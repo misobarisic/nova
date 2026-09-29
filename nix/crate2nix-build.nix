@@ -42,6 +42,11 @@ let
         buildInputs = (attrs.buildInputs or []) ++ [ rustPkgs.mpv ];
       };
 
+      yeslogic-fontconfig-sys = attrs: {
+        nativeBuildInputs = (attrs.nativeBuildInputs or []) ++ [ rustPkgs.pkg-config ];
+        buildInputs = (attrs.buildInputs or []) ++ [ rustPkgs.fontconfig ];
+      };
+
       ffmpeg-sys-next = attrs: {
         LIBCLANG_PATH = "${rustPkgs.llvmPackages.libclang.lib}/lib";
         CPATH = "${rustPkgs.glibc.dev}/include:${rustPkgs.linuxHeaders}/include";
