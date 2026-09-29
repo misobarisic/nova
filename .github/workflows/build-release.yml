@@ -47,8 +47,54 @@ jobs:
         with:
           github_access_token: ${{ github.token }}
 
-      - name: Check Rust workspace
-        run: nix develop .#default --command cargo check --workspace --locked
+      - name: Check Rust workspace (stable baseline)
+        run: |
+          nix develop .#default --command bash -euo pipefail -c '
+            nproc
+            rustc --version
+            cargo --version
+            /usr/bin/time -f "cargo-check-seconds=%e" \
+              cargo check --workspace --locked
+          '
+
+  # Side-by-side benchmark against check-linux on the same PR SHA.
+  # The Fenix revision is pinned to the one already locked by this flake.
+  check-linux-nightly-threads:
+    name: Linux workspace check (nightly, 4 threads)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ github.token }}
+
+      - name: Warm pinned Fenix nightly toolchain
+        run: >-
+          nix shell
+          github:nix-community/fenix/d30cd5c9c2d376fbecb7cabf999270b62b51dda3#packages.x86_64-linux.minimal.toolchain
+          --command rustc --version
+
+      - name: Check Rust workspace with nightly parallel frontend
+        run: |
+          nix develop .#default --command nix shell \
+            github:nix-community/fenix/d30cd5c9c2d376fbecb7cabf999270b62b51dda3#packages.x86_64-linux.minimal.toolchain \
+            --command bash -euo pipefail -c '
+              nproc
+              rustc --version
+              cargo --version
+              /usr/bin/time -f "cargo-check-seconds=%e" \
+                env RUSTFLAGS="-Zthreads=4 -C link-arg=-fuse-ld=mold" \
+                cargo check --workspace --locked
+            '
 
   check-windows:
     name: Windows GNU target check on pull requests
