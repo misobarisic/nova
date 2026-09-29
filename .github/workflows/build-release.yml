@@ -13,8 +13,6 @@ on:
       - "src/**"
       - "android/**"
       - "vendor/**"
-      - ".github/scripts/**"
-      - "docs/**"
       - "assets/**"
       - "flake.nix"
       - "flake.lock"
