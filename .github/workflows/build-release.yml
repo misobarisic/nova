@@ -128,6 +128,7 @@ jobs:
           HETZNER_STORAGEBOX_PASSWORD: ${{ secrets.HETZNER_STORAGEBOX_PASSWORD }}
           NIX_CACHE_PR_SIGNING_PUBLIC_KEY: ${{ secrets.NIX_CACHE_PR_SIGNING_PUBLIC_KEY }}
           NIX_CACHE_PR_SIGNING_PRIVATE_KEY: ${{ secrets.NIX_CACHE_PR_SIGNING_PRIVATE_KEY }}
+          NIX_CACHE_SIGNING_PUBLIC_KEY: ${{ secrets.NIX_CACHE_SIGNING_PUBLIC_KEY }}
         run: |
           missing=0
           for name in \
@@ -135,7 +136,8 @@ jobs:
             HETZNER_STORAGEBOX_USER \
             HETZNER_STORAGEBOX_PASSWORD \
             NIX_CACHE_PR_SIGNING_PUBLIC_KEY \
-            NIX_CACHE_PR_SIGNING_PRIVATE_KEY; do
+            NIX_CACHE_PR_SIGNING_PRIVATE_KEY \
+            NIX_CACHE_SIGNING_PUBLIC_KEY; do
             if [[ -z "${!name}" ]]; then
               echo "::notice::Crate2nix will run cold; Actions environment secret $name is missing."
               missing=1
@@ -156,12 +158,493 @@ jobs:
           HETZNER_STORAGEBOX_USER: ${{ secrets.HETZNER_STORAGEBOX_USER }}
           HETZNER_STORAGEBOX_PASSWORD: ${{ secrets.HETZNER_STORAGEBOX_PASSWORD }}
           NIX_CACHE_PR_SIGNING_PUBLIC_KEY: ${{ secrets.NIX_CACHE_PR_SIGNING_PUBLIC_KEY }}
+          NIX_CACHE_SIGNING_PUBLIC_KEY: ${{ secrets.NIX_CACHE_SIGNING_PUBLIC_KEY }}
         run: |
           set -euo pipefail
           [[ "$HETZNER_STORAGEBOX_HOST" =~ ^[A-Za-z0-9.-]+$ ]]
           [[ "$HETZNER_STORAGEBOX_USER" =~ ^[A-Za-z0-9-]+$ ]]
           [[ "$NIX_CACHE_PR_SIGNING_PUBLIC_KEY" =~ ^[A-Za-z0-9._-]+:[A-Za-z0-9+/=]+$ ]]
+          [[ "$NIX_CACHE_SIGNING_PUBLIC_KEY" =~ ^[A-Za-z0-9._-]+:[A-Za-z0-9+/=]+$ ]]
           [[ "$HETZNER_STORAGEBOX_PASSWORD" != *
+          umask 077
+          printf 'machine %s login %s password %s\n' \
+            "$HETZNER_STORAGEBOX_HOST" \
+            "$HETZNER_STORAGEBOX_USER" \
+            "$HETZNER_STORAGEBOX_PASSWORD" > "$RUNNER_TEMP/nix-cache.netrc"
+          {
+            printf 'extra-substituters = https://%s/nix-cache https://%s/nix-cache-pr\n' "$HETZNER_STORAGEBOX_HOST" "$HETZNER_STORAGEBOX_HOST"
+            printf 'extra-trusted-public-keys = %s %s\n' "$NIX_CACHE_SIGNING_PUBLIC_KEY" "$NIX_CACHE_PR_SIGNING_PUBLIC_KEY"
+            printf 'netrc-file = %s/nix-cache.netrc\n' "$RUNNER_TEMP"
+          } | sudo tee -a /etc/nix/nix.conf > /dev/null
+          sudo systemctl restart nix-daemon
+
+      - name: Generate Cargo.nix with pinned nixpkgs crate2nix
+        run: |
+          nixpkgs_rev=$(python3 -c 'import json; print(json.load(open("flake.lock"))["nodes"]["nixpkgs"]["locked"]["rev"])')
+          /usr/bin/time -f 'crate2nix-generate-seconds=%e' -o "$RUNNER_TEMP/crate2nix-generate.time" \
+            nix run "github:NixOS/nixpkgs/$nixpkgs_rev#crate2nix" -- generate -o nix/Cargo.nix
+
+      - name: Build the Nova workspace with crate2nix
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/crate2nix-build.log"
+          set +e
+          /usr/bin/time -f 'crate2nix-build-seconds=%e' -o "$RUNNER_TEMP/crate2nix-build.time" \
+            nix build --impure --no-link --print-out-paths --print-build-logs \
+              --file nix/crate2nix-build.nix workspace 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          derivations_built=$(grep -cE "^building '/nix/store/.+\.drv'" "$log" || true)
+          generate_time=$(cat "$RUNNER_TEMP/crate2nix-generate.time")
+          build_time=$(cat "$RUNNER_TEMP/crate2nix-build.time")
+          derivation_copies=$(grep -cE '^copying path ' "$log" || true)
+          grep -E '^/nix/store/[a-z0-9]{32}-' "$log" | sort -u > "$RUNNER_TEMP/crate2nix-output-paths" || true
+          {
+            echo "## Crate2nix build benchmark"
+            echo "- $generate_time"
+            echo "- $build_time"
+            echo "- Nix derivation build log lines: $derivations_built"
+            echo "- Store paths copied from substituters: $derivation_copies"
+            echo "- This builds every crate2nix workspace member; PR builds share the PR-only cache, separate from main."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Publish this PR's crate2nix outputs to its signed cache
+        if: steps.cache-pr.outputs.configured == 'true'
+        env:
+          HETZNER_STORAGEBOX_HOST: ${{ secrets.HETZNER_STORAGEBOX_HOST }}
+          HETZNER_STORAGEBOX_USER: ${{ secrets.HETZNER_STORAGEBOX_USER }}
+          HETZNER_STORAGEBOX_PASSWORD: ${{ secrets.HETZNER_STORAGEBOX_PASSWORD }}
+          NIX_CACHE_PR_SIGNING_PRIVATE_KEY: ${{ secrets.NIX_CACHE_PR_SIGNING_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          [[ "$NIX_CACHE_PR_SIGNING_PRIVATE_KEY" =~ ^[A-Za-z0-9._-]+:[A-Za-z0-9+/=]+$ ]]
+          [[ "$HETZNER_STORAGEBOX_PASSWORD" != *$'\n'* ]]
+
+          mapfile -t out_paths < "$RUNNER_TEMP/crate2nix-output-paths"
+          if [[ ${#out_paths[@]} -lt 1 ]]; then
+            echo "Could not find the crate2nix workspace output in the Nix build log." >&2
+            exit 1
+          fi
+
+          umask 077
+          printf '%s' "$NIX_CACHE_PR_SIGNING_PRIVATE_KEY" > "$RUNNER_TEMP/nix-cache-signing-key"
+          mkdir -p "$RUNNER_TEMP/nix-cache"
+          printf 'StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n' > "$RUNNER_TEMP/nix-cache/nix-cache-info"
+          nix copy --to "file://$RUNNER_TEMP/nix-cache?compression=zstd&compression-level=3&secret-key=$RUNNER_TEMP/nix-cache-signing-key" "${out_paths[@]}"
+
+          sudo apt-get update
+          sudo apt-get install --yes rsync sshpass
+          ssh-keyscan -p 23 -T 15 -t ed25519 "$HETZNER_STORAGEBOX_HOST" \
+            > "$RUNNER_TEMP/storagebox_known_hosts" 2>/dev/null
+          fingerprint=$(ssh-keygen -lf "$RUNNER_TEMP/storagebox_known_hosts" -E sha256 | awk 'NR == 1 { print $2 }')
+          expected='SHA256:XqONwb1S0zuj5A1CDxpOSuD2hnAArV1A3wKY7Z3sdgM'
+          if [[ "$fingerprint" != "$expected" ]]; then
+            echo "Storage Box SSH host key fingerprint did not match Hetzner's published ED25519 key." >&2
+            exit 1
+          fi
+
+          export SSHPASS="$HETZNER_STORAGEBOX_PASSWORD"
+          ssh_options="-p 23 -o UserKnownHostsFile=$RUNNER_TEMP/storagebox_known_hosts -o StrictHostKeyChecking=yes -o PreferredAuthentications=password -o PubkeyAuthentication=no"
+          target="$HETZNER_STORAGEBOX_USER@$HETZNER_STORAGEBOX_HOST"
+          remote_cache="./nix-cache-pr"
+          sshpass -e ssh $ssh_options "$target" mkdir -p "$remote_cache/nar"
+          sshpass -e rsync --archive --delay-updates --no-perms --no-owner --no-group \
+            -e "ssh $ssh_options" "$RUNNER_TEMP/nix-cache/nar/" "$target:$remote_cache/nar/"
+          sshpass -e rsync --archive --delay-updates --no-perms --no-owner --no-group \
+            --include='/*.narinfo' --include='/nix-cache-info' --exclude='*' \
+            -e "ssh $ssh_options" "$RUNNER_TEMP/nix-cache/" "$target:$remote_cache/"
+
+          umask 077
+          printf 'machine %s login %s password %s\n' \
+            "$HETZNER_STORAGEBOX_HOST" "$HETZNER_STORAGEBOX_USER" "$HETZNER_STORAGEBOX_PASSWORD" \
+            > "$RUNNER_TEMP/nix-cache.netrc"
+          curl --fail --silent --show-error --netrc-file "$RUNNER_TEMP/nix-cache.netrc" \
+            "https://$HETZNER_STORAGEBOX_HOST/nix-cache-pr/nix-cache-info" > /dev/null
+
+      - name: Remove temporary cache credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/nix-cache.netrc" "$RUNNER_TEMP/nix-cache-signing-key"
+
+  android-build:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    name: Build universal APK (arm64-v8a + x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/local/share/chromium
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ github.token }}
+
+      - name: Build both ABIs into universal APK
+        run: >-
+          nix develop .#android --command cargo apk2 build
+          --no-default-features --lib -p nova --release
+
+      - name: Stage universal release asset
+        shell: bash
+        run: |
+          mapfile -t apks < <(find target -type f -name 'nova.apk' -print)
+          if [[ ${#apks[@]} -ne 1 ]]; then
+            printf 'Expected exactly one aligned universal nova.apk, found %s:\n' "${#apks[@]}" >&2
+            printf '  %s\n' "${apks[@]}" >&2
+            exit 1
+          fi
+
+          mkdir -p dist
+          tag="${GITHUB_REF_NAME//\//-}"
+          cp "${apks[0]}" "dist/nova-${tag}.apk"
+      - name: Verify universal APK contents
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          apks = list(Path("dist").glob("*.apk"))
+          if len(apks) != 1:
+              raise SystemExit(f"Expected one universal APK, found {len(apks)}")
+
+          required = {
+              f"lib/{abi}/{library}"
+              for abi in ("arm64-v8a", "x86_64")
+              for library in ("libnova.so", "libmpv.so")
+          }
+          with ZipFile(apks[0]) as apk:
+              missing = sorted(required - set(apk.namelist()))
+          if missing:
+              raise SystemExit("Universal APK is missing: " + ", ".join(missing))
+          print(f"Verified both ABIs and libmpv in {apks[0]}")
+          PY
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nova-android-apk
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-build:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    name: Build Windows x86_64 (MinGW)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ github.token }}
+
+      - name: Build Windows executable
+        run: >-
+          nix develop .#windows --command cargo build --locked --release
+          --target x86_64-pc-windows-gnu --bin nova
+
+      - name: Stage Windows release bundle
+        run: nix develop .#windows --command bash .github/scripts/package-windows.sh
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nova-windows-x86_64
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish tag release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [android-build, windows-build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nova-android-apk
+          path: dist
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nova-windows-x86_64
+          path: dist
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          name: Nova ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: dist/*
+\n'* ]]
+
+          umask 077
+          printf 'machine %s login %s password %s\n' \
+            "$HETZNER_STORAGEBOX_HOST" \
+            "$HETZNER_STORAGEBOX_USER" \
+            "$HETZNER_STORAGEBOX_PASSWORD" > "$RUNNER_TEMP/nix-cache.netrc"
+          {
+            printf 'extra-substituters = https://%s/nix-cache-pr/%s\n' "$HETZNER_STORAGEBOX_HOST" "$PR_NUMBER"
+            printf 'extra-trusted-public-keys = %s\n' "$NIX_CACHE_PR_SIGNING_PUBLIC_KEY"
+            printf 'netrc-file = %s/nix-cache.netrc\n' "$RUNNER_TEMP"
+          } | sudo tee -a /etc/nix/nix.conf > /dev/null
+          sudo systemctl restart nix-daemon
+
+      - name: Generate Cargo.nix with pinned nixpkgs crate2nix
+        run: |
+          nixpkgs_rev=$(python3 -c 'import json; print(json.load(open("flake.lock"))["nodes"]["nixpkgs"]["locked"]["rev"])')
+          /usr/bin/time -f 'crate2nix-generate-seconds=%e' -o "$RUNNER_TEMP/crate2nix-generate.time" \
+            nix run "github:NixOS/nixpkgs/$nixpkgs_rev#crate2nix" -- generate -o nix/Cargo.nix
+
+      - name: Build the Nova workspace with crate2nix
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/crate2nix-build.log"
+          set +e
+          /usr/bin/time -f 'crate2nix-build-seconds=%e' -o "$RUNNER_TEMP/crate2nix-build.time" \
+            nix build --impure --no-link --print-out-paths --print-build-logs \
+              --file nix/crate2nix-build.nix workspace 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          derivations_built=$(grep -cE "^building '/nix/store/.+\.drv'" "$log" || true)
+          generate_time=$(cat "$RUNNER_TEMP/crate2nix-generate.time")
+          build_time=$(cat "$RUNNER_TEMP/crate2nix-build.time")
+          derivation_copies=$(grep -cE '^copying path ' "$log" || true)
+          grep -E '^/nix/store/[a-z0-9]{32}-' "$log" | sort -u > "$RUNNER_TEMP/crate2nix-output-paths" || true
+          {
+            echo "## Crate2nix build benchmark"
+            echo "- $generate_time"
+            echo "- $build_time"
+            echo "- Nix derivation build log lines: $derivations_built"
+            echo "- Store paths copied from substituters: $derivation_copies"
+            echo "- This builds every crate2nix workspace member; PR results go only to its isolated PR cache."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Publish this PR's crate2nix outputs to its signed cache
+        if: steps.cache-pr.outputs.configured == 'true'
+        env:
+          HETZNER_STORAGEBOX_HOST: ${{ secrets.HETZNER_STORAGEBOX_HOST }}
+          HETZNER_STORAGEBOX_USER: ${{ secrets.HETZNER_STORAGEBOX_USER }}
+          HETZNER_STORAGEBOX_PASSWORD: ${{ secrets.HETZNER_STORAGEBOX_PASSWORD }}
+          NIX_CACHE_PR_SIGNING_PRIVATE_KEY: ${{ secrets.NIX_CACHE_PR_SIGNING_PRIVATE_KEY }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+          [[ "$NIX_CACHE_PR_SIGNING_PRIVATE_KEY" =~ ^[A-Za-z0-9._-]+:[A-Za-z0-9+/=]+$ ]]
+          [[ "$HETZNER_STORAGEBOX_PASSWORD" != *$'\n'* ]]
+
+          mapfile -t out_paths < "$RUNNER_TEMP/crate2nix-output-paths"
+          if [[ ${#out_paths[@]} -lt 1 ]]; then
+            echo "Could not find the crate2nix workspace output in the Nix build log." >&2
+            exit 1
+          fi
+
+          umask 077
+          printf '%s' "$NIX_CACHE_PR_SIGNING_PRIVATE_KEY" > "$RUNNER_TEMP/nix-cache-signing-key"
+          mkdir -p "$RUNNER_TEMP/nix-cache"
+          printf 'StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n' > "$RUNNER_TEMP/nix-cache/nix-cache-info"
+          nix copy --to "file://$RUNNER_TEMP/nix-cache?compression=zstd&compression-level=3&secret-key=$RUNNER_TEMP/nix-cache-signing-key" "${out_paths[@]}"
+
+          sudo apt-get update
+          sudo apt-get install --yes rsync sshpass
+          ssh-keyscan -p 23 -T 15 -t ed25519 "$HETZNER_STORAGEBOX_HOST" \
+            > "$RUNNER_TEMP/storagebox_known_hosts" 2>/dev/null
+          fingerprint=$(ssh-keygen -lf "$RUNNER_TEMP/storagebox_known_hosts" -E sha256 | awk 'NR == 1 { print $2 }')
+          expected='SHA256:XqONwb1S0zuj5A1CDxpOSuD2hnAArV1A3wKY7Z3sdgM'
+          if [[ "$fingerprint" != "$expected" ]]; then
+            echo "Storage Box SSH host key fingerprint did not match Hetzner's published ED25519 key." >&2
+            exit 1
+          fi
+
+          export SSHPASS="$HETZNER_STORAGEBOX_PASSWORD"
+          ssh_options="-p 23 -o UserKnownHostsFile=$RUNNER_TEMP/storagebox_known_hosts -o StrictHostKeyChecking=yes -o PreferredAuthentications=password -o PubkeyAuthentication=no"
+          target="$HETZNER_STORAGEBOX_USER@$HETZNER_STORAGEBOX_HOST"
+          remote_cache="./nix-cache-pr/$PR_NUMBER"
+          sshpass -e ssh $ssh_options "$target" mkdir -p "$remote_cache/nar"
+          sshpass -e rsync --archive --delay-updates --no-perms --no-owner --no-group \
+            -e "ssh $ssh_options" "$RUNNER_TEMP/nix-cache/nar/" "$target:$remote_cache/nar/"
+          sshpass -e rsync --archive --delay-updates --no-perms --no-owner --no-group \
+            --include='/*.narinfo' --include='/nix-cache-info' --exclude='*' \
+            -e "ssh $ssh_options" "$RUNNER_TEMP/nix-cache/" "$target:$remote_cache/"
+
+          umask 077
+          printf 'machine %s login %s password %s\n' \
+            "$HETZNER_STORAGEBOX_HOST" "$HETZNER_STORAGEBOX_USER" "$HETZNER_STORAGEBOX_PASSWORD" \
+            > "$RUNNER_TEMP/nix-cache.netrc"
+          curl --fail --silent --show-error --netrc-file "$RUNNER_TEMP/nix-cache.netrc" \
+            "https://$HETZNER_STORAGEBOX_HOST/nix-cache-pr/$PR_NUMBER/nix-cache-info" > /dev/null
+
+      - name: Remove temporary cache credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/nix-cache.netrc" "$RUNNER_TEMP/nix-cache-signing-key"
+
+  android-build:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    name: Build universal APK (arm64-v8a + x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/local/share/chromium
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ github.token }}
+
+      - name: Build both ABIs into universal APK
+        run: >-
+          nix develop .#android --command cargo apk2 build
+          --no-default-features --lib -p nova --release
+
+      - name: Stage universal release asset
+        shell: bash
+        run: |
+          mapfile -t apks < <(find target -type f -name 'nova.apk' -print)
+          if [[ ${#apks[@]} -ne 1 ]]; then
+            printf 'Expected exactly one aligned universal nova.apk, found %s:\n' "${#apks[@]}" >&2
+            printf '  %s\n' "${apks[@]}" >&2
+            exit 1
+          fi
+
+          mkdir -p dist
+          tag="${GITHUB_REF_NAME//\//-}"
+          cp "${apks[0]}" "dist/nova-${tag}.apk"
+      - name: Verify universal APK contents
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          apks = list(Path("dist").glob("*.apk"))
+          if len(apks) != 1:
+              raise SystemExit(f"Expected one universal APK, found {len(apks)}")
+
+          required = {
+              f"lib/{abi}/{library}"
+              for abi in ("arm64-v8a", "x86_64")
+              for library in ("libnova.so", "libmpv.so")
+          }
+          with ZipFile(apks[0]) as apk:
+              missing = sorted(required - set(apk.namelist()))
+          if missing:
+              raise SystemExit("Universal APK is missing: " + ", ".join(missing))
+          print(f"Verified both ABIs and libmpv in {apks[0]}")
+          PY
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nova-android-apk
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-build:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    name: Build Windows x86_64 (MinGW)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ github.token }}
+
+      - name: Build Windows executable
+        run: >-
+          nix develop .#windows --command cargo build --locked --release
+          --target x86_64-pc-windows-gnu --bin nova
+
+      - name: Stage Windows release bundle
+        run: nix develop .#windows --command bash .github/scripts/package-windows.sh
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nova-windows-x86_64
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish tag release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [android-build, windows-build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nova-android-apk
+          path: dist
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nova-windows-x86_64
+          path: dist
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          name: Nova ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: dist/*
+\n'* ]]
 
           umask 077
           printf 'machine %s login %s password %s\n' \
