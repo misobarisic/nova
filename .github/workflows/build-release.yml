@@ -151,7 +151,7 @@ jobs:
             echo "Crate2nix will build without Storage Box cache access because required environment secrets are missing." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Configure read access to this PR's private Nix cache
+      - name: Configure read access to the shared PR Nix cache
         if: steps.cache-pr.outputs.configured == 'true'
         env:
           HETZNER_STORAGEBOX_HOST: ${{ secrets.HETZNER_STORAGEBOX_HOST }}
@@ -165,7 +165,7 @@ jobs:
           [[ "$HETZNER_STORAGEBOX_USER" =~ ^[A-Za-z0-9-]+$ ]]
           [[ "$NIX_CACHE_PR_SIGNING_PUBLIC_KEY" =~ ^[A-Za-z0-9._-]+:[A-Za-z0-9+/=]+$ ]]
           [[ "$NIX_CACHE_SIGNING_PUBLIC_KEY" =~ ^[A-Za-z0-9._-]+:[A-Za-z0-9+/=]+$ ]]
-          [[ "$HETZNER_STORAGEBOX_PASSWORD" != *
+          [[ "$HETZNER_STORAGEBOX_PASSWORD" != *$'\n'* ]]
           umask 077
           printf 'machine %s login %s password %s\n' \
             "$HETZNER_STORAGEBOX_HOST" \
