@@ -182,7 +182,7 @@ jobs:
           set +e
           /usr/bin/time -f 'crate2nix-build-seconds=%e' -o "$RUNNER_TEMP/crate2nix-build.time" \
             nix build --impure --no-link --print-out-paths --print-build-logs \
-              --file nix/crate2nix-build.nix root workspace 2>&1 | tee "$log"
+              --file nix/crate2nix-build.nix workspace 2>&1 | tee "$log"
           status=${PIPESTATUS[0]}
           set -e
 
@@ -196,7 +196,7 @@ jobs:
             echo "- $build_time"
             echo "- Nix derivation build log lines: $derivations_built"
             echo "- Store paths copied from substituters: $derivation_copies"
-            echo "- This builds the root package and every workspace member; it does not replace the Cargo workspace check."
+            echo "- This builds every crate2nix workspace member; it does not replace the Cargo workspace check."
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
 

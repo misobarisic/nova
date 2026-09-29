@@ -148,7 +148,7 @@ jobs:
           set +e
           /usr/bin/time -f 'crate2nix-cache-build-seconds=%e' -o "$RUNNER_TEMP/crate2nix-cache-build.time" \
             nix build --impure --no-link --print-out-paths --print-build-logs \
-              --file nix/crate2nix-build.nix root workspace 2>&1 | tee "$log"
+              --file nix/crate2nix-build.nix workspace 2>&1 | tee "$log"
           status=${PIPESTATUS[0]}
           set -e
           echo "## Storage Box crate2nix build" >> "$GITHUB_STEP_SUMMARY"
@@ -160,8 +160,8 @@ jobs:
 
           grep -E '^/nix/store/[a-z0-9]{32}-' "$log" | sort -u > "$RUNNER_TEMP/crate2nix-output-paths"
           mapfile -t out_paths < "$RUNNER_TEMP/crate2nix-output-paths"
-          if [[ ${#out_paths[@]} -lt 2 ]]; then
-            echo "Could not find both crate2nix workspace outputs in the Nix build log." >&2
+          if [[ ${#out_paths[@]} -lt 1 ]]; then
+            echo "Could not find the crate2nix workspace output in the Nix build log." >&2
             exit 1
           fi
 

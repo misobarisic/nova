@@ -58,8 +58,7 @@ let
     release = false;
   };
 in {
-  root = cargoNix.rootCrate.build;
   # Keep every workspace member's derivation output reachable so the cache
-  # contains per-crate artifacts instead of only the final application binary.
+  # contains the per-crate artifacts used by the workspace build.
   workspace = cargoNix.allWorkspaceMembers;
 }
