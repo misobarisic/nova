@@ -46,11 +46,13 @@ cargo check --workspace --locked --target x86_64-pc-windows-gnu
 ```
 
 Pull requests run the host and Windows-target Cargo checks plus a Linux
-crate2nix build benchmark. Same-repository PRs can read and fill an isolated
-Storage Box cache at `nix-cache-pr/<PR number>/`; the cache benchmark waits for
-approval through the `storagebox-cache-pr` Actions environment before receiving
-its credentials. Fork PRs use a no-secrets environment and build cold. PR cache
-entries use their own signing key, which the `main` publisher does not trust.
+crate2nix build benchmark. Same-repository PRs can read and fill the shared
+Storage Box cache at `nix-cache-pr/`, so builds reuse entries across PRs. The
+cache benchmark waits for approval through the `storagebox-cache-pr` Actions
+environment before receiving credentials. Fork PRs use a no-secrets environment
+and build cold. Main builds trust entries signed with the PR-only key; the PR key
+does not sign the main cache. Approve PR cache jobs only for changes you trust,
+since their outputs can later be used by main builds.
 Pushing a Rust/build change to `main` runs the trusted cache publisher, while
 pushing a Git tag builds the universal Android APK and Windows x86_64 ZIP, then
 attaches both to a GitHub Release.
@@ -59,11 +61,11 @@ The trusted publisher uses `nix-cache/` and the
 `storagebox-cache-main` Actions environment, restricted to the `main`
 deployment branch. That environment needs
 `HETZNER_STORAGEBOX_HOST`, `HETZNER_STORAGEBOX_USER`,
-`HETZNER_STORAGEBOX_PASSWORD`, `NIX_CACHE_SIGNING_PRIVATE_KEY`, and
-`NIX_CACHE_SIGNING_PUBLIC_KEY`. The reviewer-protected
-`storagebox-cache-pr` environment needs the first three plus
-`NIX_CACHE_PR_SIGNING_PRIVATE_KEY` and
-`NIX_CACHE_PR_SIGNING_PUBLIC_KEY`. Keep the two signing pairs separate.
+`HETZNER_STORAGEBOX_PASSWORD`, `NIX_CACHE_SIGNING_PRIVATE_KEY`,
+`NIX_CACHE_SIGNING_PUBLIC_KEY`, and `NIX_CACHE_PR_SIGNING_PUBLIC_KEY`. The
+reviewer-protected `storagebox-cache-pr` environment needs the first three plus
+`NIX_CACHE_PR_SIGNING_PRIVATE_KEY`, `NIX_CACHE_PR_SIGNING_PUBLIC_KEY`, and
+`NIX_CACHE_SIGNING_PUBLIC_KEY`. Keep the private signing keys separate.
 Hetzner SSH support and external reachability must be enabled for uploads.
 
 Cargo aliases live in `.cargo/config.toml`. Android linkers come from the
