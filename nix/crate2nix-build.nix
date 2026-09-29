@@ -8,10 +8,8 @@ let
   toolchain = flake.inputs.fenix.packages.${system}.stable;
 
   buildRustCrateForPkgs = rustPkgs: rustPkgs.buildRustCrate.override {
-    rust = toolchain.rustc;
+    rustc = toolchain.rustc;
     cargo = toolchain.cargo;
-    LIBCLANG_PATH = "${rustPkgs.llvmPackages.libclang.lib}/lib";
-    CPATH = "${rustPkgs.glibc.dev}/include:${rustPkgs.linuxHeaders}/include";
     defaultCrateOverrides = rustPkgs.defaultCrateOverrides // {
       nova = attrs: {
         nativeBuildInputs = (attrs.nativeBuildInputs or []) ++ [
@@ -45,6 +43,8 @@ let
       };
 
       ffmpeg-sys-next = attrs: {
+        LIBCLANG_PATH = "${rustPkgs.llvmPackages.libclang.lib}/lib";
+        CPATH = "${rustPkgs.glibc.dev}/include:${rustPkgs.linuxHeaders}/include";
         nativeBuildInputs = (attrs.nativeBuildInputs or []) ++ [
           rustPkgs.llvmPackages.libclang
         ];
