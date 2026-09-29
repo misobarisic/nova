@@ -45,9 +45,23 @@ cargo apk2 run   --target aarch64-linux-android --no-default-features --lib -p n
 cargo check --workspace --locked --target x86_64-pc-windows-gnu
 ```
 
-Pull requests run host and Windows-target Cargo checks; they do not package
-platform builds or publish releases. Pushing a Git tag builds the universal
+Pull requests run the host and Windows-target Cargo checks plus a Linux
+crate2nix build benchmark. Same-repository PRs use the Storage Box cache for
+substitutes when its Actions secrets are configured; fork PRs build cold. The
+PR job only reads cache entries and never signs or publishes them. Since the
+Storage Box credential is available to same-repository PR workflows, limit
+write access to trusted collaborators. Pushing a Rust/build change
+to `main` runs the cache publisher, while pushing a Git tag builds the universal
 Android APK and Windows x86_64 ZIP, then attaches both to a GitHub Release.
+
+The cache publisher uses the `nix-cache/` directory in the Storage Box home.
+Before checkout or Nix setup, it skips unless all five repository Actions
+secrets are present: `HETZNER_STORAGEBOX_HOST`, `HETZNER_STORAGEBOX_USER`,
+`HETZNER_STORAGEBOX_PASSWORD`, `NIX_CACHE_SIGNING_PRIVATE_KEY`, and
+`NIX_CACHE_SIGNING_PUBLIC_KEY`. The PR benchmark uses the first three plus the
+public signing key only for same-repository PRs. Set the signing key pair in
+GitHub Actions secrets; the private key is used only by the `main` publisher.
+Hetzner SSH support and external reachability must be enabled for uploads.
 
 Cargo aliases live in `.cargo/config.toml`. Android linkers come from the
 `.#android` dev shell env vars (see `.cargo/config.toml` comments); that shell
@@ -66,12 +80,14 @@ stdenv's host include path, which the NDK clang would otherwise pick up).
 nova/
 ├── .github/                  # GitHub Actions automation
 │   └── workflows/
-│       └── build-release.yml  # PR checks; tagged Android + Windows release builds
+│       ├── build-release.yml        # PR checks; tagged Android + Windows release builds
+│       └── storagebox-nix-cache.yml # main-branch crate2nix cache publisher
 ├── Cargo.toml                # workspace + root package `nova`
 ├── about.toml                # accepted SPDX licenses for the in-app catalog
 ├── build.rs                  # license catalog generation; native link directives
 ├── .cargo/config.toml        # `cargo dev` alias; Android linker notes
 ├── flake.nix                 # devShells: default, android, windows cross-build
+├── nix/crate2nix-build.nix   # crate2nix build overrides for CI benchmarking
 ├── Makefile                  # `make apk`
 ├── android/                  # Android source, signing key, and resources
 │   ├── java/                 # Java services and activities compiled to DEX by cargo-apk2
@@ -469,3 +485,4 @@ the app ignores unknown domains, so old peers stay compatible.
 | Persistence backend | `crates/storage/src/lib.rs` |
 | Android glue / external player | `src/lib.rs` (`android_main`), `crates/player/src/external.rs` (Android), `crates/player/src/lib.rs::open_external` (desktop) |
 | Build/packaging | `Cargo.toml` (`[package.metadata.android]`), `build.rs`, `flake.nix`, `Makefile` |
+| CI compile/cache experiment | `.github/workflows/build-release.yml`, `.github/workflows/storagebox-nix-cache.yml`, `nix/crate2nix-build.nix` |

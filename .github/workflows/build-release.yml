@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/build-release.yml"
+      - ".github/workflows/storagebox-nix-cache.yml"
       - ".cargo/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -16,6 +17,7 @@ on:
       - "assets/**"
       - "flake.nix"
       - "flake.lock"
+      - "nix/**"
   push:
     tags:
       - "**"
@@ -48,7 +50,26 @@ jobs:
           github_access_token: ${{ github.token }}
 
       - name: Check Rust workspace
-        run: nix develop .#default --command cargo check --workspace --locked
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/cargo-check.log"
+          set +e
+          nix develop .#default --command bash -euo pipefail -c '
+            nproc
+            rustc --version
+            cargo --version
+            /usr/bin/time -f "cargo-check-seconds=%e" cargo check --workspace --locked
+          ' 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          checking_lines=$(grep -cE '^ *Checking ' "$log" || true)
+          {
+            echo "## Stable Cargo check baseline"
+            echo "- Cargo Checking lines: $checking_lines"
+            echo "- The cargo-check-seconds line above is the timed compiler check."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
   check-windows:
     name: Windows GNU target check on pull requests
@@ -72,6 +93,116 @@ jobs:
         run: >-
           nix develop .#windows --command cargo check --workspace --locked
           --target x86_64-pc-windows-gnu
+
+  # Benchmark crate2nix on the same PR revision as the existing Cargo checks.
+  # Same-repository PRs may read the private cache. Fork PRs build cold, and
+  # this job never writes to the cache or receives its signing private key.
+  check-crate2nix:
+    name: Crate2nix workspace build benchmark
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ github.token }}
+
+      - name: Check whether this PR can read the Storage Box cache
+        id: cache-read
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          HETZNER_STORAGEBOX_HOST: ${{ secrets.HETZNER_STORAGEBOX_HOST }}
+          HETZNER_STORAGEBOX_USER: ${{ secrets.HETZNER_STORAGEBOX_USER }}
+          HETZNER_STORAGEBOX_PASSWORD: ${{ secrets.HETZNER_STORAGEBOX_PASSWORD }}
+          NIX_CACHE_SIGNING_PUBLIC_KEY: ${{ secrets.NIX_CACHE_SIGNING_PUBLIC_KEY }}
+        run: |
+          missing=0
+          for name in \
+            HETZNER_STORAGEBOX_HOST \
+            HETZNER_STORAGEBOX_USER \
+            HETZNER_STORAGEBOX_PASSWORD \
+            NIX_CACHE_SIGNING_PUBLIC_KEY; do
+            if [[ -z "${!name}" ]]; then
+              echo "::notice::Crate2nix will run without the Storage Box cache; Actions secret $name is missing."
+              missing=1
+            fi
+          done
+
+          if [[ "$missing" -eq 0 ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Crate2nix cache read skipped; the benchmark will build without Storage Box substitutes." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Configure read access to the private Nix cache
+        if: steps.cache-read.outputs.configured == 'true'
+        env:
+          HETZNER_STORAGEBOX_HOST: ${{ secrets.HETZNER_STORAGEBOX_HOST }}
+          HETZNER_STORAGEBOX_USER: ${{ secrets.HETZNER_STORAGEBOX_USER }}
+          HETZNER_STORAGEBOX_PASSWORD: ${{ secrets.HETZNER_STORAGEBOX_PASSWORD }}
+          NIX_CACHE_SIGNING_PUBLIC_KEY: ${{ secrets.NIX_CACHE_SIGNING_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          [[ "$HETZNER_STORAGEBOX_HOST" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ "$HETZNER_STORAGEBOX_USER" =~ ^[A-Za-z0-9-]+$ ]]
+          [[ "$NIX_CACHE_SIGNING_PUBLIC_KEY" =~ ^[A-Za-z0-9._-]+:[A-Za-z0-9+/=]+$ ]]
+          [[ "$HETZNER_STORAGEBOX_PASSWORD" != *$'\n'* ]]
+
+          umask 077
+          printf 'machine %s login %s password %s\n' \
+            "$HETZNER_STORAGEBOX_HOST" \
+            "$HETZNER_STORAGEBOX_USER" \
+            "$HETZNER_STORAGEBOX_PASSWORD" > "$RUNNER_TEMP/nix-cache.netrc"
+          {
+            printf 'extra-substituters = https://%s/nix-cache\n' "$HETZNER_STORAGEBOX_HOST"
+            printf 'extra-trusted-public-keys = %s\n' "$NIX_CACHE_SIGNING_PUBLIC_KEY"
+            printf 'netrc-file = %s/nix-cache.netrc\n' "$RUNNER_TEMP"
+          } | sudo tee -a /etc/nix/nix.conf > /dev/null
+          sudo systemctl restart nix-daemon
+
+      - name: Generate Cargo.nix with pinned nixpkgs crate2nix
+        run: |
+          nixpkgs_rev=$(python3 -c 'import json; print(json.load(open("flake.lock"))["nodes"]["nixpkgs"]["locked"]["rev"])')
+          /usr/bin/time -f 'crate2nix-generate-seconds=%e' -o "$RUNNER_TEMP/crate2nix-generate.time" \
+            nix run "github:NixOS/nixpkgs/$nixpkgs_rev#crate2nix" -- generate -o nix/Cargo.nix
+
+      - name: Build the Nova workspace with crate2nix
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/crate2nix-build.log"
+          set +e
+          /usr/bin/time -f 'crate2nix-build-seconds=%e' -o "$RUNNER_TEMP/crate2nix-build.time" \
+            nix build --impure --no-link --print-out-paths --print-build-logs \
+              --file nix/crate2nix-build.nix root workspace 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          derivations_built=$(grep -cE "building ['\"]/nix/store/.+\\.drv" "$log" || true)
+          generate_time=$(cat "$RUNNER_TEMP/crate2nix-generate.time")
+          build_time=$(cat "$RUNNER_TEMP/crate2nix-build.time")
+          derivation_copies=$(grep -cE '^copying path ' "$log" || true)
+          {
+            echo "## Crate2nix build benchmark"
+            echo "- $generate_time"
+            echo "- $build_time"
+            echo "- Nix derivation build log lines: $derivations_built"
+            echo "- Store paths copied from substituters: $derivation_copies"
+            echo "- This builds the root package and every workspace member; it does not replace the Cargo workspace check."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Remove temporary cache read credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/nix-cache.netrc"
 
   android-build:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')

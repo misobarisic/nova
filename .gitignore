@@ -1,4 +1,5 @@
 /target
+/nix/Cargo.nix
 /pkg
 web-console.log
 crates/proxy/web-console.log

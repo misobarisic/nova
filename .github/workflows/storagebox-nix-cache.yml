@@ -1,0 +1,204 @@
+name: Storage Box Nix cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".cargo/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "about.toml"
+      - "build.rs"
+      - "crates/**"
+      - "src/**"
+      - "assets/**"
+      - "vendor/**"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - ".github/workflows/build-release.yml"
+      - ".github/workflows/storagebox-nix-cache.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: storagebox-nix-cache
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      # Check the complete credential set before checkout, Nix installation,
+      # Storage Box setup, or any network connection to Hetzner.
+      - name: Check whether cache credentials are configured
+        id: gate
+        env:
+          HETZNER_STORAGEBOX_HOST: ${{ secrets.HETZNER_STORAGEBOX_HOST }}
+          HETZNER_STORAGEBOX_USER: ${{ secrets.HETZNER_STORAGEBOX_USER }}
+          HETZNER_STORAGEBOX_PASSWORD: ${{ secrets.HETZNER_STORAGEBOX_PASSWORD }}
+          NIX_CACHE_SIGNING_PRIVATE_KEY: ${{ secrets.NIX_CACHE_SIGNING_PRIVATE_KEY }}
+          NIX_CACHE_SIGNING_PUBLIC_KEY: ${{ secrets.NIX_CACHE_SIGNING_PUBLIC_KEY }}
+        run: |
+          missing=0
+          for name in \
+            HETZNER_STORAGEBOX_HOST \
+            HETZNER_STORAGEBOX_USER \
+            HETZNER_STORAGEBOX_PASSWORD \
+            NIX_CACHE_SIGNING_PRIVATE_KEY \
+            NIX_CACHE_SIGNING_PUBLIC_KEY; do
+            if [[ -z "${!name}" ]]; then
+              echo "::notice::Skipping cache setup because Actions secret $name is missing."
+              missing=1
+            fi
+          done
+
+          if [[ "$missing" -eq 0 ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Storage Box cache skipped: one or more required Actions secrets are missing." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Checkout
+        if: steps.gate.outputs.configured == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Prepare private cache credentials
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          HETZNER_STORAGEBOX_HOST: ${{ secrets.HETZNER_STORAGEBOX_HOST }}
+          HETZNER_STORAGEBOX_USER: ${{ secrets.HETZNER_STORAGEBOX_USER }}
+          HETZNER_STORAGEBOX_PASSWORD: ${{ secrets.HETZNER_STORAGEBOX_PASSWORD }}
+          NIX_CACHE_SIGNING_PRIVATE_KEY: ${{ secrets.NIX_CACHE_SIGNING_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          [[ "$HETZNER_STORAGEBOX_HOST" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ "$HETZNER_STORAGEBOX_USER" =~ ^[A-Za-z0-9-]+$ ]]
+          [[ "$NIX_CACHE_SIGNING_PRIVATE_KEY" =~ ^[A-Za-z0-9._-]+:[A-Za-z0-9+/=]+$ ]]
+          [[ "$HETZNER_STORAGEBOX_PASSWORD" != *$'\n'* ]]
+
+          umask 077
+          printf 'machine %s login %s password %s\n' \
+            "$HETZNER_STORAGEBOX_HOST" \
+            "$HETZNER_STORAGEBOX_USER" \
+            "$HETZNER_STORAGEBOX_PASSWORD" > "$RUNNER_TEMP/nix-cache.netrc"
+          printf '%s' "$NIX_CACHE_SIGNING_PRIVATE_KEY" > "$RUNNER_TEMP/nix-cache-signing-key"
+
+      - name: Install Nix
+        if: steps.gate.outputs.configured == 'true'
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ github.token }}
+
+      - name: Configure Nix for the private cache
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          HETZNER_STORAGEBOX_HOST: ${{ secrets.HETZNER_STORAGEBOX_HOST }}
+          NIX_CACHE_SIGNING_PUBLIC_KEY: ${{ secrets.NIX_CACHE_SIGNING_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          {
+            printf 'extra-substituters = https://%s/nix-cache\n' "$HETZNER_STORAGEBOX_HOST"
+            printf 'extra-trusted-public-keys = %s\n' "$NIX_CACHE_SIGNING_PUBLIC_KEY"
+            printf 'netrc-file = %s/nix-cache.netrc\n' "$RUNNER_TEMP"
+          } | sudo tee -a /etc/nix/nix.conf > /dev/null
+          sudo systemctl restart nix-daemon
+
+      - name: Install rsync and password-auth support
+        if: steps.gate.outputs.configured == 'true'
+        run: sudo apt-get update && sudo apt-get install --yes rsync sshpass
+
+      - name: Pin and verify the Storage Box SSH host key
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          HETZNER_STORAGEBOX_HOST: ${{ secrets.HETZNER_STORAGEBOX_HOST }}
+        run: |
+          set -euo pipefail
+          ssh-keyscan -p 23 -T 15 -t ed25519 "$HETZNER_STORAGEBOX_HOST" \
+            > "$RUNNER_TEMP/storagebox_known_hosts" 2>/dev/null
+          fingerprint=$(ssh-keygen -lf "$RUNNER_TEMP/storagebox_known_hosts" -E sha256 | awk 'NR == 1 { print $2 }')
+          expected='SHA256:XqONwb1S0zuj5A1CDxpOSuD2hnAArV1A3wKY7Z3sdgM'
+          if [[ "$fingerprint" != "$expected" ]]; then
+            echo "Storage Box SSH host key fingerprint did not match Hetzner's published ED25519 key." >&2
+            exit 1
+          fi
+
+      - name: Generate Cargo.nix with pinned nixpkgs crate2nix
+        if: steps.gate.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          nixpkgs_rev=$(python3 -c 'import json; print(json.load(open("flake.lock"))["nodes"]["nixpkgs"]["locked"]["rev"])')
+          nix run "github:NixOS/nixpkgs/$nixpkgs_rev#crate2nix" -- generate -o nix/Cargo.nix
+
+      - name: Build with crate2nix and reuse prior cache entries
+        if: steps.gate.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          log="$RUNNER_TEMP/crate2nix-cache-build.log"
+          set +e
+          /usr/bin/time -f 'crate2nix-cache-build-seconds=%e' -o "$RUNNER_TEMP/crate2nix-cache-build.time" \
+            nix build --impure --no-link --print-out-paths --print-build-logs \
+              --file nix/crate2nix-build.nix root workspace 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "## Storage Box crate2nix build" >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/crate2nix-cache-build.time" >> "$GITHUB_STEP_SUMMARY"
+          echo "The build log distinguishes paths copied from substituters from derivations built locally." >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$status" -ne 0 ]]; then
+            exit "$status"
+          fi
+
+          grep -E '^/nix/store/[a-z0-9]{32}-' "$log" | sort -u > "$RUNNER_TEMP/crate2nix-output-paths"
+          mapfile -t out_paths < "$RUNNER_TEMP/crate2nix-output-paths"
+          if [[ ${#out_paths[@]} -lt 2 ]]; then
+            echo "Could not find both crate2nix workspace outputs in the Nix build log." >&2
+            exit 1
+          fi
+
+      - name: Create signed local binary cache
+        if: steps.gate.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/nix-cache"
+          mapfile -t out_paths < "$RUNNER_TEMP/crate2nix-output-paths"
+          nix copy --to "file://$RUNNER_TEMP/nix-cache?compression=zstd&compression-level=3&secret-key=$RUNNER_TEMP/nix-cache-signing-key" "${out_paths[@]}"
+
+      - name: Upload NAR data, then cache metadata
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          HETZNER_STORAGEBOX_HOST: ${{ secrets.HETZNER_STORAGEBOX_HOST }}
+          HETZNER_STORAGEBOX_USER: ${{ secrets.HETZNER_STORAGEBOX_USER }}
+          HETZNER_STORAGEBOX_PASSWORD: ${{ secrets.HETZNER_STORAGEBOX_PASSWORD }}
+        run: |
+          set -euo pipefail
+          export SSHPASS="$HETZNER_STORAGEBOX_PASSWORD"
+          known_hosts="$RUNNER_TEMP/storagebox_known_hosts"
+          ssh_options="-p 23 -o UserKnownHostsFile=$known_hosts -o StrictHostKeyChecking=yes -o PreferredAuthentications=password -o PubkeyAuthentication=no"
+          target="$HETZNER_STORAGEBOX_USER@$HETZNER_STORAGEBOX_HOST"
+          local_cache="$RUNNER_TEMP/nix-cache"
+
+          sshpass -e ssh $ssh_options "$target" mkdir -p ./nix-cache/nar
+          # Make every NAR available before publishing narinfo pointers to it.
+          sshpass -e rsync --archive --delay-updates --no-perms --no-owner --no-group \
+            -e "ssh $ssh_options" "$local_cache/nar/" "$target:./nix-cache/nar/"
+          # Publish the narinfo files only after all referenced NARs have arrived.
+          sshpass -e rsync --archive --delay-updates --no-perms --no-owner --no-group \
+            --include='/*.narinfo' --include='/nix-cache-info' --exclude='*' \
+            -e "ssh $ssh_options" "$local_cache/" "$target:./nix-cache/"
+
+          curl --fail --silent --show-error --netrc-file "$RUNNER_TEMP/nix-cache.netrc" \
+            "https://$HETZNER_STORAGEBOX_HOST/nix-cache/nix-cache-info" > /dev/null
+
+      - name: Remove temporary cache credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/nix-cache.netrc" "$RUNNER_TEMP/nix-cache-signing-key"
