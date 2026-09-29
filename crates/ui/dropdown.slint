@@ -1,0 +1,148 @@
+// Touch-friendly dropdown replacing std-widgets ComboBox.
+//
+// Why not ComboBox: its popup ScrollView leaves Flickable.interactive at
+// false (the fluent style hardcodes `interactive: false`, and only the
+// `mouse-drag-pan-enabled` opt-in flips it). The stock popup never opts
+// in, so on touch-only devices (Android) a popup list longer than the
+// visible 6 rows cannot be scrolled at all — desktop works via the mouse
+// wheel, which touch devices don't have. This component's popup opts into
+// drag-pan explicitly, like every other ScrollView in the app.
+//
+// API mirrors the ComboBox surface this app uses: `model`,
+// two-way `current-index`, `selected(string)`. `placeholder-text` shows
+// (dimmed) while no index is selected. `roomy` selects 44px touch rows,
+// otherwise 32px desktop rows; the closed box is always exactly one row
+// tall so filter rows keep their pinned heights.
+import { ScrollView } from "std-widgets.slint";
+
+export component Dropdown inherits Rectangle {
+    in property <[string]> model;
+    // Optional display text per entry, parallel to `model`. Lets a caller show
+    // a translated label (the automatic library buckets) while `selected`
+    // still reports the stored value the app filters on. Shorter than `model`
+    // (or empty) means "show the model entry as-is".
+    in property <[string]> labels: [];
+    in-out property <int> current-index: -1;
+    in property <string> placeholder-text: "";
+    in property <bool> enabled: true;
+    in property <bool> roomy: false;
+
+    callback selected(string);
+
+    property <length> item-h: root.roomy ? 44px : 32px;
+    // Visible popup rows, capped like the stock control.
+    property <int> shown: Math.min(6, root.model.length);
+    property <bool> has_selection: root.current-index >= 0 && root.current-index < root.model.length;
+    // Display text of entry `i`: its label when one is given, else the value.
+    pure function text_at(i: int) -> string {
+        return i >= 0 && i < root.labels.length ? root.labels[i] : (i >= 0 && i < root.model.length ? root.model[i] : "");
+    }
+    property <string> shown-text: root.has_selection ? root.text_at(root.current-index) : root.placeholder-text;
+
+    height: root.item-h;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: #33333c;
+    background: touch.has-hover && root.enabled ? #23232e : #1c1c22;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+
+        Text {
+            text: root.shown-text;
+            color: root.has_selection ? #e6e6ea : #8a8a9a;
+            font-size: 13px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        Text {
+            text: "▾";
+            color: #8a8a9a;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            if (root.model.length > 0) {
+                popup.show();
+            }
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: -4px;
+        width: root.width;
+        height: root.shown * root.item-h + 8px;
+        close-policy: close-on-click-outside;
+
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: #1c1c22;
+            border-width: 1px;
+            border-color: #33333c;
+            border-radius: 6px;
+            clip: true;
+
+            ScrollView {
+                width: 100%;
+                height: 100%;
+                // THE fix (see header comment): without this, touch
+                // drags do nothing and popup lists are frozen on Android.
+                mouse-drag-pan-enabled: true;
+
+                VerticalLayout {
+                    width: 100%;
+                    padding: 4px;
+                    spacing: 0px;
+                    alignment: start;
+
+                    for value[index] in root.model: Rectangle {
+                        width: 100%;
+                        height: root.item-h;
+                        border-radius: 4px;
+                        background: index == root.current-index ? #8b5cf633 : (item_touch.has-hover ? #2b2b35 : transparent);
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+
+                            Text {
+                                text: root.text_at(index);
+                                color: #e6e6ea;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                        }
+
+                        item_touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.current-index = index;
+                                root.selected(value);
+                                popup.close();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    states [
+        disabled when !root.enabled : {
+            root.opacity: 0.5;
+        }
+    ]
+}

@@ -1,0 +1,11 @@
+# Windows native library sources
+
+Nova links against the pinned x86_64 MinGW development build of libmpv. The archive supplies the import library and `libmpv-2.dll`; its MPV build prefers static dependency libraries, including FFmpeg, so Nova does not fetch or bundle a separate FFmpeg archive.
+
+- Project: https://github.com/shinchiro/mpv-winbuild-cmake
+- Release tag: `20260928`
+- Archive: https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260928/mpv-dev-x86_64-20260928-git-e470f8986e.7z
+- SHA-256: `81795d759e01016f1550fd71651a1a5d59ab5c28ef31c0b6793224e9cff39459`
+- Architecture: x86_64, generic x86-64 baseline (no AVX2-only build)
+
+The Windows development archive is fetched by Nix as a fixed-output source and unpacked into the build environment. No upstream binary archive is committed to this repository. The release packager includes the libmpv DLL and MinGW runtime DLLs beside `nova.exe`.

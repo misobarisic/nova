@@ -1,0 +1,19 @@
+NOVA — OPEN-SOURCE RUST DEPENDENCY LICENSES
+==========================================
+
+Generated from Cargo.lock for the target and feature set used to build this app.
+Each license section lists the crates that use it and their upstream source URL.
+The complete license text is included below each group.
+
+{{#each licenses}}
+----------------------------------------------------------------------------
+{{{name}}} [{{{id}}}]
+
+Used by:
+{{#each used_by}}
+- {{{crate.name}}} {{{crate.version}}} — {{#if crate.repository}}{{{crate.repository}}}{{else}}https://crates.io/crates/{{{crate.name}}}/{{{crate.version}}}{{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

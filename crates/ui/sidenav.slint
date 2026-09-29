@@ -1,0 +1,227 @@
+import { IcHome, IcSearch, IcVideoLibrary, IcSettingsGear } from "icons.slint";
+import { Anim } from "anim.slint";
+
+// Left navigation rail for wide layouts: the narrow BottomNav design turned
+// on its side — one vertical capsule of icon buttons, the active one behind
+// the same accent circle. Hosted by each page itself (like the top pills it
+// replaces), so page + rail stay one unit and the pages keep their own
+// insets; pages reserve exactly `NavMetrics.rail-width` of extra left
+// padding (0 on narrow) and anchor the rail to the window edge.
+//
+// Wide subpages keep the rail (unlike the narrow bottom bar, which hides on
+// the Home/Settings subpages): on a desktop the rail is window chrome, not
+// page chrome. The detail modal and the player cover it, as they always did.
+//
+// Rail geometry, shared with the pages that make room for it: the 64px
+// panel plus the gap before the page's own content padding.
+export global NavMetrics {
+    out property <length> rail-width: 76px;
+}
+
+// Navigation state shared by the two bars (SideNav here, BottomNav on
+// narrow). Both live inside the pages, so a switch destroys one bar and
+// builds the other — the new bar cannot observe the old selection by itself,
+// which is why the section being left is published here by the backend
+// (`app::run`), right before it flips the page flags.
+export global NavState {
+    // Section the current switch is coming from (0 Home, 1 Discover,
+    // 2 Library, 3 Settings). Equal to the bar's own section while nothing is
+    // in flight, so a bar rebuilt for another reason (returning from the
+    // detail modal) does not glide.
+    in-out property <int> from: 0;
+}
+
+component SideItem inherits Rectangle {
+    // 0 Home, 1 Discover, 2 Library, 3 Settings (same order as BottomNav).
+    in property <int> kind: 0;
+    in property <bool> active: false;
+    // Keyboard cursor (6-button nav, zone 0). Drawn as a ring on the icon
+    // circle instead of the bottom bar's "▶" KbMark: that marker is a
+    // horizontal-layout row and would consume a row of the rail's height.
+    in property <bool> kb_focused: false;
+
+    callback picked();
+
+    height: 56px;
+
+    // Only the hover fill and the keyboard ring live here: the accent circle
+    // is the one shared marker that glides between items (`SideNav`).
+    Rectangle {
+        width: 48px;
+        height: 48px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: (root.active || root.kb_focused) ? transparent : (item_touch.has-hover ? #2b2b35 : transparent);
+        border-radius: 24px;
+        border-width: root.kb_focused ? 2px : 0px;
+        border-color: #ffffff;
+
+        if root.kind == 0: IcHome {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 24px;
+            height: 24px;
+            fill: root.active ? #ffffff : #8a8a9a;
+        }
+        if root.kind == 1: IcSearch {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 24px;
+            height: 24px;
+            fill: root.active ? #ffffff : #8a8a9a;
+        }
+        if root.kind == 2: IcVideoLibrary {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 24px;
+            height: 24px;
+            fill: root.active ? #ffffff : #8a8a9a;
+        }
+        if root.kind == 3: IcSettingsGear {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 24px;
+            height: 24px;
+            fill: root.active ? #ffffff : #8a8a9a;
+        }
+    }
+
+    item_touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+}
+
+export component SideNav inherits Rectangle {
+    // Active section: 0 Home, 1 Discover, 2 Library, 3 Settings.
+    in property <int> active: 0;
+    // Window insets: the rail is anchored to the window's left edge, so it
+    // clears the status bar / a landscape cutout itself. 0 on desktop.
+    in property <length> safe-top: 0px;
+    in property <length> safe-left: 0px;
+    in property <length> safe-bottom: 0px;
+    in property <int> kb_zone;
+    in property <int> kb_nav;
+    in-out property <bool> kb_active;
+
+    callback home_picked();
+    callback discover_picked();
+    callback library_picked();
+    callback settings_picked();
+
+    // Section index of THIS bar (0 Home, 1 Discover, 2 Library, 3 Settings) and
+    // the marker's animated position, in item units. The bar is destroyed and
+    // rebuilt with its page on every switch, so it starts at the section we
+    // came from (`NavState.from`, published by the backend) and glides to its
+    // own — the accent circle therefore appears to travel from the old item to
+    // the new one. With the animation off it starts where it belongs.
+    property <float> marker: 0.0;
+    init => {
+        if (Anim.enabled && Anim.nav_slide) {
+            marker = NavState.from;
+            marker_go.running = true;
+        } else {
+            marker = root.active;
+        }
+        // Consumed: a later rebuild (returning from the detail modal) starts
+        // settled instead of gliding from a stale section.
+        NavState.from = root.active;
+    }
+    marker_go := Timer {
+        interval: 30ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.marker = root.active;
+        }
+    }
+
+    // Fixed footprint: the hosting page reserves exactly this much on its
+    // left (its padding-left grows by `NavMetrics.rail-width`). Safe area is
+    // added here only — the page's own `safe-left` padding then reads as the
+    // gap between rail and content.
+    //
+    // x/y are set here because the pages place the rail as a plain child of
+    // their (non-layout) root: Slint centres such children by default, which
+    // would float the rail into the middle of the window.
+    x: 0px;
+    y: 0px;
+    width: NavMetrics.rail-width + root.safe-left;
+    height: 100%;
+
+    // Eats stray taps in the rail strip (the hosting page's left padding):
+    // plain Rectangles don't consume taps in Slint, so without it those taps
+    // would reach the content underneath. Same rationale as BottomNav's eater.
+    eater := TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { }
+    }
+
+    // Panel: a plain full-bleed column — no outer margin, no rounded corners
+    // — spanning from the window's left edge to its bottom edge, with the
+    // four items listed top to bottom just under the top. Same colours and
+    // border as the bottom bar, minus the capsule geometry: flush against the
+    // window edges a rounded corner would only read as a bug.
+    Rectangle {
+        x: root.safe-left;
+        y: root.safe-top;
+        width: 64px;
+        height: root.height - root.safe-top - root.safe-bottom;
+        background: #17171d;
+        border-width: 1px;
+        border-color: #2a2a33;
+
+        // The one accent circle, shared by all four items: it is positioned by
+        // the item index (56px item pitch, 8px panel padding) so it can glide.
+        // Declared before the item column, which draws the icons over it.
+        marker_dot := Rectangle {
+            x: (parent.width - self.width) / 2;
+            // Centred inside the item slot, like the item's own 48px ring:
+            // the 4px is half of the 8px the 48px circle leaves in a 56px item.
+            y: 8px + (56px - self.height) / 2 + root.marker * 56px;
+            width: 48px;
+            height: 48px;
+            border-radius: 24px;
+            background: #8b5cf6;
+            animate y { duration: Anim.nav_glide; easing: ease-out; }
+        }
+
+        VerticalLayout {
+            width: 100%;
+            height: 100%;
+            // Inside the panel, along the main axis: the first/last item keeps
+            // a little air from the panel's edges.
+            padding-top: 8px;
+            padding-bottom: 8px;
+
+            SideItem {
+                kind: 0;
+                active: root.active == 0;
+                kb_focused: root.kb_zone == 0 && root.kb_nav == 0 && root.kb_active;
+                picked => { root.kb_active = false; root.home_picked(); }
+            }
+
+            SideItem {
+                kind: 1;
+                active: root.active == 1;
+                kb_focused: root.kb_zone == 0 && root.kb_nav == 1 && root.kb_active;
+                picked => { root.kb_active = false; root.discover_picked(); }
+            }
+
+            SideItem {
+                kind: 2;
+                active: root.active == 2;
+                kb_focused: root.kb_zone == 0 && root.kb_nav == 2 && root.kb_active;
+                picked => { root.kb_active = false; root.library_picked(); }
+            }
+
+            SideItem {
+                kind: 3;
+                active: root.active == 3;
+                kb_focused: root.kb_zone == 0 && root.kb_nav == 3 && root.kb_active;
+                picked => { root.kb_active = false; root.settings_picked(); }
+            }
+        }
+    }
+}

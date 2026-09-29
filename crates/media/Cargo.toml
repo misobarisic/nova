@@ -1,0 +1,30 @@
+[package]
+name = "nova-media"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+nova-config = { path = "../config" }
+slint = { workspace = true }
+# Pure-Rust image decode: desktop cache pipeline and Android fetch path.
+image = "0.25.10"
+
+# --- Desktop (non-Android) -------------------------------------------------
+[target.'cfg(not(target_os = "android"))'.dependencies]
+addons = { path = "../addons", features = ["client"] }
+reqwest = { version = "0.13.4", features = ["blocking"] }
+# Lossy WebP encoding (image's WebP encoder is lossless-only).
+webp = "0.3.1"
+
+# --- Android ---------------------------------------------------------------
+# rustls stack (OpenSSL does not cross-compile); blocking reqwest only.
+[target.'cfg(target_os = "android")'.dependencies]
+addons = { path = "../addons", default-features = false }
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws-lc-rs"] }
+webpki-roots = "1"
+
+# Heap trimming on Linux (malloc_trim).
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"

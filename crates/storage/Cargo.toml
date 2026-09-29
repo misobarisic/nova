@@ -1,0 +1,10 @@
+[package]
+name = "nova-storage"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+# Platform-abstracted persistent key-value store, split out so app-logic
+# edits don't drag the redb backend back through codegen.
+[dependencies]
+redb = "3"

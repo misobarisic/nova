@@ -1,0 +1,100 @@
+# SPDX licenses are selected from expressions declared by each package.
+# If a license cannot be resolved, --fail makes the build stop so the catalog
+# cannot silently omit a dependency's terms.
+accepted = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "ISC",
+  "BSD-2-Clause",
+  "Zlib",
+  "Unicode-3.0",
+  "0BSD",
+  "MIT-0",
+  "CC0-1.0",
+  "CC-BY-4.0",
+  "CC-BY-SA-4.0",
+  "CC-BY-3.0",
+  "OFL-1.1",
+  "NCSA",
+  "BSL-1.0",
+  "MPL-2.0",
+  "EPL-2.0",
+  "EUPL-1.2",
+  "Artistic-2.0",
+  "Unlicense",
+  "Unicode-DFS-2016",
+  "OpenSSL",
+  "CDLA-Permissive-2.0",
+  "BSD-2-Clause-Patent",
+  "BSD-3-Clause-Clear",
+  "Apache-2.0 WITH LLVM-exception",
+  "FTL",
+  "LGPL-2.1-or-later",
+  "LGPL-2.1",
+  "LGPL-2.1-only",
+  "LGPL-3.0-or-later",
+  "LGPL-3.0-only",
+  "GPL-2.0-or-later",
+  "GPL-2.0-only",
+  "GPL-3.0-or-later",
+  "GPL-3.0-only"
+]
+ignore-dev-dependencies = true
+ignore-build-dependencies = true
+ignore-transitive-dependencies = false
+workarounds = ["ring", "rustls"]
+
+[slint]
+accepted = ["GPL-3.0-only"]
+
+[slint-macros]
+accepted = ["GPL-3.0-only"]
+
+[slint-build]
+accepted = ["GPL-3.0-only"]
+
+[slint-interpreter]
+accepted = ["GPL-3.0-only"]
+
+[i-slint-common]
+accepted = ["GPL-3.0-only"]
+
+[i-slint-core]
+accepted = ["GPL-3.0-only"]
+
+[i-slint-core-macros]
+accepted = ["GPL-3.0-only"]
+
+[i-slint-compiler]
+accepted = ["GPL-3.0-only"]
+
+[i-slint-backend-selector]
+accepted = ["GPL-3.0-only"]
+
+[i-slint-backend-android-activity]
+accepted = ["GPL-3.0-only"]
+
+[i-slint-backend-winit]
+accepted = ["GPL-3.0-only"]
+
+[i-slint-backend-qt]
+accepted = ["GPL-3.0-only"]
+
+[i-slint-backend-linuxkms]
+accepted = ["GPL-3.0-only"]
+
+[i-slint-backend-testing]
+accepted = ["GPL-3.0-only"]
+
+[i-slint-renderer-femtovg]
+accepted = ["GPL-3.0-only"]
+
+[i-slint-renderer-skia]
+accepted = ["GPL-3.0-only"]
+
+[i-slint-renderer-software]
+accepted = ["GPL-3.0-only"]
+
+[i-slint-live-preview]
+accepted = ["GPL-3.0-only"]

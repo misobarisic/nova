@@ -1,0 +1,18 @@
+[package]
+name = "nova-torrent"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+# Embedded BitTorrent client (librqbit) split out of the app crate so the
+# heavy tracker/DHT/tokio surface doesn't recompile on app-logic edits.
+
+[dependencies]
+nova-config = { path = "../config" }
+nova-storage = { path = "../storage" }
+librqbit = { version = "9", default-features = false, features = ["http-api", "rust-tls", "tracing-subscriber-utils"] }
+librqbit-dualstack-sockets = { version = "0.7", features = ["axum"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync"] }

@@ -1,0 +1,20 @@
+# English — the source language of the interface.
+#
+# Every user-facing string in crates/ui/*.slint is written in English inside
+# `@tr("…")`, so this catalog is deliberately empty: no msgid needs a translation,
+# and a missing entry makes Slint fall back to the source text (which *is* the
+# English string). The header is still required — slint-build refuses to compile
+# when `translations/` holds no catalog, and this one is what registers "en" as a
+# bundled language so `slint::select_bundled_translation("en")` (the English
+# entry of Settings → Display) succeeds instead of erroring.
+#
+# To add a language: create translations/<code>/LC_MESSAGES/nova-ui.po next to this
+# file, add the matching `nova_config::Language` variant, and generate the catalog
+# entries with `slint-tr-extractor --no-default-translation-context` (the
+# catalogs are context-free — see crates/ui/build.rs); entries start as
+# msgid-only, so untranslated strings keep showing English.
+msgid ""
+msgstr ""
+"Project-Id-Version: nova-ui\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"

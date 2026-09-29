@@ -1,0 +1,125 @@
+// Custom single-line search field built directly on TextInput.
+//
+// Why not LineEdit: the stock field paints a persistent "active" look
+// while focused (lighter background + 2px accent underline) plus a bright
+// accent text selection. On touch devices the field keeps focus the whole
+// time the keyboard is up, so it reads as stuck "highlighted/selected"
+// while typing. This field keeps one calm look: same background always,
+// a thin 1px focus ring, and a dimmed selection wash.
+
+import { IcClose } from "icons.slint";
+
+export component SearchField inherits Rectangle {
+    in-out property <string> text: "";
+    in property <string> placeholder-text: "";
+    in property <bool> enabled: true;
+    // Touch-sized box (44px) on narrow layouts, compact (32px) otherwise.
+
+    in property <bool> roomy: false;
+
+    callback accepted(string);
+    callback edited(string);
+
+    // Focus requests (keyboard edit mode) land on the inner field.
+    forward-focus: inner;
+
+    // What the user sees: committed text plus any still-composing IME
+    // text. On touch keyboards a tap on a submit button does not commit
+    // the composition first, so submitting plain `text` would silently
+    // drop it (empty searches, lost addon URLs). Submit this instead.
+    out property <string> full-text: root.text + inner.preedit-text;
+
+    // Reserve room for the trailing clear button while there is text, so the
+    // caret/text never sits under it.
+    property <bool> has_text: root.full-text != "";
+    property <length> clear_box: root.height;
+
+    height: root.roomy ? 44px : 32px;
+    border-radius: 6px;
+    border-width: 1px;
+    // Calm 1px ring on focus instead of the stock underline + background
+    // flare that looked permanently "selected" on touch screens.
+    border-color: inner.has-focus ? #8b5cf6 : #33333c;
+    background: #1c1c22;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: root.has_text ? root.clear_box + 4px : 12px;
+
+        inner := TextInput {
+            text <=> root.text;
+            enabled: root.enabled;
+            font-size: 13px;
+            color: #e6e6ea;
+            // Dimmed selection wash instead of the bright stock accent.
+            selection-background-color: #8b5cf655;
+            selection-foreground-color: #ffffff;
+            single-line: true;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            min-width: 0px;
+            accepted => { root.accepted(root.full-text); }
+            edited => { root.edited(self.text); }
+        }
+    }
+
+    // Placeholder overlay (raw TextInput has none). Hidden while there
+    // is composing IME text too, otherwise it overlaps the composition.
+    // Plain Text never intercepts pointer events, so taps fall through.
+    if root.full-text == "" && root.placeholder-text != "": Text {
+        x: 12px;
+        y: 0px;
+        width: parent.width - 24px;
+        height: parent.height;
+        text: root.placeholder-text;
+        color: #6c6c7d;
+        font-size: 13px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    // Clear button: right-most inside the field, shown only with text. Tapping
+    // clears the field; the `edited` callback fires (through `text`) so owners
+    // react exactly as if the user had deleted the characters.
+    if root.has_text && root.enabled: Rectangle {
+        x: parent.width - root.clear_box;
+        y: 0px;
+        width: root.clear_box;
+        height: parent.height;
+        border-radius: 6px;
+        background: clear_touch.has-hover ? #ffffff14 : transparent;
+
+        Rectangle {
+            width: 16px;
+            height: 16px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 8px;
+            background: #4a4a58;
+
+            IcClose {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 11px;
+                height: 11px;
+                fill: #e6e6ea;
+            }
+        }
+
+        clear_touch := TouchArea {
+            width: 100%;
+            height: 100%;
+            mouse-cursor: pointer;
+            clicked => {
+                root.text = "";
+                root.edited("");
+            }
+        }
+    }
+
+    states [
+        disabled when !root.enabled : {
+            root.opacity: 0.5;
+        }
+    ]
+}

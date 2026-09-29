@@ -1,0 +1,18 @@
+# Android NDK linkers are exported by `nix develop .#android` as
+# CARGO_TARGET_<TRIPLE>_LINKER env vars (the NDK lives in the nix store,
+# so no absolute path is checked in here — env takes precedence over this
+# file anyway). Only uncomment + adapt the block below when building with a
+# non-nix SDK (Android Studio install), replacing $ANDROID_NDK_ROOT with
+# the real path first (cargo does not expand env vars here).
+#
+# [target.aarch64-linux-android]
+# linker = "/home/you/Android/Sdk/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang"
+# ar = "/home/you/Android/Sdk/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+# [target.x86_64-linux-android]
+# linker = "/home/you/Android/Sdk/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang"
+# ar = "/home/you/Android/Sdk/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+
+# Run the app with the interpreter-backed (hot-reloading) UI. Linux debug only;
+# see the `live-preview` feature in Cargo.toml / crates/ui/build.rs.
+[alias]
+dev = "run --features live-preview"

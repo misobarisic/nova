@@ -1,0 +1,228 @@
+import { Button, ScrollView } from "std-widgets.slint";
+import { CategoryRow } from "types.slint";
+import { KbMark } from "kbnav.slint";
+import { IcCheck } from "icons.slint";
+
+export component CategoryPickerPopup {
+    preferred-width: 100%;
+    preferred-height: 100%;
+
+    in-out property <string> selected_title: "";
+    in-out property <[CategoryRow]> category_rows: [];
+    in-out property <[bool]> modal_category_flags: [];
+
+    callback toggle_entry_category(string);
+    callback closed();
+
+    // Keyboard modality (bound to AppWindow).
+    in-out property <bool> kb_active;
+
+    // ---- 6-button keyboard nav: chips grid + Done ----
+    property <int> kb_zone: 0; // 0 chips, 1 done
+    property <int> kb_idx: 0;
+    // Fewer columns on phones so names don't clip (kb nav follows it).
+    property <int> chip_cols: root.width < 430px ? 2 : 3;
+
+    function kb_clamp() {
+        if (root.kb_idx >= root.category_rows.length) {
+            root.kb_idx = Math.max(0, root.category_rows.length - 1);
+        }
+        if (root.kb_idx < 0) {
+            root.kb_idx = 0;
+        }
+    }
+
+    changed category_rows => { root.kb_clamp(); }
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000a0;
+
+        nav_scope := FocusScope {
+            width: 100%;
+            height: 100%;
+            init => { self.focus(); }
+            key-pressed(e) => {
+                if (e.text == Key.UpArrow || e.text == Key.DownArrow
+                    || e.text == Key.LeftArrow || e.text == Key.RightArrow
+                    || e.text == Key.Return || e.text == Key.Backspace) {
+                    root.kb_active = true;
+                }
+                if (e.text == Key.UpArrow) {
+                    if (root.kb_zone == 1) {
+                        root.kb_zone = 0;
+                    } else if (root.kb_idx >= root.chip_cols) {
+                        root.kb_idx -= root.chip_cols;
+                    }
+                    accept
+                } else if (e.text == Key.DownArrow) {
+                    if (root.kb_zone == 0
+                        && root.kb_idx + root.chip_cols >= root.category_rows.length) {
+                        root.kb_zone = 1;
+                    } else if (root.kb_zone == 0
+                        && root.kb_idx + root.chip_cols < root.category_rows.length) {
+                        root.kb_idx += root.chip_cols;
+                    }
+                    accept
+                } else if (e.text == Key.LeftArrow) {
+                    if (root.kb_zone == 0 && root.kb_idx > 0) {
+                        root.kb_idx -= 1;
+                    }
+                    accept
+                } else if (e.text == Key.RightArrow) {
+                    if (root.kb_zone == 0
+                        && root.kb_idx + 1 < root.category_rows.length) {
+                        root.kb_idx += 1;
+                    }
+                    accept
+                } else if (e.text == Key.Return) {
+                    if (root.kb_zone == 1) {
+                        root.closed();
+                    } else if (root.kb_idx >= 0
+                        && root.kb_idx < root.category_rows.length) {
+                        root.toggle_entry_category(
+                            root.category_rows[root.kb_idx].name);
+                    }
+                    accept
+                } else if (e.text == Key.Backspace || e.text == Key.Back) {
+                    root.closed();
+                    accept
+                } else {
+                    reject
+                }
+            }
+        }
+
+        backdrop_touch := TouchArea {
+            width: 100%;
+            height: 100%;
+            mouse-cursor: pointer;
+            clicked => { root.kb_active = false; root.closed(); }
+        }
+
+        Rectangle {
+            width: min(520px, parent.width - 40px);
+            // Bound the card to a concrete height so its content (and the
+            // header's Done button) can never stretch it to full window.
+            height: min(parent.height - 40px, 200px);
+            background: #18181c;
+            border-radius: 14px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+
+            VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+
+                // Combined header: title left, Done right (no separate
+                // bottom button row — that was most of the height). Fixed row
+                // height keeps the Done button compact instead of stretching.
+                HorizontalLayout {
+                    height: 32px;
+
+                    Text {
+                        text: @tr("Assign categories");
+                        font-size: 16px;
+                        font-weight: 700;
+                        color: #ffffff;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+
+                    Button {
+                        text: @tr("Done");
+                        primary: true;
+                        min-height: 44px;
+                        vertical-stretch: 0;
+                        clicked => { root.kb_active = false; root.closed(); }
+                    }
+
+                    KbMark { on: root.kb_zone == 1; active: root.kb_active; }
+                }
+
+                Text {
+                    text: root.selected_title;
+                    font-size: 11px;
+                    color: #8a8a9a;
+                    overflow: elide;
+                }
+
+                Rectangle { height: 1px; background: #26262e; }
+
+                if root.category_rows.length == 0: Text {
+                    text: @tr("No categories yet — add them in Settings → Categories, then come back to tag this item.");
+                    color: #8a8a9a;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+
+                if root.category_rows.length > 0: ScrollView {
+                    vertical-stretch: 1;
+                    width: 100%;
+                    // Touch devices scroll by dragging (there is no
+                    // wheel): the fluent-style ScrollView disables
+                    // drag-pan by default, so opt in explicitly.
+                    mouse-drag-pan-enabled: true;
+
+                    GridLayout {
+                        spacing: 6px;
+
+                        for cat[i] in root.category_rows: Rectangle {
+                            row: Math.floor(i / root.chip_cols);
+                            col: Math.mod(i, root.chip_cols);
+                            height: root.width < 430px ? 44px : 30px;
+                            border-radius: root.width < 430px ? 22px : 15px;
+                            background: chip_touch.has-hover ? (root.modal_category_flags[i] ? #7c4df0 : #2b2b35) : (root.modal_category_flags[i] ? #8b5cf6 : #232330);
+                            border-width: root.kb_active && root.kb_zone == 0 && root.kb_idx == i ? 2px : 0px;
+                            border-color: #ffffff;
+
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 5px;
+
+                                Rectangle {
+                                    width: 14px;
+
+                                    VerticalLayout {
+                                        width: 100%;
+                                        alignment: center;
+
+                                        if root.modal_category_flags[i]: IcCheck {
+                                            x: (parent.width - self.width) / 2;
+                                            width: 12px;
+                                            height: 12px;
+                                            fill: #ffffff;
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: cat.name;
+                                    color: root.modal_category_flags[i] ? #ffffff : #e6e6ea;
+                                    font-size: 12px;
+                                    font-weight: root.modal_category_flags[i] ? 600 : 400;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                            }
+
+                            chip_touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.kb_active = false;
+                                    root.kb_zone = 0;
+                                    root.kb_idx = i;
+                                    root.toggle_entry_category(cat.name);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

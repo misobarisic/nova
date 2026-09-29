@@ -1,0 +1,1953 @@
+import { ScrollView } from "std-widgets.slint";
+import { TrackRow } from "types.slint";
+import {
+    IcPlay, IcPause, IcVolumeUp, IcVolumeOff, IcReplay10, IcForward10,
+    IcCaptions, IcMusic, IcFullscreen, IcFullscreenExit, IcClose,
+    IcChevronRight, IcChevronLeft, IcCheck, IcSettingsGear,
+} from "icons.slint";
+import { Anim } from "anim.slint";
+import { SpeedControl, PlaybackSpeed } from "speedcontrol.slint";
+
+// 40×40 rounded-square hit-target that tints on hover and hosts any icon.
+component IconBtn inherits Rectangle {
+    in property <bool> active: false;
+    // 6-button nav highlight.
+    in property <bool> focused: false;
+    // Base fill shown when idle (not hovered/active). Default transparent:
+    // the bottom-bar buttons sit on the dark scrim. The Android center
+    // transport passes a dark fill so its glyphs read over bright video.
+    in property <color> base: transparent;
+    in-out property <bool> hovered: touch.has-hover;
+    callback clicked();
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    border-width: focused ? 2px : 0px;
+    border-color: #8b5cf6;
+    background: (root.active || touch.has-hover) ? #ffffff1f : root.base;
+    touch := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    @children
+}
+
+// One row of the Miru-style track menu: [icon] label …… value [✓ / >].
+component MenuRow inherits Rectangle {
+    in property <int> icon_kind: 0;   // 0 = none, 1 = music note, 2 = captions
+    in property <string> label;
+    in property <string> value;
+    in property <bool> selected: false;
+    // 6-button nav highlight.
+    in property <bool> focused: false;
+    callback activate();
+
+    height: 44px;
+    border-radius: 8px;
+    background: root.focused ? #8b5cf6 : (row_t.has-hover ? #ffffff12 : transparent);
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 12px;
+        spacing: 12px;
+
+        Rectangle {
+            width: 22px;
+            height: 100%;
+
+            if icon_kind == 1: IcMusic {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                fill: #ffffff;
+            }
+            if icon_kind == 2: IcCaptions {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                fill: #ffffff;
+            }
+        }
+
+        Text {
+            text: label;
+            color: #ffffff;
+            font-size: 14px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        if value != "": Text {
+            text: value;
+            color: #ffffff66;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            width: 16px;
+            height: 100%;
+
+            if selected: IcCheck {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 16px;
+                height: 16px;
+                fill: #ffffff;
+            }
+            if !selected: IcChevronRight {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 16px;
+                height: 16px;
+                fill: #ffffff59;
+            }
+        }
+    }
+
+    row_t := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { activate(); }
+    }
+}
+
+// Dark rounded popup card listing audio/subtitle tracks. Anchored by the
+// caller above the button that opens it.
+component TrackMenu inherits Rectangle {
+    in property <[TrackRow]> tracks;
+    in property <bool> kb_active: false;
+    in property <int> row_icon: 0;   // icon for every track row
+    in property <bool> with_off_row: false;
+    in property <length> max_w: 340px;
+    // 6-button nav: focused row index (off-row is 0 when present).
+    in property <int> focused_idx: -1;
+    callback pick(int);
+
+    width: Math.min(340px, self.max_w);
+    height: menu_scroll.height;
+    background: #262626;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: #ffffff17;
+    drop-shadow-blur: 24px;
+    drop-shadow-color: #00000080;
+
+    // Swallow clicks on the card itself so they don't reach the video.
+    TouchArea { width: 100%; height: 100%; }
+
+    menu_scroll := ScrollView {
+        width: 100%;
+        height: Math.min(menu_col.preferred-height, 320px);
+        // Touch devices scroll by dragging (there is no wheel): the
+        // fluent-style ScrollView disables drag-pan by default, so opt
+        // in explicitly.
+        mouse-drag-pan-enabled: true;
+
+        menu_col := VerticalLayout {
+            spacing: 2px;
+
+            if with_off_row: MenuRow {
+                label: @tr("Off");
+                focused: root.kb_active && root.focused_idx == 0;
+                activate => { pick(-1); }
+            }
+
+            if tracks.length == 0 && !with_off_row: Rectangle {
+                height: 44px;
+
+                Text {
+                    text: @tr("No tracks available.");
+                    color: #ffffff66;
+                    font-size: 13px;
+                    x: 16px;
+                    vertical-alignment: center;
+                }
+            }
+
+            for track[i] in tracks: MenuRow {
+                icon_kind: row_icon;
+                label: track.lang + (track.title != "" ? " — " + track.title : "");
+                value: track.codec;
+                selected: track.selected;
+                focused: root.kb_active && root.focused_idx == i + (root.with_off_row ? 1 : 0);
+                activate => { pick(track.index); }
+            }
+        }
+    }
+}
+
+// Player settings panel (opened by the gear button in the bottom control
+// row): a dimmed backdrop with a centered card whose rows open submenus.
+// Holds the hardware-decoder picker (Android) plus the subtitle and audio
+// track pickers. On narrow layouts the track pickers live here to save
+// control-row space; on wide layouts they duplicate the quick buttons so
+// the panel is available on every platform. Long row lists scroll.
+component SettingsMenu inherits Rectangle {
+    // Current submenu: 0 = root, 1 = hardware decoding (Android), 2 =
+    // subtitles, 3 = audio, 4 = playback speed. Two-way bound to PlayerOverlay
+    // so the keyboard handler can drive it.
+    in-out property <int> page: 0;
+    // Keyboard focus row on the current page (-1 = none / mouse mode).
+    in property <int> focused_idx: -1;
+    // Decoder selection (-1 none, 0 HW+, 1 HW, 2 SW) and its short label for
+    // the category row, both mirrored from `hwdec-current`.
+    in property <int> selected_index: -1;
+    in property <string> hwdec_label: "";
+    // Track lists and the current-selection summaries on the root rows.
+    in property <[TrackRow]> sub_tracks;
+    in property <[TrackRow]> audio_tracks;
+    in property <string> sub_label: "";
+    in property <string> audio_label: "";
+    // Playback rate: the same per-device value Settings → Player edits.
+    in-out property <float> playback_speed: 1.0;
+    // Android-only decoder section; hidden elsewhere.
+    in property <bool> is_android: false;
+
+    // Picking a track / decoder; the caller closes the modal.
+    callback pick_decoder(int);
+    callback pick_sub(int);
+    callback pick_audio(int);
+    // Playback rate: a slider value (drags/live) or ± one 0.05 step.
+    callback speed_changed(float);
+    callback speed_stepped(int);
+    callback closed();
+
+    width: 100%;
+    height: 100%;
+
+    function page_title() -> string {
+        if (root.page == 1) {
+            return @tr("Hardware decoding");
+        }
+        if (root.page == 2) {
+            return @tr("Subtitles");
+        }
+        if (root.page == 3) {
+            return @tr("Audio");
+        }
+        if (root.page == 4) {
+            return @tr("Playback speed");
+        }
+        return @tr("Player settings");
+    }
+
+    // Dim backdrop; tapping outside the card dismisses the modal.
+    Rectangle { width: 100%; height: 100%; background: #000000a6; }
+    backdrop_touch := TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { root.closed(); }
+    }
+
+    card := Rectangle {
+        width: Math.min(300px, root.width - 48px);
+        height: card_col.preferred-height;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        background: #262626;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: #ffffff17;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000080;
+
+        // Swallow taps on the card so they don't reach the backdrop.
+        TouchArea { width: 100%; height: 100%; }
+
+        card_col := VerticalLayout {
+            padding: 8px;
+            spacing: 2px;
+            alignment: start;
+
+            // ---- Header: title + back (submenu) / close ----
+            Rectangle {
+                height: 36px;
+
+                HorizontalLayout {
+                    padding-left: 4px;
+                    padding-right: 0px;
+                    spacing: 6px;
+
+                    if root.page != 0: Rectangle {
+                        width: 28px;
+                        height: 28px;
+
+                        back_touch := TouchArea {
+                            width: 100%;
+                            height: 100%;
+                            mouse-cursor: pointer;
+                            clicked => { root.page = 0; }
+                        }
+                        IcChevronLeft {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 20px;
+                            height: 20px;
+                            fill: #ffffff;
+                        }
+                    }
+
+                    Text {
+                        text: root.page_title();
+                        color: #ffffff;
+                        font-size: 14px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+
+                    // Live decoder value on the right of the submenu title.
+                    if root.page == 1: Text {
+                        text: root.hwdec_label != "" ? root.hwdec_label : "…";
+                        color: #ffffff99;
+                        font-size: 12px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+
+                        close_touch := TouchArea {
+                            width: 100%;
+                            height: 100%;
+                            mouse-cursor: pointer;
+                            clicked => { root.closed(); }
+                        }
+                        IcClose {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 18px;
+                            height: 18px;
+                            fill: #ffffff;
+                        }
+                    }
+                }
+            }
+
+            // ---- Rows for the current page (scrolls when the list is long) ----
+            ScrollView {
+                width: 100%;
+                vertical-stretch: 0;
+                height: Math.min(pages_col.preferred-height, root.height - 140px);
+                mouse-drag-pan-enabled: true;
+
+                pages_col := VerticalLayout {
+                    width: 100%;
+                    spacing: 2px;
+
+                    // Root categories.
+                    if root.page == 0: VerticalLayout {
+                        width: 100%;
+                        spacing: 2px;
+                        MenuRow {
+                            label: @tr("Subtitles");
+                            value: root.sub_label;
+                            focused: root.focused_idx == 0;
+                            activate => { root.page = 2; }
+                        }
+                        MenuRow {
+                            label: @tr("Audio");
+                            value: root.audio_label;
+                            focused: root.focused_idx == 1;
+                            activate => { root.page = 3; }
+                        }
+                        if root.is_android: MenuRow {
+                            label: @tr("Hardware decoding");
+                            value: root.hwdec_label != "" ? root.hwdec_label : "…";
+                            focused: root.focused_idx == 2;
+                            activate => { root.page = 1; }
+                        }
+                        // Same value as Settings → Player (per device).
+                        MenuRow {
+                            label: @tr("Playback speed");
+                            value: PlaybackSpeed.label(root.playback_speed);
+                            focused: root.focused_idx == (root.is_android ? 3 : 2);
+                            activate => { root.page = 4; }
+                        }
+                    }
+
+                    // Decoder submenu.
+                    if root.page == 1: VerticalLayout {
+                        width: 100%;
+                        spacing: 2px;
+                        MenuRow {
+                            label: "HW+";
+                            value: @tr("zero-copy");
+                            selected: root.selected_index == 0;
+                            focused: root.focused_idx == 0;
+                            activate => { root.pick_decoder(0); }
+                        }
+                        MenuRow {
+                            label: "HW";
+                            value: @tr("copy-back");
+                            selected: root.selected_index == 1;
+                            focused: root.focused_idx == 1;
+                            activate => { root.pick_decoder(1); }
+                        }
+                        MenuRow {
+                            label: "SW";
+                            value: @tr("software");
+                            selected: root.selected_index == 2;
+                            focused: root.focused_idx == 2;
+                            activate => { root.pick_decoder(2); }
+                        }
+                    }
+
+                    // Subtitles submenu: Off + one row per track.
+                    if root.page == 2: VerticalLayout {
+                        width: 100%;
+                        spacing: 2px;
+                        MenuRow {
+                            icon_kind: 2;
+                            label: @tr("Off");
+                            focused: root.focused_idx == 0;
+                            activate => { root.pick_sub(-1); }
+                        }
+                        for t[i] in root.sub_tracks: MenuRow {
+                            icon_kind: 2;
+                            label: t.lang + (t.title != "" ? " — " + t.title : "");
+                            value: t.codec;
+                            selected: t.selected;
+                            focused: root.focused_idx == i + 1;
+                            activate => { root.pick_sub(t.index); }
+                        }
+                    }
+
+                    // Audio submenu: one row per track.
+                    if root.page == 3: VerticalLayout {
+                        width: 100%;
+                        spacing: 2px;
+                        if root.audio_tracks.length == 0: Rectangle {
+                            height: 44px;
+
+                            Text {
+                                text: @tr("No tracks available.");
+                                color: #ffffff66;
+                                font-size: 13px;
+                                x: 16px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        for t[i] in root.audio_tracks: MenuRow {
+                            icon_kind: 1;
+                            label: t.lang + (t.title != "" ? " — " + t.title : "");
+                            value: t.codec;
+                            selected: t.selected;
+                            focused: root.focused_idx == i;
+                            activate => { root.pick_audio(t.index); }
+                        }
+                    }
+
+                    // Playback rate: the shared slider + ± 0.05 step buttons
+                    // (the same control Settings → Player shows). Up/Down
+                    // arrow keys step it; the slider is what takes focus.
+                    if root.page == 4: VerticalLayout {
+                        width: 100%;
+                        spacing: 2px;
+
+                        Rectangle {
+                            // Slider row + preset row.
+                            height: 76px;
+
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 12px;
+
+                                speed_ctl := SpeedControl {
+                                    speed <=> root.playback_speed;
+                                    focused: root.focused_idx == 0;
+                                    changed(v) => { root.speed_changed(v); }
+                                    stepped(d) => { root.speed_stepped(d); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component PlayerOverlay {
+    preferred-width: 100%;
+    preferred-height: 100%;
+
+    in-out property <bool> playback_started: false;
+    in-out property <bool> is_paused: true;
+    in-out property <float> position: 0.0;
+    in-out property <float> duration: 0.0;
+    in-out property <string> time_text: "00:00 / 00:00";
+    in-out property <string> player_status: "";
+    in-out property <string> player_title: "";
+    // Android decoder label: "HW+" = direct MediaCodec (zero-copy),
+    // "HW" = MediaCodec copy-back, "SW" = software. Empty elsewhere. Shown as
+    // the current value of the settings modal's decoder submenu.
+    in-out property <string> decode_label: "";
+    // Android decoder selection (-1 none, 0 HW+, 1 HW, 2 SW) for the settings
+    // modal's checkmark, mirrored from mpv's `hwdec-current`.
+    in-out property <int> decoder_selected: -1;
+    // Settings-panel submenu page: 0 = root, 1 = decoder, 2 = subtitles,
+    // 3 = audio. Driven by the keyboard handler.
+    property <int> settings_page: 0;
+    // Current-selection summaries shown on the settings panel's root rows.
+    in-out property <string> sub_label: "";
+    in-out property <string> audio_label: "";
+    in-out property <float> volume: 100.0;
+    in-out property <bool> muted: false;
+    // Playback rate: the per-device value both this panel and Settings →
+    // Player edit (AppWindow owns it).
+    in-out property <float> playback_speed: 1.0;
+    in-out property <bool> is_fullscreen: false;
+    in-out property <[TrackRow]> audio_tracks: [];
+    in-out property <[TrackRow]> sub_tracks: [];
+    in-out property <bool> osd_visible: true;
+    // Whether faded controls may run their actions. Opacity alone does not
+    // remove hit-testing, so handlers check this before acting.
+    property <bool> controls_active: (
+        root.osd_visible || !root.playback_started || root.open_popup != 0
+    );
+    // A faded control still receives pointer input, so every control handler
+    // calls this first. While hidden it wakes the OSD and suppresses the
+    // control; while active it simply permits the control.
+    function guard_osd_control() -> bool {
+        if (root.controls_active) {
+            return true;
+        }
+        root.osd_mouse_moved();
+        return false;
+    }
+    // Black alpha-ramp for the bottom scrim (generated in Rust; see app.rs).
+    in-out property <image> scrim_image;
+    // Episode (or show) poster shown behind the loading status until the
+    // first video frame arrives.
+    in-out property <image> player_poster;
+
+    callback toggle_pause();
+    callback seek(float);
+    callback close_player();
+    callback set_volume(float);
+    callback toggle_mute();
+    callback pick_audio_track(int);
+    callback pick_sub_track(int);
+    // Android runtime decoder pick (0 = HW+, 1 = HW, 2 = SW).
+    callback pick_decoder(int);
+    // Playback rate: slider value / ± one 0.05 step (quantized in the backend).
+    callback playback_speed_changed(float);
+    callback playback_speed_stepped(int);
+    // Transient rate preview (press-and-hold 2×): pushed straight into the
+    // running session, never stored or persisted — the release restores the
+    // stored rate through this same callback.
+    callback playback_speed_preview(float);
+    // Android swipe gestures: brightness notches (±1 per 40px, the backend
+    // scales to ±0.05 and mirrors the level into `player_brightness`) and
+    // system-volume notches (the system panel is the readout).
+    callback android_brightness_step(int);
+    callback android_volume_step(int);
+    // Session brightness level (0..1) for the swipe readout, mirrored from
+    // the backend after every step.
+    in-out property <float> player_brightness: 0.5;
+    // Android: the settings modal opened; ask the backend for the live decoder
+    // state so the submenu is correct immediately.
+    callback settings_opened();
+    callback toggle_fullscreen();
+    callback osd_mouse_moved();
+    // Live OSD scrim opacity (0 = fully hidden), for display frame-rate matching.
+    callback osd_opacity_changed(float);
+    callback tracks_popup_opened(int);
+    pure callback format_time(float) -> string;
+    pure callback format_volume(float) -> string;
+    // Keyboard modality (bound to AppWindow).
+    in-out property <bool> kb_active;
+
+    // ---- 6-button keyboard nav (arrows + Enter + Backspace) ----
+    // Control strip (Left/Right): 0 close, 1 pause, 2 volume/mute,
+    // 3 seek-back, 4 seek-fwd, 5 subtitles, 6 audio, 7 fullscreen.
+    // Up/Down adjusts volume (on 2) or seeks ∓10s (on 3/4); Enter
+    // activates; Backspace closes a popup, else the player. With a
+    // track popup open, Up/Down moves in its list, Enter picks.
+    // Every handled key also wakes the OSD so the ring stays visible.
+    property <int> kb_idx: 1;
+    property <int> kb_menu: 0;
+
+    function kb_menu_n() -> int {
+        if (root.open_popup == 2) {
+            return root.sub_tracks.length + 1;
+        }
+        if (root.open_popup == 1) {
+            return root.audio_tracks.length;
+        }
+        if (root.open_popup == 4) {
+            if (root.settings_page == 0) {
+                // Subtitles, audio, [decoder on Android], playback speed.
+                return root.is_android ? 4 : 3;
+            }
+            if (root.settings_page == 1) {
+                return 3;
+            }
+            if (root.settings_page == 2) {
+                return root.sub_tracks.length + 1;
+            }
+            if (root.settings_page == 3) {
+                return root.audio_tracks.length;
+            }
+            if (root.settings_page == 4) {
+                // The playback-rate page: the slider is the focusable row
+                // (Up/Down step it).
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    // Back out of the settings panel: one page at a time, then close.
+    function settings_back() {
+        if (root.settings_page != 0) {
+            root.settings_page = 0;
+            root.kb_menu = 0;
+        } else {
+            root.open_popup = 0;
+        }
+    }
+
+    // Highest present control index: the fullscreen button (8) is hidden on
+    // Android, where the platform's own fullscreen affordance is used.
+    function kb_control_max() -> int {
+        return root.is_android ? 7 : 8;
+    }
+
+    // Neighbour control in the strip, skipping buttons absent on this
+    // layout: the volume control (2) is gone on Android (volume pinned to
+    // 100%) and the track buttons (5/6) are hidden on narrow windows.
+    function kb_prev() -> int {
+        let raw = Math.max(0, root.kb_idx - 1);
+        if (root.is_android && raw == 2) {
+            return 1;
+        }
+        if (root.narrow && (raw == 5 || raw == 6)) {
+            return 4;
+        }
+        return raw;
+    }
+
+    function kb_next() -> int {
+        let raw = Math.min(root.kb_control_max(), root.kb_idx + 1);
+        if (root.is_android && raw == 2) {
+            return 3;
+        }
+        if (root.narrow && (raw == 5 || raw == 6)) {
+            return 7;
+        }
+        return raw;
+    }
+
+    function kb_adjust(d: int) {
+        if (root.kb_idx == 2 && !root.is_android) {
+            root.set_volume(Math.max(0, Math.min(100, root.volume + d * 5)));
+        } else if (root.kb_idx == 3 || root.kb_idx == 4) {
+            root.seek(Math.max(0, Math.min(root.duration, root.position + d * 10)));
+        }
+    }
+
+    function kb_activate() {
+        if (root.kb_idx == 0) {
+            root.close_player();
+        } else if (root.kb_idx == 1) {
+            root.toggle_pause();
+        } else if (root.kb_idx == 2 && !root.is_android) {
+            root.toggle_mute();
+        } else if (root.kb_idx == 3) {
+            root.position = Math.max(0, root.position - 10);
+            root.seek(root.position);
+        } else if (root.kb_idx == 4) {
+            root.position = Math.min(root.duration, root.position + 10);
+            root.seek(root.position);
+        } else if (root.kb_idx == 5) {
+            if (root.open_popup == 2) {
+                root.open_popup = 0;
+            } else {
+                root.open_popup = 2;
+                root.tracks_popup_opened(2);
+            }
+        } else if (root.kb_idx == 6) {
+            if (root.open_popup == 1) {
+                root.open_popup = 0;
+            } else {
+                root.open_popup = 1;
+                root.tracks_popup_opened(1);
+            }
+        } else if (root.kb_idx == 7) {
+            // Gear: settings panel (subtitles/audio + Android decoder).
+            root.settings_page = 0;
+            root.open_popup = 4;
+            root.settings_opened();
+            root.tracks_popup_opened(0);
+            root.osd_mouse_moved();
+        } else {
+            root.toggle_fullscreen();
+        }
+    }
+
+    function kb_menu_pick() {
+        if (root.open_popup == 2) {
+            if (root.kb_menu == 0) {
+                root.pick_sub_track(-1);
+            } else if (root.kb_menu - 1 < root.sub_tracks.length) {
+                root.pick_sub_track(root.sub_tracks[root.kb_menu - 1].index);
+            }
+        } else if (root.open_popup == 1) {
+            if (root.kb_menu < root.audio_tracks.length) {
+                root.pick_audio_track(root.audio_tracks[root.kb_menu].index);
+            }
+        } else if (root.open_popup == 4) {
+            if (root.settings_page == 0) {
+                // Open the focused submenu. The rate row is last on both
+                // layouts (Android has the decoder row before it).
+                if (root.kb_menu == 0) {
+                    root.settings_page = 2;
+                    root.kb_menu = 0;
+                } else if (root.kb_menu == 1) {
+                    root.settings_page = 3;
+                    root.kb_menu = 0;
+                } else if (root.is_android && root.kb_menu == 2) {
+                    root.settings_page = 1;
+                    root.kb_menu = 0;
+                } else {
+                    root.settings_page = 4;
+                    root.kb_menu = 0;
+                }
+            } else if (root.settings_page == 1) {
+                if (root.kb_menu < 3) {
+                    root.pick_decoder(root.kb_menu);
+                }
+                root.open_popup = 0;
+            } else if (root.settings_page == 2) {
+                if (root.kb_menu == 0) {
+                    root.pick_sub_track(-1);
+                } else if (root.kb_menu - 1 < root.sub_tracks.length) {
+                    root.pick_sub_track(root.sub_tracks[root.kb_menu - 1].index);
+                }
+                root.open_popup = 0;
+            } else if (root.settings_page == 3) {
+                if (root.kb_menu < root.audio_tracks.length) {
+                    root.pick_audio_track(root.audio_tracks[root.kb_menu].index);
+                }
+                root.open_popup = 0;
+            }
+        }
+    }
+
+    // Internal: which popup is open (0=none, 1=audio, 2=subs, 4=settings).
+    private property <int> open_popup: 0;
+
+    // Android: shows the decoder section in the settings panel.
+    in property <bool> is_android: false;
+    // Compact control bar for narrow (portrait) windows.
+    in property <bool> narrow;
+    // Top system-bar inset (Android status bar): Window.safe-area-insets,
+    // bound by AppWindow. 0 on desktop/web, so layout there is unchanged.
+    in property <length> safe-top: 0px;
+    // Side insets: in landscape the display cutout / gesture area moves to the
+    // left or right edge, so the close button and control row must clear it.
+    in property <length> safe-left: 0px;
+    in property <length> safe-right: 0px;
+
+    // Keep the keyboard focus on a present control when the layout flips:
+    // the subs/audio buttons (5/6) only exist on wide layouts and the
+    // fullscreen button (8) is hidden on Android (the system affordance is
+    // used there).
+    function kb_clamp_focus() {
+        if (root.narrow && (root.kb_idx == 5 || root.kb_idx == 6)) {
+            root.kb_idx = 7;
+        }
+        if (root.is_android && root.kb_idx == 8) {
+            root.kb_idx = 7;
+        }
+        if (root.is_android && root.kb_idx == 2) {
+            root.kb_idx = 1;
+        }
+    }
+    changed narrow => { root.kb_clamp_focus(); }
+    changed is_android => { root.kb_clamp_focus(); }
+
+    // Hover movement over the bar itself re-arms the auto-hide countdown.
+    // TouchArea.moved only fires while pressed and the backdrop's mouse-x/y
+    // freeze while the pointer is over OSD elements — without this the
+    // timer expires while e.g. adjusting the volume slider and the bar
+    // vanishes the instant the cursor leaves it.
+    //
+    // Only wake on an actual position change: the press/release writes set
+    // mouse-x/y through a binding whose `changed` can fire even when the value
+    // is unchanged (e.g. the release of a tap). Waking on that would re-show an
+    // OSD the tap just dismissed.
+    in-out property <length> osd_mouse_pos_x: osd_hover.mouse-x;
+    in-out property <length> osd_mouse_pos_y: osd_hover.mouse-y;
+    private property <length> osd_last_wake_x: 0px;
+    private property <length> osd_last_wake_y: 0px;
+    function osd_note_pos() {
+        if (root.osd_mouse_pos_x != root.osd_last_wake_x
+            || root.osd_mouse_pos_y != root.osd_last_wake_y) {
+            root.osd_last_wake_x = root.osd_mouse_pos_x;
+            root.osd_last_wake_y = root.osd_mouse_pos_y;
+            root.osd_mouse_moved();
+        }
+    }
+    changed osd_mouse_pos_x => { root.osd_note_pos(); }
+    changed osd_mouse_pos_y => { root.osd_note_pos(); }
+
+    // Mirror the OSD scrim's animated opacity up to the backend (through
+    // AppWindow's `osd_opacity_changed`) so the display frame rate snaps to the
+    // content rate only once the OSD has fully faded out, not when the logical
+    // `osd_visible` flag flips.
+    private property <float> osd_current_opacity: osd.opacity;
+    changed osd_current_opacity => { root.osd_opacity_changed(osd_current_opacity); }
+
+    // Re-arm the OSD wake whenever a popup opens or closes: while browsing
+    // a popup the pointer sits over the card, which is above the video
+    // TouchArea that mirrors mouse movement — so the auto-hide countdown
+    // expires in the background and the bar would vanish the instant the
+    // popup closes, even though the cursor was moving the whole time.
+    // (Also resets the keyboard track-list index.)
+    changed open_popup => {
+        root.kb_menu = 0;
+        root.osd_mouse_moved();
+    }
+
+    // ---- Backdrop gesture state (see player_backdrop below) ------------
+    // Taps act at once (a lone tap hides a visible OSD); a second tap on the
+    // same side within the double-tap window (280 ms) seeks ∓10 s instead
+    // and re-wakes the OSD. A stationary 500 ms press previews 2×; an
+    // Android vertical swipe steps brightness/volume. `tap_side`: the side
+    // of the last tap (-1 left, 0 middle, +1 right, -2 none).
+    property <int> tap_side: -2;
+    property <bool> hold_active: false;
+    // Swipe kind: 0 none, 1 brightness (left half), 2 volume (right half).
+    property <int> swipe_kind: 0;
+    property <length> swipe_py: 0px;
+    property <length> swipe_accum: 0px;
+    // Transient centre-top readout ("-10 s", "+10 s", "2×", "70%").
+    property <string> flash_text: "";
+    property <bool> flash_show: false;
+
+    tap_timer := Timer {
+        interval: 280ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            // Pairing window lapsed: the last tap stands alone.
+            root.tap_side = -2;
+        }
+    }
+
+    hold_timer := Timer {
+        interval: 500ms;
+        running: false;
+        triggered => {
+            self.stop();
+            if (root.playback_started && root.duration > 0.0 && !root.hold_active) {
+                root.hold_active = true;
+                tap_timer.stop();
+                root.tap_side = -2;
+                root.swipe_kind = 0;
+                root.playback_speed_preview(2.0);
+                root.flash_text = "2×";
+                root.flash_show = true;
+                root.osd_mouse_moved();
+            }
+        }
+    }
+
+    flash_timer := Timer {
+        interval: 800ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if (!root.hold_active) {
+                root.flash_show = false;
+            }
+        }
+    }
+
+    function show_flash(text: string) {
+        root.flash_text = text;
+        root.flash_show = true;
+        flash_timer.stop();
+        flash_timer.start();
+    }
+
+    // Release handling for the backdrop (the press position rides along
+    // because functions cannot see the TouchArea's `self`).
+    function backdrop_release(up_x: length, w: length) {
+        if (root.hold_active) {
+            root.hold_active = false;
+            root.flash_show = false;
+            root.playback_speed_preview(root.playback_speed);
+            tap_timer.stop();
+            root.tap_side = -2;
+            return;
+        }
+        if (root.swipe_kind != 0) {
+            // The brightness readout (if any) fades on its own timer.
+            root.swipe_kind = 0;
+            return;
+        }
+        if (player_backdrop.dragged) {
+            // Plain drag ended (a swipe that woke the OSD): wake only.
+            root.osd_mouse_moved();
+            player_backdrop.dragged = false;
+            return;
+        }
+        if (root.open_popup != 0) {
+            root.open_popup = 0;
+            return;
+        }
+        // Stationary tap, acting at once. A second tap on the same side
+        // within the window seeks instead (outer thirds, active playback).
+        let can_seek = root.playback_started && root.duration > 0.0;
+        let side = up_x < w / 3 ? -1 : (up_x > w * 2 / 3 ? 1 : 0);
+        if (can_seek && side != 0 && tap_timer.running && side == root.tap_side) {
+            tap_timer.stop();
+            root.tap_side = -2;
+            root.position = Math.max(0.0, Math.min(root.duration, root.position + side * 10.0));
+            root.seek(root.position);
+            root.osd_mouse_moved();
+            root.show_flash(side < 0 ? "-10 s" : "+10 s");
+            return;
+        }
+        tap_timer.stop();
+        tap_timer.start();
+        root.tap_side = side;
+        if (player_backdrop.osd_visible_at_press) {
+            root.osd_visible = false;
+        } else {
+            root.osd_mouse_moved();
+            if (!root.is_android) {
+                root.toggle_pause();
+            }
+        }
+    }
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+
+        // Key handling: 6-button nav (arrows/Enter/Backspace) plus ESC
+        // (closes a popup, else exits fullscreen). The scope takes focus
+        // on creation so it keeps receiving keys while the overlay is up.
+        // Every handled key wakes the OSD so the focus ring stays visible.
+        key_scope := FocusScope {
+            width: 100%;
+            height: 100%;
+            init => { self.focus(); }
+            key-pressed(e) => {
+                root.osd_mouse_moved();
+                // No text entry on this screen: any keypress is keyboard use.
+                root.kb_active = true;
+                if (e.text == Key.Escape) {
+                    if (root.open_popup == 4) {
+                        root.settings_back();
+                    } else if (root.open_popup != 0) {
+                        root.open_popup = 0;
+                    } else if (root.is_fullscreen) {
+                        root.toggle_fullscreen();
+                    }
+                    accept
+                } else if (root.open_popup != 0) {
+                    if (root.open_popup == 4) {
+                        // Settings panel: Up/Down move the focused row, or
+                        // step the playback rate on its own page; Right/Enter
+                        // open the focused submenu, Left/Back step back a page
+                        // then close.
+                        if (e.text == Key.UpArrow) {
+                            if (root.settings_page == 4) {
+                                root.playback_speed_stepped(1);
+                            } else if (root.kb_menu > 0) {
+                                root.kb_menu -= 1;
+                            }
+                            accept
+                        } else if (e.text == Key.DownArrow) {
+                            if (root.settings_page == 4) {
+                                root.playback_speed_stepped(-1);
+                            } else if (root.kb_menu + 1 < root.kb_menu_n()) {
+                                root.kb_menu += 1;
+                            }
+                            accept
+                        } else if (e.text == Key.RightArrow) {
+                            if (root.settings_page == 0) {
+                                root.kb_menu_pick();
+                            }
+                            accept
+                        } else if (e.text == Key.Return) {
+                            root.kb_menu_pick();
+                            accept
+                        } else if (e.text == Key.LeftArrow) {
+                            root.settings_back();
+                            accept
+                        } else if (e.text == Key.Backspace || e.text == Key.Back) {
+                            root.settings_back();
+                            accept
+                        } else {
+                            reject
+                        }
+                    } else if (e.text == Key.UpArrow) {
+                        if (root.kb_menu > 0) {
+                            root.kb_menu -= 1;
+                        }
+                        accept
+                    } else if (e.text == Key.DownArrow) {
+                        if (root.kb_menu + 1 < root.kb_menu_n()) {
+                            root.kb_menu += 1;
+                        }
+                        accept
+                    } else if (e.text == Key.Return) {
+                        root.kb_menu_pick();
+                        accept
+                    } else if (e.text == Key.Backspace || e.text == Key.Back) {
+                        root.open_popup = 0;
+                        accept
+                    } else {
+                        reject
+                    }
+                } else if (e.text == Key.UpArrow) {
+                    root.kb_adjust(1);
+                    accept
+                } else if (e.text == Key.DownArrow) {
+                    root.kb_adjust(-1);
+                    accept
+                } else if (e.text == Key.LeftArrow) {
+                    root.kb_idx = root.kb_prev();
+                    accept
+                } else if (e.text == Key.RightArrow) {
+                    root.kb_idx = root.kb_next();
+                    accept
+                } else if (e.text == Key.Return) {
+                    root.kb_activate();
+                    accept
+                } else if (e.text == Key.Backspace || e.text == Key.Back) {
+                    root.close_player();
+                    accept
+                } else {
+                    reject
+                }
+            }
+        }
+
+        // Episode (or show) poster while the stream is loading — mpv's
+        // surface stays black until the first frame, so this fills the
+        // screen. Not interactive: clicks pass through to the backdrop.
+        if !root.playback_started && root.player_poster.width > 0: Image {
+            width: 100%;
+            height: 100%;
+            source: root.player_poster;
+            image-fit: cover;
+        }
+
+        // Slight darkening over the loading poster so the centered status
+        // text stays legible on bright artwork.
+        if !root.playback_started && root.player_poster.width > 0: Rectangle {
+            width: 100%;
+            height: 100%;
+            background: #00000059;
+        }
+
+        // Center status while loading / on error (opaque bg still up).
+        if !root.playback_started && root.player_status != "": VerticalLayout {
+            width: 100%;
+            height: 100%;
+            alignment: center;
+
+            HorizontalLayout {
+                width: 100%;
+                alignment: center;
+
+                Text {
+                    text: root.player_status;
+                    color: #ffffff;
+                    font-size: 18px;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                    width: 80%;
+                }
+            }
+        }
+
+        // Video gesture surface. Stationary taps act at once (toggling the
+        // OSD: waking it when down, hiding it when up — and, off Android,
+        // toggling play/pause on wake). On top of that:
+        // - double-tap the outer thirds to seek ∓10 s (any platform): the
+        //   first tap acts normally, the second seeks and re-wakes;
+        // - press-and-hold 500 ms to preview 2× until release (any platform);
+        // - on Android, a vertical swipe adjusts brightness (left half) or
+        //   the system volume (right half).
+        // Taps on actual buttons and the slider never reach this backdrop.
+        player_backdrop := TouchArea {
+            // A swipe that wakes the OSD must not hide it again on release:
+            // `moved` wakes it, so by the time the release runs
+            // `osd_visible` is already true and the old logic would hide it
+            // immediately (the bar flashed and vanished). Track drags and
+            // treat them as wake-only gestures.
+            property <bool> dragged: false;
+            property <bool> osd_visible_at_press: false;
+            // Last pointer position that woke the OSD. A tap's release
+            // synthesizes a move at the same position; waking on it would
+            // re-show an OSD the tap just dismissed.
+            property <length> last_wake_x: 0px;
+            property <length> last_wake_y: 0px;
+            width: 100%;
+            height: 100%;
+            pointer-event(ev) => {
+                if (ev.kind == PointerEventKind.down) {
+                    player_backdrop.osd_visible_at_press = root.osd_visible;
+                    player_backdrop.dragged = false;
+                    player_backdrop.last_wake_x = self.mouse-x;
+                    player_backdrop.last_wake_y = self.mouse-y;
+                    root.osd_mouse_moved();
+                    // Arm press-and-hold 2× (stationary press, active
+                    // playback, no popup in the way).
+                    if (root.playback_started && root.duration > 0.0 && root.open_popup == 0) {
+                        hold_timer.stop();
+                        hold_timer.start();
+                    }
+                } else if (ev.kind == PointerEventKind.move) {
+                    if (self.mouse-x != player_backdrop.last_wake_x
+                        || self.mouse-y != player_backdrop.last_wake_y) {
+                        player_backdrop.last_wake_x = self.mouse-x;
+                        player_backdrop.last_wake_y = self.mouse-y;
+                        root.osd_mouse_moved();
+                    }
+                } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                    hold_timer.stop();
+                    if (ev.kind == PointerEventKind.cancel) {
+                        // Aborted gesture: drop transient state, no tap.
+                        if (root.hold_active) {
+                            root.hold_active = false;
+                            root.flash_show = false;
+                            root.playback_speed_preview(root.playback_speed);
+                        }
+                        root.swipe_kind = 0;
+                        tap_timer.stop();
+                        root.tap_side = -2;
+                        player_backdrop.dragged = false;
+                    } else {
+                        root.backdrop_release(self.mouse-x, self.width);
+                    }
+                }
+            }
+            moved => {
+                root.osd_mouse_moved();
+                if (Math.abs(self.mouse-x - self.pressed-x)
+                    + Math.abs(self.mouse-y - self.pressed-y) > 12px) {
+                    player_backdrop.dragged = true;
+                    // A drag is neither a tap nor a hold.
+                    hold_timer.stop();
+                    tap_timer.stop();
+                    root.tap_side = -2;
+                }
+                // Android brightness/volume swipe: a mostly-vertical drag.
+                // Decided here (not on press) so the direction is known, and
+                // only while no hold owns the gesture.
+                if (root.is_android && root.playback_started && root.open_popup == 0
+                    && !root.hold_active && root.swipe_kind == 0
+                    && Math.abs(self.mouse-y - self.pressed-y) > 24px
+                    && Math.abs(self.mouse-y - self.pressed-y) > 2 * Math.abs(self.mouse-x - self.pressed-x)) {
+                    root.swipe_kind = self.pressed-x < self.width / 2 ? 1 : 2;
+                    root.swipe_py = self.mouse-y;
+                    // Seed with the full gesture travel so the threshold
+                    // pixels count towards the first notch.
+                    root.swipe_accum = self.pressed-y - self.mouse-y;
+                    hold_timer.stop();
+                    tap_timer.stop();
+                    root.tap_side = -2;
+                }
+                if (root.swipe_kind != 0) {
+                    root.swipe_accum += root.swipe_py - self.mouse-y;
+                    root.swipe_py = self.mouse-y;
+                    // One system step per 40px of travel (remainder kept).
+                    if (root.swipe_accum >= 40px || root.swipe_accum <= -40px) {
+                        let dir = root.swipe_accum > 0px ? 1 : -1;
+                        if (root.swipe_kind == 1) {
+                            root.android_brightness_step(dir);
+                            root.show_flash(Math.round(root.player_brightness * 100) + "%");
+                        } else {
+                            root.android_volume_step(dir);
+                        }
+                        root.swipe_accum = root.swipe_accum - dir * 40px;
+                    }
+                }
+            }
+        }
+
+        // Transient gesture readout ("-10 s", "+10 s", "2×", "70%"): a
+        // top-centre pill that fades on its own timer (2× stays while held).
+        // A plain element — taps pass through to the backdrop below.
+        if root.flash_show: Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: 16px + root.safe-top;
+            width: flash_lbl.preferred-width + 28px;
+            height: 36px;
+            border-radius: 18px;
+            background: #000000a6;
+
+            flash_lbl := Text {
+                text: root.flash_text;
+                font-size: 15px;
+                font-weight: 700;
+                color: #ffffff;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+
+        // ---- Close button (top-left, below the status bar) ---------
+        Rectangle {
+            x: 16px + safe-left;
+            y: 16px + safe-top;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            border-width: root.kb_active && root.kb_idx == 0 && root.open_popup == 0 ? 2px : 0px;
+            border-color: #8b5cf6;
+            // A dark base keeps the white X readable over bright video;
+            // hover lightens it.
+            background: close_touch.has-hover ? #ffffff26 : #00000059;
+            // Touch hover alone must not paint the bar: the backend wake owns
+            // visibility, and a press can otherwise flash and release it.
+            opacity: (root.osd_visible || !root.playback_started
+                || root.open_popup != 0) ? 1.0 : 0.0;
+            animate opacity { duration: Anim.player_fade; }
+
+            IcClose {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 24px;
+                height: 24px;
+                fill: #ffffff;
+            }
+
+            close_touch := TouchArea {
+                width: 100%;
+                height: 100%;
+                mouse-cursor: pointer;
+                clicked => {
+                    if (!root.guard_osd_control()) { return; }
+                    root.kb_active = false; root.kb_idx = 0; root.close_player();
+                }
+            }
+        }
+
+        // ---- Android center transport (⏪10 ▶/⏸ ⏩10) ----------------
+        // Android has no volume control and no bottom-row play/rw/ff: the
+        // transport floats in the middle of the video like a mobile player.
+        // Hidden while loading (the centered status text shows instead) and
+        // whenever the OSD fades, but still hit-tested so a tap wakes it.
+        // Declared *before* the OSD so the track popups and the settings
+        // modal paint in front of it; the dark base keeps the glyphs
+        // readable over bright video. The three buttons keep their logical
+        // keyboard indices (play 1, rewind 3, forward 4); on-screen they read
+        // 3, 1, 4 left to right.
+        if root.is_android: Rectangle {
+            width: 216px;
+            height: 72px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            opacity: (root.controls_active && root.playback_started) ? 1.0 : 0.0;
+            animate opacity { duration: Anim.player_fade; }
+
+            // Rewind 10s.
+            IconBtn {
+                x: 0px;
+                y: 10px;
+                width: 52px;
+                height: 52px;
+                border-radius: 26px;
+                base: #00000059;
+                focused: root.kb_active && root.kb_idx == 3 && root.open_popup == 0;
+                clicked => {
+                    if (!root.guard_osd_control()) { return; }
+                    root.kb_active = false;
+                    root.kb_idx = 3;
+                    root.position = Math.max(0, root.position - 10);
+                    root.seek(root.position);
+                    root.osd_mouse_moved();
+                }
+                IcReplay10 {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 34px;
+                    height: 34px;
+                    fill: #ffffff;
+                }
+            }
+
+            // Play/pause (larger, circular).
+            IconBtn {
+                x: 72px;
+                y: 0px;
+                width: 72px;
+                height: 72px;
+                border-radius: 36px;
+                base: #00000059;
+                focused: root.kb_active && root.kb_idx == 1 && root.open_popup == 0;
+                clicked => {
+                    if (!root.guard_osd_control()) { return; }
+                    root.kb_active = false; root.kb_idx = 1; root.osd_mouse_moved(); root.toggle_pause();
+                }
+                if root.is_paused: IcPlay {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 40px;
+                    height: 40px;
+                    fill: #ffffff;
+                }
+                if !root.is_paused: IcPause {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 40px;
+                    height: 40px;
+                    fill: #ffffff;
+                }
+            }
+
+            // Forward 10s.
+            IconBtn {
+                x: 164px;
+                y: 10px;
+                width: 52px;
+                height: 52px;
+                border-radius: 26px;
+                base: #00000059;
+                focused: root.kb_active && root.kb_idx == 4 && root.open_popup == 0;
+                clicked => {
+                    if (!root.guard_osd_control()) { return; }
+                    root.kb_active = false;
+                    root.kb_idx = 4;
+                    root.position = Math.min(root.duration, root.position + 10);
+                    root.seek(root.position);
+                    root.osd_mouse_moved();
+                }
+                IcForward10 {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 34px;
+                    height: 34px;
+                    fill: #ffffff;
+                }
+            }
+        }
+
+        // ---- Bottom OSD -------------------------------------------------
+        // A soft scrim: fully transparent at the top, easing into a dark
+        // base at the bottom. The ramp is tall and gradual (several stops,
+        // starting at zero alpha) so no hard edge is visible over bright
+        // video. Controls (seekbar + row, 68px) are pinned to its bottom.
+        osd := Rectangle {
+            width: 100%;
+            height: 220px;
+            y: parent.height - self.height;
+            // femtovg's gradient fills render as flat fills in this
+            // environment, so the scrim is a runtime-generated 1×220
+            // alpha-ramp image stretched over the area — the ease curve is
+            // baked into the pixels and is always smooth.
+            Image {
+                width: 100%;
+                height: 100%;
+                source: root.scrim_image;
+            }
+            // Visible when the wake timer says so, and always while loading or a
+            // popup is open — the auto-hide countdown applies whether playing
+            // or paused (with a longer grace while paused). Hover alone does
+            // not paint the OSD: a touch can otherwise flash and release it.
+            opacity: (root.osd_visible || !root.playback_started
+                || root.open_popup != 0) ? 1.0 : 0.0;
+            animate opacity { duration: Anim.player_fade; }
+
+            // Hover zone covers only the bottom of the scrim (bar + head
+            // room). The upper, almost-transparent part stays click-through
+            // so click-to-pause still works there. Tapping an empty part of
+            // the bar (not a button or the seekbar) dismisses the OSD, same as
+            // tapping the video — primarily a touch convenience.
+            osd_hover := TouchArea {
+                width: 100%;
+                height: 96px;
+                y: parent.height - self.height;
+                // Like the backdrop: a swipe that wakes the OSD must not hide
+                // it again on release, and a tap wakes it when it was down.
+                property <bool> dragged: false;
+                property <bool> osd_visible_at_press: false;
+                pointer-event(ev) => {
+                    if (ev.kind == PointerEventKind.down) {
+                        osd_hover.osd_visible_at_press = root.osd_visible;
+                        osd_hover.dragged = false;
+                        root.osd_mouse_moved();
+                    }
+                    // Deliberately no wake on move: a tap's release synthesizes
+                    // a move at the same position, which would re-show the OSD
+                    // this tap just dismissed. Real drags wake via `moved`, and
+                    // hover wakes via the `osd_mouse_pos_*` change handlers.
+                }
+                moved => {
+                    root.osd_mouse_moved();
+                    if (Math.abs(self.mouse-x - self.pressed-x)
+                        + Math.abs(self.mouse-y - self.pressed-y) > 12px) {
+                        osd_hover.dragged = true;
+                    }
+                }
+                clicked => {
+                    if (osd_hover.dragged) {
+                        // Swipe: keep the just-woken OSD up (restart timer).
+                        root.osd_mouse_moved();
+                    } else if (osd_hover.osd_visible_at_press) {
+                        root.osd_visible = false;
+                    } else {
+                        root.osd_mouse_moved();
+                    }
+                }
+            }
+
+            VerticalLayout {
+                // A layout inside a plain element fills the parent, so pin
+                // the 68px of controls (seekbar + row) to the bottom edge.
+                height: 68px;
+                y: parent.height - self.height;
+                width: 100%;
+                spacing: 0px;
+
+                // ---- Seekbar ---------------------------------------------
+                // The track spans the control row's content box exactly
+                // (same 10px/14px side insets as the row below), so the bar
+                // lines up with the buttons underneath it.
+                seekbar := Rectangle {
+                    width: 100%;
+                    height: 20px;
+
+                    track_zone := Rectangle {
+                        x: 10px;
+                        width: parent.width - 24px;
+                        height: 100%;
+
+                        // Dim track.
+                        Rectangle {
+                            x: 0;
+                            y: 8px;
+                            height: 3px;
+                            width: 100%;
+                            background: #ffffff59;
+                            border-radius: 1.5px;
+                        }
+
+                        // Played portion (anchored to the left edge).
+                        Rectangle {
+                            x: 0;
+                            y: 8px;
+                            height: 3px;
+                            width: root.duration > 0 ? (root.position / root.duration) * parent.width : 0;
+                            background: #ffffff;
+                            border-radius: 1.5px;
+                        }
+
+                        // Thumb dot — only appears while the bar is hovered
+                        // (stays visible while scrubbing).
+                        Rectangle {
+                            x: Math.clamp(
+                                root.duration > 0 ? (root.position / root.duration) * (parent.width - 11px) : 0,
+                                0, parent.width - 11px);
+                            y: (parent.height - 11px) / 2;
+                            width: 11px;
+                            height: 11px;
+                            background: #ffffff;
+                            border-radius: 5.5px;
+                            opacity: seek_touch.has-hover ? 1.0 : 0.0;
+                            animate opacity { duration: Anim.player_fast; }
+                        }
+
+                        seek_touch := TouchArea {
+                            width: 100%;
+                            height: 100%;
+                            mouse-cursor: pointer;
+                            moved => {
+                                if (!root.guard_osd_control()) { return; }
+                                let pct = Math.clamp(self.mouse-x / self.width, 0, 1);
+                                // Move the thumb immediately (the backend only
+                                // mirrors mpv's position once the seek applies;
+                                // without this the scrub guard would freeze it).
+                                root.position = pct * root.duration;
+                                root.seek(pct * root.duration);
+                                root.osd_mouse_moved();
+                            }
+                            clicked => {
+                                if (!root.guard_osd_control()) { return; }
+                                let pct = Math.clamp(self.mouse-x / self.width, 0, 1);
+                                root.position = pct * root.duration;
+                                root.seek(pct * root.duration);
+                                root.osd_mouse_moved();
+                            }
+                        }
+
+                        // Hover preview: the timestamp under the cursor. Purely
+                        // hover-driven (no click needed) and independent of the
+                        // actual playback position.
+                        if root.duration > 0: Rectangle {
+                            width: seek_tip.preferred-width + 12px;
+                            height: 20px;
+                            x: Math.clamp(seek_touch.mouse-x - self.width / 2, 0px, parent.width - self.width);
+                            y: -self.height - 4px;
+                            border-radius: 5px;
+                            background: #262626e6;
+                            opacity: seek_touch.has-hover ? 1.0 : 0.0;
+                            animate opacity { duration: Anim.player_fast; }
+
+                            seek_tip := Text {
+                                text: root.format_time((seek_touch.mouse-x / seek_touch.width) * root.duration);
+                                color: #ffffff;
+                                font-size: 11px;
+                                width: 100%;
+                                height: 100%;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // ---- Control row ----------------------------------------
+                // Stretch distribution: left cluster (play/volume/time) hugs
+                // the left edge, the track controls hug the right edge, and
+                // the title stretches in between (centered within).
+                HorizontalLayout {
+                    width: 100%;
+                    height: 48px;
+                    // The Android gear adds an eighth button; the portrait rail
+                    // is already close to the 360px floor, so tighten the gaps
+                    // there (the volume slider still expands over the row).
+                    // The side insets keep the outermost buttons clear of a
+                    // landscape cutout.
+                    padding-left: (root.narrow ? 6px : 10px) + safe-left;
+                    padding-right: (root.narrow ? 8px : 14px) + safe-right;
+                    spacing: root.narrow ? 2px : 6px;
+
+                    // -- Left cluster --
+                    // Android moves play/pause to the centered transport
+                    // cluster (see below); the bottom bar keeps the time and
+                    // title only.
+                    if !root.is_android: IconBtn {
+                        focused: root.kb_active && root.kb_idx == 1 && root.open_popup == 0;
+                        // Re-arm the auto-hide wake so the bar lingers after
+                        // (un)pausing instead of vanishing mid-press.
+                        clicked => {
+                            if (!root.guard_osd_control()) { return; }
+                            root.kb_active = false; root.kb_idx = 1; root.osd_mouse_moved(); root.toggle_pause();
+                        }
+                        if root.is_paused: IcPlay {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 26px;
+                            height: 26px;
+                            fill: #ffffff;
+                        }
+                        if !root.is_paused: IcPause {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 26px;
+                            height: 26px;
+                            fill: #ffffff;
+                        }
+                    }
+
+                    // Volume: click = mute toggle, hover = inline slider.
+                    // The group wraps button + slider; an invisible 6px
+                    // catcher covers the layout gap between them so moving
+                    // the cursor across never collapses the slider.
+                    // Android hides it entirely: volume is pinned to 100%.
+                    if !root.is_android: vol_group := Rectangle {
+                        height: 40px;
+                        width: 40px + (self.vol_open ? 106px : 0px);
+                            animate width { duration: Anim.player_slide; }
+                        property <bool> vol_open:
+                            vol_btn.hovered || vol_catch.has-hover || vol_slider_touch.has-hover;
+
+                        vol_catch := TouchArea {
+                            x: 40px;
+                            y: 0;
+                            width: 6px;
+                            height: 40px;
+                            moved => { root.osd_mouse_moved(); }
+                        }
+
+                        vol_btn := IconBtn {
+                            x: 0;
+                            y: 0;
+                            focused: root.kb_active && root.kb_idx == 2 && root.open_popup == 0;
+                            clicked => {
+                                if (!root.guard_osd_control()) { return; }
+                                root.kb_active = false; root.kb_idx = 2; root.toggle_mute();
+                            }
+                            if root.muted || root.volume <= 0: IcVolumeOff {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                width: 26px;
+                                height: 26px;
+                                fill: #ffffff;
+                            }
+                            if !(root.muted || root.volume <= 0): IcVolumeUp {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                width: 26px;
+                                height: 26px;
+                                fill: #ffffff;
+                            }
+                        }
+
+                        vol_slider := Rectangle {
+                            x: 46px;
+                            y: 0;
+                            width: vol_group.vol_open ? 100px : 0px;
+                            height: 40px;
+                            clip: true;
+                        animate width { duration: Anim.player_slide; }
+
+                            property <float> vol_pct: Math.clamp((root.muted ? 0 : root.volume) / 100, 0, 1);
+
+                            Rectangle {
+                                y: 18px;
+                                x: 8px;
+                                width: parent.vol_pct * (parent.width - 16px);
+                                height: 3px;
+                                background: #ffffff;
+                                border-radius: 1.5px;
+                            }
+                            Rectangle {
+                                y: 18px;
+                                x: 8px;
+                                width: (1 - parent.vol_pct) * (parent.width - 16px);
+                                height: 3px;
+                                background: #ffffff59;
+                                border-radius: 1.5px;
+                            }
+                            // Thumb — same as the playback slider's, only
+                            // shown while the slider is hovered.
+                            Rectangle {
+                                x: Math.clamp(8px + parent.vol_pct * (parent.width - 16px) - 5.5px, 0px, parent.width - 11px);
+                                y: (parent.height - 11px) / 2;
+                                width: 11px;
+                                height: 11px;
+                                background: #ffffff;
+                                border-radius: 5.5px;
+                                opacity: vol_slider_touch.has-hover ? 1.0 : 0.0;
+                                animate opacity { duration: Anim.player_fast; }
+                            }
+                            vol_slider_touch := TouchArea {
+                                x: 0;
+                                width: 100%;
+                                height: 100%;
+                                mouse-cursor: pointer;
+                                moved => {
+                                    if (!root.guard_osd_control()) { return; }
+                                    let pct = Math.clamp(self.mouse-x / self.width, 0, 1);
+                                    root.set_volume(pct * 100);
+                                    root.osd_mouse_moved();
+                                }
+                                clicked => {
+                                    if (!root.guard_osd_control()) { return; }
+                                    let pct = Math.clamp(self.mouse-x / self.width, 0, 1);
+                                    root.set_volume(pct * 100);
+                                    root.osd_mouse_moved();
+                                }
+                            }
+                        }
+
+                        // Hover preview: the volume percentage under the
+                        // cursor. Lives in the group (the slider clips) and
+                        // only appears while the slider is hovered.
+                        Rectangle {
+                            width: vol_tip.preferred-width + 12px;
+                            height: 20px;
+                            x: 46px + Math.clamp(vol_slider_touch.mouse-x - self.width / 2, 0px, 100px - self.width);
+                            y: -self.height - 4px;
+                            border-radius: 5px;
+                            background: #262626e6;
+                            opacity: vol_slider_touch.has-hover ? 1.0 : 0.0;
+                            animate opacity { duration: Anim.player_fast; }
+
+                            vol_tip := Text {
+                                // Show what a click would set: the cursor
+                                // position as a percentage.
+                                text: root.format_volume(
+                                    Math.clamp(vol_slider_touch.mouse-x / vol_slider_touch.width, 0, 1) * 100);
+                                color: #ffffff;
+                                font-size: 11px;
+                                width: 100%;
+                                height: 100%;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // Time text. Fixed 40px height so the layout places it
+                    // exactly like the 40px icon buttons (fixed-height
+                    // children top-align in the 48px row), keeping the
+                    // text on the same vertical center as the icons. Shown on
+                    // narrow too: the Android bottom-left is free once
+                    // play/volume moved off the row, so the timestamp sits
+                    // there (the title stays hidden).
+                    Rectangle {
+                        width: time_lbl.preferred-width + 16px;
+                        height: 40px;
+
+                        time_lbl := Text {
+                            text: root.time_text;
+                            color: #ffffff;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            x: 8px;
+                        }
+                    }
+
+                    // Title (hidden on narrow: see time text above).
+                    if root.player_title != "" && !root.narrow: Rectangle {
+                        horizontal-stretch: 1;
+                        height: 40px;
+
+                        Text {
+                            text: root.player_title;
+                            color: #ffffffd9;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+
+                    if root.player_title == "" || root.narrow: Rectangle {
+                        horizontal-stretch: 1;
+                        height: 40px;
+                    }
+
+                    // -- Right cluster --
+                    // Android's ±10s buttons live in the centered transport
+                    // cluster, not here.
+                    if !root.is_android: IconBtn {
+                        focused: root.kb_active && root.kb_idx == 3 && root.open_popup == 0;
+                        clicked => {
+                            if (!root.guard_osd_control()) { return; }
+                            root.kb_active = false;
+                            root.kb_idx = 3;
+                            root.position = Math.max(0, root.position - 10);
+                            root.seek(root.position);
+                            root.osd_mouse_moved();
+                        }
+                        IcReplay10 {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 26px;
+                            height: 26px;
+                            fill: #ffffff;
+                        }
+                    }
+
+                    if !root.is_android: IconBtn {
+                        focused: root.kb_active && root.kb_idx == 4 && root.open_popup == 0;
+                        clicked => {
+                            if (!root.guard_osd_control()) { return; }
+                            root.kb_active = false;
+                            root.kb_idx = 4;
+                            root.position = Math.min(root.duration, root.position + 10);
+                            root.seek(root.position);
+                            root.osd_mouse_moved();
+                        }
+                        IcForward10 {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 26px;
+                            height: 26px;
+                            fill: #ffffff;
+                        }
+                    }
+
+                    // Subtitle button + popup anchored above it (right edge
+                    // flush with the button, 8px gap). Wide only: on narrow
+                    // layouts track selection lives in the settings panel.
+                    if !root.narrow: Rectangle {
+                        width: 40px;
+                        height: 40px;
+
+                        IconBtn {
+                            x: 0;
+                            y: 0;
+                            active: root.open_popup == 2;
+                            focused: root.kb_active && root.kb_idx == 5 && root.open_popup == 0;
+                            clicked => {
+                                if (!root.guard_osd_control()) { return; }
+                                root.kb_active = false;
+                                root.kb_idx = 5;
+                                if (root.open_popup == 2) {
+                                    root.open_popup = 0;
+                                } else {
+                                    root.open_popup = 2;
+                                    // Ask the backend to (re)enumerate tracks.
+                                    root.tracks_popup_opened(2);
+                                }
+                            }
+                            IcCaptions {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                width: 26px;
+                                height: 26px;
+                                fill: #ffffff;
+                            }
+                        }
+
+                        if root.open_popup == 2: TrackMenu {
+                            x: parent.width - self.width;
+                            y: -self.height - 8px;
+                            max_w: root.width - 32px;
+                            row_icon: 2;
+                            with_off_row: true;
+                            tracks: root.sub_tracks;
+                            focused_idx: root.kb_menu;
+                            kb_active: root.kb_active;
+                            pick(idx) => { root.kb_active = false; root.pick_sub_track(idx); }
+                        }
+                    }
+
+                    // Audio track button + popup anchored above it. Wide only:
+                    // on narrow layouts track selection lives in the settings
+                    // panel.
+                    if !root.narrow: Rectangle {
+                        width: 40px;
+                        height: 40px;
+
+                        IconBtn {
+                            x: 0;
+                            y: 0;
+                            active: root.open_popup == 1;
+                            focused: root.kb_active && root.kb_idx == 6 && root.open_popup == 0;
+                            clicked => {
+                                if (!root.guard_osd_control()) { return; }
+                                root.kb_active = false;
+                                root.kb_idx = 6;
+                                if (root.open_popup == 1) {
+                                    root.open_popup = 0;
+                                } else {
+                                    root.open_popup = 1;
+                                    // Ask the backend to (re)enumerate tracks.
+                                    root.tracks_popup_opened(1);
+                                }
+                            }
+                            IcMusic {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                width: 24px;
+                                height: 24px;
+                                fill: #ffffff;
+                            }
+                        }
+
+                        if root.open_popup == 1: TrackMenu {
+                            x: parent.width - self.width;
+                            y: -self.height - 8px;
+                            max_w: root.width - 32px;
+                            row_icon: 1;
+                            tracks: root.audio_tracks;
+                            focused_idx: root.kb_menu;
+                            kb_active: root.kb_active;
+                            pick(idx) => { root.kb_active = false; root.pick_audio_track(idx); }
+                        }
+                    }
+
+                    // Player settings (all platforms/widths): a gear that opens
+                    // the settings panel (subtitles, audio, the Android
+                    // decoder options, and the playback rate). Second to last,
+                    // right before fullscreen.
+                    settings_gear := IconBtn {
+                        active: root.open_popup == 4;
+                        focused: root.kb_active && root.kb_idx == 7 && root.open_popup == 0;
+                        clicked => {
+                            if (!root.guard_osd_control()) { return; }
+                            root.kb_active = false;
+                            root.kb_idx = 7;
+                            if (root.open_popup == 4) {
+                                root.open_popup = 0;
+                            } else {
+                                root.settings_page = 0;
+                                root.open_popup = 4;
+                                // Refresh the shown decoder state (Android)
+                                // and the track lists on open.
+                                root.settings_opened();
+                                root.tracks_popup_opened(0);
+                            }
+                            root.osd_mouse_moved();
+                        }
+                        IcSettingsGear {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 24px;
+                            height: 24px;
+                            fill: #ffffff;
+                        }
+                    }
+
+                    // Fullscreen button. Hidden on Android: the platform has
+                    // its own fullscreen affordance (and the bars are already
+                    // immersive during playback).
+                    if !root.is_android: IconBtn {
+                        focused: root.kb_active && root.kb_idx == 8 && root.open_popup == 0;
+                        clicked => {
+                            if (!root.guard_osd_control()) { return; }
+                            root.kb_active = false; root.kb_idx = 8; root.toggle_fullscreen();
+                        }
+                        if root.is_fullscreen: IcFullscreenExit {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 26px;
+                            height: 26px;
+                            fill: #ffffff;
+                        }
+                        if !root.is_fullscreen: IcFullscreen {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 26px;
+                            height: 26px;
+                            fill: #ffffff;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Player settings panel (gear button): subtitle + audio track pickers
+        // on every platform, plus the Android decoder submenu. On narrow
+        // layouts the track pickers live here instead of the control row.
+        if root.open_popup == 4: SettingsMenu {
+            page <=> root.settings_page;
+            focused_idx: root.kb_active ? root.kb_menu : -1;
+            selected_index: root.decoder_selected;
+            hwdec_label: root.decode_label;
+            sub_tracks: root.sub_tracks;
+            audio_tracks: root.audio_tracks;
+            sub_label: root.sub_label;
+            audio_label: root.audio_label;
+            playback_speed <=> root.playback_speed;
+            is_android: root.is_android;
+            pick_decoder(i) => { root.open_popup = 0; root.pick_decoder(i); }
+            // Keep the panel open on a track pick so the checkmark visibly
+            // moves to the chosen row (Android's gear is the only picker).
+            pick_sub(i) => { root.pick_sub_track(i); }
+            pick_audio(i) => { root.pick_audio_track(i); }
+            // Rate edits stay on the page (the value moves live) and go
+            // straight to the backend, which owns the per-device setting.
+            speed_changed(v) => { root.playback_speed_changed(v); }
+            speed_stepped(d) => { root.playback_speed_stepped(d); }
+            closed => { root.open_popup = 0; }
+        }
+    }
+}

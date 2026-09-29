@@ -1,0 +1,2442 @@
+import { ScrollView, Spinner } from "std-widgets.slint";
+import { SearchField } from "searchfield.slint";
+import { CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem } from "types.slint";
+import { KbMark } from "kbnav.slint";
+import { MenuSheet } from "menusheet.slint";
+import { IcBookmark, IcBookmarkBorder, IcCheck, IcChevronLeft, IcChevronRight, IcTag } from "icons.slint";
+import { Anim } from "anim.slint";
+
+// One filter pill in the horizontal addon bar above the stream list.
+component StreamFilterPill inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    // The addon is still being queried: show a small spinner on the right.
+    in property <bool> loading;
+    callback picked();
+    // The pointer is dragging over this pill (or the gesture is still too
+    // young to tell which way it goes): the bar blocks the page's pan (see
+    // StreamFilterBar::panned). Reported from the pill's own moves because
+    // they arrive *before* the enclosing Flickables hand their held-back
+    // press over, while the page — which registered the press up front —
+    // would otherwise claim the gesture on the first 8px of vertical wobble.
+    callback pan_hint();
+    // The gesture is not the row's to own after all (it is going vertical, so
+    // the page does the panning), or it has ended: the bar hands the page's
+    // pan back at once.
+    callback pan_release();
+
+    // Side padding. The pill keeps this intrinsic width whether or not a
+    // query is in flight: while loading the spinner *replaces* the trailing
+    // padding (same 12px) instead of adding to it, so the bar no longer
+    // reflows as addons answer one by one.
+    property <length> pad: 12px;
+
+    height: 30px;
+    border-radius: 15px;
+    background: selected ? #8b5cf6 : (pill_touch.has-hover ? #3a3a46 : #232330);
+    clip: true;
+
+    HorizontalLayout {
+        padding-left: root.pad;
+        padding-right: root.loading ? 0px : root.pad;
+        spacing: root.loading ? 0px : 8px;
+
+        Text {
+            text: root.label;
+            color: root.selected ? #ffffff : #c8c8d2;
+            font-size: 13px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+
+        // Centred in the pill's height (a layout child of a HorizontalLayout
+        // is top-aligned, and a squashed ring would look wrong).
+        if root.loading: Rectangle {
+            width: root.pad;
+            height: 100%;
+
+            Spinner {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: root.pad;
+                height: root.pad;
+            }
+        }
+    }
+
+    pill_touch := TouchArea {
+        mouse-cursor: pointer;
+        // Gesture anchor for the axis decision below: the first event of the
+        // gesture. A touch reaches this TouchArea as moves before the
+        // enclosing Flickables deliver the press they hold back (its finger id
+        // is non-zero), so the anchor cannot come from `pressed-x` alone.
+        property <length> hint_x: 0px;
+        property <length> hint_y: 0px;
+        property <bool> hint_live: false;
+        // True between `pan_hint` and `pan_release`: the pill owns the
+        // gesture for the bar until the finger says otherwise.
+        property <bool> hint_held: false;
+
+        function hint_stop() {
+            self.hint_live = false;
+            if (self.hint_held) {
+                self.hint_held = false;
+                root.pan_release();
+            }
+        }
+
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.down) {
+                self.hint_x = self.mouse-x;
+                self.hint_y = self.mouse-y;
+                self.hint_live = true;
+            } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                self.hint_stop();
+            } else if (ev.kind == PointerEventKind.move) {
+                if (!(self.pressed || ev.touch-finger-id != 0)) {
+                    // A hover, not a drag: the pills are simply under the
+                    // pointer. (`pressed` lags the first moves of a mouse
+                    // drag — the enclosing Flickables hold its press back for
+                    // 100ms — so a mouse can only own the gesture from there
+                    // on.)
+                    self.hint_stop();
+                    return;
+                }
+                if (!self.hint_live) {
+                    self.hint_x = self.mouse-x;
+                    self.hint_y = self.mouse-y;
+                    self.hint_live = true;
+                }
+                let dx = self.mouse-x - self.hint_x;
+                let dy = self.mouse-y - self.hint_y;
+                if (Math.abs(dy) > 8px && Math.abs(dy) > Math.abs(dx)) {
+                    // Going vertical: hand the page's pan back so the drag
+                    // scrolls like it would anywhere else.
+                    self.hint_stop();
+                } else {
+                    // Horizontal, or too early to tell — hold the page off
+                    // now: the page trips its own 8px vertical threshold
+                    // within a frame or two, and a gesture it captured is
+                    // never given back.
+                    self.hint_held = true;
+                    root.pan_hint();
+                }
+            }
+        }
+
+        // A gesture can pass without an up/cancel reaching the grabbing item,
+        // but `pressed` always falls — the same safety net the landing cards
+        // use.
+        changed pressed => {
+            if (!self.pressed) {
+                self.hint_stop();
+            }
+        }
+
+        clicked => { root.picked(); }
+    }
+}
+
+// Small round chevron button for the Episodes tab pager.
+component PageButton inherits Rectangle {
+    // 0 = previous (‹), 1 = next (›).
+    in property <int> glyph: 0;
+    in property <string> name: "";
+    in property <bool> enabled: true;
+    callback picked();
+
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    background: !root.enabled ? transparent : (pg_touch.has-hover ? #2b2b35 : #232330);
+    border-width: 1px;
+    border-color: root.enabled ? #33333d : #2a2a32;
+    accessible-role: button;
+    accessible-label: root.name;
+
+    if root.glyph == 0: IcChevronLeft {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 18px;
+        height: 18px;
+        fill: root.enabled ? #e6e6ea : #55555f;
+    }
+    if root.glyph == 1: IcChevronRight {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 18px;
+        height: 18px;
+        fill: root.enabled ? #e6e6ea : #55555f;
+    }
+
+    pg_touch := TouchArea {
+        enabled: root.enabled;
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+}
+
+// Pager buttons for the episode list: rendered both above and under the grid,
+// so a 200-episode season can be turned from either end without scrolling back
+// to the top.
+component EpisodePager inherits HorizontalLayout {
+    in property <int> page: 0;
+    in property <int> count: 1;
+    callback picked(int);
+
+    spacing: 6px;
+
+    PageButton {
+        glyph: 0;
+        name: @tr("Previous page");
+        enabled: root.page > 0;
+        picked => { root.picked(root.page - 1); }
+    }
+    PageButton {
+        glyph: 1;
+        name: @tr("Next page");
+        enabled: root.page + 1 < root.count;
+        picked => { root.picked(root.page + 1); }
+    }
+}
+
+// Square, text-free icon button for the detail top bar (back, library,
+// categories). The caller drops the icon (and any badge) in as a child; the
+// hover background and keyboard focus ring live here.
+component TopIconButton inherits Rectangle {
+    in property <bool> narrow: false;
+    in property <bool> focused: false;
+    callback clicked();
+
+    width: narrow ? 44px : 36px;
+    height: narrow ? 44px : 36px;
+    border-radius: 8px;
+    background: touch.has-hover ? #2b2b35 : #1f1f27;
+    border-width: focused ? 2px : 0px;
+    border-color: #8b5cf6;
+
+    @children
+
+    touch := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Addon filter pills above the stream list: All + one per addon, with
+// per-pill spinners while queries are in flight. One instance per stream
+// list (a movie's Overview tab, a picked series episode), in flow with the
+// streams.
+component StreamFilterBar inherits HorizontalLayout {
+    in property <[string]> addons: [];
+    in property <[bool]> loading: [];
+    in property <bool> searching: false;
+    // Active filter: 0 = All, otherwise 1-based index into `addons`.
+    in property <int> addon_filter: 0;
+    in property <bool> touch_menus: false;
+
+    callback filter_picked(int);
+    // The row owns the pointer gesture (a pill reported a horizontal drag, or
+    // the row itself just panned): the host blocks the page's own pan while
+    // that lasts. Nested Flickables have no axis lock in Slint, so without
+    // this the page would register the vertical axis of the same gesture at
+    // the first 8px of wobble — and it never gives a captured gesture back.
+    // See DetailPage::page_pan_enabled.
+    callback panned();
+    // The gesture is going vertical, or has ended: the page may pan again.
+    callback pan_released();
+
+    min-width: 0px;
+    spacing: 8px;
+
+    // True while the pill row is wider than its viewport. The desktop
+    // chevron slots below are always laid out (never `if`-gated), so
+    // this flag can't feed back into the geometry (binding loop).
+    property <bool> overflowing: pill_row.width > pill_flick.width + 1px;
+
+    // Desktop chevron slots: fixed geometry whether or not the row
+    // overflows; the buttons fade in only while useful (an `if` here
+    // would resize the viewport and loop with `overflowing` above).
+    // A disabled touch passes taps through, so a faded slot is inert.
+    if !root.touch_menus: Rectangle {
+        width: 28px;
+        height: 30px;
+        opacity: overflowing && pill_flick.content-x < -0.5px ? 1.0 : 0.0;
+        animate opacity { duration: Anim.hover_fast; }
+
+        PageButton {
+            glyph: 0;
+            name: @tr("Scroll filters left");
+            enabled: overflowing && pill_flick.content-x < -0.5px;
+            picked => {
+                pill_flick.content-x = Math.min(0px, pill_flick.content-x + pill_flick.width);
+            }
+        }
+    }
+
+    pill_flick := Flickable {
+        horizontal-stretch: 1;
+        min-width: 0px;
+        height: 30px;
+        interactive: true;
+        content-width: pill_row.width;
+        content-height: self.height;
+
+        // The row moving is the only "a drag owns this Flickable" signal
+        // Slint offers: there is no drag-started callback, and the page's own
+        // press state is not observable from here. The chevron steps below
+        // and a layout clamp also land here — they just re-arm the host's
+        // hold for one interval.
+        changed content-x => { root.panned(); }
+
+        // Explicit width = intrinsic pill row width, so the Flickable
+        // scrolls it horizontally instead of squeezing it.
+        pill_row := HorizontalLayout {
+            width: self.preferred-width;
+            height: 30px;
+            spacing: 8px;
+            alignment: start;
+
+            StreamFilterPill {
+                label: @tr("All");
+                selected: root.addon_filter == 0;
+                loading: root.searching;
+                picked => { root.filter_picked(0); }
+                pan_hint => { root.panned(); }
+                pan_release => { root.pan_released(); }
+            }
+
+            for a[i] in root.addons: StreamFilterPill {
+                label: a;
+                selected: root.addon_filter == i + 1;
+                loading: i < root.loading.length && root.loading[i];
+                picked => { root.filter_picked(i + 1); }
+                pan_hint => { root.panned(); }
+                pan_release => { root.pan_released(); }
+            }
+        }
+    }
+
+    if !root.touch_menus: Rectangle {
+        width: 28px;
+        height: 30px;
+        opacity: overflowing && pill_flick.content-x > pill_flick.width - pill_flick.content-width + 0.5px ? 1.0 : 0.0;
+        animate opacity { duration: Anim.hover_fast; }
+
+        PageButton {
+            glyph: 1;
+            name: @tr("Scroll filters right");
+            enabled: overflowing && pill_flick.content-x > pill_flick.width - pill_flick.content-width + 0.5px;
+            picked => {
+                pill_flick.content-x = Math.max(pill_flick.width - pill_flick.content-width, pill_flick.content-x - pill_flick.width);
+            }
+        }
+    }
+}
+
+// Stream list shared by the Overview tab (movies) and the Episodes tab
+// (a picked series episode).
+component StreamList {
+    in property <[StreamRow]> rows;
+    in property <string> hint;
+    // Addon labels shown as pills, in installed-addon order (pending addons
+    // included). The bar shows an "All" pill plus one per addon.
+    in property <[string]> addons: [];
+    // Per-pill loading flag, index-aligned with `addons` (spinner while an
+    // addon is still being queried).
+    in property <[bool]> loading: [];
+    // True while any addon is still being queried (All pill spinner).
+    in property <bool> searching: false;
+    // Active filter: 0 = All, otherwise 1-based index into `addons`.
+    in property <int> addon_filter: 0;
+    // Keyboard focus index (-1 = none). The parent drives it.
+    in property <int> kb_focus: -1;
+    in property <int> page: 0;
+    in property <int> page_count: 1;
+    in property <int> page_start: 0;
+    // Keyboard modality (parent-driven): the ring shows only while true.
+    in property <bool> kb_active: false;
+    in property <bool> touch_menus: false;
+
+    callback picked(int);
+    callback page_picked(int);
+    callback bottom_page_picked(int, length);
+    callback action_requested(string);
+    callback filter_picked(int);
+    // Forwarded from the filter bar's own `panned` / `pan_released` (see
+    // DetailPage::page_pan_enabled).
+    callback filter_panned();
+    callback filter_pan_released();
+
+    VerticalLayout {
+        width: 100%;
+        // Allow squeezing below the widest unbreakable token: without this
+        // the min-width of long stream text propagates up and widens the
+        // whole content column (WATCH NOW + filter row stretch with it).
+        min-width: 0px;
+        spacing: 8px;
+
+        Text {
+            text: root.hint;
+            font-size: 13px;
+            color: #8a8a9a;
+            wrap: word-wrap;
+            width: 100%;
+        }
+
+        // Per-addon filter bar: a horizontally scrollable row of pills so
+        // many addons never blow the width out of bounds. `content-width`
+        // is set explicitly because Flickable cannot infer it with a `for`.
+        //
+        // The bar pans by dragging on touch. Desktop also gets step chevrons
+        // on both ends (see StreamFilterBar): a mouse drag on the pills pans
+        // them like touch does, but the chevrons stay the precise way to
+        // reach clipped pills. Each chevron click moves by one viewport,
+        // clamped.
+        if root.addons.length > 1: StreamFilterBar {
+            width: 100%;
+            addons: root.addons;
+            loading: root.loading;
+            searching: root.searching;
+            addon_filter: root.addon_filter;
+            touch_menus: root.touch_menus;
+            filter_picked(i) => { root.filter_picked(i); }
+            panned => { root.filter_panned(); }
+            pan_released => { root.filter_pan_released(); }
+        }
+
+        VerticalLayout {
+            width: 100%;
+            min-width: 0px;
+            spacing: 14px;
+
+            if root.page_count > 1: HorizontalLayout {
+                width: 100%;
+                height: 28px;
+                spacing: 10px;
+                alignment: end;
+                Text {
+                    text: @tr("Page {}/{}", root.page + 1, root.page_count);
+                    height: 28px;
+                    font-size: 12px;
+                    color: #8a8a9a;
+                    vertical-alignment: center;
+                }
+                EpisodePager {
+                    page: root.page;
+                    count: root.page_count;
+                    picked(p) => { root.page_picked(p); }
+                }
+            }
+
+            for st[i] in root.rows: Rectangle {
+                width: 100%;
+                min-width: 0px;
+                // Follow the text as it actually wraps at the live width;
+                // Slint measures wrapped Text at its intrinsic (single-line)
+                // width, so the `st.lines` heuristic alone under-counts on
+                // narrow screens and clips. Keep it as a floor for the first
+                // paint (before `row_measure` has a width).
+                min-height: Math.max(
+                    48px,
+                    max(st.lines * 22px + 24px,
+                        row_measure.preferred-height + 20px
+                            + ((st.is_download && st.download_action != 4) ? 4px : 0px)),
+                );
+                background: st.is_download ? #24203a : #1f1f27;
+                border-radius: 8px;
+                border-width: root.kb_active && root.kb_focus == i + root.page_start ? 2px : 0px;
+                border-color: #8b5cf6;
+                clip: true;
+
+                VerticalLayout {
+                    width: 100%;
+                    min-width: 0px;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    // Explicit so the hidden `row_measure` (same spacing)
+                    // matches this layout's content height exactly.
+                    spacing: 0px;
+
+                    Text {
+                        text: st.text;
+                        color: #e6e6ea;
+                        font-size: 16px;
+                        wrap: word-wrap;
+                        vertical-alignment: center;
+                        width: 100%;
+                        min-width: 0px;
+                    }
+
+                    if st.details != "": Text {
+                        text: st.details;
+                        color: #b9a7ff;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                        width: 100%;
+                        min-width: 0px;
+                    }
+
+                    // Progress rail, anchored to the left edge (`x: 0`, like
+                    // the other rails in the app) so it fills left → right.
+                    // Hidden once the file is complete: the row reads
+                    // "Downloaded" and an empty rail there is just noise.
+                    if st.is_download && st.download_action != 4: dl_bar := Rectangle {
+                        x: 0;
+                        width: 100%;
+                        height: 4px;
+                        border-radius: 2px;
+                        background: #38324f;
+
+                        dl_fill := Rectangle {
+                            x: 0;
+                            width: parent.width * st.download_progress;
+                            height: 100%;
+                            border-radius: 2px;
+                            background: #8b5cf6;
+                        }
+                    }
+                }
+
+                // Hidden measurement copy of the text stack at the padded
+                // content width (the visible layout pads 16px each side), so
+                // the row minimum above tracks real wrapping instead of the
+                // intrinsic one-line width.
+                mrow := Rectangle {
+                    width: 100%;
+                    height: 0;
+                    clip: true;
+
+                    row_measure := VerticalLayout {
+                        width: Math.max(0px, mrow.width - 32px);
+                        spacing: 0px;
+
+                        Text {
+                            text: st.text;
+                            font-size: 16px;
+                            wrap: word-wrap;
+                            min-width: 0px;
+                        }
+
+                        if st.details != "": Text {
+                            text: st.details;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                            min-width: 0px;
+                        }
+                    }
+                }
+
+                touch_st := TouchArea {
+                    property <bool> lp_suppress: false;
+                    width: 100%;
+                    height: 100%;
+                    accessible-role: button;
+                    accessible-label: st.text;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if (touch_st.lp_suppress) {
+                            touch_st.lp_suppress = false;
+                        } else {
+                            root.picked(i + root.page_start);
+                        }
+                    }
+                    pointer-event(ev) => {
+                        if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
+                            row_lp_timer.stop();
+                            touch_st.lp_suppress = true;
+                            root.action_requested(st.id);
+                        } else if (ev.kind == PointerEventKind.down) {
+                            touch_st.lp_suppress = false;
+                            if (root.touch_menus) {
+                                row_lp_timer.stop();
+                                row_lp_timer.start();
+                            }
+                        } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                            row_lp_timer.stop();
+                        }
+                    }
+                    moved => {
+                        if (Math.abs(touch_st.mouse-x - touch_st.pressed-x)
+                            + Math.abs(touch_st.mouse-y - touch_st.pressed-y) > 24px) {
+                            row_lp_timer.stop();
+                        }
+                    }
+                }
+
+                row_lp_timer := Timer {
+                    interval: 600ms;
+                    running: false;
+                    triggered => {
+                        self.stop();
+                        touch_st.lp_suppress = true;
+                        root.action_requested(st.id);
+                    }
+                }
+            }
+
+            // Repeat the pager after the entries so users don't have to
+            // scroll all the way back up to turn a long stream list.
+            if root.page_count > 1: HorizontalLayout {
+                width: 100%;
+                height: 28px;
+                spacing: 10px;
+                alignment: end;
+                Text {
+                    text: @tr("Page {}/{}", root.page + 1, root.page_count);
+                    height: 28px;
+                    font-size: 12px;
+                    color: #8a8a9a;
+                    vertical-alignment: center;
+                }
+                EpisodePager {
+                    page: root.page;
+                    count: root.page_count;
+                    picked(p) => { root.bottom_page_picked(p, root.absolute-position.y); }
+                }
+            }
+        }
+
+        Text {
+            text: @tr("Click a stream to start playback. Right-click or hold for actions.");
+            font-size: 12px;
+            color: #5c5c6e;
+            width: 100%;
+        }
+    }
+}
+
+export component DetailPage {
+    // Custom components placed in a Window are sized by their preferred size;
+    // make this page fill the window (its parent).
+    preferred-width: 100%;
+    preferred-height: 100%;
+
+    in-out property <image> selected_poster;
+    in-out property <image> selected_backdrop;
+    in-out property <string> selected_title: "";
+    in-out property <string> selected_year: "";
+    in-out property <string> selected_description: "";
+    in-out property <[string]> selected_genre_list: [];
+    // Tab bar: 0 = Overview, 3 = Episodes (1/2 are stubs — Stremio addons
+    // provide no Characters/Artwork data).
+    in-out property <int> detail_tab: 0;
+    in-out property <string> episode_filter: "";
+    in-out property <bool> in_library: false;
+    in-out property <[CategoryRow]> category_rows: [];
+    in-out property <int> selected_category_count: 0;
+    in-out property <[StreamRow]> streams: [];
+    in-out property <int> stream_page: 0;
+    in-out property <int> stream_page_count: 1;
+    in-out property <int> stream_page_start: 0;
+    in-out property <int> stream_total: 0;
+    in-out property <string> streams_hint: "";
+    // Addon filter pills above the stream list (installed-addon order).
+    in-out property <[string]> stream_addons: [];
+    // Per-pill loading flags, index-aligned with `stream_addons`; plus a
+    // global "any query in flight" flag for the All pill.
+    in-out property <[bool]> stream_loading: [];
+    in-out property <bool> streams_searching: false;
+    // 0 = All, otherwise 1-based index into `stream_addons`.
+    in-out property <int> stream_filter: 0;
+    in-out property <bool> stream_action_open: false;
+    in-out property <string> stream_action_id: "";
+    in-out property <string> stream_action_title: "";
+    in-out property <[SheetItem]> stream_action_items: [];
+    in-out property <bool> modal_episodes: false;
+    in-out property <[string]> season_names: [];
+    in-out property <int> season_combo_idx: -1;
+    // Art-backed season picker cards, same order as season_names.
+    in-out property <[SeasonCard]> season_cards: [];
+    in-out property <[EpisodeRow]> episode_rows: [];
+    // Episodes tab pagination: Rust slices the season's filtered list into
+    // pages of EPISODE_PAGE_SIZE and writes `episode_page_start` (the global
+    // index of `episode_rows[0]`), so card picks still resolve against the
+    // whole season.
+    in-out property <int> episode_page: 0;
+    in-out property <int> episode_page_count: 1;
+    in-out property <int> episode_page_start: 0;
+    in-out property <int> episode_total: 0;
+    in-out property <string> episode_context: "";
+    // Set by AppWindow when the streams view was entered directly (Home
+    // Continue deep-link) without visiting the episode list — see kb_back.
+    in property <bool> deep_stream: false;
+    // Compact layout for narrow (portrait) windows.
+    in property <bool> narrow;
+    // Top system-bar inset (Android status bar): Window.safe-area-insets,
+    // bound by AppWindow. 0 on desktop/web, so layout there is unchanged.
+    in property <length> safe-top: 0px;
+    // Side insets: in landscape the display cutout / gesture area moves to
+    // the left or right edge, so page content must clear it.
+    in property <length> safe-left: 0px;
+    in property <length> safe-right: 0px;
+    // Bottom system-bar inset (Android gesture/nav bar), for the card
+    // bottom sheets. 0 on desktop/web.
+    in property <length> safe-bottom: 0px;
+    // True on touch-driven platforms (Android): card menus open as
+    // bottom sheets on hold. Desktop keeps native right-click popups.
+    in property <bool> touch_menus: false;
+
+    // Episode grid columns: 1 in narrow windows, otherwise scaled to the
+    // available width (content ≈ page − sidebar − padding), capped at 4.
+    property <int> ep_cols: root.narrow ? 1 : Math.min(4, Math.max(2, Math.floor((root.width - 260px) / 320px)));
+    // Equal-width episode cards: grid columns start at each cell's
+    // preferred width (full unwrapped text even when wrapped — see Text
+    // docs), so without an explicit cell width columns track content
+    // length. Derive one shared width top-down from the page width
+    // (content = page − 16px scroll padding each side − 200px sidebar
+    // and 16px body spacing on wide; sidebar hidden on narrow).
+    // Must use root.width here: referencing the content layout's own
+    // width feeds back through the ScrollView and binding-loops.
+    property <length> ep_card_w: (root.width - (root.narrow ? 32px : 248px) - (root.ep_cols - 1) * 12px) / root.ep_cols;
+    // Season picker grid: 2 fluid columns on narrow windows; on wide
+    // windows the column count grows from a 180px minimum card but cards
+    // are capped (same centered-cap scheme as the Discover grid), so the
+    // wall never turns into a few giant banners on desktop.
+    property <length> min-season: 180px;
+    property <length> max-season: 240px;
+    property <int> season_cols: root.narrow ? 2 : Math.min(5, Math.max(3, Math.floor((root.width - 248px + 12px) / (root.min-season + 12px))));
+    property <length> season_card_w: Math.min(root.max-season, (root.width - (root.narrow ? 32px : 248px) - (root.season_cols - 1) * 12px) / root.season_cols);
+    // Columns actually used (partial last row still packs left).
+    property <int> season_grid_cols: Math.min(root.season_cols, root.season_cards.length);
+    // Series flow when an addon listed seasons; movies have none.
+    property <bool> has_episodes: root.season_names.length > 0;
+    // True while the assign-categories popup covers this page (wired by
+    // AppWindow): used to hand keyboard focus back when it closes.
+    in property <bool> popup_open: false;
+
+    // ---- 6-button keyboard nav (arrows + Enter + Backspace) ----
+    // Zones: 0 top bar, 1 tabs, 2 watch-now, 3 content. Content kind:
+    // 0 none, 1 stream list, 2 episode picker (season/filter/grid).
+    // Enter activates; Backspace steps back (episode streams -> list ->
+    // modal). The filter field uses edit mode like Discover's search.
+    // Bound to AppWindow (survives modal recreation): reopening the same
+    // entry restores focus. kb_edit stays local (transient edit mode).
+    in-out property <int> kb_zone: 0;
+    in-out property <int> kb_top: 0; // 0 back, 1 library, 2 categories
+    in-out property <int> kb_tab: 0;
+    in-out property <int> kb_ci: 2; // picker control: 0 season, 1 filter, 2 grid
+    in-out property <int> kb_ep: 0;
+    in-out property <int> kb_s: 0;
+    property <bool> kb_edit: false;
+    // Keyboard modality (bound to AppWindow, see DiscoverPage).
+    in-out property <bool> kb_active;
+
+    function det_content() -> int {
+        if (root.detail_tab == 3 && root.modal_episodes) {
+            return 2;
+        }
+        if (root.detail_tab == 3 && !root.modal_episodes) {
+            return 1;
+        }
+        if (root.detail_tab == 0 && !root.has_episodes) {
+            return 1;
+        }
+        return 0;
+    }
+
+    function det_top_visible(i: int) -> bool {
+        if (i == 0 || i == 1) {
+            return true;
+        }
+        return root.in_library && root.category_rows.length > 0;
+    }
+
+    function det_top_fix() {
+        if (root.kb_top == 2 && !root.det_top_visible(2)) {
+            root.kb_top = 1;
+        }
+    }
+
+    function det_top_right() {
+        if (root.kb_top == 0) {
+            root.kb_top = 1;
+        } else if (root.kb_top == 1 && root.det_top_visible(2)) {
+            root.kb_top = 2;
+        }
+    }
+
+    function det_top_left() {
+        if (root.kb_top == 2) {
+            root.kb_top = 1;
+        } else if (root.kb_top == 1) {
+            root.kb_top = 0;
+        }
+    }
+
+    function det_zone_down() {
+        if (root.kb_zone == 0) {
+            root.kb_zone = 1;
+        } else if (root.kb_zone == 1) {
+            if (root.has_episodes) {
+                root.kb_zone = 2;
+            } else if (root.det_content() != 0) {
+                root.kb_zone = 3;
+            }
+        } else if (root.kb_zone == 2) {
+            if (root.det_content() != 0) {
+                root.kb_zone = 3;
+            }
+        } else {
+            // Inside content: grid Down moves a row, streams move one row.
+            if (root.det_content() == 2 && root.kb_ci == 2) {
+                if (root.kb_ep + root.ep_cols < root.episode_rows.length) {
+                    root.kb_ep += root.ep_cols;
+                    root.kb_nudge(-90px);
+                }
+            } else if (root.det_content() == 2 && root.kb_ci < 2) {
+                root.kb_ci += 1;
+                root.kb_nudge(-80px);
+            } else if (root.det_content() == 1) {
+                if (root.kb_s + 1 < root.stream_total) {
+                    root.kb_s += 1;
+                    root.kb_nudge(-50px);
+                }
+            }
+        }
+    }
+
+    function det_zone_up() {
+        if (root.kb_zone == 3) {
+            if (root.det_content() == 2 && root.kb_ci == 2) {
+                if (root.kb_ep >= root.ep_cols) {
+                    root.kb_ep -= root.ep_cols;
+                    root.kb_nudge(90px);
+                } else {
+                    root.kb_ci = 1;
+                    root.kb_nudge(80px);
+                }
+            } else if (root.det_content() == 2 && root.kb_ci == 1) {
+                root.kb_ci = 0;
+                root.kb_nudge(80px);
+            } else if (root.det_content() == 2 && root.kb_ci == 0) {
+                if (root.has_episodes) {
+                    root.kb_zone = 2;
+                } else {
+                    root.kb_zone = 1;
+                }
+            } else if (root.has_episodes) {
+                root.kb_zone = 2;
+            } else {
+                root.kb_zone = 1;
+            }
+        } else if (root.kb_zone == 2) {
+            root.kb_zone = 1;
+        } else if (root.kb_zone == 1) {
+            root.kb_zone = 0;
+        }
+    }
+
+    function kb_left() {
+        if (root.kb_zone == 0) {
+            root.det_top_left();
+        } else if (root.kb_zone == 1) {
+            root.kb_tab = root.kb_tab == 0 ? 3 : 0;
+        } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 0) {
+            root.kb_cycle_season(-1);
+        } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 1) {
+            // Filter / pager row: Left steps one page back.
+            if (root.episode_page > 0) {
+                root.episode_page_picked(root.episode_page - 1);
+            }
+        } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 2) {
+            if (root.kb_ep > 0) {
+                root.kb_ep -= 1;
+            }
+        }
+    }
+
+    function kb_right() {
+        if (root.kb_zone == 0) {
+            root.det_top_right();
+        } else if (root.kb_zone == 1) {
+            root.kb_tab = root.kb_tab == 0 ? 3 : 0;
+        } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 0) {
+            root.kb_cycle_season(1);
+        } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 1) {
+            // Right steps one page forward.
+            if (root.episode_page + 1 < root.episode_page_count) {
+                root.episode_page_picked(root.episode_page + 1);
+            }
+        } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 2) {
+            if (root.kb_ep + 1 < root.episode_rows.length) {
+                root.kb_ep += 1;
+            }
+        }
+    }
+
+    function kb_cycle_season(d: int) {
+        let n = root.season_names.length;
+        if (n == 0) {
+            return;
+        }
+        let v = root.season_combo_idx + d;
+        let c = Math.max(0, Math.min(n - 1, v));
+        if (c != root.season_combo_idx) {
+            root.season_combo_idx = c;
+            root.season_picked(c);
+        }
+    }
+
+    function kb_enter() {
+        if (root.kb_zone == 0) {
+            if (root.kb_top == 0) {
+                root.back();
+            } else if (root.kb_top == 1) {
+                root.add_to_library();
+            } else {
+                root.open_categories();
+            }
+        } else if (root.kb_zone == 1) {
+            root.detail_tab_picked(root.kb_tab);
+        } else if (root.kb_zone == 2) {
+            root.watch_now();
+        } else {
+            if (root.det_content() == 1) {
+                if (root.kb_s >= 0 && root.kb_s < root.stream_total) {
+                    root.stream_picked(root.kb_s);
+                }
+            } else if (root.det_content() == 2) {
+                if (root.kb_ci == 0) {
+                    root.kb_cycle_season(1);
+                } else if (root.kb_ci == 1) {
+                    root.kb_edit = true;
+                } else {
+                    if (root.kb_ep >= 0 && root.kb_ep < root.episode_rows.length) {
+                        root.episode_picked(root.kb_ep);
+                    }
+                }
+            }
+        }
+    }
+
+    function kb_back() {
+        // A deep-linked streams view (Home Continue) skips the episode list,
+        // so back closes the modal instead of revealing a screen never seen.
+        if (!root.modal_episodes && root.episode_context != "" && !root.deep_stream) {
+            root.episodes_back();
+        } else {
+            root.back();
+        }
+    }
+
+    // ---- Page pan lock (pill-bar axis lock) ----------------------------
+    // Nested Flickables have no axis locking in Slint: whichever one crosses
+    // the 8px grab threshold first owns the whole gesture, and a Flickable
+    // that captured the pointer never gives it back. A finger on the 30px
+    // pill strip always wobbles a little vertically, so the page used to
+    // grab the drag a few frames in and scroll — mid-swipe, while the pills
+    // stopped moving.
+    //
+    // The pills therefore block the page's pan at the *start* of the
+    // gesture, not when their row starts moving (it cannot: the page holds
+    // the press back for its 100ms drag-vs-tap window, so the row's own
+    // Flickable only wakes up well after the page has had its chance). Two
+    // reports keep it off — `StreamFilterBar::panned` for a horizontal pill
+    // drag or any row movement (a fling coasts on `content-x` changes), and
+    // `pan_released` to hand it back when the gesture is going vertical
+    // instead — with the hold lapsing a moment after the reports stop. With
+    // `interactive: false` the page also forwards events straight through,
+    // so the pills get the rest of the gesture outright.
+    //
+    // The whole page is instantiated per modal open (see `page` below), so
+    // this can never stay stuck across opens.
+    property <bool> page_pan_enabled: true;
+
+    function filters_panned() {
+        root.page_pan_enabled = false;
+        // Longer than one 16ms drag/fling frame, so a live gesture keeps
+        // re-arming the hold at every move. `restart` only re-arms a timer
+        // that was started before (it is created stopped), so the first
+        // report of a gesture has to start it.
+        pan_release_t.running = true;
+        pan_release_t.restart();
+    }
+
+    // The pill row is not panning any more (its gesture went vertical, or the
+    // finger lifted): the page picks its pan straight back up.
+    function filters_pan_released() {
+        root.page_pan_enabled = true;
+        pan_release_t.stop();
+    }
+
+    // Best-effort scroll follow (episode cards and stream rows have
+    // variable heights, so nudge instead of computing exact strides).
+    function kb_nudge(d: length) {
+        let vy = det_scroll.content-y;
+        let vh = det_scroll.height;
+        let min_y = Math.min(0px, vh - det_scroll.content-height);
+        let v = vy + d;
+        det_scroll.content-y = Math.max(min_y, Math.min(0px, v));
+    }
+
+    function scroll_stream_list_to_top(list_y: length) {
+        // The final pager sits after up to 25 variable-height rows. Align the
+        // start of this stream list in the outer detail scroller after it is
+        // used, so the next page begins at its first entry rather than at an
+        // arbitrary offset left over from the bottom controls.
+        let relative_y = list_y - det_scroll.absolute-position.y;
+        let min_y = Math.min(0px, det_scroll.height - det_scroll.content-height);
+        det_scroll.content-y = Math.max(
+            min_y,
+            Math.min(0px, det_scroll.content-y - relative_y),
+        );
+    }
+
+    changed kb_zone => {
+        if (root.kb_zone == 3) {
+            root.kb_nudge(-120px);
+        } else {
+            root.kb_nudge(120px);
+        }
+    }
+    changed detail_tab => {
+        root.kb_s = 0;
+        root.kb_ep = 0;
+        root.kb_ci = 2;
+        root.kb_tab = root.detail_tab == 3 ? 3 : 0;
+    }
+    changed episode_rows => {
+        if (root.kb_ep >= root.episode_rows.length) {
+            root.kb_ep = Math.max(0, root.episode_rows.length - 1);
+        }
+    }
+    changed streams => {
+        if (root.kb_s >= root.stream_total) {
+            root.kb_s = Math.max(0, root.stream_total - 1);
+        }
+    }
+    changed kb_s => {
+        if (root.kb_active && root.kb_s >= 0 && root.kb_s / 25 != root.stream_page) {
+            root.stream_page_picked(root.kb_s / 25);
+        }
+    }
+    changed episode_context => { root.det_top_fix(); }
+    changed modal_episodes => { root.det_top_fix(); }
+    changed in_library => { root.det_top_fix(); }
+    changed category_rows => { root.det_top_fix(); }
+    changed popup_open => {
+        if (!root.popup_open) {
+            nav_scope.focus();
+        }
+    }
+
+    callback back();
+    callback episodes_back();
+    callback add_to_library();
+    callback open_categories();
+    callback season_picked(int);
+    callback episode_picked(int);
+    // Pager move (absolute target page; the backend clamps it).
+    callback episode_page_picked(int);
+    callback stream_picked(int);
+    callback stream_page_picked(int);
+    callback stream_action_requested(string);
+    callback stream_action_selected(string, int);
+    callback stream_filter_picked(int);
+    callback detail_tab_picked(int);
+    callback episode_filter_changed(string);
+    callback watch_now();
+    // Manual watched-state (context menu + quick-toggle overlay).
+    // Episode actions: 0 toggle, 1 mark watched, 2 mark unwatched,
+    // 3 mark this + all previous watched, 4 clear resume position.
+    callback episode_toggle_watched(int);
+    callback episode_watch_action(int, int);
+    // Season actions: 0 toggle whole season, 1 mark watched, 2 mark unwatched.
+    callback season_watch_action(int, int);
+
+    // Card bottom-sheet menu state (single instance per kind; -1 closed,
+    // 0 episode, 1 season). Pure UI state: the actions reuse the
+    // callbacks above with the stored index.
+    property <int> menu_kind: -1;
+    property <int> menu_idx: 0;
+    property <bool> menu_flag: false;
+    property <float> menu_progress: 0.0;
+
+    function open_ep_menu(idx: int, watched: bool, progress: float) {
+        root.menu_kind = 0;
+        root.menu_idx = idx;
+        root.menu_flag = watched;
+        root.menu_progress = progress;
+    }
+
+    function open_season_menu(idx: int, watched: bool) {
+        root.menu_kind = 1;
+        root.menu_idx = idx;
+        root.menu_flag = watched;
+    }
+
+    function close_menu() {
+        root.menu_kind = -1;
+    }
+
+    page := Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #0f0f12;
+
+        // Entrance fade: the page is instantiated fresh per open (`if
+        // modal_visible` in AppWindow), so the fade replays every time.
+        // The page fill matches the window background, so only the content
+        // (top bar, banner, tabs, body) reads as fading in. The flip is
+        // deferred one tick: changing the value during creation would be
+        // treated as the baseline and not animate.
+        property <bool> entered: false;
+        opacity: self.entered ? 1.0 : 0.0;
+        animate opacity { duration: Anim.transition_fade; }
+
+        enter_t := Timer {
+            interval: 40ms;
+            running: true;
+            triggered => {
+                enter_t.running = false;
+                page.entered = true;
+            }
+        }
+
+        // 6-button scope: overlays the page without intercepting the mouse.
+        // The categories popup (separate scope) takes focus while open and
+        // hands it back via popup_open below.
+        nav_scope := FocusScope {
+            width: 100%;
+            height: 100%;
+            init => { self.focus(); }
+            key-pressed(e) => {
+                if (root.stream_action_open) {
+                    root.stream_action_open = false;
+                    accept
+                } else if (root.menu_kind >= 0) {
+                    // An open sheet eats Backspace (dismiss only).
+                    root.close_menu();
+                    accept
+                } else if (root.kb_edit) {
+                    root.kb_edit = false;
+                    self.focus();
+                    accept
+                } else if (e.text == Key.UpArrow) {
+                    root.kb_active = true;
+                    root.det_zone_up();
+                    accept
+                } else if (e.text == Key.DownArrow) {
+                    root.kb_active = true;
+                    root.det_zone_down();
+                    accept
+                } else if (e.text == Key.LeftArrow) {
+                    root.kb_active = true;
+                    root.kb_left();
+                    accept
+                } else if (e.text == Key.RightArrow) {
+                    root.kb_active = true;
+                    root.kb_right();
+                    accept
+                } else if (e.text == Key.Return) {
+                    root.kb_active = true;
+                    root.kb_enter();
+                    accept
+                } else if (e.text == Key.Backspace || e.text == Key.Back) {
+                    root.kb_active = true;
+                    root.kb_back();
+                    accept
+                } else if (e.text == "w" || e.text == "W") {
+                    // Quick watched-toggle for the focused episode card.
+                    if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 2
+                        && root.kb_ep >= 0 && root.kb_ep < root.episode_rows.length) {
+                        root.kb_active = true;
+                        root.episode_toggle_watched(root.kb_ep);
+                        accept
+                    } else {
+                        reject
+                    }
+                } else {
+                    reject
+                }
+            }
+        }
+
+        // One-shot restore nudge: the modal is recreated per open with
+        // restored kb props but no `changed` fires for pre-set values.
+        restore_t := Timer {
+            interval: 150ms;
+            running: true;
+            triggered => {
+                if (root.kb_zone == 3) {
+                    root.kb_nudge(-120px);
+                }
+                self.running = false;
+            }
+        }
+
+        page_body := VerticalLayout {
+            width: 100%;
+            height: 100%;
+            spacing: 0px;
+
+            // Top bar: icon-only controls so the content below dominates.
+            // The episode indicator/back affordance lives above the stream
+            // list instead (see the Episodes tab).
+            HorizontalLayout {
+                spacing: root.narrow ? 6px : 12px;
+                alignment: space-between;
+                padding: root.narrow ? 10px : 16px;
+                padding-bottom: 10px;
+                padding-top: (root.narrow ? 10px : 16px) + safe-top;
+                padding-left: (root.narrow ? 10px : 16px) + safe-left;
+                padding-right: (root.narrow ? 10px : 16px) + safe-right;
+
+                HorizontalLayout {
+                    alignment: start;
+
+                    TopIconButton {
+                        narrow: root.narrow;
+                        focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 0;
+                        clicked => { root.kb_active = false; root.kb_top = 0; root.back(); }
+
+                        IcChevronLeft {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 24px;
+                            height: 24px;
+                            fill: #ffffff;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: root.narrow ? 6px : 10px;
+                    alignment: end;
+
+                    // Add / remove from library: bookmark outline vs filled.
+                    TopIconButton {
+                        narrow: root.narrow;
+                        focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 1;
+                        clicked => { root.kb_active = false; root.kb_top = 1; root.add_to_library(); }
+
+                        if root.in_library: IcBookmark {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 24px;
+                            height: 24px;
+                            fill: #8b5cf6;
+                        }
+
+                        if !root.in_library: IcBookmarkBorder {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 24px;
+                            height: 24px;
+                            fill: #ffffff;
+                        }
+                    }
+
+                    // Category assignment.
+                    if root.in_library && root.category_rows.length > 0: TopIconButton {
+                        narrow: root.narrow;
+                        focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 2;
+                        clicked => { root.kb_active = false; root.kb_top = 2; root.open_categories(); }
+
+                        IcTag {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 24px;
+                            height: 24px;
+                            fill: #ffffff;
+                        }
+
+                        // Assignment count, when any.
+                        if root.selected_category_count > 0: Rectangle {
+                            x: parent.width - 16px;
+                            y: 4px;
+                            width: 14px;
+                            height: 14px;
+                            border-radius: 7px;
+                            background: #8b5cf6;
+
+                            Text {
+                                text: root.selected_category_count;
+                                color: #ffffff;
+                                font-size: 9px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+
+            det_scroll := Flickable {
+                width: 100%;
+                vertical-stretch: 1;
+                // A raw Flickable, not a ScrollView (which does not expose
+                // the inner Flickable's `interactive`): the pill bar's axis
+                // lock flips exactly that (see `page_pan_enabled`). Panning
+                // is otherwise unchanged — touch drags and mouse drags pan,
+                // the wheel scrolls regardless of `interactive`.
+                interactive: root.page_pan_enabled;
+                // The fluent ScrollView came with a scrollbar; this Flickable
+                // has none, so `page_scroll_bar` below draws the same slim
+                // indicator on top of it.
+
+                VerticalLayout {
+                    width: 100%;
+                    padding-left: 16px + safe-left;
+                    padding-right: 16px + safe-right;
+                    padding-bottom: 16px;
+                    spacing: 12px;
+                    // Never distribute leftover viewport height here: with
+                    // default stretch alignment and all-zero child stretches,
+                    // extra space is shared EQUALLY by every child (see
+                    // adjust_items), inflating short pages' grids. Leftover
+                    // stays below the content instead.
+                    alignment: start;
+
+                    // ---- Banner header --------------------------------
+                    // Wide backdrop (addon `background`, if any) with a
+                    // dimming overlay; poster + title row sits at the bottom.
+                    // Explicit width: without it the banner stretches to the
+                    // scroll content width, so an overflowing child (e.g.
+                    // episode streams) drags the backdrop right too.
+                    Rectangle {
+                        width: 100%;
+                        border-radius: 10px;
+                        clip: true;
+                        background: #1a1a20;
+                        height: 260px;
+
+                        Image {
+                            source: root.selected_backdrop;
+                            image-fit: cover;
+                            width: 100%;
+                            height: 100%;
+                        }
+
+                        Rectangle {
+                            width: 100%;
+                            height: 100%;
+                            background: #00000099;
+                        }
+
+                        HorizontalLayout {
+                            padding: 16px;
+                            spacing: 18px;
+                            alignment: start;
+                            width: 100%;
+                            height: 100%;
+
+                            VerticalLayout {
+                                vertical-stretch: 1;
+                                horizontal-stretch: 1;
+                                Rectangle { vertical-stretch: 1; }
+
+                                HorizontalLayout {
+                                    spacing: 18px;
+
+                                    Rectangle {
+                                        width: 120px;
+                                        height: 172px;
+                                        border-radius: 8px;
+                                        clip: true;
+                                        background: #222228;
+
+                                        Image {
+                                            source: root.selected_poster;
+                                            image-fit: cover;
+                                            width: 100%;
+                                            height: 100%;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        spacing: 8px;
+                                        alignment: end;
+                                        horizontal-stretch: 1;
+
+                                        Text {
+                                            text: root.selected_title;
+                                            font-size: root.narrow ? 20px : 24px;
+                                            font-weight: 700;
+                                            color: #ffffff;
+                                            wrap: word-wrap;
+                                            // A single unbroken word must not
+                                            // widen the banner past the viewport.
+                                            min-width: 0px;
+                                        }
+
+                                        // Badge pills from real addon data only
+                                        // (year + genres). Scores, airing state and
+                                        // season labels are not in the protocol.
+                                        // Narrow: 2-column flow so the row never
+                                        // overflows the text column.
+                                        property <int> pill_cols: root.narrow ? 2 : 99;
+                                        property <int> pill_off: root.selected_year != "" ? 1 : 0;
+                                        GridLayout {
+                                            width: 100%;
+                                            // Squeezable (same min-width pattern as
+                                            // the stream rows): on narrow screens
+                                            // the text column is ~160px and two
+                                            // wide pills would otherwise push the
+                                            // page sideways.
+                                            min-width: 0px;
+                                            spacing: 6px;
+
+                                            if root.selected_year != "": Rectangle {
+                                                row: 0;
+                                                col: 0;
+                                                height: 22px;
+                                                min-width: 0px;
+                                                border-radius: 11px;
+                                                background: #232330;
+                                                clip: true;
+
+                                                HorizontalLayout {
+                                                    padding-left: 10px;
+                                                    padding-right: 10px;
+
+                                                    Text {
+                                                        text: root.selected_year;
+                                                        color: #e6e6ea;
+                                                        font-size: 12px;
+                                                        font-weight: 600;
+                                                        vertical-alignment: center;
+                                                        horizontal-stretch: 1;
+                                                        overflow: elide;
+                                                    }
+                                                }
+                                            }
+
+                                            // Narrow: 2-column flow; squeezed
+                                            // pills elide instead of pushing the
+                                            // page sideways (see grid note above).
+                                            for g[i] in root.selected_genre_list: Rectangle {
+                                                // Offset past the year pill above.
+                                                row: Math.floor((i + pill_off) / pill_cols);
+                                                col: Math.mod(i + pill_off, pill_cols);
+                                                height: 22px;
+                                                min-width: 0px;
+                                                border-radius: 11px;
+                                                background: #232330;
+                                                clip: true;
+
+                                                HorizontalLayout {
+                                                    padding-left: 10px;
+                                                    padding-right: 10px;
+
+                                                    Text {
+                                                        text: g;
+                                                        color: #e6e6ea;
+                                                        font-size: 12px;
+                                                        font-weight: 600;
+                                                        vertical-alignment: center;
+                                                        horizontal-stretch: 1;
+                                                        overflow: elide;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ---- Tab bar --------------------------------------
+                    Rectangle {
+                        width: 100%;
+                        background: #141419;
+                        border-radius: 8px;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            padding: 4px;
+
+                        for t[i] in [@tr("Overview"), @tr("Characters"), @tr("Artwork"), @tr("Episodes")]: Rectangle {
+                            horizontal-stretch: 1;
+                            // Squeezable (same min-width pattern as the rows
+                            // below): four fixed labels must share narrow
+                            // phone widths, so they elide instead of pushing
+                            // the page sideways on wider font metrics.
+                            min-width: 0px;
+                            height: root.narrow ? 44px : 30px;
+                            border-radius: 6px;
+                            background: root.detail_tab == i ? #4c4c8a : transparent;
+                            border-width: (i == 0 || i == 3) && root.kb_zone == 1 && root.kb_tab == i ? 2px : 0px;
+                            border-color: #8b5cf6;
+                            clip: true;
+
+                            Text {
+                                text: t;
+                                color: (i == 1 || i == 2) ? #5c5c6e : #e6e6ea;
+                                font-size: 13px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                overflow: elide;
+                            }
+
+                            tab_touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.kb_active = false;
+                                    if (i == 0) {
+                                        root.kb_tab = 0;
+                                        root.detail_tab_picked(0);
+                                    } else if (i == 3) {
+                                        root.kb_tab = 3;
+                                        root.detail_tab_picked(3);
+                                    }
+                                }
+                            }
+                        }
+                        }
+                    }
+
+                    // ---- Body: sidebar + content ----------------------
+                    // Default (stretch) alignment: the sidebar keeps its
+                    // explicit 200px and the content column fills the rest,
+                    // so the episode grid gets equal columns. (alignment:
+                    // start would pin content to its preferred width and
+                    // size grid columns to unwrapped text.)
+                    HorizontalLayout {
+                        width: 100%;
+                        spacing: 16px;
+
+                        // Sidebar (series meta + actions): packed to content
+                        // height so tall episode grids can't spread it out.
+                        if !root.narrow: VerticalLayout {
+                            width: 200px;
+                            spacing: 10px;
+                            alignment: start;
+
+                            if root.has_episodes: Rectangle {
+                                height: root.narrow ? 48px : 38px;
+                                border-radius: 8px;
+                                background: watch_touch.has-hover ? #7c3aed : #8b5cf6;
+                                border-width: root.kb_active && root.kb_zone == 2 ? 2px : 0px;
+                                border-color: #ffffff;
+
+                                Text {
+                                    text: @tr("▶  WATCH NOW");
+                                    color: #ffffff;
+                                    font-size: 14px;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                watch_touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.kb_active = false; root.watch_now(); }
+                                }
+                            }
+
+                            Rectangle {
+                                background: #141419;
+                                border-radius: 8px;
+
+                            VerticalLayout {
+                                spacing: 8px;
+                                padding: 12px;
+                                alignment: start;
+
+                                Text {
+                                    text: @tr("Episodes");
+                                    color: #8a8a9a;
+                                    font-size: 12px;
+                                }
+
+                                Text {
+                                    text: root.has_episodes ? @tr("{} in this season", root.episode_total) : "—";
+                                    color: #e6e6ea;
+                                    font-size: 13px;
+                                    wrap: word-wrap;
+                                }
+
+                                Text {
+                                    text: @tr("Released");
+                                    color: #8a8a9a;
+                                    font-size: 12px;
+                                }
+
+                                Text {
+                                    text: root.selected_year == "" ? "—" : root.selected_year;
+                                    color: #e6e6ea;
+                                    font-size: 13px;
+                                }
+
+                                Text {
+                                    text: @tr("Genres");
+                                    color: #8a8a9a;
+                                    font-size: 12px;
+                                }
+
+                                for g in root.selected_genre_list: Text {
+                                    text: g;
+                                    color: #e6e6ea;
+                                    font-size: 13px;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            }
+                        }
+
+                        // Main content. Same as above: start alignment so a
+                        // content column shorter than the sidebar never has
+                        // its children spread apart by shared leftover space.
+                        // min-width 0 so wide stream text can't push this
+                        // column (and with it WATCH NOW + the filter row)
+                        // past the viewport.
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            min-width: 0px;
+                            spacing: 10px;
+                            alignment: start;
+
+                            // Narrow windows: inline WATCH NOW above content.
+                            if root.narrow && root.has_episodes: Rectangle {
+                                height: 48px;
+                                border-radius: 8px;
+                                background: watch_touch_n.has-hover ? #7c3aed : #8b5cf6;
+                                border-width: root.kb_active && root.kb_zone == 2 ? 2px : 0px;
+                                border-color: #ffffff;
+
+                                Text {
+                                    text: @tr("▶  WATCH NOW");
+                                    color: #ffffff;
+                                    font-size: 14px;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                watch_touch_n := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.kb_active = false; root.watch_now(); }
+                                }
+                            }
+
+                            // ---- Overview tab -------------------------
+                            // start-aligned: never share leftover height
+                            // between children (see scroll content note).
+                            if root.detail_tab == 0: VerticalLayout {
+                                spacing: 10px;
+                                alignment: start;
+
+                                if root.selected_description != "": Text {
+                                    text: root.selected_description;
+                                    color: #cccccc;
+                                    font-size: 14px;
+                                    wrap: word-wrap;
+                                    // Same longest-word containment as the
+                                    // banner title above.
+                                    min-width: 0px;
+                                }
+
+                                if root.selected_description == "": Text {
+                                    text: @tr("No description provided by the addon.");
+                                    color: #5c5c6e;
+                                    font-size: 13px;
+                                }
+
+                                // Movies list their streams here (series
+                                // streams live in the Episodes tab).
+                                if !root.modal_episodes && !root.has_episodes: StreamList {
+                                    rows: root.streams;
+                                    hint: root.streams_hint;
+                                    addons: root.stream_addons;
+                                    loading: root.stream_loading;
+                                    searching: root.streams_searching;
+                                    addon_filter: root.stream_filter;
+                                    page: root.stream_page;
+                                    page_count: root.stream_page_count;
+                                    page_start: root.stream_page_start;
+                                    kb_focus: root.kb_zone == 3 ? root.kb_s : -1;
+                                    kb_active: root.kb_active;
+                                    touch_menus: root.touch_menus;
+                                    picked(i) => { root.kb_active = false; root.stream_picked(i); }
+                                    page_picked(p) => {
+                                        root.kb_active = false;
+                                        root.stream_page_picked(p);
+                                        root.kb_s = p * 25;
+                                    }
+                                    bottom_page_picked(p, y) => {
+                                        root.kb_active = false;
+                                        root.stream_page_picked(p);
+                                        root.kb_s = p * 25;
+                                        root.scroll_stream_list_to_top(y);
+                                    }
+                                    action_requested(id) => { root.stream_action_requested(id); }
+                                    filter_picked(i) => {
+                                        root.kb_active = false;
+                                        root.kb_s = 0;
+                                        root.stream_filter_picked(i);
+                                    }
+                                    filter_panned => { root.filters_panned(); }
+                                    filter_pan_released => { root.filters_pan_released(); }
+                                }
+                            }
+
+                            // ---- Stub tabs (no addon data) ------------
+                            if root.detail_tab == 1 || root.detail_tab == 2: Text {
+                                text: @tr("Not provided by Stremio addons.");
+                                color: #5c5c6e;
+                                font-size: 13px;
+                            }
+
+                            // ---- Episodes tab -------------------------
+                            // start-aligned: the grid must keep its natural
+                            // height (see scroll content note).
+                            if root.detail_tab == 3: VerticalLayout {
+                                spacing: 10px;
+                                alignment: start;
+
+                                // `if` keeps big episode grids uninstantiated when
+                                // hidden; keyboard edit-mode focuses the
+                                // filter via edit_watcher below (page scope
+                                // cannot see ids inside `if`).
+                                if root.modal_episodes: VerticalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+
+                                    // Enters filter edit mode on demand: the
+                                    // page sets kb_edit, this focuses the
+                                    // field (accepting the keystrokes); the
+                                    // field's accepted handler exits edit.
+                                    edit_watcher := Timer {
+                                        interval: 80ms;
+                                        running: root.kb_edit;
+                                        triggered => { filter_line.focus(); }
+                                    }
+
+                                    // ---- Season picker ----------------------
+                                    // Art-backed season wall (tap a card to
+                                    // switch seasons). The keyboard zone is
+                                    // unchanged (kb_ci == 0, Left/Right
+                                    // cycles, Enter steps); the ring on the
+                                    // selected card shows focus (same as the
+                                    // episode grid, which also has no mark).
+                                    // No label row above the wall: its emoji
+                                    // measured narrower than it painted on
+                                    // Android and let the page wiggle sideways.
+                                    HorizontalLayout {
+                                        width: 100%;
+                                        alignment: center;
+
+                                        GridLayout {
+                                            // Exact content width so the
+                                            // wall centers like the Discover
+                                            // grid when cards hit their cap.
+                                            width: Math.max(0px, root.season_grid_cols * (root.season_card_w + 12px) - 12px);
+                                            spacing: 12px;
+
+                                            for s[i] in root.season_cards: Rectangle {
+                                                row: Math.floor(i / root.season_cols);
+                                                col: Math.mod(i, root.season_cols);
+                                                // Fixed shared width (see
+                                                // season_card_w): keeps every
+                                                // column equal.
+                                                width: root.season_card_w;
+                                                // Cinematic 16:9 cards.
+                                                height: root.season_card_w * 9 / 16;
+                                                border-radius: 8px;
+                                                clip: true;
+                                                background: #1c1c23;
+                                                border-width: root.season_combo_idx == i ? 2px : 0px;
+                                                border-color: root.kb_active && root.kb_zone == 3 && root.kb_ci == 0 && root.season_combo_idx == i ? #ffffff : #8b5cf6;
+
+                                                if s.has_thumb: Image {
+                                                    source: s.thumb;
+                                                    image-fit: cover;
+                                                    width: 100%;
+                                                    height: 100%;
+                                                }
+
+                                                if !s.has_thumb: Text {
+                                                    text: "🎬";
+                                                    font-size: 22px;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+
+                                                // Dim the art so the label
+                                                // stays legible.
+                                                Rectangle {
+                                                    width: 100%;
+                                                    height: 100%;
+                                                    background: #00000066;
+                                                }
+
+                                                Text {
+                                                    text: s.name;
+                                                    color: #ffffff;
+                                                    font-size: 17px;
+                                                    font-weight: 700;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+
+                                                // Watched check (top-right) for fully-seen seasons:
+                                                // same small white disc + black check as the
+                                                // episode cards.
+                                                if s.watched: Rectangle {
+                                                    x: parent.width - 28px;
+                                                    y: 4px;
+                                                    width: 22px;
+                                                    height: 22px;
+                                                    border-radius: 11px;
+                                                    background: #ffffff;
+
+                                                    IcCheck {
+                                                        x: (parent.width - self.width) / 2;
+                                                        y: (parent.height - self.height) / 2;
+                                                        width: 13px;
+                                                        height: 13px;
+                                                        fill: #000000;
+                                                    }
+                                                }
+
+                                                // Card menu: desktop right-click opens the
+                                                // native popup at the cursor; touch hold
+                                                // opens the bottom sheet (see below).
+                                                season_ctx := ContextMenuArea {
+                                                    width: 100%;
+                                                    height: 100%;
+
+                                                    Menu {
+                                                        MenuItem {
+                                                            title: s.watched ? @tr("Mark season as unwatched") : @tr("Mark season as watched");
+                                                            activated => { root.season_watch_action(i, 0); }
+                                                        }
+                                                        MenuSeparator {}
+                                                        MenuItem {
+                                                            title: @tr("Select season");
+                                                            activated => {
+                                                                root.kb_active = false;
+                                                                root.kb_zone = 3;
+                                                                root.kb_ci = 0;
+                                                                root.season_picked(i);
+                                                            }
+                                                        }
+                                                    }
+
+                                                touch_season := TouchArea {
+                                                    property <bool> lp_suppress: false;
+                                                    mouse-cursor: pointer;
+                                                    clicked => {
+                                                        if (touch_season.lp_suppress) {
+                                                            touch_season.lp_suppress = false;
+                                                        } else {
+                                                            root.kb_active = false;
+                                                            root.kb_zone = 3;
+                                                            root.kb_ci = 0;
+                                                            root.season_picked(i);
+                                                        }
+                                                    }
+                                                    pointer-event(ev) => {
+                                                        if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
+                                                            season_lp_timer.stop();
+                                                            if (root.touch_menus) {
+                                                                root.open_season_menu(i, s.watched);
+                                                            } else {
+                                                                season_ctx.show({ x: touch_season.mouse-x, y: touch_season.mouse-y });
+                                                            }
+                                                        } else if (ev.kind == PointerEventKind.down) {
+                                                            touch_season.lp_suppress = false;
+                                                            if (root.touch_menus) {
+                                                                season_lp_timer.stop();
+                                                                season_lp_timer.start();
+                                                            }
+                                                        } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                                                            season_lp_timer.stop();
+                                                        }
+                                                    }
+                                                    moved => {
+                                                        if (Math.abs(touch_season.mouse-x - touch_season.pressed-x) + Math.abs(touch_season.mouse-y - touch_season.pressed-y) > 24px) {
+                                                            season_lp_timer.stop();
+                                                        }
+                                                    }
+                                                }
+                                                }
+
+                                                // Hold-to-open timer (pinned off until a
+                                                // press arms it; see ep_lp_timer).
+                                                season_lp_timer := Timer {
+                                                    interval: 600ms;
+                                                    running: false;
+                                                    triggered => {
+                                                        self.stop();
+                                                        touch_season.lp_suppress = true;
+                                                        root.open_season_menu(i, s.watched);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        width: 100%;
+                                        spacing: 8px;
+
+                                        KbMark { on: root.kb_zone == 3 && root.kb_ci == 1; active: root.kb_active; }
+                                        filter_line := SearchField {
+                                            roomy: root.narrow;
+                                            // Typed filter text grows the preferred
+                                            // width; without this the input paints
+                                            // past the viewport's right edge.
+                                            min-width: 0px;
+                                            text <=> root.episode_filter;
+                                            placeholder-text: @tr("Filter episodes…");
+                                            horizontal-stretch: 1;
+                                            edited(t) => { root.episode_filter_changed(t); }
+                                            accepted(t) => {
+                                                root.episode_filter_changed(t);
+                                                root.kb_edit = false;
+                                                nav_scope.focus();
+                                            }
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        width: 100%;
+                                        spacing: 10px;
+
+                                        Text {
+                                            text: root.episode_page_count > 1
+                                                ? @tr("{n} episode · page {}/{}" | "{n} episodes · page {}/{}" % root.episode_total, root.episode_page + 1, root.episode_page_count)
+                                                : @tr("{n} episode" | "{n} episodes" % root.episode_total);
+                                            font-size: 13px;
+                                            color: #8a8a9a;
+                                            vertical-alignment: center;
+                                        }
+
+                                        // Pager (hidden when the season fits on
+                                        // a single page).
+                                        if root.episode_page_count > 1: EpisodePager {
+                                            page: root.episode_page;
+                                            count: root.episode_page_count;
+                                            picked(p) => { root.episode_page_picked(p); }
+                                        }
+                                    }
+
+                                    GridLayout {
+                                        spacing: 12px;
+
+                                        for e[i] in root.episode_rows: ep_card := Rectangle {
+                                            row: Math.floor(i / root.ep_cols);
+                                            col: Math.mod(i, root.ep_cols);
+                                            // Fixed shared width (see ep_card_w):
+                                            // keeps every column equal.
+                                            width: root.ep_card_w;
+                                            // Hard containment: on some renderer
+                                            // paths overflowing text is painted
+                                            // past its element instead of being
+                                            // elided, so the card itself must
+                                            // clip (nothing may reach the next
+                                            // row's thumbnails).
+                                            clip: true;
+                                            background: e.watched ? #1a1c26 : #1c1c23;
+                                            border-radius: 8px;
+                                            border-width: root.kb_active && root.kb_zone == 3 && root.kb_ci == 2 && root.kb_ep == i ? 2px : 0px;
+                                            border-color: #8b5cf6;
+
+                                            // Card menu: desktop right-click opens the
+                                            // native popup at the cursor; touch hold
+                                            // opens the bottom sheet (see below).
+                                            // The TouchArea owns all presses (see
+                                            // upstream slint#12354), both paths open
+                                            // explicitly from its handlers.
+                                            ep_ctx := ContextMenuArea {
+                                                width: 100%;
+                                                height: 100%;
+
+                                                Menu {
+                                                    MenuItem {
+                                                        title: e.watched ? @tr("Mark episode as unwatched") : @tr("Mark episode as watched");
+                                                        activated => { root.episode_watch_action(root.episode_page_start + i, e.watched ? 2 : 1); }
+                                                    }
+                                                    MenuItem {
+                                                        title: @tr("Mark episode and previous as watched");
+                                                        enabled: !e.watched;
+                                                        activated => { root.episode_watch_action(root.episode_page_start + i, 3); }
+                                                    }
+                                                    MenuItem {
+                                                        title: @tr("Clear resume position");
+                                                        enabled: !e.watched && e.progress > 0;
+                                                        activated => { root.episode_watch_action(root.episode_page_start + i, 4); }
+                                                    }
+                                                    MenuSeparator {}
+                                                    MenuItem {
+                                                        title: @tr("Open episode");
+                                                        activated => {
+                                                            root.kb_active = false;
+                                                            root.episode_picked(root.episode_page_start + i);
+                                                        }
+                                                    }
+                                                }
+
+                                            touch_ep := TouchArea {
+                                                property <bool> lp_suppress: false;
+                                                mouse-cursor: pointer;
+                                                clicked => {
+                                                    if (touch_ep.lp_suppress) {
+                                                        // Release after a hold: the sheet
+                                                        // is already up, don't open.
+                                                        touch_ep.lp_suppress = false;
+                                                    } else {
+                                                        root.kb_active = false;
+                                                        root.episode_picked(root.episode_page_start + i);
+                                                    }
+                                                }
+                                                pointer-event(ev) => {
+                                                    if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
+                                                        ep_lp_timer.stop();
+                                                        if (root.touch_menus) {
+                                                            root.open_ep_menu(root.episode_page_start + i, e.watched, e.progress);
+                                                        } else {
+                                                            ep_ctx.show({ x: touch_ep.mouse-x, y: touch_ep.mouse-y });
+                                                        }
+                                                    } else if (ev.kind == PointerEventKind.down) {
+                                                        touch_ep.lp_suppress = false;
+                                                        // Hold-to-sheet is a touch flow;
+                                                        // desktop keeps click-only behavior.
+                                                        if (root.touch_menus) {
+                                                            ep_lp_timer.stop();
+                                                            ep_lp_timer.start();
+                                                        }
+                                                    } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                                                        ep_lp_timer.stop();
+                                                    }
+                                                }
+                                                // Finger jitter must not cancel the hold;
+                                                // only a real drag (scroll) does.
+                                                moved => {
+                                                    if (Math.abs(touch_ep.mouse-x - touch_ep.pressed-x) + Math.abs(touch_ep.mouse-y - touch_ep.pressed-y) > 24px) {
+                                                        ep_lp_timer.stop();
+                                                    }
+                                                }
+                                            }
+                                            }
+
+                                            // Hold-to-open timer. NOTE: Slint Timers
+                                            // run from creation by default
+                                            // (`running` defaults true), so it is
+                                            // pinned off here and only armed by a
+                                            // press. A 600ms stationary hold opens
+                                            // the sheet; taps/drags stop it first.
+                                            ep_lp_timer := Timer {
+                                                interval: 600ms;
+                                                running: false;
+                                                triggered => {
+                                                    self.stop();
+                                                    touch_ep.lp_suppress = true;
+                                                    root.open_ep_menu(root.episode_page_start + i, e.watched, e.progress);
+                                                }
+                                            }
+
+                                            VerticalLayout {
+                                                padding: 8px;
+                                                // Slightly roomier bottom edge
+                                                // so the 3rd description line
+                                                // and rail don't sit on the
+                                                // card border.
+                                                padding-bottom: 12px;
+                                                spacing: 6px;
+                                                // Pack content at the top: with
+                                                // the default stretch alignment
+                                                // leftover row height would be
+                                                // dealt out as gaps between
+                                                // every element (blank lines
+                                                // through the card) instead of
+                                                // one blank area at the bottom.
+                                                alignment: start;
+
+                                                // 16:9 thumbnail with EP badge.
+                                                Rectangle {
+                                                    height: 110px;
+                                                    border-radius: 6px;
+                                                    clip: true;
+                                                    background: #000000;
+
+                                                    if e.has_thumb: Image {
+                                                        source: e.thumb;
+                                                        image-fit: cover;
+                                                        width: 100%;
+                                                        height: 100%;
+                                                    }
+
+                                                    if !e.has_thumb: Text {
+                                                        text: "▶";
+                                                        color: #5a5a6e;
+                                                        font-size: 18px;
+                                                        horizontal-alignment: center;
+                                                        vertical-alignment: center;
+                                                    }
+
+                                                    // EP badge pinned bottom-left,
+                                                    // sized to its text by the
+                                                    // row layout (never the
+                                                    // thumbnail width).
+                                                    VerticalLayout {
+                                                        width: 100%;
+                                                        height: 100%;
+
+                                                        Rectangle { vertical-stretch: 1; }
+
+                                                        HorizontalLayout {
+                                                            padding-left: 6px;
+                                                            padding-bottom: 6px;
+                                                            spacing: 0px;
+
+                                                            Rectangle {
+                                                                height: 22px;
+                                                                border-radius: 11px;
+                                                                background: #000000c0;
+
+                                                                HorizontalLayout {
+                                                                    padding-left: 8px;
+                                                                    padding-right: 8px;
+
+                                                                    Text {
+                                                                        text: e.ep_no;
+                                                                        color: #ffffff;
+                                                                        font-size: 11px;
+                                                                        font-weight: 700;
+                                                                        vertical-alignment: center;
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            // Absorbs the row's free
+                                                            // width so the badge
+                                                            // keeps its text width.
+                                                            Rectangle { horizontal-stretch: 1; }
+                                                        }
+                                                    }
+
+                                                    // Watched check, Stremio-style: a small white
+                                                    // disc with a black check, pinned to the
+                                                    // thumbnail's top-right corner — part of the
+                                                    // artwork, no pill box.
+                                                    if e.watched: Rectangle {
+                                                        x: parent.width - 28px;
+                                                        y: 4px;
+                                                        width: 22px;
+                                                        height: 22px;
+                                                        border-radius: 11px;
+                                                        background: #ffffff;
+
+                                                        IcCheck {
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: (parent.height - self.height) / 2;
+                                                            width: 13px;
+                                                            height: 13px;
+                                                            fill: #000000;
+                                                        }
+                                                    }
+                                                }
+
+                                                // Single-line elided title/synopsis
+                                                // (Discover-card pattern): a
+                                                // wrapped synopsis spans a
+                                                // different line count per card
+                                                // and grid rows stretch to the
+                                                // tallest, leaving uneven blank
+                                                // areas. One line each keeps
+                                                // every card the same height at
+                                                // any window width.
+                                                Text {
+                                                    text: e.text;
+                                                    color: e.watched ? #8a8a9a : #e6e6ea;
+                                                    font-size: 14px;
+                                                    font-weight: 600;
+                                                    overflow: elide;
+                                                }
+
+                                                // Always rendered (blank space keeps
+                                                // the line height): every card
+                                                // keeps the same height whether
+                                                // the addon sent a date or not.
+                                                Text {
+                                                    text: e.date == "" ? " " : e.date;
+                                                    color: #8f8fa0;
+                                                    font-size: 12px;
+                                                    overflow: elide;
+                                                }
+
+                                                // Always rendered, same reason as
+                                                // the date. The reserved height
+                                                // admits exactly 3 lines with an
+                                                // ellipsis on the last one and
+                                                // never a 4th: elide keeps only
+                                                // the lines whose full block
+                                                // fits, and the grid row height
+                                                // no longer depends on the
+                                                // measured wrapped-text height.
+                                                // NOTE: the height is derived
+                                                // from the font size (not a
+                                                // pixel constant) so larger
+                                                // fonts in the future cannot
+                                                // outgrow the reserved space:
+                                                // 3 * 1.45em covers the default
+                                                // font's ~1.36em line height
+                                                // with margin (~56.6px at
+                                                // 13px) while staying well
+                                                // short of a 4th line.
+                                                Text {
+                                                    text: e.details == "" ? " " : e.details;
+                                                    color: #8f8fa0;
+                                                    font-size: 13px;
+                                                    height: 3 * self.font-size * 1.45;
+                                                    wrap: word-wrap;
+                                                    overflow: elide;
+                                                }
+
+                                                // Resume rail, always present so
+                                                // cards never differ by it: the
+                                                // fill is zero-width when there
+                                                // is nothing to resume.
+                                                Rectangle {
+                                                    height: 4px;
+                                                    border-radius: 2px;
+                                                    background: #2b2b35;
+
+                                                    Rectangle {
+                                                        x: 0;
+                                                        width: parent.width * (!e.watched ? e.progress : 0.0);
+                                                        height: 100%;
+                                                        border-radius: 2px;
+                                                        background: #8b5cf6;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Same pager under the grid.
+                                    if root.episode_page_count > 1: HorizontalLayout {
+                                        width: 100%;
+                                        height: 28px;
+                                        spacing: 10px;
+                                        alignment: end;
+
+                                        Text {
+                                            text: @tr("Page {}/{}", root.episode_page + 1, root.episode_page_count);
+                                            height: 28px;
+                                            font-size: 12px;
+                                            color: #8a8a9a;
+                                            vertical-alignment: center;
+                                        }
+
+                                        EpisodePager {
+                                            page: root.episode_page;
+                                            count: root.episode_page_count;
+                                            picked(p) => { root.episode_page_picked(p); }
+                                        }
+                                    }
+                                }
+
+                                // Picked episode: an indicator/back bar (the
+                                // top bar is icon-only) above its streams.
+                                if !root.modal_episodes: VerticalLayout {
+                                    width: 100%;
+                                    min-width: 0px;
+                                    spacing: 10px;
+                                    alignment: start;
+
+                                    if root.episode_context != "": Rectangle {
+                                        width: 100%;
+                                        height: root.narrow ? 40px : 34px;
+                                        border-radius: 8px;
+                                        background: ep_ctx_touch.has-hover ? #2b2b35 : #1f1f27;
+
+                                        HorizontalLayout {
+                                            padding-left: 4px;
+                                            padding-right: 12px;
+                                            spacing: 4px;
+                                            alignment: start;
+
+                                            Rectangle {
+                                                width: root.narrow ? 32px : 28px;
+                                                // Full bar height: this box only
+                                                // reserves the icon's width, and a
+                                                // HorizontalLayout top-aligns a
+                                                // plain Rectangle child (no
+                                                // `vertical-alignment`), which left
+                                                // the chevron sitting high in the bar.
+                                                height: 100%;
+
+                                                IcChevronLeft {
+                                                    x: (parent.width - self.width) / 2;
+                                                    y: (parent.height - self.height) / 2;
+                                                    width: 20px;
+                                                    height: 20px;
+                                                    fill: #c9c9d4;
+                                                }
+                                            }
+
+                                            Text {
+                                                text: root.episode_context;
+                                                color: #cccccc;
+                                                font-size: 13px;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                                horizontal-stretch: 1;
+                                                min-width: 0px;
+                                            }
+                                        }
+
+                                        ep_ctx_touch := TouchArea {
+                                            width: 100%;
+                                            height: 100%;
+                                            mouse-cursor: pointer;
+                                            clicked => { root.kb_active = false; root.episodes_back(); }
+                                        }
+                                    }
+
+                                    StreamList {
+                                        rows: root.streams;
+                                        hint: root.streams_hint;
+                                        addons: root.stream_addons;
+                                        loading: root.stream_loading;
+                                        searching: root.streams_searching;
+                                        addon_filter: root.stream_filter;
+                                        page: root.stream_page;
+                                        page_count: root.stream_page_count;
+                                        page_start: root.stream_page_start;
+                                        kb_focus: root.kb_zone == 3 ? root.kb_s : -1;
+                                        kb_active: root.kb_active;
+                                        touch_menus: root.touch_menus;
+                                        picked(i) => { root.kb_active = false; root.stream_picked(i); }
+                                        page_picked(p) => {
+                                            root.kb_active = false;
+                                            root.stream_page_picked(p);
+                                            root.kb_s = p * 25;
+                                        }
+                                        bottom_page_picked(p, y) => {
+                                            root.kb_active = false;
+                                            root.stream_page_picked(p);
+                                            root.kb_s = p * 25;
+                                            root.scroll_stream_list_to_top(y);
+                                        }
+                                        action_requested(id) => { root.stream_action_requested(id); }
+                                        filter_picked(i) => {
+                                            root.kb_active = false;
+                                            root.kb_s = 0;
+                                            root.stream_filter_picked(i);
+                                        }
+                                        filter_panned => { root.filters_panned(); }
+                                        filter_pan_released => { root.filters_pan_released(); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Scroll indicator for the page Flickable above (a raw Flickable
+        // draws none): the slim thumb the fluent ScrollView used to show,
+        // in the app's dark palette. Position readout only — the page pans
+        // by dragging anywhere, so there is nothing to grab here.
+        if det_scroll.content-height > det_scroll.height: page_scroll_bar := Rectangle {
+            width: 3px;
+            height: Math.max(24px, det_scroll.height * det_scroll.height / det_scroll.content-height);
+            x: page.width - self.width - 2px;
+            y: page_body.y + det_scroll.y + (det_scroll.height - self.height) * (-det_scroll.content-y / (det_scroll.content-height - det_scroll.height));
+            border-radius: self.width / 2;
+            background: #55555f;
+        }
+
+        // Hold behind the pill-bar axis lock (see `filters_panned`): the
+        // page's pan stays off while the pill row is moving and comes back
+        // once it has been still for one interval.
+        pan_release_t := Timer {
+            interval: 200ms;
+            running: false;
+            triggered => {
+                self.stop();
+                root.page_pan_enabled = true;
+            }
+        }
+
+        // Card bottom sheets (single instance per kind): the dim
+        // backdrop eats outside taps (dismiss only, never forwarded).
+        if root.stream_action_open: MenuSheet {
+            width: 100%;
+            height: 100%;
+            safe-bottom: root.safe-bottom;
+            safe-left: root.safe-left;
+            safe-right: root.safe-right;
+            max_h: root.height * 0.85;
+            sheet_title: root.stream_action_title;
+            items: root.stream_action_items;
+            picked(a) => {
+                root.stream_action_open = false;
+                root.stream_action_selected(root.stream_action_id, a);
+            }
+            closed => { root.stream_action_open = false; }
+        }
+
+        if root.menu_kind == 0: MenuSheet {
+            width: 100%;
+            height: 100%;
+            safe-bottom: root.safe-bottom;
+            safe-left: root.safe-left;
+            safe-right: root.safe-right;
+            max_h: root.height * 0.85;
+            sheet_title: @tr("Episode options");
+            items: [
+                    { label: root.menu_flag ? @tr("Mark episode as unwatched") : @tr("Mark episode as watched"), enabled: true },
+                    { label: @tr("Mark episode and previous as watched"), enabled: !root.menu_flag },
+                { label: @tr("Clear resume position"), enabled: !root.menu_flag && root.menu_progress > 0 },
+                { label: @tr("Open episode"), enabled: true },
+            ];
+            picked(a) => {
+                if (a == 0) {
+                    root.episode_watch_action(root.menu_idx, root.menu_flag ? 2 : 1);
+                } else if (a == 1) {
+                    root.episode_watch_action(root.menu_idx, 3);
+                } else if (a == 2) {
+                    root.episode_watch_action(root.menu_idx, 4);
+                } else {
+                    root.kb_active = false;
+                    root.episode_picked(root.menu_idx);
+                }
+                root.close_menu();
+            }
+            closed => { root.close_menu(); }
+        }
+
+        if root.menu_kind == 1: MenuSheet {
+            width: 100%;
+            height: 100%;
+            safe-bottom: root.safe-bottom;
+            safe-left: root.safe-left;
+            safe-right: root.safe-right;
+            max_h: root.height * 0.85;
+            sheet_title: @tr("Season options");
+            items: [
+                { label: root.menu_flag ? @tr("Mark season as unwatched") : @tr("Mark season as watched"), enabled: true },
+                { label: @tr("Select season"), enabled: true },
+            ];
+            picked(a) => {
+                if (a == 0) {
+                    root.season_watch_action(root.menu_idx, 0);
+                } else {
+                    root.kb_active = false;
+                    root.kb_zone = 3;
+                    root.kb_ci = 0;
+                    root.season_picked(root.menu_idx);
+                }
+                root.close_menu();
+            }
+            closed => { root.close_menu(); }
+        }
+    }
+}

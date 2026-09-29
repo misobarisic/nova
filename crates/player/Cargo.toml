@@ -1,0 +1,30 @@
+[package]
+name = "nova-player"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+# In-window mpv player (desktop + Android). Split out of the app crate so the
+# mpv/render/JNI surface doesn't recompile on app-logic edits. Never built on
+# any other target.
+[dependencies]
+nova-config = { path = "../config" }
+nova-ui = { path = "../ui" }
+slint = { workspace = true, features = ["backend-android-activity-06"] }
+# Vendored libmpv; build_libmpv stays off (see root Cargo.toml notes).
+libmpv2 = "6.0.0"
+# mpv track-list JSON parsing.
+serde_json = "1.0.151"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# GL state guard around mpv's render callback (same version Slint uses).
+glow = "0.17"
+# JNI for the external-player fallback.
+jni = "0.22"
+# dlopen/dlsym for the Android EGL function-pointer lookup.
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Idle inhibition over D-Bus (ScreenSaver, logind fallback). Same major
+# version the tree already pulls in transitively via atspi.
+zbus = { version = "5", default-features = false, features = ["blocking-api"] }

@@ -1,0 +1,42 @@
+[package]
+name = "nova-sync"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+# Cross-device sync over iroh: a generic per-record store (last-write-wins with
+# tombstones) plus a small custom ALPN protocol that exchanges only the records
+# a peer is missing or has stale. Split into a leaf crate (like `nova-torrent`)
+# so the heavy iroh/QUIC dependency tree doesn't recompile on app-logic edits.
+#
+# The crate deliberately knows nothing about the app's data model: the app
+# decomposes its state into `notify(domain, key, value, ts)` calls and rebuilds
+# its own types from `records(domain)`. That keeps merge semantics under the
+# app's control while the transport stays generic.
+
+[dependencies]
+nova-config = { path = "../config" }
+nova-storage = { path = "../storage" }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+# Wire format: compact binary serde. `alloc` enables to_allocvec/take_from_bytes
+# for the Vec/String-bearing frames.
+postcard = { version = "1", features = ["alloc"] }
+# Frame bodies (`Hello` digests, record batches) are postcard, which is compact
+# but not redundant-free: repeated keys, a per-record device id and JSON record
+# values still deflate well. `rust_backend` (miniz_oxide) is pure Rust, so it
+# cross-compiles to Android and is already in the lock via other crates.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# Digest hashing for the exchange short-circuit (domain -> version-map hash).
+# Already in the lock via iroh, so this adds no new compiled crate.
+blake3 = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+# Core iroh only (stable 1.x API). Default features bring `tls-ring` (the
+# crypto provider that cross-compiles cleanly to Android via the NDK) plus
+# relay/portmapper support needed by the N0 preset.
+iroh = "1.2"
+
+[dev-dependencies]
+# The store-persistence integration test seeds a legacy blob and inspects rows.
+nova-storage = { path = "../storage" }

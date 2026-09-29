@@ -1,0 +1,54 @@
+libmpv for Android: pinned prebuilt binaries (no nix-flake builds).
+
+Source: https://github.com/media-kit/libmpv-android-video-build/releases/tag/v1.1.11
+Flavor: `full` (required: the `default` flavor's FFmpeg is built with
+`--disable-decoders` and its explicit enable list omits the HDMV PGS / bitmap
+subtitle decoder `hdmv_pgs_subtitle`, so Blu-ray PGS subs never render; the
+`full` flavor includes `ff_pgssub_decoder`. It is a superset of `default`
+otherwise — same release, same system deps).
+
+Vendored files. The sha256 column is what `sha256sum vendor/android-libs/*/libmpv.so`
+must print; the downloaded jars' hashes are kept below for provenance (this
+table used to record those instead).
+
+| file                | size (B) | sha256                                                           |
+|---------------------|----------|------------------------------------------------------------------|
+| arm64-v8a/libmpv.so | 16111232 | 1389a049513651ef7367f9710c34701ccb5de33ebef4f9691389891a2acd7bca |
+| x86_64/libmpv.so    | 19799824 | a314e50636601239304d2630836f76bf3482c6a18f498b826ddb5592960a1044 |
+
+Source jars (NOT vendored, extracted and discarded):
+- https://github.com/media-kit/libmpv-android-video-build/releases/download/v1.1.11/full-arm64-v8a.jar
+  sha256 cdb54c5cf24725623ca717bbbd6d991031d625a377460bd128f19c2dffe189bd
+- https://github.com/media-kit/libmpv-android-video-build/releases/download/v1.1.11/full-x86_64.jar
+  sha256 848936cfd7333077f21759adaca4a9e1a5647891da2e42ab211c5bdc30f4535d
+
+How these are wired into the build:
+- `build.rs` maps the Rust target triple to the ABI directory and emits
+  `cargo:rustc-link-search=native=vendor/android-libs/<abi>`, because `libmpv2-sys`
+  emits only a bare `cargo:rustc-link-lib=mpv` (no pkg-config, no search path).
+- `Cargo.toml` carries `[package.metadata.android] runtime_libs = "vendor/android-libs"`,
+  which makes cargo-apk add `<runtime_libs>/<android_abi>/*.so` to `lib/<abi>/`
+  of the APK (checked against cargo-apk 0.9.6 + ndk-build 0.9.0 sources). Both
+  paths point at the same files, so the linked and the packaged copy cannot
+  drift apart.
+- Only ABIs with a vendored file here are linkable; `build.rs` warns (instead of
+  leaving an obscure `cannot find -lmpv`) for any other Android target.
+
+Notes:
+- Only `lib/<abi>/libmpv.so` is vendored. Each jar also contains
+  `lib/<abi>/libmediakitandroidhelper.so` (media-kit's own JNI bridge), which we
+  do not use: our render path is the `mpv_render_*` GL underlay in
+  `src/player.rs`, and `readelf -d` confirms `libmpv.so` has no `NEEDED` on the
+  helper (only system libs: libm, libandroid, libOpenSLES, libEGL, libdl, libc;
+  SONAME is `libmpv.so`). The OpenSL ES dependency is what backs `ao=opensles`
+  for audio out on-device.
+- Directory names are Gradle Android ABI names (`arm64-v8a`, `x86_64`), matching
+  the jar layout, ndk-build's `target.android_abi()` and cargo-apk's
+  `runtime_libs` convention. They intentionally differ from the Rust target
+  triples (`aarch64-linux-android`, `x86_64-linux-android`).
+- The `full` flavor is a superset of `default`; the extra codecs are subtitle
+  bitmap decoders (PGS, XSUB, JACOsub, …) plus more audio/video decoders. It
+  was chosen because `default` cannot play HDMV PGS subtitles at all.
+- To upgrade: download the new tag's `full-<abi>.jar`s, verify sizes, extract
+  `lib/<abi>/libmpv.so` over these files, and update this table. Keep `full`:
+  switching back to `default` silently drops PGS/bitmap subtitle playback.

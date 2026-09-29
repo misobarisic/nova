@@ -1,0 +1,21 @@
+[package]
+name = "nova-ui"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[features]
+# Opt-in interpreter-backed UI for Linux development: on a Linux debug build
+# this loads `appwindow.slint` from disk and hot-reloads it instead of using the
+# ahead-of-time compiled components (see build.rs). It pulls in the Slint
+# interpreter (`slint-interpreter`), so it is never enabled by default, on
+# other targets, or in release builds.
+live-preview = ["slint/live-preview"]
+
+[dependencies]
+# `backend-android-activity-06` compiles on every target_os (per Slint docs)
+# and is required for the Android entry point in src/lib.rs.
+slint = { workspace = true, features = ["backend-android-activity-06"] }
+
+[build-dependencies]
+slint-build = { workspace = true }

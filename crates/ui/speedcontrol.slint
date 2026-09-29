@@ -1,0 +1,244 @@
+// Shared playback-rate control.
+//
+// Settings → Player and the player's own settings panel both edit the same
+// per-device value (`AppWindow.playback_speed`), so the widget lives here and
+// the two hosts only differ in how they route the callbacks.
+//
+// The slider covers the whole 0.5–2.0 range and may sit anywhere inside it;
+// the ± buttons step by 0.05 and are resolved by the backend, which
+// re-quantizes the rate onto the step grid (so a slider value like 1.234 lands
+// on 1.25 on the next step). Under the slider a row of presets (1×, 1.25×,
+// 1.5×, 2×) jumps straight to the common rates. The readout always shows two
+// decimals.
+
+export global PlaybackSpeed {
+    out property <float> minimum: 0.5;
+    out property <float> maximum: 2.0;
+    out property <float> span: maximum - minimum;
+
+    /// "1.25×" — Slint has no printf-style formatting, so the hundredths are
+    /// padded by hand (the value is already clamped by the backend).
+    public pure function label(speed: float) -> string {
+        let hundredths = Math.round(speed * 100);
+        let fraction = Math.mod(hundredths, 100);
+        return Math.floor(hundredths / 100) + "." + (fraction < 10 ? "0" : "") + fraction + "×";
+    }
+}
+
+// Square, text-free step button (same material as the small in-row buttons).
+component SpeedStepButton inherits Rectangle {
+    in property <string> glyph: "+";
+    // Accessible name (the glyph alone reads badly, and the headless tests
+    // locate the buttons by label).
+    in property <string> name: "";
+    callback clicked();
+
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: step_touch.has-hover ? #2b2b35 : #232330;
+    border-width: 1px;
+    border-color: #33333d;
+    accessible-role: button;
+    accessible-label: root.name;
+
+    Text {
+        text: root.glyph;
+        color: #e6e6ea;
+        font-size: 17px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    step_touch := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// One preset chip under the slider (1×, 1.25×, …): the active rate is filled.
+component SpeedPreset inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    callback clicked();
+
+    horizontal-stretch: 1;
+    height: 28px;
+    border-radius: 8px;
+    background: root.selected ? #443e66 : (preset_touch.has-hover ? #2b2b35 : #232330);
+    border-width: 1px;
+    border-color: root.selected ? #8b5cf6 : #33333d;
+
+    Text {
+        text: root.label;
+        color: root.selected ? #e6e0ff : #e6e6ea;
+        font-size: 12px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    preset_touch := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component SpeedControl inherits Rectangle {
+    /// Shared rate (two-way bound to `AppWindow.playback_speed` by the host).
+    in-out property <float> speed: 1.0;
+    /// Keyboard focus ring, drawn on the slider (the host adjusts it with
+    /// Left/Right or Up/Down through `stepped`).
+    in property <bool> focused: false;
+
+    /// The rate changed (slider drag/tap, ± step or a preset): a raw value.
+    callback changed(float);
+    /// One ± press: the backend applies ± a step and re-quantizes.
+    callback stepped(int);
+
+    /// Host-side entry point for the keyboard steps, so arrow keys go through
+    /// exactly the same path as the buttons.
+    function request_step(d: int) {
+        root.stepped(d);
+    }
+
+    /// Preset jump: an exact rate, so the host's normal change path applies it.
+    function apply(v: float) {
+        root.speed = v;
+        root.changed(v);
+    }
+
+    // Presets are exact rates, so "active" is an equality test on the shared
+    // value: a nearby slider value leaves them all unselected.
+    function is_set(v: float) -> bool {
+        return Math.abs(root.speed - v) < 0.001;
+    }
+
+    // Slider row (32) + gap (8) + preset row (28).
+    height: 68px;
+
+    VerticalLayout {
+        width: 100%;
+        spacing: 8px;
+
+        // Slider row: every child is 32px tall, so the row needs no cross-axis
+        // alignment.
+        HorizontalLayout {
+            width: 100%;
+            height: 32px;
+            spacing: 8px;
+
+            SpeedStepButton {
+                glyph: "−";
+                name: @tr("Slower");
+                clicked => { root.request_step(-1); }
+            }
+
+            slider := Rectangle {
+                horizontal-stretch: 1;
+                height: 32px;
+                border-width: root.focused ? 2px : 0px;
+                border-color: #8b5cf6;
+                border-radius: 6px;
+
+                property <float> pct: Math.clamp(
+                    (root.speed - PlaybackSpeed.minimum) / PlaybackSpeed.span, 0, 1);
+
+                Rectangle {
+                    x: 0;
+                    width: 100%;
+                    y: (parent.height - 4px) / 2;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: #2e2e38;
+
+                    Rectangle {
+                        x: 0;
+                        width: slider.pct * parent.width;
+                        height: 100%;
+                        border-radius: 2px;
+                        background: #a89af5;
+                    }
+                }
+
+                Rectangle {
+                    x: slider.pct * (parent.width - 14px);
+                    y: (parent.height - 14px) / 2;
+                    width: 14px;
+                    height: 14px;
+                    border-radius: 7px;
+                    background: #a89af5;
+                }
+
+                track_touch := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    mouse-cursor: pointer;
+
+                    function value_at(x: length) -> float {
+                        return PlaybackSpeed.minimum
+                            + Math.clamp(x / self.width, 0, 1) * PlaybackSpeed.span;
+                    }
+
+                    moved => {
+                        root.speed = value_at(self.mouse-x);
+                        root.changed(root.speed);
+                    }
+                    clicked => {
+                        root.speed = value_at(self.mouse-x);
+                        root.changed(root.speed);
+                    }
+                }
+            }
+
+            SpeedStepButton {
+                glyph: "+";
+                name: @tr("Faster");
+                clicked => { root.request_step(1); }
+            }
+
+            Text {
+                width: 52px;
+                height: 32px;
+                text: PlaybackSpeed.label(root.speed);
+                color: #e6e6ea;
+                font-size: 13px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+
+        // Presets, straight under the slider.
+        HorizontalLayout {
+            width: 100%;
+            height: 28px;
+            spacing: 8px;
+
+            SpeedPreset {
+                label: "1×";
+                selected: root.is_set(1.0);
+                clicked => { root.apply(1.0); }
+            }
+            SpeedPreset {
+                label: "1.25×";
+                selected: root.is_set(1.25);
+                clicked => { root.apply(1.25); }
+            }
+            SpeedPreset {
+                label: "1.5×";
+                selected: root.is_set(1.5);
+                clicked => { root.apply(1.5); }
+            }
+            SpeedPreset {
+                label: "2×";
+                selected: root.is_set(2.0);
+                clicked => { root.apply(2.0); }
+            }
+        }
+    }
+}

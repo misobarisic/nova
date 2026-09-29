@@ -1,0 +1,802 @@
+import { Button, ScrollView } from "std-widgets.slint";
+import { MediaCard, CategoryRow } from "types.slint";
+import { KbMark } from "kbnav.slint";
+import { Dropdown } from "dropdown.slint";
+import { MenuSheet } from "menusheet.slint";
+import { SideNav, NavMetrics } from "sidenav.slint";
+import { BottomNav } from "bottomnav.slint";
+import { IcCheck } from "icons.slint";
+import { Anim } from "anim.slint";
+
+export component LibraryPage {
+    // Custom components placed in a Window are sized by their preferred size;
+    // make this page fill the window (its parent).
+    preferred-width: 100%;
+    preferred-height: 100%;
+
+    in-out property <[MediaCard]> library: [];
+    in-out property <[CategoryRow]> category_rows: [];
+    in-out property <string> library_filter_category: "";
+    in-out property <string> library_empty_hint: @tr("Your library is empty — open any movie, series or anime and press \"+ Add to library\".");
+    in-out property <[string]> category_names: [];
+    // Display text for `category_names` (same order/length): the automatic
+    // buckets are shown translated while the picked value stays the stored
+    // identifier the backend filters on (`nova_config`-agnostic; pushed from
+    // `library.rs`).
+    in-out property <[string]> category_labels: [];
+    // Index of the active filter in category_names (-1 = All). Mirrors
+    // library_filter_category as a position so the dropdown selection
+    // follows chip/keyboard/category changes made outside the dropdown.
+    in-out property <int> category_index: -1;
+
+    property <length> item-gap: 18px;
+    // Same fluid scheme as Discover: column count from a 160px minimum
+    // card (always ≥ 2), live card width stretched to fill the row
+    // (capped), grid centered when capped.
+    property <length> min-card: 160px;
+    property <length> max-card: 200px;
+    // Floor from Settings → Display (phones fit N across at 160px cards).
+    in property <int> min_cols: 2;
+    // Left inset reserved by the wide-layout navigation rail (0 on narrow).
+    property <length> rail_w: root.narrow ? 0px : NavMetrics.rail-width;
+    // The 36px below is the page's own 2 × 18px padding; `rail_w` is the
+    // column the rail takes out of that width.
+    property <int> cols: Math.max(root.min_cols, Math.floor((self.width - 36px - root.rail_w + root.item-gap) / (root.min-card + root.item-gap)));
+    property <length> item-width: Math.min(root.max-card, (self.width - 36px - root.rail_w - (root.cols - 1) * root.item-gap) / root.cols);
+
+    callback discover_picked();
+    callback home_picked();
+    callback library_picked();
+    callback settings_picked();
+    callback library_filter_picked(string);
+    callback library_item_picked(int);
+    // Library watched-state context menu: 1 mark series watched,
+    // 2 mark series unwatched.
+    callback library_watch_action(int, int);
+    // Library status pin: 0 automatic, 1 On Hold, 2 Dropped.
+    callback library_status_action(int, int);
+    callback remove_library_item(int);
+
+    // Card bottom-sheet menu state (single instance; -1 closed).
+    // Pure UI state: actions reuse the callbacks above.
+    property <bool> menu_open: false;
+    property <int> menu_idx: 0;
+    property <bool> menu_watched: false;
+
+    function open_lib_menu(idx: int, watched: bool) {
+        root.menu_idx = idx;
+        root.menu_watched = watched;
+        root.menu_open = true;
+    }
+
+    function close_menu() {
+        root.menu_open = false;
+    }
+    // Preload fetch window (visible ±2 rows), see DiscoverPage.
+    callback library_visible_range(int, int);
+
+    // Compact layout for narrow (portrait) windows.
+    in property <bool> narrow;
+    // Top system-bar inset (Android status bar): Window.safe-area-insets,
+    // bound by AppWindow. 0 on desktop/web, so layout there is unchanged.
+    in property <length> safe-top: 0px;
+    // Side insets: in landscape the display cutout / gesture area moves to
+    // the left or right edge, so page content must clear it.
+    in property <length> safe-left: 0px;
+    in property <length> safe-right: 0px;
+    // Bottom system-bar inset (Android gesture/nav bar), for the card
+    // bottom sheet. 0 on desktop/web.
+    in property <length> safe-bottom: 0px;
+    // True on touch-driven platforms (Android): card menus open as
+    // bottom sheets on hold. Desktop keeps native right-click popups.
+    in property <bool> touch_menus: false;
+
+    // ---- 6-button keyboard nav (arrows + Enter + Backspace) ----
+    // Zones: 0 page-nav (0 Home, 1 Discover, 2 Library, 3 Settings),
+    // 1 category filter, 2 grid. Backspace returns to Home. The filter
+    // cycles All + categories (kb_f = -1 is All);
+    // kb_f resyncs to All whenever the filter becomes empty, otherwise it
+    // tracks keyboard moves (mouse picks may desync it by one step).
+    // Bound to AppWindow (survives page recreation): backing out of an
+    // entry returns to the same focused card.
+    in-out property <int> kb_zone: 0;
+    in-out property <int> kb_nav: 2;
+    in-out property <int> kb_f: -1;
+    in-out property <int> kb_idx: 0;
+    // Keyboard modality (bound to AppWindow, see DiscoverPage).
+    in-out property <bool> kb_active;
+    // Exact scroll offset (bound to AppWindow): the grid viewport syncs
+    // here continuously and restores absolutely on return.
+    in-out property <length> scroll_y: 0px;
+
+    function kb_clamp_idx() {
+        if (root.library.length == 0) {
+            root.kb_idx = 0;
+        } else if (root.kb_idx >= root.library.length) {
+            root.kb_idx = root.library.length - 1;
+        } else if (root.kb_idx < 0) {
+            root.kb_idx = 0;
+        }
+    }
+
+    function kb_filter_on() -> bool { return root.category_names.length > 0; }
+
+    function kb_cycle_filter(d: int) {
+        let n = root.category_names.length;
+        let raw = root.kb_f + d;
+        let v = raw < -1 ? n - 1 : (raw >= n ? -1 : raw);
+        root.kb_f = v;
+        if (v < 0) {
+            root.library_filter_picked("");
+        } else {
+            root.library_filter_picked(root.category_names[v]);
+        }
+    }
+
+    function kb_up() {
+        if (root.kb_zone == 2) {
+            if (root.kb_idx >= root.cols) {
+                root.kb_idx -= root.cols;
+            } else {
+                root.kb_zone = root.kb_filter_on() ? 1 : 0;
+            }
+        } else if (root.kb_zone == 1) {
+            root.kb_zone = 0;
+        }
+    }
+
+    function kb_down() {
+        if (root.kb_zone == 0) {
+            if (root.kb_filter_on()) {
+                root.kb_zone = 1;
+            } else if (root.library.length > 0) {
+                root.kb_zone = 2;
+                root.kb_clamp_idx();
+            }
+        } else if (root.kb_zone == 1) {
+            if (root.library.length > 0) {
+                root.kb_zone = 2;
+                root.kb_clamp_idx();
+            }
+        } else {
+            if (root.kb_idx + root.cols < root.library.length) {
+                root.kb_idx += root.cols;
+            }
+        }
+    }
+
+    function kb_left() {
+        if (root.kb_zone == 0) {
+            root.kb_nav = Math.mod(root.kb_nav + 3, 4);
+        } else if (root.kb_zone == 1) {
+            root.kb_cycle_filter(-1);
+        } else {
+            if (root.kb_idx > 0) {
+                root.kb_idx -= 1;
+            }
+        }
+    }
+
+    function kb_right() {
+        if (root.kb_zone == 0) {
+            root.kb_nav = Math.mod(root.kb_nav + 1, 4);
+        } else if (root.kb_zone == 1) {
+            root.kb_cycle_filter(1);
+        } else {
+            if (root.kb_idx + 1 < root.library.length) {
+                root.kb_idx += 1;
+            }
+        }
+    }
+
+    function kb_enter() {
+        if (root.kb_zone == 0) {
+            if (root.kb_nav == 0) {
+                root.home_picked();
+            } else if (root.kb_nav == 1) {
+                root.discover_picked();
+            } else if (root.kb_nav == 2) {
+                root.library_picked();
+            } else {
+                root.settings_picked();
+            }
+        } else if (root.kb_zone == 1) {
+            root.kb_cycle_filter(1);
+        } else {
+            if (root.kb_idx >= 0 && root.kb_idx < root.library.length) {
+                root.library_item_picked(root.kb_idx);
+            }
+        }
+    }
+
+    // Row stride follows the card height (2:3 poster + 64px footer,
+    // see the grid below) plus the item gap. Live property: it changes
+    // with the column count.
+    property <length> row_stride: root.item-width * 3 / 2 + 64px + root.item-gap;
+    // The grid has actually measured: `cols`/`item-width` are the divisors of
+    // every row calculation below, so a scroll adjustment must not run while
+    // they are still 0 — it would compute a nonsense row and jump the listing.
+    property <bool> grid_ready: lib_scroll.content-height > 0px
+        && root.cols > 0 && root.item-width > 0px;
+    // Bounded restore retries (a page whose grid never lays out must not leave
+    // the timer ticking).
+    property <int> restore_tries: 0;
+    // Keep the focused card on screen. Skipped before layout
+    // (content-height 0) — the one-shot restore timer in the grid
+    // container retries.
+    function kb_follow() {
+        if (root.kb_zone != 2 || root.library.length == 0) {
+            return;
+        }
+        if (!root.grid_ready) {
+            return;
+        }
+        let top = Math.floor(root.kb_idx / root.cols) * root.row_stride;
+        let bot = top + root.row_stride;
+        let vy = lib_scroll.content-y;
+        let vh = lib_scroll.visible-height;
+        let min_y = Math.min(0px, vh - lib_scroll.content-height);
+        if (top < -vy) {
+            lib_scroll.content-y = -top;
+        } else if (bot > vh - vy) {
+            lib_scroll.content-y = Math.max(min_y, vh - bot);
+        }
+    }
+
+    changed kb_idx => { root.kb_follow(); }
+    changed kb_zone => { root.kb_follow(); }
+
+    // Clamp the (restored) scroll offset into the valid range once laid
+    // out: content may have shrunk while inside the entry.
+    function kb_clamp_view() {
+        if (lib_scroll.content-height == 0px) {
+            return;
+        }
+        let min_y = Math.min(0px, lib_scroll.visible-height - lib_scroll.content-height);
+        lib_scroll.content-y = Math.max(min_y, Math.min(0px, lib_scroll.content-y));
+    }
+    // Reveal the focused card only when its row is *entirely* outside the
+    // viewport. Used when the page is restored (and when the model is
+    // re-applied): nudging a partially visible row into view is what used to
+    // shift the listing slightly on the way back from an entry. Real keyboard
+    // navigation still uses `kb_follow`, which keeps the whole row visible.
+    function kb_reveal_if_hidden() {
+        if (root.kb_zone != 2 || root.library.length == 0) {
+            return;
+        }
+        if (!root.grid_ready) {
+            return;
+        }
+        let top = Math.floor(root.kb_idx / root.cols) * root.row_stride;
+        let bot = top + root.row_stride;
+        let vy = lib_scroll.content-y;
+        let vh = lib_scroll.visible-height;
+        let min_y = Math.min(0px, vh - lib_scroll.content-height);
+        if (bot <= -vy) {
+            lib_scroll.content-y = Math.max(min_y, -top);
+        } else if (top >= vh - vy) {
+            lib_scroll.content-y = Math.max(min_y, vh - bot);
+        }
+    }
+
+    changed library => {
+        root.kb_clamp_idx();
+        root.kb_reveal_if_hidden();
+    }
+    changed library_filter_category => {
+        if (root.library_filter_category == "") {
+            root.kb_f = -1;
+        }
+    }
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #0f0f12;
+
+        // 6-button scope: overlays the page without intercepting the mouse.
+        nav_scope := FocusScope {
+            width: 100%;
+            height: 100%;
+            init => { self.focus(); }
+            key-pressed(e) => {
+                if (root.menu_open) {
+                    // An open sheet eats Backspace (dismiss only).
+                    root.close_menu();
+                    accept
+                } else if (e.text == Key.UpArrow) {
+                    root.kb_active = true;
+                    root.kb_up();
+                    accept
+                } else if (e.text == Key.DownArrow) {
+                    root.kb_active = true;
+                    root.kb_down();
+                    accept
+                } else if (e.text == Key.LeftArrow) {
+                    root.kb_active = true;
+                    root.kb_left();
+                    accept
+                } else if (e.text == Key.RightArrow) {
+                    root.kb_active = true;
+                    root.kb_right();
+                    accept
+                } else if (e.text == Key.Return) {
+                    root.kb_active = true;
+                    root.kb_enter();
+                    accept
+                } else if (e.text == Key.Backspace || e.text == Key.Back) {
+                    root.kb_active = true;
+                    root.home_picked();
+                    accept
+                } else {
+                    reject
+                }
+            }
+        }
+
+        VerticalLayout {
+            width: 100%;
+            height: 100%;
+            padding-left: 18px + safe-left + root.rail_w;
+            padding-right: 18px + safe-right;
+            padding-bottom: 18px;
+            padding-top: 18px + safe-top;
+            spacing: 12px;
+
+            HorizontalLayout {
+                vertical-stretch: 0;
+                spacing: 8px;
+                alignment: start;
+
+                Text {
+                    text: @tr("My Library");
+                    font-size: 26px;
+                    font-weight: 700;
+                    color: #ffffff;
+                }
+
+                Text {
+                    text: @tr("({n} item)" | "({n} items)" % root.library.length);
+                    font-size: 15px;
+                    color: #6c6c7d;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle { height: 1px; background: #23232b; }
+
+            // Category filter bar: "All" chip + category dropdown.
+            // Keyboard: Left/Right cycles All + categories as one control.
+            // Gated on `category_names` (the dropdown's own model), not on
+            // `category_rows`: the latter holds *user* categories only, so
+            // gating on it hid the automatic buckets (Plan to Watch / Watching
+            // / Completed / On Hold / Dropped) until a category was created.
+            if root.category_names.length > 0: HorizontalLayout {
+                vertical-stretch: 0;
+                spacing: 8px;
+                // Explicit height: the row must stay at control height
+                // (All chip is 28px/44px) and never absorb grid space.
+                height: root.narrow ? 44px : 32px;
+
+                KbMark { on: root.kb_zone == 1; active: root.kb_active; }
+                // "All" chip — accent when no category filter is active.
+                // Pinned to content width so it never stretches into a
+                // wide pill on roomy windows.
+                Rectangle {
+                    horizontal-stretch: 0;
+                    height: root.narrow ? 44px : 28px;
+                    border-radius: 14px;
+                    border-width: 1px;
+                    border-color: root.library_filter_category == "" ? #8b5cf6 : transparent;
+                    background: filter_all_touch.has-hover ? (root.library_filter_category == "" ? #8b5cf6 : #2b2b35) : (root.library_filter_category == "" ? #8b5cf6 : #232330);
+
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+
+                        Text {
+                            text: @tr("All");
+                            color: root.library_filter_category == "" ? #ffffff : #e6e6ea;
+                            font-size: 12px;
+                            font-weight: root.library_filter_category == "" ? 600 : 400;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    filter_all_touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.library_filter_picked(""); }
+                    }
+                }
+
+                // Category dropdown — lists each category by name.
+                // The index is driven by Rust (mirrors the filter
+                // category) so it follows "All" chip, keyboard and
+                // category add/remove changes, not just own taps.
+                Dropdown {
+                    roomy: root.narrow;
+                    model: root.category_names;
+                    labels: root.category_labels;
+                    current-index <=> root.category_index;
+                    placeholder-text: @tr("All");
+                    horizontal-stretch: 1;
+                    max-width: 220px;
+                    selected(v) => { root.library_filter_picked(v); }
+                }
+
+                // Absorbs leftover width past the dropdown's max-width so
+                // the chip/dropdown stay left-packed (same as Discover's
+                // addon row).
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            // Empty state
+            if root.library.length == 0: VerticalLayout {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                alignment: center;
+
+                Text {
+                    text: "📚";
+                    font-size: 42px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: root.library_empty_hint;
+                    font-size: 14px;
+                    color: #8a8a9a;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                    max-width: 560px;
+                }
+            }
+
+            // Grid (always present so the keyboard scope can drive its
+            // ScrollView; empty with no cards when the library is empty).
+            Rectangle {
+                vertical-stretch: 1;
+                clip: true;
+
+                // One-shot restore: the page is recreated on return (bound
+                // kb props arrive pre-set, so no `changed` fires) — clamp +
+                // scroll to the focused card once layout is ready. The bound
+                // scroll offset restores the absolute position; the clamp
+                // guards shrunk content and follow is a no-op when visible.
+                restore_t := Timer {
+                    interval: 120ms;
+                    running: true;
+                    triggered => {
+                        root.restore_tries += 1;
+                        if (!root.grid_ready) {
+                            if (root.restore_tries < 10) {
+                                return; // layout not there yet: keep trying
+                            }
+                            self.running = false;
+                            return;
+                        }
+                        self.running = false;
+                        root.kb_clamp_idx();
+                        // Restore the exact offset: clamp for shrunk content,
+                        // then reveal only if the focused row is fully hidden
+                        // (a no-op in the common case).
+                        root.kb_clamp_view();
+                        root.kb_reveal_if_hidden();
+                    }
+                }
+
+                lib_scroll := ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    // Touch devices scroll by dragging (there is no
+                    // wheel): the fluent-style ScrollView disables
+                    // drag-pan by default, so opt in explicitly.
+                    mouse-drag-pan-enabled: true;
+                    // One-way mirror, see DiscoverPage: Flickable drops
+                    // viewport bindings on press, so mirror explicitly.
+                    init => { self.content-y = root.scroll_y; }
+                    // Preload + unload reporting (Bridge::visible_range):
+                    // same row_stride and ±2-row preload window as
+                    // Discover; see DiscoverPage for the scheme.
+                    property <int> reported_first: -1000000;
+                    changed content-y => {
+                        root.scroll_y = self.content-y;
+                        if (root.library.length > 0) {
+                            let first_row = Math.max(0, Math.floor(-self.content-y / root.row_stride));
+                            let vis_rows = Math.ceil(self.visible-height / root.row_stride);
+                            let first_idx = Math.max(0, (first_row - 2) * root.cols);
+                            let last_idx = Math.min(root.library.length - 1, (first_row + vis_rows + 2) * root.cols - 1);
+                            if (self.reported_first < -100000) {
+                                self.reported_first = first_idx;
+                            } else if (Math.abs(first_idx - self.reported_first) > 48) {
+                                self.reported_first = first_idx;
+                                root.library_visible_range(first_idx, last_idx);
+                            }
+                        }
+                    }
+
+                    // Centered wrapper: when cards hit max-card the grid is
+                    // narrower than the viewport and centers instead of
+                    // pooling dead space on the right; when fluid it spans
+                    // the full width and the centering is a no-op.
+                    HorizontalLayout {
+                        width: 100%;
+                        alignment: center;
+
+                    GridLayout {
+                        // Exact content width so centering above has an effect.
+                        width: root.cols * (root.item-width + root.item-gap) - root.item-gap;
+                        spacing: root.item-gap;
+
+                        for card[i] in root.library: Rectangle {
+                            row: Math.floor(i / root.cols);
+                            col: Math.mod(i, root.cols);
+
+                            width: root.item-width;
+                            // True 2:3 poster at any column count (see
+                            // DiscoverGrid); +64px footer reserves the
+                            // badge line so badged cards never clip.
+                            height: root.item-width * 3 / 2 + 64px;
+
+                            // Card menu: desktop right-click opens the
+                            // native popup at the cursor; touch hold opens
+                            // the bottom sheet (see below).
+                            lib_ctx := ContextMenuArea {
+                                width: 100%;
+                                height: 100%;
+
+                                Menu {
+                                    MenuItem {
+                                        title: @tr("Open");
+                                        activated => {
+                                            root.kb_active = false;
+                                            root.kb_zone = 2;
+                                            root.kb_idx = i;
+                                            root.library_item_picked(i);
+                                        }
+                                    }
+                                    MenuSeparator {}
+                                    MenuItem {
+                                        title: card.watched ? @tr("Mark series as unwatched") : @tr("Mark series as watched");
+                                        activated => { root.library_watch_action(i, card.watched ? 2 : 1); }
+                                    }
+                                    MenuSeparator {}
+                                    MenuItem {
+                                        title: @tr("Mark as On Hold");
+                                        activated => { root.library_status_action(i, 1); }
+                                    }
+                                    MenuItem {
+                                        title: @tr("Mark as Dropped");
+                                        activated => { root.library_status_action(i, 2); }
+                                    }
+                                    MenuItem {
+                                        title: @tr("Back to automatic");
+                                        activated => { root.library_status_action(i, 0); }
+                                    }
+                                    MenuSeparator {}
+                                    MenuItem {
+                                        title: @tr("Remove from library");
+                                        activated => { root.remove_library_item(i); }
+                                    }
+                                }
+
+                            touch_lib := TouchArea {
+                                property <bool> lp_suppress: false;
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    if (touch_lib.lp_suppress) {
+                                        touch_lib.lp_suppress = false;
+                                    } else {
+                                        root.kb_active = false;
+                                        root.kb_zone = 2;
+                                        root.kb_idx = i;
+                                        root.library_item_picked(i);
+                                    }
+                                }
+                                pointer-event(ev) => {
+                                    if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
+                                        lib_lp_timer.stop();
+                                        if (root.touch_menus) {
+                                            root.open_lib_menu(i, card.watched);
+                                        } else {
+                                            lib_ctx.show({ x: touch_lib.mouse-x, y: touch_lib.mouse-y });
+                                        }
+                                    } else if (ev.kind == PointerEventKind.down) {
+                                        touch_lib.lp_suppress = false;
+                                        if (root.touch_menus) {
+                                            lib_lp_timer.stop();
+                                            lib_lp_timer.start();
+                                        }
+                                    } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                                        lib_lp_timer.stop();
+                                    }
+                                }
+                                moved => {
+                                    if (Math.abs(touch_lib.mouse-x - touch_lib.pressed-x) + Math.abs(touch_lib.mouse-y - touch_lib.pressed-y) > 24px) {
+                                        lib_lp_timer.stop();
+                                    }
+                                }
+                            }
+                            }
+
+                            // Hold-to-open timer (pinned off until a press
+                            // arms it; Slint Timers run from creation by
+                            // default).
+                            lib_lp_timer := Timer {
+                                interval: 600ms;
+                                running: false;
+                                triggered => {
+                                    self.stop();
+                                    touch_lib.lp_suppress = true;
+                                    root.open_lib_menu(i, card.watched);
+                                }
+                            }
+
+                            Rectangle {
+                                width: 100%;
+                                height: 100%;
+                                background: #18181c;
+                                border-radius: 10px;
+                                border-width: root.kb_active && root.kb_zone == 2 && root.kb_idx == i ? 2px : 0px;
+                                border-color: #8b5cf6;
+
+                                y: touch_lib.has-hover ? -6px : 0px;
+                                animate y { duration: Anim.hover_lift; easing: ease-in-out; }
+
+                                VerticalLayout {
+                                    spacing: 0px;
+
+                                    Rectangle {
+                                        height: root.item-width * 3 / 2;
+                                        border-radius: 10px;
+                                        clip: true;
+                                        background: #222228;
+
+                                        if card.is_loaded: Image {
+                                            source: card.poster;
+                                            image-fit: cover;
+                                            width: 100%;
+                                            height: 100%;
+                                        }
+
+                                        if !card.is_loaded: Text {
+                                            text: "🎬";
+                                            font-size: 34px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+
+                                        // Watched check (top-right) for fully-seen
+                                        // series: same white disc + black check as
+                                        // the episode cards.
+                                        if card.watched: Rectangle {
+                                            x: parent.width - 28px;
+                                            y: 4px;
+                                            width: 22px;
+                                            height: 22px;
+                                            border-radius: 11px;
+                                            background: #ffffff;
+
+                                            IcCheck {
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                width: 13px;
+                                                height: 13px;
+                                                fill: #000000;
+                                            }
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        padding-top: 6px;
+                                        spacing: 2px;
+
+                                        Text {
+                                            text: card.title;
+                                            color: #eeeeee;
+                                            font-size: 13px;
+                                            font-weight: 600;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            text: card.year;
+                                            color: #7a7a8c;
+                                            font-size: 11px;
+                                        }
+
+                                        if card.badge != "": Text {
+                                            text: card.badge;
+                                            color: #c4b5fd;
+                                            font-size: 11px;
+                                            font-weight: 600;
+                                            overflow: elide;
+                                        }
+                                    }
+                                }
+                            }
+
+                        }
+                    }
+                    }
+                }
+            }
+
+            // Bottom tab bar (narrow only): wide layouts use the left rail.
+            if root.narrow: bottom := BottomNav {
+                active: 2;
+                safe-bottom: root.safe-bottom;
+                kb_zone: root.kb_zone;
+                kb_nav: root.kb_nav;
+                kb_active <=> root.kb_active;
+
+                home_picked => { root.home_picked(); }
+                discover_picked => { root.discover_picked(); }
+                library_picked => { root.library_picked(); }
+                settings_picked => { root.settings_picked(); }
+            }
+        }
+
+        // Left navigation rail (wide layouts only; narrow uses the bottom
+        // bar). Declared after the page column so it paints over the strip
+        // its own footprint reserves — the column widens its left padding by
+        // `rail_w`, so no page content lands under it.
+        if !root.narrow: rail := SideNav {
+            active: 2;
+            safe-top: root.safe-top;
+            safe-left: root.safe-left;
+            safe-bottom: root.safe-bottom;
+            kb_zone: root.kb_zone;
+            kb_nav: root.kb_nav;
+            kb_active <=> root.kb_active;
+
+            home_picked => { root.home_picked(); }
+            discover_picked => { root.discover_picked(); }
+            library_picked => { root.library_picked(); }
+            settings_picked => { root.settings_picked(); }
+        }
+
+        // Card bottom sheet (single instance, page-level overlay): the
+        // dim backdrop eats outside taps (dismiss only, never forwarded).
+        if root.menu_open: MenuSheet {
+            width: 100%;
+            height: 100%;
+            safe-bottom: root.safe-bottom;
+            safe-left: root.safe-left;
+            safe-right: root.safe-right;
+            max_h: root.height * 0.85;
+            sheet_title: @tr("Library options");
+            items: [
+                { label: @tr("Open"), enabled: true },
+                { label: root.menu_watched ? @tr("Mark series as unwatched") : @tr("Mark series as watched"), enabled: true },
+                { label: @tr("Mark as On Hold"), enabled: true },
+                { label: @tr("Mark as Dropped"), enabled: true },
+                { label: @tr("Back to automatic"), enabled: true },
+                { label: @tr("Remove from library"), enabled: true },
+            ];
+            picked(a) => {
+                if (a == 0) {
+                    root.kb_active = false;
+                    root.kb_zone = 2;
+                    root.kb_idx = root.menu_idx;
+                    root.library_item_picked(root.menu_idx);
+                } else if (a == 1) {
+                    root.library_watch_action(root.menu_idx, root.menu_watched ? 2 : 1);
+                } else if (a == 2) {
+                    root.library_status_action(root.menu_idx, 1);
+                } else if (a == 3) {
+                    root.library_status_action(root.menu_idx, 2);
+                } else if (a == 4) {
+                    root.library_status_action(root.menu_idx, 0);
+                } else {
+                    root.remove_library_item(root.menu_idx);
+                }
+                root.close_menu();
+            }
+            closed => { root.close_menu(); }
+        }
+    }
+}

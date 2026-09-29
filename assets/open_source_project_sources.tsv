@@ -1,0 +1,25 @@
+Nova root app	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/src
+Nova addons crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/addons
+Nova UI crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/ui
+Nova storage crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/storage
+Nova config crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/config
+Nova download crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/download
+Nova torrent crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/torrent
+Nova media crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/media
+Nova player crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/player
+Nova sync crate	GPL-3.0-or-later	https://github.com/misobarisic/nova/tree/main/crates/sync
+Android libmpv build recipe v1.1.11	MIT (build recipe; not packaged)	https://github.com/media-kit/libmpv-android-video-build/releases/tag/v1.1.11
+Android libmpv binary and source build	Component licenses listed below	https://github.com/media-kit/libmpv-android-video-build/releases/tag/v1.1.11
+Android libmpv provenance and hashes	Bundled binary hashes and source archive URLs	https://github.com/misobarisic/nova/blob/main/vendor/android-libs/SOURCES
+mpv (Android bundled; desktop system-provided)	LGPL-2.1-or-later	https://github.com/mpv-player/mpv/tree/78d43740f52db817d98bcf24fb30a76ab6fa13ff
+FFmpeg 6.0 (Android bundled)	LGPL-3.0-or-later	https://github.com/FFmpeg/FFmpeg/tree/n6.0
+libass 0.17.1 (Android bundled)	ISC	https://github.com/libass/libass/tree/0.17.1
+FreeType 2-13-0 (Android bundled)	FTL	https://gitlab.freedesktop.org/freetype/freetype/-/tree/VER-2-13-0
+FriBidi 1.0.12 (Android bundled)	LGPL-2.1-or-later	https://github.com/fribidi/fribidi/tree/v1.0.12
+HarfBuzz 7.2.0 (Android bundled)	MIT	https://github.com/harfbuzz/harfbuzz/tree/7.2.0
+mbed TLS 3.4.0 (Android bundled)	Apache-2.0	https://github.com/Mbed-TLS/mbedtls/tree/v3.4.0
+dav1d 1.2.0 (Android bundled)	BSD-2-Clause	https://code.videolan.org/videolan/dav1d/-/tree/1.2.0
+libxml2 2.10.3 (Android bundled)	MIT	https://gitlab.gnome.org/GNOME/libxml2/-/tree/v2.10.3
+Roboto Regular font	Apache-2.0	https://github.com/misobarisic/nova/tree/main/assets/fonts
+Android NDK system libraries (not bundled)	Android platform terms	https://developer.android.com/ndk
+Linux libmpv/X11 runtime (system-provided)	Distribution-provided licenses	https://github.com/mpv-player/mpv/tree/78d43740f52db817d98bcf24fb30a76ab6fa13ff

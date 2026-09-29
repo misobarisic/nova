@@ -1,0 +1,801 @@
+# Croatian (Hrvatski) — every `@tr("…")` string of the interface.
+#
+# The `.slint` files are the source of truth: the entries below follow them file
+# by file, and a string without an entry falls back to its English source text
+# (English is the source language, so `translations/en/` stays empty). Regenerate
+# with `slint-tr-extractor --no-default-translation-context` after marking new
+# strings — the catalogs are context-free (see crates/ui/build.rs).
+#
+# Text the Rust backend formats itself (download states, sync status, relative
+# dates) is NOT here: it lives in src/app/text.rs, keyed by the same English
+# source strings.
+#
+# Register: the interface addresses the user in the formal plural ("vi") —
+# "Prikažite…", "Izbrišite…", "Pridružite se". Two labels are deliberately
+# shorter than the literal translation so the phone-width rows still fit
+# ("Copy link" → "Kopirajte URL", "Create invite" → "Nova pozivnica"); the
+# Croatian-width phases in tests/settings_addon_row_fit.rs and
+# tests/settings_sync_overflow.rs guard that.
+#
+# Values that are identifiers in the data rather than prose stay as they are:
+# stored category names, addon names, stream/codec labels, `JPEG`/`WebP`,
+# `HW+`/`HW`/`SW`, `P2P`, `HLS`/`DASH`, `VLC`, `mpv`, `Stremio`, `Cinemeta`,
+# and unit abbreviations (GB / MB / KB).
+msgid ""
+msgstr ""
+"Project-Id-Version: nova-ui\n"
+"Language: hr\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgid "No addons installed yet — add one in Settings → Addons."
+msgstr "Još nema instaliranih dodataka — dodajte ga u Postavkama → Dodaci."
+
+msgid "Your library is empty — open any movie, series or anime and press \"+ Add to library\"."
+msgstr "Moja biblioteka je prazna — otvorite film, seriju ili anime i pritisnite „+ Dodajte u biblioteku“."
+
+msgid "Nothing to continue — start watching a show or movie and it will show up here."
+msgstr "Nema što nastaviti — počnite gledati seriju ili film i pojavit će se ovdje."
+
+msgid "Assign categories"
+msgstr "Dodijelite kategorije"
+
+msgid "Done"
+msgstr "Gotovo"
+
+msgid "No categories yet — add them in Settings → Categories, then come back to tag this item."
+msgstr "Još nema kategorija — dodajte ih u Postavkama → Kategorije, a zatim se vratite i označite ovu stavku."
+
+msgid "Previous page"
+msgstr "Prethodna stranica"
+
+msgid "Next page"
+msgstr "Sljedeća stranica"
+
+msgid "All"
+msgstr "Sve"
+
+msgid "Click a stream to start playback. Right-click or hold for actions."
+msgstr "Kliknite zapis za reprodukciju. Desni klik ili držanje otvara radnje."
+
+msgid "Overview"
+msgstr "Pregled"
+
+msgid "Characters"
+msgstr "Likovi"
+
+msgid "Artwork"
+msgstr "Slike"
+
+msgid "Episodes"
+msgstr "Epizode"
+
+msgid "▶  WATCH NOW"
+msgstr "▶  GLEDAJ SADA"
+
+msgid "{} in this season"
+msgstr "{} u ovoj sezoni"
+
+msgid "Released"
+msgstr "Objavljeno"
+
+msgid "Genres"
+msgstr "Žanrovi"
+
+msgid "No description provided by the addon."
+msgstr "Dodatak nije priložio opis."
+
+msgid "Not provided by Stremio addons."
+msgstr "Stremio dodaci to ne nude."
+
+msgid "Mark season as unwatched"
+msgstr "Označite sezonu kao nepogledanu"
+
+msgid "Mark season as watched"
+msgstr "Označite sezonu kao pogledanu"
+
+msgid "Select season"
+msgstr "Odaberite sezonu"
+
+msgid "Filter episodes…"
+msgstr "Filtrirajte epizode…"
+
+msgid "{n} episode · page {}/{}"
+msgid_plural "{n} episodes · page {}/{}"
+msgstr[0] "{n} epizoda · stranica {}/{}"
+msgstr[1] "{n} epizode · stranica {}/{}"
+msgstr[2] "{n} epizoda · stranica {}/{}"
+
+msgid "{n} episode"
+msgid_plural "{n} episodes"
+msgstr[0] "{n} epizoda"
+msgstr[1] "{n} epizode"
+msgstr[2] "{n} epizoda"
+
+msgid "Mark episode as unwatched"
+msgstr "Označite epizodu kao nepogledanu"
+
+msgid "Mark episode as watched"
+msgstr "Označite epizodu kao pogledanu"
+
+msgid "Mark episode and previous as watched"
+msgstr "Označite epizodu i prethodne kao pogledane"
+
+msgid "Clear resume position"
+msgstr "Obrišite poziciju za nastavak"
+
+msgid "Open episode"
+msgstr "Otvorite epizodu"
+
+msgid "Page {}/{}"
+msgstr "Stranica {}/{}"
+
+msgid "Episode options"
+msgstr "Opcije epizode"
+
+msgid "Season options"
+msgstr "Opcije sezone"
+
+msgid "Discover"
+msgstr "Otkrijte"
+
+msgid "({n} item)"
+msgid_plural "({n} items)"
+msgstr[0] "({n} stavka)"
+msgstr[1] "({n} stavke)"
+msgstr[2] "({n} stavki)"
+
+msgid "Addon"
+msgstr "Dodatak"
+
+msgid "Type"
+msgstr "Vrsta"
+
+msgid "Catalog"
+msgstr "Katalog"
+
+msgid "Search"
+msgstr "Pretraga"
+
+msgid "Play"
+msgstr "Reproducirajte"
+
+msgid "Enter series"
+msgstr "Otvorite seriju"
+
+msgid "Remove from Continue Watching"
+msgstr "Uklonite iz Nastavka gledanja"
+
+msgid "Continue Watching"
+msgstr "Nastavak gledanja"
+
+msgid "Upcoming"
+msgstr "Uskoro"
+
+msgid "My Library"
+msgstr "Moja biblioteka"
+
+msgid "Open"
+msgstr "Otvorite"
+
+msgid "Mark series as unwatched"
+msgstr "Označite seriju kao nepogledanu"
+
+msgid "Mark series as watched"
+msgstr "Označite seriju kao pogledanu"
+
+msgid "Mark as On Hold"
+msgstr "Označite kao Na čekanju"
+
+msgid "Mark as Dropped"
+msgstr "Označite kao Odbačeno"
+
+msgid "Back to automatic"
+msgstr "Vratite na automatski"
+
+msgid "Remove from library"
+msgstr "Uklonite iz biblioteke"
+
+msgid "Library options"
+msgstr "Opcije biblioteke"
+
+msgid "Cancel"
+msgstr "Odustanite"
+
+msgid "Off"
+msgstr "Isključeno"
+
+msgid "No tracks available."
+msgstr "Nema dostupnih zapisa."
+
+msgid "Hardware decoding"
+msgstr "Hardversko dekodiranje"
+
+msgid "Subtitles"
+msgstr "Titlovi"
+
+msgid "Audio"
+msgstr "Zvuk"
+
+msgid "Playback speed"
+msgstr "Brzina reprodukcije"
+
+msgid "Player settings"
+msgstr "Postavke reproduktora"
+
+msgid "zero-copy"
+msgstr "bez kopiranja"
+
+msgid "copy-back"
+msgstr "s kopiranjem"
+
+msgid "software"
+msgstr "softverski"
+
+msgid "Unlimited"
+msgstr "Neograničeno"
+
+msgid "Addons"
+msgstr "Dodaci"
+
+msgid "Categories"
+msgstr "Kategorije"
+
+msgid "Image cache"
+msgstr "Predmemorija slika"
+
+msgid "Display"
+msgstr "Prikaz"
+
+msgid "P2P"
+msgstr "P2P"
+
+msgid "Player"
+msgstr "Reproduktor"
+
+msgid "Look and feel"
+msgstr "Izgled i dojam"
+
+msgid "Sync"
+msgstr "Sinkronizacija"
+
+msgid "Downloaded episodes"
+msgstr "Preuzete epizode"
+
+msgid "Downloads"
+msgstr "Preuzimanja"
+
+msgid "Installed addons and catalog sources"
+msgstr "Instalirani dodaci i izvori kataloga"
+
+msgid "Tags for organising My Library"
+msgstr "Oznake za organiziranje Moje biblioteke"
+
+msgid "Poster and thumbnail caching"
+msgstr "Predmemoriranje plakata i sličica"
+
+msgid "Dates, metadata, grid layout and language"
+msgstr "Datumi, metapodaci, raspored mreže i jezik"
+
+msgid "Stream P2P with the built-in client"
+msgstr "P2P prijenos s ugrađenim klijentom"
+
+msgid "Built-in or external player"
+msgstr "Ugrađeni ili vanjski reproduktor"
+
+msgid "Motion, transitions and hover effects"
+msgstr "Kretanje, prijelazi i efekti prelaska pokazivača"
+
+msgid "Sync library and watch history between devices"
+msgstr "Sinkronizacija biblioteke i povijesti gledanja između uređaja"
+
+msgid "Episode files stored on this device"
+msgstr "Datoteke epizoda spremljene na ovom uređaju"
+
+msgid "Offline media and cleanup policy"
+msgstr "Izvanmrežni sadržaj i pravila čišćenja"
+
+msgid "Settings"
+msgstr "Postavke"
+
+msgid "ADDONS"
+msgstr "DODACI"
+
+msgid "Install addon"
+msgstr "Instalirajte dodatak"
+
+msgid "Paste an addon install URL and add it to the catalog sources."
+msgstr "Zalijepite URL za instalaciju dodatka i dodajte ga u izvore kataloga."
+
+msgid "Addon install URL — e.g. https://v3-cinemeta.strem.io"
+msgstr "URL za instalaciju dodatka — npr. https://v3-cinemeta.strem.io"
+
+msgid "Add"
+msgstr "Dodajte"
+
+msgid "No addons installed yet. Paste an addon install URL above and click Add."
+msgstr "Još nema instaliranih dodataka. Zalijepite URL za instalaciju dodatka iznad i dodajte ga."
+
+msgid "Configure"
+msgstr "Konfigurirajte"
+
+msgid "Copy link"
+msgstr "Kopirajte URL"
+
+msgid "Refresh"
+msgstr "Osvježite"
+
+msgid "Remove"
+msgstr "Uklonite"
+
+msgid "CATEGORIES"
+msgstr "KATEGORIJE"
+
+msgid "Add category"
+msgstr "Dodajte kategoriju"
+
+msgid "Create a tag you can assign to items from the detail page and filter the library with."
+msgstr "Izradite oznaku koju možete dodijeliti stavkama na stranici pojedinosti i po njoj filtrirati biblioteku."
+
+msgid "New category name"
+msgstr "Naziv nove kategorije"
+
+msgid "No categories yet. Add one above, then assign items to categories from the detail page."
+msgstr "Još nema kategorija. Dodajte je iznad, a zatim dodijelite stavke kategorijama na stranici pojedinosti."
+
+msgid "IMAGE CACHE"
+msgstr "PREDMEMORIJA SLIKA"
+
+msgid "Cache images on disk"
+msgstr "Predmemorirajte slike na disku"
+
+msgid "Store downloaded posters and thumbnails so they load instantly on later runs. When off, images download fresh every launch."
+msgstr "Pohranjujte preuzete plakate i sličice kako bi se učitavali trenutačno pri sljedećim pokretanjima. Kad je isključeno, slike se preuzimaju iznova pri svakom pokretanju."
+
+msgid "Re-encode cached images"
+msgstr "Ponovno kodirajte predmemorirane slike"
+
+msgid "When off, original downloaded images are cached as-is (default)."
+msgstr "Kad je isključeno, izvorne preuzete slike predmemoriraju se takve kakve jesu (zadano)."
+
+msgid "Format"
+msgstr "Format"
+
+msgid "Image format used when re-encoding."
+msgstr "Format slike koji se koristi pri ponovnom kodiranju."
+
+msgid "Quality"
+msgstr "Kvaliteta"
+
+msgid "Encoding quality — lower values mean smaller files."
+msgstr "Kvaliteta kodiranja — niže vrijednosti znače manje datoteke."
+
+msgid "Downscale images"
+msgstr "Smanjite slike"
+
+msgid "Cap the longest side at 1024 px before encoding (smaller cache)."
+msgstr "Ograničite najdulju stranicu na 1024 px prije kodiranja (manja predmemorija)."
+
+msgid "Re-encode on load"
+msgstr "Ponovno kodirajte pri učitavanju"
+
+msgid "When an image is loaded, re-encode it to the format/quality above and replace the on-disk cache entry."
+msgstr "Kad se slika učita, ponovno je kodirajte u gore navedeni format/kvalitetu i zamijenite zapis u predmemoriji na disku."
+
+msgid "Cache memory"
+msgstr "Predmemorija u RAM-u"
+
+msgid "Maximum RAM for decoded posters and thumbnails. Lower if memory is tight."
+msgstr "Najveća količina RAM-a za dekodirane plakate i sličice. Smanjite ako ponestaje memorije."
+
+msgid "Re-encode existing cache"
+msgstr "Ponovno kodirajte postojeću predmemoriju"
+
+msgid "Rewrite images already cached on disk to the format/quality above. Runs immediately."
+msgstr "Prepišite slike već predmemorirane na disku u gore navedeni format/kvalitetu. Izvodi se odmah."
+
+msgid "Re-encode now"
+msgstr "Ponovno kodirajte sada"
+
+msgid "Changes save automatically and apply to newly cached images. Use “Re-encode on load” to convert existing images as they are accessed, or “Re-encode now” to rewrite all at once."
+msgstr "Promjene se spremaju automatski i primjenjuju se na novo predmemorirane slike. Upotrijebite „Ponovno kodirajte pri učitavanju“ za pretvorbu postojećih slika pri njihovu otvaranju ili „Ponovno kodirajte sada“ za prepisivanje svih odjednom."
+
+msgid "Disk usage"
+msgstr "Iskorištenost diska"
+
+msgid "Total size of all cached images on disk."
+msgstr "Ukupna veličina svih predmemoriranih slika na disku."
+
+msgid "Clear"
+msgstr "Očistite"
+
+msgid "DISPLAY"
+msgstr "PRIKAZ"
+
+msgid "Relative episode dates"
+msgstr "Relativni datumi epizoda"
+
+msgid "Show release dates as \"3 days ago\" instead of \"Mar 15, 2024\"."
+msgstr "Prikažite datume objave kao „prije 3 dana“ umjesto „15. ožu 2024.“."
+
+msgid "Prefetch episode metadata"
+msgstr "Unaprijed dohvatite metapodatke epizoda"
+
+msgid "Download season/episode info in the background for items in Discover. My Library is always prefetched."
+msgstr "Preuzimajte podatke o sezonama i epizodama u pozadini za stavke na stranici „Otkrijte“. Moja biblioteka uvijek se dohvaća unaprijed."
+
+msgid "Show unwatched thumbnails"
+msgstr "Prikažite sličice nepogledanih epizoda"
+
+msgid "Show artwork for episodes you haven't started. When off, unwatched episodes show a placeholder instead."
+msgstr "Prikažite slike za epizode koje niste počeli gledati. Kad je isključeno, nepogledane epizode prikazuju zamjensku sliku."
+
+msgid "Discover grid columns"
+msgstr "Stupci mreže na stranici Discover"
+
+msgid "Minimum columns in the Discover grid. More columns show smaller cards — e.g. 3 across on a phone."
+msgstr "Najmanji broj stupaca u mreži stranice „Otkrijte“. Više stupaca znači manje kartice — npr. 3 u redu na telefonu."
+
+msgid "Library grid columns"
+msgstr "Stupci mreže biblioteke"
+
+msgid "Minimum columns in My Library. Applies automatically."
+msgstr "Najmanji broj stupaca u Mojoj biblioteci. Primjenjuje se automatski."
+
+msgid "Language"
+msgstr "Jezik"
+
+msgid "Language of the interface. Applies to this device only."
+msgstr "Jezik sučelja. Primjenjuje se samo na ovom uređaju."
+
+msgid "Stream P2P"
+msgstr "P2P prijenos"
+
+msgid "Play P2P stream rows (Torrentio and friends) in the in-app player using a built-in P2P client. Files are kept for instant replay unless \"No caching\" is on."
+msgstr "Reproducirajte P2P zapise prijenosa (Torrentio i slični) u ugrađenom reproduktoru koristeći ugrađeni P2P klijent. Datoteke se čuvaju za trenutačnu reprodukciju osim ako je uključeno „Bez predmemoriranja“."
+
+msgid "Download folder"
+msgstr "Mapa za preuzimanje"
+
+msgid "Where P2P data is stored. Leave empty to use the default app cache folder."
+msgstr "Gdje se pohranjuju P2P podaci. Ostavite prazno za zadanu mapu predmemorije aplikacije."
+
+msgid "Default (app cache folder)"
+msgstr "Zadano (mapa predmemorije aplikacije)"
+
+msgid "Cache size limit"
+msgstr "Ograničenje veličine predmemorije"
+
+msgid "Maximum disk space for downloaded P2P data. Least-recently-used items are removed first once exceeded."
+msgstr "Najveći prostor na disku za preuzete P2P podatke. Kad se prekorači, prvo se uklanjaju najrjeđe korištene stavke."
+
+msgid "Download rate limit"
+msgstr "Ograničenje brzine preuzimanja"
+
+msgid "Cap the download speed. 0 means unlimited."
+msgstr "Ograničite brzinu preuzimanja. 0 znači neograničeno."
+
+msgid "No caching"
+msgstr "Bez predmemoriranja"
+
+msgid "Delete a stream's downloaded data as soon as its playback stops. Overrides keep-for-replay."
+msgstr "Izbrišite preuzete podatke zapisa odmah nakon završetka reprodukcije. Nadjačava čuvanje za ponovnu reprodukciju."
+
+msgid "Total size of downloaded P2P data on disk."
+msgstr "Ukupna veličina preuzetih P2P podataka na disku."
+
+msgid "PLAYER"
+msgstr "REPRODUKTOR"
+
+msgid "Built-in plays streams inside the app. External hands them to another video app."
+msgstr "Ugrađeni reproduktor reproducira zapise unutar aplikacije. Vanjski ih prepušta drugoj video aplikaciji."
+
+msgid "Built-in"
+msgstr "Ugrađeni"
+
+msgid "External"
+msgstr "Vanjski"
+
+msgid "External app"
+msgstr "Vanjska aplikacija"
+
+msgid "Which app opens the stream. System default uses whatever handles video URLs."
+msgstr "Koja aplikacija otvara zapis. Sistemska zadana koristi onu koja obrađuje video URL-ove."
+
+msgid "System default"
+msgstr "Sistemska zadana"
+
+msgid "Video decoder"
+msgstr "Video dekoder"
+
+msgid "HW+ keeps decoded frames on the GPU and is fastest; it falls back to HW, then SW. HW falls back to SW."
+msgstr "HW+ zadržava dekodirane sličice na GPU-u i najbrži je; prelazi na HW, zatim na SW. HW prelazi na SW."
+
+msgid "Rate the built-in player starts at. The slider covers 0.5×–2.0×; ± moves in 0.05× steps."
+msgstr "Brzina kojom ugrađeni reproduktor počinje. Klizač pokriva 0.5×–2.0×; ± pomiče u koracima od 0.05×."
+
+msgid "LOOK AND FEEL"
+msgstr "IZGLED I DOJAM"
+
+msgid "Enable animations"
+msgstr "Omogućite animacije"
+
+msgid "Master switch. Turn off to make every transition and hover effect instant."
+msgstr "Glavni prekidač. Isključite ga da svi prijelazi i efekti prelaska pokazivača postanu trenutačni."
+
+msgid "Page transitions"
+msgstr "Prijelazi stranica"
+
+msgid "Slide and fade when opening settings subpages and detail pages."
+msgstr "Klizanje i postupno pojavljivanje pri otvaranju podstranica postavki i stranica pojedinosti."
+
+msgid "Hover effects"
+msgstr "Efekti prelaska pokazivača"
+
+msgid "Card lift and the highlight on buttons, toggles and rows."
+msgstr "Podizanje kartica i isticanje gumba, prekidača i redaka."
+
+msgid "Player OSD"
+msgstr "OSD reproduktora"
+
+msgid "Fade and slide of the player controls, close button and volume slider."
+msgstr "Postupno pojavljivanje i klizanje kontrola reproduktora, gumba za zatvaranje i klizača glasnoće."
+
+msgid "Navigation glide"
+msgstr "Klizanje navigacije"
+
+msgid "Slide the highlighted item in the navigation bar from the old page to the new one."
+msgstr "Pomaknite istaknutu stavku u navigacijskoj traci sa stare stranice na novu."
+
+msgid "Pairing request"
+msgstr "Zahtjev za uparivanje"
+
+msgid "{} wants to sync with this device."
+msgstr "{} se želi sinkronizirati s ovim uređajem."
+
+msgid "Match code: {}"
+msgstr "Kod za podudaranje: {}"
+
+msgid "Accept"
+msgstr "Prihvatite"
+
+msgid "Deny"
+msgstr "Odbijte"
+
+msgid "Remove device?"
+msgstr "Ukloniti uređaj?"
+
+msgid "{} will be removed from sync on every paired device."
+msgstr "{} bit će uklonjen iz sinkronizacije na svakom uparenom uređaju."
+
+msgid "SYNC"
+msgstr "SINKRONIZACIJA"
+
+msgid "Enable cross-device sync"
+msgstr "Omogućite sinkronizaciju između uređaja"
+
+msgid "Keep your library, watch history, addons and settings in step across your devices. Direct, end-to-end encrypted connections — no account or server."
+msgstr "Držite biblioteku, povijest gledanja, dodatke i postavke usklađenima na svim svojim uređajima. Izravne veze šifrirane od kraja do kraja — bez računa i poslužitelja."
+
+msgid "THIS DEVICE"
+msgstr "OVAJ UREĐAJ"
+
+msgid "Device name"
+msgstr "Naziv uređaja"
+
+msgid "Endpoint ID"
+msgstr "ID krajnje točke"
+
+msgid "Share this with a peer so it can add this device."
+msgstr "Podijelite ovo s drugim uređajem kako bi mogao dodati ovaj uređaj."
+
+msgid "Copy"
+msgstr "Kopirajte"
+
+msgid "Sync now"
+msgstr "Sinkronizirajte sada"
+
+msgid "AUTO-SYNC"
+msgstr "AUTOMATSKI"
+
+msgid "Auto-sync while the app is running"
+msgstr "Automatska sinkronizacija dok je aplikacija pokrenuta"
+
+msgid "How often to check for changes while the app is open or a download is active."
+msgstr "Koliko često provjeravati promjene dok je aplikacija otvorena ili je preuzimanje aktivno."
+
+msgid "30s"
+msgstr "30 s"
+
+msgid "1m"
+msgstr "1 m"
+
+msgid "5m"
+msgstr "5 m"
+
+msgid "15m"
+msgstr "15 m"
+
+msgid "Background sync"
+msgstr "Sinkronizacija u pozadini"
+
+msgid "Best-effort sync while the app is closed. Android schedules it and may delay it — often every 15–60 min, longer in deep Doze."
+msgstr "Sinkronizacija prema mogućnostima dok je aplikacija zatvorena. Android je zakazuje i može je odgoditi — obično svakih 15–60 min, dulje u dubokom Dozeu."
+
+msgid "Local network discovery"
+msgstr "Otkrivanje lokalne mreže"
+
+msgid "Probe the local network for direct connections (UPnP, LAN discovery). Turn off on faulty Wi-Fi that chokes on multicast traffic."
+msgstr "Ispituje lokalnu mrežu radi izravnih veza (UPnP, otkrivanje LAN-a). Isključite na neispravnom Wi-Fi-ju koji se guši na multicast prometu."
+
+msgid "PAIRING"
+msgstr "UPARIVANJE"
+
+msgid "Ask before accepting devices"
+msgstr "Pitajte prije prihvaćanja uređaja"
+
+msgid "Show a confirmation prompt with a match code instead of trusting an invite automatically."
+msgstr "Prikažite potvrdu s kodom za podudaranje umjesto automatskog prihvaćanja pozivnice."
+
+msgid "Create an invite to add another device"
+msgstr "Izradite pozivnicu za dodavanje drugog uređaja"
+
+msgid "Create invite"
+msgstr "Nova pozivnica"
+
+msgid "Copy code"
+msgstr "Kopirajte kod"
+
+msgid "Invite {}"
+msgstr "Pozivnica {}"
+
+msgid "Join with an invite code"
+msgstr "Pridružite se s kodom pozivnice"
+
+msgid "paste invite code"
+msgstr "zalijepite kod pozivnice"
+
+msgid "Join"
+msgstr "Pridružite se"
+
+msgid "Scan QR code"
+msgstr "Skenirajte QR kod"
+
+msgid "PEERS"
+msgstr "UPARENI UREĐAJI"
+
+msgid "Add a device by its endpoint ID"
+msgstr "Dodajte uređaj prema ID-u krajnje točke"
+
+msgid "peer endpoint id"
+msgstr "ID krajnje točke drugog uređaja"
+
+msgid "No peers yet. Add another device to start syncing."
+msgstr "Još nema uparenih uređaja. Dodajte drugi uređaj da sinkronizacija započne."
+
+msgid "DOWNLOADS"
+msgstr "PREUZIMANJA"
+
+msgid "Auto-delete watched episodes"
+msgstr "Automatsko brisanje pogledanih epizoda"
+
+msgid "Delete a downloaded episode once you mark it watched. Movie downloads are never removed by this setting."
+msgstr "Izbrišite preuzetu epizodu kad je označite kao pogledanu. Ova postavka nikad ne briše preuzimanja filmova."
+
+msgid "Stored on this device: {n} episode"
+msgid_plural "Stored on this device: {n} episodes"
+msgstr[0] "Na ovom je uređaju {n} epizoda"
+msgstr[1] "Na ovom su uređaju {n} epizode"
+msgstr[2] "Na ovom je uređaju {n} epizoda"
+
+msgid "View"
+msgstr "Prikažite"
+
+msgid "DOWNLOADED EPISODES"
+msgstr "PREUZETE EPIZODE"
+
+msgid "No downloaded episodes. Download an episode from its stream list to see it here."
+msgstr "Nema preuzetih epizoda. Preuzmite epizodu s njezina popisa zapisa da biste je vidjeli ovdje."
+
+msgid "Delete"
+msgstr "Izbrišite"
+
+msgid "Slower"
+msgstr "Sporije"
+
+msgid "Faster"
+msgstr "Brže"
+
+msgid "Calendar"
+msgstr "Kalendar"
+
+msgid "List"
+msgstr "Popis"
+
+msgid "Mon"
+msgstr "pon"
+
+msgid "Tue"
+msgstr "uto"
+
+msgid "Wed"
+msgstr "sri"
+
+msgid "Thu"
+msgstr "čet"
+
+msgid "Fri"
+msgstr "pet"
+
+msgid "Sat"
+msgstr "sub"
+
+msgid "Sun"
+msgstr "ned"
+
+msgid "No episodes on this day."
+msgstr "Nema epizoda na ovaj dan."
+
+msgid "Scroll filters left"
+msgstr "Pomaknite filtre ulijevo"
+
+msgid "Scroll filters right"
+msgstr "Pomaknite filtre udesno"
+
+msgid "Move up"
+msgstr "Pomaknite gore"
+
+msgid "Move down"
+msgstr "Pomaknite dolje"
+
+msgid "Next up"
+msgstr "Sljedeće"
+
+msgid "New Episode"
+msgstr "Nova epizoda"
+
+msgid "Episode playback"
+msgstr "Reprodukcija epizoda"
+
+msgid "Choose how episodes with saved playback history start."
+msgstr "Odaberite kako započeti epizode sa spremljenom poviješću reprodukcije."
+
+msgid "Start over"
+msgstr "Ispočetka"
+
+msgid "Resume playback?"
+msgstr "Nastaviti reprodukciju?"
+
+msgid "This episode has saved playback history."
+msgstr "Za ovu epizodu postoji spremljena povijest reprodukcije."
+
+msgid "Ask"
+msgstr "Pitaj"
+
+msgid "This device"
+msgstr "Ovaj uređaj"
+
+
+# Settings → About
+msgid "About and licenses"
+msgstr "O aplikaciji i licencama"
+
+msgid "Open-source notices and source code"
+msgstr "Obavijesti o otvorenom kodu i izvorni kod"
+
+msgid "ABOUT NOVA"
+msgstr "O APLIKACIJI NOVA"
+
+msgid "Nova is licensed under GPL-3.0-or-later. This page lists the Rust crates used by this build, Nova's workspace crates, bundled native media components, and their license texts."
+msgstr "Nova je licencirana pod GPL-3.0-or-later. Ova stranica navodi Rust pakete korištene u ovoj verziji, pakete radnog prostora Nova, uključene nativne medijske komponente i tekstove njihovih licenci."
+
+msgid "SOURCE CODE"
+msgstr "IZVORNI KOD"
+
+msgid "Open source"
+msgstr "Otvori izvorni kod"
+
+msgid "LICENSE TEXTS"
+msgstr "TEKSTOVI LICENCI"

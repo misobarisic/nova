@@ -1,0 +1,1761 @@
+import { ScrollView } from "std-widgets.slint";
+import { ContinueRow, UpcomingRow, CalCell, SheetItem } from "types.slint";
+import { MenuSheet } from "menusheet.slint";
+import { SideNav, NavMetrics } from "sidenav.slint";
+import { BottomNav } from "bottomnav.slint";
+import { Anim } from "anim.slint";
+import { IcChevronLeft, IcChevronRight } from "icons.slint";
+
+// Small "Next up" pill pinned to a Continue card's poster top-right. Shown
+// only when the card offers the next episode of a series still being
+// watched (a resume already has the progress rail).
+component NextUpBadge inherits Rectangle {
+    width: badge_lbl.preferred-width + 16px;
+    height: 22px;
+    border-radius: 8px;
+    background: #8b5cf6;
+
+    badge_lbl := Text {
+        text: @tr("Next up");
+        font-size: 11px;
+        font-weight: 700;
+        color: #ffffff;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+}
+
+// Small "New Episode" pill, same slot: shown when everything else dated and
+// released is already watched, so the offered episode is new.
+component NewEpisodeBadge inherits Rectangle {
+    width: badge_lbl.preferred-width + 16px;
+    height: 22px;
+    border-radius: 8px;
+    background: #8b5cf6;
+
+    badge_lbl := Text {
+        text: @tr("New Episode");
+        font-size: 11px;
+        font-weight: 700;
+        color: #ffffff;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+}
+
+// One Continue Watching card, shared by the landing carousel and the "see
+// all" subpage grid. The `reveal` layer runs the subpage entrance stagger;
+// on the landing (`reveal` stays true) only the hover lift animates.
+component ContinueCard inherits Rectangle {
+    in property <ContinueRow> entry;
+    in property <length> card-width;
+    in property <bool> focused: false;
+    in property <bool> reveal: true;
+    in property <duration> reveal-delay: 0ms;
+    in property <bool> tappable: true;
+    // Landing cards report the early axis of a touch to the page, exactly as
+    // the stream-filter pills do; the rail Flickable owns the actual pan.
+    in property <bool> rail-gesture: false;
+    callback pan_hint();
+    callback pan_release();
+    // On touch surfaces a stationary hold (or a mouse right-click) opens the
+    // page-level sheet, exactly like a My Library card. Desktop opens the
+    // native popup below instead.
+    //
+    // It is also the card's "touch platform" flag: nothing there has a real
+    // hover. `TouchArea.has-hover` is true under a finger, and a press that a
+    // scroll container delay-forwards can leave it *latched* — the dispatch
+    // that set it is discarded while the delayed press is pending, so the
+    // matching Exit is never sent and the flag stays on with no touch left on
+    // the card. Pointer-only flourishes (the lift below) must therefore be off
+    // there, or a card stays lifted after the finger is gone.
+    in property <bool> touch_menus: false;
+    // Open the card under a stationary tap.
+    callback picked();
+    // Open the card menu (page-level sheet): a touch hold, or — on touch
+    // platforms — a right-click, mirroring the Library cards.
+    callback menu_requested();
+    // Menu actions. The card has no index of its own: the `for` site binds
+    // these to the row index.
+    // "Enter series": open the detail page without starting playback.
+    callback enter_requested();
+    callback remove_requested();
+
+    width: card-width;
+    // True 2:3 poster at any width + 76px footer reserves title, episode
+    // label and the progress rail so cards never clip.
+    height: card-width * 3 / 2 + 76px;
+
+    // Each card owns its native desktop popup (landing rail and subpage).
+    // On touch the same press/hold opens the page-level sheet instead.
+    cont_ctx := ContextMenuArea {
+        width: 100%;
+        height: 100%;
+
+        Menu {
+            MenuItem {
+                title: @tr("Play");
+                activated => { root.picked(); }
+            }
+            MenuItem {
+                title: @tr("Enter series");
+                activated => { root.enter_requested(); }
+            }
+            MenuSeparator {}
+            MenuItem {
+                title: @tr("Remove from Continue Watching");
+                activated => { root.remove_requested(); }
+            }
+        }
+    }
+
+    reveal_layer := Rectangle {
+        width: 100%;
+        height: 100%;
+        opacity: reveal ? 1.0 : 0.0;
+        y: reveal ? 0px : 12px;
+        animate opacity { duration: Anim.transition_fade; delay: reveal-delay; }
+        animate y { duration: Anim.transition_slide; delay: reveal-delay; }
+
+        touch := TouchArea {
+            // A drag (carousel flick / page scroll) must not also open the
+            // item: `clicked` fires for any down+up over the area, so a swipe
+            // that the Flickable didn't capture could still navigate. Suppress
+            // the pick once the finger travels, and re-arm on the next press.
+            enabled: root.tappable;
+            property <bool> dragged: false;
+            // Release after a hold: the sheet is already open, so the pending
+            // tap must not play the item too.
+            property <bool> menu_suppress: false;
+            property <length> hint_x: 0px;
+            property <length> hint_y: 0px;
+            property <bool> hint_live: false;
+            property <bool> hint_held: false;
+            function hint_stop() {
+                self.hint_live = false;
+                if (self.hint_held) {
+                    self.hint_held = false;
+                    root.pan_release();
+                }
+            }
+            mouse-cursor: pointer;
+            pointer-event(ev) => {
+                if (ev.kind == PointerEventKind.down) {
+                    touch.hint_x = touch.mouse-x;
+                    touch.hint_y = touch.mouse-y;
+                    touch.hint_live = true;
+                    touch.dragged = false;
+                    touch.menu_suppress = false;
+                    // Hold-to-open the card menu (subpage grids): the timer
+                    // is cancelled as soon as the finger moves or the press
+                    // ends (same 600ms convention as the library cards).
+                    if (root.touch_menus) {
+                        cont_hold_t.stop();
+                        cont_hold_t.start();
+                    }
+                } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                    touch.hint_stop();
+                    cont_hold_t.stop();
+                    if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
+                    // Card menu, exactly like a Library card: on touch the
+                    // page-level sheet (same menu the hold opens), on desktop
+                    // the native popup at the cursor (the ContextMenuArea
+                    // alone never sees the press while this TouchArea sits on
+                    // top of it).
+                        if (root.touch_menus) {
+                            root.menu_requested();
+                        } else {
+                            cont_ctx.show({ x: touch.mouse-x, y: touch.mouse-y });
+                        }
+                    }
+                } else if (ev.kind == PointerEventKind.move && root.rail-gesture) {
+                    if (!(touch.pressed || ev.touch-finger-id != 0)) {
+                        touch.hint_stop();
+                        return;
+                    }
+                    if (!touch.hint_live) {
+                        touch.hint_x = touch.mouse-x;
+                        touch.hint_y = touch.mouse-y;
+                        touch.hint_live = true;
+                    }
+                    let dx = touch.mouse-x - touch.hint_x;
+                    let dy = touch.mouse-y - touch.hint_y;
+                    if (Math.abs(dy) > 8px && Math.abs(dy) > Math.abs(dx)) {
+                        touch.hint_stop();
+                    } else {
+                        touch.hint_held = true;
+                        root.pan_hint();
+                    }
+                }
+            }
+            changed pressed => {
+                if (!self.pressed) { self.hint_stop(); }
+            }
+            moved => {
+                if (Math.abs(touch.mouse-x - touch.pressed-x)
+                    + Math.abs(touch.mouse-y - touch.pressed-y) > 12px) {
+                    touch.dragged = true;
+                    cont_hold_t.stop();
+                }
+            }
+            clicked => {
+                cont_hold_t.stop();
+                if (!touch.dragged && !touch.menu_suppress) {
+                    root.picked();
+                }
+                touch.dragged = false;
+                touch.menu_suppress = false;
+            }
+        }
+
+        // Hold-to-open timer (pinned off until a press arms it; Slint Timers
+        // run from creation by default). A 600ms stationary hold opens the
+        // card menu; the host suppresses the trailing pick.
+        cont_hold_t := Timer {
+            interval: 600ms;
+            running: false;
+            triggered => {
+                self.stop();
+                touch.menu_suppress = true;
+                root.menu_requested();
+            }
+        }
+
+        lift := Rectangle {
+            width: 100%;
+            height: 100%;
+            background: #18181c;
+            border-radius: 10px;
+            border-width: root.focused ? 2px : 0px;
+            border-color: #8b5cf6;
+
+            // Lift on real pointer hover only: on touch `has-hover` is true for
+            // the whole press, so lifting then would make the card under the
+            // finger bob up/down while a carousel/page is dragged — and it can
+            // stay latched after the touch is gone (see `touch_menus`).
+            y: (touch.has-hover && !touch.pressed && !root.touch_menus) ? -6px : 0px;
+            animate y { duration: Anim.hover_lift; easing: ease-in-out; }
+
+            VerticalLayout {
+                spacing: 0px;
+
+                Rectangle {
+                    height: root.card-width * 3 / 2;
+                    border-radius: 10px;
+                    clip: true;
+                    background: #222228;
+
+                    if root.entry.is_loaded: Image {
+                        source: root.entry.poster;
+                        image-fit: cover;
+                        width: 100%;
+                        height: 100%;
+                    }
+
+                    if !root.entry.is_loaded: Text {
+                        text: "🎬";
+                        font-size: 34px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    // Badges for offered episodes: "Next up" mid-series, "New
+                    // Episode" when everything else is already watched.
+                    // Resumes (badge 0) show the progress rail instead.
+                    if root.entry.badge == 1: NextUpBadge {
+                        x: parent.width - self.width - 6px;
+                        y: 6px;
+                    }
+                    if root.entry.badge == 2: NewEpisodeBadge {
+                        x: parent.width - self.width - 6px;
+                        y: 6px;
+                    }
+
+                    // Resume rail pinned to the poster's bottom edge.
+                    Rectangle {
+                        y: parent.height - 5px;
+                        height: 5px;
+                        border-radius: 2px;
+                        background: #2b2b35;
+
+                        Rectangle {
+                            x: 0;
+                            width: parent.width * root.entry.progress;
+                            height: 100%;
+                            border-radius: 2px;
+                            background: #8b5cf6;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 6px;
+                    spacing: 2px;
+
+                    Text {
+                        text: root.entry.title;
+                        color: #eeeeee;
+                        font-size: 13px;
+                        font-weight: 600;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: root.entry.subtitle;
+                        color: #c4b5fd;
+                        font-size: 11px;
+                        font-weight: 600;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One Upcoming card (same as ContinueCard plus an air-date line).
+component UpcomingCard inherits Rectangle {
+    in property <UpcomingRow> entry;
+    in property <length> card-width;
+    in property <bool> focused: false;
+    in property <bool> reveal: true;
+    in property <duration> reveal-delay: 0ms;
+    in property <bool> tappable: true;
+    in property <bool> rail-gesture: false;
+    callback pan_hint();
+    callback pan_release();
+    // See ContinueCard: touch platforms have no hover, and `has-hover` can
+    // latch under a finger, so pointer-only flourishes (the lift below) are off
+    // there.
+    in property <bool> touch_menus: false;
+    callback picked();
+
+    width: card-width;
+    // True 2:3 poster + 88px footer reserves title, episode label and the
+    // air date.
+    height: card-width * 3 / 2 + 88px;
+
+    reveal_layer := Rectangle {
+        width: 100%;
+        height: 100%;
+        opacity: reveal ? 1.0 : 0.0;
+        y: reveal ? 0px : 12px;
+        animate opacity { duration: Anim.transition_fade; delay: reveal-delay; }
+        animate y { duration: Anim.transition_slide; delay: reveal-delay; }
+
+        touch := TouchArea {
+            // A drag (carousel flick / page scroll) must not also open the
+            // item: `clicked` fires for any down+up over the area, so a swipe
+            // that the Flickable didn't capture could still navigate. Suppress
+            // the pick once the finger travels, and re-arm on the next press.
+            enabled: root.tappable;
+            property <bool> dragged: false;
+            property <length> hint_x: 0px;
+            property <length> hint_y: 0px;
+            property <bool> hint_live: false;
+            property <bool> hint_held: false;
+            function hint_stop() {
+                self.hint_live = false;
+                if (self.hint_held) {
+                    self.hint_held = false;
+                    root.pan_release();
+                }
+            }
+            mouse-cursor: pointer;
+            pointer-event(ev) => {
+                if (ev.kind == PointerEventKind.down) {
+                    touch.hint_x = touch.mouse-x;
+                    touch.hint_y = touch.mouse-y;
+                    touch.hint_live = true;
+                    touch.dragged = false;
+                } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                    touch.hint_stop();
+                } else if (ev.kind == PointerEventKind.move && root.rail-gesture) {
+                    if (!(touch.pressed || ev.touch-finger-id != 0)) {
+                        touch.hint_stop();
+                        return;
+                    }
+                    if (!touch.hint_live) {
+                        touch.hint_x = touch.mouse-x;
+                        touch.hint_y = touch.mouse-y;
+                        touch.hint_live = true;
+                    }
+                    let dx = touch.mouse-x - touch.hint_x;
+                    let dy = touch.mouse-y - touch.hint_y;
+                    if (Math.abs(dy) > 8px && Math.abs(dy) > Math.abs(dx)) {
+                        touch.hint_stop();
+                    } else {
+                        touch.hint_held = true;
+                        root.pan_hint();
+                    }
+                }
+            }
+            changed pressed => {
+                if (!self.pressed) { self.hint_stop(); }
+            }
+            moved => {
+                if (Math.abs(touch.mouse-x - touch.pressed-x)
+                    + Math.abs(touch.mouse-y - touch.pressed-y) > 12px) {
+                    touch.dragged = true;
+                }
+            }
+            clicked => {
+                if (!touch.dragged) {
+                    root.picked();
+                }
+                touch.dragged = false;
+            }
+        }
+
+        lift := Rectangle {
+            width: 100%;
+            height: 100%;
+            background: #18181c;
+            border-radius: 10px;
+            border-width: root.focused ? 2px : 0px;
+            border-color: #8b5cf6;
+
+            // See ContinueCard: hover lift must not fire while pressed, and is
+            // pointer-only (touch platforms strand the flag).
+            y: (touch.has-hover && !touch.pressed && !root.touch_menus) ? -6px : 0px;
+            animate y { duration: Anim.hover_lift; easing: ease-in-out; }
+
+            VerticalLayout {
+                spacing: 0px;
+
+                Rectangle {
+                    height: root.card-width * 3 / 2;
+                    border-radius: 10px;
+                    clip: true;
+                    background: #222228;
+
+                    if root.entry.is_loaded: Image {
+                        source: root.entry.poster;
+                        image-fit: cover;
+                        width: 100%;
+                        height: 100%;
+                    }
+
+                    if !root.entry.is_loaded: Text {
+                        text: "🎬";
+                        font-size: 34px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                VerticalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 6px;
+                    spacing: 2px;
+
+                    Text {
+                        text: root.entry.title;
+                        color: #eeeeee;
+                        font-size: 13px;
+                        font-weight: 600;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: root.entry.subtitle;
+                        color: #c4b5fd;
+                        font-size: 11px;
+                        font-weight: 600;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: root.entry.date;
+                        color: #7a7a8c;
+                        font-size: 11px;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Landing section header: title + count, tappable to open the "see all"
+// subpage. Hover tints the row and a chevron signals the affordance.
+component SectionHeader inherits Rectangle {
+    in property <string> title;
+    in property <int> count;
+    callback open_all();
+
+    height: 36px;
+    border-radius: 8px;
+    background: header_touch.has-hover ? #ffffff0a : transparent;
+    animate background { duration: Anim.hover_fast; }
+
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        spacing: 8px;
+        alignment: start;
+
+        Text {
+            text: root.title;
+            font-size: 26px;
+            font-weight: 700;
+            color: #ffffff;
+        }
+
+        Text {
+            text: "(" + root.count + ")";
+            font-size: 15px;
+            color: #6c6c7d;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            width: 22px;
+            height: 100%;
+
+            IcChevronRight {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                fill: #8a8a9a;
+            }
+        }
+    }
+
+    header_touch := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { root.open_all(); }
+    }
+}
+
+// Upcoming calendar day cell: one of the 42 month-grid squares. Days with
+// episodes are tappable (the dot marks them); filler days from the edge
+// months and empty days are inert. `picked` carries the day's epoch days.
+component CalDayCell inherits Rectangle {
+    in property <CalCell> cell;
+    // Keyboard focus ring rides the selected day (arrows move it).
+    in property <bool> kb_ring: false;
+    // Even column width across the grid (passed in: 7 columns, 6 gaps).
+    in property <length> cell_width;
+    callback picked(int);
+
+    width: root.cell_width;
+    height: 44px;
+    border-radius: 10px;
+    background: root.cell.selected ? #8b5cf6 : (touch.has-hover ? #ffffff14 : transparent);
+    animate background { duration: Anim.hover_fast; }
+    border-width: root.kb_ring && root.cell.selected ? 2px : 0px;
+    border-color: #ffffff;
+    opacity: root.cell.in_month ? 1.0 : 0.35;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 3px;
+
+        Text {
+            text: "" + root.cell.day;
+            font-size: 14px;
+            font-weight: root.cell.selected ? 700 : 400;
+            color: root.cell.selected ? #ffffff : (root.cell.today ? #c4b5fd : #eeeeee);
+            horizontal-alignment: center;
+        }
+
+        if root.cell.count > 0: HorizontalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: root.cell.selected ? #ffffff : #8b5cf6;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        // Always eats the tap (even on empty/filler days): without this the
+        // press falls through the opaque subpage to a landing rail card.
+        width: 100%;
+        height: 100%;
+        mouse-cursor: root.cell.in_month && root.cell.count > 0 ? pointer : default;
+        clicked => {
+            if (root.cell.in_month && root.cell.count > 0) {
+                root.picked(root.cell.epoch);
+            }
+        }
+    }
+}
+
+// Upcoming subpage view switch: the episode grid ⇄ month calendar pill.
+// Reads what it opens to.
+component CalToggle inherits Rectangle {
+    in property <bool> open: false;
+    callback toggled();
+
+    width: label.preferred-width + 28px;
+    height: 32px;
+    y: 2px;
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: #2a2a33;
+    background: touch.has-hover ? #ffffff14 : #17171d;
+    animate background { duration: Anim.hover_fast; }
+
+    label := Text {
+        x: 14px;
+        y: (parent.height - self.height) / 2;
+        text: root.open ? @tr("List") : @tr("Calendar");
+        font-size: 13px;
+        font-weight: 600;
+        color: #c4b5fd;
+    }
+
+    touch := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+}
+
+export component HomePage {
+    // Custom components placed in a Window are sized by their preferred size;
+    // make this page fill the window (its parent).
+    preferred-width: 100%;
+    preferred-height: 100%;
+
+    in-out property <[ContinueRow]> continue_rows: [];
+    in-out property <[UpcomingRow]> upcoming_rows: [];
+    // Upcoming calendar (month view inside the "see all" subpage, toggled by
+    // the Calendar button): the 42 grid cells, the month title, the selected
+    // day's episode rows, the selected epoch day (-1 = none) and the
+    // list/calendar switch. The backend owns the month arithmetic and the
+    // selection; this only renders cells and forwards taps.
+    in-out property <[CalCell]> cal_cells: [];
+    in-out property <string> cal_title: "";
+    in-out property <[UpcomingRow]> cal_day_rows: [];
+    in-out property <int> cal_epoch: -1;
+    in-out property <bool> cal_open: false;
+    in-out property <string> home_empty_hint: @tr("Nothing to continue — start watching a show or movie and it will show up here.");
+    // 0 = landing carousels, 1 = all Continue, 2 = all Upcoming.
+    in-out property <int> view: 0;
+
+    property <length> item-gap: 18px;
+    // Same fluid scheme as Library: column count from a 160px minimum
+    // card (always ≥ 2), live card width stretched to fill the row
+    // (capped), grid centered when capped. Used by the subpage grids.
+    property <length> min-card: 160px;
+    property <length> max-card: 200px;
+    in property <int> min_cols: 2;
+    // Left inset reserved by the wide-layout navigation rail (0 on narrow).
+    property <length> rail_w: root.narrow ? 0px : NavMetrics.rail-width;
+    // The 36px below is the page's own 2 × 18px padding; `rail_w` is the
+    // column the rail takes out of that width.
+    property <int> grid_cols: Math.max(root.min_cols, Math.floor((self.width - 36px - root.rail_w + root.item-gap) / (root.min-card + root.item-gap)));
+    property <length> grid_item_width: Math.min(root.max-card, (self.width - 36px - root.rail_w - (root.grid_cols - 1) * root.item-gap) / root.grid_cols);
+    // Landing carousel card: ~2.5 cards across on narrow (Android), the
+    // grid card elsewhere.
+    property <length> rail_item_width: root.narrow
+        ? Math.max(96px, (self.width - 36px + root.item-gap) / 2.5 - root.item-gap)
+        : root.grid_item_width;
+    property <length> rail_h: root.rail_item_width * 3 / 2 + 76px;
+    property <length> rail_h_up: root.rail_item_width * 3 / 2 + 88px;
+    // Approximate landing section heights for keyboard follow (header +
+    // divider + carousel + spacing).
+    property <length> cont_section_h: root.continue_rows.length > 0
+        ? (36px + 1px + root.rail_h + 8px + 12px) : 0px;
+    property <length> up_section_h: root.upcoming_rows.length > 0
+        ? (36px + 1px + root.rail_h_up + 8px + 12px) : 0px;
+    // Stagger only when transitions are on, so disabling animations makes
+    // the cards appear at once (no per-card delay left running).
+    property <bool> stagger: Anim.enabled && Anim.transitions;
+    // The card's early horizontal gesture hint blocks the landing's vertical
+    // Flickable so the inner rail can own the pan (like StreamFilterPill).
+    property <bool> page_pan_enabled: true;
+
+    function rail_panned() {
+        root.page_pan_enabled = false;
+        rail_pan_release_t.running = true;
+        rail_pan_release_t.restart();
+    }
+
+    function rail_pan_released() {
+        root.page_pan_enabled = true;
+        rail_pan_release_t.stop();
+    }
+
+    // A card may lose its up/cancel when the Flickable captures a swipe.
+    // Like the stream pills, allow the axis hint to lapse if movement stops.
+    rail_pan_release_t := Timer {
+        interval: 200ms;
+        running: false;
+        triggered => {
+            self.stop();
+            root.page_pan_enabled = true;
+        }
+    }
+
+    callback home_picked();
+    callback discover_picked();
+    callback library_picked();
+    callback settings_picked();
+    callback continue_picked(int);
+    // Card menu actions, all resolved against the current library view in the
+    // backend: `continue_picked` plays the resume episode (the card tap too),
+    // `continue_enter` opens the detail page without starting playback, and
+    // `continue_remove` hides the card until the item is resumed again.
+    callback continue_remove(int);
+    callback continue_enter(int);
+    callback upcoming_picked(int);
+    // Upcoming calendar: open/close the month view, step the visible month
+    // (±1), pick a day (epoch days) and open the selected day's first episode
+    // (keyboard Enter).
+    callback upcoming_cal_open();
+    callback upcoming_cal_close();
+    callback upcoming_cal_month(int);
+    callback upcoming_cal_pick(int);
+    callback upcoming_cal_activate();
+    // System back on the root screen: background the app (Android moves
+    // the task to the back, keeping process state; desktop never fires it).
+    callback exit_to_background();
+
+    // Card menu state. `menu_idx` is the card the open/next menu acts on;
+    // `menu_open` only drives the bottom sheet (single instance, -1 closed).
+    // Pure UI state: actions reuse the callbacks above.
+    property <bool> menu_open: false;
+    property <int> menu_idx: 0;
+
+    function open_continue_menu(idx: int) {
+        if (root.menu_open) {
+            root.close_menu();
+            return;
+        }
+        root.menu_idx = idx;
+        root.menu_open = true;
+    }
+
+    function close_menu() {
+        root.menu_open = false;
+    }
+
+    // Exact scroll offsets: landing page, subpage page, and the two
+    // carousel x positions (bound to AppWindow so they survive the detail
+    // modal destroying/recreating this component).
+    in-out property <length> scroll_y: 0px;
+    in-out property <length> all_scroll_y: 0px;
+    in-out property <length> continue_x: 0px;
+    in-out property <length> upcoming_x: 0px;
+
+    // Compact layout for narrow (portrait) windows.
+    in property <bool> narrow;
+    // Top system-bar inset (Android status bar): Window.safe-area-insets,
+    // bound by AppWindow. 0 on desktop/web, so layout there is unchanged.
+    in property <length> safe-top: 0px;
+    // Side insets: in landscape the display cutout / gesture area moves to
+    // the left or right edge, so page content must clear it.
+    in property <length> safe-left: 0px;
+    in property <length> safe-right: 0px;
+    // Bottom system-bar inset (Android gesture/nav bar), for the bottom
+    // tab bar. 0 on desktop/web.
+    in property <length> safe-bottom: 0px;
+    // True on touch-driven platforms (Android): card menus open as
+    // bottom sheets on hold. Desktop keeps native right-click popups.
+    // Bound from AppWindow (see the HomePage wiring there).
+    in property <bool> touch_menus: false;
+
+    // ---- 6-button keyboard nav (arrows + Enter + Backspace) ----
+    // Landing zones: 0 page-nav, 1 Continue carousel, 2 Upcoming carousel.
+    // Subpage: zone 1 is the grid. Backspace pops the subpage. Bound to
+    // AppWindow (survives page recreation).
+    in-out property <int> kb_zone: 0;
+    in-out property <int> kb_nav: 0;
+    in-out property <int> kb_idx: 0;
+    in-out property <int> kb_up_idx: 0;
+    // Keyboard modality (bound to AppWindow, see DiscoverPage).
+    in-out property <bool> kb_active;
+
+    // Number of cards in the list the keyboard cursor is on (Continue on the
+    // landing, whichever grid the subpage shows).
+    function active_len() -> int {
+        if (root.view == 2) {
+            return root.upcoming_rows.length;
+        }
+        return root.continue_rows.length;
+    }
+
+    function kb_clamp_idx() {
+        let n = root.active_len();
+        if (n == 0) {
+            root.kb_idx = 0;
+        } else if (root.kb_idx >= n) {
+            root.kb_idx = n - 1;
+        } else if (root.kb_idx < 0) {
+            root.kb_idx = 0;
+        }
+        if (root.upcoming_rows.length == 0) {
+            root.kb_up_idx = 0;
+        } else if (root.kb_up_idx >= root.upcoming_rows.length) {
+            root.kb_up_idx = root.upcoming_rows.length - 1;
+        } else if (root.kb_up_idx < 0) {
+            root.kb_up_idx = 0;
+        }
+    }
+
+    function kb_up() {
+        if (root.view == 2 && root.cal_open) {
+            // Calendar: a week back.
+            root.upcoming_cal_pick(root.cal_epoch - 7);
+        } else if (root.view != 0) {
+            if (root.kb_idx >= root.grid_cols) {
+                root.kb_idx -= root.grid_cols;
+            }
+        } else if (root.kb_zone == 2) {
+            root.kb_zone = root.continue_rows.length > 0 ? 1 : 0;
+            root.kb_clamp_idx();
+        } else if (root.kb_zone == 1) {
+            root.kb_zone = 0;
+        }
+    }
+
+    function kb_down() {
+        if (root.view == 2 && root.cal_open) {
+            // Calendar: a week forward.
+            root.upcoming_cal_pick(root.cal_epoch + 7);
+        } else if (root.view != 0) {
+            if (root.kb_idx + root.grid_cols < root.active_len()) {
+                root.kb_idx += root.grid_cols;
+            }
+        } else if (root.kb_zone == 0) {
+            if (root.continue_rows.length > 0) {
+                root.kb_zone = 1;
+                root.kb_clamp_idx();
+            } else if (root.upcoming_rows.length > 0) {
+                root.kb_zone = 2;
+                root.kb_clamp_idx();
+            }
+        } else if (root.kb_zone == 1) {
+            if (root.upcoming_rows.length > 0) {
+                root.kb_zone = 2;
+                root.kb_clamp_idx();
+            }
+        }
+    }
+
+    function kb_left() {
+        if (root.view == 2 && root.cal_open) {
+            // Calendar: the previous day.
+            root.upcoming_cal_pick(root.cal_epoch - 1);
+        } else if (root.view != 0) {
+            if (root.kb_idx > 0) {
+                root.kb_idx -= 1;
+            }
+        } else if (root.kb_zone == 0) {
+            root.kb_nav = Math.mod(root.kb_nav + 3, 4);
+        } else if (root.kb_zone == 1) {
+            if (root.kb_idx > 0) {
+                root.kb_idx -= 1;
+            }
+        } else {
+            if (root.kb_up_idx > 0) {
+                root.kb_up_idx -= 1;
+            }
+        }
+    }
+
+    function kb_right() {
+        if (root.view == 2 && root.cal_open) {
+            // Calendar: the next day.
+            root.upcoming_cal_pick(root.cal_epoch + 1);
+        } else if (root.view != 0) {
+            if (root.kb_idx + 1 < root.active_len()) {
+                root.kb_idx += 1;
+            }
+        } else if (root.kb_zone == 0) {
+            root.kb_nav = Math.mod(root.kb_nav + 1, 4);
+        } else if (root.kb_zone == 1) {
+            if (root.kb_idx + 1 < root.continue_rows.length) {
+                root.kb_idx += 1;
+            }
+        } else {
+            if (root.kb_up_idx + 1 < root.upcoming_rows.length) {
+                root.kb_up_idx += 1;
+            }
+        }
+    }
+
+    function kb_enter() {
+        if (root.view == 2 && root.cal_open) {
+            // Calendar: open the selected day's first episode.
+            root.upcoming_cal_activate();
+        } else if (root.view != 0) {
+            if (root.kb_idx >= 0 && root.kb_idx < root.active_len()) {
+                if (root.view == 2) {
+                    root.upcoming_picked(root.kb_idx);
+                } else {
+                    root.continue_picked(root.kb_idx);
+                }
+            }
+        } else if (root.kb_zone == 0) {
+            if (root.kb_nav == 0) {
+                root.home_picked();
+            } else if (root.kb_nav == 1) {
+                root.discover_picked();
+            } else if (root.kb_nav == 2) {
+                root.library_picked();
+            } else {
+                root.settings_picked();
+            }
+        } else if (root.kb_zone == 1) {
+            if (root.kb_idx >= 0 && root.kb_idx < root.continue_rows.length) {
+                root.continue_picked(root.kb_idx);
+            }
+        } else {
+            if (root.kb_up_idx >= 0 && root.kb_up_idx < root.upcoming_rows.length) {
+                root.upcoming_picked(root.kb_up_idx);
+            }
+        }
+    }
+
+    // Row strides for the subpage grids, plus the carousel scroll helpers.
+    property <length> row_stride: root.grid_item_width * 3 / 2 + 76px + root.item-gap;
+    property <length> row_stride_up: root.grid_item_width * 3 / 2 + 88px + root.item-gap;
+
+    // Keep the focused card on screen. Skipped before layout
+    // (content-height 0) — the one-shot restore timer below retries.
+    function kb_follow() {
+        // Only the keyboard moves the focus. This same entry point runs for
+        // data rebuilds (a sync pass or a progress/library write pushes fresh
+        // models) and for a subpage swap, and following the — stale — focus
+        // there used to drag a manually flicked rail back to the focused card
+        // (card 0, or whatever the user last opened) and scroll the page under
+        // it. A carousel drag clears `kb_active`, so a flick ends the
+        // modality just like a tap does.
+        if (!root.kb_active) {
+            return;
+        }
+        if (root.view == 0) {
+            root.kb_follow_landing();
+        } else {
+            root.kb_follow_grid();
+        }
+    }
+
+    // Landing: scroll the focused carousel horizontally and bring its section
+    // into the vertical viewport. A rail's `content-x` is the *negative*
+    // scroll offset (0 = the row's start), so the focused card's left edge
+    // sits at `x + content-x` on screen: writing `x` itself (as this used to)
+    // is a positive offset, which the rail immediately clamps back to 0 — the
+    // row jumped to its start instead of following the focus.
+    function kb_follow_landing() {
+        if (land_scroll.content-height == 0px) {
+            return;
+        }
+        if (root.kb_zone == 1 && root.continue_rows.length > 0) {
+            let cw = root.rail_item_width;
+            let x = root.kb_idx * (cw + root.item-gap);
+            rail_continue.content-x = root.rail_show(rail_continue.content-x, x, cw, rail_continue.width, rail_continue.content-width);
+            root.kb_scroll_to(0px, root.cont_section_h);
+        } else if (root.kb_zone == 2 && root.upcoming_rows.length > 0) {
+            let cw = root.rail_item_width;
+            let x = root.kb_up_idx * (cw + root.item-gap);
+            rail_upcoming.content-x = root.rail_show(rail_upcoming.content-x, x, cw, rail_upcoming.width, rail_upcoming.content-width);
+            root.kb_scroll_to(root.cont_section_h, root.cont_section_h + root.up_section_h);
+        }
+    }
+
+    // The offset that brings a card at content-x `x` (width `cw`) into a
+    // `vw`-wide viewport currently at `content-x`, clamped to the rail's ends.
+    function rail_show(content_x: length, x: length, cw: length, vw: length, content_w: length) -> length {
+        let left = x + content_x;
+        if (left < 0px) {
+            return Math.max(-Math.max(0px, content_w - vw), -x);
+        }
+        if (left + cw > vw) {
+            return Math.max(-Math.max(0px, content_w - vw), vw - (x + cw));
+        }
+        return content_x;
+    }
+
+    function kb_follow_grid() {
+        // The calendar replaces the grid: nothing grid-shaped to follow.
+        if (root.cal_open) {
+            return;
+        }
+        if (sub_scroll.content-height == 0px) {
+            return;
+        }
+        let stride = root.view == 2 ? root.row_stride_up : root.row_stride;
+        let top = Math.floor(root.kb_idx / root.grid_cols) * stride;
+        // +56px: the subpage's back header + divider.
+        root.kb_scroll_sub(top + 56px, top + stride + 56px);
+    }
+
+    function kb_scroll_to(top: length, bot: length) {
+        let vy = land_scroll.content-y;
+        let vh = land_scroll.height;
+        let min_y = Math.min(0px, vh - land_scroll.content-height);
+        if (top < -vy) {
+            land_scroll.content-y = -top;
+        } else if (bot > vh - vy) {
+            land_scroll.content-y = Math.max(min_y, vh - bot);
+        }
+    }
+
+    function kb_scroll_sub(top: length, bot: length) {
+        let vy = sub_scroll.content-y;
+        let vh = sub_scroll.visible-height;
+        let min_y = Math.min(0px, vh - sub_scroll.content-height);
+        if (top < -vy) {
+            sub_scroll.content-y = -top;
+        } else if (bot > vh - vy) {
+            sub_scroll.content-y = Math.max(min_y, vh - bot);
+        }
+    }
+
+    changed kb_idx => { root.kb_follow(); }
+    changed kb_up_idx => { root.kb_follow(); }
+    changed kb_zone => { root.kb_follow(); }
+    changed continue_rows => {
+        root.kb_clamp_idx();
+        root.kb_follow();
+    }
+    changed upcoming_rows => {
+        root.kb_clamp_idx();
+        root.kb_follow();
+    }
+    changed view => {
+        if (root.view != 0) {
+            root.kb_zone = 1;
+        }
+        root.kb_clamp_idx();
+        root.kb_follow();
+    }
+
+    // Clamp the (restored) landing scroll offset into the valid range once
+    // laid out: content may have shrunk while inside the entry.
+    function kb_clamp_view() {
+        if (land_scroll.content-height == 0px) {
+            return;
+        }
+        let min_y = Math.min(0px, land_scroll.height - land_scroll.content-height);
+        land_scroll.content-y = Math.max(min_y, Math.min(0px, land_scroll.content-y));
+    }
+
+    // Open a "see all" subpage. Restarts the row stagger (when transitions
+    // are on) and resets the subpage scroll so a fresh list starts at the top.
+    function open_subpage(kind: int) {
+        root.kb_active = false;
+        root.kb_zone = 1;
+        root.kb_idx = 0;
+        root.all_scroll_y = 0px;
+        sub_scroll.content-y = 0px;
+        // Reset the rail's axis hint when leaving the landing.
+        root.rail_pan_released();
+        if (root.stagger) {
+            root.sub_revealed = false;
+            sub_reveal_t.running = true;
+        }
+        root.view = kind;
+    }
+
+    // Subpage row entrance. Deferred one tick (like the detail page fade):
+    // flipping during creation would be treated as the baseline and not
+    // animate. `sub_revealed` defaults true, so a re-created HomePage
+    // (return from detail) shows the preserved subpage with no re-stagger.
+    property <bool> sub_revealed: true;
+    sub_reveal_t := Timer {
+        interval: 40ms;
+        running: false;
+        triggered => {
+            sub_reveal_t.running = false;
+            root.sub_revealed = true;
+        }
+    }
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #0f0f12;
+
+        // 6-button scope: overlays the page without intercepting the mouse.
+        nav_scope := FocusScope {
+            width: 100%;
+            height: 100%;
+            init => { self.focus(); }
+            key-pressed(e) => {
+                if (e.text == Key.UpArrow) {
+                    root.kb_active = true;
+                    root.kb_up();
+                    accept
+                } else if (e.text == Key.DownArrow) {
+                    root.kb_active = true;
+                    root.kb_down();
+                    accept
+                } else if (e.text == Key.LeftArrow) {
+                    root.kb_active = true;
+                    root.kb_left();
+                    accept
+                } else if (e.text == Key.RightArrow) {
+                    root.kb_active = true;
+                    root.kb_right();
+                    accept
+                } else if (e.text == Key.Return) {
+                    root.kb_active = true;
+                    root.kb_enter();
+                    accept
+                } else if (e.text == Key.Back) {
+                    // On a subpage, pop one layer (calendar first, then the
+                    // subpage itself); on the root screen there is nothing to
+                    // pop — background the app instead.
+                    if (root.menu_open) {
+                        root.close_menu();
+                    } else if (root.view == 2 && root.cal_open) {
+                        root.upcoming_cal_close();
+                    } else if (root.view != 0) {
+                        root.view = 0;
+                    } else {
+                        root.exit_to_background();
+                    }
+                    accept
+                } else if (e.text == Key.Backspace) {
+                    if (root.menu_open) {
+                        root.close_menu();
+                    } else if (root.view == 2 && root.cal_open) {
+                        root.upcoming_cal_close();
+                    } else if (root.view != 0) {
+                        root.view = 0;
+                    }
+                    root.kb_active = true;
+                    accept
+                } else {
+                    reject
+                }
+            }
+        }
+
+        VerticalLayout {
+            width: 100%;
+            height: 100%;
+            padding-left: 18px + safe-left + root.rail_w;
+            padding-right: 18px + safe-right;
+            padding-bottom: 18px;
+            padding-top: 18px + safe-top;
+            spacing: 12px;
+
+            content_host := Rectangle {
+                vertical-stretch: 1;
+                min-height: 0px;
+                clip: true;
+
+                // ---- Landing layer: horizontal carousels -------------
+                landing_layer := Rectangle {
+                    width: 100%;
+                    height: 100%;
+                    // Push transition: slides left and dims while a subpage
+                    // slides in over it; reverses on back.
+                    x: root.view != 0 ? -0.28 * content_host.width : 0px;
+                    opacity: root.view != 0 ? 0.0 : 1.0;
+                    animate x { duration: Anim.transition_slide; easing: ease-out; }
+                    animate opacity { duration: Anim.transition_fade; }
+
+                    restore_t := Timer {
+                        interval: 120ms;
+                        running: true;
+                        triggered => {
+                            root.kb_clamp_idx();
+                            root.kb_clamp_view();
+                            root.kb_follow();
+                            self.running = false;
+                        }
+                    }
+
+                    land_scroll := Flickable {
+                        width: 100%;
+                        height: 100%;
+                        // A raw Flickable (not a ScrollView) so the carousels
+                        // can toggle `interactive` for the horizontal axis lock;
+                        // the fluent ScrollView does not expose it. Wheel/scroll
+                        // events are accepted regardless of `interactive`.
+                        interactive: root.page_pan_enabled;
+                        // Mouse drag-pan belongs to the inner rail on desktop;
+                        // the page still scrolls with the wheel/trackpad.
+                        // Touch page scrolling only depends on `interactive`.
+                        mouse-drag-pan-enabled: false;
+                        // One-way mirror, see DiscoverPage: Flickable drops
+                        // viewport bindings on press, so mirror explicitly.
+                        init => { self.content-y = root.scroll_y; }
+                        changed content-y => {
+                            root.scroll_y = self.content-y;
+                        }
+
+                        VerticalLayout {
+                            width: 100%;
+                            spacing: 12px;
+
+                            if root.continue_rows.length == 0 && root.upcoming_rows.length == 0: VerticalLayout {
+                                alignment: center;
+                                // Take enough height to center in the viewport.
+                                min-height: 300px;
+                                Text {
+                                    text: root.home_empty_hint;
+                                    font-size: 14px;
+                                    color: #8a8a9a;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                    width: 100%;
+                                }
+                            }
+
+                            // ---- Continue Watching --------------------
+                            if root.continue_rows.length > 0: SectionHeader {
+                                title: @tr("Continue Watching");
+                                count: root.continue_rows.length;
+                                open_all => { root.open_subpage(1); }
+                            }
+
+                            if root.continue_rows.length > 0: Rectangle { height: 1px; background: #23232b; }
+
+                            // Horizontal carousel: the inner Flickable owns
+                            // dragging and native momentum, like the stream
+                            // filter pills. Cards report early axis hints so
+                            // the vertical page does not steal the gesture.
+                            Rectangle {
+                                visible: root.continue_rows.length > 0;
+                                width: 100%;
+                                height: root.rail_h + 8px;
+
+                                rail_continue := Flickable {
+                                    width: 100%;
+                                    height: 100%;
+                                    interactive: root.view == 0;
+                                    mouse-drag-pan-enabled: true;
+                                    content-width: c_row.width;
+                                    content-height: self.height;
+                                    init => { self.content-x = root.continue_x; }
+                                    changed content-x => {
+                                        root.continue_x = self.content-x;
+                                        if (!root.kb_active && root.view == 0) { root.rail_panned(); }
+                                    }
+
+                                    c_row := HorizontalLayout {
+                                        y: 8px;
+                                        height: root.rail_h;
+                                        width: self.preferred-width;
+                                        spacing: root.item-gap;
+
+                                        for c[i] in root.continue_rows: ContinueCard {
+                                            entry: c;
+                                            card-width: root.rail_item_width;
+                                            tappable: root.view == 0;
+                                            rail-gesture: root.view == 0;
+                                            touch_menus: root.touch_menus;
+                                            focused: root.kb_active && root.kb_zone == 1 && root.kb_idx == i;
+                                            picked => {
+                                                root.kb_active = false;
+                                                root.kb_zone = 1;
+                                                root.kb_idx = i;
+                                                root.continue_picked(i);
+                                            }
+                                            menu_requested => {
+                                                if (root.touch_menus) { root.open_continue_menu(i); }
+                                            }
+                                            enter_requested => { root.continue_enter(i); }
+                                            remove_requested => { root.continue_remove(i); }
+                                            pan_hint => {
+                                                root.kb_active = false;
+                                                root.rail_panned();
+                                            }
+                                            pan_release => { root.rail_pan_released(); }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ---- Upcoming (caught-up series, unaired) --
+                            if root.upcoming_rows.length > 0: SectionHeader {
+                                title: @tr("Upcoming");
+                                count: root.upcoming_rows.length;
+                                open_all => { root.open_subpage(2); }
+                            }
+
+                            if root.upcoming_rows.length > 0: Rectangle { height: 1px; background: #23232b; }
+
+                            Rectangle {
+                                visible: root.upcoming_rows.length > 0;
+                                width: 100%;
+                                height: root.rail_h_up + 8px;
+
+                                rail_upcoming := Flickable {
+                                    width: 100%;
+                                    height: 100%;
+                                    interactive: root.view == 0;
+                                    mouse-drag-pan-enabled: true;
+                                    content-width: u_row.width;
+                                    content-height: self.height;
+                                    init => { self.content-x = root.upcoming_x; }
+                                    changed content-x => {
+                                        root.upcoming_x = self.content-x;
+                                        if (!root.kb_active && root.view == 0) { root.rail_panned(); }
+                                    }
+
+                                    u_row := HorizontalLayout {
+                                        y: 8px;
+                                        height: root.rail_h_up;
+                                        width: self.preferred-width;
+                                        spacing: root.item-gap;
+
+                                        for u[i] in root.upcoming_rows: UpcomingCard {
+                                            entry: u;
+                                            card-width: root.rail_item_width;
+                                            tappable: root.view == 0;
+                                            rail-gesture: root.view == 0;
+                                            touch_menus: root.touch_menus;
+                                            focused: root.kb_active && root.kb_zone == 2 && root.kb_up_idx == i;
+                                            picked => {
+                                                root.kb_active = false;
+                                                root.kb_zone = 2;
+                                                root.kb_up_idx = i;
+                                                root.upcoming_picked(i);
+                                            }
+                                            pan_hint => {
+                                                root.kb_active = false;
+                                                root.rail_panned();
+                                            }
+                                            pan_release => { root.rail_pan_released(); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---- Subpage layer: full vertical grid ---------------
+                sub_layer := Rectangle {
+                    width: 100%;
+                    height: 100%;
+                    background: #0f0f12;
+                    x: root.view != 0 ? 0px : content_host.width;
+                    opacity: root.view != 0 ? 1.0 : 0.0;
+                    animate x { duration: Anim.transition_slide; easing: ease-out; }
+                    animate opacity { duration: Anim.transition_fade; }
+
+                    VerticalLayout {
+                        width: 100%;
+                        height: 100%;
+                        spacing: 12px;
+
+                        // Back bar: returns to the landing (Backspace too).
+                        HorizontalLayout {
+                            vertical-stretch: 0;
+                            height: 36px;
+                            spacing: 10px;
+                            alignment: start;
+
+                            Rectangle {
+                                width: 36px;
+                                height: 36px;
+                                border-radius: 8px;
+                                background: back_touch.has-hover ? #ffffff14 : transparent;
+                                animate background { duration: Anim.hover_fast; }
+
+                                IcChevronLeft {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    width: 22px;
+                                    height: 22px;
+                                    fill: #ffffff;
+                                }
+
+                                back_touch := TouchArea {
+                                    width: 100%;
+                                    height: 100%;
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        // The calendar closes back to the
+                                        // episode grid before leaving the
+                                        // subpage (same as Back/Backspace).
+                                        if (root.view == 2 && root.cal_open) {
+                                            root.upcoming_cal_close();
+                                        } else {
+                                            root.view = 0;
+                                        }
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: root.view == 2 ? @tr("Upcoming") : @tr("Continue Watching");
+                                font-size: 22px;
+                                font-weight: 700;
+                                color: #ffffff;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                text: "(" + (root.view == 2 ? root.upcoming_rows.length : root.continue_rows.length) + ")";
+                                font-size: 14px;
+                                color: #6c6c7d;
+                                vertical-alignment: center;
+                            }
+
+                            // Push the view toggle to the row's end.
+                            Rectangle { horizontal-stretch: 1; }
+
+                            // Upcoming only: the episode grid ⇄ month calendar
+                            // switch. The button reads what it opens to.
+                            if root.view == 2: CalToggle {
+                                open: root.cal_open;
+                                toggled => {
+                                    if (root.cal_open) {
+                                        root.upcoming_cal_close();
+                                    } else {
+                                        root.upcoming_cal_open();
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle { height: 1px; background: #23232b; }
+
+                        Rectangle {
+                            vertical-stretch: 1;
+                            min-height: 0px;
+                            clip: true;
+
+                            sub_scroll := ScrollView {
+                                width: 100%;
+                                height: 100%;
+                                mouse-drag-pan-enabled: true;
+                                init => { self.content-y = root.all_scroll_y; }
+                                changed content-y => {
+                                    root.all_scroll_y = self.content-y;
+                                }
+
+                                // The ScrollView needs a direct *layout*
+                                // child for its content-height (a bare
+                                // conditional child is ignored, leaving the
+                                // viewport unscrollable). This wrapper holds
+                                // the view-gated grids.
+                                VerticalLayout {
+                                    width: 100%;
+                                    spacing: 12px;
+
+                                    // ---- All Continue Watching ------
+                                    if root.view == 1: VerticalLayout {
+                                        width: 100%;
+                                        spacing: 12px;
+
+                                        HorizontalLayout {
+                                            width: 100%;
+                                            alignment: center;
+
+                                            GridLayout {
+                                                // Exact content width so centering above has an effect.
+                                                width: root.grid_cols * (root.grid_item_width + root.item-gap) - root.item-gap;
+                                                spacing: root.item-gap;
+
+                                                for c[i] in root.continue_rows: ContinueCard {
+                                                    row: Math.floor(i / root.grid_cols);
+                                                    col: Math.mod(i, root.grid_cols);
+
+                                                    entry: c;
+                                                    card-width: root.grid_item_width;
+                                                    touch_menus: root.touch_menus;
+                                                    focused: root.kb_active && root.kb_zone == 1 && root.kb_idx == i;
+                                                    reveal: root.sub_revealed;
+                                                    reveal-delay: root.stagger ? i * 30ms : 0ms;
+                                                    picked => {
+                                                        root.kb_active = false;
+                                                        root.kb_zone = 1;
+                                                        root.kb_idx = i;
+                                                        root.continue_picked(i);
+                                                    }
+                                                    menu_requested => {
+                                                        if (root.touch_menus) {
+                                                            root.open_continue_menu(i);
+                                                        }
+                                                    }
+                                                    enter_requested => {
+                                                        root.continue_enter(i);
+                                                    }
+                                                    remove_requested => {
+                                                        root.continue_remove(i);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // ---- All Upcoming ---------------
+                                    // The episode grid; the calendar below
+                                    // replaces it while `cal_open`.
+                                    if root.view == 2 && !root.cal_open: VerticalLayout {
+                                        width: 100%;
+                                        spacing: 12px;
+
+                                        HorizontalLayout {
+                                            width: 100%;
+                                            alignment: center;
+
+                                            GridLayout {
+                                                width: root.grid_cols * (root.grid_item_width + root.item_gap) - root.item-gap;
+                                                spacing: root.item-gap;
+
+                                                for u[i] in root.upcoming_rows: UpcomingCard {
+                                                    row: Math.floor(i / root.grid_cols);
+                                                    col: Math.mod(i, root.grid_cols);
+
+                                                    entry: u;
+                                                    card-width: root.grid_item_width;
+                                                    touch_menus: root.touch_menus;
+                                                    focused: root.kb_active && root.kb_zone == 1 && root.kb_idx == i;
+                                                    reveal: root.sub_revealed;
+                                                    reveal-delay: root.stagger ? i * 30ms : 0ms;
+                                                    picked => {
+                                                        root.kb_active = false;
+                                                        root.kb_zone = 1;
+                                                        root.kb_idx = i;
+                                                        root.upcoming_picked(i);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // ---- Upcoming calendar ----------
+                                    // Month grid (full Monday-first weeks, 42
+                                    // cells so the shape never shifts) with
+                                    // episode counts, plus the selected day's
+                                    // episodes in the same card grid. Taps
+                                    // resolve through the rows' full-list
+                                    // `index`.
+                                    if root.view == 2 && root.cal_open: VerticalLayout {
+                                        width: 100%;
+                                        spacing: 12px;
+                                        // Pack from the top: without this the
+                                        // column shares the scroll viewport's
+                                        // leftover height equally between the
+                                        // month/weekday/grid bands, leaving a
+                                        // huge gap above the dates.
+                                        alignment: start;
+
+                                        // Month step: ‹ title ›.
+                                        HorizontalLayout {
+                                            width: 100%;
+                                            spacing: 8px;
+                                            alignment: start;
+
+                                            Rectangle {
+                                                width: 32px;
+                                                height: 32px;
+                                                border-radius: 8px;
+                                                background: cal_prev_touch.has-hover ? #ffffff14 : transparent;
+                                                animate background { duration: Anim.hover_fast; }
+
+                                                IcChevronLeft {
+                                                    x: (parent.width - self.width) / 2;
+                                                    y: (parent.height - self.height) / 2;
+                                                    width: 20px;
+                                                    height: 20px;
+                                                    fill: #ffffff;
+                                                }
+
+                                                cal_prev_touch := TouchArea {
+                                                    width: 100%;
+                                                    height: 100%;
+                                                    mouse-cursor: pointer;
+                                                    clicked => { root.upcoming_cal_month(-1); }
+                                                }
+                                            }
+
+                                            Text {
+                                                text: root.cal_title;
+                                                font-size: 16px;
+                                                font-weight: 700;
+                                                color: #ffffff;
+                                                vertical-alignment: center;
+                                                horizontal-alignment: center;
+                                                horizontal-stretch: 1;
+                                            }
+
+                                            Rectangle {
+                                                width: 32px;
+                                                height: 32px;
+                                                border-radius: 8px;
+                                                background: cal_next_touch.has-hover ? #ffffff14 : transparent;
+                                                animate background { duration: Anim.hover_fast; }
+
+                                                IcChevronRight {
+                                                    x: (parent.width - self.width) / 2;
+                                                    y: (parent.height - self.height) / 2;
+                                                    width: 20px;
+                                                    height: 20px;
+                                                    fill: #ffffff;
+                                                }
+
+                                                cal_next_touch := TouchArea {
+                                                    width: 100%;
+                                                    height: 100%;
+                                                    mouse-cursor: pointer;
+                                                    clicked => { root.upcoming_cal_month(1); }
+                                                }
+                                            }
+                                        }
+
+                                        // Weekday header, Monday-first.
+                                        HorizontalLayout {
+                                            width: 100%;
+                                            spacing: 4px;
+
+                                            for wd in [@tr("Mon"), @tr("Tue"), @tr("Wed"), @tr("Thu"), @tr("Fri"), @tr("Sat"), @tr("Sun")]: Text {
+                                                text: wd;
+                                                font-size: 11px;
+                                                font-weight: 600;
+                                                color: #6c6c7d;
+                                                horizontal-alignment: center;
+                                                horizontal-stretch: 1;
+                                            }
+                                        }
+
+                                        GridLayout {
+                                            width: 100%;
+                                            spacing: 4px;
+
+                                            for cell[i] in root.cal_cells: CalDayCell {
+                                                row: Math.floor(i / 7);
+                                                col: Math.mod(i, 7);
+
+                                                cell: cell;
+                                                // Seven even columns across
+                                                // the viewport (6 × 4px gaps).
+                                                cell_width: (sub_scroll.width - 6 * 4px) / 7;
+                                                kb_ring: root.kb_active;
+                                                picked(e) => { root.upcoming_cal_pick(e); }
+                                            }
+                                        }
+
+                                        // Selected day's episodes, same cards
+                                        // as the grid (no stagger: the set
+                                        // changes on every day pick).
+                                        if root.cal_day_rows.length > 0: HorizontalLayout {
+                                            width: 100%;
+                                            alignment: center;
+
+                                            GridLayout {
+                                                width: root.grid_cols * (root.grid_item_width + root.item-gap) - root.item-gap;
+                                                spacing: root.item-gap;
+
+                                                for u[i] in root.cal_day_rows: UpcomingCard {
+                                                    row: Math.floor(i / root.grid_cols);
+                                                    col: Math.mod(i, root.grid_cols);
+
+                                                    entry: u;
+                                                    card-width: root.grid_item_width;
+                                                    touch_menus: root.touch_menus;
+                                                    reveal: root.sub_revealed;
+                                                    picked => {
+                                                        root.kb_active = false;
+                                                        root.upcoming_picked(u.index);
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        if root.cal_day_rows.length == 0: Text {
+                                            text: @tr("No episodes on this day.");
+                                            font-size: 13px;
+                                            color: #8a8a9a;
+                                            horizontal-alignment: center;
+                                            width: 100%;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Bottom tab bar (narrow only): wide layouts use the left rail.
+            // Hidden on a "see all" subpage — the rail stays up there, since
+            // on a desktop it is window chrome rather than page chrome.
+            if root.narrow && root.view == 0: bottom := BottomNav {
+                active: 0;
+                safe-bottom: root.safe-bottom;
+                kb_zone: root.kb_zone;
+                kb_nav: root.kb_nav;
+                kb_active <=> root.kb_active;
+
+                home_picked => { root.home_picked(); }
+                discover_picked => { root.discover_picked(); }
+                library_picked => { root.library_picked(); }
+                settings_picked => { root.settings_picked(); }
+            }
+        }
+
+        // Left navigation rail (wide layouts only; narrow uses the bottom
+        // bar, and only on the landing view). Declared after the page column
+        // so it paints over the strip its own footprint reserves — the
+        // column widens its left padding by `rail_w`, so no page content
+        // lands under it.
+        if !root.narrow: rail := SideNav {
+            active: 0;
+            safe-top: root.safe-top;
+            safe-left: root.safe-left;
+            safe-bottom: root.safe-bottom;
+            kb_zone: root.kb_zone;
+            kb_nav: root.kb_nav;
+            kb_active <=> root.kb_active;
+
+            home_picked => { root.home_picked(); }
+            discover_picked => { root.discover_picked(); }
+            library_picked => { root.library_picked(); }
+            settings_picked => { root.settings_picked(); }
+        }
+
+        // Card menu (single instance, page-level overlay): the dim
+        // backdrop eats outside taps (dismiss only, never forwarded). A
+        // sibling of the page layout, not a layout child — inside the
+        // VerticalLayout above it would be laid out as a row and squeeze the
+        // landing content instead of covering it (very visible on Android).
+        // Play / Enter series / Remove from Continue Watching (+ the sheet's
+        // own Cancel).
+        if root.menu_open: cont_sheet := MenuSheet {
+            width: 100%;
+            height: 100%;
+            safe-bottom: root.safe-bottom;
+            safe-left: root.safe-left;
+            safe-right: root.safe-right;
+            max_h: root.height * 0.85;
+            sheet_title: root.menu_idx >= 0 && root.menu_idx < root.continue_rows.length
+                ? root.continue_rows[root.menu_idx].title
+                : @tr("Continue Watching");
+            items: [
+                { label: @tr("Play"), enabled: true },
+                { label: @tr("Enter series"), enabled: true },
+                { label: @tr("Remove from Continue Watching"), enabled: true },
+            ];
+            picked(a) => {
+                if (a == 0) {
+                    root.kb_active = false;
+                    root.kb_zone = 1;
+                    root.kb_idx = root.menu_idx;
+                    root.continue_picked(root.menu_idx);
+                } else if (a == 1) {
+                    root.continue_enter(root.menu_idx);
+                } else {
+                    root.continue_remove(root.menu_idx);
+                }
+                root.close_menu();
+            }
+            closed => { root.close_menu(); }
+        }
+    }
+}

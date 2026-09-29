@@ -1,0 +1,908 @@
+import { DiscoverPage } from "discover.slint";
+import { HomePage } from "home.slint";
+import { DetailPage } from "detail.slint";
+import { CategoryPickerPopup } from "categories.slint";
+import { LibraryPage } from "library.slint";
+import { SettingsPage } from "settings.slint";
+import { PlayerOverlay } from "player.slint";
+// Re-exported so the Rust backend can reach the animation switches (globals
+// are only accessible from Rust when exported by the root component's file).
+export { Anim } from "anim.slint";
+// Same re-export for the navigation bookkeeping the backend writes: which
+// section a page switch is leaving, for the nav bars' marker glide.
+export { NavState } from "sidenav.slint";
+
+// Shared structs used by the property declarations below; they are exported
+// from types.slint, so the generated Rust module (`slint::include_modules!`)
+// exposes them to the backend.
+import { MediaCard, StreamRow, EpisodeRow, AddonRow, CategoryRow, SyncPeer, SyncInvite, TrackRow, SeasonCard, ContinueRow, UpcomingRow, CalCell, SheetItem, DownloadRow, LicenseSource } from "types.slint";
+
+// AppWindow owns every property / callback the backend drives (all the
+// `set_*`, `get_*`, `on_*` and `invoke_*` calls in desktop.rs / web.rs) and
+// forwards them into the per-screen components below. The screen switching
+// guards live here so each page component stays self-contained.
+export component AppWindow inherits Window {
+    icon: @image-url("../../assets/logo.png");
+    preferred-width: 1100px;
+    preferred-height: 750px;
+    min-width: 360px;
+    // Landscape phones offer ~360px of height; pages scroll internally,
+    // so the window is allowed to shrink that far.
+    min-height: 360px;
+    title: "Nova";
+    // Narrow (portrait) layout mode: pages + player switch to compact
+    // variants below this window width.
+    property <bool> narrow_ui: self.width < 700px;
+    // In player mode the video (mpv on desktop, HTML5 <video> on web)
+    // renders behind this window, so the window turns transparent while
+    // the overlay is up and playback has started.
+    //
+    // Android is the exception: there the EGL window surface must stay opaque
+    // so SurfaceFlinger does not treat the whole window as translucent (which
+    // flashes the black compositor layer on every repaint, e.g. while the OSD
+    // fades). mpv draws after the clear in `RenderingState::BeforeRendering`,
+    // so an opaque background never hides the video — only a frame where the
+    // video is missing reads as black instead of transparent.
+    background: (root.player_open && root.playback_started)
+        ? (root.is_android ? #000000 : transparent)
+        : #0f0f12;
+
+    in-out property <[MediaCard]> catalog: [];
+    in-out property <[string]> addon_names: [];
+    in-out property <[string]> type_names: [];
+    in-out property <[string]> catalog_names: [];
+    in-out property <[AddonRow]> addon_rows: [];
+    in-out property <[StreamRow]> streams: [];
+    in-out property <int> addon_combo_idx: -1;
+    in-out property <int> type_combo_idx: -1;
+    in-out property <int> catalog_combo_idx: -1;
+    in-out property <string> addon_url: "";
+    in-out property <string> search_text: "";
+    // False when the chosen catalog declares no search extra: Discover
+    // disables its search field + button instead of silently re-fetching.
+    in-out property <bool> searchable: true;
+    // Minimum grid columns (Settings → Display), applied live on autosave.
+    in-out property <int> discover_min_cols: 2;
+    in-out property <int> library_min_cols: 2;
+    in-out property <string> empty_hint: @tr("No addons installed yet — add one in Settings → Addons.");
+    in-out property <string> streams_hint: "";
+    // Addon filter pills above the stream list (0 = All, else 1-based).
+    in-out property <[string]> stream_addons: [];
+    in-out property <[bool]> stream_loading: [];
+    in-out property <bool> streams_searching: false;
+    in-out property <int> stream_filter: 0;
+    in-out property <bool> stream_action_open: false;
+    in-out property <string> stream_action_id: "";
+    in-out property <string> stream_action_title: "";
+    in-out property <[SheetItem]> stream_action_items: [];
+    in-out property <string> searchable_hint: "";
+    // --- Library (own collection, Stremio-style) -----------------------
+    in-out property <[MediaCard]> library: [];
+    in-out property <bool> show_library: false;
+    in-out property <bool> show_home: true;
+    in-out property <bool> in_library: false;
+    in-out property <string> library_empty_hint: @tr("Your library is empty — open any movie, series or anime and press \"+ Add to library\".");
+    // --- Home (landing page, Continue Watching) ------------------------
+    in-out property <[ContinueRow]> home_continue: [];
+    in-out property <[UpcomingRow]> home_upcoming: [];
+    // Home → Upcoming calendar (the "see all" subpage's month view): the 42
+    // grid cells, the month title, the selected day's episode rows, the
+    // selected epoch day (-1 = none) and the list/calendar switch. The
+    // backend owns the month arithmetic and the selection.
+    in-out property <[CalCell]> home_cal_cells: [];
+    in-out property <string> home_cal_title: "";
+    in-out property <[UpcomingRow]> home_cal_day: [];
+    in-out property <int> home_cal_epoch: -1;
+    in-out property <bool> home_cal_open: false;
+    // Home subpage stack: 0 = landing carousels, 1 = all Continue Watching,
+    // 2 = all Upcoming. Owned here so the chosen view (and its scroll)
+    // survives the detail modal destroying/recreating HomePage.
+    in-out property <int> home_view: 0;
+    // Touch-driven platform (Android): card menus open as bottom sheets
+    // on hold; desktop keeps native right-click popups. Set once from Rust.
+    in-out property <bool> touch_menus: false;
+    in-out property <string> home_empty_hint: @tr("Nothing to continue — start watching a show or movie and it will show up here.");
+
+    // --- Settings (image cache) ---------------------------------------
+    in-out property <bool> show_settings: false;
+    in-out property <string> license_catalog: "";
+    in-out property <[LicenseSource]> license_sources: [];
+    // Image-cache re-encode settings are desktop-only (the web build relies
+    // on the browser HTTP cache and has no app-level image cache).
+    in-out property <bool> show_image_cache: true;
+    in-out property <bool> cache_images: true;
+    in-out property <string> cache_disk_usage: "";
+    in-out property <bool> cache_enabled: false;
+    in-out property <int> cache_format_index: 0;
+    in-out property <float> cache_quality: 85.0;
+    in-out property <bool> cache_downscale: true;
+    in-out property <bool> cache_date_relative: true;
+    in-out property <bool> cache_show_unwatched_thumbs: true;
+    in-out property <float> cache_lru_mb: 128.0;
+    in-out property <bool> cache_prefetch_metadata: false;
+    // Lazily re-encode images on load to the configured format/quality.
+    in-out property <bool> cache_lazy_reencode: false;
+    in-out property <[string]> cache_format_names: ["JPEG", "WebP"];
+    // Player backend (Settings → Player): 0 = built-in mpv, 1 = external
+    // app. Desktop external target: 0 = system default, 1 = VLC, 2 = mpv.
+    // Android decoder: preferred video decoder (0 = HW+, 1 = HW, 2 = SW);
+    // the decoder row is hidden unless `is_android` is true.
+    in-out property <int> player_backend_index: 0;
+    in-out property <int> desktop_external_app_index: 0;
+    in-out property <int> android_hwdec_index: 0;
+    in-out property <bool> is_android: false;
+    // --- Player: playback rate (per device) ---------------------------
+    // One value edited from both Settings → Player and the player's own
+    // settings panel: the slider may sit anywhere in 0.5–2.0, the ± buttons
+    // step by 0.05 (quantized by the backend). Local-only, never synced.
+    in-out property <float> playback_speed: 1.0;
+    in-out property <int> episode_start_index: 1;
+    in-out property <bool> resume_prompt_visible: false;
+    // --- Settings (animations) ----------------------------------------
+    // Master + per-category animation switches (Settings → Look and feel).
+    in-out property <bool> animations: true;
+    in-out property <bool> anim_transitions: true;
+    in-out property <bool> anim_hover: true;
+    in-out property <bool> anim_player: true;
+    // Navigation feedback (Settings → Look and feel → Navigation): the nav
+    // marker glides between items when the bar switches pages.
+    in-out property <bool> anim_nav_slide: true;
+    // --- Settings (display) -------------------------------------------
+    // Language of the interface (Settings → Display): the picker index into
+    // the bundled language list. Local-only, applied to Slint's catalogs by
+    // the backend (`src/app/i18n.rs`).
+    in-out property <int> language_index: 0;
+    // Language names shown in the picker, each in its own language
+    // (`nova_config::Language::ALL` → `label()`), so they are not translated;
+    // pushed by the backend.
+    in-out property <[string]> language_names: ["English", "Hrvatski"];
+    // --- Settings (torrent streaming) ---------------------------------
+    // Hidden on the web build, which has no embedded BitTorrent client.
+    in-out property <bool> show_torrents: true;
+    in-out property <bool> torrent_enabled: true;
+    in-out property <string> torrent_dir: "";
+    in-out property <float> torrent_max_mb: 20480.0;
+    in-out property <float> torrent_down_limit: 0.0;
+    in-out property <bool> torrent_no_cache: false;
+    in-out property <string> torrent_disk_usage: "";
+    // Settings → Downloads.
+    in-out property <bool> download_auto_delete_watched: false;
+    // Settings → Downloads → Downloaded episodes (completed episode files).
+    in-out property <[DownloadRow]> downloads_rows: [];
+    // --- Settings (cross-device sync) ---------------------------------
+    in-out property <bool> sync_enabled: false;
+    in-out property <string> sync_identity: "";
+    in-out property <[SyncPeer]> sync_peers: [];
+    in-out property <string> sync_peer_input: "";
+    in-out property <string> sync_status: "";
+    // Pairing (Settings → Sync).
+    in-out property <string> sync_device_name: "";
+    in-out property <bool> sync_pair_confirm: false;
+    in-out property <bool> sync_local_discovery: true;
+    in-out property <int> sync_interval_index: 1;
+    in-out property <bool> sync_background: true;
+    in-out property <string> sync_invite_ticket: "";
+    // QR rendering of the current ticket (empty until one is created).
+    in-out property <image> sync_invite_qr;
+    in-out property <[SyncInvite]> sync_invites: [];
+    in-out property <string> sync_join_input: "";
+    // True on Android, where the camera QR scanner is available.
+    in-out property <bool> sync_qr_scan_available: false;
+    in-out property <string> sync_link_notice: "";
+    in-out property <bool> sync_pair_prompt_visible: false;
+    in-out property <string> sync_pair_prompt_id: "";
+    in-out property <string> sync_pair_prompt_name: "";
+    in-out property <string> sync_pair_prompt_code: "";
+    // User-defined library categories.
+    in-out property <[CategoryRow]> category_rows: [];
+    in-out property <string> category_input: "";
+    // Library filter: empty string = show all, otherwise filter by category.
+    in-out property <string> library_filter_category: "";
+    // Category names for the library filter dropdown.
+    in-out property <[string]> library_category_names: [];
+    // Display text for `library_category_names` (see library.slint): the
+    // automatic buckets are localized for the label only.
+    in-out property <[string]> library_category_labels: [];
+    // Index of the active filter in library_category_names (-1 = All).
+    in-out property <int> library_category_index: -1;
+    // Categories assigned to the current modal item (for the detail picker).
+    in-out property <[bool]> modal_category_flags: [];
+    // Assign-categories popup: visible while the user picks categories
+    // for the current library item.
+    in-out property <bool> categories_modal: false;
+    // Number of categories assigned to the current item (badge on the
+    // detail-page Categories pill).
+    in-out property <int> selected_category_count: 0;
+
+    in-out property <image> selected_poster;
+    in-out property <image> selected_backdrop;
+    in-out property <string> selected_title: "";
+    in-out property <string> selected_year: "";
+    in-out property <string> selected_description: "";
+    in-out property <[string]> selected_genre_list: [];
+    in-out property <bool> modal_visible: false;
+    in-out property <int> selected_index: -1;
+    // Detail tab bar: 0 = Overview, 3 = Episodes (1/2 are stubs — the
+    // addon protocol provides no Characters/Artwork data).
+    in-out property <int> detail_tab: 0;
+    // Episode filter box text (Rust re-renders `episode_rows` on change).
+    in-out property <string> episode_filter: "";
+    // Series episode picker (Stremio/Nuvio-style selection flow).
+    // `modal_episodes` shows the season/episode list; when false the
+    // streams area is shown instead.
+    in-out property <bool> modal_episodes: false;
+    in-out property <[string]> season_names: [];
+    in-out property <int> season_combo_idx: -1;
+    // Art-backed season picker cards, same order as season_names.
+    in-out property <[SeasonCard]> season_cards: [];
+    in-out property <[EpisodeRow]> episode_rows: [];
+    // Episodes tab pagination (Rust slices a season into pages of 50 rows).
+    in-out property <int> episode_page: 0;
+    in-out property <int> episode_page_count: 1;
+    in-out property <int> episode_page_start: 0;
+    in-out property <int> episode_total: 0;
+    // Stream list pagination (Rust supplies only the active 25-row slice).
+    in-out property <int> stream_page: 0;
+    in-out property <int> stream_page_count: 1;
+    in-out property <int> stream_page_start: 0;
+    in-out property <int> stream_total: 0;
+    in-out property <string> episode_context: "";
+    // True while the streams view was entered directly (Home Continue
+    // deep-link) without visiting the episode list: system back then closes
+    // the modal instead of revealing the skipped list.
+    in-out property <bool> detail_deep_stream: false;
+    in-out property <bool> can_load_more: false;
+    in-out property <bool> loading_more: false;
+
+    // ---- Keyboard nav state (survives page recreation) -----------------
+    // Discover/Library/Detail pages are `if`-gated and destroyed on
+    // navigation; their keyboard focus lives here so backing out of an
+    // entry returns to the same focused card/row. Bound down with `<=>`.
+    in-out property <int> discover_kb_zone: 0;
+    in-out property <int> discover_kb_nav: 1;
+    in-out property <int> discover_kb_ctl: 0;
+    in-out property <int> discover_kb_idx: 0;
+    in-out property <int> library_kb_zone: 0;
+    in-out property <int> library_kb_nav: 2;
+    in-out property <int> library_kb_f: -1;
+    in-out property <int> library_kb_idx: 0;
+    in-out property <int> detail_kb_zone: 0;
+    in-out property <int> detail_kb_top: 0;
+    in-out property <int> detail_kb_tab: 0;
+    in-out property <int> detail_kb_ci: 2;
+    in-out property <int> detail_kb_ep: 0;
+    in-out property <int> detail_kb_s: 0;
+    in-out property <int> home_kb_zone: 0;
+    in-out property <int> home_kb_nav: 0;
+    in-out property <int> home_kb_idx: 0;
+    in-out property <int> home_kb_up_idx: 0;
+    // Keyboard modality: true once the user navigates with arrows/Enter
+    // (pages set it in their key handlers), false after mouse clicks.
+    // Focus rings/markers show only while true, so mouse-only UI carries
+    // no keyboard affordance cost.
+    in-out property <bool> kb_active: false;
+    // Exact grid scroll offsets: bound two-way to the grid ScrollViews so
+    // backing out of an entry restores the absolute position (focus
+    // follow-up only guarantees visibility, which drifts slightly).
+    in-out property <length> discover_scroll_y: 0px;
+    in-out property <length> library_scroll_y: 0px;
+    in-out property <length> home_scroll_y: 0px;
+    // Home subpage scroll + the two carousel offsets (restored across the
+    // detail modal, same mirror pattern as the grids).
+    in-out property <length> home_all_scroll_y: 0px;
+    in-out property <length> home_continue_x: 0px;
+    in-out property <length> home_upcoming_x: 0px;
+    // Whole-page scroll on Android (Discover filters scroll away with the
+    // grid); desktop keeps the filter header pinned. Set once from Rust.
+    in-out property <bool> discover_scroll_page: false;
+    // Settings content offset (same mirror pattern as the grids).
+    in-out property <length> settings_scroll_y: 0px;
+
+    callback addon_added(string);
+    callback addon_toggled(int);
+    callback addon_remove(int);
+    callback addon_move_up(int);
+    callback addon_move_down(int);
+    callback addon_configure(string);
+    callback addon_refresh(int);
+    // Copy an addon's install URL (Settings → Addons → "Copy link"); the row
+    // itself only prints the addon name.
+    callback addon_copy_link(string);
+    callback addon_picked(string);
+    callback type_picked(string);
+    callback catalog_picked(string);
+    callback search_submitted(string);
+    callback item_selected(string, int);
+    callback stream_picked(int);
+    callback stream_page_picked(int);
+    callback stream_action_requested(string);
+    callback stream_action_selected(string, int);
+    callback stream_filter_picked(int);
+    callback season_picked(int);
+    callback episode_picked(int);
+    // Episodes tab pager move (absolute page; the backend clamps it).
+    callback episode_page_picked(int);
+    callback episode_toggle_watched(int);
+    callback episode_watch_action(int, int);
+    callback season_watch_action(int, int);
+    callback episodes_back();
+    callback detail_tab_picked(int);
+    callback episode_filter_changed(string);
+    callback watch_now();
+    callback modal_closed();
+    callback load_more();
+    // Preload fetch windows (visible ±2 rows) for poster loading/unloading
+    // (Discover / Library).
+    callback visible_range(int, int);
+    callback library_visible_range(int, int);
+
+    // --- In-app player (same window, like the reference prototype) ------
+    // When a stream is picked the catalog is hidden and a full-window
+    // player overlay takes over: the video is rendered *under* the whole
+    // window (mpv underlay on desktop, HTML5 <video> behind the canvas on
+    // web) and the Slint scene only draws this overlay on top. The window
+    // background flips to transparent once `playback_started`, so the
+    // video shows through. `player_open` = overlay up (catalog hidden).
+    in-out property <bool> player_open: false;
+    in-out property <bool> playback_started: false;
+    in-out property <bool> is_paused: true;
+    in-out property <float> position: 0.0;
+    in-out property <float> duration: 0.0;
+    in-out property <string> time_text: "00:00 / 00:00";
+    in-out property <string> player_status: "";
+    in-out property <string> player_title: "";
+    // Android decoder badge ("HW+" / "HW" / "SW"); empty on other targets.
+    in-out property <string> decode_label: "";
+    // Android decoder-picker selection (-1 none, 0 HW+, 1 HW, 2 SW). Set
+    // optimistically the moment the user picks, then corrected by the backend
+    // to whichever decoder mpv actually engages.
+    in-out property <int> decoder_selected: -1;
+    // Current subtitle / audio selection summaries for the player settings
+    // panel's root rows (e.g. the selected language, or "Off"/"None").
+    in-out property <string> sub_track_label: "";
+    in-out property <string> audio_track_label: "";
+    in-out property <float> volume: 100.0;
+    in-out property <bool> muted: false;
+    in-out property <bool> is_fullscreen: false;
+    in-out property <[TrackRow]> audio_tracks: [];
+    in-out property <[TrackRow]> sub_tracks: [];
+    in-out property <bool> osd_visible: true;
+    // The OSD scrim's live (animated) opacity, mirrored up from the player
+    // overlay via `osd_opacity_changed`. Rust uses it to match the display
+    // frame rate only once the OSD has fully faded out; 0 when no overlay is up.
+    in-out property <float> osd_opacity: 0.0;
+    in-out property <image> scrim_image;
+    in-out property <image> player_poster;
+
+    callback toggle_pause();
+    callback seek(float);
+    callback close_player();
+    callback resume_choice(bool);
+    callback resume_cancel();
+    callback set_volume(float);
+    callback toggle_mute();
+    callback pick_audio_track(int);
+    callback pick_sub_track(int);
+    // Android runtime decoder pick (0 = HW+, 1 = HW, 2 = SW).
+    callback pick_decoder(int);
+    // Playback rate (player settings panel / Settings → Player, same value):
+    // a slider value, or ± one step (the backend quantizes it onto the 0.05
+    // grid, applies it to the running session and persists it, debounced).
+    callback playback_speed_changed(float);
+    callback playback_speed_stepped(int);
+    // Transient rate preview (press-and-hold 2×): applied to the running
+    // session only, never stored or persisted.
+    callback playback_speed_preview(float);
+    // Android swipe gestures: brightness notches (±1, scaled to ±0.05 by the
+    // backend, which mirrors the level for the readout) and system-volume
+    // notches (the system panel is the readout).
+    callback android_brightness_step(int);
+    callback android_volume_step(int);
+    // Session brightness level (0..1) for the swipe readout.
+    in-out property <float> player_brightness: 0.5;
+    // Android: the player settings modal opened (gear); the backend uses this
+    // to query the live decoder state immediately.
+    callback settings_opened();
+    callback toggle_fullscreen();
+    callback osd_mouse_moved();
+    callback tracks_popup_opened(int);
+    pure callback format_time(float) -> string;
+    pure callback format_volume(float) -> string;
+    callback library_picked();
+    callback discover_picked();
+    callback home_picked();
+    callback continue_picked(int);
+    callback continue_remove(int);
+    // "Enter series": open the card's detail page without starting playback.
+    callback continue_enter(int);
+    callback upcoming_picked(int);
+    // Home → Upcoming calendar: open/close the month view, step the visible
+    // month (±1), pick a day (epoch days) and open the selected day's first
+    // episode (keyboard Enter).
+    callback upcoming_cal_open();
+    callback upcoming_cal_close();
+    callback upcoming_cal_month(int);
+    callback upcoming_cal_pick(int);
+    callback upcoming_cal_activate();
+    callback library_watch_action(int, int);
+    callback library_status_action(int, int);
+    callback add_to_library();
+    callback remove_library_item(int);
+    callback library_item_picked(int);
+    // System back on the root screen: background the app (Android only;
+    // desktop backends never synthesize Key.Back).
+    callback exit_to_background();
+    callback settings_picked();
+    callback save_settings();
+    callback clear_cache();
+    callback reencode_cache();
+    callback torrents_changed();
+    callback torrent_dir_edited(string);
+    callback clear_torrent_cache();
+    callback download_auto_delete_watched_changed(bool);
+    callback download_list_remove(string);
+    callback license_source_requested(string);
+    // Cross-device sync (Settings → Sync).
+    callback sync_changed();
+    callback sync_add_peer(string);
+    callback sync_remove_peer(string);
+    callback sync_now();
+    callback sync_copy_identity();
+    callback sync_device_name_edited(string);
+    callback sync_pair_confirm_changed(bool);
+    callback sync_local_discovery_changed(bool);
+    callback sync_interval_picked(int);
+    callback sync_background_changed(bool);
+    callback sync_create_invite();
+    callback sync_cancel_invite(string);
+    callback sync_copy_ticket(string);
+    callback sync_join_invite(string);
+    callback sync_scan_qr();
+    callback sync_respond_pair(string, bool);
+    callback category_added(string);
+    callback category_removed(int);
+    callback category_renamed(int, string);
+    callback toggle_entry_category(string);
+    callback library_filter_picked(string);
+
+    public function set_card_poster(idx: int, img: image) {
+        // Guard against stale indices (an in-flight poster fetch landing
+        // after the model shrank): an out-of-range write would panic.
+        if (idx < 0 || idx >= root.catalog.length) { return; }
+        root.catalog[idx].poster = img;
+        root.catalog[idx].is_loaded = true;
+    }
+    // Unload a card poster outside the visible window (frees CPU pixels +
+    // GPU texture); the card shows its placeholder until it scrolls back
+    // into view and the poster is re-fetched.
+    public function clear_card_poster(idx: int, img: image) {
+        if (idx < 0 || idx >= root.catalog.length) { return; }
+        root.catalog[idx].poster = img;
+        root.catalog[idx].is_loaded = false;
+    }
+    public function set_library_poster(idx: int, img: image) {
+        if (idx < 0 || idx >= root.library.length) { return; }
+        root.library[idx].poster = img;
+        root.library[idx].is_loaded = true;
+    }
+    public function clear_library_poster(idx: int, img: image) {
+        if (idx < 0 || idx >= root.library.length) { return; }
+        root.library[idx].poster = img;
+        root.library[idx].is_loaded = false;
+    }
+
+    // ---- Discover page ------------------------------------------------
+    if !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_home: DiscoverPage {
+        catalog <=> root.catalog;
+        addon_names <=> root.addon_names;
+        type_names <=> root.type_names;
+        catalog_names <=> root.catalog_names;
+        empty_hint <=> root.empty_hint;
+        searchable_hint <=> root.searchable_hint;
+        addon_combo_idx <=> root.addon_combo_idx;
+        type_combo_idx <=> root.type_combo_idx;
+        catalog_combo_idx <=> root.catalog_combo_idx;
+        search_text <=> root.search_text;
+        searchable <=> root.searchable;
+        min_cols: root.discover_min_cols;
+        can_load_more <=> root.can_load_more;
+        loading_more <=> root.loading_more;
+        kb_zone <=> root.discover_kb_zone;
+        kb_nav <=> root.discover_kb_nav;
+        kb_ctl <=> root.discover_kb_ctl;
+        kb_idx <=> root.discover_kb_idx;
+        kb_active <=> root.kb_active;
+        scroll_y <=> root.discover_scroll_y;
+        scroll_page <=> root.discover_scroll_page;
+        narrow: root.narrow_ui;
+        safe-top: root.safe-area-insets.top;
+        safe-left: root.safe-area-insets.left;
+        safe-right: root.safe-area-insets.right;
+        safe-bottom: root.safe-area-insets.bottom;
+
+        addon_picked(v) => { root.addon_picked(v); }
+        type_picked(v) => { root.type_picked(v); }
+        catalog_picked(v) => { root.catalog_picked(v); }
+        search_submitted(v) => { root.search_submitted(v); }
+        item_selected(id, i) => { root.item_selected(id, i); }
+        discover_picked => { root.discover_picked(); }
+        home_picked => { root.home_picked(); }
+        library_picked => { root.library_picked(); }
+        settings_picked => { root.settings_picked(); }
+        load_more => { root.load_more(); }
+        visible_range(f, l) => { root.visible_range(f, l); }
+    }
+
+    // ---- Home page (landing page, Continue Watching) --------------------
+    if root.show_home && !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings: HomePage {
+        continue_rows <=> root.home_continue;
+        upcoming_rows <=> root.home_upcoming;
+        cal_cells <=> root.home_cal_cells;
+        cal_title <=> root.home_cal_title;
+        cal_day_rows <=> root.home_cal_day;
+        cal_epoch <=> root.home_cal_epoch;
+        cal_open <=> root.home_cal_open;
+        home_empty_hint <=> root.home_empty_hint;
+        min_cols: root.library_min_cols;
+        kb_zone <=> root.home_kb_zone;
+        kb_nav <=> root.home_kb_nav;
+        kb_idx <=> root.home_kb_idx;
+        kb_up_idx <=> root.home_kb_up_idx;
+        kb_active <=> root.kb_active;
+        scroll_y <=> root.home_scroll_y;
+        view <=> root.home_view;
+        all_scroll_y <=> root.home_all_scroll_y;
+        continue_x <=> root.home_continue_x;
+        upcoming_x <=> root.home_upcoming_x;
+        narrow: root.narrow_ui;
+        touch_menus: root.touch_menus;
+        safe-top: root.safe-area-insets.top;
+        safe-left: root.safe-area-insets.left;
+        safe-right: root.safe-area-insets.right;
+        safe-bottom: root.safe-area-insets.bottom;
+
+        home_picked => { root.home_picked(); }
+        discover_picked => { root.discover_picked(); }
+        library_picked => { root.library_picked(); }
+        settings_picked => { root.settings_picked(); }
+        continue_picked(i) => { root.continue_picked(i); }
+        continue_remove(i) => { root.continue_remove(i); }
+        continue_enter(i) => { root.continue_enter(i); }
+        upcoming_picked(i) => { root.upcoming_picked(i); }
+        upcoming_cal_open => { root.upcoming_cal_open(); }
+        upcoming_cal_close => { root.upcoming_cal_close(); }
+        upcoming_cal_month(d) => { root.upcoming_cal_month(d); }
+        upcoming_cal_pick(e) => { root.upcoming_cal_pick(e); }
+        upcoming_cal_activate => { root.upcoming_cal_activate(); }
+        exit_to_background => { root.exit_to_background(); }
+    }
+
+    // ---- Detail page ---------------------------------------------------
+    if root.modal_visible && !root.player_open: DetailPage {
+        selected_poster <=> root.selected_poster;
+        selected_backdrop <=> root.selected_backdrop;
+        selected_title <=> root.selected_title;
+        selected_year <=> root.selected_year;
+        selected_description <=> root.selected_description;
+        selected_genre_list <=> root.selected_genre_list;
+        detail_tab <=> root.detail_tab;
+        episode_filter <=> root.episode_filter;
+        in_library <=> root.in_library;
+        category_rows <=> root.category_rows;
+        selected_category_count <=> root.selected_category_count;
+        streams <=> root.streams;
+        stream_page <=> root.stream_page;
+        stream_page_count <=> root.stream_page_count;
+        stream_page_start <=> root.stream_page_start;
+        stream_total <=> root.stream_total;
+        streams_hint <=> root.streams_hint;
+        stream_addons <=> root.stream_addons;
+        stream_loading <=> root.stream_loading;
+        streams_searching <=> root.streams_searching;
+        stream_filter <=> root.stream_filter;
+        stream_action_open <=> root.stream_action_open;
+        stream_action_id <=> root.stream_action_id;
+        stream_action_title <=> root.stream_action_title;
+        stream_action_items <=> root.stream_action_items;
+        modal_episodes <=> root.modal_episodes;
+        season_names <=> root.season_names;
+        season_combo_idx <=> root.season_combo_idx;
+        season_cards <=> root.season_cards;
+        episode_rows <=> root.episode_rows;
+        episode_page <=> root.episode_page;
+        episode_page_count <=> root.episode_page_count;
+        episode_page_start <=> root.episode_page_start;
+        episode_total <=> root.episode_total;
+        episode_context <=> root.episode_context;
+        deep_stream: root.detail_deep_stream;
+        popup_open: root.categories_modal;
+        kb_zone <=> root.detail_kb_zone;
+        kb_top <=> root.detail_kb_top;
+        kb_tab <=> root.detail_kb_tab;
+        kb_ci <=> root.detail_kb_ci;
+        kb_ep <=> root.detail_kb_ep;
+        kb_s <=> root.detail_kb_s;
+        kb_active <=> root.kb_active;
+        narrow: root.narrow_ui;
+        safe-top: root.safe-area-insets.top;
+        safe-left: root.safe-area-insets.left;
+        safe-right: root.safe-area-insets.right;
+        safe-bottom: root.safe-area-insets.bottom;
+        touch_menus: root.touch_menus;
+
+        back => {
+            root.categories_modal = false;
+            root.modal_visible = false;
+            root.modal_closed();
+        }
+        episodes_back => { root.episodes_back(); }
+        add_to_library => { root.add_to_library(); }
+        open_categories => { root.categories_modal = true; }
+        season_picked(i) => { root.season_picked(i); }
+        episode_picked(i) => { root.episode_picked(i); }
+        episode_page_picked(p) => { root.episode_page_picked(p); }
+        episode_toggle_watched(i) => { root.episode_toggle_watched(i); }
+        episode_watch_action(i, a) => { root.episode_watch_action(i, a); }
+        season_watch_action(i, a) => { root.season_watch_action(i, a); }
+        stream_picked(i) => { root.stream_picked(i); }
+        stream_page_picked(p) => { root.stream_page_picked(p); }
+        stream_action_requested(id) => { root.stream_action_requested(id); }
+        stream_action_selected(id, a) => { root.stream_action_selected(id, a); }
+        stream_filter_picked(i) => { root.stream_filter_picked(i); }
+        detail_tab_picked(t) => { root.detail_tab_picked(t); }
+        episode_filter_changed(t) => { root.episode_filter_changed(t); }
+        watch_now => { root.watch_now(); }
+    }
+
+    // ---- Assign-categories popup ---------------------------------------
+    // Overlays the detail page while the user picks categories for the
+    // current library item; `closed()` is fired by the backdrop / Done.
+    if root.categories_modal && root.modal_visible && !root.player_open: CategoryPickerPopup {
+        selected_title <=> root.selected_title;
+        category_rows <=> root.category_rows;
+        modal_category_flags <=> root.modal_category_flags;
+        kb_active <=> root.kb_active;
+
+        toggle_entry_category(name) => { root.toggle_entry_category(name); }
+        closed => { root.categories_modal = false; }
+    }
+
+    // ---- Library page ---------------------------------------------------
+    if root.show_library && !root.player_open && !root.modal_visible && !root.show_settings && !root.show_home: LibraryPage {
+        library <=> root.library;
+        category_rows <=> root.category_rows;
+        category_names <=> root.library_category_names;
+        category_labels <=> root.library_category_labels;
+        category_index <=> root.library_category_index;
+        library_filter_category <=> root.library_filter_category;
+        min_cols: root.library_min_cols;
+        library_empty_hint <=> root.library_empty_hint;
+
+        discover_picked => { root.discover_picked(); }
+        home_picked => { root.home_picked(); }
+        library_picked => { root.library_picked(); }
+        settings_picked => { root.settings_picked(); }
+        library_filter_picked(c) => { root.library_filter_picked(c); }
+        library_item_picked(i) => { root.library_item_picked(i); }
+        remove_library_item(i) => { root.remove_library_item(i); }
+        library_watch_action(i, a) => { root.library_watch_action(i, a); }
+        library_status_action(i, s) => { root.library_status_action(i, s); }
+        library_visible_range(f, l) => { root.library_visible_range(f, l); }
+        kb_zone <=> root.library_kb_zone;
+        kb_nav <=> root.library_kb_nav;
+        kb_f <=> root.library_kb_f;
+        kb_idx <=> root.library_kb_idx;
+        kb_active <=> root.kb_active;
+        scroll_y <=> root.library_scroll_y;
+        narrow: root.narrow_ui;
+        safe-top: root.safe-area-insets.top;
+        safe-left: root.safe-area-insets.left;
+        safe-right: root.safe-area-insets.right;
+        safe-bottom: root.safe-area-insets.bottom;
+        touch_menus: root.touch_menus;
+    }
+
+    // ---- Settings page --------------------------------------------------
+    if root.show_settings && !root.player_open && !root.modal_visible && !root.show_home: SettingsPage {
+        addon_rows <=> root.addon_rows;
+        addon_url <=> root.addon_url;
+        category_rows <=> root.category_rows;
+        category_input <=> root.category_input;
+        cache_images <=> root.cache_images;
+        cache_disk_usage <=> root.cache_disk_usage;
+        cache_enabled <=> root.cache_enabled;
+        cache_format_index <=> root.cache_format_index;
+        cache_quality <=> root.cache_quality;
+        cache_downscale <=> root.cache_downscale;
+        cache_date_relative <=> root.cache_date_relative;
+        cache_show_unwatched_thumbs <=> root.cache_show_unwatched_thumbs;
+        cache_lru_mb <=> root.cache_lru_mb;
+        cache_prefetch_metadata <=> root.cache_prefetch_metadata;
+        cache_lazy_reencode <=> root.cache_lazy_reencode;
+        discover_min_cols <=> root.discover_min_cols;
+        library_min_cols <=> root.library_min_cols;
+        cache_format_names <=> root.cache_format_names;
+        android_hwdec_index <=> root.android_hwdec_index;
+        player_backend_index <=> root.player_backend_index;
+        desktop_external_app_index <=> root.desktop_external_app_index;
+        playback_speed <=> root.playback_speed;
+        episode_start_index <=> root.episode_start_index;
+        is_android: root.is_android;
+        animations <=> root.animations;
+        anim_transitions <=> root.anim_transitions;
+        anim_hover <=> root.anim_hover;
+        anim_player <=> root.anim_player;
+        anim_nav_slide <=> root.anim_nav_slide;
+        language_index <=> root.language_index;
+        language_names <=> root.language_names;
+        show_image_cache <=> root.show_image_cache;
+        show_torrents <=> root.show_torrents;
+        torrent_enabled <=> root.torrent_enabled;
+        torrent_dir <=> root.torrent_dir;
+        torrent_max_mb <=> root.torrent_max_mb;
+        torrent_down_limit <=> root.torrent_down_limit;
+        torrent_no_cache <=> root.torrent_no_cache;
+        torrent_disk_usage <=> root.torrent_disk_usage;
+        download_auto_delete_watched <=> root.download_auto_delete_watched;
+        downloads_rows <=> root.downloads_rows;
+        license_catalog: root.license_catalog;
+        license_sources: root.license_sources;
+        sync_enabled <=> root.sync_enabled;
+        sync_identity <=> root.sync_identity;
+        sync_peers <=> root.sync_peers;
+        sync_peer_input <=> root.sync_peer_input;
+        sync_status <=> root.sync_status;
+        sync_device_name <=> root.sync_device_name;
+        sync_pair_confirm <=> root.sync_pair_confirm;
+        sync_local_discovery <=> root.sync_local_discovery;
+        sync_interval_index <=> root.sync_interval_index;
+        sync_background <=> root.sync_background;
+        sync_invite_ticket <=> root.sync_invite_ticket;
+        sync_invite_qr <=> root.sync_invite_qr;
+        sync_invites <=> root.sync_invites;
+        sync_join_input <=> root.sync_join_input;
+        sync_qr_scan_available <=> root.sync_qr_scan_available;
+        sync_link_notice <=> root.sync_link_notice;
+        sync_pair_prompt_visible <=> root.sync_pair_prompt_visible;
+        sync_pair_prompt_id <=> root.sync_pair_prompt_id;
+        sync_pair_prompt_name <=> root.sync_pair_prompt_name;
+        sync_pair_prompt_code <=> root.sync_pair_prompt_code;
+        kb_active <=> root.kb_active;
+        narrow: root.narrow_ui;
+        safe-top: root.safe-area-insets.top;
+        safe-left: root.safe-area-insets.left;
+        safe-right: root.safe-area-insets.right;
+        safe-bottom: root.safe-area-insets.bottom;
+        scroll_y <=> root.settings_scroll_y;
+
+        discover_picked => { root.discover_picked(); }
+        home_picked => { root.home_picked(); }
+        library_picked => { root.library_picked(); }
+        settings_picked => { root.settings_picked(); }
+        addon_added(u) => { root.addon_added(u); }
+        addon_toggled(i) => { root.addon_toggled(i); }
+        addon_remove(i) => { root.addon_remove(i); }
+        addon_move_up(i) => { root.addon_move_up(i); }
+        addon_move_down(i) => { root.addon_move_down(i); }
+        addon_configure(u) => { root.addon_configure(u); }
+        addon_refresh(i) => { root.addon_refresh(i); }
+        addon_copy_link(u) => { root.addon_copy_link(u); }
+        playback_speed_stepped(d) => { root.playback_speed_stepped(d); }
+        category_added(n) => { root.category_added(n); }
+        category_removed(i) => { root.category_removed(i); }
+        save_settings => { root.save_settings(); }
+        clear_cache => { root.clear_cache(); }
+        reencode_cache => { root.reencode_cache(); }
+        torrents_changed => { root.torrents_changed(); }
+        torrent_dir_edited(d) => { root.torrent_dir_edited(d); }
+        clear_torrent_cache => { root.clear_torrent_cache(); }
+        download_auto_delete_watched_changed(v) => { root.download_auto_delete_watched_changed(v); }
+        download_list_remove(id) => { root.download_list_remove(id); }
+        license_source_requested(url) => { root.license_source_requested(url); }
+        sync_changed => { root.sync_changed(); }
+        sync_add_peer(id) => { root.sync_add_peer(id); }
+        sync_remove_peer(id) => { root.sync_remove_peer(id); }
+        sync_now => { root.sync_now(); }
+        sync_copy_identity => { root.sync_copy_identity(); }
+        sync_device_name_edited(n) => { root.sync_device_name_edited(n); }
+        sync_pair_confirm_changed(v) => { root.sync_pair_confirm_changed(v); }
+        sync_local_discovery_changed(v) => { root.sync_local_discovery_changed(v); }
+        sync_interval_picked(i) => { root.sync_interval_picked(i); }
+        sync_background_changed(v) => { root.sync_background_changed(v); }
+        sync_create_invite => { root.sync_create_invite(); }
+        sync_cancel_invite(id) => { root.sync_cancel_invite(id); }
+        sync_copy_ticket(t) => { root.sync_copy_ticket(t); }
+        sync_join_invite(t) => { root.sync_join_invite(t); }
+        sync_scan_qr => { root.sync_scan_qr(); }
+        sync_respond_pair(id, ok) => { root.sync_respond_pair(id, ok); }
+    }
+
+    // ---- Player overlay --------------------------------------------------
+    if root.player_open: PlayerOverlay {
+        playback_started <=> root.playback_started;
+        is_paused <=> root.is_paused;
+        position <=> root.position;
+        duration <=> root.duration;
+        time_text <=> root.time_text;
+        player_status <=> root.player_status;
+        player_title <=> root.player_title;
+        decode_label <=> root.decode_label;
+        decoder_selected <=> root.decoder_selected;
+        sub_label <=> root.sub_track_label;
+        audio_label <=> root.audio_track_label;
+        volume <=> root.volume;
+        muted <=> root.muted;
+        playback_speed <=> root.playback_speed;
+        player_brightness <=> root.player_brightness;
+        is_fullscreen <=> root.is_fullscreen;
+        audio_tracks <=> root.audio_tracks;
+        sub_tracks <=> root.sub_tracks;
+        osd_visible <=> root.osd_visible;
+        // Mirror the animated OSD opacity up for the backend frame-rate logic.
+        osd_opacity_changed(v) => { root.osd_opacity = v; }
+        scrim_image <=> root.scrim_image;
+        player_poster <=> root.player_poster;
+        kb_active <=> root.kb_active;
+        is_android: root.is_android;
+        narrow: root.narrow_ui;
+        safe-top: root.safe-area-insets.top;
+        safe-left: root.safe-area-insets.left;
+        safe-right: root.safe-area-insets.right;
+
+        toggle_pause => { root.toggle_pause(); }
+        seek(v) => { root.seek(v); }
+        close_player => { root.close_player(); }
+        set_volume(v) => { root.set_volume(v); }
+        toggle_mute => { root.toggle_mute(); }
+        pick_audio_track(i) => { root.pick_audio_track(i); }
+        pick_sub_track(i) => { root.pick_sub_track(i); }
+        pick_decoder(i) => { root.pick_decoder(i); }
+        playback_speed_changed(v) => { root.playback_speed_changed(v); }
+        playback_speed_stepped(d) => { root.playback_speed_stepped(d); }
+        playback_speed_preview(v) => { root.playback_speed_preview(v); }
+        android_brightness_step(d) => { root.android_brightness_step(d); }
+        android_volume_step(d) => { root.android_volume_step(d); }
+        settings_opened => { root.settings_opened(); }
+        toggle_fullscreen => { root.toggle_fullscreen(); }
+        osd_mouse_moved => { root.osd_mouse_moved(); }
+        tracks_popup_opened(i) => { root.tracks_popup_opened(i); }
+        format_time(t) => { root.format_time(t); }
+        format_volume(v) => { root.format_volume(v); }
+    }
+
+    if root.resume_prompt_visible: Rectangle {
+        x: 0; y: 0; width: 100%; height: 100%; background: #000000b8;
+        TouchArea {
+            width: 100%; height: 100%;
+            clicked => { root.resume_cancel(); }
+        }
+        Rectangle {
+            width: Math.min(360px, parent.width - 40px);
+            height: 176px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: #262626; border-radius: 14px;
+            // Consume clicks inside the card instead of passing them to the
+            // outside-click dismiss layer underneath.
+            TouchArea { width: 100%; height: 100%; }
+            VerticalLayout {
+                padding: 20px; spacing: 12px;
+                Text { text: @tr("Resume playback?"); color: #ffffff; font-size: 18px; font-weight: 600; }
+                Text { text: @tr("This episode has saved playback history."); color: #b8b8be; font-size: 14px; wrap: word-wrap; }
+                HorizontalLayout {
+                    alignment: end; spacing: 8px;
+                    Rectangle {
+                        width: 112px; height: 40px; border-radius: 8px; background: #ffffff18;
+                        Text { text: @tr("Start over"); color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { width: 100%; height: 100%; clicked => { root.resume_choice(false); } }
+                    }
+                    Rectangle {
+                        width: 100px; height: 40px; border-radius: 8px; background: #8b5cf6;
+                        Text { text: @tr("Resume"); color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { width: 100%; height: 100%; clicked => { root.resume_choice(true); } }
+                    }
+                }
+            }
+        }
+    }
+}

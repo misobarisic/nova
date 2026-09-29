@@ -1,0 +1,5 @@
+{{#each licenses}}
+{{#each used_by}}
+{{{crate.name}}} {{{crate.version}}}	{{{../id}}}	{{#if crate.repository}}{{{crate.repository}}}{{else}}https://crates.io/crates/{{{crate.name}}}/{{{crate.version}}}{{/if}}
+{{/each}}
+{{/each}}

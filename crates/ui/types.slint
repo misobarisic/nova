@@ -1,0 +1,179 @@
+export struct MediaCard {
+    id: string,
+    title: string,
+    year: string,
+    poster_path: string,
+    poster: image,
+    is_loaded: bool,
+    /// Playback badge for library items (e.g. "▶ Resume S1 E3", "3 left",
+    /// "✓ Seen"). Empty when there is nothing to report.
+    badge: string,
+    /// True when every known episode of the series is marked watched
+    /// (library cards show the white-disc check; always false for
+    /// Discover catalog cards).
+    watched: bool,
+}
+
+export struct StreamRow {
+    id: string,
+    text: string,
+    details: string,
+    /// Reserved line count (explicit lines + wrap estimate), used to give
+    /// each row an explicit height so long text is never clipped.
+    lines: int,
+    is_download: bool,
+    download_progress: float,
+    download_action: int,
+}
+
+/// One completed downloaded episode shown in Settings → Downloads →
+/// Downloaded episodes. `id` is the download job id used to remove it.
+export struct DownloadRow {
+    id: string,
+    /// Series name.
+    title: string,
+    /// Episode label plus stream quality (e.g. "S1 E2 · Title · 1080p").
+    subtitle: string,
+    /// File name and size readout.
+    details: string,
+}
+
+export struct EpisodeRow {
+    text: string,
+    /// Release date / description (may be empty).
+    details: string,
+    /// Reserved text lines, used to give each row an explicit height.
+    lines: int,
+    /// Episode thumbnail (loaded lazily from the video's thumbnail URL).
+    thumb: image,
+    /// True once the thumbnail image has been decoded.
+    has_thumb: bool,
+    /// True once the episode was watched past the threshold (or to the end).
+    watched: bool,
+    /// Fraction watched (0..1) for unwatched episodes with saved progress.
+    progress: float,
+    /// Short episode badge for grid cards (e.g. "EP 1").
+    ep_no: string,
+    /// Human-readable release date for grid cards (may be empty).
+    date: string,
+}
+
+/// One installed addon shown in the Settings → Addons list.
+export struct AddonRow {
+    label: string,
+    /// Normalised install URL.
+    url: string,
+    /// Whether the addon is enabled (feeds Discover / streams). Disabled
+    /// addons stay installed but are hidden until re-enabled.
+    enabled: bool,
+    /// Web configuration page (<addon base>/config); empty if derivable.
+    config_url: string,
+}
+
+/// One user-defined library category shown in the Settings → Categories list.
+export struct CategoryRow {
+    name: string,
+}
+
+/// One trusted peer device shown in the Settings → Sync list.
+export struct LicenseSource {
+    label: string,
+    license: string,
+    url: string,
+}
+
+export struct SyncPeer {
+    /// Full endpoint id (64 chars); the row elides it.
+    id: string,
+    /// Friendly name learned during pairing; empty for manually added peers.
+    name: string,
+    /// Preformatted freshness ("Last connected 2m ago", "Never connected"):
+    /// the max of our direct ack and the mesh `presence` sightings.
+    last_seen: string,
+}
+
+/// One outstanding invite shown in the Settings → Sync list.
+export struct SyncInvite {
+    /// Short id used to revoke the invite.
+    id: string,
+}
+
+/// One season card in the detail-page season picker grid (art-backed like
+/// the reference season wall; season 0 renders as "Specials").
+export struct SeasonCard {
+    name: string,
+    thumb: image,
+    has_thumb: bool,
+    /// True when every known episode of the season is marked watched.
+    watched: bool,
+    /// Fraction of the season watched (0..1), for a mini progress rail.
+    progress: float,
+}
+
+/// One audio/subtitle track in the player's track picker popup.
+export struct TrackRow {
+    index: int,
+    lang: string,
+    title: string,
+    codec: string,
+    selected: bool,
+}
+
+/// One tappable row in a MenuSheet bottom-sheet popup.
+export struct SheetItem {
+    label: string,
+    enabled: bool,
+}
+
+/// One entry in the Home → Continue Watching row: a library series with
+/// a resumable episode (latest progress first).
+export struct ContinueRow {
+    /// Library entry id (stable key for poster dispatch guards).
+    id: string,
+    /// Series title.
+    title: string,
+    /// Resume label (e.g. "S1 E3 · Episode name").
+    subtitle: string,
+    poster: image,
+    is_loaded: bool,
+    /// Fraction watched (0..1) of the resume episode for the rail.
+    progress: float,
+    /// Card badge: 0 = resume (no badge, the rail shows it), 1 = "Next up"
+    /// (mid-series, older released episodes still unwatched), 2 = "New
+    /// Episode" (everything else dated and released is watched — this one
+    /// is new).
+    badge: int,
+}
+
+/// One entry in the Home → Upcoming row: an unaired episode of a series
+/// whose available episodes are all watched (air date first).
+export struct UpcomingRow {
+    /// Library entry id (stable key for poster dispatch guards).
+    id: string,
+    /// Series title.
+    title: string,
+    /// Episode label (e.g. "S1 E4 · Episode name").
+    subtitle: string,
+    /// Human air date (e.g. "in 3 days").
+    date: string,
+    poster: image,
+    is_loaded: bool,
+    /// Position in the Upcoming list. Picks resolve through it, so a
+    /// filtered view (the calendar's selected day) still opens the right
+    /// episode.
+    index: int,
+}
+
+/// One cell of the Home → Upcoming calendar's month grid: 42 of these cover
+/// the visible month plus the filler days that complete the edge weeks.
+/// `epoch` is days since the Unix epoch (the pick callback's argument);
+/// `day` the printed month-day number.
+export struct CalCell {
+    epoch: int,
+    day: int,
+    in_month: bool,
+    /// Upcoming episodes airing on this day (0 = plain day).
+    count: int,
+    selected: bool,
+    today: bool,
+}

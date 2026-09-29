@@ -1,0 +1,260 @@
+[workspace]
+members = ["crates/addons", "crates/ui", "crates/storage", "crates/config", "crates/download", "crates/torrent", "crates/media", "crates/player", "crates/sync"]
+resolver = "3"
+
+[workspace.package]
+license = "GPL-3.0-or-later"
+
+[workspace.dependencies]
+# Slint GUI toolkit: single source of truth for the version. Crates opt into
+# features locally with `slint = { workspace = true, features = [...] }`.
+slint = "1.18.0"
+slint-build = "1.18.0"
+i-slint-backend-testing = "1.18.0"
+
+[package]
+name = "nova"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["desktop"]
+# Desktop-only extras: legacy TOML migration and file parsing. The app code
+# itself compiles on desktop and Android (the APK builds with
+# `--no-default-features`).
+desktop = [
+    "dep:toml",
+]
+# Opt-in interpreter-backed UI for Linux development. Not part of any default
+# or release build: run it explicitly, e.g.
+#   cargo run --features live-preview        (or: cargo dev)
+# Only generates interpreted code on a Linux debug build (see crates/ui/build.rs);
+# other targets and release builds stay ahead-of-time compiled and never pull
+# the Slint interpreter into the dependency tree.
+live-preview = ["nova-ui/live-preview"]
+
+[dependencies]
+# `backend-android-activity-06` compiles on every target_os (per Slint docs)
+# and is required for the Android entry point in src/lib.rs.
+slint = { workspace = true, features = ["backend-android-activity-06"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+# Addon protocol (URL building + response parsing). HTTP lives in nova-media.
+addons = { path = "crates/addons", default-features = false }
+# Leaf/sub-crates (see their manifests): UI, storage, settings+paths, media,
+# player, torrent.
+nova-ui = { path = "crates/ui", default-features = false }
+nova-storage = { path = "crates/storage" }
+nova-config = { path = "crates/config" }
+nova-media = { path = "crates/media" }
+nova-download = { path = "crates/download" }
+nova-player = { path = "crates/player" }
+nova-torrent = { path = "crates/torrent" }
+nova-sync = { path = "crates/sync" }
+
+# `settings.toml` / addons / library file parsing (desktop only).
+toml = { version = "1.1.5", optional = true }
+
+# QR encoding for the sync invite ticket (Settings → Sync). Disable default
+# features so we don't pull the `image` crate: we read the module matrix via
+# `QrCode::to_colors()` and build the Slint image buffer by hand.
+qrcode = { version = "0.14", default-features = false }
+
+# Linux desktop allocator: jemalloc handles image-churn fragmentation far
+# better than glibc malloc (per-thread arenas + decay-based background
+# purge). Non-Linux targets keep the system allocator.
+[target.'cfg(target_os = "linux")'.dependencies]
+tikv-jemallocator = "0.6"
+
+# Android background execution: JNI bridge to the Java foreground service and
+# JobScheduler job, plus the Context/JavaVM that android-activity publishes
+# through ndk-context.
+[target.'cfg(target_os = "android")'.dependencies]
+# 0.21 (not 0.22): the reworked 0.22 API is unnecessary here — no JNI types are
+# shared with android-activity (we reach the Context through ndk-context and
+# load Java classes via the Context class loader).
+jni = "0.21"
+ndk-context = "0.1"
+# QR decoding for the camera scan pipeline (android_qr.rs) and, on desktop, the
+# QR round-trip test below. `default-features = false` drops the optional
+# `image` crate; we decode the camera's luma plane through the greyscale
+# constructor. Pure Rust, so it cross-compiles to the NDK targets.
+rqrr = { version = "0.11", default-features = false }
+
+[dev-dependencies]
+# Headless UI tests (drag-scroll regression): drives the real AppWindow
+# through synthetic pointer events, no display needed.
+i-slint-backend-testing = { workspace = true }
+# Feed real touch phases (rather than mouse events) to the carousel gesture test.
+i-slint-core = "1.18.0"
+# Test fixtures build small PNGs.
+image = "0.25.10"
+# The QR round-trip test encodes a ticket and decodes the resulting raster;
+# on Android the same crate is a normal dependency. Listed here so the test
+# runs on desktop, where the target-gated dependency is not built.
+rqrr = { version = "0.11", default-features = false }
+# Generating a real ticket for the QR round-trip test needs a valid endpoint
+# id; iroh is already in the build via nova-sync, so this adds no new tree.
+iroh = "1.2"
+
+# Android packaging (cargo-apk). arm64 covers physical devices;
+# x86_64 covers the emulator. Slint needs min SDK 26.
+[package.metadata.android]
+package = "dev.misob.nova"
+build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
+# Folder holding extra prebuilt shared libraries: cargo-apk2 adds everything
+# matching `<runtime_libs>/<android_abi>/*.so` (see build.rs for the matching
+# link search path and vendor/android-libs/SOURCES for provenance). The ABI directory
+# names are Gradle's, not the Rust target triples.
+runtime_libs = "vendor/android-libs"
+resources = "android/res"
+
+# cargo-apk2 packaging: compile the Java background components (foreground
+# service + periodic sync JobService) into DEX alongside the native lib. The
+# predecessor cargo-apk has no service/dex support, which is why Android is
+# built with `cargo apk2` now (see docs/PROJECT_STRUCTURE.md).
+use_aapt2 = true
+java_sources = "android/java"
+
+# We ship Java now, so android:hasCode must stay true. Pure NativeActivity
+# builds set this false.
+[package.metadata.android.application]
+has_code = true
+# Launcher / task-switcher name. cargo-apk2 falls back to the artifact name
+# (`nova`) when this is empty; the label is what the user reads, so it carries
+# the display capitalisation.
+label = "Nova"
+icon = "@mipmap/ic_launcher"
+
+# cargo-apk2 generates no implicit activity (unlike cargo-apk): declare the
+# android-activity NativeActivity, its `lib_name` meta-data (the value is
+# filled from `[lib]` automatically) and the launcher intent filter. cargo-apk2
+# sets `android:exported="true"` on targetSdk >= 31.
+#
+# Keep rotation in-place: `configChanges` lists each change we handle at
+# runtime instead of letting the Activity be recreated (which would restart the
+# app and drop the in-app player). `screenLayout`/`smallestScreenSize` flip on
+# some devices and, being unhandled, would recreate the Activity.
+[[package.metadata.android.application.activity]]
+name = "android.app.NativeActivity"
+config_changes = "orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|density|uiMode|layoutDirection"
+
+[[package.metadata.android.application.activity.meta_data]]
+name = "android.app.lib_name"
+
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.VIEW", "android.intent.action.MAIN"]
+categories = ["android.intent.category.LAUNCHER"]
+
+# Camera QR scanner, launched from Rust (android_qr::start_scan). Not exported:
+# only this app may start it. Portrait keeps the Camera2 preview transform
+# simple; the decoder detects QR rotation itself, so a landscape-held ticket
+# still scans.
+[[package.metadata.android.application.activity]]
+name = ".QrScanActivity"
+exported = false
+orientation = "portrait"
+
+# Download foreground service: keeps the process (and its transfer threads)
+# alive while a stream download is running, including with the screen off.
+[[package.metadata.android.application.service]]
+name = ".NovaBackgroundService"
+foreground_service_type = "dataSync"
+
+# Periodic background sync, driven by JobScheduler (min 15 min). Runs a
+# bounded sync pass with no Activity present; see android_bg.rs / sync_headless.
+[[package.metadata.android.application.service]]
+name = ".NovaSyncJobService"
+permission = "android.permission.BIND_JOB_SERVICE"
+
+# The dev, release, and dev-release profiles use the same public debug key
+# so APKs stay update-compatible across build profiles. Do not publish with it:
+# configure a private release keystore through CARGO_APK_RELEASE_KEYSTORE and
+# CARGO_APK_RELEASE_KEYSTORE_PASSWORD before any store release.
+[package.metadata.android.signing.dev]
+path = "android/keystore/debug.keystore"
+keystore_password = "android"
+
+[package.metadata.android.signing.release]
+path = "android/keystore/debug.keystore"
+keystore_password = "android"
+
+[package.metadata.android.signing.dev-release]
+path = "android/keystore/debug.keystore"
+keystore_password = "android"
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 35
+
+# Catalogs, streams and posters are all fetched over HTTP.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
+# Cross-device sync polls ConnectivityManager.getActiveNetwork() to forward
+# network changes to iroh (Android does not notify native code directly).
+[[package.metadata.android.uses_permission]]
+name = "android.permission.ACCESS_NETWORK_STATE"
+
+# Foreground service for active stream downloads. targetSdk 34+ requires the
+# type-specific permission alongside FOREGROUND_SERVICE; the service declares
+# foregroundServiceType="dataSync".
+[[package.metadata.android.uses_permission]]
+name = "android.permission.FOREGROUND_SERVICE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+
+# Partial wake lock held while a transfer is active (the foreground service
+# keeps the process unfrozen; the wake lock keeps the CPU from suspending).
+[[package.metadata.android.uses_permission]]
+name = "android.permission.WAKE_LOCK"
+
+# API 33+: the foreground-service notification is hidden without it.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.POST_NOTIFICATIONS"
+
+# Periodic sync jobs survive reboot via JobInfo.setPersisted(true).
+[[package.metadata.android.uses_permission]]
+name = "android.permission.RECEIVE_BOOT_COMPLETED"
+
+# Camera QR scanner (QrScanActivity): requested at runtime; the activity is
+# unreachable if denied. Declared optional so the app still installs on
+# camera-less devices (desktop use cases don't need it).
+[[package.metadata.android.uses_permission]]
+name = "android.permission.CAMERA"
+
+[[package.metadata.android.uses_feature]]
+name = "android.hardware.camera"
+required = false
+
+[profile.dev]
+opt-level = 0
+debug = false
+#debug = "line-tables-only"
+#debug = 0
+#strip = "debuginfo"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev-release]
+inherits = "release"
+lto = false
+codegen-units = 4
+debug = false
+strip = "symbols"
+#panic = "abort"
+
+[profile.release]
+opt-level = 3
+#lto = "fat"
+#codegen-units = 1
+strip = "symbols"
+#panic = "abort"
+#incremental = false
+#incremental = false # Set to false for the absolute best performance
