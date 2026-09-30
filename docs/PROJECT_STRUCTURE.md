@@ -54,8 +54,9 @@ the APK without an architecture suffix contains both arm64-v8a and x86_64.
 The Windows bundle is named `nova-windows-x86_64-<tag>.zip`. Linux release
 files are named `nova-x86_64-<tag>.deb` and
 `nova-x86_64-<tag>.AppImage`; both come from one native Ubuntu 22.04 build.
-The `.deb` declares shared-library and Qt platform-plugin dependencies, while
-the AppImage bundles the linked libraries and Qt platform plugins.
+The `.deb` declares shared-library dependencies, while the AppImage bundles
+libraries using linuxdeploy. Nova uses Slint's Winit/FemtoVG backend; Qt is
+not required.
 The Android workflow invokes cargo-apk2 once to build both architectures into
 a universal APK. `.github/scripts/package-android.py` derives the two
 architecture-specific APKs from that output, aligns and signs all three with

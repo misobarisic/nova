@@ -60,16 +60,13 @@ download_verified \
   "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage" \
   "$tools_dir/linuxdeploy-plugin-appimage-x86_64.AppImage" \
   "0441769ab38009504d2678c38cd7e526955388dd30a215b4a20afaa5471652f2"
-download_verified \
-  "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage" \
-  "$tools_dir/linuxdeploy-plugin-qt-x86_64.AppImage" \
-  "cfc1055b2b9dbc08412b579f20990b7b41a17b61beaa5847dc9477c96c9e9617"
 
 appimage="$dist/nova-x86_64-${artifact_tag}.AppImage"
 deb_file="$dist/nova-x86_64-${artifact_tag}.deb"
 app_icon="$appdir/usr/share/icons/hicolor/512x512/apps/nova.png"
 
 install -D -m 755 "$binary" "$appdir/usr/bin/nova"
+install -D -m 755 "$binary" "$deb_root/usr/bin/nova"
 install -D -m 644 assets/logo.png "$app_icon"
 install -D -m 644 LICENSE "$appdir/usr/share/doc/nova/LICENSE"
 install -D -m 644 THIRD_PARTY_NOTICES.md "$appdir/usr/share/doc/nova/THIRD_PARTY_NOTICES.md"
@@ -77,21 +74,9 @@ install -D -m 644 .github/scripts/nova.desktop "$deb_root/usr/share/applications
 install -D -m 644 assets/logo.png "$deb_root/usr/share/icons/hicolor/512x512/apps/nova.png"
 install -D -m 644 LICENSE "$deb_root/usr/share/doc/nova/LICENSE"
 install -D -m 644 THIRD_PARTY_NOTICES.md "$deb_root/usr/share/doc/nova/THIRD_PARTY_NOTICES.md"
-mkdir -p "$appdir/usr/share/applications"
-sed 's/^Exec=nova$/Exec=AppRun/' .github/scripts/nova.desktop \
-  > "$appdir/usr/share/applications/nova.desktop"
+install -D -m 644 .github/scripts/nova.desktop "$appdir/usr/share/applications/nova.desktop"
 desktop-file-validate .github/scripts/nova.desktop
 desktop-file-validate "$appdir/usr/share/applications/nova.desktop"
-
-uses_qt=false
-if ldd "$binary" | grep -q 'libQt6'; then
-  uses_qt=true
-fi
-
-extra_dependencies=""
-if [[ "$uses_qt" == true ]]; then
-  extra_dependencies=", qt6-qpa-plugins, qt6-wayland"
-fi
 
 cat > "$deb_work/debian/control" <<EOF
 Source: nova
@@ -102,7 +87,7 @@ Standards-Version: 4.6.0
 
 Package: nova
 Architecture: amd64
-Depends: \${shlibs:Depends}, \${misc:Depends}$extra_dependencies
+Depends: \${shlibs:Depends}, \${misc:Depends}
 Description: Cross-platform media catalog and player
  Nova is a media catalog and player for desktop and Android.
 EOF
@@ -114,9 +99,6 @@ if [[ -z "$shlib_dependencies" ]]; then
   exit 1
 fi
 dependencies="$shlib_dependencies"
-if [[ "$uses_qt" == true ]]; then
-  dependencies="${dependencies}, qt6-qpa-plugins, qt6-wayland"
-fi
 
 cat > "$deb_root/DEBIAN/control" <<EOF
 Package: nova
@@ -144,24 +126,10 @@ linuxdeploy_args=(
   --icon-file "$app_icon"
 )
 
-if [[ "$uses_qt" == true ]]; then
-  qmake="$(command -v qmake6 || command -v qmake || true)"
-  if [[ -z "$qmake" ]]; then
-    echo "Qt is linked but qmake was not found; install qt6-base-dev" >&2
-    exit 1
-  fi
-  QMAKE="$qmake" \
-  EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so" \
-  LINUXDEPLOY_OUTPUT_VERSION="$debian_version" \
-  LDAI_OUTPUT="$appimage" \
-    "$tools_dir/linuxdeploy-x86_64.AppImage" \
-      "${linuxdeploy_args[@]}" --plugin qt --output appimage
-else
-  LINUXDEPLOY_OUTPUT_VERSION="$debian_version" \
-  LDAI_OUTPUT="$appimage" \
-    "$tools_dir/linuxdeploy-x86_64.AppImage" \
-      "${linuxdeploy_args[@]}" --output appimage
-fi
+LINUXDEPLOY_OUTPUT_VERSION="$debian_version" \
+LDAI_OUTPUT="$appimage" \
+  "$tools_dir/linuxdeploy-x86_64.AppImage" \
+    "${linuxdeploy_args[@]}" --output appimage
 
 test -s "$appimage"
 chmod 755 "$appimage"

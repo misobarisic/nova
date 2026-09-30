@@ -148,7 +148,7 @@ jobs:
             libseat-dev libssl-dev libudev-dev libvulkan-dev libwayland-dev \
             libx11-dev libx11-xcb-dev libxcursor-dev libxi-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libxrandr-dev \
-            patchelf pkg-config qt6-base-dev qt6-qpa-plugins qt6-wayland \
+            patchelf pkg-config \
             squashfs-tools xinput
 
       - name: Install cargo-about
