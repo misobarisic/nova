@@ -46,8 +46,14 @@ cargo check --workspace --locked --target x86_64-pc-windows-gnu
 ```
 
 Pull requests run host and Windows-target Cargo checks; they do not package
-platform builds or publish releases. Pushing a Git tag builds the universal
-Android APK and Windows x86_64 ZIP, then attaches both to a GitHub Release.
+platform builds or publish releases. Pushing a Git tag builds three Android APKs and a Windows x86_64 ZIP, then
+attaches all four to a GitHub Release. Android release filenames are
+`nova-arm64-v8a-<tag>.apk`, `nova-x86_64-<tag>.apk`, and `nova-<tag>.apk`;
+the APK without an architecture suffix contains both arm64-v8a and x86_64.
+The Windows bundle is named `nova-windows-x86_64-<tag>.zip`.
+The Android workflow matrix builds each variant with cargo-apk2, verifies its
+exact ABI set and bundled libnova/libmpv libraries, and uploads separate
+artifacts for the release job to collect.
 
 Cargo aliases live in `.cargo/config.toml`. Android linkers come from the
 `.#android` dev shell env vars (see `.cargo/config.toml` comments); that shell

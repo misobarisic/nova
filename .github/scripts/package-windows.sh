@@ -36,7 +36,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 tag, bundle_name, dist_name = argv[1:]
 bundle = Path(bundle_name)
 dist = Path(dist_name)
-output = dist / f"nova-{tag}-windows-x86_64.zip"
+output = dist / f"nova-windows-x86_64-{tag}.zip"
 files = sorted(path for path in bundle.iterdir() if path.is_file())
 if not any(path.name.lower() == "libmpv-2.dll" for path in files):
     raise SystemExit("Windows bundle is missing libmpv-2.dll")
