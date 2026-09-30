@@ -42,6 +42,12 @@ let
         buildInputs = (attrs.buildInputs or []) ++ [ rustPkgs.mpv ];
       };
 
+      tikv-jemalloc-sys = attrs: {
+        # Seed jemalloc's configure cache for the GNU strerror_r signature
+        # provided by the pinned x86_64 Linux/glibc build environment.
+        je_cv_strerror_r_returns_char_with_gnu_source = "yes";
+      };
+
       yeslogic-fontconfig-sys = attrs: {
         nativeBuildInputs = (attrs.nativeBuildInputs or []) ++ [ rustPkgs.pkg-config ];
         buildInputs = (attrs.buildInputs or []) ++ [ rustPkgs.fontconfig ];
