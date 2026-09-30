@@ -10,7 +10,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 ABIS = {"arm64-v8a", "x86_64"}
-VARIANTS = {"": ABIS, "-arm64-v8a": {"arm64-v8a"}, "-x86_64": {"x86_64"}}
+VARIANTS = {"-universal": ABIS, "-arm64-v8a": {"arm64-v8a"}, "-x86_64": {"x86_64"}}
 
 
 def signature_entry(name):
@@ -133,14 +133,14 @@ def main():
         raise RuntimeError("Configured Android release keystore does not exist")
     env = dict(os.environ, NOVA_APK_KEYSTORE_PASSWORD=password)
     original_signers = signer_certificates(apksigner, source)
-    tag = os.environ["GITHUB_REF_NAME"].replace("/", "-")
+    tag = os.environ["GITHUB_REF_NAME"].removeprefix("v").replace("/", "-")
     dist = Path("dist")
     dist.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="nova-apk-") as temporary:
         work = Path(temporary)
         for suffix, abis in VARIANTS.items():
             unsigned, aligned = work / "unsigned.apk", work / "aligned.apk"
-            output = dist / f"nova{suffix}-{tag}.apk"
+            output = dist / f"Nova-Android{suffix}-{tag}.apk"
             filter_apk(source, unsigned, abis)
             # Align before signing; editing a signed APK invalidates its signature.
             run(zipalign, "-P", "16", "-f", "4", unsigned, aligned)

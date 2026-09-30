@@ -17,7 +17,8 @@ if [[ "$event_name" == "pull_request" ]]; then
   debian_version="${cargo_version}~pr${GITHUB_EVENT_NUMBER:-0}"
 else
   raw_tag="${GITHUB_REF_NAME:-local}"
-  artifact_tag="$(printf '%s' "$raw_tag" | sed -E 's/[^A-Za-z0-9._+-]+/-/g')"
+  artifact_version="${raw_tag#v}"
+  artifact_tag="$(printf '%s' "$artifact_version" | sed -E 's/[^A-Za-z0-9._+-]+/-/g')"
   upstream_version="${raw_tag#v}"
   upstream_version="$(printf '%s' "$upstream_version" | sed -E 's/-/~/g; s/[^A-Za-z0-9.+~]/./g')"
   if [[ "$upstream_version" =~ ^[0-9] ]]; then
@@ -61,8 +62,8 @@ download_verified \
   "$tools_dir/linuxdeploy-plugin-appimage-x86_64.AppImage" \
   "0441769ab38009504d2678c38cd7e526955388dd30a215b4a20afaa5471652f2"
 
-appimage="$dist/nova-x86_64-${artifact_tag}.AppImage"
-deb_file="$dist/nova-x86_64-${artifact_tag}.deb"
+appimage="$dist/Nova-Linux-x86_64-${artifact_tag}.AppImage"
+deb_file="$dist/Nova-Linux-x86_64-${artifact_tag}.deb"
 app_icon="$appdir/usr/share/icons/hicolor/512x512/apps/nova.png"
 icon_512="$work/nova-512.png"
 

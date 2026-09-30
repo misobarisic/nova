@@ -4,7 +4,8 @@ set -euo pipefail
 : "${MPV_SOURCE:?run through nix develop .#windows}"
 : "${MINGW_CC:?run through nix develop .#windows}"
 
-tag="${GITHUB_REF_NAME//\//-}"
+tag="${GITHUB_REF_NAME#v}"
+tag="${tag//\//-}"
 bundle="target/windows-package"
 dist="dist"
 rm -rf "$bundle"
@@ -36,7 +37,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 tag, bundle_name, dist_name = argv[1:]
 bundle = Path(bundle_name)
 dist = Path(dist_name)
-output = dist / f"nova-windows-x86_64-{tag}.zip"
+output = dist / f"Nova-Windows-x86_64-{tag}.zip"
 files = sorted(path for path in bundle.iterdir() if path.is_file())
 if not any(path.name.lower() == "libmpv-2.dll" for path in files):
     raise SystemExit("Windows bundle is missing libmpv-2.dll")
