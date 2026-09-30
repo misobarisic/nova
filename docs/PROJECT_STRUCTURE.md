@@ -47,12 +47,12 @@ cargo check --workspace --locked --target x86_64-pc-windows-gnu
 
 Pull requests run the host and Windows-target Cargo checks plus a Linux
 crate2nix build benchmark. Same-repository PRs can read and fill the shared
-Storage Box cache at `nix-cache-pr/`, so builds reuse entries across PRs. The
-cache benchmark waits for approval through the `storagebox-cache-pr` Actions
+Storage Box cache at `nix-cache-pr/`, so builds reuse entries across PRs. Every
+PR cache job waits for approval through the `storagebox-cache-pr` Actions
 environment before receiving credentials. Fork PRs use a no-secrets environment
-and build cold. Main builds trust entries signed with the PR-only key; the PR key
-does not sign the main cache. Approve PR cache jobs only for changes you trust,
-since their outputs can later be used by main builds.
+and build cold. Main and PR workflows use the same signing key pair, and main
+trusts PR cache entries. An approved PR cache job can therefore publish entries
+that main builds trust; review the proposed changes before approving a run.
 Pushing a Rust/build change to `main` runs the trusted cache publisher, while
 pushing a Git tag builds the universal Android APK and Windows x86_64 ZIP, then
 attaches both to a GitHub Release.
@@ -65,7 +65,10 @@ deployment branch. That environment needs
 `NIX_CACHE_SIGNING_PUBLIC_KEY`, and `NIX_CACHE_PR_SIGNING_PUBLIC_KEY`. The
 reviewer-protected `storagebox-cache-pr` environment needs the first three plus
 `NIX_CACHE_PR_SIGNING_PRIVATE_KEY`, `NIX_CACHE_PR_SIGNING_PUBLIC_KEY`, and
-`NIX_CACHE_SIGNING_PUBLIC_KEY`. Keep the private signing keys separate.
+`NIX_CACHE_SIGNING_PUBLIC_KEY`. Set both environments' public-key secrets to
+the same shared public key, and set the two private-key secrets to the same
+shared private key. The PR environment requires your approval and disallows
+administrator bypass.
 Hetzner SSH support and external reachability must be enabled for uploads.
 
 Cargo aliases live in `.cargo/config.toml`. Android linkers come from the
