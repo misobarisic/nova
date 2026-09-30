@@ -38,12 +38,12 @@ let
       };
 
       nova-ui = attrs: {
-        # crate2nix stages this package at its own source root, so Slint's
-        # workspace-relative logo path would otherwise escape the build source.
-        # Copy the repository asset into the crate and adjust only this derivation.
+        # crate2nix stages this package at its own source root, so workspace
+        # assets would otherwise be outside the build source. Copy the entire
+        # assets directory into this derivation, preserving its layout.
         postPatch = (attrs.postPatch or "") + ''
           mkdir -p assets
-          cp ${../assets/logo.png} assets/logo.png
+          cp -R ${../assets}/. assets/
           substituteInPlace appwindow.slint \
             --replace-fail '"../../assets/logo.png"' '"assets/logo.png"'
         '';
