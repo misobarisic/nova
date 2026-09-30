@@ -306,17 +306,14 @@ impl Bridge {
                 .and_then(|t| t.resume_pos)
                 .unwrap_or(0.0)
         };
-        let ep = self
-            .app()
-            .map(|a| {
-                let ctx = a.get_episode_context();
-                if ctx.is_empty() {
-                    None
-                } else {
-                    Some(ctx.to_string())
-                }
-            })
-            .flatten();
+        let ep = self.app().and_then(|a| {
+            let ctx = a.get_episode_context();
+            if ctx.is_empty() {
+                None
+            } else {
+                Some(ctx.to_string())
+            }
+        });
         let display_title = match ep {
             Some(ep) => format!("{title} · {ep}"),
             None => title,

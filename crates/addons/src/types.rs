@@ -64,9 +64,7 @@ impl Manifest {
 
     /// The catalogs this addon declares for `type_` (e.g. `"movie"`).
     pub fn catalogs_for_type(&self, type_: &str) -> impl Iterator<Item = &Catalog> {
-        self.catalogs
-            .iter()
-            .filter(move |c| c.type_ == type_)
+        self.catalogs.iter().filter(move |c| c.type_ == type_)
     }
 
     /// Find the catalog with the given media type and catalog id.

@@ -131,7 +131,10 @@ impl Bridge {
                 let (poster, is_loaded) = if e.poster_url.is_empty() {
                     (Image::default(), false)
                 } else {
-                    match decoded_cache_get(&sized_cache_key(&e.poster_url, Some(DISPLAY_POSTER_SIDE))) {
+                    match decoded_cache_get(&sized_cache_key(
+                        &e.poster_url,
+                        Some(DISPLAY_POSTER_SIDE),
+                    )) {
                         Some(buf) => (Image::from_rgba8(buf), true),
                         None => (Image::default(), false),
                     }
@@ -182,9 +185,13 @@ impl Bridge {
             if episodes.is_empty() {
                 continue;
             }
-            let is_watched =
-                |v: &Video| progress.get(&progress_map_key(&e.id, &v.id)).is_some_and(|p| p.watched);
-            let (future, available, available_watched) = upcoming_tally(&episodes, is_watched, today);
+            let is_watched = |v: &Video| {
+                progress
+                    .get(&progress_map_key(&e.id, &v.id))
+                    .is_some_and(|p| p.watched)
+            };
+            let (future, available, available_watched) =
+                upcoming_tally(&episodes, is_watched, today);
             // Caught up (something actually watched, nothing available
             // left) and still waiting on unaired episodes.
             if future.is_empty() || available == 0 || available_watched < available {
@@ -326,8 +333,7 @@ impl Bridge {
         // streams view actually being active: `episode_picked` no-ops when
         // the episode no longer resolves (e.g. the cache moved on).
         if let Some(app) = self.app() {
-            let on_streams =
-                !app.get_modal_episodes() && !app.get_episode_context().is_empty();
+            let on_streams = !app.get_modal_episodes() && !app.get_episode_context().is_empty();
             let still_same = self
                 .shared
                 .lock()
@@ -449,7 +455,12 @@ impl Bridge {
             let today = today_days();
             let cells = cal_cells(cal.first, &counts, cal.day, today);
             let (year, month, _) = civil_from_days(cal.first);
-            (cells, text::cal_month_title(month, year), cal.day.unwrap_or(-1), cal.open)
+            (
+                cells,
+                text::cal_month_title(month, year),
+                cal.day.unwrap_or(-1),
+                cal.open,
+            )
         };
         let day_rows = if epoch >= 0 {
             self.current_upcoming_day_rows(epoch)
@@ -485,8 +496,11 @@ impl Bridge {
             let mut state = self.shared.lock().unwrap();
             let (year, month, _) = civil_from_days(state.upcoming_cal.first);
             let shifted = (month as i64 - 1) + delta as i64;
-            let first =
-                days_from_civil(year + shifted.div_euclid(12), (shifted.rem_euclid(12) + 1) as u32, 1);
+            let first = days_from_civil(
+                year + shifted.div_euclid(12),
+                (shifted.rem_euclid(12) + 1) as u32,
+                1,
+            );
             state.upcoming_cal.first = first;
             if let Some(day) = state
                 .upcoming_list
@@ -528,7 +542,6 @@ impl Bridge {
             self.upcoming_picked(i);
         }
     }
-
 }
 
 /// One Home → Upcoming display row: library + episode-cache joins for a
@@ -667,11 +680,82 @@ fn cal_cells(
         .collect()
 }
 
+/// Which badge a Continue Watching card gets: 0 = resume (no badge — the
+/// progress rail shows it), 1 = "Next up" (still working through the
+/// series: older dated, released episodes unwatched), 2 = "New Episode"
+/// (everything else dated and released is already watched, so this one is
+/// new). `started` is whether the offered episode has started, unwatched
+/// progress; `episode_id` the offered episode; `is_watched` resolves any
+/// episode against the progress map.
+fn continue_badge(
+    started: bool,
+    episode_id: &str,
+    episodes: &[Video],
+    is_watched: impl Fn(&Video) -> bool,
+) -> i32 {
+    if started {
+        return 0;
+    }
+    let backlog = episodes.iter().any(|v| {
+        v.id != episode_id
+            && episode_has_air_date(v)
+            && episode_is_out(v, today_days())
+            && !is_watched(v)
+    });
+    if backlog { 1 } else { 2 }
+}
+
+/// Which episode/movie id Continue Watching should offer for one library entry:
+/// the in-progress one, or — once a series' latest episode is finished — the
+/// next dated, released, not-yet-watched episode. Dateless episodes never
+/// surface on their own (no schedule to count down to); a manually started
+/// one still resumes through the in-progress branch. Movies have no "next",
+/// so they only appear while in progress. `None` means nothing left to continue.
+pub(crate) fn continue_resume_id(
+    type_: &str,
+    item_id: &str,
+    latest: &EpisodeProgress,
+    episodes: Option<&[Video]>,
+    progress: &HashMap<String, EpisodeProgress>,
+) -> Option<String> {
+    if type_ == "movie" {
+        return (!latest.watched && latest.position_secs > 0.0).then(|| latest.episode_id.clone());
+    }
+    if latest.watched {
+        next_episode_to_watch(item_id, episodes?, progress).map(|v| v.id.clone())
+    } else if latest.position_secs > 0.0 {
+        Some(latest.episode_id.clone())
+    } else {
+        None
+    }
+}
+
+/// Read the Continue Watching hide map (empty when absent/corrupt).
+pub(crate) fn read_continue_hidden() -> HashMap<String, u64> {
+    read_json::<HashMap<String, u64>>(CONTINUE_HIDDEN_KEY).unwrap_or_default()
+}
+
+/// Persist the Continue Watching hide map and, unless remote data is being
+/// applied, push it mesh-wide (`continue_hidden` domain). Removed keys become
+/// tombstones via `sync_records`.
+pub(crate) fn write_continue_hidden(map: &HashMap<String, u64>) {
+    write_json(CONTINUE_HIDDEN_KEY, map);
+    if !applying() {
+        notify_continue_hidden(map);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn progress(series: &str, episode: &str, position: f64, watched: bool, updated: u64) -> EpisodeProgress {
+    fn progress(
+        series: &str,
+        episode: &str,
+        position: f64,
+        watched: bool,
+        updated: u64,
+    ) -> EpisodeProgress {
         EpisodeProgress {
             series_id: series.to_string(),
             episode_id: episode.to_string(),
@@ -770,9 +854,7 @@ mod tests {
             video("s1:1:2", 1, 2, Some("2020-01-02")),
             video("s1:1:3", 1, 3, Some("2020-01-03")),
         ];
-        let watched = |v: &Video| {
-            ["s1:1:1", "s1:1:2"].contains(&v.id.as_str())
-        };
+        let watched = |v: &Video| ["s1:1:1", "s1:1:2"].contains(&v.id.as_str());
         // Unstarted offer with older episodes still unwatched → next up.
         assert_eq!(continue_badge(false, "s1:1:2", &eps, watched), 1);
         // Unstarted offer with everything else watched → new episode.
@@ -790,7 +872,10 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(progress_map_key("s1", "s1:1:1"), done.clone());
         // All released episodes watched: nothing left to continue.
-        assert_eq!(continue_resume_id("series", "s1", &done, Some(&eps), &map), None);
+        assert_eq!(
+            continue_resume_id("series", "s1", &done, Some(&eps), &map),
+            None
+        );
         // No episode list cached yet: cannot offer the next episode.
         assert_eq!(continue_resume_id("series", "s1", &done, None, &map), None);
     }
@@ -804,7 +889,10 @@ mod tests {
         // Leap day, month ends, year rollover.
         assert_eq!(civil_from_days(days_from_civil(2024, 2, 29)), (2024, 2, 29));
         assert_eq!(civil_from_days(days_from_civil(2026, 9, 27)), (2026, 9, 27));
-        assert_eq!(civil_from_days(days_from_civil(1999, 12, 31)), (1999, 12, 31));
+        assert_eq!(
+            civil_from_days(days_from_civil(1999, 12, 31)),
+            (1999, 12, 31)
+        );
         assert_eq!(civil_from_days(days_from_civil(2000, 1, 1)), (2000, 1, 1));
         // A known Monday: 2026-09-28.
         assert_eq!(weekday_monday0(days_from_civil(2026, 9, 28)), 0);
@@ -818,18 +906,19 @@ mod tests {
     #[test]
     fn calendar_heal_keeps_valid_month_and_repairs_stale_days() {
         fn state_with(days: &[i64]) -> Shared {
-            let mut state = Shared::default();
-            state.upcoming_list = days
-                .iter()
-                .enumerate()
-                .map(|(i, d)| UpcomingEntry {
-                    series_id: format!("s{i}"),
-                    type_: "series".to_string(),
-                    episode_id: format!("e{i}"),
-                    air_days: *d,
-                })
-                .collect();
-            state
+            Shared {
+                upcoming_list: days
+                    .iter()
+                    .enumerate()
+                    .map(|(i, d)| UpcomingEntry {
+                        series_id: format!("s{i}"),
+                        type_: "series".to_string(),
+                        episode_id: format!("e{i}"),
+                        air_days: *d,
+                    })
+                    .collect(),
+                ..Shared::default()
+            }
         }
         let today = today_days();
         let day_a = today + 3;
@@ -886,71 +975,5 @@ mod tests {
         assert_eq!((marked.count, marked.selected), (2, true));
         assert_eq!(cells.iter().filter(|c| c.today).count(), 1);
         assert!(cells.iter().filter(|c| c.in_month).count() == 30);
-    }
-}
-
-/// Which badge a Continue Watching card gets: 0 = resume (no badge — the
-/// progress rail shows it), 1 = "Next up" (still working through the
-/// series: older dated, released episodes unwatched), 2 = "New Episode"
-/// (everything else dated and released is already watched, so this one is
-/// new). `started` is whether the offered episode has started, unwatched
-/// progress; `episode_id` the offered episode; `is_watched` resolves any
-/// episode against the progress map.
-fn continue_badge(
-    started: bool,
-    episode_id: &str,
-    episodes: &[Video],
-    is_watched: impl Fn(&Video) -> bool,
-) -> i32 {
-    if started {
-        return 0;
-    }
-    let backlog = episodes.iter().any(|v| {
-        v.id != episode_id
-            && episode_has_air_date(v)
-            && episode_is_out(v, today_days())
-            && !is_watched(v)
-    });
-    if backlog { 1 } else { 2 }
-}
-
-/// Which episode/movie id Continue Watching should offer for one library entry:
-/// the in-progress one, or — once a series' latest episode is finished — the
-/// next dated, released, not-yet-watched episode. Dateless episodes never
-/// surface on their own (no schedule to count down to); a manually started
-/// one still resumes through the in-progress branch. Movies have no "next",
-/// so they only appear while in progress. `None` means nothing left to continue.
-pub(crate) fn continue_resume_id(
-    type_: &str,
-    item_id: &str,
-    latest: &EpisodeProgress,
-    episodes: Option<&[Video]>,
-    progress: &HashMap<String, EpisodeProgress>,
-) -> Option<String> {
-    if type_ == "movie" {
-        return (!latest.watched && latest.position_secs > 0.0)
-            .then(|| latest.episode_id.clone());
-    }
-    if latest.watched {
-        next_episode_to_watch(item_id, episodes?, progress).map(|v| v.id.clone())
-    } else if latest.position_secs > 0.0 {
-        Some(latest.episode_id.clone())
-    } else {
-        None
-    }
-}
-
-/// Read the Continue Watching hide map (empty when absent/corrupt).
-pub(crate) fn read_continue_hidden() -> HashMap<String, u64> {
-    read_json::<HashMap<String, u64>>(CONTINUE_HIDDEN_KEY).unwrap_or_default()
-}
-
-/// Persist the Continue Watching hide map and, unless remote data is being
-/// applied, push it mesh-wide (`continue_hidden` domain). Removed keys become
-/// tombstones via `sync_records`.
-pub(crate) fn write_continue_hidden(map: &HashMap<String, u64>) {
-    write_json(CONTINUE_HIDDEN_KEY, map);
-    if !applying() {
-        notify_continue_hidden(map);
     }
 }

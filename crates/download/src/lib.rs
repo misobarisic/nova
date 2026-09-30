@@ -41,7 +41,10 @@ impl DownloadSource {
     }
 
     pub fn torrent(info_hash: impl Into<String>, file_idx: Option<u32>) -> Self {
-        Self::Torrent { info_hash: info_hash.into(), file_idx }
+        Self::Torrent {
+            info_hash: info_hash.into(),
+            file_idx,
+        }
     }
 
     pub fn url(&self) -> Option<&str> {
@@ -135,10 +138,19 @@ impl Default for DownloadJob {
 impl DownloadJob {
     pub fn new(id: impl Into<String>, source: DownloadSource) -> Self {
         let now = unix_timestamp();
-        Self { id: id.into(), created_at: now, updated_at: now, source, ..Self::default() }
+        Self {
+            id: id.into(),
+            created_at: now,
+            updated_at: now,
+            source,
+            ..Self::default()
+        }
     }
 
-    pub fn http_request(&self, destination: impl Into<PathBuf>) -> Result<HttpDownloadRequest, DownloadError> {
+    pub fn http_request(
+        &self,
+        destination: impl Into<PathBuf>,
+    ) -> Result<HttpDownloadRequest, DownloadError> {
         let url = self.source.url().ok_or_else(|| {
             DownloadError::InvalidSource("torrent downloads are not HTTP downloads".into())
         })?;
@@ -211,7 +223,10 @@ pub struct DownloadManifest {
 
 impl Default for DownloadManifest {
     fn default() -> Self {
-        Self { version: 1, jobs: Vec::new() }
+        Self {
+            version: 1,
+            jobs: Vec::new(),
+        }
     }
 }
 
@@ -238,7 +253,11 @@ pub struct DownloadResume {
 
 impl DownloadResume {
     pub fn new(bytes_downloaded: u64, etag: Option<String>, last_modified: Option<String>) -> Self {
-        Self { bytes_downloaded, etag, last_modified }
+        Self {
+            bytes_downloaded,
+            etag,
+            last_modified,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -255,13 +274,21 @@ pub struct HttpDownloadRequest {
 
 impl Default for HttpDownloadRequest {
     fn default() -> Self {
-        Self { url: String::new(), destination: PathBuf::new(), resume: None }
+        Self {
+            url: String::new(),
+            destination: PathBuf::new(),
+            resume: None,
+        }
     }
 }
 
 impl HttpDownloadRequest {
     pub fn new(url: impl Into<String>, destination: impl Into<PathBuf>) -> Self {
-        Self { url: url.into(), destination: destination.into(), resume: None }
+        Self {
+            url: url.into(),
+            destination: destination.into(),
+            resume: None,
+        }
     }
 
     pub fn with_resume(mut self, resume: DownloadResume) -> Self {
@@ -269,7 +296,10 @@ impl HttpDownloadRequest {
         self
     }
 
-    pub fn from_job(job: &DownloadJob, destination: impl Into<PathBuf>) -> Result<Self, DownloadError> {
+    pub fn from_job(
+        job: &DownloadJob,
+        destination: impl Into<PathBuf>,
+    ) -> Result<Self, DownloadError> {
         job.http_request(destination)
     }
 }
@@ -301,7 +331,11 @@ pub struct DownloadProgress {
 
 impl DownloadProgress {
     pub fn new(bytes_downloaded: u64, total_bytes: Option<u64>, bytes_per_second: u64) -> Self {
-        Self { bytes_downloaded, total_bytes, bytes_per_second }
+        Self {
+            bytes_downloaded,
+            total_bytes,
+            bytes_per_second,
+        }
     }
 
     pub fn fraction(&self) -> Option<f64> {
@@ -319,7 +353,8 @@ impl DownloadProgress {
     }
 
     pub fn is_complete(&self) -> bool {
-        self.total_bytes.is_some_and(|total| self.bytes_downloaded >= total)
+        self.total_bytes
+            .is_some_and(|total| self.bytes_downloaded >= total)
     }
 
     pub fn formatted_bytes(&self) -> String {
@@ -355,7 +390,8 @@ pub struct CancellationToken {
 
 impl fmt::Debug for CancellationToken {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("CancellationToken")
+        formatter
+            .debug_struct("CancellationToken")
             .field("cancelled", &self.is_cancelled())
             .finish()
     }
@@ -424,7 +460,10 @@ impl fmt::Display for DownloadError {
             Self::InvalidSource(message) => formatter.write_str(message),
             Self::UnsupportedUrl(url) => write!(formatter, "unsupported download URL: {url}"),
             Self::UnsupportedContentType(content_type) => {
-                write!(formatter, "unsupported download content type: {content_type}")
+                write!(
+                    formatter,
+                    "unsupported download content type: {content_type}"
+                )
             }
             Self::HttpStatus { status, message } => {
                 if message.is_empty() {
@@ -433,8 +472,12 @@ impl fmt::Display for DownloadError {
                     write!(formatter, "HTTP {status}: {message}")
                 }
             }
-            Self::InvalidResponse(message) => write!(formatter, "invalid download response: {message}"),
-            Self::InvalidResume(message) => write!(formatter, "invalid download resume state: {message}"),
+            Self::InvalidResponse(message) => {
+                write!(formatter, "invalid download response: {message}")
+            }
+            Self::InvalidResume(message) => {
+                write!(formatter, "invalid download resume state: {message}")
+            }
             Self::Io(message) => write!(formatter, "download I/O error: {message}"),
         }
     }
@@ -449,7 +492,10 @@ impl From<std::io::Error> for DownloadError {
 }
 
 pub fn unix_timestamp() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 pub fn format_bytes(bytes: u64) -> String {
@@ -487,28 +533,43 @@ pub fn format_percent(downloaded: u64, total: Option<u64>) -> String {
 
 pub fn format_progress(downloaded: u64, total: Option<u64>) -> String {
     match total {
-        Some(total) => format!("{} / {} ({})", format_bytes(downloaded), format_bytes(total), format_percent(downloaded, Some(total))),
+        Some(total) => format!(
+            "{} / {} ({})",
+            format_bytes(downloaded),
+            format_bytes(total),
+            format_percent(downloaded, Some(total))
+        ),
         None => format_bytes(downloaded),
     }
 }
 
 pub fn sanitize_filename(input: &str) -> String {
-    let basename = input.rsplit(|character| character == '/' || character == '\\').next().unwrap_or(input);
+    let basename = input.rsplit(['/', '\\']).next().unwrap_or(input);
     let mut cleaned = String::with_capacity(basename.len());
     for character in basename.chars() {
-        if character.is_control() || matches!(character, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+        if character.is_control()
+            || matches!(
+                character,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+            )
+        {
             cleaned.push('_');
         } else {
             cleaned.push(character);
         }
     }
-    let trimmed = cleaned.trim_matches(|character: char| character == ' ' || character == '.').to_string();
+    let trimmed = cleaned
+        .trim_matches(|character: char| character == ' ' || character == '.')
+        .to_string();
     if trimmed.is_empty() {
         return "download".into();
     }
     let device_stem = trimmed.split('.').next().unwrap_or(trimmed.as_str());
     if is_reserved_name(device_stem) {
-        let suffix = trimmed.find('.').map(|index| &trimmed[index..]).unwrap_or("");
+        let suffix = trimmed
+            .find('.')
+            .map(|index| &trimmed[index..])
+            .unwrap_or("");
         return limit_filename(&format!("{device_stem}_{suffix}"));
     }
     limit_filename(&trimmed)
@@ -546,7 +607,11 @@ fn limit_filename(name: &str) -> String {
         return name.to_string();
     }
     let (stem, extension) = split_extension(name);
-    let suffix = if extension.is_empty() { String::new() } else { format!(".{extension}") };
+    let suffix = if extension.is_empty() {
+        String::new()
+    } else {
+        format!(".{extension}")
+    };
     let available = LIMIT.saturating_sub(suffix.len());
     if available == 0 {
         return "download".into();
@@ -556,22 +621,24 @@ fn limit_filename(name: &str) -> String {
         end -= 1;
     }
     let mut limited = format!("{}{}", &stem[..end], suffix);
-    limited = limited.trim_end_matches(|character: char| character == ' ' || character == '.').to_string();
-    if limited.is_empty() { "download".into() } else { limited }
+    limited = limited.trim_end_matches([' ', '.']).to_string();
+    if limited.is_empty() {
+        "download".into()
+    } else {
+        limited
+    }
 }
 
 pub fn is_reserved_filename(input: &str) -> bool {
-    let basename = input
-        .rsplit(|character| character == '/' || character == '\\')
-        .next()
-        .unwrap_or(input);
+    let basename = input.rsplit(['/', '\\']).next().unwrap_or(input);
     let stem = basename.split('.').next().unwrap_or(basename);
     is_reserved_name(stem)
 }
 
 pub fn validate_download_url(url: &str) -> Result<Url, DownloadError> {
     let trimmed = url.trim();
-    let parsed = Url::parse(trimmed).map_err(|error| DownloadError::InvalidUrl(error.to_string()))?;
+    let parsed =
+        Url::parse(trimmed).map_err(|error| DownloadError::InvalidUrl(error.to_string()))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(DownloadError::UnsupportedUrl(trimmed.to_string()));
     }
@@ -597,7 +664,10 @@ mod tests {
         let source = DownloadSource::torrent("abc", Some(2));
         let json = serde_json::to_string(&source).unwrap();
         assert_eq!(json, "{\"torrent\":{\"info_hash\":\"abc\",\"file_idx\":2}}");
-        assert_eq!(serde_json::from_str::<DownloadSource>(&json).unwrap(), source);
+        assert_eq!(
+            serde_json::from_str::<DownloadSource>(&json).unwrap(),
+            source
+        );
 
         let manifest: DownloadManifest = serde_json::from_str("{}").unwrap();
         assert_eq!(manifest.version, 1);

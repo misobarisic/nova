@@ -62,8 +62,16 @@ fn continue_badges_mark_next_up_and_new_episode() {
         // next-up badge (its card is offscreen) and nothing on the resume.
         let next_up = ElementHandle::find_by_element_type_name(&app, "NextUpBadge").count();
         let new_ep = ElementHandle::find_by_element_type_name(&app, "NewEpisodeBadge").count();
-        fail(&failures1, new_ep == 1, &format!("landing must badge the new-episode card, found {new_ep}"));
-        fail(&failures1, next_up == 0, &format!("landing must not badge offscreen cards, found {next_up}"));
+        fail(
+            &failures1,
+            new_ep == 1,
+            &format!("landing must badge the new-episode card, found {new_ep}"),
+        );
+        fail(
+            &failures1,
+            next_up == 0,
+            &format!("landing must not badge offscreen cards, found {next_up}"),
+        );
 
         // Same cards, same badges in the subpage grid (the covered landing
         // layer still instantiates its own badge).
@@ -74,9 +82,17 @@ fn continue_badges_mark_next_up_and_new_episode() {
             let app = app2.upgrade().unwrap();
             let next_up = ElementHandle::find_by_element_type_name(&app, "NextUpBadge").count();
             let new_ep = ElementHandle::find_by_element_type_name(&app, "NewEpisodeBadge").count();
-            fail(&failures2, next_up == 1, &format!("subpage must badge the next-up card, found {next_up}"));
+            fail(
+                &failures2,
+                next_up == 1,
+                &format!("subpage must badge the next-up card, found {next_up}"),
+            );
             // Landing's own new-episode badge plus the subpage grid's.
-            fail(&failures2, new_ep == 2, &format!("subpage must badge the new-episode card too, found {new_ep}"));
+            fail(
+                &failures2,
+                new_ep == 2,
+                &format!("subpage must badge the new-episode card too, found {new_ep}"),
+            );
             slint::quit_event_loop().unwrap();
         });
     });
@@ -84,5 +100,9 @@ fn continue_badges_mark_next_up_and_new_episode() {
     slint::run_event_loop().unwrap();
 
     let failures = failures.borrow();
-    assert!(failures.is_empty(), "continue badge failures:\n  {}", failures.join("\n  "));
+    assert!(
+        failures.is_empty(),
+        "continue badge failures:\n  {}",
+        failures.join("\n  ")
+    );
 }

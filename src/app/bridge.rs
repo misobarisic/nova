@@ -25,21 +25,18 @@ pub(super) fn with_global_bridge<R>(f: impl FnOnce(&Bridge) -> R) -> Option<R> {
 impl Bridge {
     pub(super) fn new(
         app: slint::Weak<AppWindow>,
-        #[cfg(feature = "desktop")]
-        poster_tx: PosterTx,
-        #[cfg(feature = "desktop")]
-        poster_cache: PosterCache,
+        #[cfg(feature = "desktop")] poster_tx: PosterTx,
+        #[cfg(feature = "desktop")] poster_cache: PosterCache,
         catalog_gen: Arc<AtomicU64>,
         player: crate::player::Player,
         downloads: DownloadCoordinator,
     ) -> Self {
         Bridge {
             app,
-            shared: {
-                let mut s = Shared::default();
-                s.chosen_addon = usize::MAX; // default to "All addons"
-                Arc::new(Mutex::new(s))
-            },
+            shared: Arc::new(Mutex::new(Shared {
+                chosen_addon: usize::MAX, // default to "All addons"
+                ..Shared::default()
+            })),
             catalog_gen,
             #[cfg(feature = "desktop")]
             poster_tx,
@@ -55,5 +52,4 @@ impl Bridge {
     pub(super) fn app(&self) -> Option<AppWindow> {
         self.app.upgrade()
     }
-
 }

@@ -84,18 +84,10 @@ impl Default for TorrentSettings {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DownloadSettings {
     #[serde(default)]
     pub auto_delete_watched: bool,
-}
-
-impl Default for DownloadSettings {
-    fn default() -> Self {
-        Self {
-            auto_delete_watched: false,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -115,10 +107,11 @@ pub enum CacheImageFormat {
 /// Android video decoder preference (Settings → Player). The player starts at
 /// the chosen decoder and steps down the chain automatically when it fails:
 /// `HwPlus` → `Hw` → `Sw`, `Hw` → `Sw`, `Sw` alone. Unused on other platforms.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum AndroidHwdec {
     /// Direct MediaCodec: decoded frames stay on the GPU ("HW+").
     #[serde(rename = "hw+")]
+    #[default]
     HwPlus,
     /// MediaCodec copy-back: hardware decode through system memory ("HW").
     #[serde(rename = "hw")]
@@ -126,12 +119,6 @@ pub enum AndroidHwdec {
     /// Software decode ("SW").
     #[serde(rename = "sw")]
     Sw,
-}
-
-impl Default for AndroidHwdec {
-    fn default() -> Self {
-        AndroidHwdec::HwPlus
-    }
 }
 
 impl AndroidHwdec {
@@ -191,7 +178,10 @@ impl Language {
     /// Settings picker index → language. Out-of-range reads as English (the
     /// fallback whenever the stored value or the UI list is out of step).
     pub fn from_index(index: i32) -> Self {
-        Self::ALL.get(index.max(0) as usize).copied().unwrap_or_default()
+        Self::ALL
+            .get(index.max(0) as usize)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Language → Settings picker index.
@@ -535,9 +525,7 @@ pub fn app_data_dir() -> PathBuf {
 fn xdg_app_dir(env: &str, home_fallback: &str, name: &str) -> PathBuf {
     let base = std::env::var_os(env)
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(home_fallback))
-        })
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(home_fallback)))
         .unwrap_or_else(std::env::temp_dir);
     base.join(name)
 }
@@ -554,9 +542,8 @@ fn windows_app_dir(local: bool) -> PathBuf {
     let base = std::env::var_os(env)
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("USERPROFILE").map(|profile| {
-                PathBuf::from(profile).join("AppData").join(profile_subdir)
-            })
+            std::env::var_os("USERPROFILE")
+                .map(|profile| PathBuf::from(profile).join("AppData").join(profile_subdir))
         })
         .unwrap_or_else(std::env::temp_dir);
     base.join(APP_DIR_NAME)
@@ -726,7 +713,10 @@ mod tests {
         let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
         let settings: CacheSettings = serde_json::from_str(older).unwrap();
         assert_eq!(settings.language, Language::English);
-        assert_eq!(settings.episode_start_behavior, EpisodeStartBehavior::Resume);
+        assert_eq!(
+            settings.episode_start_behavior,
+            EpisodeStartBehavior::Resume
+        );
         assert_eq!(CacheSettings::default().language.index(), 0);
     }
 

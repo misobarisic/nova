@@ -16,9 +16,10 @@ fn s(v: &str) -> SharedString {
 }
 
 fn back(app: &nova::AppWindow) {
-    app.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
-        text: slint::platform::Key::Back.into(),
-    });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
 }
 
 fn after(ms: u64, body: impl FnOnce() + 'static) {
@@ -71,8 +72,7 @@ fn downloads_subpage_shows_auto_delete_and_lists_episodes() {
     after(400, move || {
         let app = app1.upgrade().unwrap();
         // Downloads is the 9th landing entry (index 8).
-        let Some(downloads) =
-            ElementHandle::find_by_element_type_name(&app, "SettingsLink").nth(8)
+        let Some(downloads) = ElementHandle::find_by_element_type_name(&app, "SettingsLink").nth(8)
         else {
             fail(&failures1, false, "DIAG: no Downloads landing entry");
             slint::quit_event_loop().unwrap();
@@ -112,11 +112,8 @@ fn downloads_subpage_shows_auto_delete_and_lists_episodes() {
                     after(400, move || {
                         let app = app3.upgrade().unwrap();
                         // Two Delete buttons, one per listed episode.
-                        let deletes: Vec<_> = ElementHandle::find_by_element_type_name(
-                            &app,
-                            "PillButton",
-                        )
-                        .collect();
+                        let deletes: Vec<_> =
+                            ElementHandle::find_by_element_type_name(&app, "PillButton").collect();
                         fail(
                             &failures3,
                             deletes.len() == 2,
@@ -133,8 +130,7 @@ fn downloads_subpage_shows_auto_delete_and_lists_episodes() {
                             }
                             fail(
                                 &failures4,
-                                removed4.borrow().len() == 1
-                                    && removed4.borrow()[0] == "d1",
+                                removed4.borrow().len() == 1 && removed4.borrow()[0] == "d1",
                                 "tapping Delete must remove that episode",
                             );
 
@@ -144,11 +140,9 @@ fn downloads_subpage_shows_auto_delete_and_lists_episodes() {
                             back(&app5);
                             after(400, move || {
                                 let app = app4.upgrade().unwrap();
-                                let toggles = ElementHandle::find_by_element_type_name(
-                                    &app,
-                                    "ToggleSwitch",
-                                )
-                                .count();
+                                let toggles =
+                                    ElementHandle::find_by_element_type_name(&app, "ToggleSwitch")
+                                        .count();
                                 fail(
                                     &failures4,
                                     toggles >= 1,

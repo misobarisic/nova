@@ -464,7 +464,7 @@ impl Bridge {
                 .collect();
             let entry = &mut state.installed[pos];
             if name_changed {
-                entry.label = if taken.iter().any(|l| *l == wanted) {
+                entry.label = if taken.contains(&wanted) {
                     format!("{wanted} ({base})")
                 } else {
                     wanted

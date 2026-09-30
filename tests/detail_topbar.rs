@@ -45,10 +45,7 @@ fn show_series(app: &nova::AppWindow) {
     app.set_streams(Rc::new(VecModel::from(Vec::new())).into());
     app.set_in_library(true);
     app.set_category_rows(
-        Rc::new(VecModel::from(vec![nova::CategoryRow {
-            name: s("Anime"),
-        }]))
-        .into(),
+        Rc::new(VecModel::from(vec![nova::CategoryRow { name: s("Anime") }])).into(),
     );
     app.set_selected_category_count(1);
 }
@@ -69,7 +66,12 @@ fn detail_top_bar_is_icon_only_and_fits() {
         let app = app1.upgrade().unwrap();
 
         let labels = visible_texts(&app).join(" | ");
-        for banned in ["Add to library", "Remove from library", "Categories", "Back"] {
+        for banned in [
+            "Add to library",
+            "Remove from library",
+            "Categories",
+            "Back",
+        ] {
             if labels.contains(banned) {
                 failures1
                     .borrow_mut()
@@ -86,9 +88,10 @@ fn detail_top_bar_is_icon_only_and_fits() {
         }
 
         if max_right_edge(&app) > 361.0 {
-            failures1
-                .borrow_mut()
-                .push(format!("top bar overflows 360px (edge {})", max_right_edge(&app)));
+            failures1.borrow_mut().push(format!(
+                "top bar overflows 360px (edge {})",
+                max_right_edge(&app)
+            ));
         }
 
         slint::quit_event_loop().unwrap();

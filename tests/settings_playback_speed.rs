@@ -111,19 +111,27 @@ fn playback_speed_control_renders_and_reports_steps() {
             for preset in ["1×", "1.25×", "1.5×", "2×"] {
                 fail(
                     &failures2,
-                    ElementHandle::find_by_accessible_label(&app, preset).next().is_some(),
+                    ElementHandle::find_by_accessible_label(&app, preset)
+                        .next()
+                        .is_some(),
                     "the speed control must offer the 1× / 1.25× / 1.5× / 2× presets",
                 );
             }
             // The readout reflects the shared value, two decimals.
             fail(
                 &failures2,
-                ElementHandle::find_by_accessible_label(&app, "1.00×").next().is_some(),
+                ElementHandle::find_by_accessible_label(&app, "1.00×")
+                    .next()
+                    .is_some(),
                 "the speed readout must show the current rate (1.00×)",
             );
             let Some(faster) = ElementHandle::find_by_accessible_label(&app, "Faster").next()
             else {
-                fail(&failures2, false, "DIAG: no Faster button in Settings → Player");
+                fail(
+                    &failures2,
+                    false,
+                    "DIAG: no Faster button in Settings → Player",
+                );
                 slint::quit_event_loop().unwrap();
                 return;
             };
@@ -151,7 +159,11 @@ fn playback_speed_control_renders_and_reports_steps() {
                         ElementHandle::find_by_element_id(&app, "PlayerOverlay::settings_gear")
                             .next()
                     else {
-                        fail(&failures4, false, "DIAG: no settings gear in the player OSD");
+                        fail(
+                            &failures4,
+                            false,
+                            "DIAG: no settings gear in the player OSD",
+                        );
                         slint::quit_event_loop().unwrap();
                         return;
                     };
@@ -216,9 +228,8 @@ fn playback_speed_control_renders_and_reports_steps() {
                                 LogicalPosition::new(track_left + track_width * 0.75, y),
                             );
                             let high = changes6.borrow().last().copied();
-                            let in_range = |v: Option<f32>| {
-                                v.is_some_and(|v| (0.5..=2.0).contains(&v))
-                            };
+                            let in_range =
+                                |v: Option<f32>| v.is_some_and(|v| (0.5..=2.0).contains(&v));
                             fail(
                                 &failures6,
                                 in_range(low) && in_range(high),

@@ -40,8 +40,7 @@ impl Bridge {
                         None
                     }
                 };
-                if let (Some(pixels), Some(index), Some(app)) =
-                    (pixels, index, app_weak.upgrade())
+                if let (Some(pixels), Some(index), Some(app)) = (pixels, index, app_weak.upgrade())
                 {
                     app.invoke_set_search_card_poster(index as i32, Image::from_rgba8(pixels));
                 }
@@ -57,7 +56,12 @@ impl Bridge {
         #[cfg(feature = "desktop")]
         {
             let generation = self.catalog_gen.load(Ordering::Relaxed);
-            self.poster_tx.send_hi(PosterJob { generation, index, url, library });
+            self.poster_tx.send_hi(PosterJob {
+                generation,
+                index,
+                url,
+                library,
+            });
         }
         #[cfg(not(feature = "desktop"))]
         {
@@ -140,10 +144,8 @@ impl Bridge {
                 }
                 if let Some(url) = &v.thumbnail
                     && {
-                        let cached = decoded_cache_contains(&sized_cache_key(
-                            url,
-                            Some(EPISODE_THUMB_SIDE),
-                        ));
+                        let cached =
+                            decoded_cache_contains(&sized_cache_key(url, Some(EPISODE_THUMB_SIDE)));
                         // Normal pass takes the missing ones, verify pass
                         // the cached ones — disjoint by construction.
                         cached == verify
@@ -191,24 +193,16 @@ impl Bridge {
                 // Refresh check: the cached art stays painted while fresh
                 // bytes download; rows repaint only on a real pixel change.
                 let worker = bridge.clone();
-                refresh_image_if_changed(
-                    job.url.clone(),
-                    Some(EPISODE_THUMB_SIDE),
-                    move |fresh| {
-                        EPISODE_INFLIGHT.lock().unwrap().remove(&job.url);
-                        EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
-                        // Kick off the next queued download.
-                        Bridge::pump_episode_thumbs(worker.clone());
-                        if fresh.is_none() {
-                            return; // unchanged or failed: cached art is shown
-                        }
-                        Bridge::schedule_episode_thumb_render(
-                            worker,
-                            job.item_id,
-                            job.season_index,
-                        );
-                    },
-                );
+                refresh_image_if_changed(job.url.clone(), Some(EPISODE_THUMB_SIDE), move |fresh| {
+                    EPISODE_INFLIGHT.lock().unwrap().remove(&job.url);
+                    EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
+                    // Kick off the next queued download.
+                    Bridge::pump_episode_thumbs(worker.clone());
+                    if fresh.is_none() {
+                        return; // unchanged or failed: cached art is shown
+                    }
+                    Bridge::schedule_episode_thumb_render(worker, job.item_id, job.season_index);
+                });
                 continue;
             }
             let worker = bridge.clone();
@@ -218,18 +212,22 @@ impl Bridge {
                 EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
                 // Kick off the next queued download.
                 Bridge::pump_episode_thumbs(worker.clone());
-                    if !loaded {
-                        return; // keep the placeholder
-                    }
-                    Bridge::schedule_episode_thumb_render(worker, job.item_id, job.season_index);
-                });
+                if !loaded {
+                    return; // keep the placeholder
+                }
+                Bridge::schedule_episode_thumb_render(worker, job.item_id, job.season_index);
+            });
         }
     }
 
     /// Debounced episode-list re-render after thumbnail downloads: at most
     /// one render is scheduled; it picks up every thumbnail finished so far
     /// and only fires while the same item + season list is still showing.
-    pub(super) fn schedule_episode_thumb_render(bridge: Bridge, item_id: String, season_index: usize) {
+    pub(super) fn schedule_episode_thumb_render(
+        bridge: Bridge,
+        item_id: String,
+        season_index: usize,
+    ) {
         if !EPISODE_RENDER_PENDING.swap(true, Ordering::SeqCst) {
             let _ = slint::invoke_from_event_loop(move || {
                 let timer = slint::Timer::default();
@@ -243,13 +241,14 @@ impl Bridge {
                             state
                                 .modal_item
                                 .as_ref()
-                                .map(|m| {
-                                    m.id == item_id && m.season_index == season_index
-                                })
+                                .map(|m| m.id == item_id && m.season_index == season_index)
                                 .unwrap_or(false)
                         };
                         if still_on_list
-                            && bridge.app().map(|a| a.get_modal_episodes()).unwrap_or(false)
+                            && bridge
+                                .app()
+                                .map(|a| a.get_modal_episodes())
+                                .unwrap_or(false)
                         {
                             bridge.apply_episode_rows();
                         }
@@ -329,9 +328,9 @@ impl Bridge {
                     let model = app.get_library();
                     // Guard: card still present, still this item and not
                     // already filled by another race.
-                    let matches = model.row_data(index).map(|card: MediaCard| {
-                        !card.is_loaded && card.id == SharedString::from(id.as_str())
-                    });
+                    let matches = model
+                        .row_data(index)
+                        .map(|card: MediaCard| !card.is_loaded && card.id == id.as_str());
                     if matches == Some(true) {
                         app.invoke_set_library_poster(index as i32, Image::from_rgba8(pixels));
                     }
@@ -371,9 +370,9 @@ impl Bridge {
                         return;
                     };
                     let model = app.get_home_continue();
-                    let matches = model.row_data(index).map(|row: ContinueRow| {
-                        !row.is_loaded && row.id == SharedString::from(id.as_str())
-                    });
+                    let matches = model
+                        .row_data(index)
+                        .map(|row: ContinueRow| !row.is_loaded && row.id == id.as_str());
                     if matches == Some(true) {
                         let Some(mut row) = model.row_data(index) else {
                             return;
@@ -418,9 +417,9 @@ impl Bridge {
                         return;
                     };
                     let model = app.get_home_upcoming();
-                    let matches = model.row_data(index).map(|row: UpcomingRow| {
-                        !row.is_loaded && row.id == SharedString::from(id.as_str())
-                    });
+                    let matches = model
+                        .row_data(index)
+                        .map(|row: UpcomingRow| !row.is_loaded && row.id == id.as_str());
                     if matches == Some(true) {
                         let Some(mut row) = model.row_data(index) else {
                             return;
@@ -438,7 +437,8 @@ impl Bridge {
     /// or not in library). Backfills entries saved before the backdrop URL
     /// was persisted, so later reopens can start the image load without
     /// waiting for a meta fetch.
-    pub(super) fn persist_backdrop_for(&self, id: &str, url: &str) {        if url.is_empty() {
+    pub(super) fn persist_backdrop_for(&self, id: &str, url: &str) {
+        if url.is_empty() {
             return;
         }
         let changed = {
@@ -614,7 +614,11 @@ impl Bridge {
     /// rebuild or restart. Desktop also drops the matching `PosterStore`
     /// entries so later repaints can't resurrect the stale art. Main thread
     /// only (touches the Slint models).
-    pub(super) fn push_poster_to_grids(&self, item_id: &str, pixels: &SharedPixelBuffer<Rgba8Pixel>) {
+    pub(super) fn push_poster_to_grids(
+        &self,
+        item_id: &str,
+        pixels: &SharedPixelBuffer<Rgba8Pixel>,
+    ) {
         let Some(app) = self.app() else {
             return;
         };
@@ -642,10 +646,7 @@ impl Bridge {
                 #[cfg(feature = "desktop")]
                 {
                     let generation = self.catalog_gen.load(Ordering::Relaxed);
-                    self.poster_cache
-                        .lock()
-                        .unwrap()
-                        .remove(&(generation, i));
+                    self.poster_cache.lock().unwrap().remove(&(generation, i));
                 }
             }
         }
@@ -680,7 +681,6 @@ impl Bridge {
             });
         });
     }
-
 }
 
 pub(crate) fn set_active_cache_settings(settings: CacheSettings) {

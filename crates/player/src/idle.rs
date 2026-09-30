@@ -82,12 +82,11 @@ pub fn converge_idle_inhibit(want: bool) {
     match action_for(want, state.held()) {
         Action::Keep => {}
         Action::Release => {
-            if let (Some(conn), Some(cookie)) = (state.conn.clone(), state.cookie) {
-                if let Ok(proxy) = ScreenSaverProxyBlocking::new(&conn)
-                    && let Err(e) = proxy.uninhibit(cookie)
-                {
-                    eprintln!("nova player: release screensaver inhibit: {e}");
-                }
+            if let (Some(conn), Some(cookie)) = (state.conn.clone(), state.cookie)
+                && let Ok(proxy) = ScreenSaverProxyBlocking::new(&conn)
+                && let Err(e) = proxy.uninhibit(cookie)
+            {
+                eprintln!("nova player: release screensaver inhibit: {e}");
             }
             state.cookie = None;
             state.login_fd = None;

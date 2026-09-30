@@ -42,18 +42,21 @@ fn moved(app: &nova::AppWindow, position: LogicalPosition) {
 }
 
 fn release(app: &nova::AppWindow, position: LogicalPosition) {
-    let _ = app
-        .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
-            position,
-            button: slint::platform::PointerEventButton::Left,
-        });
+    let _ =
+        app.window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            });
 }
 
 fn center(element: &ElementHandle) -> LogicalPosition {
     let position = element.absolute_position();
     let size = element.size();
-    LogicalPosition::new(position.x + size.width / 2.0, position.y + size.height / 2.0)
+    LogicalPosition::new(
+        position.x + size.width / 2.0,
+        position.y + size.height / 2.0,
+    )
 }
 
 /// Every card whose card background currently sits above its own box, i.e. is
@@ -65,7 +68,10 @@ fn lifted_cards(app: &nova::AppWindow, kind: &str) -> Vec<String> {
         .into_iter()
         .enumerate()
         .filter_map(|(i, card)| {
-            let lift = card.query_descendants().match_id(&format!("{kind}::lift")).find_first()?;
+            let lift = card
+                .query_descendants()
+                .match_id(format!("{kind}::lift"))
+                .find_first()?;
             let dy = lift.absolute_position().y - card.absolute_position().y;
             (dy < -1.0).then(|| {
                 let p = card.absolute_position();
@@ -163,7 +169,11 @@ fn continue_card_hover_lift_is_pointer_only() {
             let app = app2.upgrade().unwrap();
             let cards = visible_grid_cards(&app);
             if cards.len() < 2 {
-                fail(&failures2, false, "DIAG: not enough visible subpage grid cards");
+                fail(
+                    &failures2,
+                    false,
+                    "DIAG: not enough visible subpage grid cards",
+                );
                 slint::quit_event_loop().unwrap();
                 return;
             }
@@ -216,5 +226,9 @@ fn continue_card_hover_lift_is_pointer_only() {
     slint::run_event_loop().unwrap();
 
     let failures = failures.borrow();
-    assert!(failures.is_empty(), "continue card hover failures:\n  {}", failures.join("\n  "));
+    assert!(
+        failures.is_empty(),
+        "continue card hover failures:\n  {}",
+        failures.join("\n  ")
+    );
 }

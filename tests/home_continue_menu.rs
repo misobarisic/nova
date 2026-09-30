@@ -268,7 +268,7 @@ fn continue_menu_matches_the_library_card_menu() {
 
                     // ---- Subpage: hold a grid card to open the sheet ----
                     let Some(header) =
-                        ElementHandle::find_by_element_type_name(&app, "SectionHeader").nth(0)
+                        ElementHandle::find_by_element_type_name(&app, "SectionHeader").next()
                     else {
                         fail(&failures3, false, "DIAG: no SectionHeader found");
                         slint::quit_event_loop().unwrap();

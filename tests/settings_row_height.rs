@@ -40,7 +40,7 @@ fn enclosing_rect(
                 && p.y <= target.1 + 0.5
                 && p.x + sz.width >= target.0 + target.2 - 0.5
                 && p.y + sz.height >= target.1 + target.3 - 0.5;
-            contains.then(|| (sz.width * sz.height, p.x, p.y, sz.width, sz.height))
+            contains.then_some((sz.width * sz.height, p.x, p.y, sz.width, sz.height))
         })
         .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
         .map(|(_, x, y, w, h)| (x, y, w, h))
@@ -69,8 +69,7 @@ fn wrapped_download_row_grows_to_fit() {
     after(400, move || {
         let app = app1.upgrade().unwrap();
         // Downloads is the 9th landing entry (index 8).
-        let Some(downloads) =
-            ElementHandle::find_by_element_type_name(&app, "SettingsLink").nth(8)
+        let Some(downloads) = ElementHandle::find_by_element_type_name(&app, "SettingsLink").nth(8)
         else {
             slint::quit_event_loop().unwrap();
             panic!("DIAG: no Downloads landing entry");

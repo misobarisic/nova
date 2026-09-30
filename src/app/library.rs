@@ -344,7 +344,10 @@ impl Bridge {
         }
         app.set_selected_genre_list(
             Rc::new(VecModel::from(
-                paint_genres.iter().map(SharedString::from).collect::<Vec<_>>(),
+                paint_genres
+                    .iter()
+                    .map(SharedString::from)
+                    .collect::<Vec<_>>(),
             ))
             .into(),
         );
@@ -485,10 +488,7 @@ impl Bridge {
         let (entry_id, all_cats) = {
             let state = self.shared.lock().unwrap();
             match state.modal_item.as_ref() {
-                Some(m) => (
-                    m.id.clone(),
-                    state.cache_settings.categories.clone(),
-                ),
+                Some(m) => (m.id.clone(), state.cache_settings.categories.clone()),
                 None => return,
             }
         };
@@ -586,7 +586,6 @@ impl Bridge {
         }
         self.sync_library_category_index();
     }
-
 }
 
 /// Add/overwrite an entry in place, keeping entries unique by `id` and
@@ -640,7 +639,7 @@ pub(crate) fn remove_category(
 /// Rename a category everywhere (settings + all library entries).
 #[allow(dead_code)]
 pub(crate) fn rename_category(
-    categories: &mut Vec<String>,
+    categories: &mut [String],
     entries: &mut [LibraryEntry],
     old: &str,
     new: &str,
@@ -655,11 +654,7 @@ pub(crate) fn rename_category(
     }
 }
 /// Set the categories for a single library entry (by id).
-pub(crate) fn set_entry_categories(
-    entries: &mut [LibraryEntry],
-    id: &str,
-    cats: Vec<String>,
-) {
+pub(crate) fn set_entry_categories(entries: &mut [LibraryEntry], id: &str, cats: Vec<String>) {
     if let Some(e) = entries.iter_mut().find(|e| e.id == id) {
         e.categories = cats;
     }

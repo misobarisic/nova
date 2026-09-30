@@ -36,12 +36,12 @@ fn tap(app: &nova::AppWindow, element: &ElementHandle) {
             position: c,
             button: slint::platform::PointerEventButton::Left,
         });
-    let _ = app
-        .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
-            position: c,
-            button: slint::platform::PointerEventButton::Left,
-        });
+    let _ =
+        app.window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
+                position: c,
+                button: slint::platform::PointerEventButton::Left,
+            });
 }
 
 fn chevrons(app: &nova::AppWindow) -> Vec<ElementHandle> {
@@ -75,21 +75,21 @@ fn drag(app: &nova::AppWindow, from: LogicalPosition, dx: f32, dy: f32) {
             button: slint::platform::PointerEventButton::Left,
         });
     for step in 1..=4 {
-        let _ = app.window().dispatch_event_with_result(
-            slint::platform::WindowEvent::PointerMoved {
-                position: LogicalPosition::new(
-                    from.x + dx * step as f32 / 4.0,
-                    from.y + dy * step as f32 / 4.0,
-                ),
-            },
-        );
+        let _ =
+            app.window()
+                .dispatch_event_with_result(slint::platform::WindowEvent::PointerMoved {
+                    position: LogicalPosition::new(
+                        from.x + dx * step as f32 / 4.0,
+                        from.y + dy * step as f32 / 4.0,
+                    ),
+                });
     }
-    let _ = app
-        .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
-            position: LogicalPosition::new(from.x + dx, from.y + dy),
-            button: slint::platform::PointerEventButton::Left,
-        });
+    let _ =
+        app.window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
+                position: LogicalPosition::new(from.x + dx, from.y + dy),
+                button: slint::platform::PointerEventButton::Left,
+            });
 }
 
 #[test]
@@ -277,7 +277,11 @@ fn pill_chevrons_step_and_the_touch_bar_scrolls_with_the_streams() {
                     let app = app4.upgrade().unwrap();
                     let (xa, ya) = pill_pos(&app);
                     let buttons = chevrons(&app);
-                    fail(&failures4, buttons.len() == 2, "slots stay laid out when pills fit");
+                    fail(
+                        &failures4,
+                        buttons.len() == 2,
+                        "slots stay laid out when pills fit",
+                    );
                     if buttons.len() == 2 {
                         let mut buttons = buttons;
                         buttons.sort_by(|a, b| {
@@ -318,11 +322,9 @@ fn pill_chevrons_step_and_the_touch_bar_scrolls_with_the_streams() {
                         // One bar, in flow with the streams: it sits deep in
                         // the page, and it is the only pill row there is (the
                         // docked copy above the scroll is gone).
-                        let rows = ElementHandle::find_by_element_id(
-                            &app,
-                            "StreamFilterBar::pill-row",
-                        )
-                        .count();
+                        let rows =
+                            ElementHandle::find_by_element_id(&app, "StreamFilterBar::pill-row")
+                                .count();
                         fail(
                             &failures5,
                             rows == 1,

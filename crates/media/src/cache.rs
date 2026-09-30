@@ -7,17 +7,17 @@
 
 #[allow(unused_imports)]
 use nova_config::{
-    active_cache_settings, fnv1a, poster_cache_dir, CacheImageFormat, CacheSettings,
-    IMAGE_DOWNSCALE_MAX,
+    CacheImageFormat, CacheSettings, IMAGE_DOWNSCALE_MAX, active_cache_settings, fnv1a,
+    poster_cache_dir,
 };
 use slint::{Rgba8Pixel, SharedPixelBuffer};
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 #[cfg(not(target_os = "android"))]
 #[cfg(not(target_os = "android"))]
 use std::time::Duration;
-use std::fs;
 
 /// Set the decoded-image LRU byte budget (mirrors `lru_cache_mb`).
 pub fn set_decoded_cache_budget(mb: u32) {
@@ -132,8 +132,7 @@ fn write_display_poster(url: &str, max_side: u32, pixels: &SharedPixelBuffer<Rgb
     let rgb = image::DynamicImage::ImageRgba8(raw).to_rgb8();
     let mut out: Vec<u8> = Vec::new();
     let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 80);
-    if image::ImageEncoder::write_image(enc, &rgb, w, h, image::ExtendedColorType::Rgb8).is_err()
-    {
+    if image::ImageEncoder::write_image(enc, &rgb, w, h, image::ExtendedColorType::Rgb8).is_err() {
         return;
     }
     let dir = poster_cache_dir();
@@ -142,7 +141,10 @@ fn write_display_poster(url: &str, max_side: u32, pixels: &SharedPixelBuffer<Rgb
     }
     let path = dir.join(display_file_name(url, max_side));
     let tmp = path.with_extension("tmp");
-    if fs::write(&tmp, &out).and_then(|_| fs::rename(&tmp, &path)).is_err() {
+    if fs::write(&tmp, &out)
+        .and_then(|_| fs::rename(&tmp, &path))
+        .is_err()
+    {
         eprintln!("nova: could not write display poster for {url}");
     }
 }
@@ -153,10 +155,7 @@ fn write_display_poster(url: &str, max_side: u32, pixels: &SharedPixelBuffer<Rgb
 /// episode-pick player backdrop. Desktop only; the `fetch_image` wrappers on
 /// both targets route through the same cascade shape.
 #[cfg(not(target_os = "android"))]
-pub fn display_pixels(
-    url: &str,
-    max_side: Option<u32>,
-) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+pub fn display_pixels(url: &str, max_side: Option<u32>) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
     let key = sized_cache_key(url, max_side);
     if let Some(pixels) = decoded_cache_get(&key) {
         return Some(pixels);
@@ -571,9 +570,7 @@ static HTTP_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
 #[cfg(not(target_os = "android"))]
 fn original_bytes(url: &str) -> Option<Vec<u8>> {
     let cache_images = active_cache_settings().cache_images;
-    if cache_images
-        && let Some(bytes) = read_poster_bytes(&poster_cache_dir(), url)
-    {
+    if cache_images && let Some(bytes) = read_poster_bytes(&poster_cache_dir(), url) {
         return Some(bytes);
     }
     let bytes = HTTP_CLIENT.get(url).send().ok()?.bytes().ok()?;
@@ -592,8 +589,8 @@ pub fn poster_pixels(
         return Ok(pixels);
     }
 
-    let bytes = original_bytes(url)
-        .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+    let bytes =
+        original_bytes(url).ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
             "poster download failed".into()
         })?;
     let pixels = decode_image_bytes(&bytes)?;

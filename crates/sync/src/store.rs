@@ -261,22 +261,19 @@ impl Store {
         let dirty = &self.dirty;
         let mut batch: Vec<(String, Option<String>)> = Vec::with_capacity(dirty.len() + 1);
         for (domain, key) in dirty {
-            let row = record_row_key(&domain, &key);
+            let row = record_row_key(domain, key);
             match self.domains.get(domain).and_then(|m| m.get(key)) {
-                Some(record) => match serde_json::to_string(record) {
-                    Ok(value) => batch.push((row, Some(value))),
-                    Err(e) => return Err(e.into()),
-                },
+                Some(record) => batch.push((row, Some(serde_json::to_string(record)?))),
                 // Removed (e.g. an acked tombstone collected by GC).
                 None => batch.push((row, None)),
             }
         }
         // The clock moves on every set/apply, including an apply that wins no
         // record; persist it so monotonicity survives restarts.
-        match serde_json::to_string(&self.hlc) {
-            Ok(hlc) => batch.push((CLOCK_KEY.to_string(), Some(hlc))),
-            Err(e) => return Err(e.into()),
-        }
+        batch.push((
+            CLOCK_KEY.to_string(),
+            Some(serde_json::to_string(&self.hlc)?),
+        ));
         batch.push((
             PENDING_KEY.to_string(),
             Some(serde_json::to_string(&self.pending_domains)?),
@@ -394,31 +391,27 @@ impl Store {
         }
         self.hlc.observe(remote.version.hlc(), crate::now_ms());
         self.clock_dirty = true;
-        if domain == "progress" {
-            if let Some(local) = self.record(domain, key) {
-                if !local.is_deleted() && !remote.is_deleted() {
-                    if let Some(value) = crate::progress::merge(local, &remote) {
-                        if local.value.as_ref() == Some(&value)
-                            && !remote.version.newer_than(&local.version)
-                        {
-                            return false;
-                        }
-                        let winner = if remote.version.newer_than(&local.version) {
-                            &remote
-                        } else {
-                            local
-                        };
-                        if winner.value.as_ref() != Some(&value) {
-                            let dev = self.device.unwrap_or(winner.version.dev);
-                            remote.version =
-                                Version::from_hlc(self.hlc.tick(crate::now_ms(), 0), dev, false);
-                        } else {
-                            remote.version = winner.version;
-                        }
-                        remote.value = Some(value);
-                    }
-                }
+        if domain == "progress"
+            && let Some(local) = self.record(domain, key)
+            && !local.is_deleted()
+            && !remote.is_deleted()
+            && let Some(value) = crate::progress::merge(local, &remote)
+        {
+            if local.value.as_ref() == Some(&value) && !remote.version.newer_than(&local.version) {
+                return false;
             }
+            let winner = if remote.version.newer_than(&local.version) {
+                &remote
+            } else {
+                local
+            };
+            if winner.value.as_ref() != Some(&value) {
+                let dev = self.device.unwrap_or(winner.version.dev);
+                remote.version = Version::from_hlc(self.hlc.tick(crate::now_ms(), 0), dev, false);
+            } else {
+                remote.version = winner.version;
+            }
+            remote.value = Some(value);
         }
         let slot = self.domains.entry(domain.to_string()).or_default();
         match resolve(slot.get(key), &remote) {

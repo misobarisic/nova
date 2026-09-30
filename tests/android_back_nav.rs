@@ -13,9 +13,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 fn back(app: &nova::AppWindow) {
-    app.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
-        text: slint::platform::Key::Back.into(),
-    });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
 }
 
 fn after(ms: u64, body: impl FnOnce() + 'static) {
@@ -95,7 +96,11 @@ fn system_back_pops_one_layer_at_a_time() {
             app.get_modal_episodes(),
             "Back in streams must show episodes",
         );
-        fail(&failures1, app.get_modal_visible(), "modal closed too early");
+        fail(
+            &failures1,
+            app.get_modal_visible(),
+            "modal closed too early",
+        );
         // `back` clears the props in Slint itself; no wiring needed.
         back(&app);
         fail(
@@ -123,7 +128,7 @@ fn system_back_pops_one_layer_at_a_time() {
                     &app,
                     "SettingsLink",
                 )
-                .nth(0);
+                .next();
                 let Some(link) = link else {
                     fail(&failures3, false, "DIAG: no SettingsLink found at all");
                     fail(

@@ -138,15 +138,19 @@ mod episode_helpers_tests {
         // s:1:2 is dateless: neither future nor available.
         let mut map = HashMap::new();
         map.insert(progress_map_key("s", "s:1:1"), prog("s", "s:1:1", true, 1));
-        let (future, available, watched) = upcoming_tally(&eps, |v| {
-            map.get(&progress_map_key("s", &v.id)).is_some_and(|p| p.watched)
-        }, today_days());
+        let (future, available, watched) = upcoming_tally(
+            &eps,
+            |v| {
+                map.get(&progress_map_key("s", &v.id))
+                    .is_some_and(|p| p.watched)
+            },
+            today_days(),
+        );
         assert_eq!(future.len(), 1);
         assert_eq!(future[0].0, 2);
         assert_eq!((available, watched), (1, 1));
         // All dateless: nothing to count anywhere.
-        let (future, available, watched) =
-            upcoming_tally(&eps[1..2], |_| false, today_days());
+        let (future, available, watched) = upcoming_tally(&eps[1..2], |_| false, today_days());
         assert!(future.is_empty());
         assert_eq!((available, watched), (0, 0));
     }
@@ -172,7 +176,6 @@ mod episode_helpers_tests {
         assert!(next_episode_to_watch("s", &[], &map).is_none());
     }
 }
-
 
 #[cfg(test)]
 mod episode_pagination_tests {
@@ -209,7 +212,14 @@ mod playback_tests {
         }
     }
 
-    fn entry(series: &str, ep: &str, pos: f64, dur: f64, watched: bool, at: u64) -> EpisodeProgress {
+    fn entry(
+        series: &str,
+        ep: &str,
+        pos: f64,
+        dur: f64,
+        watched: bool,
+        at: u64,
+    ) -> EpisodeProgress {
         EpisodeProgress {
             series_id: series.into(),
             episode_id: ep.into(),
@@ -259,16 +269,37 @@ mod playback_tests {
     fn resume_step_lands_disarms_and_only_seeks_when_missed() {
         // No frames yet / unknown duration / already handled: nothing to do.
         assert_eq!(resume_step(120.0, 0.0, 0.0, true, false), ResumeStep::Idle);
-        assert_eq!(resume_step(120.0, 0.0, 600.0, false, false), ResumeStep::Idle);
+        assert_eq!(
+            resume_step(120.0, 0.0, 600.0, false, false),
+            ResumeStep::Idle
+        );
         assert_eq!(resume_step(120.0, 0.0, 600.0, true, true), ResumeStep::Idle);
         // Reached within the 5 s slack (either side): land and disarm.
-        assert_eq!(resume_step(120.0, 120.0, 600.0, true, false), ResumeStep::Landed);
-        assert_eq!(resume_step(120.0, 125.0, 600.0, true, false), ResumeStep::Landed);
-        assert_eq!(resume_step(120.0, 115.0, 600.0, true, false), ResumeStep::Landed);
+        assert_eq!(
+            resume_step(120.0, 120.0, 600.0, true, false),
+            ResumeStep::Landed
+        );
+        assert_eq!(
+            resume_step(120.0, 125.0, 600.0, true, false),
+            ResumeStep::Landed
+        );
+        assert_eq!(
+            resume_step(120.0, 115.0, 600.0, true, false),
+            ResumeStep::Landed
+        );
         // Engine opened elsewhere (ignored the load-time start): seek once.
-        assert_eq!(resume_step(120.0, 0.0, 600.0, true, false), ResumeStep::Seek);
-        assert_eq!(resume_step(120.0, 125.1, 600.0, true, false), ResumeStep::Seek);
-        assert_eq!(resume_step(120.0, 114.9, 600.0, true, false), ResumeStep::Seek);
+        assert_eq!(
+            resume_step(120.0, 0.0, 600.0, true, false),
+            ResumeStep::Seek
+        );
+        assert_eq!(
+            resume_step(120.0, 125.1, 600.0, true, false),
+            ResumeStep::Seek
+        );
+        assert_eq!(
+            resume_step(120.0, 114.9, 600.0, true, false),
+            ResumeStep::Seek
+        );
     }
 
     #[test]
@@ -361,10 +392,7 @@ mod playback_tests {
 
     #[test]
     fn auto_bucket_derives_plan_watching_completed() {
-        let eps = vec![
-            video("s:1:1", 1, 1, "One"),
-            video("s:1:2", 1, 2, "Two"),
-        ];
+        let eps = vec![video("s:1:1", 1, 1, "One"), video("s:1:2", 1, 2, "Two")];
         // Untouched: plan to watch (movies with no episodes land here too).
         assert_eq!(auto_bucket("s", &eps, &HashMap::new()), "Plan to Watch");
         assert_eq!(auto_bucket("m", &[], &HashMap::new()), "Plan to Watch");
@@ -401,10 +429,7 @@ mod playback_tests {
         eps2[2].released = Some("2999-01-01".to_string());
         assert!(!series_fully_watched("s", &eps2, &map));
         assert_eq!(auto_bucket("s", &eps2, &map), "Watching");
-        assert_eq!(
-            library_badge_for("s", &eps2, &map),
-            "Caught up · 1 unaired"
-        );
+        assert_eq!(library_badge_for("s", &eps2, &map), "Caught up · 1 unaired");
         // …but a list with nothing out yet never completes, even untouched.
         let eps3 = vec![eps2[2].clone()];
         assert!(!series_fully_watched("s", &eps3, &HashMap::new()));
@@ -432,10 +457,7 @@ mod playback_tests {
         eps4.push(video("s:0:1", 0, 1, "Special"));
         assert!(!series_fully_watched("s", &eps4, &map));
         assert_eq!(auto_bucket("s", &eps4, &map), "Watching");
-        assert_eq!(
-            library_badge_for("s", &eps4, &map),
-            "Caught up · 1 unaired"
-        );
+        assert_eq!(library_badge_for("s", &eps4, &map), "Caught up · 1 unaired");
         // Built-in names are reserved and distinct from user categories.
         assert!(BUILTIN_FILTERS.contains(&"Watching"));
         assert_eq!(WatchStatus::default(), WatchStatus::Auto);
@@ -552,7 +574,6 @@ mod playback_tests {
     }
 }
 
-
 #[cfg(test)]
 mod persistence_tests {
     use super::super::*;
@@ -626,7 +647,6 @@ mod persistence_tests {
     }
 }
 
-
 #[cfg(test)]
 mod library_tests {
     use super::super::*;
@@ -677,8 +697,7 @@ mod library_tests {
         year: &str,
         poster_url: &str,
         background_url: &str,
-        genres: &[&str],
-        description: &str,
+        header: (&[&str], &str),
     ) -> LibraryEntry {
         LibraryEntry {
             id: id.into(),
@@ -687,8 +706,8 @@ mod library_tests {
             year: year.into(),
             poster_url: poster_url.into(),
             background_url: background_url.into(),
-            genres: genres.iter().map(|g| g.to_string()).collect(),
-            description: description.into(),
+            genres: header.0.iter().map(|g| g.to_string()).collect(),
+            description: header.1.into(),
             categories: Vec::new(),
             watch_status: WatchStatus::Auto,
             added_at_secs: 0,
@@ -699,25 +718,25 @@ mod library_tests {
     fn upsert_dedupes_by_id_and_removal_drops_entry() {
         let mut items = vec![entry("tt1", "movie", "Alpha", "2020", "u1")];
         // Same id overwrites in place (kept position), returns "not added".
-        assert_eq!(
-            upsert_library(&mut items, entry("tt1", "movie", "Alpha 2", "2021", "u2")),
-            false
-        );
+        assert!(!upsert_library(
+            &mut items,
+            entry("tt1", "movie", "Alpha 2", "2021", "u2")
+        ));
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].name, "Alpha 2");
         assert_eq!(items[0].poster_url, "u2");
 
         // A new id is appended.
-        assert_eq!(
-            upsert_library(&mut items, entry("tt2", "series", "Beta", "", "")),
-            true
-        );
+        assert!(upsert_library(
+            &mut items,
+            entry("tt2", "series", "Beta", "", "")
+        ));
         assert_eq!(items.len(), 2);
         assert_eq!(items[1].id, "tt2");
 
         // Removal by id.
-        assert_eq!(remove_library_entry(&mut items, "tt1"), true);
-        assert_eq!(remove_library_entry(&mut items, "tt1"), false);
+        assert!(remove_library_entry(&mut items, "tt1"));
+        assert!(!remove_library_entry(&mut items, "tt1"));
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, "tt2");
         let _ = std::mem::take(&mut items);
@@ -737,13 +756,10 @@ mod library_tests {
         assert_eq!(old[0].description, "");
         // Upsert with a backdrop URL replaces the empty default in place.
         let mut items = old;
-        assert_eq!(
-            upsert_library(
-                &mut items,
-                entry_bg("tt1", "series", "Alpha", "2020", "u", "https://img/bg")
-            ),
-            false
-        );
+        assert!(!upsert_library(
+            &mut items,
+            entry_bg("tt1", "series", "Alpha", "2020", "u", "https://img/bg")
+        ));
         assert_eq!(items[0].background_url, "https://img/bg");
     }
 
@@ -757,15 +773,17 @@ mod library_tests {
                 "2020",
                 "https://img/a",
                 "https://img/bg",
-                &["Drama", "Sci-Fi"],
-                "A synopsis.",
+                (&["Drama", "Sci-Fi"], "A synopsis."),
             ),
             entry("tt2", "series", "Beta", "1999", ""),
         ];
         let json = serde_json::to_string(&items).unwrap();
         let back: Vec<LibraryEntry> = serde_json::from_str(&json).unwrap();
         assert_eq!(back, items, "genres + description round-trip");
-        assert_eq!(back[0].genres, vec!["Drama".to_string(), "Sci-Fi".to_string()]);
+        assert_eq!(
+            back[0].genres,
+            vec!["Drama".to_string(), "Sci-Fi".to_string()]
+        );
         assert_eq!(back[0].description, "A synopsis.");
         assert!(back[1].genres.is_empty());
         assert_eq!(back[1].description, "");
@@ -835,27 +853,22 @@ mod library_tests {
         assert!(old[0].genres.is_empty());
         assert_eq!(old[0].description, "");
         let mut items = old;
-        assert_eq!(
-            upsert_library(
-                &mut items,
-                entry_full(
-                    "tt1",
-                    "series",
-                    "Alpha",
-                    "2020",
-                    "u",
-                    "b",
-                    &["Drama"],
-                    "A synopsis."
-                )
-            ),
-            false
-        );
+        assert!(!upsert_library(
+            &mut items,
+            entry_full(
+                "tt1",
+                "series",
+                "Alpha",
+                "2020",
+                "u",
+                "b",
+                (&["Drama"], "A synopsis.")
+            )
+        ));
         assert_eq!(items[0].genres, vec!["Drama".to_string()]);
         assert_eq!(items[0].description, "A synopsis.");
     }
 }
-
 
 #[cfg(test)]
 mod meta_header_tests {
@@ -911,7 +924,6 @@ mod meta_header_tests {
         assert_eq!(old, MetaHeader::default());
     }
 }
-
 
 #[cfg(test)]
 mod episodes_cache_tests {
@@ -1021,7 +1033,6 @@ mod episodes_cache_tests {
     }
 }
 
-
 #[cfg(test)]
 mod settings_tests {
     use super::super::*;
@@ -1109,9 +1120,18 @@ mod settings_tests {
             nova_config::DesktopExternalApp::SystemDefault
         );
         // Index mapping round-trips both ways.
-        assert_eq!(nova_config::DesktopExternalApp::from_index(0), nova_config::DesktopExternalApp::SystemDefault);
-        assert_eq!(nova_config::DesktopExternalApp::from_index(1), nova_config::DesktopExternalApp::Vlc);
-        assert_eq!(nova_config::DesktopExternalApp::from_index(2), nova_config::DesktopExternalApp::Mpv);
+        assert_eq!(
+            nova_config::DesktopExternalApp::from_index(0),
+            nova_config::DesktopExternalApp::SystemDefault
+        );
+        assert_eq!(
+            nova_config::DesktopExternalApp::from_index(1),
+            nova_config::DesktopExternalApp::Vlc
+        );
+        assert_eq!(
+            nova_config::DesktopExternalApp::from_index(2),
+            nova_config::DesktopExternalApp::Mpv
+        );
         assert_eq!(nova_config::DesktopExternalApp::Vlc.index(), 1);
         assert_eq!(nova_config::DesktopExternalApp::Mpv.program(), "mpv");
         // Configs written before these keys existed parse with the defaults.
@@ -1214,11 +1234,18 @@ mod settings_tests {
     }
 
     #[test]
-    fn disk_usage_formatting() {        assert_eq!(format_disk_usage(0, 0), "0 B · 0 files");
+    fn disk_usage_formatting() {
+        assert_eq!(format_disk_usage(0, 0), "0 B · 0 files");
         assert_eq!(format_disk_usage(512, 1), "512 B · 1 file");
         assert_eq!(format_disk_usage(2048, 2), "2.0 KB · 2 files");
-        assert_eq!(format_disk_usage(5 * 1024 * 1024, 1203), "5.0 MB · 1,203 files");
-        assert_eq!(format_disk_usage(3 * 1024 * 1024 * 1024, 7), "3.0 GB · 7 files");
+        assert_eq!(
+            format_disk_usage(5 * 1024 * 1024, 1203),
+            "5.0 MB · 1,203 files"
+        );
+        assert_eq!(
+            format_disk_usage(3 * 1024 * 1024 * 1024, 7),
+            "3.0 GB · 7 files"
+        );
         assert_eq!(grouped_count(0), "0");
         assert_eq!(grouped_count(999), "999");
         assert_eq!(grouped_count(1000), "1,000");
@@ -1262,7 +1289,6 @@ mod settings_tests {
         assert!(!partial.no_cache);
     }
 }
-
 
 #[cfg(test)]
 mod stream_source_tests {
@@ -1391,7 +1417,6 @@ mod stream_display_tests {
     }
 }
 
-
 #[cfg(test)]
 mod image_cache_tests {
     use super::super::*;
@@ -1449,14 +1474,14 @@ mod image_cache_tests {
     }
 }
 
-
 #[cfg(test)]
 mod rewrite_cache_tests {
     use super::super::*;
     use std::io::Cursor;
 
     fn scratch(sub: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("nova-rewrite-test-{}-{sub}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("nova-rewrite-test-{}-{sub}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -1497,7 +1522,10 @@ mod rewrite_cache_tests {
         for n in ["1111111111111111", "2222222222222222"] {
             let bytes = fs::read(dir.join(format!("{n}.img"))).unwrap();
             assert!(bytes.starts_with(&[0xFF, 0xD8, 0xFF]), "jpeg magic for {n}");
-            assert_eq!(fs::read_to_string(dir.join(format!("{n}.cfg"))).unwrap(), key);
+            assert_eq!(
+                fs::read_to_string(dir.join(format!("{n}.cfg"))).unwrap(),
+                key
+            );
         }
         // The already-matching entry keeps its original bytes.
         assert_eq!(fs::read(dir.join("3333333333333333.img")).unwrap(), png);

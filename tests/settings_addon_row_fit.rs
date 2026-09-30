@@ -38,7 +38,10 @@ fn row_controls(app: &nova::AppWindow) -> Vec<(String, Rect)> {
             if r.2 <= 0.0 || r.3 <= 0.0 {
                 continue; // parked layer / not laid out
             }
-            let name = e.accessible_label().map(|l| l.to_string()).unwrap_or_default();
+            let name = e
+                .accessible_label()
+                .map(|l| l.to_string())
+                .unwrap_or_default();
             if name == "Add" {
                 continue;
             }
@@ -57,8 +60,7 @@ fn row_of(app: &nova::AppWindow, target: Rect) -> Option<Rect> {
     for kind in ["SettingsRow", "AddonRowCard"] {
         rows.extend(ElementHandle::find_by_element_type_name(app, kind).map(|e| rect(&e)));
     }
-    rows
-        .into_iter()
+    rows.into_iter()
         .filter(|(x, y, w, h)| {
             centre.0 >= *x && centre.0 <= x + w && centre.1 >= *y && centre.1 <= y + h
         })
@@ -73,11 +75,7 @@ fn inside(control: Rect, row: Rect) -> bool {
     cx >= rx - 0.5 && cy >= ry - 0.5 && cx + cw <= rx + rw + 0.5 && cy + ch <= ry + rh + 0.5
 }
 
-fn by_label(
-    app: &nova::AppWindow,
-    kind: &str,
-    label: &str,
-) -> Option<ElementHandle> {
+fn by_label(app: &nova::AppWindow, kind: &str, label: &str) -> Option<ElementHandle> {
     ElementHandle::find_by_element_type_name(app, kind)
         .into_iter()
         .find(|e| e.accessible_label().map(|l| l == label).unwrap_or(false))
@@ -110,45 +108,45 @@ fn check(app: &nova::AppWindow, label: &str, failures: &Rc<RefCell<Vec<String>>>
         .into_iter()
         .find(|(name, _)| name.starts_with("ToggleSwitch"));
     let up = by_label(app, "AddonIconButton", "Move up");
-    if app.window().size().width < 700 {
-        if let (Some((_, t)), Some(up)) = (toggle, up) {
-            let (ux, _, _, _) = rect(&up);
-            let band = (t.1, t.1 + t.3);
-            let title = ElementHandle::find_by_element_type_name(app, "Text")
-                .into_iter()
-                .map(|e| rect(&e))
-                .find(|(x, y, w, h)| {
-                    *w > 60.0 && *x > t.0 + t.2
-                        && y + h / 2.0 >= band.0 - 4.0
-                        && y + h / 2.0 <= band.1 + 4.0
-                });
-            match title {
-                Some((x, y, w, h)) => {
-                    if x + w > ux + 0.5 {
-                        failures.borrow_mut().push(format!(
-                            "{label}: addon name runs under the move arrows (title right {rx:.1}, arrows at {ux:.1})",
-                            rx = x + w,
-                        ));
-                    }
-                    // The action line is the lowest control band in the row:
-                    // controls below the title band.
-                    let actions_top = row_controls(app)
-                        .into_iter()
-                        .filter(|(_, r)| r.1 > band.1 - 4.0)
-                        .map(|(_, r)| r.1)
-                        .fold(f32::MAX, f32::min);
-                    if actions_top.is_finite() && y + h > actions_top + 0.5 {
-                        failures.borrow_mut().push(format!(
-                            "{label}: addon name reaches into the action line (title bottom {:.1}, actions at {:.1})",
-                            y + h,
-                            actions_top
-                        ));
-                    }
+    if app.window().size().width < 700
+        && let (Some((_, t)), Some(up)) = (toggle, up)
+    {
+        let (ux, _, _, _) = rect(&up);
+        let band = (t.1, t.1 + t.3);
+        let title = ElementHandle::find_by_element_type_name(app, "Text")
+            .map(|e| rect(&e))
+            .find(|(x, y, w, h)| {
+                *w > 60.0
+                    && *x > t.0 + t.2
+                    && y + h / 2.0 >= band.0 - 4.0
+                    && y + h / 2.0 <= band.1 + 4.0
+            });
+        match title {
+            Some((x, y, w, h)) => {
+                if x + w > ux + 0.5 {
+                    failures.borrow_mut().push(format!(
+                        "{label}: addon name runs under the move arrows (title right {rx:.1}, arrows at {ux:.1})",
+                        rx = x + w,
+                    ));
                 }
-                None => failures.borrow_mut().push(format!(
-                    "{label}: DIAG: no title Text found on the toggle line"
-                )),
+                // The action line is the lowest control band in the row:
+                // controls below the title band.
+                let actions_top = row_controls(app)
+                    .into_iter()
+                    .filter(|(_, r)| r.1 > band.1 - 4.0)
+                    .map(|(_, r)| r.1)
+                    .fold(f32::MAX, f32::min);
+                if actions_top.is_finite() && y + h > actions_top + 0.5 {
+                    failures.borrow_mut().push(format!(
+                        "{label}: addon name reaches into the action line (title bottom {:.1}, actions at {:.1})",
+                        y + h,
+                        actions_top
+                    ));
+                }
             }
+            None => failures.borrow_mut().push(format!(
+                "{label}: DIAG: no title Text found on the toggle line"
+            )),
         }
     }
 }

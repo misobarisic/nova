@@ -32,12 +32,12 @@ fn moved(app: &nova::AppWindow, position: LogicalPosition) {
 }
 
 fn release(app: &nova::AppWindow, position: LogicalPosition) {
-    let _ = app
-        .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
-            position,
-            button: slint::platform::PointerEventButton::Left,
-        });
+    let _ =
+        app.window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            });
 }
 
 fn tap(app: &nova::AppWindow, x: f32, y: f32) {
@@ -119,11 +119,26 @@ fn backdrop_double_tap_hold_and_swipe() {
         fail(
             &failures1,
             seeks1.borrow().as_slice() == [110.0],
-            &format!("double-tap right must seek +10 s (got {:?})", seeks1.borrow()),
+            &format!(
+                "double-tap right must seek +10 s (got {:?})",
+                seeks1.borrow()
+            ),
         );
-        fail(&failures1, app.get_osd_visible(), "double-tap must not toggle the OSD");
-        fail(&failures1, toggles1.borrow().eq(&0), "double-tap must not toggle pause");
-        fail(&failures1, previews1.borrow().is_empty(), "double-tap must not preview speed");
+        fail(
+            &failures1,
+            app.get_osd_visible(),
+            "double-tap must not toggle the OSD",
+        );
+        fail(
+            &failures1,
+            toggles1.borrow().eq(&0),
+            "double-tap must not toggle pause",
+        );
+        fail(
+            &failures1,
+            previews1.borrow().is_empty(),
+            "double-tap must not preview speed",
+        );
 
         // ---- Double-tap left seeks −10 s ----
         tap(&app, 100.0, 300.0);
@@ -131,7 +146,10 @@ fn backdrop_double_tap_hold_and_swipe() {
         fail(
             &failures1,
             seeks1.borrow().as_slice() == [110.0, 100.0],
-            &format!("double-tap left must seek −10 s (got {:?})", seeks1.borrow()),
+            &format!(
+                "double-tap left must seek −10 s (got {:?})",
+                seeks1.borrow()
+            ),
         );
 
         // ---- Lone side tap hides the OSD at once ----
@@ -140,7 +158,11 @@ fn backdrop_double_tap_hold_and_swipe() {
         let failures2 = failures1.clone();
         after(450, move || {
             let app = app2.upgrade().unwrap();
-            fail(&failures2, !app.get_osd_visible(), "lone tap must hide the OSD after the window");
+            fail(
+                &failures2,
+                !app.get_osd_visible(),
+                "lone tap must hide the OSD after the window",
+            );
             fail(
                 &failures2,
                 seeks1.borrow().len() == 2,
@@ -149,8 +171,16 @@ fn backdrop_double_tap_hold_and_swipe() {
 
             // ---- Middle tap wakes immediately (and toggles pause off Android) ----
             tap(&app, 300.0, 300.0);
-            fail(&failures2, app.get_osd_visible(), "middle tap must wake the OSD at once");
-            fail(&failures2, toggles1.borrow().eq(&1), "desktop wake tap must toggle pause");
+            fail(
+                &failures2,
+                app.get_osd_visible(),
+                "middle tap must wake the OSD at once",
+            );
+            fail(
+                &failures2,
+                toggles1.borrow().eq(&1),
+                "desktop wake tap must toggle pause",
+            );
             let app3 = app.as_weak();
             let failures3 = failures2.clone();
             after(450, move || {
@@ -176,14 +206,17 @@ fn backdrop_double_tap_hold_and_swipe() {
                     fail(
                         &failures4,
                         previews1.borrow().as_slice() == [2.0, 1.0],
-                        &format!("release must restore the stored rate (got {:?})", previews1.borrow()),
+                        &format!(
+                            "release must restore the stored rate (got {:?})",
+                            previews1.borrow()
+                        ),
                     );
+                    fail(&failures4, seeks1.borrow().len() == 2, "hold must not seek");
                     fail(
                         &failures4,
-                        seeks1.borrow().len() == 2,
-                        "hold must not seek",
+                        app.get_osd_visible(),
+                        "hold must leave the OSD up",
                     );
-                    fail(&failures4, app.get_osd_visible(), "hold must leave the OSD up");
 
                     // ---- Android swipes: brightness left, volume right ----
                     app.set_is_android(true);
@@ -204,7 +237,10 @@ fn backdrop_double_tap_hold_and_swipe() {
                         fail(
                             &failures5,
                             brightness1.borrow().as_slice() == [-1, -1, -1],
-                            &format!("left swipe must step brightness down (got {:?})", brightness1.borrow()),
+                            &format!(
+                                "left swipe must step brightness down (got {:?})",
+                                brightness1.borrow()
+                            ),
                         );
                         let p = LogicalPosition::new(500.0, 300.0);
                         press(&app, p);
@@ -219,14 +255,21 @@ fn backdrop_double_tap_hold_and_swipe() {
                             fail(
                                 &failures6,
                                 volumes1.borrow().as_slice() == [-1, -1],
-                                &format!("right swipe must step volume down (got {:?})", volumes1.borrow()),
+                                &format!(
+                                    "right swipe must step volume down (got {:?})",
+                                    volumes1.borrow()
+                                ),
                             );
                             fail(
                                 &failures6,
                                 seeks1.borrow().len() == 2,
                                 "swipes must not seek",
                             );
-                            fail(&failures6, app.get_osd_visible(), "swipes must leave the OSD up");
+                            fail(
+                                &failures6,
+                                app.get_osd_visible(),
+                                "swipes must leave the OSD up",
+                            );
                             slint::quit_event_loop().unwrap();
                         });
                     });
@@ -238,5 +281,9 @@ fn backdrop_double_tap_hold_and_swipe() {
     slint::run_event_loop().unwrap();
 
     let failures = failures.borrow();
-    assert!(failures.is_empty(), "player gesture failures:\n  {}", failures.join("\n  "));
+    assert!(
+        failures.is_empty(),
+        "player gesture failures:\n  {}",
+        failures.join("\n  ")
+    );
 }

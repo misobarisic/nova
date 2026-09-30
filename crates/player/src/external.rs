@@ -315,7 +315,8 @@ fn apply_screen_on(keep: bool) -> Result<(), String> {
 /// stack and UI state — alive, so returning restores the same screen instead
 /// of relaunching. Safe to call from the Slint UI thread (`moveTaskToBack`
 /// is thread-agnostic, like the clipboard calls above).
-pub fn move_task_to_back() {    let vm_ptr = VM_PTR.load(Ordering::SeqCst);
+pub fn move_task_to_back() {
+    let vm_ptr = VM_PTR.load(Ordering::SeqCst);
     let act_ptr = ACTIVITY_PTR.load(Ordering::SeqCst);
     if vm_ptr.is_null() || act_ptr.is_null() {
         return;

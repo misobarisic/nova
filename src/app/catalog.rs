@@ -64,12 +64,13 @@ impl Bridge {
                 if loaded {
                     blank.push(i);
                 }
-            } else if i >= f && i <= l && !loaded {
-                if let Some(card) = row
-                    && !card.poster_path.is_empty()
-                {
-                    fetch.push((i, card.poster_path.to_string()));
-                }
+            } else if i >= f
+                && i <= l
+                && !loaded
+                && let Some(card) = row
+                && !card.poster_path.is_empty()
+            {
+                fetch.push((i, card.poster_path.to_string()));
             }
         }
         let unloaded = !blank.is_empty();
@@ -124,7 +125,7 @@ impl Bridge {
                 {
                     let ty = state.type_defs.get(state.chosen_type);
                     let cat = ty.and_then(|t| t.catalogs.get(state.chosen_catalog));
-                    cat.map_or(false, |c| c.supports_skip)
+                    cat.is_some_and(|c| c.supports_skip)
                 },
                 state.catalog_exhausted,
             )
@@ -452,7 +453,7 @@ impl Bridge {
             let state = self.shared.lock().unwrap();
             let ty = state.type_defs.get(state.chosen_type);
             let cat = ty.and_then(|t| t.catalogs.get(state.chosen_catalog));
-            let supports_skip = cat.map_or(false, |c| c.supports_skip);
+            let supports_skip = cat.is_some_and(|c| c.supports_skip);
             app.set_can_load_more(supports_skip && !state.catalog_exhausted);
         }
     }
@@ -509,7 +510,7 @@ impl Bridge {
             "prefetch: {} candidates from {} metas (type_.empty={}, first_type={:?})",
             candidates.len(),
             metas.len(),
-            metas.first().map_or(true, |m| m.type_.is_empty()),
+            metas.first().is_none_or(|m| m.type_.is_empty()),
             metas.first().map(|m| &m.type_),
         );
 
@@ -1034,10 +1035,10 @@ impl Bridge {
             let card = old_cards
                 .remove(&key)
                 .unwrap_or_else(|| search_media_card(meta));
-            if !card.is_loaded {
-                if let Some(poster) = &meta.poster {
-                    poster_jobs.push((meta.type_.clone(), meta.id.clone(), poster.clone()));
-                }
+            if !card.is_loaded
+                && let Some(poster) = &meta.poster
+            {
+                poster_jobs.push((meta.type_.clone(), meta.id.clone(), poster.clone()));
             }
             cards.push(card);
         }
@@ -1530,8 +1531,8 @@ fn damerau_levenshtein(left: &[char], right: &[char]) -> usize {
     for (index, row) in distances.iter_mut().enumerate() {
         row[0] = index;
     }
-    for index in 0..=right.len() {
-        distances[0][index] = index;
+    for (index, distance) in distances[0].iter_mut().enumerate() {
+        *distance = index;
     }
 
     for left_index in 1..=left.len() {
@@ -1632,8 +1633,8 @@ pub(crate) fn build_merged_type_defs(installed: &[Installed]) -> Vec<TypeDef> {
     let active: Vec<&Installed> = installed.iter().filter(|a| a.enabled).collect();
 
     // Collect all (type, catalog, addon_label) triples.
-    let mut by_type: HashMap<String, Vec<(String, String, bool, Vec<String>, String)>> =
-        HashMap::new();
+    type MergedCatalog = (String, String, bool, Vec<String>, String);
+    let mut by_type: HashMap<String, Vec<MergedCatalog>> = HashMap::new();
     for inst in &active {
         for cat in &inst.manifest.catalogs {
             by_type.entry(cat.type_.clone()).or_default().push((

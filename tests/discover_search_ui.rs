@@ -133,7 +133,9 @@ fn search_results_back_restores_discover_filters_and_browse_model() {
                             .push("Back should return to the browse view".into());
                     }
                     if !app.get_search_text().is_empty() {
-                        failures3.borrow_mut().push("Back should clear the search input".into());
+                        failures3
+                            .borrow_mut()
+                            .push("Back should clear the search input".into());
                     }
                     if app.get_type_combo_idx() != 1
                         || app.get_catalog_combo_idx() != 1

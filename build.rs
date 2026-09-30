@@ -21,7 +21,9 @@ fn main() {
         println!("cargo:rerun-if-env-changed=MPV_SOURCE");
         let source = std::env::var_os("MPV_SOURCE")
             .map(std::path::PathBuf::from)
-            .expect("MPV_SOURCE must point to the Windows libmpv package (use nix develop .#windows)");
+            .expect(
+                "MPV_SOURCE must point to the Windows libmpv package (use nix develop .#windows)",
+            );
         let lib_dir = source.join("64");
         let import_library = lib_dir.join("libmpv.dll.a");
         if !import_library.is_file() {
@@ -76,7 +78,11 @@ fn generate_license_catalog() {
     ] {
         println!("cargo:rerun-if-changed={path}");
     }
-    for name in ["TARGET", "CARGO_FEATURE_DESKTOP", "CARGO_FEATURE_LIVE_PREVIEW"] {
+    for name in [
+        "TARGET",
+        "CARGO_FEATURE_DESKTOP",
+        "CARGO_FEATURE_LIVE_PREVIEW",
+    ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
 
@@ -92,9 +98,8 @@ fn generate_license_catalog() {
     sources.push_str(include_str!("assets/open_source_project_sources.tsv"));
 
     let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "unknown".into());
-    let mut catalog = format!(
-        "NOVA — OPEN-SOURCE LICENSES\nTarget: {target}\nVersion: {version}\n\n",
-    );
+    let mut catalog =
+        format!("NOVA — OPEN-SOURCE LICENSES\nTarget: {target}\nVersion: {version}\n\n",);
     catalog.push_str(&render_cargo_about(
         &manifest_dir,
         "assets/open_source_licenses.hbs",
@@ -107,9 +112,7 @@ fn generate_license_catalog() {
     catalog.push_str("\n\n===== Roboto font license: Apache-2.0 =====\n\n");
     catalog.push_str(include_str!("assets/fonts/LICENSE.txt"));
 
-    let out_dir = PathBuf::from(
-        env::var_os("OUT_DIR").expect("OUT_DIR is set by Cargo"),
-    );
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set by Cargo"));
     fs::write(out_dir.join("nova_license_catalog.txt"), catalog)
         .expect("write generated license catalog");
     fs::write(out_dir.join("nova_license_sources.tsv"), sources)
@@ -173,6 +176,8 @@ fn android_lib_dir(target: &str) -> Option<&'static str> {
     // Only advertise a directory that actually holds the library: a stale or
     // missing file should surface as a warning here rather than as an
     // obscure "cannot find -lmpv" from the linker.
-    let lib = std::path::Path::new("vendor/android-libs").join(abi).join("libmpv.so");
+    let lib = std::path::Path::new("vendor/android-libs")
+        .join(abi)
+        .join("libmpv.so");
     lib.exists().then_some(abi)
 }

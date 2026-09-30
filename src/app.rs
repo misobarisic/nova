@@ -66,7 +66,7 @@ pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
         })
         .collect::<Vec<_>>();
 
-    sources.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    sources.sort_by_key(|a| a.label.to_lowercase());
     sources.dedup_by(|a, b| a.label == b.label && a.url == b.url);
     sources
 }

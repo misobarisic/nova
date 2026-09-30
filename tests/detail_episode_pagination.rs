@@ -113,81 +113,85 @@ fn episode_page_renders_totals_and_picks_globally() {
         // The tab body is built by the modal's deferred reveal timers, so it
         // needs a moment beyond the first layout pass.
         after(700, move || {
-        let app = app0.upgrade().unwrap();
-        // Warm-up: the tab body's delegates are laid out on the first pass a
-        // tree query triggers, so probe once before looking for the card.
-        let _ = ElementHandle::find_by_element_type_name(&app, "Text").count();
+            let app = app0.upgrade().unwrap();
+            // Warm-up: the tab body's delegates are laid out on the first pass a
+            // tree query triggers, so probe once before looking for the card.
+            let _ = ElementHandle::find_by_element_type_name(&app, "Text").count();
 
-        // The first card of the page is episode 51 → global index 50.
-        let Some(card) = ElementHandle::find_by_element_id(&app, "DetailPage::ep_card").next()
-        else {
-            fail(&failures1, false, "DIAG: no episode card rendered");
-            slint::quit_event_loop().unwrap();
-            return;
-        };
-        let failures2 = failures1.clone();
-        let picks2 = picks1.clone();
-        let pages2 = pages1.clone();
-        click_then(&app, card, 350, move |app| {
-            fail(
-                &failures2,
-                picks2.borrow().as_slice() == [50],
-                &format!(
-                    "a card on page 2 must resolve against the season (got {:?})",
-                    picks2.borrow()
-                ),
-            );
-            // A pager above *and* under the grid. The bottom one sits past 50
-            // cards, and the accessibility tree only reports what is on
-            // screen, so count the components (the buttons are still checked
-            // by label where they are visible).
-            let pagers = ElementHandle::find_by_element_type_name(&app, "EpisodePager").count();
-            fail(
-                &failures2,
-                pagers == 2,
-                &format!("the episode list must offer a pager above and under the grid (found {pagers})"),
-            );
-            for label in ["Previous page", "Next page"] {
-                let found = ElementHandle::find_by_accessible_label(&app, label).count();
-                fail(
-                    &failures2,
-                    found == 2,
-                    &format!("{label} must be offered above and under the grid (found {found})"),
-                );
-            }
-            let Some(next) = ElementHandle::find_by_accessible_label(&app, "Next page").next()
+            // The first card of the page is episode 51 → global index 50.
+            let Some(card) = ElementHandle::find_by_element_id(&app, "DetailPage::ep_card").next()
             else {
-                fail(&failures2, false, "DIAG: no Next page button");
+                fail(&failures1, false, "DIAG: no episode card rendered");
                 slint::quit_event_loop().unwrap();
                 return;
             };
-            let failures3 = failures2.clone();
-            let pages3 = pages2.clone();
-            click_then(&app, next, 350, move |app| {
+            let failures2 = failures1.clone();
+            let picks2 = picks1.clone();
+            let pages2 = pages1.clone();
+            click_then(&app, card, 350, move |app| {
                 fail(
-                    &failures3,
-                    pages3.borrow().as_slice() == [2],
-                    "Next must ask for the absolute page",
+                    &failures2,
+                    picks2.borrow().as_slice() == [50],
+                    &format!(
+                        "a card on page 2 must resolve against the season (got {:?})",
+                        picks2.borrow()
+                    ),
                 );
-                let Some(prev) =
-                    ElementHandle::find_by_accessible_label(&app, "Previous page").next()
+                // A pager above *and* under the grid. The bottom one sits past 50
+                // cards, and the accessibility tree only reports what is on
+                // screen, so count the components (the buttons are still checked
+                // by label where they are visible).
+                let pagers = ElementHandle::find_by_element_type_name(&app, "EpisodePager").count();
+                fail(
+                    &failures2,
+                    pagers == 2,
+                    &format!(
+                        "the episode list must offer a pager above and under the grid (found {pagers})"
+                    ),
+                );
+                for label in ["Previous page", "Next page"] {
+                    let found = ElementHandle::find_by_accessible_label(&app, label).count();
+                    fail(
+                        &failures2,
+                        found == 2,
+                        &format!(
+                            "{label} must be offered above and under the grid (found {found})"
+                        ),
+                    );
+                }
+                let Some(next) = ElementHandle::find_by_accessible_label(&app, "Next page").next()
                 else {
-                    fail(&failures3, false, "DIAG: no Previous page button");
+                    fail(&failures2, false, "DIAG: no Next page button");
                     slint::quit_event_loop().unwrap();
                     return;
                 };
-                let failures4 = failures3.clone();
-                let pages4 = pages3.clone();
-                click_then(&app, prev, 350, move |_app| {
+                let failures3 = failures2.clone();
+                let pages3 = pages2.clone();
+                click_then(&app, next, 350, move |app| {
                     fail(
-                        &failures4,
-                        pages4.borrow().as_slice() == [2, 0],
-                        "Previous must ask for the absolute page",
+                        &failures3,
+                        pages3.borrow().as_slice() == [2],
+                        "Next must ask for the absolute page",
                     );
-                    slint::quit_event_loop().unwrap();
+                    let Some(prev) =
+                        ElementHandle::find_by_accessible_label(&app, "Previous page").next()
+                    else {
+                        fail(&failures3, false, "DIAG: no Previous page button");
+                        slint::quit_event_loop().unwrap();
+                        return;
+                    };
+                    let failures4 = failures3.clone();
+                    let pages4 = pages3.clone();
+                    click_then(&app, prev, 350, move |_app| {
+                        fail(
+                            &failures4,
+                            pages4.borrow().as_slice() == [2, 0],
+                            "Previous must ask for the absolute page",
+                        );
+                        slint::quit_event_loop().unwrap();
+                    });
                 });
             });
-        });
         });
     });
 

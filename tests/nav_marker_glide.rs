@@ -39,7 +39,11 @@ fn centres(
             keep(cx, cy).then_some((cx, cy))
         })
         .collect();
-    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap()));
+    out.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap()
+            .then(a.1.partial_cmp(&b.1).unwrap())
+    });
     out
 }
 
@@ -73,16 +77,20 @@ fn check_marker(
     failures: &Rc<RefCell<Vec<String>>>,
 ) {
     if icons.len() != 4 {
-        failures
-            .borrow_mut()
-            .push(format!("{label}: expected 4 nav icons, found {}", icons.len()));
+        failures.borrow_mut().push(format!(
+            "{label}: expected 4 nav icons, found {}",
+            icons.len()
+        ));
         return;
     }
     let icon = icons[index];
     let axis = |p: (f32, f32)| if vertical { p.1 } else { p.0 };
     // In the rail each item also draws its own (invisible) ring, so the marked
     // item carries two 48px squares; the bottom bar has only the marker.
-    let on_item = dots.iter().filter(|d| (axis(**d) - axis(icon)).abs() < 1.0).count();
+    let on_item = dots
+        .iter()
+        .filter(|d| (axis(**d) - axis(icon)).abs() < 1.0)
+        .count();
     if on_item == 0 {
         failures.borrow_mut().push(format!(
             "{label}: no marker on item {index} (icon centre {:.1}, markers {:?})",
@@ -124,7 +132,14 @@ fn nav_marker_is_centred_and_lands_on_the_picked_item() {
     let app1 = app.as_weak();
     after(700, move || {
         let app = app1.upgrade().unwrap();
-        check_marker("rail settings", &rail_icons(&app), &rail_dots(&app), 3, true, &f);
+        check_marker(
+            "rail settings",
+            &rail_icons(&app),
+            &rail_dots(&app),
+            3,
+            true,
+            &f,
+        );
 
         // Leave with the opposite switch (Settings → Home), as the backend does.
         app.global::<nova::NavState>().set_from(3);
@@ -134,7 +149,14 @@ fn nav_marker_is_centred_and_lands_on_the_picked_item() {
         let app2 = app.as_weak();
         after(700, move || {
             let app = app2.upgrade().unwrap();
-            check_marker("rail home", &rail_icons(&app), &rail_dots(&app), 0, true, &f2);
+            check_marker(
+                "rail home",
+                &rail_icons(&app),
+                &rail_dots(&app),
+                0,
+                true,
+                &f2,
+            );
 
             // Narrow: the bottom bar's marker is the only 48px square.
             app.window().set_size(slint::PhysicalSize::new(360, 800));

@@ -72,9 +72,7 @@ impl Hlc {
     /// receive step) with a forward-drift cap on the remote physical time.
     pub fn observe(&mut self, remote: Hlc, now_ms: u64) -> Hlc {
         let remote = Hlc {
-            physical_ms: remote
-                .physical_ms
-                .min(now_ms.saturating_add(MAX_DRIFT_MS)),
+            physical_ms: remote.physical_ms.min(now_ms.saturating_add(MAX_DRIFT_MS)),
             counter: remote.counter,
         };
         let physical = self.physical_ms.max(remote.physical_ms).max(now_ms);

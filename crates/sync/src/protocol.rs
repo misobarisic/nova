@@ -247,13 +247,13 @@ impl Handler {
             crate::ack_floor(&peers, &acks)
         };
         let mut store = self.store();
-        if store.gc(now_ms, crate::store::TOMBSTONE_TTL_MS, floor) > 0 {
-            if let Err(e) = store.save() {
-                nova_storage::report(nova_storage::Error::new(
-                    nova_storage::ErrorKind::Transaction,
-                    e,
-                ));
-            }
+        if store.gc(now_ms, crate::store::TOMBSTONE_TTL_MS, floor) > 0
+            && let Err(e) = store.save()
+        {
+            nova_storage::report(nova_storage::Error::new(
+                nova_storage::ErrorKind::Transaction,
+                e,
+            ));
         }
     }
 
@@ -708,15 +708,15 @@ async fn exchange(
                     entries.iter().all(|e| crate::store::valid_clock(e.hlc())),
                     "peer clock exceeds permitted drift; correct device clock"
                 );
-                if let Wire::Records { domain, .. } = frame {
-                    if domain == "progress" {
-                        anyhow::ensure!(
-                            entries
-                                .iter()
-                                .all(|e| crate::progress::valid(&e.to_record())),
-                            "invalid progress action clock"
-                        );
-                    }
+                if let Wire::Records { domain, .. } = frame
+                    && domain == "progress"
+                {
+                    anyhow::ensure!(
+                        entries
+                            .iter()
+                            .all(|e| crate::progress::valid(&e.to_record())),
+                        "invalid progress action clock"
+                    );
                 }
             }
         }
@@ -734,7 +734,7 @@ async fn exchange(
             peer = crate::short_id(remote_id),
             "peer removed us; dropping it"
         );
-        handler.drop_peer(&remote_id);
+        handler.drop_peer(remote_id);
         handler.set_removed_notice(peer_name.clone());
         if !changed.iter().any(|d| d == crate::DOMAIN_PEERS) {
             changed.push(crate::DOMAIN_PEERS.to_string());
@@ -855,12 +855,10 @@ async fn write_side(
 /// Read and discard frames until the peer's stream ends. Returns false on a
 /// transport error. Both sides use this as the "the peer applied" signal.
 async fn wait_for_end(recv: &mut RecvStream) -> bool {
-    loop {
-        match frame::read_frame_c::<Wire>(recv).await {
-            Ok(Some(_)) => return false,
-            Ok(None) => return true,
-            Err(_) => return false,
-        }
+    match frame::read_frame_c::<Wire>(recv).await {
+        Ok(Some(_)) => false,
+        Ok(None) => true,
+        Err(_) => false,
     }
 }
 
@@ -1729,16 +1727,16 @@ mod tests {
         let notify = Arc::new(tokio::sync::Notify::new());
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let force = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let worker = tokio::spawn(crate::sync_worker(
-            a.clone(),
-            a_handler.clone(),
+        let worker = tokio::spawn(crate::sync_worker(crate::SyncWorker {
+            endpoint: a.clone(),
+            handler: a_handler.clone(),
             peers,
-            Arc::new(Mutex::new(std::collections::HashMap::new())),
-            health.clone(),
-            notify.clone(),
-            stop.clone(),
-            force.clone(),
-        ));
+            conns: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            health: health.clone(),
+            sync_notify: notify.clone(),
+            stop: stop.clone(),
+            force_attempt: force.clone(),
+        }));
         // A periodic wake must respect backoff.
         notify.notify_one();
         tokio::time::timeout(Duration::from_secs(10), async {

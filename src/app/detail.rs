@@ -105,7 +105,10 @@ impl Bridge {
         app.set_selected_description(SharedString::from(&paint_description));
         app.set_selected_genre_list(
             Rc::new(VecModel::from(
-                paint_genres.iter().map(SharedString::from).collect::<Vec<_>>(),
+                paint_genres
+                    .iter()
+                    .map(SharedString::from)
+                    .collect::<Vec<_>>(),
             ))
             .into(),
         );
@@ -236,14 +239,13 @@ impl Bridge {
             state.stream_filter = 0;
         }
         if let Some(app) = self.app() {
-            app.set_stream_addons(Rc::new(
-                VecModel::from(requested.iter().map(SharedString::from).collect::<Vec<_>>()),
-            )
-            .into());
-            app.set_stream_loading(Rc::new(
-                VecModel::from(vec![true; requested.len()]),
-            )
-            .into());
+            app.set_stream_addons(
+                Rc::new(VecModel::from(
+                    requested.iter().map(SharedString::from).collect::<Vec<_>>(),
+                ))
+                .into(),
+            );
+            app.set_stream_loading(Rc::new(VecModel::from(vec![true; requested.len()])).into());
             app.set_streams_searching(!requested.is_empty());
             app.set_stream_filter(0);
         }
@@ -837,7 +839,11 @@ impl Bridge {
                 },
             )
         };
-        self.shared.lock().unwrap().detail_snapshots.insert(snap.0, snap.1);
+        self.shared
+            .lock()
+            .unwrap()
+            .detail_snapshots
+            .insert(snap.0, snap.1);
     }
 
     /// Restore a saved position for `id` (same-entry reopen): tab, filter
@@ -848,7 +854,13 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
-        let snap = self.shared.lock().unwrap().detail_snapshots.get(id).cloned();
+        let snap = self
+            .shared
+            .lock()
+            .unwrap()
+            .detail_snapshots
+            .get(id)
+            .cloned();
         match snap {
             Some(s) => {
                 app.set_detail_tab(s.tab);
@@ -911,7 +923,7 @@ impl Bridge {
         }
 
         // Current date as days since epoch.
-// the web build reads the browser clock via js_sys instead.)
+        // the web build reads the browser clock via js_sys instead.)
         let now_secs = now_secs();
         let today = (now_secs / 86400) as i64;
 
@@ -957,8 +969,7 @@ impl Bridge {
     /// 4th line that the card then clips mid-glyph.
     pub(super) fn episode_details(overview: Option<&str>, resume_suffix: &str) -> String {
         const EPISODE_SYNOPSIS_CHARS: usize = 150;
-        let budget =
-            EPISODE_SYNOPSIS_CHARS.saturating_sub(resume_suffix.chars().count());
+        let budget = EPISODE_SYNOPSIS_CHARS.saturating_sub(resume_suffix.chars().count());
         let mut details = overview
             .map(|o| Self::truncate_synopsis(o, budget))
             .unwrap_or_default();
@@ -984,16 +995,19 @@ impl Bridge {
     ) -> (bool, f32, String) {
         match map.get(&progress_map_key(series_id, episode_id)) {
             Some(p) if p.watched => (true, 1.0f32, String::new()),
-            Some(p)
-                if resumable_position(p.position_secs, p.duration_secs, p.watched) =>
-            {
-                (
-                    false,
-                    progress_fraction(p.position_secs, p.duration_secs),
-                    format!(" · ▶ Resume {}", crate::player::format_time(p.position_secs)),
-                )
-            }
-            Some(p) => (false, progress_fraction(p.position_secs, p.duration_secs), String::new()),
+            Some(p) if resumable_position(p.position_secs, p.duration_secs, p.watched) => (
+                false,
+                progress_fraction(p.position_secs, p.duration_secs),
+                format!(
+                    " · ▶ Resume {}",
+                    crate::player::format_time(p.position_secs)
+                ),
+            ),
+            Some(p) => (
+                false,
+                progress_fraction(p.position_secs, p.duration_secs),
+                String::new(),
+            ),
             None => (false, 0.0, String::new()),
         }
     }
@@ -1001,7 +1015,11 @@ impl Bridge {
     /// Whether an episode row may show its thumbnail under the
     /// `show_unwatched_thumbs` setting: hidden only for fresh episodes with
     /// no watch flag and no playback position.
-    pub(super) fn episode_thumb_visible(show_unwatched: bool, watched: bool, progress: f32) -> bool {
+    pub(super) fn episode_thumb_visible(
+        show_unwatched: bool,
+        watched: bool,
+        progress: f32,
+    ) -> bool {
         show_unwatched || watched || progress > 0.0
     }
 
@@ -1048,8 +1066,7 @@ impl Bridge {
                     // reserves exactly 3 lines (see detail.slint); this
                     // Rust-side truncation keeps the text short so the
                     // renderer ellipsis rarely has to do any work.
-                    let details =
-                        Self::episode_details(v.overview.as_deref(), &resume_suffix);
+                    let details = Self::episode_details(v.overview.as_deref(), &resume_suffix);
                     let date = v
                         .released
                         .as_deref()
@@ -1062,11 +1079,7 @@ impl Bridge {
                         text,
                         details,
                         thumb_url: v.thumbnail.clone(),
-                        show_thumb: Self::episode_thumb_visible(
-                            show_unwatched,
-                            watched,
-                            progress,
-                        ),
+                        show_thumb: Self::episode_thumb_visible(show_unwatched, watched, progress),
                         watched,
                         progress,
                         ep_no: SharedString::from(episode_badge(v)),
@@ -1094,10 +1107,13 @@ impl Bridge {
                     (Image::default(), false)
                 } else {
                     match &seed.thumb_url {
-                        Some(url) => match decoded_cache_get(&sized_cache_key(url, Some(EPISODE_THUMB_SIDE))) {
-                            Some(buf) => (Image::from_rgba8(buf), true),
-                            None => (Image::default(), false),
-                        },
+                        Some(url) => {
+                            match decoded_cache_get(&sized_cache_key(url, Some(EPISODE_THUMB_SIDE)))
+                            {
+                                Some(buf) => (Image::from_rgba8(buf), true),
+                                None => (Image::default(), false),
+                            }
+                        }
                         None => (Image::default(), false),
                     }
                 };
@@ -1230,14 +1246,13 @@ impl Bridge {
         m.seasons
             .iter()
             .map(|&s| {
-                let (thumb, has_thumb) = match season_thumb_url(&m.videos, s)
-                    .as_deref()
-                    .and_then(|url| {
+                let (thumb, has_thumb) =
+                    match season_thumb_url(&m.videos, s).as_deref().and_then(|url| {
                         decoded_cache_get(&sized_cache_key(url, Some(EPISODE_THUMB_SIDE)))
                     }) {
-                    Some(buf) => (Image::from_rgba8(buf), true),
-                    None => (Image::default(), false),
-                };
+                        Some(buf) => (Image::from_rgba8(buf), true),
+                        None => (Image::default(), false),
+                    };
                 // Watched fraction from the progress map (manual toggles and
                 // playback both land here). Every known episode counts,
                 // including unaired ones: a season with episodes still to
@@ -1282,7 +1297,13 @@ impl Bridge {
             return;
         }
         // Same-entry reopen: restore the saved season instead of season 0.
-        let snapshot = self.shared.lock().unwrap().detail_snapshots.get(&id).cloned();
+        let snapshot = self
+            .shared
+            .lock()
+            .unwrap()
+            .detail_snapshots
+            .get(&id)
+            .cloned();
         let (season_names, season_idx) = {
             let mut state = self.shared.lock().unwrap();
             let m = match state.modal_item.as_mut() {
@@ -1367,7 +1388,10 @@ impl Bridge {
     /// `(series_id, episode_id, ordered episode ids of the season)`.
     /// Uses the same season + filter as `current_episode_rows`, so menu
     /// actions and the quick-toggle always hit the card the user touched.
-    pub(super) fn resolve_filtered_episode(&self, index: usize) -> Option<(String, String, Vec<String>)> {
+    pub(super) fn resolve_filtered_episode(
+        &self,
+        index: usize,
+    ) -> Option<(String, String, Vec<String>)> {
         let state = self.shared.lock().unwrap();
         let m = state.modal_item.as_ref()?;
         if m.seasons.is_empty() {
@@ -1435,7 +1459,12 @@ impl Bridge {
                 .progress
                 .get(&progress_map_key(&series_id, &episode_id))
                 .is_some_and(|p| p.watched);
-            Self::set_episode_watched_locked(&mut state.progress, &series_id, &episode_id, now_watched);
+            Self::set_episode_watched_locked(
+                &mut state.progress,
+                &series_id,
+                &episode_id,
+                now_watched,
+            );
             now_watched
         };
         if now_watched {
@@ -1740,9 +1769,7 @@ impl Bridge {
                 .map(|m| !m.seasons.is_empty())
                 .unwrap_or(false)
         };
-        if is_episodic
-            && let Some(app) = self.app()
-        {
+        if is_episodic && let Some(app) = self.app() {
             app.set_detail_tab(3);
             app.set_detail_kb_zone(2);
         }
@@ -1773,7 +1800,12 @@ impl Bridge {
     /// One addon answered the stream query: merge its rows into the list and
     /// refresh the UI immediately. An empty `new_rows` drops the addon's pill
     /// (it returned nothing).
-    pub(super) fn stream_addon_loaded(&self, request_id: String, addon: String, new_rows: Vec<StreamUi>) {
+    pub(super) fn stream_addon_loaded(
+        &self,
+        request_id: String,
+        addon: String,
+        new_rows: Vec<StreamUi>,
+    ) {
         let (was_empty, addons, loading, searching, filter) = {
             let mut state = self.shared.lock().unwrap();
             let matches = state
@@ -1858,9 +1890,7 @@ impl Bridge {
             let mut filtered: Vec<StreamUi> = state
                 .stream_all
                 .iter()
-                .filter(|s| {
-                    filter == 0 || selected.as_deref().is_some_and(|a| a == s.addon)
-                })
+                .filter(|s| filter == 0 || selected.as_deref().is_some_and(|a| a == s.addon))
                 .cloned()
                 .collect();
             // "All" always lists streams grouped by addon priority (the
@@ -2111,7 +2141,6 @@ impl Bridge {
             app.set_streams_hint(SharedString::from(text));
         }
     }
-
 }
 
 /// Stable-sort addon stream rows into installed-addon order (unknown addons
@@ -2270,8 +2299,12 @@ mod tests {
     #[test]
     fn streams_sort_into_installed_addon_order_keeping_arrival_order() {
         let order = vec!["B".to_string(), "A".to_string()];
-        let mut rows =
-            vec![row("A", "a1"), row("C", "c1"), row("B", "b1"), row("A", "a2")];
+        let mut rows = vec![
+            row("A", "a1"),
+            row("C", "c1"),
+            row("B", "b1"),
+            row("A", "a2"),
+        ];
         sort_streams_by_addon(&mut rows, &order);
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         // Installed order (B, then A), unknown addon (C) last, arrival order

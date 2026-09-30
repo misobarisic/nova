@@ -22,25 +22,25 @@ fn after(ms: u64, body: impl FnOnce() + 'static) {
 
 /// Synchronous upward drag over `from`: press, four small moves, release.
 fn drag_up(app: &nova::AppWindow, from: LogicalPosition, dy: f32) {
-    let _ = app.window().dispatch_event_with_result(
-        slint::platform::WindowEvent::PointerPressed {
+    let _ = app
+        .window()
+        .dispatch_event_with_result(slint::platform::WindowEvent::PointerPressed {
             position: from,
             button: slint::platform::PointerEventButton::Left,
-        },
-    );
+        });
     for step in 1..=4 {
-        let _ = app.window().dispatch_event_with_result(
-            slint::platform::WindowEvent::PointerMoved {
-                position: LogicalPosition::new(from.x, from.y - dy * step as f32 / 4.0),
-            },
-        );
+        let _ =
+            app.window()
+                .dispatch_event_with_result(slint::platform::WindowEvent::PointerMoved {
+                    position: LogicalPosition::new(from.x, from.y - dy * step as f32 / 4.0),
+                });
     }
-    let _ = app.window().dispatch_event_with_result(
-        slint::platform::WindowEvent::PointerReleased {
-            position: LogicalPosition::new(from.x, from.y - dy),
-            button: slint::platform::PointerEventButton::Left,
-        },
-    );
+    let _ =
+        app.window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
+                position: LogicalPosition::new(from.x, from.y - dy),
+                button: slint::platform::PointerEventButton::Left,
+            });
 }
 
 fn card(id: usize) -> nova::MediaCard {
@@ -66,7 +66,10 @@ fn returning_to_the_library_keeps_the_scroll_offset() {
     app.set_show_home(false);
     app.set_show_library(true);
     app.set_library(
-        Rc::new(VecModel::from((0..60).map(card).collect::<Vec<nova::MediaCard>>())).into(),
+        Rc::new(VecModel::from(
+            (0..60).map(card).collect::<Vec<nova::MediaCard>>(),
+        ))
+        .into(),
     );
     // Focus on the first card: after a small scroll its row is only partly
     // visible — exactly the case the restore used to nudge up.

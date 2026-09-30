@@ -31,12 +31,12 @@ fn moved(app: &nova::AppWindow, position: LogicalPosition) {
 }
 
 fn release(app: &nova::AppWindow, position: LogicalPosition) {
-    let _ = app
-        .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
-            position,
-            button: slint::platform::PointerEventButton::Left,
-        });
+    let _ =
+        app.window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            });
 }
 
 fn find_landing_card(app: &nova::AppWindow) -> Option<ElementHandle> {
@@ -53,7 +53,10 @@ fn find_landing_card(app: &nova::AppWindow) -> Option<ElementHandle> {
 fn center(element: &ElementHandle) -> LogicalPosition {
     let position = element.absolute_position();
     let size = element.size();
-    LogicalPosition::new(position.x + size.width / 2.0, position.y + size.height / 2.0)
+    LogicalPosition::new(
+        position.x + size.width / 2.0,
+        position.y + size.height / 2.0,
+    )
 }
 
 fn setup() -> nova::AppWindow {
@@ -92,51 +95,10 @@ fn setup() -> nova::AppWindow {
     app
 }
 
-/// A flick with fine-grained sampling: prints the rail's movement around every
-/// move event (before and after the frame's timers) and flags anything that
-/// does not match the finger.
-fn probe_flick(app: &nova::AppWindow, tag: &str, gap: u64, frames: usize, step: f32) {
-    let from = center(&find_landing_card(app).expect("card"));
-    let mut x = from.x;
-    let mut rail = app.get_home_continue_x();
-    press(app, from);
-    idle(gap);
-    for frame in 1..=frames {
-        x += step;
-        moved(app, LogicalPosition::new(x, from.y));
-        let after_move = app.get_home_continue_x();
-        idle(16);
-        let after_frame = app.get_home_continue_x();
-        let d_move = after_move - rail;
-        let d_frame = after_frame - after_move;
-        let expected = step;
-        let flag = if (d_move - expected).abs() > 2.0 || (d_frame - expected).abs() > 2.0 {
-            "  <-- SNAP?"
-        } else {
-            ""
-        };
-        eprintln!(
-            "DIAG {tag} frame {frame}: move {d_move:+.1} then {d_frame:+.1} (finger {expected:+.1}) rail {after_frame:.1}{flag}"
-        );
-        rail = after_frame;
-    }
-    release(app, LogicalPosition::new(x, from.y));
-    let at_release = app.get_home_continue_x();
-    eprintln!("DIAG {tag}: release at {at_release:.1} (release delta {:.1})", at_release - rail);
-    for frame in 0..4 {
-        idle(16);
-        let now = app.get_home_continue_x();
-        eprintln!("DIAG {tag} coast {frame}: {:+.1}", now - at_release);
-        rail = now;
-    }
-}
-
 fn key(app: &nova::AppWindow, k: slint::platform::Key) {
     let _ = app
         .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::KeyPressed {
-            text: k.into(),
-        });
+        .dispatch_event_with_result(slint::platform::WindowEvent::KeyPressed { text: k.into() });
 }
 
 #[test]
@@ -189,5 +151,8 @@ fn probe_rail_snaps() {
     frames(10);
     app.set_home_view(0);
     frames(10);
-    eprintln!("DIAG after a subpage round trip: rail {:.1} (was {flicked:.1})", app.get_home_continue_x());
+    eprintln!(
+        "DIAG after a subpage round trip: rail {:.1} (was {flicked:.1})",
+        app.get_home_continue_x()
+    );
 }

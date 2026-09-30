@@ -27,12 +27,12 @@ fn press(app: &nova::AppWindow, position: LogicalPosition) {
 }
 
 fn release(app: &nova::AppWindow, position: LogicalPosition) {
-    let _ = app
-        .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
-            position,
-            button: slint::platform::PointerEventButton::Left,
-        });
+    let _ =
+        app.window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            });
 }
 
 fn tap(app: &nova::AppWindow, element: &ElementHandle) {
@@ -79,7 +79,7 @@ fn upcoming_calendar_toggles_picks_days_and_resolves_indices() {
         .map(|i| nova::CalCell {
             epoch: E - 16 + i,
             day: (i % 30) + 1,
-            in_month: i >= 2 && i < 40,
+            in_month: (2..40).contains(&i),
             count: if E - 16 + i == E {
                 2
             } else if E - 16 + i == E2 {
@@ -180,9 +180,17 @@ fn upcoming_calendar_toggles_picks_days_and_resolves_indices() {
         let grid_cards = ElementHandle::find_by_element_type_name(&app, "UpcomingCard")
             .filter(|c| c.size().width > 140.0)
             .count();
-        fail(&failures1, grid_cards == 3, &format!("grid mode must render 3 cards, found {grid_cards}"));
+        fail(
+            &failures1,
+            grid_cards == 3,
+            &format!("grid mode must render 3 cards, found {grid_cards}"),
+        );
         let cells = ElementHandle::find_by_element_type_name(&app, "CalDayCell").count();
-        fail(&failures1, cells == 0, &format!("grid mode must render no calendar cells, found {cells}"));
+        fail(
+            &failures1,
+            cells == 0,
+            &format!("grid mode must render no calendar cells, found {cells}"),
+        );
 
         // ---- The toggle opens the calendar ----
         let Some(toggle) = ElementHandle::find_by_element_type_name(&app, "CalToggle").next()
@@ -202,12 +210,20 @@ fn upcoming_calendar_toggles_picks_days_and_resolves_indices() {
                 cal_open_calls1.borrow().as_slice() == [true],
                 "tapping the toggle must call upcoming_cal_open",
             );
-            fail(&failures2, app.get_home_cal_open(), "calendar must be open after the toggle");
+            fail(
+                &failures2,
+                app.get_home_cal_open(),
+                "calendar must be open after the toggle",
+            );
 
             // ---- Calendar mode: 42 cells, grid cards gone, day cards up ----
             let cells: Vec<_> =
                 ElementHandle::find_by_element_type_name(&app, "CalDayCell").collect();
-            fail(&failures2, cells.len() == 42, &format!("calendar must render 42 cells, found {}", cells.len()));
+            fail(
+                &failures2,
+                cells.len() == 42,
+                &format!("calendar must render 42 cells, found {}", cells.len()),
+            );
             // No dead gap above the dates: the first date row sits right
             // below the month/weekday bands (the column packs from the top
             // instead of sharing the viewport leftover between bands).
@@ -218,12 +234,18 @@ fn upcoming_calendar_toggles_picks_days_and_resolves_indices() {
             fail(
                 &failures2,
                 first_y < 165.0,
-                &format!("first date row too low ({first_y:.1}) — slack distributed into the bands"),
+                &format!(
+                    "first date row too low ({first_y:.1}) — slack distributed into the bands"
+                ),
             );
             let cards = ElementHandle::find_by_element_type_name(&app, "UpcomingCard")
                 .filter(|c| c.size().width > 140.0)
                 .count();
-            fail(&failures2, cards == 2, &format!("calendar day list must render 2 cards, found {cards}"));
+            fail(
+                &failures2,
+                cards == 2,
+                &format!("calendar day list must render 2 cards, found {cards}"),
+            );
 
             // Tapping every cell reports exactly the marked epochs (filler
             // and empty days stay silent, nothing double-fires) and must not
@@ -233,7 +255,11 @@ fn upcoming_calendar_toggles_picks_days_and_resolves_indices() {
             }
             let mut got = picks1.borrow().clone();
             got.sort_unstable();
-            fail(&failures2, got.as_slice() == [E, E2], &format!("day taps must report the marked epochs, got {got:?}"));
+            fail(
+                &failures2,
+                got.as_slice() == [E, E2],
+                &format!("day taps must report the marked epochs, got {got:?}"),
+            );
             fail(
                 &failures2,
                 opened1.borrow().is_empty(),
@@ -241,10 +267,9 @@ fn upcoming_calendar_toggles_picks_days_and_resolves_indices() {
             );
 
             // The first day card resolves through its full-list index.
-            let day_cards: Vec<_> =
-                ElementHandle::find_by_element_type_name(&app, "UpcomingCard")
-                    .filter(|c| c.size().width > 140.0)
-                    .collect();
+            let day_cards: Vec<_> = ElementHandle::find_by_element_type_name(&app, "UpcomingCard")
+                .filter(|c| c.size().width > 140.0)
+                .collect();
             match day_cards.first() {
                 Some(card) => tap(&app, card),
                 None => fail(&failures2, false, "DIAG: no day card to tap"),
@@ -252,7 +277,10 @@ fn upcoming_calendar_toggles_picks_days_and_resolves_indices() {
             fail(
                 &failures2,
                 opened1.borrow().as_slice() == ["u1"],
-                &format!("day card must open full-list index 1, got {:?}", opened1.borrow()),
+                &format!(
+                    "day card must open full-list index 1, got {:?}",
+                    opened1.borrow()
+                ),
             );
 
             // Month step + keyboard paths reach the backend.
@@ -270,7 +298,11 @@ fn upcoming_calendar_toggles_picks_days_and_resolves_indices() {
                 "Left must pick the previous day",
             );
             key(&app, slint::platform::Key::Return);
-            fail(&failures2, *activates1.borrow() == 1, "Enter must activate the selected day");
+            fail(
+                &failures2,
+                *activates1.borrow() == 1,
+                "Enter must activate the selected day",
+            );
 
             // System back closes the calendar before leaving the subpage.
             key(&app, slint::platform::Key::Back);
@@ -283,8 +315,16 @@ fn upcoming_calendar_toggles_picks_days_and_resolves_indices() {
                     cal_open_calls1.borrow().as_slice() == [true, false],
                     "Back must close the calendar first",
                 );
-                fail(&failures3, app.get_home_view() == 2, "Back must not leave the subpage while closing the calendar");
-                fail(&failures3, !app.get_home_cal_open(), "calendar must be closed after Back");
+                fail(
+                    &failures3,
+                    app.get_home_view() == 2,
+                    "Back must not leave the subpage while closing the calendar",
+                );
+                fail(
+                    &failures3,
+                    !app.get_home_cal_open(),
+                    "calendar must be closed after Back",
+                );
                 slint::quit_event_loop().unwrap();
             });
         });
@@ -293,5 +333,9 @@ fn upcoming_calendar_toggles_picks_days_and_resolves_indices() {
     slint::run_event_loop().unwrap();
 
     let failures = failures.borrow();
-    assert!(failures.is_empty(), "upcoming calendar failures:\n  {}", failures.join("\n  "));
+    assert!(
+        failures.is_empty(),
+        "upcoming calendar failures:\n  {}",
+        failures.join("\n  ")
+    );
 }

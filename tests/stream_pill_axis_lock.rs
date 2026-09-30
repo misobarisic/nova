@@ -104,12 +104,12 @@ fn press(app: &nova::AppWindow, at: LogicalPosition) {
 }
 
 fn release(app: &nova::AppWindow, at: LogicalPosition) {
-    let _ = app
-        .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
-            position: at,
-            button: slint::platform::PointerEventButton::Left,
-        });
+    let _ =
+        app.window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
+                position: at,
+                button: slint::platform::PointerEventButton::Left,
+            });
 }
 
 /// One move event, then a frame of mock time.
@@ -189,10 +189,7 @@ fn pill_bar_owns_a_horizontal_drag_and_gives_vertical_back_to_the_page() {
                 ),
             );
         }
-        release(
-            &app,
-            LogicalPosition::new(start.x - 300.0, start.y - 36.0),
-        );
+        release(&app, LogicalPosition::new(start.x - 300.0, start.y - 36.0));
         idle(16);
 
         let after = row_pos(&app);

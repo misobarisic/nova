@@ -98,6 +98,8 @@ fn sync_records(domain: &str, records: Vec<(String, String, u64)>) {
 
 /// App snapshots and record mutations share one transaction, even with sync
 /// disabled. A persisted baseline is the only deletion authority.
+type SnapshotDomainRecords = (&'static str, Vec<(String, String, u64)>);
+
 pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sync::Result<()> {
     if !writable_key(key) {
         return Err(storage::Error::new(
@@ -106,7 +108,7 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
         )
         .into());
     }
-    let domains: Vec<(&str, Vec<(String, String, u64)>)> = match key {
+    let domains: Vec<SnapshotDomainRecords> = match key {
         "library" => {
             let entries: Vec<LibraryEntry> = serde_json::from_str(raw)?;
             vec![(
@@ -774,7 +776,7 @@ impl Bridge {
                 state
                     .installed
                     .iter()
-                    .position(|a| !desired.iter().any(|d| &d.url == &a.url))
+                    .position(|a| !desired.iter().any(|d| d.url == a.url))
             };
             match stale {
                 Some(idx) => self.remove_addon_at(idx),
@@ -1450,12 +1452,12 @@ mod tests {
         let current = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         // Reversed mesh order wins wholesale.
         assert_eq!(
-            sort_by_order(current.clone(), &vec!["c".to_string(), "a".to_string()]),
+            sort_by_order(current.clone(), &["c".to_string(), "a".to_string()]),
             vec!["c".to_string(), "a".to_string(), "b".to_string()]
         );
         // Unknown urls keep trailing relative order; stale entries drop out.
         assert_eq!(
-            sort_by_order(current.clone(), &vec!["c".to_string(), "z".to_string()]),
+            sort_by_order(current.clone(), &["c".to_string(), "z".to_string()]),
             vec!["c".to_string(), "a".to_string(), "b".to_string()]
         );
         // Empty order keeps everything as-is.
@@ -1636,7 +1638,6 @@ mod tests {
         assert!(!fields.contains_key("rewrite_existing"));
     }
 
-    #[test]
     #[test]
     fn merge_settings_fields_unions_independent_and_group_records() {
         // Device A changed the cache group (whole-record), device B changed an

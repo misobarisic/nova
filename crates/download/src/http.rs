@@ -4,14 +4,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use reqwest::header::{HeaderMap, ACCEPT_ENCODING, ETAG, IF_RANGE, LAST_MODIFIED, RANGE};
+use reqwest::header::{ACCEPT_ENCODING, ETAG, HeaderMap, IF_RANGE, LAST_MODIFIED, RANGE};
 use reqwest::{Client, Response, StatusCode, Url};
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use super::{
-    CancellationToken, DownloadError, DownloadJob, DownloadOutcome, DownloadProgress, DownloadResume,
-    HttpDownloadRequest, part_path, sanitize_filename, validate_download_url,
+    CancellationToken, DownloadError, DownloadJob, DownloadOutcome, DownloadProgress,
+    DownloadResume, HttpDownloadRequest, part_path, sanitize_filename, validate_download_url,
 };
 
 /// Time allowed for the connection + response headers. A socket that is
@@ -137,8 +137,8 @@ pub async fn download_http_resume<F>(
 where
     F: FnMut(DownloadProgress) + Send,
 {
-    let request = HttpDownloadRequest::new(url, destination.as_ref().to_path_buf())
-        .with_resume(resume);
+    let request =
+        HttpDownloadRequest::new(url, destination.as_ref().to_path_buf()).with_resume(resume);
     download_http_inner(client, request, cancellation, on_progress).await
 }
 
@@ -181,7 +181,9 @@ where
     let url = validate_download_url(&request.url)?;
     let destination = request.destination;
     if destination.as_os_str().is_empty() {
-        return Err(DownloadError::InvalidResponse("empty destination path".into()));
+        return Err(DownloadError::InvalidResponse(
+            "empty destination path".into(),
+        ));
     }
     let parent = destination
         .parent()
@@ -229,8 +231,10 @@ where
         if offset > 0 {
             match status {
                 StatusCode::PARTIAL_CONTENT => {
-                    let range = parse_content_range(header_string(response.headers(), "content-range").as_deref())
-                        .map_err(DownloadError::InvalidResponse)?;
+                    let range = parse_content_range(
+                        header_string(response.headers(), "content-range").as_deref(),
+                    )
+                    .map_err(DownloadError::InvalidResponse)?;
                     if range.start != offset {
                         return Err(DownloadError::InvalidResponse(format!(
                             "Content-Range starts at {}, expected {offset}",
@@ -265,7 +269,8 @@ where
                     );
                     let etag = header_string(response.headers(), "etag");
                     let last_modified = header_string(response.headers(), "last-modified");
-                    if total == Some(offset) && !validators_changed(&resume, &etag, &last_modified) {
+                    if total == Some(offset) && !validators_changed(&resume, &etag, &last_modified)
+                    {
                         return finish_existing_part(
                             &part,
                             &destination,
@@ -302,8 +307,10 @@ where
                     break (response, ResponseKind::Full, content_length);
                 }
                 StatusCode::PARTIAL_CONTENT => {
-                    let range = parse_content_range(header_string(response.headers(), "content-range").as_deref())
-                        .map_err(DownloadError::InvalidResponse)?;
+                    let range = parse_content_range(
+                        header_string(response.headers(), "content-range").as_deref(),
+                    )
+                    .map_err(DownloadError::InvalidResponse)?;
                     if range.start != 0 {
                         return Err(DownloadError::InvalidResponse(format!(
                             "unsolicited Content-Range starts at {}",
@@ -330,12 +337,17 @@ where
     let mut total_bytes = match response_kind {
         ResponseKind::Full => total_bytes,
         ResponseKind::Partial(range) => range.total.or_else(|| {
-            response.content_length().map(|length| offset.saturating_add(length))
+            response
+                .content_length()
+                .map(|length| offset.saturating_add(length))
         }),
     };
     let expected_remaining = match response_kind {
         ResponseKind::Full => response.content_length(),
-        ResponseKind::Partial(range) => range.end.checked_sub(range.start).and_then(|length| length.checked_add(1)),
+        ResponseKind::Partial(range) => range
+            .end
+            .checked_sub(range.start)
+            .and_then(|length| length.checked_add(1)),
     };
     if let Some(total) = total_bytes
         && offset > total
@@ -495,9 +507,17 @@ async fn send_request(
     let mut request = client.get(url.clone()).header(ACCEPT_ENCODING, "identity");
     if offset > 0 {
         request = request.header(RANGE, format!("bytes={offset}-"));
-        if let Some(validator) = resume.etag.as_deref().filter(|value| !value.is_empty()).or_else(|| {
-            resume.last_modified.as_deref().filter(|value| !value.is_empty())
-        }) {
+        if let Some(validator) = resume
+            .etag
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                resume
+                    .last_modified
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+            })
+        {
             request = request.header(IF_RANGE, validator);
         }
     }
@@ -669,8 +689,8 @@ fn output_file_name(destination: &Path, headers: &HeaderMap, url: Option<&Url>) 
         .and_then(content_disposition_filename);
     let from_url = url
         .and_then(|url| url.path_segments())
-        .and_then(|segments| segments.filter(|segment| !segment.is_empty()).last())
-        .map(|segment| percent_decode(segment));
+        .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
+        .map(percent_decode);
     destination
         .file_name()
         .and_then(|name| name.to_str())
@@ -686,7 +706,10 @@ fn content_disposition_filename(value: &str) -> Option<String> {
     if let Some(index) = lower.find("filename*=") {
         let value = value[index + 10..].split(';').next()?.trim();
         let value = value.trim_matches('"');
-        let value = value.rsplit_once("''").map(|(_, value)| value).unwrap_or(value);
+        let value = value
+            .rsplit_once("''")
+            .map(|(_, value)| value)
+            .unwrap_or(value);
         return Some(percent_decode(value));
     }
     let index = lower.find("filename=")?;
@@ -765,7 +788,13 @@ pub fn is_manifest_url(url: &str) -> bool {
         .map(|url| url.query().unwrap_or_default().to_ascii_lowercase())
         .unwrap_or_default();
     if [
-        ".m3u8", ".m3u", ".mpd", ".ism", ".isml", ".f4m", ".m3u8.txt",
+        ".m3u8",
+        ".m3u",
+        ".mpd",
+        ".ism",
+        ".isml",
+        ".f4m",
+        ".m3u8.txt",
     ]
     .iter()
     .any(|extension| path.ends_with(extension) || query.contains(extension))
@@ -775,13 +804,7 @@ pub fn is_manifest_url(url: &str) -> bool {
     path.split('/').any(|segment| {
         matches!(
             segment,
-            "manifest"
-                | "manifest.json"
-                | "playlist"
-                | "master"
-                | "master.m3u8"
-                | "hls"
-                | "dash"
+            "manifest" | "manifest.json" | "playlist" | "master" | "master.m3u8" | "hls" | "dash"
         )
     }) || query.contains("manifest")
         || query.contains("playlist")
@@ -857,15 +880,9 @@ mod tests {
         )
         .await;
         let client = Client::new();
-        let error = download_http(
-            &client,
-            url,
-            &path,
-            CancellationToken::new(),
-            |_| {},
-        )
-        .await
-        .unwrap_err();
+        let error = download_http(&client, url, &path, CancellationToken::new(), |_| {})
+            .await
+            .unwrap_err();
         task.await.unwrap();
         assert!(matches!(error, DownloadError::UnsupportedContentType(_)));
         assert!(!path.exists());
@@ -1001,7 +1018,9 @@ mod tests {
         assert!(is_manifest_url("https://youtu.be/abc"));
         assert!(is_manifest_url("https://cdn.example/x/master.m3u8"));
         assert!(is_manifest_url("https://cdn.example/video?manifest=1"));
-        assert!(is_manifest_content_type("application/dash+xml; charset=utf-8"));
+        assert!(is_manifest_content_type(
+            "application/dash+xml; charset=utf-8"
+        ));
         assert!(!is_manifest_content_type("video/mp4"));
         assert_eq!(sanitize_filename("a/b:c?.mp4"), "b_c_.mp4");
         assert_eq!(format_bytes(1024), "1.0 KiB");

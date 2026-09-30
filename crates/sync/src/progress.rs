@@ -36,10 +36,10 @@ fn candidate(mut data: Value, version: Version) -> Candidate {
 }
 fn state(record: &Record) -> Option<State> {
     let data: Value = serde_json::from_str(record.value.as_ref()?).ok()?;
-    if let Some(meta) = data.get(META) {
-        if let Ok(s) = serde_json::from_value(meta.clone()) {
-            return Some(s);
-        }
+    if let Some(meta) = data.get(META)
+        && let Ok(s) = serde_json::from_value(meta.clone())
+    {
+        return Some(s);
     }
     let c = candidate(data, record.version);
     Some(State {
@@ -71,12 +71,20 @@ pub(crate) fn valid(record: &Record) -> bool {
 }
 fn max(a: Candidate, b: Candidate) -> Candidate {
     if b.version.newer_than(&a.version)
-        || (b.version == a.version && b.data.to_string() > a.data.to_string())
+        || (b.version == a.version && data_cmp(&b.data, &a.data).is_gt())
     {
         b
     } else {
         a
     }
+}
+
+fn data_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
+    // JSON objects serialize with stable key order in this crate configuration;
+    // byte comparison gives equal-version candidates a deterministic total tie.
+    serde_json::to_vec(a)
+        .expect("JSON value serialization")
+        .cmp(&serde_json::to_vec(b).expect("JSON value serialization"))
 }
 fn union(a: Option<Candidate>, b: Option<Candidate>) -> Option<Candidate> {
     match (a, b) {

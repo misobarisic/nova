@@ -31,18 +31,21 @@ fn moved(app: &nova::AppWindow, position: LogicalPosition) {
 }
 
 fn release(app: &nova::AppWindow, position: LogicalPosition) {
-    let _ = app
-        .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
-            position,
-            button: slint::platform::PointerEventButton::Left,
-        });
+    let _ =
+        app.window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            });
 }
 
 fn center(element: &i_slint_backend_testing::ElementHandle) -> LogicalPosition {
     let position = element.absolute_position();
     let size = element.size();
-    LogicalPosition::new(position.x + size.width / 2.0, position.y + size.height / 2.0)
+    LogicalPosition::new(
+        position.x + size.width / 2.0,
+        position.y + size.height / 2.0,
+    )
 }
 
 /// The first landing carousel card currently on screen. Landing cards are the
@@ -179,7 +182,7 @@ fn carousels_render_headers_open_subpages_and_subpage_scrolls() {
                         &app,
                         "SectionHeader",
                     )
-                    .nth(0)
+                    .next()
                 else {
                     fail(&failures3, false, "DIAG: no SectionHeader found");
                     slint::quit_event_loop().unwrap();
@@ -200,8 +203,11 @@ fn carousels_render_headers_open_subpages_and_subpage_scrolls() {
                         );
 
                         // The subpage grid must scroll: drag a visible grid card up.
-                        let cards: Vec<_> = i_slint_backend_testing::ElementHandle::
-                            find_by_element_type_name(&app, "ContinueCard")
+                        let cards: Vec<_> =
+                            i_slint_backend_testing::ElementHandle::find_by_element_type_name(
+                                &app,
+                                "ContinueCard",
+                            )
                             .collect();
                         let sub = cards.iter().find(|c| {
                             let p = c.absolute_position();
@@ -236,5 +242,9 @@ fn carousels_render_headers_open_subpages_and_subpage_scrolls() {
     slint::run_event_loop().unwrap();
 
     let failures = failures.borrow();
-    assert!(failures.is_empty(), "home carousel failures:\n  {}", failures.join("\n  "));
+    assert!(
+        failures.is_empty(),
+        "home carousel failures:\n  {}",
+        failures.join("\n  ")
+    );
 }

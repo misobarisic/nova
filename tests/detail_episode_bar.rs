@@ -76,7 +76,10 @@ fn episode_bar_chevron_is_vertically_centered() {
             .collect();
         if in_bar.is_empty() {
             fail("DIAG: no chevron found in the picked-episode bar".to_string());
-        } else if !in_bar.iter().any(|centre| (centre - bar_centre).abs() <= 1.5) {
+        } else if !in_bar
+            .iter()
+            .any(|centre| (centre - bar_centre).abs() <= 1.5)
+        {
             fail(format!(
                 "the bar chevron must be vertically centered: centre {in_bar:?}, bar centre {bar_centre}",
             ));

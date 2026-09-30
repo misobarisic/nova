@@ -69,12 +69,18 @@ pub struct Record {
 impl Record {
     #[cfg(test)]
     pub fn present(value: String, version: Version) -> Self {
-        Self { value: Some(value), version }
+        Self {
+            value: Some(value),
+            version,
+        }
     }
 
     #[cfg(test)]
     pub fn tombstone(version: Version) -> Self {
-        Self { value: None, version }
+        Self {
+            value: None,
+            version,
+        }
     }
 
     pub fn is_deleted(&self) -> bool {

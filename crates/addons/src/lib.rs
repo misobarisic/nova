@@ -40,7 +40,10 @@ pub enum Error {
         retries: usize,
     },
     /// The addon replied with a body that is not valid JSON.
-    Json { url: String, source: serde_json::Error },
+    Json {
+        url: String,
+        source: serde_json::Error,
+    },
     /// Transport-level failure (DNS, connect, timeout, TLS, …). Only present
     /// with the `client` feature (platforms without it report errors as messages).
     #[cfg(feature = "client")]
@@ -225,9 +228,9 @@ impl Addon {
     /// caller's concern).
     pub fn parse_meta(bytes: &[u8]) -> Result<Option<MetaItem>, serde_json::Error> {
         let resp: MetaResponse = serde_json::from_slice(bytes)?;
-        Ok(resp.meta.filter(|m| {
-            !m.preview.id.is_empty() || !m.preview.title().is_empty()
-        }))
+        Ok(resp
+            .meta
+            .filter(|m| !m.preview.id.is_empty() || !m.preview.title().is_empty()))
     }
 
     /// Decode a `/stream/...` body into its list of streams.
@@ -272,11 +275,8 @@ impl Addon {
     pub fn meta(&self, type_: &str, id: &str) -> Result<Option<MetaItem>, Error> {
         let url = self.meta_url(type_, id);
         match http_get_blocking(&url) {
-            Ok(bytes) => Self::parse_meta(&bytes).map_err(|source| Error::Json {
-                url,
-                source,
-            }),
-            Err(Error::Status { status, .. }) if status == 404 => Ok(None),
+            Ok(bytes) => Self::parse_meta(&bytes).map_err(|source| Error::Json { url, source }),
+            Err(Error::Status { status: 404, .. }) => Ok(None),
             Err(e) => Err(e),
         }
     }
@@ -301,7 +301,7 @@ impl Addon {
 
     /// Percent-encode a value for use inside a URL path segment.
     fn encode_segment(value: &str) -> String {
-        use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+        use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
         utf8_percent_encode(value, NON_ALPHANUMERIC).to_string()
     }
 }
@@ -362,9 +362,11 @@ pub fn http_get_blocking(url: &str) -> Result<Vec<u8>, Error> {
                 // ultimately failed, so callers can report it.
                 return Err(match (retries, e) {
                     (0, e) => e,
-                    (_, Error::Status { status, url, .. }) => {
-                        Error::Status { status, url, retries }
-                    }
+                    (_, Error::Status { status, url, .. }) => Error::Status {
+                        status,
+                        url,
+                        retries,
+                    },
                     (_, e) => e,
                 });
             }
@@ -447,7 +449,10 @@ mod tests {
     #[test]
     fn url_normalisation() {
         let cases = [
-            ("https://v3-cinemeta.strem.io", "https://v3-cinemeta.strem.io/"),
+            (
+                "https://v3-cinemeta.strem.io",
+                "https://v3-cinemeta.strem.io/",
+            ),
             (
                 "https://v3-cinemeta.strem.io/manifest.json",
                 "https://v3-cinemeta.strem.io/",
@@ -623,10 +628,7 @@ mod tests {
         let addon = Addon::new(&base).unwrap();
 
         // Not routed => 404 => treated as "addon does not know this item".
-        assert!(matches!(
-            addon.meta("movie", "tt0000000"),
-            Ok(None)
-        ));
+        assert!(matches!(addon.meta("movie", "tt0000000"), Ok(None)));
 
         let got = addon.streams("movie", "tt0111161").unwrap();
         assert_eq!(got.len(), 2);
@@ -681,8 +683,7 @@ mod tests {
         // A cold Cinemeta-style lookup: the first two attempts trip the
         // gateway timeout, the retry hits the now-warm backend cache.
         let body = r#"{"metas": [{"id":"tt0816692","type":"movie","name":"Interstellar","releaseInfo":"2014"}]}"#;
-        let (base, hits) =
-            serve_answering(|n| if n <= 2 { (504, "") } else { (200, body) });
+        let (base, hits) = serve_answering(|n| if n <= 2 { (504, "") } else { (200, body) });
         let addon = Addon::new(&base).unwrap();
         let metas = addon
             .catalog("movie", "top", &[("search", "interstellar 2014")])

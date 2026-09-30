@@ -68,7 +68,9 @@ fn show_detail(app: &nova::AppWindow) {
     app.set_detail_tab(3);
     app.set_modal_episodes(true);
     app.set_episode_context(s(""));
-    app.set_selected_title(s("Mushoku Tensei: Jobless Reincarnation Supercalifragilistic"));
+    app.set_selected_title(s(
+        "Mushoku Tensei: Jobless Reincarnation Supercalifragilistic",
+    ));
     app.set_selected_year(s("2021-"));
     app.set_selected_description(s(
         "A very long description with averylongunbrokenwordthatcantwrapanywhere in the middle of it.",

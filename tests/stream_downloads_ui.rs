@@ -141,7 +141,7 @@ fn pinned_download_and_stream_actions_fit_and_dispatch() {
                 &[s("download:job-1").to_string()]
             );
             assert!(app.get_stream_action_open());
-            app.invoke_stream_action_selected(s("download:job-1").into(), 1);
+            app.invoke_stream_action_selected(s("download:job-1"), 1);
             assert_eq!(
                 selected2.borrow().as_slice(),
                 &[(s("download:job-1").to_string(), 1)]

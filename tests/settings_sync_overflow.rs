@@ -53,8 +53,12 @@ fn settings_sync_subpage_has_no_horizontal_overflow() {
     app.set_sync_invite_ticket(s(
         "NV1MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43UOWLZVCVNBQWY5DFMFRGGZDFMZTWQ2LKNNWG23T",
     ));
-    app.set_sync_status(s(&format!("Last sync failed: connect to {long_id} timed out")));
-    app.set_sync_link_notice(s("Paired with a-device-with-an-extremely-long-name-for-testing"));
+    app.set_sync_status(s(&format!(
+        "Last sync failed: connect to {long_id} timed out"
+    )));
+    app.set_sync_link_notice(s(
+        "Paired with a-device-with-an-extremely-long-name-for-testing",
+    ));
     app.set_sync_peers(
         Rc::new(VecModel::from(vec![nova::SyncPeer {
             id: s(long_id.as_str()),
@@ -64,7 +68,8 @@ fn settings_sync_subpage_has_no_horizontal_overflow() {
         .into(),
     );
 
-    let failures: Rc<std::cell::RefCell<Vec<String>>> = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let failures: Rc<std::cell::RefCell<Vec<String>>> =
+        Rc::new(std::cell::RefCell::new(Vec::new()));
     let app1 = app.as_weak();
     let failures1 = failures.clone();
     after(400, move || {

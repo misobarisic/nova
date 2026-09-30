@@ -85,6 +85,16 @@ pub struct TorrentDownloadReady {
     pub file_len: u64,
 }
 
+/// Inputs for one retained torrent download. Keeping request state together
+/// makes cancellation and output ownership explicit at the subsystem boundary.
+pub struct TorrentDownloadRequest {
+    pub info_hash: String,
+    pub file_idx: Option<u32>,
+    pub requested_name: String,
+    pub output_directory: PathBuf,
+    pub cancel: Arc<AtomicBool>,
+}
+
 type DownloadCompletion = Box<dyn FnOnce(Result<TorrentDownloadReady, String>) + Send + 'static>;
 
 /// Live torrent stats for the player overlay.
@@ -198,28 +208,27 @@ impl TorrentEngine {
             // connector can only try TCP — which many networks filter on peer
             // ports, leaving metadata unresolvable. The listener also lets the
             // session announce a reachable port to DHT/trackers.
-            let make_opts = |ipv4_only: bool| {
-                let mut opts = SessionOptions::default();
-                opts.client_name_and_version = Some("nova/0.1".to_string());
-                opts.persistence = None;
-                opts.dht = Some(librqbit::DhtSessionConfig {
+            let make_opts = |ipv4_only: bool| SessionOptions {
+                client_name_and_version: Some("nova/0.1".to_string()),
+                persistence: None,
+                dht: Some(librqbit::DhtSessionConfig {
                     persistence: Some(librqbit::dht::DhtPersistenceConfig {
                         config_filename: Some(dht_file.clone()),
                         ..Default::default()
                     }),
                     ..Default::default()
-                });
-                opts.ipv4_only = ipv4_only;
-                opts.ratelimits = librqbit::limits::LimitsConfig {
+                }),
+                ipv4_only,
+                ratelimits: librqbit::limits::LimitsConfig {
                     download_bps: NonZeroU32::new(settings.down_limit_kbps.saturating_mul(1024)),
                     upload_bps: None,
-                };
-                opts.listen = Some(librqbit::ListenerOptions {
+                },
+                listen: Some(librqbit::ListenerOptions {
                     mode: librqbit::ListenerMode::TcpAndUtp,
                     ipv4_only,
                     ..Default::default()
-                });
-                opts
+                }),
+                ..Default::default()
             };
 
             // Prefer dual-stack; fall back to IPv4-only when the host cannot
@@ -332,11 +341,7 @@ impl TorrentEngine {
 
     pub fn start_download(
         &self,
-        info_hash: String,
-        file_idx: Option<u32>,
-        requested_name: String,
-        output_directory: PathBuf,
-        cancel: Arc<AtomicBool>,
+        request: TorrentDownloadRequest,
         on_progress: impl FnMut(TorrentStats) + Send + 'static,
         on_complete: impl FnOnce(Result<TorrentDownloadReady, String>) + Send + 'static,
     ) {
@@ -344,9 +349,9 @@ impl TorrentEngine {
             on_complete(Err("torrent engine unavailable".into()));
             return;
         };
-        let key = canonical_hash(&info_hash);
+        let key = canonical_hash(&request.info_hash);
         let job_id = inner.next_download_id.fetch_add(1, Ordering::Relaxed);
-        let dir = output_directory.join(&key);
+        let dir = request.output_directory.join(&key);
         {
             let mut retained = inner.retained.lock().unwrap();
             if retained.contains_key(&key) {
@@ -359,10 +364,10 @@ impl TorrentEngine {
                 RetainedEntry {
                     torrent_id: UNMANAGED,
                     dir,
-                    file_idx: file_idx.map(|idx| idx as usize),
+                    file_idx: request.file_idx.map(|idx| idx as usize),
                     file_len: None,
                     job_id,
-                    cancel: cancel.clone(),
+                    cancel: request.cancel.clone(),
                     complete: false,
                 },
             );
@@ -377,13 +382,9 @@ impl TorrentEngine {
             .name("torrent-download".into())
             .spawn(move || {
                 let result = worker_inner.download_blocking(
-                    info_hash,
-                    file_idx,
-                    requested_name,
-                    output_directory,
+                    request,
                     worker_key.clone(),
                     job_id,
-                    cancel,
                     on_progress,
                 );
                 deliver_download_completion(&worker_completion, result);
@@ -695,15 +696,18 @@ impl EngineInner {
 
     fn download_blocking(
         self: Arc<Self>,
-        info_hash: String,
-        file_idx: Option<u32>,
-        requested_name: String,
-        output_directory: PathBuf,
+        request: TorrentDownloadRequest,
         key: String,
         job_id: u64,
-        cancel: Arc<AtomicBool>,
         mut on_progress: impl FnMut(TorrentStats) + Send + 'static,
     ) -> Result<TorrentDownloadReady, String> {
+        let TorrentDownloadRequest {
+            info_hash,
+            file_idx,
+            requested_name,
+            output_directory,
+            cancel,
+        } = request;
         if cancel.load(Ordering::Acquire) {
             self.clear_retained_job(&key, job_id);
             return Err("torrent download cancelled".into());
@@ -1086,7 +1090,7 @@ impl EngineInner {
 
     fn pause(&self, id: TorrentId) {
         let session = self.session.clone();
-        let _ = self.rt.block_on(async move {
+        self.rt.block_on(async move {
             if let Some(handle) = session.get(TorrentIdOrHash::Id(id)) {
                 let _ = session.pause(&handle).await;
             }
@@ -1623,7 +1627,10 @@ fn sweep_orphans(dir: &Path, owned: &HashSet<PathBuf>, aggressive: bool) {
             if owned.iter().any(|owner| owner.starts_with(&canonical)) {
                 continue;
             }
-            eprintln!("nova torrent: removing orphaned cache dir {}", path.display());
+            eprintln!(
+                "nova torrent: removing orphaned cache dir {}",
+                path.display()
+            );
             if let Err(e) = std::fs::remove_dir_all(&path) {
                 eprintln!("nova torrent: could not remove {}: {e:#}", path.display());
             }

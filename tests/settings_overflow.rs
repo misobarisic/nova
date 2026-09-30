@@ -56,7 +56,8 @@ fn settings_addons_subpage_has_no_horizontal_overflow() {
         .into(),
     );
 
-    let failures: Rc<std::cell::RefCell<Vec<String>>> = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let failures: Rc<std::cell::RefCell<Vec<String>>> =
+        Rc::new(std::cell::RefCell::new(Vec::new()));
     let app1 = app.as_weak();
     let failures1 = failures.clone();
     after(400, move || {

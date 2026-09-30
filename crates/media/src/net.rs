@@ -22,7 +22,10 @@ pub struct FetchError {
 
 impl FetchError {
     fn new(status: Option<u16>, message: impl Into<String>) -> Self {
-        FetchError { status, message: message.into() }
+        FetchError {
+            status,
+            message: message.into(),
+        }
     }
 
     /// Human-readable message for the UI status line.
@@ -156,7 +159,10 @@ mod imp {
                 .map(|l| l.to_string())
                 .unwrap_or_else(|| "?".to_string());
             let msg = if payload.is_empty() {
-                format!("thread '{}' panicked at {loc}", thread.name().unwrap_or("<unnamed>"))
+                format!(
+                    "thread '{}' panicked at {loc}",
+                    thread.name().unwrap_or("<unnamed>")
+                )
             } else {
                 format!(
                     "thread '{}' panicked at {loc}: {payload}",
@@ -175,7 +181,11 @@ mod imp {
 
     /// Take the recent panic log (oldest first), clearing it.
     pub(crate) fn take_recent_panics() -> Vec<String> {
-        PANIC_LOG.lock().ok().map(|mut log| std::mem::take(&mut *log)).unwrap_or_default()
+        PANIC_LOG
+            .lock()
+            .ok()
+            .map(|mut log| std::mem::take(&mut *log))
+            .unwrap_or_default()
     }
 
     // Built once; a `Result` (not `expect`) so a client-construction
@@ -352,9 +362,9 @@ mod imp {
     }
 
     fn get_once(url: &str) -> Result<Vec<u8>, FetchError> {
-        let client = HTTP_CLIENT.as_ref().map_err(|e| {
-            FetchError::new(None, format!("http client init failed: {e}"))
-        })?;
+        let client = HTTP_CLIENT
+            .as_ref()
+            .map_err(|e| FetchError::new(None, format!("http client init failed: {e}")))?;
         let resp = client
             .get(url)
             .send()
@@ -397,11 +407,7 @@ mod imp {
         };
         let rgba = img.into_rgba8();
         let (w, h) = (rgba.dimensions().0, rgba.dimensions().1);
-        Some(slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-            rgba.as_raw(),
-            w,
-            h,
-        ))
+        Some(slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(rgba.as_raw(), w, h))
     }
 
     fn short_url(url: &str) -> String {
@@ -409,7 +415,7 @@ mod imp {
     }
 }
 
-pub use imp::{fetch_bytes, fetch_image};
 pub(crate) use imp::fetch_image_fresh;
 #[cfg(target_os = "android")]
 pub use imp::install_panic_hook;
+pub use imp::{fetch_bytes, fetch_image};

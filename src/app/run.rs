@@ -321,12 +321,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_stream_page_picked(move |page| b.stream_page_picked(page as usize));
 
     let b = bridge.clone();
-    app.on_stream_action_requested(move |id| b.open_stream_action(&id.to_string()));
+    app.on_stream_action_requested(move |id| b.open_stream_action(id.as_ref()));
 
     let b = bridge.clone();
-    app.on_stream_action_selected(move |id, action| {
-        b.stream_action_selected(&id.to_string(), action as i32)
-    });
+    app.on_stream_action_selected(move |id, action| b.stream_action_selected(id.as_ref(), action));
 
     let b = bridge.clone();
     app.on_stream_filter_picked(move |idx| b.stream_filter_picked(idx as usize));
@@ -727,7 +725,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let b = bridge.clone();
     app.on_playback_speed_stepped(move |d| {
-        b.nudge_playback_speed(d as i32);
+        b.nudge_playback_speed(d);
         schedule_speed_save();
     });
 
@@ -777,7 +775,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // OSD auto-hide: show on activity, hide after inactivity — 3 s while
     // playing, 5 s while paused so the controls linger for resume. The
     // countdown runs in both states (loading keeps the bar up regardless).
-    let osd_timer = Arc::new(Mutex::new(slint::Timer::default()));
+    let osd_timer = Rc::new(slint::Timer::default());
     {
         let osd_timer = osd_timer.clone();
         let app_weak = app.as_weak();
@@ -797,8 +795,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     false => Duration::from_secs(3),
                 };
                 let aw = app_weak.clone();
-                let timer = osd_timer.lock().unwrap();
-                timer.start(slint::TimerMode::SingleShot, timeout, move || {
+                osd_timer.start(slint::TimerMode::SingleShot, timeout, move || {
                     if let Some(app) = aw.upgrade() {
                         app.set_osd_visible(false);
                     }

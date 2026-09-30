@@ -18,9 +18,10 @@ fn s(v: &str) -> SharedString {
 }
 
 fn back(app: &nova::AppWindow) {
-    app.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
-        text: slint::platform::Key::Back.into(),
-    });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
 }
 
 fn press(app: &nova::AppWindow, position: LogicalPosition) {
@@ -39,12 +40,12 @@ fn moved(app: &nova::AppWindow, position: LogicalPosition) {
 }
 
 fn release(app: &nova::AppWindow, position: LogicalPosition) {
-    let _ = app
-        .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
-            position,
-            button: slint::platform::PointerEventButton::Left,
-        });
+    let _ =
+        app.window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            });
 }
 
 fn after(ms: u64, body: impl FnOnce() + 'static) {

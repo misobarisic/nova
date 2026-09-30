@@ -27,6 +27,17 @@ pub(crate) struct DownloadCoordinator {
     inner: Arc<DownloadInner>,
 }
 
+struct NewDownload {
+    media_type: String,
+    media_id: String,
+    request_id: String,
+    title: String,
+    year: String,
+    display: String,
+    addon: String,
+    source: JobSource,
+}
+
 struct DownloadInner {
     root: PathBuf,
     state: Mutex<DownloadState>,
@@ -165,17 +176,17 @@ impl DownloadCoordinator {
         jobs
     }
 
-    pub(crate) fn enqueue(
-        &self,
-        media_type: String,
-        media_id: String,
-        request_id: String,
-        title: String,
-        year: String,
-        display: String,
-        addon: String,
-        source: JobSource,
-    ) -> String {
+    fn enqueue(&self, request: NewDownload) -> String {
+        let NewDownload {
+            media_type,
+            media_id,
+            request_id,
+            title,
+            year,
+            display,
+            addon,
+            source,
+        } = request;
         let id = {
             let mut state = self.inner.state();
             if let Some(index) = state
@@ -296,10 +307,10 @@ impl DownloadCoordinator {
             self.bump_revision();
             job
         };
-        if let JobSource::Torrent { info_hash, .. } = &removed.source {
-            if let Some(engine) = crate::torrent::engine() {
-                let _ = engine.remove_retained(info_hash);
-            }
+        if let JobSource::Torrent { info_hash, .. } = &removed.source
+            && let Some(engine) = crate::torrent::engine()
+        {
+            let _ = engine.remove_retained(info_hash);
         }
         if !self
             .inner
@@ -389,26 +400,22 @@ impl DownloadCoordinator {
             JobSource::Http { .. } => "download-http",
             JobSource::Torrent { .. } => "download-torrent",
         };
-        let spawned = thread::Builder::new()
-            .name(name.into())
-            .spawn(move || {
-                // Marks the worker ended even if the transfer panics; the tick
-                // reaps a slot whose worker died before `finish` cleared it.
-                let _done = WorkerDone(done);
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    match source {
-                        JobSource::Http { .. } => coordinator.run_http(job, active),
-                        JobSource::Torrent {
-                            info_hash,
-                            file_idx,
-                        } => coordinator.run_torrent(job, info_hash, file_idx, active),
-                    }
-                }));
-                if outcome.is_err() {
-                    eprintln!("nova downloads: worker for {worker_job_id} panicked; recovering");
-                    coordinator.recover_failed_worker(&worker_job_id);
-                }
-            });
+        let spawned = thread::Builder::new().name(name.into()).spawn(move || {
+            // Marks the worker ended even if the transfer panics; the tick
+            // reaps a slot whose worker died before `finish` cleared it.
+            let _done = WorkerDone(done);
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match source {
+                JobSource::Http { .. } => coordinator.run_http(job, active),
+                JobSource::Torrent {
+                    info_hash,
+                    file_idx,
+                } => coordinator.run_torrent(job, info_hash, file_idx, active),
+            }));
+            if outcome.is_err() {
+                eprintln!("nova downloads: worker for {worker_job_id} panicked; recovering");
+                coordinator.recover_failed_worker(&worker_job_id);
+            }
+        });
         if let Err(error) = spawned {
             self.finish(
                 job_id,
@@ -460,11 +467,13 @@ impl DownloadCoordinator {
         let progress_activity = last_activity.clone();
         let progress_best = best_progress.clone();
         engine.start_download(
-            info_hash,
-            file_idx,
-            job.display.clone(),
-            self.inner.root.join("torrents"),
-            active.torrent_cancel.clone(),
+            crate::torrent::TorrentDownloadRequest {
+                info_hash,
+                file_idx,
+                requested_name: job.display.clone(),
+                output_directory: self.inner.root.join("torrents"),
+                cancel: active.torrent_cancel.clone(),
+            },
             move |stats| {
                 let bits = (stats.progress as f64).max(0.0).to_bits();
                 if bits > progress_best.load(Ordering::Relaxed) {
@@ -611,18 +620,17 @@ impl DownloadCoordinator {
                 state.active = None;
             }
             let still_present = state.manifest.jobs.iter().any(|job| job.id == id);
-            if still_present {
-                if let Some(job) = state.manifest.jobs.iter_mut().find(|job| job.id == id)
-                    && matches!(
-                        job.phase,
-                        DownloadPhase::Resolving | DownloadPhase::Downloading
-                    )
-                {
-                    job.phase = DownloadPhase::Failed;
-                    job.error = Some(text::tr("Download worker stopped unexpectedly.").into());
-                    job.bytes_per_second = 0;
-                    job.updated_at = crate::download::unix_timestamp();
-                }
+            if still_present
+                && let Some(job) = state.manifest.jobs.iter_mut().find(|job| job.id == id)
+                && matches!(
+                    job.phase,
+                    DownloadPhase::Resolving | DownloadPhase::Downloading
+                )
+            {
+                job.phase = DownloadPhase::Failed;
+                job.error = Some(text::tr("Download worker stopped unexpectedly.").into());
+                job.bytes_per_second = 0;
+                job.updated_at = crate::download::unix_timestamp();
             }
             persist_manifest(&state.manifest);
             self.bump_revision();
@@ -782,7 +790,10 @@ fn load_manifest_raw() -> DownloadManifest {
             DownloadManifest::default()
         }
         Err(error) => {
-            let key = format!("{DOWNLOAD_CORRUPT_PREFIX}{}", crate::nova_config::now_secs());
+            let key = format!(
+                "{DOWNLOAD_CORRUPT_PREFIX}{}",
+                crate::nova_config::now_secs()
+            );
             crate::storage::set_str(&key, &raw);
             crate::storage::remove(DOWNLOADS_KEY);
             eprintln!("nova downloads: quarantined corrupt manifest: {error}");
@@ -882,12 +893,9 @@ fn adopt_orphaned_artifacts(root: &Path, manifest: &mut DownloadManifest) {
             if known.contains(&canonical) || known_ids.contains(id.as_str()) {
                 continue;
             }
-            manifest.jobs.push(adopted_job(
-                id,
-                JobSource::http(String::new()),
-                &path,
-                len,
-            ));
+            manifest
+                .jobs
+                .push(adopted_job(id, JobSource::http(String::new()), &path, len));
             adopted += 1;
         }
     }
@@ -909,7 +917,10 @@ fn directory_artifact(dir: &Path) -> Option<(PathBuf, u64)> {
             continue;
         }
         let path = entry.path();
-        if path.extension().is_some_and(|extension| extension == "part") {
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "part")
+        {
             continue;
         }
         let len = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
@@ -1219,16 +1230,16 @@ impl Bridge {
             StreamSource::Unsupported => return,
             StreamSource::Downloaded { .. } => return,
         };
-        self.downloads.enqueue(
+        self.downloads.enqueue(NewDownload {
             media_type,
             media_id,
             request_id,
             title,
             year,
-            stream.display.clone(),
-            stream.addon.clone(),
+            display: stream.display.clone(),
+            addon: stream.addon.clone(),
             source,
-        );
+        });
         self.apply_stream_filter();
     }
 
@@ -1253,10 +1264,16 @@ impl Bridge {
                 let label = read_episodes_cache_for(&job.media_type, &job.media_id)
                     .and_then(|videos| episode_context_label_for(&job.request_id, &videos))
                     .unwrap_or_else(|| fallback_episode_label(&job.request_id));
-                let display =
-                    if job.display.trim().is_empty() { String::new() } else { first_line(&job.display) };
-                let subtitle =
-                    if display.is_empty() { label } else { format!("{label} · {display}") };
+                let display = if job.display.trim().is_empty() {
+                    String::new()
+                } else {
+                    first_line(&job.display)
+                };
+                let subtitle = if display.is_empty() {
+                    label
+                } else {
+                    format!("{label} · {display}")
+                };
                 let size = format_bytes(job.total_bytes.unwrap_or(job.bytes_downloaded));
                 let details = match job.file_name.as_deref() {
                     Some(name) if !name.is_empty() => format!("{name} · {size}"),
@@ -1379,10 +1396,7 @@ mod tests {
 
     #[test]
     fn job_status_exposes_progress_and_action() {
-        let mut job = DownloadJob::new(
-            "job-1",
-            JobSource::http("https://cdn.example/movie.mp4"),
-        );
+        let mut job = DownloadJob::new("job-1", JobSource::http("https://cdn.example/movie.mp4"));
         job.display = "Addon\nMovie 1080p".into();
         job.phase = DownloadPhase::Downloading;
         job.bytes_downloaded = 512;
@@ -1402,7 +1416,10 @@ mod tests {
         job.file_name = Some("movie.mkv".into());
         job.phase = DownloadPhase::Completed;
         assert_eq!(DownloadCoordinator::status_text(&job), "Downloaded");
-        assert_eq!(DownloadCoordinator::action_label(&job), "Play downloaded file");
+        assert_eq!(
+            DownloadCoordinator::action_label(&job),
+            "Play downloaded file"
+        );
     }
 
     fn temp_root(name: &str) -> PathBuf {
@@ -1554,7 +1571,12 @@ mod tests {
     #[test]
     fn reaping_a_dead_worker_fails_the_job_and_frees_the_slot() {
         let coordinator = DownloadCoordinator::new(temp_root("reap"));
-        install_active(&coordinator, "download-dead", DownloadPhase::Resolving, true);
+        install_active(
+            &coordinator,
+            "download-dead",
+            DownloadPhase::Resolving,
+            true,
+        );
 
         assert!(coordinator.reap_finished_worker());
         assert!(coordinator.inner.state().active.is_none());
@@ -1589,8 +1611,10 @@ mod tests {
         let coordinator = DownloadCoordinator::new(temp_root("heal"));
         {
             let mut state = coordinator.inner.state();
-            let mut job =
-                DownloadJob::new("download-queued", JobSource::http("http://127.0.0.1:1/never"));
+            let mut job = DownloadJob::new(
+                "download-queued",
+                JobSource::http("http://127.0.0.1:1/never"),
+            );
             job.phase = DownloadPhase::Queued;
             state.manifest.jobs.push(job);
         }
@@ -1610,15 +1634,17 @@ mod tests {
     #[test]
     fn a_live_worker_is_not_reaped() {
         let coordinator = DownloadCoordinator::new(temp_root("reap-live"));
-        install_active(&coordinator, "download-live", DownloadPhase::Resolving, false);
+        install_active(
+            &coordinator,
+            "download-live",
+            DownloadPhase::Resolving,
+            false,
+        );
 
         assert!(!coordinator.reap_finished_worker());
         let state = coordinator.inner.state();
         assert!(state.active.is_some());
-        assert_eq!(
-            state.manifest.jobs[0].phase,
-            DownloadPhase::Resolving
-        );
+        assert_eq!(state.manifest.jobs[0].phase, DownloadPhase::Resolving);
         drop(state);
 
         let root = coordinator.inner.root.clone();
@@ -1649,7 +1675,12 @@ mod tests {
         // Idle: no service should be requested.
         assert!(!coordinator.has_active_work());
 
-        install_active(&coordinator, "download-bg", DownloadPhase::Downloading, false);
+        install_active(
+            &coordinator,
+            "download-bg",
+            DownloadPhase::Downloading,
+            false,
+        );
         assert!(coordinator.has_active_work());
         let (title, _text) = coordinator.background_status();
         assert!(title.contains('1'), "{title}");

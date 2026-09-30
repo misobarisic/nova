@@ -40,18 +40,21 @@ fn moved(app: &nova::AppWindow, position: LogicalPosition) {
 }
 
 fn release(app: &nova::AppWindow, position: LogicalPosition) {
-    let _ = app
-        .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
-            position,
-            button: slint::platform::PointerEventButton::Left,
-        });
+    let _ =
+        app.window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            });
 }
 
 fn center(element: &ElementHandle) -> LogicalPosition {
     let position = element.absolute_position();
     let size = element.size();
-    LogicalPosition::new(position.x + size.width / 2.0, position.y + size.height / 2.0)
+    LogicalPosition::new(
+        position.x + size.width / 2.0,
+        position.y + size.height / 2.0,
+    )
 }
 
 /// The first landing carousel card on screen (the narrow ~2.5-across variant).
@@ -214,7 +217,10 @@ fn fast_flicks_do_not_jump_and_upcoming_coasts_too() {
     release(&app, LogicalPosition::new(from.x - 120.0, from.y));
     idle(16);
     let step = app.get_home_continue_x() - at_drag;
-    assert!(step < -3.0 && step > -55.0, "coast jumped {step:+.1}px in one frame");
+    assert!(
+        step < -3.0 && step > -55.0,
+        "coast jumped {step:+.1}px in one frame"
+    );
 
     // Both rails use CarouselDrag. Start Upcoming at its visible first card,
     // then verify a regular flick gets momentum without moving Continue.
@@ -237,15 +243,23 @@ fn fast_flicks_do_not_jump_and_upcoming_coasts_too() {
     let at_release = app.get_home_upcoming_x();
     assert!(at_release < -75.0, "Upcoming must follow the drag");
     idle(16);
-    assert!(app.get_home_upcoming_x() < at_release - 15.0, "Upcoming must coast");
+    assert!(
+        app.get_home_upcoming_x() < at_release - 15.0,
+        "Upcoming must coast"
+    );
 }
 
 fn pointer_flick_is_not_undone_by_keyboard_focus() {
     let app = setup();
-    for key in [slint::platform::Key::DownArrow, slint::platform::Key::RightArrow] {
-        let _ = app.window().dispatch_event_with_result(
-            slint::platform::WindowEvent::KeyPressed { text: key.into() },
-        );
+    for key in [
+        slint::platform::Key::DownArrow,
+        slint::platform::Key::RightArrow,
+    ] {
+        let _ = app
+            .window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::KeyPressed {
+                text: key.into(),
+            });
     }
     let focused = app.get_home_continue_x();
     let from = center(&find_landing_card(&app).expect("landing card"));
@@ -262,7 +276,10 @@ fn pointer_flick_is_not_undone_by_keyboard_focus() {
         idle(16);
     }
     let flicked = app.get_home_continue_x();
-    assert!(flicked < focused - 100.0, "pointer flick must move past keyboard focus");
+    assert!(
+        flicked < focused - 100.0,
+        "pointer flick must move past keyboard focus"
+    );
 
     // A view change and a model refresh both run kb_follow. Neither may pull
     // the rail back to the formerly focused card after pointer navigation.
@@ -292,9 +309,15 @@ fn a_slow_drag_after_a_settled_flick_starts_where_the_rail_stopped() {
         idle(16);
     }
     let settled = app.get_home_continue_x();
-    assert!(settled < -200.0, "first flick must move the rail off its start");
+    assert!(
+        settled < -200.0,
+        "first flick must move the rail off its start"
+    );
     idle(200);
-    assert!((app.get_home_continue_x() - settled).abs() < 1.0, "coast must be over");
+    assert!(
+        (app.get_home_continue_x() - settled).abs() < 1.0,
+        "coast must be over"
+    );
 
     let from = LogicalPosition::new(160.0, from.y);
     press(&app, from);
@@ -312,13 +335,15 @@ fn a_slow_drag_after_a_settled_flick_starts_where_the_rail_stopped() {
 }
 
 fn touch(app: &nova::AppWindow, position: LogicalPosition, phase: i_slint_core::input::TouchPhase) {
-    let _ = app.window().dispatch_event_with_result(slint::platform::WindowEvent::internal(
-        slint::platform::InternalEvent::Touch {
-            id: 1,
-            position: i_slint_core::lengths::LogicalPoint::new(position.x, position.y),
-            phase,
-        },
-    ));
+    let _ = app
+        .window()
+        .dispatch_event_with_result(slint::platform::WindowEvent::internal(
+            slint::platform::InternalEvent::Touch {
+                id: 1,
+                position: i_slint_core::lengths::LogicalPoint::new(position.x, position.y),
+                phase,
+            },
+        ));
 }
 
 fn touch_drag_after_settled_flick_stays_at_the_settled_offset() {
@@ -334,7 +359,9 @@ fn touch_drag_after_settled_flick_stays_at_the_settled_offset() {
         idle(16);
     }
     touch(&app, LogicalPosition::new(x, from.y), TouchPhase::Ended);
-    for _ in 0..80 { idle(16); }
+    for _ in 0..80 {
+        idle(16);
+    }
     let settled = app.get_home_continue_x();
     assert!(settled < -200.0, "touch flick must move the rail");
     idle(200);
@@ -347,14 +374,22 @@ fn touch_drag_after_settled_flick_stays_at_the_settled_offset() {
     touch(&app, interrupted, TouchPhase::Started);
     idle(120);
     touch(&app, LogicalPosition::new(75.0, from.y), TouchPhase::Moved);
-    touch(&app, LogicalPosition::new(75.0, from.y), TouchPhase::Cancelled);
+    touch(
+        &app,
+        LogicalPosition::new(75.0, from.y),
+        TouchPhase::Cancelled,
+    );
     idle(16);
 
     let from = LogicalPosition::new(160.0, from.y);
     touch(&app, from, TouchPhase::Started);
     idle(120);
     for i in 1..=10 {
-        touch(&app, LogicalPosition::new(from.x + i as f32 * 5.0, from.y), TouchPhase::Moved);
+        touch(
+            &app,
+            LogicalPosition::new(from.x + i as f32 * 5.0, from.y),
+            TouchPhase::Moved,
+        );
         let offset = app.get_home_continue_x();
         assert!(
             (offset - settled).abs() < 60.0,
@@ -372,5 +407,9 @@ fn touch_drag_after_settled_flick_stays_at_the_settled_offset() {
         app.get_home_continue_x() > settled + 35.0,
         "the new touch must follow its own slow movement"
     );
-    touch(&app, LogicalPosition::new(from.x + 50.0, from.y), TouchPhase::Ended);
+    touch(
+        &app,
+        LogicalPosition::new(from.x + 50.0, from.y),
+        TouchPhase::Ended,
+    );
 }

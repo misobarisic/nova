@@ -136,12 +136,12 @@ fn moved(app: &nova::AppWindow, position: slint::LogicalPosition) {
 }
 
 fn release(app: &nova::AppWindow, position: slint::LogicalPosition) {
-    let _ = app
-        .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
-            position,
-            button: slint::platform::PointerEventButton::Left,
-        });
+    let _ =
+        app.window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            });
 }
 
 /// Scroll a settings subpage up by dragging its left text column — the
@@ -167,9 +167,7 @@ fn display_language_picker_renders_and_reaches_the_backend() {
     app.set_show_home(false);
     // The backend pushes the picker list (`settings_to_ui`) from
     // `Language::ALL`; the component's own default carries the same entries.
-    app.set_language_names(
-        Rc::new(VecModel::from(vec![s("English"), s("Hrvatski")])).into(),
-    );
+    app.set_language_names(Rc::new(VecModel::from(vec![s("English"), s("Hrvatski")])).into());
 
     let failures: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
     // The autosave callback the backend wires to persist the pick; the value

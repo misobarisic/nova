@@ -456,29 +456,18 @@ impl SyncEngine {
         let force_attempt = Arc::new(AtomicBool::new(false));
         let health: Arc<Mutex<HashMap<String, PeerHealth>>> = Arc::new(Mutex::new(HashMap::new()));
         let conns: Arc<Mutex<HashMap<String, Connection>>> = Arc::new(Mutex::new(HashMap::new()));
-        {
-            // The worker runs one bounded-parallel pass per wake-up; triggers
-            // that arrive mid-pass leave a `Notify` permit, so they queue a
-            // single follow-up pass instead of being dropped.
-            let endpoint = endpoint.clone();
-            let handler = handler.clone();
-            let peers = peers.clone();
-            let health = health.clone();
-            let conns = conns.clone();
-            let sync_notify = sync_notify.clone();
-            let stop = stop.clone();
-            let force_attempt = force_attempt.clone();
-            rt.spawn(sync_worker(
-                endpoint,
-                handler,
-                peers,
-                conns,
-                health,
-                sync_notify,
-                stop,
-                force_attempt,
-            ));
-        }
+        // The worker runs one bounded-parallel pass per wake-up; triggers that
+        // arrive mid-pass queue one coalesced follow-up pass.
+        rt.spawn(sync_worker(SyncWorker {
+            endpoint: endpoint.clone(),
+            handler: handler.clone(),
+            peers: peers.clone(),
+            conns: conns.clone(),
+            health: health.clone(),
+            sync_notify: sync_notify.clone(),
+            stop: stop.clone(),
+            force_attempt: force_attempt.clone(),
+        }));
         {
             let endpoint = endpoint.clone();
             let handler = handler.clone();
@@ -738,13 +727,13 @@ impl SyncEngine {
     /// A value of `None` is a tombstone (deletion). No-op when unchanged.
     pub fn notify(&self, domain: &str, key: &str, value: Option<&str>, ts: u64) {
         let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
-        if store.set(domain, key, value.map(str::to_string), ts, self.device) {
-            if let Err(e) = store.save() {
-                nova_storage::report(nova_storage::Error::new(
-                    nova_storage::ErrorKind::Transaction,
-                    e,
-                ));
-            }
+        if store.set(domain, key, value.map(str::to_string), ts, self.device)
+            && let Err(e) = store.save()
+        {
+            nova_storage::report(nova_storage::Error::new(
+                nova_storage::ErrorKind::Transaction,
+                e,
+            ));
         }
     }
 
@@ -759,13 +748,11 @@ impl SyncEngine {
         for (key, value, ts) in changes {
             changed |= store.set(domain, key, value.clone(), *ts, self.device);
         }
-        if changed {
-            if let Err(e) = store.save() {
-                nova_storage::report(nova_storage::Error::new(
-                    nova_storage::ErrorKind::Transaction,
-                    e,
-                ));
-            }
+        if changed && let Err(e) = store.save() {
+            nova_storage::report(nova_storage::Error::new(
+                nova_storage::ErrorKind::Transaction,
+                e,
+            ));
         }
     }
 
@@ -818,7 +805,7 @@ impl SyncEngine {
 /// Long-lived sync worker: one bounded-parallel pass per wake-up. A trigger
 /// that arrives during a pass leaves a `Notify` permit, so it runs exactly one
 /// more pass afterwards (coalesced) instead of being dropped.
-async fn sync_worker(
+struct SyncWorker {
     endpoint: Endpoint,
     handler: Arc<Handler>,
     peers: Arc<Mutex<Vec<String>>>,
@@ -827,7 +814,19 @@ async fn sync_worker(
     sync_notify: Arc<tokio::sync::Notify>,
     stop: Arc<AtomicBool>,
     force_attempt: Arc<AtomicBool>,
-) {
+}
+
+async fn sync_worker(worker: SyncWorker) {
+    let SyncWorker {
+        endpoint,
+        handler,
+        peers,
+        conns,
+        health,
+        sync_notify,
+        stop,
+        force_attempt,
+    } = worker;
     loop {
         sync_notify.notified().await;
         if stop.load(Ordering::Relaxed) {
@@ -1300,10 +1299,9 @@ impl Drop for BackgroundLease {
         let mut slot = ENGINE.lock().unwrap_or_else(|e| e.into_inner());
         if !FOREGROUND_OWNER.load(Ordering::Acquire)
             && slot.as_ref().is_some_and(|e| Arc::ptr_eq(e, &self.engine))
+            && let Some(engine) = slot.take()
         {
-            if let Some(engine) = slot.take() {
-                engine.stop();
-            }
+            engine.stop();
         }
     }
 }
@@ -1415,13 +1413,13 @@ pub(crate) fn presence_note(store: &Arc<Mutex<Store>>, self_id: &str, peer: &str
     {
         return;
     }
-    if store.set(DOMAIN_PRESENCE, &key, Some(now.to_string()), 0, dev) {
-        if let Err(e) = store.save() {
-            nova_storage::report(nova_storage::Error::new(
-                nova_storage::ErrorKind::Transaction,
-                e,
-            ));
-        }
+    if store.set(DOMAIN_PRESENCE, &key, Some(now.to_string()), 0, dev)
+        && let Err(e) = store.save()
+    {
+        nova_storage::report(nova_storage::Error::new(
+            nova_storage::ErrorKind::Transaction,
+            e,
+        ));
     }
 }
 
@@ -1620,13 +1618,13 @@ pub(crate) fn peers_refresh(
 ) {
     let ts = now_secs();
     let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
-    if peer_upsert(&mut store, id, Some(name), ts, dev, false, false) {
-        if let Err(e) = store.save() {
-            nova_storage::report(nova_storage::Error::new(
-                nova_storage::ErrorKind::Transaction,
-                e,
-            ));
-        }
+    if peer_upsert(&mut store, id, Some(name), ts, dev, false, false)
+        && let Err(e) = store.save()
+    {
+        nova_storage::report(nova_storage::Error::new(
+            nova_storage::ErrorKind::Transaction,
+            e,
+        ));
     }
     // A peer we are syncing with is live by construction; make sure the
     // allowlist agrees (defensive against a missed reconcile).
@@ -1751,14 +1749,17 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
 
 pub(crate) fn hex_decode(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     let mut out = Vec::with_capacity(s.len() / 2);
     let bytes = s.as_bytes();
-    for pair in bytes.chunks_exact(2) {
-        let hi = (pair[0] as char).to_digit(16)?;
-        let lo = (pair[1] as char).to_digit(16)?;
+    let (pairs, []) = bytes.as_chunks::<2>() else {
+        return None;
+    };
+    for &[hi, lo] in pairs {
+        let hi = (hi as char).to_digit(16)?;
+        let lo = (lo as char).to_digit(16)?;
         out.push(((hi << 4) | lo) as u8);
     }
     Some(out)

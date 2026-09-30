@@ -28,7 +28,6 @@ pub use nova_download as download;
 // `crate::torrent::…` keeps working unchanged.
 pub use nova_torrent as torrent;
 
-
 // The full catalog app.
 pub mod app;
 mod diagnostics;

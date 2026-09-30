@@ -67,8 +67,7 @@ fn wrapped_stream_row_grows_to_fit() {
             .into_iter()
             .filter_map(|e| {
                 let p = e.absolute_position();
-                let inside =
-                    p.y >= row_pos.y - 1.0 && p.y <= row_pos.y + row_size.height + 1.0;
+                let inside = p.y >= row_pos.y - 1.0 && p.y <= row_pos.y + row_size.height + 1.0;
                 inside.then_some(e.size().height)
             })
             .fold(0.0_f32, f32::max);

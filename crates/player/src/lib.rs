@@ -24,15 +24,15 @@
 //! timeout error when playback never starts. [`Player::close`] stops mpv and
 //! returns to the catalog.
 
-use nova_ui::{AppWindow, TrackRow};
 use libmpv2::Mpv;
+use nova_ui::{AppWindow, TrackRow};
 use slint::{ComponentHandle, GraphicsAPI, RenderingState, VecModel};
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "android")]
 use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -51,31 +51,31 @@ pub use crate::idle::converge_idle_inhibit;
 // pointers that JNI needs. Re-exported here so `src/app.rs` and `android_main`
 // keep talking to `crate::player` on every platform.
 #[cfg(target_os = "android")]
-pub use crate::external::open_browser;
-#[cfg(target_os = "android")]
-pub use crate::external::open_external;
-#[cfg(target_os = "android")]
-pub use crate::external::set_android_runtime;
-#[cfg(target_os = "android")]
 pub use crate::external::android_activity_ptr;
 #[cfg(target_os = "android")]
-pub use crate::external::set_android_app;
-#[cfg(target_os = "android")]
-pub use crate::external::reassert_system_bars;
-#[cfg(target_os = "android")]
-pub use crate::external::set_system_bars_hidden;
-#[cfg(target_os = "android")]
-pub use crate::external::set_content_frame_rate;
-#[cfg(target_os = "android")]
-pub use crate::external::set_clipboard;
-#[cfg(target_os = "android")]
-pub use crate::external::network_changed;
+pub use crate::external::converge_screen_on;
 #[cfg(target_os = "android")]
 pub use crate::external::device_model;
 #[cfg(target_os = "android")]
 pub use crate::external::move_task_to_back;
 #[cfg(target_os = "android")]
-pub use crate::external::converge_screen_on;
+pub use crate::external::network_changed;
+#[cfg(target_os = "android")]
+pub use crate::external::open_browser;
+#[cfg(target_os = "android")]
+pub use crate::external::open_external;
+#[cfg(target_os = "android")]
+pub use crate::external::reassert_system_bars;
+#[cfg(target_os = "android")]
+pub use crate::external::set_android_app;
+#[cfg(target_os = "android")]
+pub use crate::external::set_android_runtime;
+#[cfg(target_os = "android")]
+pub use crate::external::set_clipboard;
+#[cfg(target_os = "android")]
+pub use crate::external::set_content_frame_rate;
+#[cfg(target_os = "android")]
+pub use crate::external::set_system_bars_hidden;
 
 /// Direct MediaCodec interop ("HW+"): decoder output stays on the GPU as
 /// EGLImages. [`State::hwdec_checked`] watches whether it actually engaged; if
@@ -419,7 +419,9 @@ fn shell_open_url(url: &str) -> Result<(), String> {
     if code > 32 {
         Ok(())
     } else {
-        Err(format!("could not open URL with the Windows shell (code {code})"))
+        Err(format!(
+            "could not open URL with the Windows shell (code {code})"
+        ))
     }
 }
 
@@ -939,7 +941,9 @@ fn register_java_vm() -> bool {
     // `android_main`; libavutil only stores it here.
     let rc = unsafe { av_jni_set_java_vm(vm, std::ptr::null_mut()) };
     if rc != 0 {
-        alog(&format!("av_jni_set_java_vm failed ({rc}); direct mediacodec disabled"));
+        alog(&format!(
+            "av_jni_set_java_vm failed ({rc}); direct mediacodec disabled"
+        ));
         return false;
     }
     alog("JavaVM registered with libavutil (direct mediacodec possible)");
@@ -984,10 +988,8 @@ impl Player {
                     // otherwise. See [`SUBTITLE_FONT`].
                     match install_subtitle_font() {
                         Some(dir) => {
-                            let _ = mpv.set_property(
-                                "sub-fonts-dir",
-                                dir.to_string_lossy().as_ref(),
-                            );
+                            let _ =
+                                mpv.set_property("sub-fonts-dir", dir.to_string_lossy().as_ref());
                             let _ = mpv.set_property("sub-font", SUBTITLE_FONT_FAMILY);
                             alog("subtitle font: bundled Roboto installed as default");
                         }
@@ -1076,8 +1078,7 @@ impl Player {
                         }
 
                         let GraphicsAPI::NativeOpenGL { get_proc_address } = graphics_api else {
-                            let msg =
-                                "cannot play in-app: the mpv player needs an OpenGL renderer";
+                            let msg = "cannot play in-app: the mpv player needs an OpenGL renderer";
                             *notifier_state.mpv_error.lock().unwrap() = Some(msg.to_string());
                             #[cfg(target_os = "android")]
                             alog(msg);
@@ -1118,8 +1119,7 @@ impl Player {
                                 params.as_mut_ptr(),
                             ) < 0
                             {
-                                let msg =
-                                    "cannot play in-app: mpv render context creation failed";
+                                let msg = "cannot play in-app: mpv render context creation failed";
                                 *notifier_state.mpv_error.lock().unwrap() = Some(msg.to_string());
                                 #[cfg(target_os = "android")]
                                 alog(msg);
@@ -1141,8 +1141,7 @@ impl Player {
                             // fall back to the GLES/EGL libraries.
                             #[cfg(target_os = "android")]
                             let gl = {
-                                let get_proc: &dyn Fn(&CStr) -> *const c_void =
-                                    *get_proc_address;
+                                let get_proc: &dyn Fn(&CStr) -> *const c_void = *get_proc_address;
                                 glow::Context::from_loader_function_cstr(|name| {
                                     let symbol = get_proc(name);
                                     if !symbol.is_null() {
@@ -1183,12 +1182,9 @@ impl Player {
                             // a teardown after close arms nothing.
                             #[cfg(target_os = "android")]
                             if notifier_state.started.load(Ordering::SeqCst) {
-                                if let Some(url) =
-                                    notifier_state.last_url.lock().unwrap().clone()
-                                {
+                                if let Some(url) = notifier_state.last_url.lock().unwrap().clone() {
                                     alog("surface recreated mid-playback; arming resume reload");
-                                    *notifier_state.surface_pending_url.lock().unwrap() =
-                                        Some(url);
+                                    *notifier_state.surface_pending_url.lock().unwrap() = Some(url);
                                 }
                             }
                         }
@@ -1206,41 +1202,38 @@ impl Player {
                         if let Some(url) = notifier_state.pending.lock().unwrap().take() {
                             #[cfg(target_os = "android")]
                             let start = notifier_state.pending_start.lock().unwrap().take();
-                            if let Ok(mpv) = notifier_state.mpv.lock() {
-                                if let Some(mpv) = mpv.as_ref() {
-                                    // Android decoder reloads pass the resume
-                                    // point as a per-file option: the global
-                                    // `start` property is only honored for the
-                                    // first load, so a second `loadfile` would
-                                    // otherwise restart at 0.
-                                    #[cfg(target_os = "android")]
-                                    match start {
-                                        Some(pos) => {
-                                            let opts = format!("start={pos}");
-                                            let _ = mpv.command(
-                                                "loadfile",
-                                                &[url.as_str(), "replace", "-1", opts.as_str()],
-                                            );
-                                        }
-                                        None => {
-                                            let _ = mpv.command("loadfile", &[url.as_str()]);
-                                        }
+                            if let Ok(mpv) = notifier_state.mpv.lock()
+                                && let Some(mpv) = mpv.as_ref()
+                            {
+                                // Android decoder reloads pass the resume
+                                // point as a per-file option: the global
+                                // `start` property is only honored for the
+                                // first load, so a second `loadfile` would
+                                // otherwise restart at 0.
+                                #[cfg(target_os = "android")]
+                                match start {
+                                    Some(pos) => {
+                                        let opts = format!("start={pos}");
+                                        let _ = mpv.command(
+                                            "loadfile",
+                                            &[url.as_str(), "replace", "-1", opts.as_str()],
+                                        );
                                     }
-                                    #[cfg(not(target_os = "android"))]
-                                    let _ = mpv.command("loadfile", &[url.as_str()]);
-                                    // Ensure the new file actually starts: if
-                                    // the previous session left mpv paused,
-                                    // the file would load but not play.
-                                    let _ = mpv.set_property("pause", false);
-                                    // A surface-resume reload restores a paused
-                                    // session as paused instead.
-                                    #[cfg(target_os = "android")]
-                                    if notifier_state
-                                        .pending_paused
-                                        .swap(false, Ordering::SeqCst)
-                                    {
-                                        let _ = mpv.set_property("pause", true);
+                                    None => {
+                                        let _ = mpv.command("loadfile", &[url.as_str()]);
                                     }
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                let _ = mpv.command("loadfile", &[url.as_str()]);
+                                // Ensure the new file actually starts: if
+                                // the previous session left mpv paused,
+                                // the file would load but not play.
+                                let _ = mpv.set_property("pause", false);
+                                // A surface-resume reload restores a paused
+                                // session as paused instead.
+                                #[cfg(target_os = "android")]
+                                if notifier_state.pending_paused.swap(false, Ordering::SeqCst) {
+                                    let _ = mpv.set_property("pause", true);
                                 }
                             }
                         }
@@ -1358,16 +1351,16 @@ impl Player {
         // the second playback would silently start paused. `start` is set on
         // every play (even 0.0): it persists across files, so a previous
         // resume must not leak into the next playback.
-        if let Ok(mpv) = self.state.mpv.lock() {
-            if let Some(mpv) = mpv.as_ref() {
-                let _ = mpv.set_property("pause", false);
-                let _ = mpv.set_property("start", start_pos_secs.max(0.0));
-                // Rate is per device (Settings → Player / the player's own
-                // settings panel); `speed` also survives stop/EOF, so set it
-                // from the saved value on every play instead of letting the
-                // previous session's rate leak into this one.
-                let _ = mpv.set_property("speed", saved_playback_speed() as f64);
-            }
+        if let Ok(mpv) = self.state.mpv.lock()
+            && let Some(mpv) = mpv.as_ref()
+        {
+            let _ = mpv.set_property("pause", false);
+            let _ = mpv.set_property("start", start_pos_secs.max(0.0));
+            // Rate is per device (Settings → Player / the player's own
+            // settings panel); `speed` also survives stop/EOF, so set it
+            // from the saved value on every play instead of letting the
+            // previous session's rate leak into this one.
+            let _ = mpv.set_property("speed", saved_playback_speed() as f64);
         }
 
         // Android: immersive playback — hide the status and navigation bars
@@ -1411,23 +1404,23 @@ impl Player {
         // keeps mirroring the live mpv values (persist across streams).
         #[cfg(target_os = "android")]
         {
-            if let Ok(mpv) = self.state.mpv.lock() {
-                if let Some(mpv) = mpv.as_ref() {
-                    let _ = mpv.set_property("volume", 100.0_f64);
-                    let _ = mpv.set_property("mute", false);
-                }
+            if let Ok(mpv) = self.state.mpv.lock()
+                && let Some(mpv) = mpv.as_ref()
+            {
+                let _ = mpv.set_property("volume", 100.0_f64);
+                let _ = mpv.set_property("mute", false);
             }
             app.set_volume(100.0);
             app.set_muted(false);
         }
         #[cfg(not(target_os = "android"))]
-        if let Ok(mpv) = self.state.mpv.lock() {
-            if let Some(mpv) = mpv.as_ref() {
-                let vol: f64 = mpv.get_property("volume").unwrap_or(100.0);
-                let muted: bool = mpv.get_property("mute").unwrap_or(false);
-                app.set_volume(vol as f32);
-                app.set_muted(muted);
-            }
+        if let Ok(mpv) = self.state.mpv.lock()
+            && let Some(mpv) = mpv.as_ref()
+        {
+            let vol: f64 = mpv.get_property("volume").unwrap_or(100.0);
+            let muted: bool = mpv.get_property("mute").unwrap_or(false);
+            app.set_volume(vol as f32);
+            app.set_muted(muted);
         }
         app.window().request_redraw();
         Ok(())
@@ -1473,11 +1466,11 @@ impl Player {
             return;
         };
         if let Some(mpv) = mpv.as_ref() {
-            let _ = mpv.set_property("volume", vol.max(0.0).min(100.0) as f64);
+            let _ = mpv.set_property("volume", vol.clamp(0.0, 100.0) as f64);
             let _ = mpv.set_property("mute", false);
         }
         if let Some(app) = self.state.app.upgrade() {
-            app.set_volume(vol.max(0.0).min(100.0));
+            app.set_volume(vol.clamp(0.0, 100.0));
             app.set_muted(false);
         }
     }
@@ -1512,7 +1505,7 @@ impl Player {
     pub fn toggle_fullscreen(&self) {
         if let Some(app) = self.state.app.upgrade() {
             let current = app.get_is_fullscreen();
-            let _ = app.window().set_fullscreen(!current);
+            app.window().set_fullscreen(!current);
             app.set_is_fullscreen(!current);
         }
     }
@@ -1524,7 +1517,11 @@ impl Player {
                 return;
             };
             if let Some(mpv) = mpv.as_ref() {
-                let val = if track_id < 0 { "no".to_string() } else { track_id.to_string() };
+                let val = if track_id < 0 {
+                    "no".to_string()
+                } else {
+                    track_id.to_string()
+                };
                 let _ = mpv.set_property("aid", val.as_str());
             }
         }
@@ -1539,7 +1536,11 @@ impl Player {
                 return;
             };
             if let Some(mpv) = mpv.as_ref() {
-                let val = if track_id < 0 { "no".to_string() } else { track_id.to_string() };
+                let val = if track_id < 0 {
+                    "no".to_string()
+                } else {
+                    track_id.to_string()
+                };
                 let _ = mpv.set_property("sid", val.as_str());
             }
         }
@@ -1625,10 +1626,7 @@ impl Player {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let listed_selected = t
-                    .get("selected")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let listed_selected = t.get("selected").and_then(|v| v.as_bool()).unwrap_or(false);
                 let selected = match type_ {
                     "audio" => aid.map_or(listed_selected, |a| a == id),
                     "sub" => sid.map_or(listed_selected, |s| s == id),
@@ -1666,10 +1664,10 @@ impl Player {
 
     /// Stop playback and return to the catalog.
     pub fn close(&self) {
-        if let Ok(mpv) = self.state.mpv.lock() {
-            if let Some(mpv) = mpv.as_ref() {
-                let _ = mpv.command("stop", &[]);
-            }
+        if let Ok(mpv) = self.state.mpv.lock()
+            && let Some(mpv) = mpv.as_ref()
+        {
+            let _ = mpv.command("stop", &[]);
         }
         *self.state.pending.lock().unwrap() = None;
         #[cfg(target_os = "android")]
@@ -1804,8 +1802,7 @@ impl Player {
             // (surface recreation) briefly blanks `time-pos`, which would
             // otherwise trip this guard and strand the reload.
             let seek_pending = self.state.seek_pending.load(Ordering::SeqCst);
-            let diverged =
-                seek_pending && (app.get_position() as f64 - pos).abs() > 2.0;
+            let diverged = seek_pending && (app.get_position() as f64 - pos).abs() > 2.0;
             if seek_pending && !diverged {
                 // mpv caught up with the seek: disengage the guard.
                 self.state.seek_pending.store(false, Ordering::SeqCst);
@@ -1917,7 +1914,7 @@ impl Player {
         if snapshot.dur > 0.0 || snapshot.pos > 0.0 {
             // Frames are progressing: reveal the video (transparent window
             // background) and drop the loading status.
-            if self.state.started.swap(true, Ordering::SeqCst) == false {
+            if !self.state.started.swap(true, Ordering::SeqCst) {
                 app.set_player_status(slint::SharedString::default());
                 // Arm the 3s OSD auto-hide countdown as playback begins, so
                 // the controls fade even if the mouse never moves.
@@ -1953,7 +1950,7 @@ impl Player {
                     decode_label(current)
                 ));
             }
-        } else if self.state.reported.load(Ordering::SeqCst) == false
+        } else if !self.state.reported.load(Ordering::SeqCst)
             && self.state.opened_at.lock().unwrap().elapsed() > Duration::from_secs(20)
         {
             // Android: the requested decoder produced no frames at all — step
@@ -1968,7 +1965,7 @@ impl Player {
             // (the overlay stays up so the message is readable and Close
             // works) — or, on Android, hand the stream to a system player
             // instead of leaving an unplayable overlay behind.
-            if self.state.reported.swap(true, Ordering::SeqCst) == false {
+            if !self.state.reported.swap(true, Ordering::SeqCst) {
                 #[cfg(target_os = "android")]
                 if self.hand_off_to_external_player() {
                     return;
@@ -2074,10 +2071,7 @@ impl Player {
             if attempted_direct {
                 self.state.direct_failed.store(true, Ordering::SeqCst);
             }
-            chain
-                .iter()
-                .position(|m| *m == HWDEC_FALLBACK)
-                .unwrap_or(0)
+            chain.iter().position(|m| *m == HWDEC_FALLBACK).unwrap_or(0)
         } else {
             if attempted_direct {
                 self.state.direct_failed.store(true, Ordering::SeqCst);
@@ -2297,7 +2291,11 @@ impl Player {
         if last.as_str() == current {
             return;
         }
-        let label = if current.is_empty() { "--" } else { decode_label(current) };
+        let label = if current.is_empty() {
+            "--"
+        } else {
+            decode_label(current)
+        };
         alog(&format!("hwdec survey: {current:?} ({label})"));
         *last = current.to_string();
     }

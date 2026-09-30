@@ -174,17 +174,17 @@ impl Bridge {
 
     /// Refresh the Settings page torrent-cache readout. Native only.
     pub(super) fn refresh_torrent_disk_usage(&self) {
-        if let Some(app) = self.app() {
-            if let Some(engine) = crate::torrent::engine() {
-                let bytes = engine.cache_bytes(&torrent_cache_dir());
-                app.set_torrent_disk_usage(SharedString::from(&format_disk_usage(bytes, 0)));
-            }
+        if let Some(app) = self.app()
+            && let Some(engine) = crate::torrent::engine()
+        {
+            let bytes = engine.cache_bytes(&torrent_cache_dir());
+            app.set_torrent_disk_usage(SharedString::from(&format_disk_usage(bytes, 0)));
         }
     }
 
     /// Apply a change to the torrent settings: persist + update runtime cache
     /// + refresh the UI readouts. Torrent settings autosave, like the grid
-    /// settings.
+    ///   settings.
     pub(super) fn update_torrent_settings(&self, f: impl FnOnce(&mut TorrentSettings)) {
         let mut settings = active_torrent_settings();
         f(&mut settings);

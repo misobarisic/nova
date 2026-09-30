@@ -19,8 +19,8 @@ pub(crate) fn iso_days(iso: &str) -> Option<i64> {
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
-    let mut days = (year - 1970) * 365 + (year - 1969) / 4 - (year - 1901) / 100
-        + (year - 1601) / 400;
+    let mut days =
+        (year - 1970) * 365 + (year - 1969) / 4 - (year - 1901) / 100 + (year - 1601) / 400;
     let mdays: &[i64] = &[0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
     days += mdays[(month - 1) as usize] + (day - 1);
     if month > 2 && (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) {
@@ -38,7 +38,11 @@ pub(crate) fn today_days() -> i64 {
 /// Bulk mark-watched actions (season / series / up-to-here) skip episodes
 /// this returns false for, so unaired episodes never get marked.
 pub(crate) fn episode_is_out(v: &Video, today: i64) -> bool {
-    v.released.as_deref().and_then(iso_days).map(|d| d <= today).unwrap_or(true)
+    v.released
+        .as_deref()
+        .and_then(iso_days)
+        .map(|d| d <= today)
+        .unwrap_or(true)
 }
 /// Whether an episode carries a known air date at all. Surfacing paths
 /// (Continue Watching's next-up offer, the library "N left" count, the Home
@@ -88,7 +92,10 @@ pub(crate) fn library_badge_for(
             if !resumable_position(p.position_secs, p.duration_secs, p.watched) {
                 continue;
             }
-            if best.map(|b| p.updated_at_secs > b.updated_at_secs).unwrap_or(true) {
+            if best
+                .map(|b| p.updated_at_secs > b.updated_at_secs)
+                .unwrap_or(true)
+            {
                 best = Some(p);
             }
         }
@@ -289,13 +296,14 @@ pub(crate) fn series_fully_watched(
 /// watched — series with unaired episodes never complete), "Watching"
 /// (any progress, not complete) or "Plan to Watch" (untouched, including
 /// movies which carry no progress).
-pub(crate) fn auto_bucket(series_id: &str, episodes: &[Video], map: &HashMap<String, EpisodeProgress>) -> &'static str {
+pub(crate) fn auto_bucket(
+    series_id: &str,
+    episodes: &[Video],
+    map: &HashMap<String, EpisodeProgress>,
+) -> &'static str {
     if series_fully_watched(series_id, episodes, map) {
         "Completed"
-    } else if map
-        .values()
-        .any(|p| p.series_id == series_id)
-    {
+    } else if map.values().any(|p| p.series_id == series_id) {
         "Watching"
     } else {
         "Plan to Watch"
@@ -340,9 +348,10 @@ pub(crate) fn episode_matches_filter(v: &Video, filter: &str) -> bool {
     if needle.is_empty() {
         return true;
     }
-    if v
-        .episode_number()
-        .map(|n| n.to_string() == needle || format!("ep {n}") == needle || format!("e{n}") == needle)
+    if v.episode_number()
+        .map(|n| {
+            n.to_string() == needle || format!("ep {n}") == needle || format!("e{n}") == needle
+        })
         .unwrap_or(false)
     {
         return true;
