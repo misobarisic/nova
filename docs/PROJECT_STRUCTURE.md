@@ -51,9 +51,13 @@ attaches all four to a GitHub Release. Android release filenames are
 `nova-arm64-v8a-<tag>.apk`, `nova-x86_64-<tag>.apk`, and `nova-<tag>.apk`;
 the APK without an architecture suffix contains both arm64-v8a and x86_64.
 The Windows bundle is named `nova-windows-x86_64-<tag>.zip`.
-The Android workflow matrix builds each variant with cargo-apk2, verifies its
-exact ABI set and bundled libnova/libmpv libraries, and uploads separate
-artifacts for the release job to collect.
+The Android workflow invokes cargo-apk2 once to build both architectures into
+a universal APK. `.github/scripts/package-android.py` derives the two
+architecture-specific APKs from that output, aligns and signs all three with
+the same release key cargo-apk2 uses (environment override, then Cargo metadata),
+and checks signatures, signing certificates, exact ABI sets, native libraries,
+and unchanged payload bytes/compression. All three APKs share one Actions
+artifact for the release job to collect.
 
 Cargo aliases live in `.cargo/config.toml`. Android linkers come from the
 `.#android` dev shell env vars (see `.cargo/config.toml` comments); that shell
@@ -71,6 +75,7 @@ stdenv's host include path, which the NDK clang would otherwise pick up).
 ```
 nova/
 ├── .github/                  # GitHub Actions automation
+│   ├── scripts/package-android.py # derive, align, sign, verify APK variants
 │   └── workflows/
 │       └── build-release.yml  # PR checks; tagged Android + Windows release builds
 ├── Cargo.toml                # workspace + root package `nova`

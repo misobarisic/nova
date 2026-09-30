@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/build-release.yml"
+      - ".github/scripts/package-android.py"
       - ".cargo/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -75,23 +76,7 @@ jobs:
 
   android-build:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    name: Build Android APK (${{ matrix.variant }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - variant: universal
-            target: ""
-            abi: "arm64-v8a,x86_64"
-            suffix: ""
-          - variant: arm64-v8a
-            target: aarch64-linux-android
-            abi: arm64-v8a
-            suffix: "-arm64-v8a"
-          - variant: x86_64
-            target: x86_64-linux-android
-            abi: x86_64
-            suffix: "-x86_64"
+    name: Build Android APKs (universal, arm64-v8a, x86_64)
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
@@ -117,72 +102,18 @@ jobs:
         with:
           github_access_token: ${{ github.token }}
 
-      - name: Build Android APK
-        shell: bash
-        env:
-          ANDROID_TARGET: ${{ matrix.target }}
-        run: |
-          target_args=()
-          if [[ -n "$ANDROID_TARGET" ]]; then
-            target_args=(--target "$ANDROID_TARGET")
-          fi
-          nix develop .#android --command cargo apk2 build \
-            --no-default-features --lib -p nova --release "${target_args[@]}"
+      - name: Build universal APK once
+        run: >-
+          nix develop .#android --command cargo apk2 build
+          --no-default-features --lib -p nova --release
 
-      - name: Stage Android release asset
-        shell: bash
-        env:
-          APK_SUFFIX: ${{ matrix.suffix }}
-        run: |
-          mapfile -t apks <<< "$(find target -type f -name 'nova.apk' -print)"
-          if [[ ${#apks[@]} -ne 1 || ! -f "${apks[0]}" ]]; then
-            printf 'Expected exactly one aligned nova.apk, found %s:\n' "${#apks[@]}" >&2
-            printf '  %s\n' "${apks[@]}" >&2
-            exit 1
-          fi
+      - name: Derive, align, sign, and verify all three APKs
+        run: nix develop .#android --command python3 .github/scripts/package-android.py
 
-          mkdir -p dist
-          tag="${GITHUB_REF_NAME//\//-}"
-          cp "${apks[0]}" "dist/nova${APK_SUFFIX}-${tag}.apk"
-      - name: Verify APK architectures and native libraries
-        env:
-          EXPECTED_ABIS: ${{ matrix.abi }}
-        run: |
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          from zipfile import ZipFile
-
-          apks = list(Path("dist").glob("*.apk"))
-          if len(apks) != 1:
-              raise SystemExit(f"Expected one APK, found {len(apks)}")
-
-          expected_abis = set(os.environ["EXPECTED_ABIS"].split(","))
-          required = {
-              f"lib/{abi}/{library}"
-              for abi in expected_abis
-              for library in ("libnova.so", "libmpv.so")
-          }
-          with ZipFile(apks[0]) as apk:
-              entries = set(apk.namelist())
-              actual_abis = {
-                  entry.split("/")[1]
-                  for entry in entries
-                  if entry.startswith("lib/") and entry.endswith(".so")
-              }
-              if actual_abis != expected_abis:
-                  raise SystemExit(
-                      f"APK ABIs {sorted(actual_abis)} != expected {sorted(expected_abis)}"
-                  )
-              missing = sorted(required - entries)
-          if missing:
-              raise SystemExit("APK is missing: " + ", ".join(missing))
-          print(f"Verified expected ABIs and native libraries in {apks[0]}")
-          PY
       - name: Upload APK artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: nova-android-apk-${{ matrix.variant }}
+          name: nova-android-apks
           path: dist/*.apk
           if-no-files-found: error
           retention-days: 1
@@ -229,11 +160,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download all APK artifacts
+      - name: Download APK artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: nova-android-apk-*
-          merge-multiple: true
+          name: nova-android-apks
           path: dist
 
       - name: Download Windows artifact
