@@ -57,3 +57,21 @@ catalog is generated from the locked dependency graph at build time. See
   catalog bundled); text the Rust side formats goes through
   `src/app/text.rs`.
 - `cargo check` + the test suite are the gate; do not commit unless asked.
+
+### Commit messages
+
+Use Conventional Commit subjects:
+
+`<type>(<scope>): <imperative summary>`
+
+Keep the summary concise and lowercase after the colon (preserve proper names). Omit the scope when it does not help identify the change. Common types are `feat`, `fix`, `refactor`, `perf`, `ui`, `docs`, `test`, `build`, `ci`, and `chore`.
+
+Examples:
+
+```text
+feat(player): add subtitle selection
+fix(settings): prevent horizontal panning on Licenses
+ci(release): publish Linux .deb and AppImage builds
+```
+
+For breaking changes, add `!` after the type or scope and explain the impact in the commit body, for example `feat(sync)!: change pairing protocol`.
