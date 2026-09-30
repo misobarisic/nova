@@ -6,7 +6,7 @@
 //! once per process.
 
 use i_slint_backend_testing::ElementHandle;
-use slint::{ComponentHandle, SharedString, VecModel};
+use slint::{ComponentHandle, LogicalPosition, SharedString, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -25,6 +25,32 @@ fn back(app: &nova::AppWindow) {
         });
 }
 
+fn drag_horizontal(app: &nova::AppWindow, from: LogicalPosition, to: LogicalPosition) {
+    let _ = app
+        .window()
+        .dispatch_event_with_result(slint::platform::WindowEvent::PointerPressed {
+            position: from,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    for step in 1..=4 {
+        let t = step as f32 / 4.0;
+        let _ =
+            app.window()
+                .dispatch_event_with_result(slint::platform::WindowEvent::PointerMoved {
+                    position: LogicalPosition::new(
+                        from.x + (to.x - from.x) * t,
+                        from.y + (to.y - from.y) * t,
+                    ),
+                });
+    }
+    let _ =
+        app.window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
+                position: to,
+                button: slint::platform::PointerEventButton::Left,
+            });
+}
+
 fn check_alignment(app: &nova::AppWindow, label: &str, failures: &Rc<RefCell<Vec<String>>>) {
     let rows: Vec<_> =
         ElementHandle::find_by_element_id(app, "SettingsPage::source_card").collect();
@@ -39,6 +65,7 @@ fn check_alignment(app: &nova::AppWindow, label: &str, failures: &Rc<RefCell<Vec
         return;
     }
 
+    let viewport_width = app.window().size().width as f32;
     for (index, (row, button)) in rows.iter().zip(&buttons).enumerate() {
         let row_y = row.absolute_position().y;
         let row_x = row.absolute_position().x;
@@ -53,6 +80,11 @@ fn check_alignment(app: &nova::AppWindow, label: &str, failures: &Rc<RefCell<Vec
         if (row_center - button_center).abs() > 1.0 {
             failures.borrow_mut().push(format!(
                 "{label}: source button {index} center y={button_center:.1} differs from row center y={row_center:.1}"
+            ));
+        }
+        if row_x < -0.5 || row_x + row_w > viewport_width + 0.5 {
+            failures.borrow_mut().push(format!(
+                "{label}: source row {index} at x={row_x:.1} w={row_w:.1} exceeds viewport width {viewport_width:.1}"
             ));
         }
         if button_x < row_x - 0.5
@@ -76,17 +108,25 @@ fn about_opens_nested_licenses_and_centers_source_buttons() {
     app.window().show().unwrap();
     app.set_show_settings(true);
     app.set_show_home(false);
-    app.set_license_catalog("Test license catalog contents".into());
+    // Exercise intrinsic-width edge cases with long generated-style license
+    // text and crate names while keeping realistic word and line breaks.
+    let mut license_text = (0..64)
+        .map(|_| "A long license clause with attributed contributors and redistribution terms.")
+        .collect::<Vec<_>>()
+        .join("\n");
+    license_text.push('\n');
+    license_text.push_str(&"X".repeat(128));
+    app.set_license_catalog(s(&license_text));
     app.set_license_sources(
         Rc::new(VecModel::from(vec![
             nova::LicenseSource {
-                label: s("crate-one"),
-                license: s("MIT"),
+                label: s(&"crate-one".repeat(32)),
+                license: s(&"License".repeat(24)),
                 url: s("https://example.com/crate-one"),
             },
             nova::LicenseSource {
-                label: s("crate-two"),
-                license: s("Apache-2.0"),
+                label: s(&"crate-two".repeat(32)),
+                license: s(&"License".repeat(24)),
                 url: s("https://example.com/crate-two"),
             },
         ]))
@@ -145,6 +185,42 @@ fn about_opens_nested_licenses_and_centers_source_buttons() {
                             "Licenses page must contain both source links",
                         );
                         check_alignment(&app, "narrow layout", &failures3);
+
+                        // A horizontal swipe over a long license row must not
+                        // move the page sideways, even when catalog text is
+                        // unusually long and contains no word-break points.
+                        if let Some(row) =
+                            ElementHandle::find_by_element_id(&app, "SettingsPage::source_card")
+                                .next()
+                        {
+                            let row_pos = row.absolute_position();
+                            let row_size = row.size();
+                            let before_x = row_pos.x;
+                            let y = row_pos.y + row_size.height / 2.0;
+                            let end_x = (app.window().size().width as f32 - 24.0).max(24.0);
+                            drag_horizontal(
+                                &app,
+                                LogicalPosition::new(end_x, y),
+                                LogicalPosition::new((end_x - 160.0).max(16.0), y),
+                            );
+                            let after_x = ElementHandle::find_by_element_id(
+                                &app,
+                                "SettingsPage::source_card",
+                            )
+                            .next()
+                            .map(|e| e.absolute_position().x);
+                            fail(
+                                &failures3,
+                                after_x.is_some_and(|x| (x - before_x).abs() <= 1.0),
+                                "horizontal drag must not pan the Licenses page",
+                            );
+                        } else {
+                            fail(
+                                &failures3,
+                                false,
+                                "DIAG: no license source row to test horizontal panning",
+                            );
+                        }
 
                         // Resize without leaving the nested page so the same
                         // source rows are measured at desktop button height.

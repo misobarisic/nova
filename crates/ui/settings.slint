@@ -4666,6 +4666,7 @@ export component SettingsPage {
 
                             Text {
                                 width: 100%;
+                                min-width: 0px;
                                 text: @tr("Nova is licensed under GPL-3.0-or-later. This page lists the Rust crates used by this build, Nova's workspace crates, bundled native media components, and their license texts.");
                                 font-size: 12px;
                                 color: #b9b9c4;
@@ -4678,6 +4679,7 @@ export component SettingsPage {
                             }
 
                             for source[i] in root.license_sources: source_card := Rectangle {
+                                width: 100%;
                                 background: Math.mod(i, 2) == 0 ? #17171a : #121214;
                                 height: root.narrow ? 60px : 48px;
                                 border-radius: 8px;
@@ -4742,10 +4744,14 @@ export component SettingsPage {
 
                             Text {
                                 width: 100%;
+                                min-width: 0px;
                                 text: root.license_catalog;
                                 font-size: 10px;
                                 color: #b9b9c4;
-                                wrap: word-wrap;
+                                // Legal text may contain long unbroken tokens;
+                                // word-wrap preserves their intrinsic width and
+                                // can make the whole page pan on a narrow screen.
+                                wrap: char-wrap;
                                 vertical-alignment: top;
                             }
                         }
