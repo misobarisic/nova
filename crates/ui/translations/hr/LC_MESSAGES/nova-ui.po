@@ -564,11 +564,11 @@ msgstr "OSD reproduktora"
 msgid "Fade and slide of the player controls, close button and volume slider."
 msgstr "Postupno pojavljivanje i klizanje kontrola reproduktora, gumba za zatvaranje i klizača glasnoće."
 
-msgid "Navigation glide"
-msgstr "Klizanje navigacije"
+msgid "Navigation feedback"
+msgstr "Animacija navigacije"
 
-msgid "Slide the highlighted item in the navigation bar from the old page to the new one."
-msgstr "Pomaknite istaknutu stavku u navigacijskoj traci sa stare stranice na novu."
+msgid "Gently pop the selected navigation icon when switching pages."
+msgstr "Blago povećajte odabranu navigacijsku ikonu pri promjeni stranice."
 
 msgid "Pairing request"
 msgstr "Zahtjev za uparivanje"

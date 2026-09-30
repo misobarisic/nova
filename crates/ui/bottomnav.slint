@@ -1,7 +1,6 @@
 import { KbMark } from "kbnav.slint";
 import { IcHome, IcSearch, IcVideoLibrary, IcSettingsGear } from "icons.slint";
-import { Anim } from "anim.slint";
-import { NavState } from "sidenav.slint";
+import { NavFeedback } from "sidenav.slint";
 
 // Bottom tab bar for narrow (phone) layouts: a compact floating capsule,
 // centered with fixed side margins, icons only — the active tab gets an
@@ -11,9 +10,8 @@ import { NavState } from "sidenav.slint";
 // between the two on `narrow`. Same TouchArea-driven taps as the cards.
 //
 // The accent circle is a single marker shared by the four tabs (not one
-// background per tab), so it can glide from the tab you left to the one you
-// picked: pages are rebuilt on a switch, so the new bar starts the marker at
-// `NavState.from` and animates to its own section (see the `init` below).
+// background per tab), snapping to the picked tab. The shared NavFeedback
+// driver only pops the incoming icon; the marker never travels or stretches.
 //
 // The pill sizes itself (capped width, side margins) so every host page
 // renders it identically — host layout padding must not affect it.
@@ -38,27 +36,7 @@ export component BottomNav inherits Rectangle {
     // 64px touch bar + system inset, pinned so content above never shifts.
     height: 64px + root.safe-bottom;
 
-    // Marker position, in item units (see the marker rectangle below).
-    property <float> marker: 0.0;
-    init => {
-        if (Anim.enabled && Anim.nav_slide) {
-            marker = NavState.from;
-            marker_go.running = true;
-        } else {
-            marker = root.active;
-        }
-        // Consumed: a later rebuild (returning from the detail modal) starts
-        // settled instead of gliding from a stale section.
-        NavState.from = root.active;
-    }
-    marker_go := Timer {
-        interval: 30ms;
-        running: false;
-        triggered => {
-            self.running = false;
-            root.marker = root.active;
-        }
-    }
+    motion := NavFeedback { active: root.active; }
 
     // Eats stray taps anywhere in the bar footprint (gaps between tabs,
     // side margins, safe zone) so they never reach content underneath.
@@ -92,11 +70,10 @@ export component BottomNav inherits Rectangle {
                 property <length> pitch: (pill.width - 16px) / 4;
                 width: 48px;
                 height: 48px;
-                x: 8px + root.marker * pitch + (pitch - self.width) / 2;
-                y: 8px;
+                x: 8px + root.active * pitch + (pitch - self.width) / 2;
+                y: (pill.height - self.height) / 2;
                 border-radius: 24px;
                 background: #8b5cf6;
-                animate x { duration: Anim.nav_glide; easing: ease-out; }
             }
 
             HorizontalLayout {
@@ -110,11 +87,11 @@ export component BottomNav inherits Rectangle {
                     horizontal-stretch: 1;
                     height: 100%;
 
-                    IcHome {
+                    icon_home := IcHome {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        width: 24px;
-                        height: 24px;
+                        width: 24px + (root.active == 0 ? motion.pulse * 2px : 0px);
+                        height: self.width;
                         fill: root.active == 0 ? #ffffff : #8a8a9a;
                     }
 
@@ -129,11 +106,11 @@ export component BottomNav inherits Rectangle {
                     horizontal-stretch: 1;
                     height: 100%;
 
-                    IcSearch {
+                    icon_discover := IcSearch {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        width: 24px;
-                        height: 24px;
+                        width: 24px + (root.active == 1 ? motion.pulse * 2px : 0px);
+                        height: self.width;
                         fill: root.active == 1 ? #ffffff : #8a8a9a;
                     }
 
@@ -148,11 +125,11 @@ export component BottomNav inherits Rectangle {
                     horizontal-stretch: 1;
                     height: 100%;
 
-                    IcVideoLibrary {
+                    icon_library := IcVideoLibrary {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        width: 24px;
-                        height: 24px;
+                        width: 24px + (root.active == 2 ? motion.pulse * 2px : 0px);
+                        height: self.width;
                         fill: root.active == 2 ? #ffffff : #8a8a9a;
                     }
 
@@ -167,11 +144,11 @@ export component BottomNav inherits Rectangle {
                     horizontal-stretch: 1;
                     height: 100%;
 
-                    IcSettingsGear {
+                    icon_settings := IcSettingsGear {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        width: 24px;
-                        height: 24px;
+                        width: 24px + (root.active == 3 ? motion.pulse * 2px : 0px);
+                        height: self.width;
                         fill: root.active == 3 ? #ffffff : #8a8a9a;
                     }
 

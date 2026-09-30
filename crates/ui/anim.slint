@@ -22,7 +22,7 @@ export global Anim {
     out property <duration> player_fade: (enabled && player) ? 200ms : 0ms;
     out property <duration> player_slide: (enabled && player) ? 150ms : 0ms;
     out property <duration> player_fast: (enabled && player) ? 120ms : 0ms;
-    // Navigation bars: slide the selection marker from the previous item to
-    // the picked one.
-    out property <duration> nav_glide: (enabled && nav_slide) ? 120ms : 0ms;
+    // Keep the persisted nav_slide switch for compatibility; navigation now
+    // uses icon-only feedback, never a travelling highlight.
+    out property <duration> nav_feedback: (enabled && nav_slide) ? 220ms : 0ms;
 }

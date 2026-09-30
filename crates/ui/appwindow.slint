@@ -9,7 +9,7 @@ import { PlayerOverlay } from "player.slint";
 // are only accessible from Rust when exported by the root component's file).
 export { Anim } from "anim.slint";
 // Same re-export for the navigation bookkeeping the backend writes: which
-// section a page switch is leaving, for the nav bars' marker glide.
+// section a page switch is leaving, for the incoming nav icon's feedback.
 export { NavState } from "sidenav.slint";
 
 // Shared structs used by the property declarations below; they are exported
@@ -163,7 +163,8 @@ export component AppWindow inherits Window {
     in-out property <bool> anim_hover: true;
     in-out property <bool> anim_player: true;
     // Navigation feedback (Settings → Look and feel → Navigation): the nav
-    // marker glides between items when the bar switches pages.
+    // selected icon pops when the bar switches pages. Keep the historical
+    // property name to preserve settings and sync compatibility.
     in-out property <bool> anim_nav_slide: true;
     // --- Settings (display) -------------------------------------------
     // Language of the interface (Settings → Display): the picker index into

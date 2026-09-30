@@ -1,7 +1,7 @@
 //! Navigation selection marker (headless): the accent circle must sit centred
 //! on the item it marks — in the wide rail *and* in the narrow bottom bar —
 //! must land on the item that was picked (the bar is rebuilt on every switch,
-//! so this is the `NavState.from` glide), and must not drift when something
+//! with an instantly positioned highlight), and must not drift when something
 //! else rebuilds the page (detail modal, player, subpages).
 //!
 //! Regression: the rail's shared marker was positioned from the item's top
@@ -176,20 +176,9 @@ fn nav_marker_is_centred_and_lands_on_the_picked_item() {
                             &f5,
                         );
 
-                        // The flash flag clears itself (its timer is bound to it).
-                        app.set_nav_flash_peak(true);
-                        let f6 = f5.clone();
-                        let app6 = app.as_weak();
-                        after(300, move || {
-                            let app = app6.upgrade().unwrap();
-                            if app.get_nav_flash_peak() {
-                                f6.borrow_mut().push(
-                                    "screen flash: nav_flash_peak stayed set past the pulse"
-                                        .to_string(),
-                                );
-                            }
-                            slint::quit_event_loop().unwrap();
-                        });
+                        // Navigation feedback is confined to the marker and
+                        // icon; there is no whole-screen flash.
+                        slint::quit_event_loop().unwrap();
                     });
                 });
             });

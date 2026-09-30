@@ -18,9 +18,9 @@ fn current_nav(app: &AppWindow) -> i32 {
 /// Publish the section a page switch is leaving, before the page flags flip.
 ///
 /// `NavState.from` is what the switch destroys: the nav bar lives inside the
-/// page, so the new bar cannot see the old selection by itself — it starts its
-/// marker there and glides to its own item (Settings → Look and feel →
-/// Navigation). The glide duration switch lives in the `Anim` global.
+/// page, so the new bar cannot see the old selection by itself. It uses this
+/// to pop only an incoming icon, never on a rebuild of the same page (Settings
+/// → Look and feel → Navigation feedback). The highlight snaps immediately.
 fn note_nav_switch(bridge: &Bridge, next: i32) {
     let Some(app) = bridge.app() else {
         return;
@@ -353,8 +353,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // These four callbacks are the only way a page switch happens, so the
     // switch bookkeeping lives here, *before* the page flags flip: each page
     // hosts its own nav bar, which is rebuilt by the switch and therefore
-    // cannot animate across it — it reads the section we are leaving from
-    // `NavState` and glides its selection marker from there.
+    // reads the section we are leaving from `NavState` to distinguish a real
+    // navigation click from a same-page rebuild before popping the new icon.
     let b = bridge.clone();
     app.on_library_picked(move || {
         note_nav_switch(&b, 2);

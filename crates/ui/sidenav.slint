@@ -25,10 +25,42 @@ export global NavMetrics {
 // (`app::run`), right before it flips the page flags.
 export global NavState {
     // Section the current switch is coming from (0 Home, 1 Discover,
-    // 2 Library, 3 Settings). Equal to the bar's own section while nothing is
-    // in flight, so a bar rebuilt for another reason (returning from the
-    // detail modal) does not glide.
+    // 2 Library, 3 Settings). Consumed by the new bar so a rebuild (returning
+    // from detail or resizing) does not replay the selected icon's pop.
     in-out property <int> from: 0;
+}
+
+// Shared icon-only feedback for both responsive bars. The highlight snaps
+// immediately; the incoming icon grows by at most 2px and settles in place.
+export component NavFeedback inherits Rectangle {
+    in property <int> active: 0;
+    width: 0px;
+    height: 0px;
+    out property <float> pulse: feedback && motion_enabled ? 4 * progress * (1 - progress) : 0.0;
+    private property <float> progress: 0.0;
+    private property <bool> feedback: false;
+    private property <bool> motion_enabled: Anim.enabled && Anim.nav_slide;
+    animate progress { duration: Anim.nav_feedback; easing: ease-out; }
+
+    init => {
+        root.feedback = root.motion_enabled && NavState.from != root.active;
+        // Consume the switch: returning from detail or resizing the window
+        // must not replay selection feedback.
+        NavState.from = root.active;
+        if (root.feedback) { go.start(); } else { root.progress = 1.0; }
+    }
+    changed motion_enabled => {
+        if (!root.motion_enabled) {
+            go.stop();
+            root.feedback = false;
+            root.progress = 1.0;
+        }
+    }
+    go := Timer {
+        interval: 16ms;
+        running: false;
+        triggered => { self.stop(); root.progress = 1.0; }
+    }
 }
 
 component SideItem inherits Rectangle {
@@ -39,13 +71,14 @@ component SideItem inherits Rectangle {
     // circle instead of the bottom bar's "▶" KbMark: that marker is a
     // horizontal-layout row and would consume a row of the rail's height.
     in property <bool> kb_focused: false;
+    in property <float> pop: 0.0;
 
     callback picked();
 
     height: 56px;
 
-    // Only the hover fill and the keyboard ring live here: the accent circle
-    // is the one shared marker that glides between items (`SideNav`).
+    // Only the hover fill and keyboard ring live here; SideNav owns the
+    // shared, instantly positioned accent circle.
     Rectangle {
         width: 48px;
         height: 48px;
@@ -56,32 +89,32 @@ component SideItem inherits Rectangle {
         border-width: root.kb_focused ? 2px : 0px;
         border-color: #ffffff;
 
-        if root.kind == 0: IcHome {
+        if root.kind == 0: icon_home := IcHome {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 24px;
-            height: 24px;
+            width: 24px + root.pop * 2px;
+            height: self.width;
             fill: root.active ? #ffffff : #8a8a9a;
         }
-        if root.kind == 1: IcSearch {
+        if root.kind == 1: icon_discover := IcSearch {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 24px;
-            height: 24px;
+            width: 24px + root.pop * 2px;
+            height: self.width;
             fill: root.active ? #ffffff : #8a8a9a;
         }
-        if root.kind == 2: IcVideoLibrary {
+        if root.kind == 2: icon_library := IcVideoLibrary {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 24px;
-            height: 24px;
+            width: 24px + root.pop * 2px;
+            height: self.width;
             fill: root.active ? #ffffff : #8a8a9a;
         }
-        if root.kind == 3: IcSettingsGear {
+        if root.kind == 3: icon_settings := IcSettingsGear {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 24px;
-            height: 24px;
+            width: 24px + root.pop * 2px;
+            height: self.width;
             fill: root.active ? #ffffff : #8a8a9a;
         }
     }
@@ -109,32 +142,7 @@ export component SideNav inherits Rectangle {
     callback library_picked();
     callback settings_picked();
 
-    // Section index of THIS bar (0 Home, 1 Discover, 2 Library, 3 Settings) and
-    // the marker's animated position, in item units. The bar is destroyed and
-    // rebuilt with its page on every switch, so it starts at the section we
-    // came from (`NavState.from`, published by the backend) and glides to its
-    // own — the accent circle therefore appears to travel from the old item to
-    // the new one. With the animation off it starts where it belongs.
-    property <float> marker: 0.0;
-    init => {
-        if (Anim.enabled && Anim.nav_slide) {
-            marker = NavState.from;
-            marker_go.running = true;
-        } else {
-            marker = root.active;
-        }
-        // Consumed: a later rebuild (returning from the detail modal) starts
-        // settled instead of gliding from a stale section.
-        NavState.from = root.active;
-    }
-    marker_go := Timer {
-        interval: 30ms;
-        running: false;
-        triggered => {
-            self.running = false;
-            root.marker = root.active;
-        }
-    }
+    motion := NavFeedback { active: root.active; }
 
     // Fixed footprint: the hosting page reserves exactly this much on its
     // left (its padding-left grows by `NavMetrics.rail-width`). Safe area is
@@ -173,18 +181,17 @@ export component SideNav inherits Rectangle {
         border-color: #2a2a33;
 
         // The one accent circle, shared by all four items: it is positioned by
-        // the item index (56px item pitch, 8px panel padding) so it can glide.
+        // the item index (56px item pitch, 8px panel padding), with no glide.
         // Declared before the item column, which draws the icons over it.
         marker_dot := Rectangle {
             x: (parent.width - self.width) / 2;
             // Centred inside the item slot, like the item's own 48px ring:
             // the 4px is half of the 8px the 48px circle leaves in a 56px item.
-            y: 8px + (56px - self.height) / 2 + root.marker * 56px;
+            y: 8px + (56px - self.height) / 2 + root.active * 56px;
             width: 48px;
             height: 48px;
             border-radius: 24px;
             background: #8b5cf6;
-            animate y { duration: Anim.nav_glide; easing: ease-out; }
         }
 
         VerticalLayout {
@@ -198,6 +205,7 @@ export component SideNav inherits Rectangle {
             SideItem {
                 kind: 0;
                 active: root.active == 0;
+                pop: root.active == 0 ? motion.pulse : 0.0;
                 kb_focused: root.kb_zone == 0 && root.kb_nav == 0 && root.kb_active;
                 picked => { root.kb_active = false; root.home_picked(); }
             }
@@ -205,6 +213,7 @@ export component SideNav inherits Rectangle {
             SideItem {
                 kind: 1;
                 active: root.active == 1;
+                pop: root.active == 1 ? motion.pulse : 0.0;
                 kb_focused: root.kb_zone == 0 && root.kb_nav == 1 && root.kb_active;
                 picked => { root.kb_active = false; root.discover_picked(); }
             }
@@ -212,6 +221,7 @@ export component SideNav inherits Rectangle {
             SideItem {
                 kind: 2;
                 active: root.active == 2;
+                pop: root.active == 2 ? motion.pulse : 0.0;
                 kb_focused: root.kb_zone == 0 && root.kb_nav == 2 && root.kb_active;
                 picked => { root.kb_active = false; root.library_picked(); }
             }
@@ -219,6 +229,7 @@ export component SideNav inherits Rectangle {
             SideItem {
                 kind: 3;
                 active: root.active == 3;
+                pop: root.active == 3 ? motion.pulse : 0.0;
                 kb_focused: root.kb_zone == 0 && root.kb_nav == 3 && root.kb_active;
                 picked => { root.kb_active = false; root.settings_picked(); }
             }
