@@ -779,14 +779,23 @@ msgstr "Ovaj uređaj"
 
 
 # Settings → About
-msgid "About and licenses"
-msgstr "O aplikaciji i licencama"
+msgid "About"
+msgstr "O aplikaciji"
 
-msgid "Open-source notices and source code"
-msgstr "Obavijesti o otvorenom kodu i izvorni kod"
+msgid "Information about Nova"
+msgstr "Informacije o aplikaciji Nova"
+
+msgid "Licenses"
+msgstr "Licence"
 
 msgid "ABOUT NOVA"
 msgstr "O APLIKACIJI NOVA"
+
+msgid "Nova is a media catalog and player application."
+msgstr "Nova je aplikacija za katalogiziranje medija i reprodukciju."
+
+msgid "OPEN-SOURCE LICENSES"
+msgstr "LICENCE OTVORENOG KODA"
 
 msgid "Nova is licensed under GPL-3.0-or-later. This page lists the Rust crates used by this build, Nova's workspace crates, bundled native media components, and their license texts."
 msgstr "Nova je licencirana pod GPL-3.0-or-later. Ova stranica navodi Rust pakete korištene u ovoj verziji, pakete radnog prostora Nova, uključene nativne medijske komponente i tekstove njihovih licenci."

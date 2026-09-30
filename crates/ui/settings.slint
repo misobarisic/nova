@@ -956,8 +956,8 @@ export component SettingsPage {
     // 1 addon install [field, add], 2 addon rows, 3 category install
     // [field, add], 4 category rows, 5 image-cache rows, 6 display rows,
     // 7 torrent rows, 9 player rows, 10 look-and-feel rows, 11 sync rows,
-    // 12 downloads rows, 14 About source links. Left/Right moves
-    // moves between rows/zones; Enter activates; Backspace returns to the
+    // 12 downloads rows, 14 license source links, 15 About → Licenses button.
+    // Left/Right moves between rows/zones; Enter activates; Backspace returns to the
     // landing (or Home at the landing). Text fields use edit mode (0 none, 1
     // addon url, 2 category, 3 torrent dir): Enter focuses the field, Enter
     // again submits and exits.
@@ -976,10 +976,10 @@ export component SettingsPage {
     property <int> kb_anr: 0; // look-and-feel rows 0..4
     property <int> kb_dl: 0; // downloads rows 0 delete-after-watched, 1 episodes
     property <int> kb_dlr: 0; // downloaded-episodes list row
-    property <int> kb_about_idx: 0; // source row on Settings → About
+    property <int> kb_about_idx: 0; // source row on Settings → About → Licenses
     property <int> kb_edit: 0;
     // Landing selection (section ids: 0–8 for Addons through Downloads;
-    // 10 About; id 9 is the nested Downloaded Episodes subpage).
+    // 10 About; ids 9 and 11 are nested Downloaded Episodes and Licenses pages).
     property <int> kb_land: 0;
 
     // ---- Landing / subpage navigation state ----
@@ -1055,7 +1055,8 @@ export component SettingsPage {
         if (id == 6) { return @tr("Look and feel"); }
         if (id == 7) { return @tr("Sync"); }
         if (id == 9) { return @tr("Downloaded episodes"); }
-        if (id == 10) { return @tr("About and licenses"); }
+        if (id == 10) { return @tr("About"); }
+        if (id == 11) { return @tr("Licenses"); }
         return @tr("Downloads");
     }
 
@@ -1069,7 +1070,7 @@ export component SettingsPage {
         if (id == 6) { return @tr("Motion, transitions and hover effects"); }
         if (id == 7) { return @tr("Sync library and watch history between devices"); }
         if (id == 9) { return @tr("Episode files stored on this device"); }
-        if (id == 10) { return @tr("Open-source notices and source code"); }
+        if (id == 10) { return @tr("Information about Nova"); }
         return @tr("Offline media and cleanup policy");
     }
 
@@ -1085,7 +1086,8 @@ export component SettingsPage {
         if (root.sel == 7) { return 11; }
         if (root.sel == 8) { return 12; }
         if (root.sel == 9) { return 13; }
-        if (root.sel == 10) { return 14; }
+        if (root.sel == 10) { return 15; }
+        if (root.sel == 11) { return 14; }
         return 0;
     }
 
@@ -1112,10 +1114,13 @@ export component SettingsPage {
 
     function close_page() {
         root.kb_active = false;
-        // The downloaded-episodes list (9) is nested under Downloads (8):
-        // back returns to Downloads, not the landing menu.
+        // Nested pages return to their parent rather than the landing menu.
         if (root.sel == 9) {
             root.open_page(8);
+            return;
+        }
+        if (root.sel == 11) {
+            root.open_page(10);
             return;
         }
         root.sub_open = false;
@@ -1186,7 +1191,10 @@ export component SettingsPage {
     }
 
     function kb_up() {
-        if (root.kb_zone == 14) {
+        if (root.kb_zone == 15) {
+            root.kb_zone = 0;
+            root.kb_nudge(150px);
+        } else if (root.kb_zone == 14) {
             if (root.kb_about_idx > 0) {
                 root.kb_about_idx -= 1;
                 root.kb_nudge(50px);
@@ -1278,7 +1286,9 @@ export component SettingsPage {
     }
 
     function kb_down() {
-        if (root.kb_zone == 14) {
+        if (root.kb_zone == 15) {
+            root.kb_nudge(-150px);
+        } else if (root.kb_zone == 14) {
             if (root.kb_about_idx + 1 < root.license_sources.length) {
                 root.kb_about_idx += 1;
                 root.kb_nudge(-50px);
@@ -1653,9 +1663,12 @@ export component SettingsPage {
 
     function kb_enter() {
         if (root.kb_zone == 14) {
-            if (root.kb_about_idx >= 0 && root.kb_about_idx < root.license_sources.length) {
+            if (root.sel == 11 && root.kb_about_idx >= 0
+                && root.kb_about_idx < root.license_sources.length) {
                 root.license_source_requested(root.license_sources[root.kb_about_idx].url);
             }
+        } else if (root.kb_zone == 15 && root.sel == 10) {
+            root.open_page(11);
         } else if (root.kb_zone == 8) {
             root.open_page(root.kb_land);
         } else if (root.kb_zone == 0) {
@@ -4623,6 +4636,36 @@ export component SettingsPage {
 
                             Text {
                                 width: 100%;
+                                text: @tr("Nova is a media catalog and player application.");
+                                font-size: 12px;
+                                color: #b9b9c4;
+                                wrap: word-wrap;
+                            }
+
+                            about_licenses_button := PillButton {
+                                label: @tr("Licenses");
+                                roomy: root.narrow;
+                                focused: root.kb_zone == 15 && root.kb_active;
+                                clicked => {
+                                    root.kb_active = false;
+                                    root.kb_zone = 15;
+                                    root.open_page(11);
+                                }
+                            }
+                        }
+
+                        if root.sel == 11: VerticalLayout {
+                            width: 100%;
+                            vertical-stretch: 0;
+                            spacing: 16px;
+
+                            SectionHeader {
+                                icon-kind: 6;
+                                label: @tr("OPEN-SOURCE LICENSES");
+                            }
+
+                            Text {
+                                width: 100%;
                                 text: @tr("Nova is licensed under GPL-3.0-or-later. This page lists the Rust crates used by this build, Nova's workspace crates, bundled native media components, and their license texts.");
                                 font-size: 12px;
                                 color: #b9b9c4;
@@ -4634,7 +4677,7 @@ export component SettingsPage {
                                 label: @tr("SOURCE CODE");
                             }
 
-                            for source[i] in root.license_sources: Rectangle {
+                            for source[i] in root.license_sources: source_card := Rectangle {
                                 background: Math.mod(i, 2) == 0 ? #17171a : #121214;
                                 height: root.narrow ? 60px : 48px;
                                 border-radius: 8px;
@@ -4648,6 +4691,7 @@ export component SettingsPage {
 
                                     VerticalLayout {
                                         horizontal-stretch: 1;
+                                        min-width: 0px;
                                         alignment: center;
                                         spacing: 2px;
 
@@ -4656,6 +4700,7 @@ export component SettingsPage {
                                             font-size: 12px;
                                             color: #f2f2f4;
                                             overflow: elide;
+                                            min-width: 0px;
                                         }
 
                                         Text {
@@ -4663,18 +4708,28 @@ export component SettingsPage {
                                             font-size: 10px;
                                             color: #8a8a92;
                                             overflow: elide;
+                                            min-width: 0px;
                                         }
                                     }
 
-                                    PillButton {
-                                        label: @tr("Open source");
-                                        roomy: root.narrow;
-                                        focused: root.kb_zone == 14 && root.kb_about_idx == i && root.kb_active;
-                                        clicked => {
-                                            root.kb_active = false;
-                                            root.kb_zone = 14;
-                                            root.kb_about_idx = i;
-                                            root.license_source_requested(source.url);
+                                    // A HorizontalLayout top-aligns fixed-height
+                                    // children. Fill the row vertically and use
+                                    // the inner layout to center the source action.
+                                    VerticalLayout {
+                                        height: 100%;
+                                        alignment: center;
+
+                                        source_view_button := PillButton {
+                                            label: @tr("Open source");
+                                            roomy: root.narrow;
+                                            compact: root.narrow;
+                                            focused: root.kb_zone == 14 && root.kb_about_idx == i && root.kb_active;
+                                            clicked => {
+                                                root.kb_active = false;
+                                                root.kb_zone = 14;
+                                                root.kb_about_idx = i;
+                                                root.license_source_requested(source.url);
+                                            }
                                         }
                                     }
                                 }
