@@ -231,16 +231,16 @@ jobs:
           name: nova-windows-x86_64
           path: dist
 
-      - name: Prefix release assets by platform
+      - name: Name release assets by platform
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME}"
-          mv "dist/nova-x86_64-${tag}.AppImage" "dist/01-desktop-linux-x86_64-${tag}.AppImage"
-          mv "dist/nova-x86_64-${tag}.deb" "dist/02-desktop-linux-x86_64-${tag}.deb"
-          mv "dist/nova-windows-x86_64-${tag}.zip" "dist/03-desktop-windows-x86_64-${tag}.zip"
-          mv "dist/nova-arm64-v8a-${tag}.apk" "dist/10-android-arm64-v8a-${tag}.apk"
-          mv "dist/nova-${tag}.apk" "dist/11-android-universal-${tag}.apk"
-          mv "dist/nova-x86_64-${tag}.apk" "dist/12-android-x86_64-${tag}.apk"
+          mv "dist/nova-x86_64-${tag}.AppImage" "dist/nova-desktop-linux-x86_64-${tag}.AppImage"
+          mv "dist/nova-x86_64-${tag}.deb" "dist/nova-desktop-linux-x86_64-${tag}.deb"
+          mv "dist/nova-windows-x86_64-${tag}.zip" "dist/nova-desktop-windows-x86_64-${tag}.zip"
+          mv "dist/nova-arm64-v8a-${tag}.apk" "dist/nova-mobile-apk-arm64-v8a-${tag}.apk"
+          mv "dist/nova-${tag}.apk" "dist/nova-mobile-apk-universal-${tag}.apk"
+          mv "dist/nova-x86_64-${tag}.apk" "dist/nova-mobile-apk-x86_64-${tag}.apk"
       - name: Publish GitHub release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
