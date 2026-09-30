@@ -95,12 +95,9 @@ jobs:
           --target x86_64-pc-windows-gnu
 
   # Benchmark crate2nix on the same PR revision as the existing Cargo checks.
-  # Same-repository PRs may read and fill their own signed cache after the
-  # storagebox-cache-pr environment reviewer approves the job. Fork PRs use a
-  # no-secrets environment and run cold. PR cache signatures are not trusted
-  # by the main cache workflow.
-  # Same-repository PRs share the PR cache after environment approval. Main
-  # also trusts those signed entries; the separate PR key cannot sign the main cache.
+  # Same-repository PRs share and fill the signed PR cache after a reviewer
+  # approves the protected environment. Fork PRs run cold without secrets.
+  # Main trusts the PR cache's separate signing key when publishing its cache.
   check-crate2nix:
     name: Crate2nix workspace build benchmark
     if: github.event_name == 'pull_request'
