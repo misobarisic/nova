@@ -178,6 +178,41 @@ jobs:
           } | sudo tee -a /etc/nix/nix.conf > /dev/null
           sudo systemctl restart nix-daemon
 
+      - name: Initialize Storage Box cache metadata
+        if: steps.cache-pr.outputs.configured == 'true'
+        env:
+          HETZNER_STORAGEBOX_HOST: ${{ secrets.HETZNER_STORAGEBOX_HOST }}
+          HETZNER_STORAGEBOX_USER: ${{ secrets.HETZNER_STORAGEBOX_USER }}
+          HETZNER_STORAGEBOX_PASSWORD: ${{ secrets.HETZNER_STORAGEBOX_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [[ "$HETZNER_STORAGEBOX_HOST" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ "$HETZNER_STORAGEBOX_USER" =~ ^[A-Za-z0-9-]+$ ]]
+
+          sudo apt-get update
+          sudo apt-get install --yes rsync sshpass
+          ssh-keyscan -p 23 -T 15 -t ed25519 "$HETZNER_STORAGEBOX_HOST" \
+            > "$RUNNER_TEMP/storagebox_known_hosts" 2>/dev/null
+          fingerprint=$(ssh-keygen -lf "$RUNNER_TEMP/storagebox_known_hosts" -E sha256 | awk 'NR == 1 { print $2 }')
+          expected='SHA256:XqONwb1S0zuj5A1CDxpOSuD2hnAArV1A3wKY7Z3sdgM'
+          if [[ "$fingerprint" != "$expected" ]]; then
+            echo "Storage Box SSH host key fingerprint did not match Hetzner's published ED25519 key." >&2
+            exit 1
+          fi
+
+          umask 077
+          printf 'StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n' > "$RUNNER_TEMP/nix-cache-info"
+          export SSHPASS="$HETZNER_STORAGEBOX_PASSWORD"
+          ssh_options="-p 23 -o UserKnownHostsFile=$RUNNER_TEMP/storagebox_known_hosts -o StrictHostKeyChecking=yes -o PreferredAuthentications=password -o PubkeyAuthentication=no"
+          target="$HETZNER_STORAGEBOX_USER@$HETZNER_STORAGEBOX_HOST"
+          for remote_cache in nix-cache nix-cache-pr; do
+            sshpass -e ssh $ssh_options "$target" mkdir -p "./$remote_cache/nar"
+            sshpass -e rsync --archive --delay-updates --no-perms --no-owner --no-group \
+              -e "ssh $ssh_options" "$RUNNER_TEMP/nix-cache-info" "$target:./$remote_cache/nix-cache-info"
+            curl --fail --silent --show-error --netrc-file "$RUNNER_TEMP/nix-cache.netrc" \
+              "https://$HETZNER_STORAGEBOX_HOST/$remote_cache/nix-cache-info" > /dev/null
+          done
+
       - name: Generate Cargo.nix with pinned nixpkgs crate2nix
         run: |
           nixpkgs_rev=$(python3 -c 'import json; print(json.load(open("flake.lock"))["nodes"]["nixpkgs"]["locked"]["rev"])')
@@ -233,17 +268,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/nix-cache"
           printf 'StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n' > "$RUNNER_TEMP/nix-cache/nix-cache-info"
           nix copy --to "file://$RUNNER_TEMP/nix-cache?compression=zstd&compression-level=3&secret-key=$RUNNER_TEMP/nix-cache-signing-key" "${out_paths[@]}"
-
-          sudo apt-get update
-          sudo apt-get install --yes rsync sshpass
-          ssh-keyscan -p 23 -T 15 -t ed25519 "$HETZNER_STORAGEBOX_HOST" \
-            > "$RUNNER_TEMP/storagebox_known_hosts" 2>/dev/null
-          fingerprint=$(ssh-keygen -lf "$RUNNER_TEMP/storagebox_known_hosts" -E sha256 | awk 'NR == 1 { print $2 }')
-          expected='SHA256:XqONwb1S0zuj5A1CDxpOSuD2hnAArV1A3wKY7Z3sdgM'
-          if [[ "$fingerprint" != "$expected" ]]; then
-            echo "Storage Box SSH host key fingerprint did not match Hetzner's published ED25519 key." >&2
-            exit 1
-          fi
 
           export SSHPASS="$HETZNER_STORAGEBOX_PASSWORD"
           ssh_options="-p 23 -o UserKnownHostsFile=$RUNNER_TEMP/storagebox_known_hosts -o StrictHostKeyChecking=yes -o PreferredAuthentications=password -o PubkeyAuthentication=no"
