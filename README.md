@@ -6,6 +6,8 @@ URLs with an in-window **mpv** player, streams torrents through an embedded
 BitTorrent client, and syncs library state across devices over
 [iroh](https://iroh.computer) (opt-in, end-to-end encrypted, no account).
 
+> **Alpha software:** Nova is under active development. Expect bugs, incomplete features, and breaking changes between releases.
+
 - Language: Rust 2024, UI in [Slint](https://slint.dev) 1.18
 - Root package `nova`; heavy subsystems (player, sync, torrent, storage, UI)
   live in leaf crates under `crates/` so app-logic edits stay cheap to build
