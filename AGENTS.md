@@ -93,6 +93,11 @@ cargo test --test settings_sync_overflow   # headless Slint UI regression tests
 
 ## Git
 
+- **Commit messages:** Use Conventional Commit subjects in the form `type(scope): imperative summary`. Keep the summary concise and lowercase after the colon (preserve proper names), and omit the scope when it does not help identify the change.
+  - Types: `feat`, `fix`, `refactor`, `perf`, `ui`, `docs`, `test`, `build`, `ci`, `chore`.
+  - Useful scopes include `player`, `library`, `addons`, `search`, `settings`, `sync`, `android`, `desktop`, and `release`.
+  - Examples: `feat(player): add subtitle selection`; `fix(settings): prevent horizontal panning on Licenses`; `ci(release): publish Linux .deb and AppImage builds`.
+  - Mark breaking changes with `!` after the type or scope, and explain the impact in the body: `feat(sync)!: change pairing protocol`.
 - Do **not** commit, amend, push, or open PRs unless the user explicitly asks.
 - Check `git status` before editing or staging, and preserve unrelated existing
   work.
