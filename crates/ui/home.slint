@@ -1727,7 +1727,8 @@ export component HomePage {
         // landing content instead of covering it (very visible on Android).
         // Play / Enter series / Remove from Continue Watching (+ the sheet's
         // own Cancel).
-        if root.menu_open: cont_sheet := MenuSheet {
+        cont_sheet := MenuSheet {
+            open: root.menu_open;
             width: 100%;
             height: 100%;
             safe-bottom: root.safe-bottom;

@@ -761,7 +761,8 @@ export component LibraryPage {
 
         // Card bottom sheet (single instance, page-level overlay): the
         // dim backdrop eats outside taps (dismiss only, never forwarded).
-        if root.menu_open: MenuSheet {
+        MenuSheet {
+            open: root.menu_open;
             width: 100%;
             height: 100%;
             safe-bottom: root.safe-bottom;

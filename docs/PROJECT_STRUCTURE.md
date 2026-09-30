@@ -242,6 +242,15 @@ Defines the shared state and the UI bridge:
 | `categories.slint`, `dropdown.slint`, `searchfield.slint`, `menusheet.slint`, `speedcontrol.slint` | Reusable widgets / popups. `searchfield.slint` is the app's single text-input component (custom `TextInput` + placeholder + an in-field clear "×" shown only while it has text); every input uses it, and long text scrolls horizontally to keep the caret visible. `speedcontrol.slint` is the playback-rate control (0.5–2.0 slider + ± 0.05 buttons + two-decimal readout, with 1× / 1.25× / 1.5× / 2× preset chips under the slider) shared by Settings → Player and the player's settings panel; the step buttons carry accessible names ("Slower"/"Faster"). |
 | `bottomnav.slint`, `sidenav.slint`, `kbnav.slint`, `icons.slint`, `anim.slint` | Navigation, icons, animations, keyboard-nav helpers. Page navigation is responsive and **per page** — every page hosts its own instance of both and switches on `narrow`: `bottomnav.slint` (`BottomNav`) is the icon-only bottom capsule on narrow layouts, `sidenav.slint` (`SideNav`) is the same design turned upright on wide ones — a full-height, flush, square-cornered 64px panel down the left edge (x/y are pinned inside the component: Slint centres a plain child of a non-layout parent, which would float it mid-window) with the four items listed top to bottom. Pages reserve its footprint by adding `NavMetrics.rail-width` (the exported global) to their own left padding, and subtract the same amount in their grid math; the rail also eats stray taps in that strip. Wide subpages keep the rail (window chrome), the narrow bottom bar hides on them. |
 
+**Animated feedback:** `menusheet.slint` stays mounted in Home, Library and
+Detail: callers bind its `open` property instead of conditionally creating it.
+The backdrop fades and the bottom panel slides using `Anim.transition_*`;
+closing disables row actions immediately and retains the tap-swallowing exit
+layer until the slide ends. Reopening cancels the exit timer, and disabling
+motion snaps immediately. `player.slint` keeps its click-through gesture pill
+mounted so both reveal and dismissal fade/slide with `Anim.player_*`; seeking
+and restoring the held playback rate still happen immediately.
+
 > When adding a UI property/callback: declare it in the page component **and**
 > in `AppWindow`, forward it in the `AppWindow` child wiring block, then handle it
 > in `src/app/run.rs`.
@@ -388,6 +397,7 @@ the app ignores unknown domains, so old peers stay compatible.
 
 - **Unit tests**: inline `#[cfg(test)] mod tests` in most modules; app tests in `src/app/tests.rs`; download tests in `crates/download`; sync tests in each `crates/sync/src/*.rs`.
 - **Integration tests** (`tests/`, headless via `i-slint-backend-testing`, no display):
+  - `animation_feedback.rs` — bottom-sheet entrance/exit geometry, inert closing rows, interrupted exits and animation-off behavior; player gesture-pill entrance/dismissal and independent player/master switches, using mock time.
   - `settings_overflow.rs`, `settings_sync_overflow.rs`, `detail_overflow.rs` — assert pages don't overflow horizontally with long content (tickets, peer ids, errors).
   - `detail_row_height.rs`, `settings_row_height.rs` — assert rows grow to fit text that wraps on narrow screens (the vertical counterpart to the overflow tests).
   - `settings_addon_row_fit.rs` — every control of a Settings → Addons row (toggle, Copy link pill, Configure/Refresh/Remove/move icon buttons) draws inside that row at phone and desktop widths: the narrow `AddonRowCard` puts the name with the move arrows on the first line and the icon actions underneath, and the test additionally requires the name to stay on the arrows' line (ending where they begin, above the action line).
@@ -494,6 +504,7 @@ the app ignores unknown domains, so old peers stay compatible.
 | Change the detail/stream flow | `src/app/detail.rs`, `src/app/streams.rs`, `crates/ui/detail.slint` |
 | Add a persisted app field | `src/app.rs` (struct), `src/app/io.rs` + relevant module's `read/write_persisted_*`, then `src/app/sync.rs` if it should sync |
 | Touch playback | `crates/player/src/lib.rs`, `src/app/playback.rs`, `crates/ui/player.slint` |
+| Bottom-sheet / player feedback motion | `crates/ui/menusheet.slint` (`open` + retained exit), `crates/ui/player.slint` (`flash_pill`), `crates/ui/anim.slint` (category durations), `tests/animation_feedback.rs` |
 | Android player gestures (swipe volume/brightness) | `src/app/android_player.rs` (volume via any `Context`, brightness via the stashed `NativeActivity` — the `ndk-context` `Context` is not necessarily an `Activity`), `android/java/dev/misob/nova/PlayerFx.java`, `crates/ui/player.slint` (backdrop state machine) |
 | Torrent behavior | `crates/torrent/src/lib.rs`, `src/app/playback.rs` |
 | Stream downloads | `crates/download/src/lib.rs`, `src/app/downloads.rs`, `crates/torrent/src/lib.rs`, `crates/ui/detail.slint` |

@@ -1189,13 +1189,18 @@ export component PlayerOverlay {
         // Transient gesture readout ("-10 s", "+10 s", "2×", "70%"): a
         // top-centre pill that fades on its own timer (2× stays while held).
         // A plain element — taps pass through to the backdrop below.
-        if root.flash_show: Rectangle {
+        // Stay mounted so clearing the flag can animate out; actions and the
+        // transient playback rate still change immediately, not after a fade.
+        flash_pill := Rectangle {
             x: (parent.width - self.width) / 2;
-            y: 16px + root.safe-top;
+            y: (root.flash_show ? 16px : 10px) + root.safe-top;
             width: flash_lbl.preferred-width + 28px;
             height: 36px;
             border-radius: 18px;
             background: #000000a6;
+            opacity: root.flash_show ? 1.0 : 0.0;
+            animate opacity { duration: Anim.player_fast; easing: ease-out; }
+            animate y { duration: Anim.player_slide; easing: ease-out; }
 
             flash_lbl := Text {
                 text: root.flash_text;

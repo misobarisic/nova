@@ -1,5 +1,6 @@
 import { ScrollView } from "std-widgets.slint";
 import { SheetItem } from "types.slint";
+import { Anim } from "anim.slint";
 
 // Bottom-sheet action menu replacing native context menus on cards.
 //
@@ -17,6 +18,9 @@ import { SheetItem } from "types.slint";
 // and lifted by `safe-bottom` so Cancel clears the Android system bar.
 // Short sheets render exactly; tall/landscape sheets cap and scroll.
 export component MenuSheet inherits Rectangle {
+    // Keep the component mounted: `open` controls interaction immediately,
+    // while the retained layer finishes its exit before disappearing.
+    in property <bool> open: false;
     in property <string> sheet_title: "";
     in property <[SheetItem]> items: [];
     // Bottom system-bar inset (Android gesture/nav bar), bound by the
@@ -38,6 +42,55 @@ export component MenuSheet inherits Rectangle {
 
     width: 100%;
     height: 100%;
+    visible: root.open || root.retained;
+    clip: true;
+
+    private property <bool> retained: false;
+    private property <bool> revealed: false;
+    private property <bool> motion_enabled: Anim.enabled && Anim.transitions;
+
+    function update_open() {
+        enter_t.stop();
+        exit_t.stop();
+        if (root.open) {
+            root.retained = true;
+            if (root.motion_enabled) {
+                // Defer the first target until the hidden baseline is painted.
+                enter_t.start();
+            } else {
+                root.revealed = true;
+            }
+        } else {
+            root.revealed = false;
+            if (root.motion_enabled && root.retained) {
+                exit_t.start();
+            } else {
+                root.retained = false;
+            }
+        }
+    }
+
+    init => { root.update_open(); }
+    changed open => { root.update_open(); }
+    changed motion_enabled => {
+        if (!root.motion_enabled) {
+            enter_t.stop();
+            exit_t.stop();
+            root.revealed = root.open;
+            root.retained = root.open;
+        }
+    }
+
+    enter_t := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => { self.stop(); root.revealed = root.open; }
+    }
+    exit_t := Timer {
+        interval: Anim.transition_slide;
+        running: false;
+        triggered => { self.stop(); root.retained = false; }
+    }
 
     // Chrome around the scrolling list: padding + gaps + optional title
     // + Cancel. Kept explicit (not measured) so the cap math below is
@@ -51,13 +104,16 @@ export component MenuSheet inherits Rectangle {
         width: 100%;
         height: 100%;
         background: #00000080;
+        opacity: root.revealed ? 1.0 : 0.0;
+        animate opacity { duration: Anim.transition_fade; easing: ease-out; }
     }
 
     back_touch := TouchArea {
         width: 100%;
         height: 100%;
         mouse-cursor: pointer;
-        clicked => { root.closed(); }
+        // Continue swallowing outside taps during exit, but dispatch once.
+        clicked => { if (root.open) { root.closed(); } }
     }
 
     // Bottom-anchored panel (large touch targets, thumb-friendly),
@@ -65,6 +121,8 @@ export component MenuSheet inherits Rectangle {
     VerticalLayout {
         width: 100%;
         height: 100%;
+        y: root.revealed ? 0px : root.chrome_h + root.list_h + root.safe-bottom;
+        animate y { duration: Anim.transition_slide; easing: ease-out; }
         alignment: end;
 
         HorizontalLayout {
@@ -73,7 +131,7 @@ export component MenuSheet inherits Rectangle {
             padding-left: root.safe-left;
             padding-right: root.safe-right;
 
-            Rectangle {
+            panel := Rectangle {
                 width: Math.min(560px, parent.width - root.safe-left - root.safe-right - 24px);
                 height: root.chrome_h + root.list_h + root.safe-bottom;
                 background: #1c1c22;
@@ -132,7 +190,7 @@ export component MenuSheet inherits Rectangle {
                                 }
 
                                 btn_touch := TouchArea {
-                                    enabled: it.enabled;
+                                    enabled: root.open && it.enabled;
                                     mouse-cursor: pointer;
                                     clicked => { root.picked(i); }
                                 }
@@ -157,7 +215,7 @@ export component MenuSheet inherits Rectangle {
 
                         cancel_touch := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.closed(); }
+                            clicked => { if (root.open) { root.closed(); } }
                         }
                     }
                 }
