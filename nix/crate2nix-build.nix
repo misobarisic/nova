@@ -37,6 +37,18 @@ let
         ];
       };
 
+      nova-ui = attrs: {
+        # crate2nix stages this package at its own source root, so Slint's
+        # workspace-relative logo path would otherwise escape the build source.
+        # Copy the repository asset into the crate and adjust only this derivation.
+        postPatch = (attrs.postPatch or "") + ''
+          mkdir -p assets
+          cp ${../assets/logo.png} assets/logo.png
+          substituteInPlace appwindow.slint \
+            --replace-fail '"../../assets/logo.png"' '"assets/logo.png"'
+        '';
+      };
+
       libmpv2-sys = attrs: {
         nativeBuildInputs = (attrs.nativeBuildInputs or []) ++ [ rustPkgs.pkg-config ];
         buildInputs = (attrs.buildInputs or []) ++ [ rustPkgs.mpv ];
