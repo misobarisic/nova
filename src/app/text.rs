@@ -120,6 +120,8 @@ pub(crate) fn tr(english: &'static str) -> &'static str {
         "This download is not complete yet." => "Preuzimanje još nije dovršeno.",
         // ---- Catalog / addons ------------------------------------------
         "No results for this selection." => "Nema rezultata za ovaj odabir.",
+        "No results for this search." => "Nema rezultata za ovu pretragu.",
+        "Type at least 2 characters to search." => "Upišite barem 2 znaka za pretraživanje.",
         "Search (e.g. a movie title)" => "Pretražite (npr. naslov filma)",
         "This catalog has no search" => "Ovaj katalog ne podržava pretraživanje",
         "All addons" => "Svi dodaci",

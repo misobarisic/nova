@@ -74,11 +74,6 @@ use nova_media::cache::*;
 // Re-exported so `nova::app::TorrentSettings` stays a valid path.
 pub use nova_config::TorrentSettings;
 
-/// Serde helper: default for boolean fields that default to on.
-fn default_true() -> bool {
-    true
-}
-
 // ---------------------------------------------------------------------------
 // State shared between UI callbacks and background worker threads.
 // ---------------------------------------------------------------------------
@@ -103,12 +98,25 @@ pub(crate) struct Installed {
 
 struct CatDef {
     id: String,
-    supports_search: bool,
     supports_skip: bool,
+    genre_options: Vec<String>,
     label: String,
     /// Which addon this catalog belongs to (its label). Empty when only one
     /// addon is active (not needed for disambiguation).
     addon_label: String,
+}
+
+/// One enabled addon catalog that accepts a global search query. Pagination
+/// is tracked per target because catalogs can differ in both support and
+/// progress.
+#[derive(Clone)]
+struct SearchTarget {
+    addon_url: String,
+    type_: String,
+    catalog_id: String,
+    supports_skip: bool,
+    next_skip: usize,
+    exhausted: bool,
 }
 
 pub(crate) struct TypeDef {
@@ -154,6 +162,7 @@ struct Shared {
     type_defs: Vec<TypeDef>,
     chosen_type: usize,
     chosen_catalog: usize,
+    chosen_genre: String,
     search: String,
     /// True while the initial set of addons is being loaded at startup.
     /// Suppresses the "All addons are disabled" hint until loading finishes.
@@ -168,9 +177,16 @@ struct Shared {
     catalog_gen: u64,
     /// MetaPreviews backing the current grid, index-aligned with `catalog`.
     previews: Vec<MetaPreview>,
+    /// Search result set, kept separate so returning from Search restores the
+    /// selected browse catalog without another request.
+    search_previews: Vec<MetaPreview>,
+    search_targets: Vec<SearchTarget>,
+    search_generation: u64,
+    search_loading_more: bool,
+    search_poster_inflight: HashSet<(u64, String, String)>,
     /// Saved library items (My Library), order = insertion order.
     entries: Vec<LibraryEntry>,
-    /// Current image-cache settings (mirrored from `settings.toml`).
+    /// Current image-cache settings (mirrored from the KV store).
     cache_settings: CacheSettings,
     download_settings: DownloadSettings,
     /// Modal target, if open.
@@ -585,39 +601,10 @@ pub(crate) use i18n::*;
 mod tests;
 
 // ---------------------------------------------------------------------------
-// Persistence: the installed addon list + per-addon manifest cache.
-//
-//   * `addons.toml`  — which addons are installed and enabled (one table per
-//                      addon: normalised base URL + enabled flag). Lives in
-//                      the app data dir.
-//   * `manifests/…`  — one JSON file per addon holding the last manifest
-//                      fetched for it, so a restart never needs to ping the
-//                      addon server again (manifests are re-fetched only
-//                      when an addon is installed fresh / the cache misses).
+// Persistence: the installed addon list + per-addon manifest cache live in
+// the KV store. Manifests are re-fetched only when an addon is installed fresh
+// or the cache misses.
 // ---------------------------------------------------------------------------
-
-/// Wire format of `addons.toml` (current): one table per installed addon,
-/// with the normalised base URL and whether it is enabled.
-#[derive(Serialize, Deserialize)]
-#[cfg(feature = "desktop")]
-struct AddonsFile {
-    addons: Vec<AddonRowFile>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[cfg(feature = "desktop")]
-struct AddonRowFile {
-    url: String,
-    #[serde(default = "default_true")]
-    enabled: bool,
-}
-
-/// Legacy wire format of `addons.toml` (plain URL list, all enabled).
-#[derive(Deserialize)]
-#[cfg(feature = "desktop")]
-struct LegacyAddonsFile {
-    addons: Vec<String>,
-}
 
 /// Wire format for addon entries in the KV store (and the synced record).
 #[derive(Clone, Serialize, Deserialize)]
@@ -716,33 +703,16 @@ pub(crate) struct LibraryEntry {
     pub added_at_secs: u64,
 }
 
-/// Wire format of `library.toml`.
-#[derive(Serialize, Deserialize, Default)]
-#[cfg(feature = "desktop")]
-struct LibraryFile {
-    entries: Vec<LibraryEntry>,
-}
-
 // ---------------------------------------------------------------------------
-// Settings (image cache re-encoding), persisted in `settings.toml`.
+// Settings (image cache re-encoding), persisted in the KV store.
 // ---------------------------------------------------------------------------
-
-/// Wire format of `settings.toml`.
-#[derive(Serialize, Deserialize, Default)]
-#[cfg(feature = "desktop")]
-struct SettingsFile {
-    #[serde(default)]
-    cache: CacheSettings,
-    #[serde(default)]
-    torrent: TorrentSettings,
-}
 
 /// KV key holding the persisted torrent settings (JSON), alongside every
 /// other durable setting.
 #[allow(dead_code)]
 const TORRENT_SETTINGS_KEY: &str = "torrent_settings";
 
-/// Runtime torrent settings (kept in sync with `settings.toml`); read by the
+/// Runtime torrent settings (kept in sync with the KV store); read by the
 /// torrent engine and the player-close cleanup path.
 static CURRENT_TORRENT_SETTINGS: LazyLock<Mutex<TorrentSettings>> =
     LazyLock::new(|| Mutex::new(TorrentSettings::default()));

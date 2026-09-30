@@ -240,8 +240,8 @@
             echo "  ANDROID_HOME=$ANDROID_HOME"
             echo "  NDK: $ANDROID_NDK_ROOT"
             echo "  target stds: $(ls "$(rustc --print sysroot)/lib/rustlib" | grep android | tr '\n' ' ')"
-            echo "  build: cargo apk2 build --target aarch64-linux-android --no-default-features --lib"
-            echo "  run:   cargo apk2 run   --target aarch64-linux-android --no-default-features --lib"
+            echo "  build: cargo apk2 build --target aarch64-linux-android --no-default-features --features android --lib"
+            echo "  run:   cargo apk2 run   --target aarch64-linux-android --no-default-features --features android --lib"
           '';
         };
       # Windows x86_64 cross-build environment. MPV's Windows development

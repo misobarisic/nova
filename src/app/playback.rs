@@ -669,29 +669,11 @@ pub(crate) fn write_progress_map(map: &HashMap<String, EpisodeProgress>) {
     }
 }
 /// App-wide torrent settings (mirrored in the settings page). Persisted in
-/// the same KV store as the image-cache settings, so it works on Android too
-/// (the APK builds with `--no-default-features`, so the `desktop` feature —
-/// and its `toml` dependency — is unavailable there). The web build has no
-/// torrent support, so it always reads the disabled default.
+/// the same KV store as the image-cache settings, so it works on Android too.
+/// The web build has no torrent support, so it always reads the disabled
+/// default.
 pub(crate) fn read_torrent_settings() -> TorrentSettings {
-    {
-        if let Some(settings) = read_json::<TorrentSettings>(TORRENT_SETTINGS_KEY) {
-            return settings;
-        }
-        // One-time migration from the legacy `settings.toml` `[torrent]`
-        // section. Only desktop ever wrote that file; Android never had one,
-        // so it falls through to the native default (streaming on).
-        #[cfg(feature = "desktop")]
-        {
-            let legacy = read_torrent_settings_file(&app_data_dir());
-            write_json(TORRENT_SETTINGS_KEY, &legacy);
-            return legacy;
-        }
-        #[cfg(not(feature = "desktop"))]
-        {
-            return TorrentSettings::default();
-        }
-    }
+    read_json::<TorrentSettings>(TORRENT_SETTINGS_KEY).unwrap_or_default()
 }
 pub(crate) fn write_torrent_settings(settings: &TorrentSettings) {
     write_json(TORRENT_SETTINGS_KEY, settings);

@@ -13,9 +13,7 @@ license.workspace = true
 live-preview = ["slint/live-preview"]
 
 [dependencies]
-# `backend-android-activity-06` compiles on every target_os (per Slint docs)
-# and is required for the Android entry point in src/lib.rs.
-slint = { workspace = true, features = ["backend-android-activity-06"] }
+slint = { workspace = true }
 
 [build-dependencies]
 slint-build = { workspace = true }

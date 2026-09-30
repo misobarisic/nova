@@ -159,7 +159,7 @@ impl Bridge {
         }
     }
 
-    /// Persist the current in-memory library list to `library.toml`.
+    /// Persist the current in-memory library list to the KV store.
     pub(super) fn persist_library(&self) {
         let entries = {
             let state = self.shared.lock().unwrap();
@@ -589,35 +589,6 @@ impl Bridge {
 
 }
 
-/// Core: read library entries under `dir`.
-#[cfg(feature = "desktop")]
-pub(crate) fn read_library_file(dir: &Path) -> Option<Vec<LibraryEntry>> {
-    let text = fs::read_to_string(dir.join("library.toml")).ok()?;
-    let parsed: LibraryFile = toml::from_str(&text).ok()?;
-    Some(parsed.entries)
-}
-/// Core: persist library entries under `dir` (atomic, with a header comment).
-#[allow(dead_code)]
-#[cfg(feature = "desktop")]
-pub(crate) fn write_library_file(dir: &Path, entries: &[LibraryEntry]) {
-    if fs::create_dir_all(dir).is_err() {
-        eprintln!("nova: could not create config dir {:?}", dir);
-        return;
-    }
-    let body = toml::to_string_pretty(&LibraryFile {
-        entries: entries.to_vec(),
-    })
-    .unwrap_or_default();
-    let header = "# nova — your library. One entry per saved movie / series / anime;
-                  # items are added from the detail page and stored by their
-                  # catalog id so metadata and streams can be re-fetched later.
-
-";
-    let contents = format!("{header}{body}");
-    if let Err(e) = atomic_write(&dir.join("library.toml"), &contents) {
-        eprintln!("nova: could not write library.toml: {e}");
-    }
-}
 /// Add/overwrite an entry in place, keeping entries unique by `id` and
 /// preserving insertion order. Returns true when the entry was newly added.
 pub(crate) fn upsert_library(entries: &mut Vec<LibraryEntry>, entry: LibraryEntry) -> bool {

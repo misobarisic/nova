@@ -1901,22 +1901,12 @@ export component DetailPage {
                                         }
                                     }
 
-                                    HorizontalLayout {
+                                    // Pager (hidden when the season fits on a
+                                    // single page); the episode filter needs no
+                                    // separate item-count row.
+                                    if root.episode_page_count > 1: HorizontalLayout {
                                         width: 100%;
-                                        spacing: 10px;
-
-                                        Text {
-                                            text: root.episode_page_count > 1
-                                                ? @tr("{n} episode · page {}/{}" | "{n} episodes · page {}/{}" % root.episode_total, root.episode_page + 1, root.episode_page_count)
-                                                : @tr("{n} episode" | "{n} episodes" % root.episode_total);
-                                            font-size: 13px;
-                                            color: #8a8a9a;
-                                            vertical-alignment: center;
-                                        }
-
-                                        // Pager (hidden when the season fits on
-                                        // a single page).
-                                        if root.episode_page_count > 1: EpisodePager {
+                                        EpisodePager {
                                             page: root.episode_page;
                                             count: root.episode_page_count;
                                             picked(p) => { root.episode_page_picked(p); }

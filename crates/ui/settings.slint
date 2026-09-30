@@ -744,6 +744,7 @@ export component SettingsPage {
     in-out property <bool> cache_show_unwatched_thumbs: true;
     in-out property <float> cache_lru_mb: 128.0;
     in-out property <bool> cache_prefetch_metadata: false;
+    in-out property <bool> discover_catalog_addon_names: true;
     in-out property <bool> cache_lazy_reencode: false;
     // Minimum grid columns (Settings → Display below); autosaved.
     in-out property <int> discover_min_cols: 2;
@@ -1337,7 +1338,7 @@ export component SettingsPage {
         } else if (root.kb_zone == 6) {
             // Rows 0-5: three toggles, Discover columns, Library columns,
             // Language.
-            if (root.kb_dr < 5) {
+            if (root.kb_dr < 6) {
                 root.kb_dr += 1;
                 root.kb_nudge(-50px);
             }
@@ -1590,6 +1591,9 @@ export component SettingsPage {
             } else if (root.kb_dr == 4) {
                 root.library_min_cols = Math.max(2, root.library_min_cols - 1);
                 root.schedule_save();
+            } else if (root.kb_dr == 6) {
+                root.discover_catalog_addon_names = !root.discover_catalog_addon_names;
+                root.schedule_save();
             } else if (root.language_index > 0) {
                 root.language_index -= 1;
                 root.schedule_save();
@@ -1642,6 +1646,9 @@ export component SettingsPage {
                 root.schedule_save();
             } else if (root.kb_dr == 4) {
                 root.library_min_cols = Math.min(6, root.library_min_cols + 1);
+                root.schedule_save();
+            } else if (root.kb_dr == 6) {
+                root.discover_catalog_addon_names = !root.discover_catalog_addon_names;
                 root.schedule_save();
             } else if (root.language_index < root.language_names.length - 1) {
                 root.language_index += 1;
@@ -1719,6 +1726,10 @@ export component SettingsPage {
             }
             // Segmented grid-column rows need no Enter action (same as the
             // format picker in the cache section).
+            if (root.kb_dr == 6) {
+                root.discover_catalog_addon_names = !root.discover_catalog_addon_names;
+                root.schedule_save();
+            }
         } else if (root.kb_zone == 7) {
             if (root.kb_tr == 1) {
                 root.kb_edit = 3;
@@ -3243,6 +3254,15 @@ export component SettingsPage {
                                         picked(i) => { root.kb_active = false; root.kb_zone = 6; root.kb_dr = 5; root.language_index = i; root.schedule_save(); }
                                     }
                                 }
+                                SettingsRow {
+                                    row-title: @tr("Show addon names in catalogs");
+                                    row-desc: @tr("Prefix catalog names with their addon in Discover's All addons view.");
+                                    ToggleSwitch {
+                                        checked <=> root.discover_catalog_addon_names;
+                                        focused: root.kb_zone == 6 && root.kb_dr == 6;
+                                        toggled => { root.kb_active = false; root.kb_zone = 6; root.kb_dr = 6; root.schedule_save(); }
+                                    }
+                                }
                             }
                         }
                         }
@@ -4138,6 +4158,7 @@ export component SettingsPage {
                                     }
 
                                     SearchField {
+                                        roomy: root.narrow;
                                         text <=> root.sync_device_name;
                                         placeholder-text: @tr("Device name");
                                         edited(t) => { root.sync_device_name_edited(t); }
@@ -4381,6 +4402,7 @@ export component SettingsPage {
                                         spacing: 12px;
 
                                         SearchField {
+                                            roomy: root.narrow;
                                             text <=> root.sync_join_input;
                                             placeholder-text: @tr("paste invite code");
                                             horizontal-stretch: 1;
@@ -4390,6 +4412,7 @@ export component SettingsPage {
 
                                         PillButton {
                                             label: @tr("Join");
+                                            roomy: root.narrow;
                                             primary: true;
                                             clicked => { root.sync_join_invite(root.sync_join_input); }
                                         }
@@ -4452,6 +4475,7 @@ export component SettingsPage {
                                                 spacing: 12px;
 
                                                 sync_peer_field := SearchField {
+                                                    roomy: root.narrow;
                                                     text <=> root.sync_peer_input;
                                                     placeholder-text: @tr("peer endpoint id");
                                                     horizontal-stretch: 1;
@@ -4461,6 +4485,7 @@ export component SettingsPage {
 
                                                 PillButton {
                                                     label: @tr("Add");
+                                                    roomy: root.narrow;
                                                     primary: true;
                                                     clicked => { root.sync_add_peer(root.sync_peer_input); }
                                                 }

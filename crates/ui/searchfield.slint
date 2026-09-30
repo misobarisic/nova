@@ -16,9 +16,15 @@ export component SearchField inherits Rectangle {
     // Touch-sized box (44px) on narrow layouts, compact (32px) otherwise.
 
     in property <bool> roomy: false;
+    // The Discover search bar is a page-level control rather than a compact
+    // filter; give it the larger height and type scale from the mobile UI.
+    in property <bool> prominent: false;
 
     callback accepted(string);
     callback edited(string);
+    callback focus_changed(bool);
+    out property <bool> has-focus: inner.has-focus;
+    changed has-focus => { root.focus_changed(self.has-focus); }
 
     // Focus requests (keyboard edit mode) land on the inner field.
     forward-focus: inner;
@@ -33,31 +39,63 @@ export component SearchField inherits Rectangle {
     // caret/text never sits under it.
     property <bool> has_text: root.full-text != "";
     property <length> clear_box: root.height;
+    property <length> input_left: root.prominent ? 16px : 12px;
+    property <length> input_right: root.has_text
+        ? root.clear_box + 4px
+        : (root.prominent ? 16px : 12px);
 
-    height: root.roomy ? 44px : 32px;
-    border-radius: 6px;
+    height: root.prominent ? 58px : (root.roomy ? 44px : 32px);
+    // Text growth belongs inside the clipped viewport, not in the host's
+    // layout: long URLs/queries must not push nearby controls off-screen.
+    min-width: 1px;
+    preferred-width: 160px;
+    horizontal-stretch: 1;
+    border-radius: root.prominent ? 14px : 6px;
     border-width: 1px;
     // Calm 1px ring on focus instead of the stock underline + background
     // flare that looked permanently "selected" on touch screens.
     border-color: inner.has-focus ? #8b5cf6 : #33333c;
     background: #1c1c22;
+    clip: true;
 
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: root.has_text ? root.clear_box + 4px : 12px;
+    input_viewport := Rectangle {
+        x: root.input_left;
+        y: 0px;
+        width: Math.max(1px, root.width - root.input_left - root.input_right);
+        height: root.height;
+        clip: true;
+        // Resizing the window (or showing the clear control) changes the
+        // viewport without necessarily moving the cursor. Follow it then too.
+        changed width => { inner.follow_cursor(); }
 
         inner := TextInput {
             text <=> root.text;
             enabled: root.enabled;
-            font-size: 13px;
+            font-size: root.prominent ? 16px : 13px;
             color: #e6e6ea;
             // Dimmed selection wash instead of the bright stock accent.
             selection-background-color: #8b5cf655;
             selection-foreground-color: #ffffff;
             single-line: true;
             vertical-alignment: center;
-            horizontal-stretch: 1;
-            min-width: 0px;
+            // Raw TextInput does not scroll its text when the caret leaves
+            // the viewport; track a horizontal offset, as LineEdit does.
+            property <length> computed-x: 0px;
+            property <length> cursor-x: 0px;
+            x: min(0px, max(parent.width - self.width - self.text-cursor-width, self.computed-x));
+            width: max(parent.width - self.text-cursor-width, self.preferred-width);
+            height: parent.height;
+            function follow_cursor() {
+                if (self.cursor-x + self.x < 4px) {
+                    self.computed-x = -self.cursor-x + 4px;
+                } else if (self.cursor-x + self.x > parent.width - 4px - self.text-cursor-width) {
+                    self.computed-x = parent.width - self.cursor-x - 4px - self.text-cursor-width;
+                }
+            }
+            cursor-position-changed(cursor-position) => {
+                self.cursor-x = cursor-position.x;
+                self.follow_cursor();
+            }
             accepted => { root.accepted(root.full-text); }
             edited => { root.edited(self.text); }
         }
@@ -67,27 +105,28 @@ export component SearchField inherits Rectangle {
     // is composing IME text too, otherwise it overlaps the composition.
     // Plain Text never intercepts pointer events, so taps fall through.
     if root.full-text == "" && root.placeholder-text != "": Text {
-        x: 12px;
+        x: root.prominent ? 16px : 12px;
         y: 0px;
-        width: parent.width - 24px;
+        width: parent.width - (root.prominent ? 32px : 24px);
         height: parent.height;
         text: root.placeholder-text;
         color: #6c6c7d;
-        font-size: 13px;
+        font-size: root.prominent ? 16px : 13px;
         vertical-alignment: center;
         overflow: elide;
     }
 
-    // Clear button: right-most inside the field, shown only with text. Tapping
-    // clears the field; the `edited` callback fires (through `text`) so owners
-    // react exactly as if the user had deleted the characters.
-    if root.has_text && root.enabled: Rectangle {
+    // Clear is shared by every text-entry field, not only Discover. Dispatch
+    // edited explicitly because programmatic writes don't emit TextInput.edited.
+    if root.has_text && root.enabled: clear_button := Rectangle {
         x: parent.width - root.clear_box;
         y: 0px;
         width: root.clear_box;
         height: parent.height;
         border-radius: 6px;
         background: clear_touch.has-hover ? #ffffff14 : transparent;
+        accessible-role: button;
+        accessible-label: @tr("Clear");
 
         Rectangle {
             width: 16px;
@@ -111,8 +150,10 @@ export component SearchField inherits Rectangle {
             height: 100%;
             mouse-cursor: pointer;
             clicked => {
+                inner.clear-selection();
                 root.text = "";
                 root.edited("");
+                inner.focus();
             }
         }
     }

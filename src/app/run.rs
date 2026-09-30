@@ -263,7 +263,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_catalog_picked(move |label| b.pick_catalog(&label));
 
     let b = bridge.clone();
+    app.on_genre_picked(move |label| b.pick_genre(&label));
+
+    let b = bridge.clone();
+    app.on_search_edited(move |text| b.search_edited(&text));
+
+    let b = bridge.clone();
     app.on_search_submitted(move |text| b.submit_search(&text));
+
+    let b = bridge.clone();
+    app.on_search_back_picked(move || b.close_search_results());
+    bridge.load_search_history();
+    let b = bridge.clone();
+    app.on_search_history_cleared(move || b.clear_search_history());
 
     let b = bridge.clone();
     app.on_item_selected(move |_id, idx| b.item_selected(idx as usize));
@@ -520,11 +532,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_library_filter_picked(move |cat| b.filter_library(&cat));
 
-    // Open the KV database and migrate legacy TOML files on first run.
-    #[cfg(feature = "desktop")]
-    migrate_legacy_storage(&app_data_dir());
-
-    // Startup addon set: the persisted `addons.toml` list first, plus any
+    // Startup addon set: the persisted KV list first, plus any
     // extra URLs from NOVA_ADDONS / --addon. Both are installed from their
     // cached manifest when available (no server ping); the cache is only
     // populated by a live fetch the first time an addon is installed.

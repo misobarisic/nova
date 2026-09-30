@@ -10,10 +10,22 @@ pub(crate) fn page_count(total: usize) -> usize {
 
 impl Bridge {
     pub(super) fn item_selected(&self, index: usize) {
+        let searching = self.app().is_some_and(|app| app.get_discover_search_open());
         let (preview, generation) = {
             let state = self.shared.lock().unwrap();
-            let preview = state.previews.get(index).cloned();
-            (preview, state.catalog_gen)
+            let preview = if searching {
+                state.search_previews.get(index).cloned()
+            } else {
+                state.previews.get(index).cloned()
+            };
+            (
+                preview,
+                if searching {
+                    state.search_generation
+                } else {
+                    state.catalog_gen
+                },
+            )
         };
         // The (generation, index) poster fast path is native-only; Android
         // relies on the decoded LRU via load_detail_poster instead.
@@ -114,7 +126,9 @@ impl Bridge {
         // item would otherwise survive).
         app.set_player_poster(Image::default());
         #[cfg(feature = "desktop")]
-        if let Some(buffer) = self.poster_cache.lock().unwrap().get(&(generation, index)) {
+        if !searching
+            && let Some(buffer) = self.poster_cache.lock().unwrap().get(&(generation, index))
+        {
             app.set_selected_poster(Image::from_rgba8(buffer.clone()));
         }
 

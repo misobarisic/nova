@@ -2,6 +2,53 @@
 use super::*;
 
 impl Bridge {
+    /// Search results have their own generation and model, so their posters
+    /// use the shared image decoder but never the browse-grid poster queue.
+    pub(super) fn fetch_search_card_poster(
+        &self,
+        type_: String,
+        id: String,
+        url: String,
+        generation: u64,
+    ) {
+        {
+            let mut state = self.shared.lock().unwrap();
+            if state.search_generation != generation
+                || !state
+                    .search_poster_inflight
+                    .insert((generation, type_.clone(), id.clone()))
+            {
+                return;
+            }
+        }
+
+        let app_weak = self.app.clone();
+        let bridge = self.clone();
+        net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
+            let _ = slint::invoke_from_event_loop(move || {
+                let index = {
+                    let mut state = bridge.shared.lock().unwrap();
+                    state
+                        .search_poster_inflight
+                        .remove(&(generation, type_.clone(), id.clone()));
+                    if state.search_generation == generation {
+                        state
+                            .search_previews
+                            .iter()
+                            .position(|meta| meta.type_ == type_ && meta.id == id)
+                    } else {
+                        None
+                    }
+                };
+                if let (Some(pixels), Some(index), Some(app)) =
+                    (pixels, index, app_weak.upgrade())
+                {
+                    app.invoke_set_search_card_poster(index as i32, Image::from_rgba8(pixels));
+                }
+            });
+        });
+    }
+
     /// (Re)fetch the poster for one card (scroll-back after unloading, or a
     /// not-yet-loaded row inside the ±2-row preload window). Near-viewport
     /// work goes on the high-priority channel so it jumps ahead of the

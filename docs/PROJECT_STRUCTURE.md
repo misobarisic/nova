@@ -30,16 +30,26 @@ cargo build              # desktop binary: target/debug/nova
 cargo run                # run desktop app
 cargo dev                # alias: run --features live-preview (hot-reload UI, Linux debug only)
 
+# Make targets (enter `nix develop` or `nix develop .#android` first)
+make linux-run
+make linux-run-preview
+make linux-run-release
+make android-build
+make android-build-release
+make android-build-release-universal
+make android-run
+make android-run-release
+# For an emulator: append ANDROID_TARGET=x86_64-linux-android
+
 # Tests
 cargo test                              # workspace tests (app unit + integration)
 cargo test -p nova-sync --lib            # sync crate unit tests (fast)
 cargo test --test settings_sync_overflow # headless Slint UI regression tests
 
-# Android (arm64 physical device; x86_64 for emulator)
-# cargo-apk2 (not cargo-apk): it compiles android/java/ to DEX and declares the
-# foreground service + sync job. Enter `nix develop .#android` first.
-cargo apk2 build --target aarch64-linux-android --no-default-features --lib -p nova
-cargo apk2 run   --target aarch64-linux-android --no-default-features --lib -p nova
+# Android Make rules use cargo-apk2 (not cargo-apk): it compiles android/java/
+# to DEX and declares the foreground service + sync job. They enable the
+# Android Slint backend with `--features android`; enter `nix develop .#android`
+# before invoking them. Make targets never enter Nix shells themselves.
 
 # Windows x86_64 check (cross-build from Linux)
 cargo check --workspace --locked --target x86_64-pc-windows-gnu
@@ -71,7 +81,9 @@ also provides `cargo-apk2` (packaged by the flake) and unsets `CPATH` (the
 stdenv's host include path, which the NDK clang would otherwise pick up).
 
 **Features** (root `Cargo.toml`):
-- `desktop` (default): enables `toml` (legacy file import). Android builds with `--no-default-features`.
+- `desktop` (default): enables Slint's Winit/FemtoVG backend.
+- `android`: enables Slint's Android Activity backend (Skia on Android);
+  Android builds use `--no-default-features --features android`.
 - `live-preview`: interpreter-backed, hot-reloading Slint UI (Linux debug only; pulls in the Slint interpreter).
 
 ---
@@ -89,7 +101,7 @@ nova/
 ├── build.rs                  # license catalog generation; native link directives
 ├── .cargo/config.toml        # `cargo dev` alias; Android linker notes
 ├── flake.nix                 # devShells: default, android, windows cross-build
-├── Makefile                  # `make apk`
+├── Makefile                  # Linux and Android build/run targets (use active shell)
 ├── android/                  # Android source, signing key, and resources
 │   ├── java/                 # Java services and activities compiled to DEX by cargo-apk2
 │   ├── keystore/
@@ -136,7 +148,7 @@ nova/
 | `nova-ui` | `crates/ui` | Compiled Slint components (`.slint` → Rust via `include_modules!`). Leaf, so UI edits don't recompile app logic. |
 | `nova-config` | `crates/config` | Shared settings types, runtime cache settings, platform app paths, playback-rate bounds/helpers (`clamp_playback_speed` / `quantize_playback_speed`), `fnv1a`, `now_secs`/`now_ms`. Leaf. |
 | `nova-storage` | `crates/storage` | Platform-agnostic persistent KV store (redb) at `<data>/nova.redb`. Leaf. |
-| `nova-media` | `crates/media` | HTTP transport (`net`) + decoded/poster image cache (`cache`). |
+| `nova-media` | `crates/media` | HTTP transport (`net`) + decoded/poster image cache (`cache`); artwork decoding is limited to JPEG, PNG, and WebP. |
 | `nova-download` | `crates/download` | Durable stream-job model, manifest helpers, cancellation, and progressive/resumable HTTP file transfers. |
 | `nova-player` | `crates/player` | In-window mpv player (desktop + Android) + external launch: the *video* app (`open_external` — desktop target app, Android video-MIME `ACTION_VIEW` for stream fallback) and the system *browser* (`open_browser` — `xdg-open`, or on Android `ACTION_VIEW` marked `BROWSABLE` + `FLAG_ACTIVITY_NEW_TASK` so only web-link handlers can claim it, for links like addon config pages); Android JNI glue. |
 | `nova-torrent` | `crates/torrent` | Embedded BitTorrent (librqbit); resolves `infoHash` → loopback HTTP URL for mpv. |
@@ -163,10 +175,10 @@ Defines the shared state and the UI bridge:
 
 | File | Responsibility |
 |---|---|
-| `run.rs` | `app::run()`: window setup, renderer env (`SLINT_BACKEND=winit`, `SLINT_RENDERER=femtovg`), poster worker pool, **all callback wiring** (`app.on_*`), storage init + legacy migration, startup restore, `start_sync`. |
+| `run.rs` | `app::run()`: window setup, renderer env (`SLINT_BACKEND=winit`, `SLINT_RENDERER=femtovg`), poster worker pool, **all callback wiring** (`app.on_*`), storage init, startup restore, `start_sync`. |
 | `bridge.rs` | `Bridge::new` / `Bridge::app()` accessor. |
-| `addon_mgr.rs` | Install/remove/refresh addons, manifest cache, addon picker rows, `migrate_legacy_storage`, and the Settings → Addons row model (`apply_addon_rows`): the Configure button is offered only once a probe of `<addon base>/configure` has answered 2xx, and opens that page through `player::open_browser` (the system browser on both platforms). Rows print the addon name only; `addon_copy_link` copies the install URL (`row.url`, still in the row model) to the clipboard. |
-| `catalog.rs` | Discover: catalog fetch, endless-scroll pagination, prefetch, type/catalog/addon pickers, search. |
+| `addon_mgr.rs` | Install/remove/refresh addons, manifest cache, addon picker rows, and the Settings → Addons row model (`apply_addon_rows`): the Configure button is offered only once a probe of `<addon base>/configure` has answered 2xx, and opens that page through `player::open_browser` (the system browser on both platforms). Rows print the addon name only; `addon_copy_link` copies the install URL (`row.url`, still in the row model) to the clipboard. |
+| `catalog.rs` | Discover: catalog fetch and pagination, metadata prefetch, addon/type/catalog/genre pickers, debounced global search after 2 characters, title-relevance ranking of merged results, stale-query invalidation, independent search-result pagination, and device-local recent-search history (20 unique queries, most recent first). Back cancels pending work and clears the query. |
 | `detail.rs` | Detail modal: meta fetch, seasons/episodes (**paginated 50 per page** — `EPISODE_PAGE_SIZE`, page stored on the modal), stream list, per-addon filter pills, pinned download rows. Streams render per addon as each answers (no wait for the slowest), are stably sorted by installed addon order, and the request's downloaded rows are pinned on top from the moment the search starts. |
 | `downloads.rs` | Durable one-at-a-time stream download queue, HTTP/torrent workers, pinned-row state, auto-delete-watched, and the Settings → Downloads → Downloaded episodes list (`completed_episode_jobs`). |
 | `episodes.rs` | Pure episode/progress helpers: ordering, labels, badges, filters, `progress_map_key`. Series with episodes still to come never complete (unaired episodes can never be watched); a dated-complete series reads "Caught up" (plus the unaired tail when there is one). |
@@ -198,6 +210,7 @@ Defines the shared state and the UI bridge:
 ## 4. UI crate `nova-ui` (`crates/ui`)
 
 - `build.rs` compiles `appwindow.slint` with `slint-build` (AOT), except Linux debug + `live-preview` → interpreter/hot-reload. `SLINT_EMIT_DEBUG_INFO` toggles debug info.
+- Runtime Slint dependencies disable default features: desktop enables Winit/FemtoVG, Android enables the Activity/Skia backend, and neither includes the software renderer.
 - `src/lib.rs` is just `slint::include_modules!()`. The root `AppWindow` owns every property/callback the backend drives and forwards to page components.
 
 ### Translations (i18n)
@@ -219,14 +232,14 @@ Defines the shared state and the UI bridge:
 |---|---|
 | `appwindow.slint` | Root `AppWindow`: all backend properties/callbacks, screen switching, player overlay wiring. |
 | `types.slint` | Shared structs: `MediaCard`, `StreamRow` (including pinned download state), `EpisodeRow`, `AddonRow`, `CategoryRow`, `SyncPeer`, `SyncInvite`, `TrackRow`, `SeasonCard`, `ContinueRow`, `UpcomingRow`, `SheetItem`. |
-| `discover.slint` | Discover grid + filters + pagination. Column count / card width are computed from the page width **minus the wide-layout rail** (`rail_w`, 0 on narrow), so the grid never runs under it. |
+| `discover.slint` | Discover browse grid + addon/type/catalog/genre dropdowns in a horizontal Flickable (readable pill widths, early gesture-axis hints keep the whole-page scroll from stealing horizontal drags). Keyboard focus reveals off-screen filters. Global-search results have their own model and scroll offset. Typing starts a debounced search after 2 characters; results remain open while editing shorter queries, and each result delegate owns a one-shot Home-style fade/slide reveal, independent of poster/model updates. Results fade through on submit/back; the browse selection and scroll position are preserved. Column count / card width subtract the wide-layout rail (`rail_w`, 0 on narrow). |
 | `home.slint` | Home landing: Continue Watching / Upcoming as horizontal carousels (~2.5 cards visible on narrow), with tappable headers opening vertical "see all" subpages. Both rails are interactive `Flickable`s (native inertia); card `TouchArea`s hint the gesture axis early, blocking the landing page pan while a horizontal drag belongs to the rail and handing vertical gestures back to the page, like Detail's stream-filter pills. Landing cards own taps, hold/right-click menus (native `ContextMenuArea` on desktop, page-level `MenuSheet` on touch), and drag-to-tap suppression; cards and rails disable while the subpage covers them. Scroll offsets (`home_continue_x`, `home_upcoming_x`, etc.) ride on `AppWindow` to survive detail navigation. The subpage slides in and staggers rows; keyboard focus follows only keyboard navigation. Continue cards show Next up / New Episode pills or a resume rail; hover lift is pointer-only to avoid sticky touch hover. The Upcoming subpage also offers a month calendar (`CalToggle` / `CalDayCell`); `home.rs` owns its date arithmetic and selection. |
 | `detail.slint` | Detail modal (largest file): tabs, seasons, episodes, streams, right-click/hold stream action sheet, and pinned download status rows. The page scroll is a raw `Flickable` (not a `ScrollView`: the axis lock needs the inner Flickable's `interactive`) with a slim custom scroll indicator (`page_scroll_bar`, the fluent thumb's stand-in) pinned to its right edge. Its top bar is **icon-only** (`TopIconButton`): back, a two-state library bookmark (`IcBookmark`/`IcBookmarkBorder`), and `IcTag` categories with a count badge. The Episodes tab renders **one page of 50 episodes** at a time (pagers above and under the grid; card picks pass `episode_page_start + i`, so they still resolve against the whole season), and the addon filter pills keep a single width while queries are in flight (the loading spinner replaces the pill's trailing padding). The pill bar (`StreamFilterBar`) sits in flow with the streams — one instance per stream list — and pans by dragging on touch; on desktop it also gains step chevrons on both ends (chevron clicks page-step `content-x` by one viewport), whose slots are always laid out so the overflow flag can't loop with the viewport width, fading in only while useful. Its drags are axis-locked against the page scroll (`DetailPage::page_pan_enabled`): the page is a raw `Flickable` there, and the pills report every drag frame (`pan_hint` / `pan_release`, plus the row's own `content-x` changes) so the page's pan is blocked for the gesture and handed back when it turns vertical. Without it the page wins the race — nested Flickables have no axis lock (whoever passes 8px first owns the gesture, and a Flickable never gives a captured gesture back), and a finger on the 30px strip wobbles vertically far enough to trip it. A Home Continue tap deep-links straight to the resume episode's streams (`detail_deep_stream`); system back then closes the modal instead of revealing the skipped episode list, while a manually picked episode keeps the streams → episode-list step. Pinned download rows show the status text (`Downloaded` once complete — the file name is dropped) over a left-anchored progress rail. The picked-episode label lives on a tappable bar above the stream list (`episodes_back`), not in the top bar; that bar's chevron box fills the bar height so the icon centres on the bar (a HorizontalLayout top-aligns a plain `Rectangle` child). |
 | `detail.slint` (stream paging) | Stream lists render Rust-provided 25-row slices with previous/next controls above and below the rows; `stream_page_start` keeps card picks and keyboard focus indexes absolute across pages. Using a bottom pager scrolls the outer detail page back to the stream-list start. |
 | `library.slint` | My Library grid + the category filter bar ("All" chip + dropdown). Grid geometry subtracts the wide-layout rail (`rail_w`) like Discover. The bar is gated on `category_names` — the dropdown's own model, which always holds the automatic buckets (Plan to Watch / Watching / Completed / On Hold / Dropped) ahead of the user's categories (`category_rows` is the *user* list, also used by Settings → Categories and the detail category picker). The grid restores its absolute scroll offset only once it has measured (`grid_ready` — the restore timer retries rather than adjusting against a half-built layout, whose zero `cols`/`item-width` would jump the listing), and the restore reveals the focused card only when its row is *fully* hidden, so returning from an entry keeps the exact position. |
 | `settings.slint` | Settings (largest file): Addons, Categories, Image cache, Display (including the UI **Language** picker, applied by the backend), Player (backend + decoder + episode start behavior), P2P/Torrents, Look and feel, Sync, Downloads, and nested "Downloaded episodes" (section 9 under Downloads) and "Licenses" (section 11 under About) pages. The About landing entry opens app information; its Licenses button opens the source links and generated license-text catalog. Source-link buttons are vertically centered and compact on narrow layouts while retaining 44px touch targets; source rows fit the viewport, and the license catalog character-wraps long tokens to prevent horizontal panning. Addon rows show the addon **name only** — the install URL is not printed as the row description (it wrapped over several lines); a "Copy link" pill copies it instead (`addon_copy_link`). Row actions are icon buttons on both layouts (`AddonIconButton`: configure cog `IcSettingsGear`, refresh `IcSync`, remove `IcDelete`, ↑/↓ text glyphs — all 32px on wide, 44px touch targets on narrow) plus the "Copy link" pill, which keeps its label; icon buttons carry translated accessible names. The wide row is a single aligned 32px line (toggle, cog, Copy link, Refresh, Remove, ↑, ↓); the narrow `AddonRowCard` puts toggle + name + move arrows on the first line (toggle vertically centered on the arrow line) and the actions underneath, so the name keeps full width. The keyboard columns (0–6) walk that same order in both. The Sync section renders the invite ticket as a QR image and (Android only) offers a "Scan QR code" button that opens `QrScanActivity`. `SettingsRow` sizes itself from a hidden measurement of its wrapped title+description (not a fixed line count), so long titles don't clip on narrow screens. |
 | `player.slint` | Player overlay (OSD, controls, tracks, subtitles). On Android the volume control is hidden (volume pinned to 100% at play start; swipe adjusts after) and play/pause (larger, on a dark base for bright video) with ±10s sit in a centered floating transport cluster declared before the OSD so the track popups and settings modal paint above it; the bottom bar keeps the seekbar, gear and the timestamp (shown on narrow too). The gear's settings panel has submenus for subtitles, audio, the Android decoder and — on every platform — **playback speed** (Up/Down step it by 0.05; the value is the same per-device setting Settings → Player edits). The video backdrop owns taps (OSD toggle), double-taps on the outer thirds (∓10 s seek: the first tap acts normally, the second seeks and re-wakes), a 500 ms press-and-hold (transient 2× via `playback_speed_preview`, restored on release) and, on Android only, vertical swipes (left = window brightness, right = system volume via `android/java/.../PlayerFx.java` + `src/app/android_player.rs`); popups dismiss and OSD wakes stay immediate. |
-| `categories.slint`, `dropdown.slint`, `searchfield.slint`, `menusheet.slint`, `speedcontrol.slint` | Reusable widgets / popups. `searchfield.slint` is the app's single text-input component (custom `TextInput` + placeholder + an in-field clear "×" shown only while it has text); every input uses it. `speedcontrol.slint` is the playback-rate control (0.5–2.0 slider + ± 0.05 buttons + two-decimal readout, with 1× / 1.25× / 1.5× / 2× preset chips under the slider) shared by Settings → Player and the player's settings panel; the step buttons carry accessible names ("Slower"/"Faster"). |
+| `categories.slint`, `dropdown.slint`, `searchfield.slint`, `menusheet.slint`, `speedcontrol.slint` | Reusable widgets / popups. `searchfield.slint` is the app's single text-input component (custom `TextInput` + placeholder + an in-field clear "×" shown only while it has text); every input uses it, and long text scrolls horizontally to keep the caret visible. `speedcontrol.slint` is the playback-rate control (0.5–2.0 slider + ± 0.05 buttons + two-decimal readout, with 1× / 1.25× / 1.5× / 2× preset chips under the slider) shared by Settings → Player and the player's settings panel; the step buttons carry accessible names ("Slower"/"Faster"). |
 | `bottomnav.slint`, `sidenav.slint`, `kbnav.slint`, `icons.slint`, `anim.slint` | Navigation, icons, animations, keyboard-nav helpers. Page navigation is responsive and **per page** — every page hosts its own instance of both and switches on `narrow`: `bottomnav.slint` (`BottomNav`) is the icon-only bottom capsule on narrow layouts, `sidenav.slint` (`SideNav`) is the same design turned upright on wide ones — a full-height, flush, square-cornered 64px panel down the left edge (x/y are pinned inside the component: Slint centres a plain child of a non-layout parent, which would float it mid-window) with the four items listed top to bottom. Pages reserve its footprint by adding `NavMetrics.rail-width` (the exported global) to their own left padding, and subtract the same amount in their grid math; the rail also eats stray taps in that strip. Wide subpages keep the rail (window chrome), the narrow bottom bar hides on them. |
 
 > When adding a UI property/callback: declare it in the page component **and**
@@ -244,10 +257,11 @@ backend if it can't open. Keys used by the app:
 
 | Key | Content |
 |---|---|
-| `settings` | `CacheSettings` JSON (image cache + display + player backend/decoder + playback rate). Player backend choice (`player_external`, `desktop_external_app`), decoder (`android_hwdec`), episode start behavior (`episode_start_behavior`), playback rate (`playback_speed`, 0.5–2.0×), and UI `language` are device-local. |
+| `settings` | `CacheSettings` JSON (image cache + display + player backend/decoder + playback rate). Display's `discover_catalog_addon_names` defaults on and syncs as a settings field; hiding prefixes changes only dropdown labels, not catalog identity. Player backend choice (`player_external`, `desktop_external_app`), decoder (`android_hwdec`), episode start behavior (`episode_start_behavior`), playback rate (`playback_speed`, 0.5–2.0×), and UI `language` are device-local. |
 | `library` | `Vec<LibraryEntry>` JSON. |
 | `addons` | `Vec<AddonStore>` JSON (installed addons). |
 | `manifest:{url}` | Cached addon `Manifest` JSON (one per addon). |
+| `discover:search_history` | Local-only JSON list of the 20 most recent unique completed Discover queries (2–256 characters). Loaded at startup, displayed on focusing the empty Discover input, and erased by Clear history. Never synced. |
 | `episode_progress` | `HashMap<String, EpisodeProgress>` JSON (watch history). Tracking = 250 ms tick mirroring mpv props (`playback.rs::note_player_progress_from_ui`): saves throttled to 30 s / 5 s delta (time-based saves skipped while paused), finalize-on-close, external player untracked. Series and movies both tracked: a movie's record is keyed `id\x01id`. |
 | `continue_hidden` | `HashMap<String, u64>` JSON — Continue Watching items the user removed, `id -> removal unix secs`. Local mirror of the synced `continue_hidden` domain (so the choice survives with sync off); read at startup in `run.rs`, cleared for an item when playback of it is armed. |
 | `torrent_settings` | `TorrentSettings` JSON (runtime mirror). |
@@ -268,10 +282,10 @@ Helpers: `src/app/io.rs` (`read_json`/`write_json`), and per-domain
 (single transaction for many rows) and `scan_prefix` (ordered prefix scan),
 which the sync store uses to persist per-record rows without rewriting a blob.
 
-### Legacy files (desktop, imported once)
-`settings.toml`, `library.toml`, `addons.toml` in the app data dir are imported
-into redb on first run by `migrate_legacy_storage` (`addon_mgr.rs`) and then
-left as backup. The KV `settings` key's presence marks "already migrated".
+### Legacy files
+Legacy desktop `settings.toml`, `library.toml`, and `addons.toml` files are no
+longer imported. Current settings, library entries, and addons are read only
+from the KV store in `<data>/nova.redb`; any old files are left untouched.
 
 ### Paths (`nova-config`)
 - Platform data and cache paths are listed in [PLATFORM_STORAGE.md](PLATFORM_STORAGE.md).
@@ -358,7 +372,7 @@ the app ignores unknown domains, so old peers stay compatible.
 | Poster loading | worker pool + dual-priority channels + WebP encode | per-grid `net::fetch_image` |
 | Allocator | jemalloc | system |
 | Storage dir | XDG dirs | app files dir + sibling cache dir |
-| Legacy TOML import | yes (`desktop` feature) | no |
+| Legacy config-file import | no | no |
 | Permissions | — | INTERNET, ACCESS_NETWORK_STATE, FOREGROUND_SERVICE, FOREGROUND_SERVICE_DATA_SYNC, WAKE_LOCK, POST_NOTIFICATIONS, RECEIVE_BOOT_COMPLETED, CAMERA (runtime; camera feature declared optional) |
 | Invite QR | Ticket displayed as a QR image; paste to join | Same QR display, plus "Scan QR code": `QrScanActivity` (framework Camera2 — cargo-apk2 can bundle no AAR) feeds the luma plane to Rust (`rqrr`), which validates the ticket and joins automatically. |
 | Screen stay-awake during playback | D-Bus `ScreenSaver` inhibit (logind `idle` fallback), converged in `Player::tick` + play/toggle/close | `FLAG_KEEP_SCREEN_ON` via `converge_screen_on`, same convergence points; no permission needed |
@@ -457,7 +471,7 @@ the app ignores unknown domains, so old peers stay compatible.
   its page pan via `pan_hint` / `pan_release` and a short release timer.
 - **`ApplyingGuard`** must wrap remote-apply code paths so writes don't echo back to sync.
 - **Android packaging is `cargo-apk2`, not `cargo-apk`.** The Java background components (`android/java/`) must be compiled to DEX and the `<service>`/`foregroundServiceType` elements emitted, neither of which the old tool can do; `Cargo.toml` therefore uses `use_aapt2`, `java_sources`, `has_code = true`, and an explicit `[[…application.activity]]` (cargo-apk2 generates no implicit activity). The APK launcher icon is configured as `@mipmap/ic_launcher` and packaged from `android/res/`, derived from `assets/logo.png`. The `.#android` shell provides cargo-apk2 from the flake (nixpkgs has no such attr and upstream publishes no binstall artifacts, so it is built with `rustPlatform.buildRustPackage`) and unsets `CPATH` (host include leak breaks the NDK C build).
-- **Android builds use `--no-default-features`**; guard desktop-only code with `#[cfg(feature = "desktop")]` or `#[cfg(not(target_os = "android"))]`.
+- **Android builds use `--no-default-features --features android`**; guard desktop-only code with `#[cfg(feature = "desktop")]` or `#[cfg(not(target_os = "android"))]`.
 - **Download jobs are local-only**: `downloads:v1` and artifacts are never synced. HTTP resumes require matching `Range`/`ETag`/`Last-Modified`; retained torrent data is protected from playback cache eviction. Transfers are one-at-a-time, so a hung job must not pin the slot: HTTP connects/headers/body-gaps time out (60 s) and a torrent with no progress fails after 10 min; tapping Download again re-arms a `Failed` job in place. A transfer worker carries a done flag; the 250 ms tick reaps one that ended without finalizing (panic/unwind) and the state mutex is poison-tolerant, so a dead worker can never leave every later job stuck in `Queued`. Completed-job validation **canonicalizes** both paths before the root check (Android path aliases), and unreferenced HTTP artifacts under `<data>/downloads/http/` are re-adopted on startup rather than silently dropped (torrent artifacts are not re-adopted: sparse partial files look complete on disk). Deletion (`remove_owned_path`/`remove_owned_dir`) canonicalizes the target the same way — a lexical `starts_with` across the `/data/user/0` vs `/data/data` aliases previously skipped the unlink, clearing the row while leaving the file (and its app-storage footprint) on disk.
 - **`Store::load` quarantines** an unreadable sync blob instead of wiping it — check `sync:records.corrupt.*` if sync state looks empty.
 - **The Android background sync job must open storage before reading settings.** A job-only process has no Activity, so `android_bg::run_headless_sync` calls `nova_config::set_android_files_dir` + `storage::init_at` *before* any `nova_sync::read_settings()`: the store open is lazy and caches a permanent `None` when no path is set, so reading first made sync look permanently disabled. It then waits on `SyncStatus::pass_count` (a monotonic worker wake-up counter, bumped even by a no-peer pass) instead of the transient `syncing` flag, so it returns promptly; the Java service logs the native summary to logcat (`NovaSyncJob`).
@@ -472,7 +486,11 @@ the app ignores unknown domains, so old peers stay compatible.
 |---|---|
 | Add a Settings option | `crates/ui/settings.slint`, `src/app/settings.rs`, `src/app/run.rs`, `crates/config/src/lib.rs` |
 | Add a UI language / translate a string | `crates/ui/translations/<code>/LC_MESSAGES/nova-ui.po` (context-free), `crates/config/src/lib.rs` (`Language`), `src/app/i18n.rs`; mark strings `@tr("…")` in the `.slint` files |
-| Add a Discover feature / catalog change | `src/app/catalog.rs`, `crates/ui/discover.slint`, `crates/addons` |
+| Add a Discover feature / catalog change | `src/app/catalog.rs`, `crates/ui/discover.slint`, `crates/ui/appwindow.slint`, `crates/addons` |
+| Discover reveal / filter-drag regressions | `tests/discover_reveal_and_filters.rs` (animated opacity during poster updates, same-length result replacement, animation-off behavior, horizontal filter drags), `tests/discover_search_ui.rs` (browse/results navigation) |
+| Text-input overflow / clear controls | `crates/ui/searchfield.slint` (shared by all inputs; follows the caret on edits and viewport resize), `tests/searchfield_overflow.rs` (compact, touch and prominent fields: long text, End/Home, window shrink, clear buttons) |
+| Discover local search history | `src/app/catalog.rs` (local KV + bounded MRU list), `crates/ui/discover.slint` (recent-search panel expands/collapses in the layout on empty-input focus, respecting animation settings), `tests/discover_search_history_ui.rs` (expansion, focus, replay, Back/clear) |
+| Discover catalog labels / return animation | `src/app/catalog.rs` (`apply_catalog_labels_to_ui`, separate labels and identity values), Settings → Display's `discover_catalog_addon_names`; `crates/ui/appwindow.slint` (`discover_search_animate_results` survives detail-page recreation, resets for a fresh search), `tests/discover_reveal_and_filters.rs` |
 | Change the detail/stream flow | `src/app/detail.rs`, `src/app/streams.rs`, `crates/ui/detail.slint` |
 | Add a persisted app field | `src/app.rs` (struct), `src/app/io.rs` + relevant module's `read/write_persisted_*`, then `src/app/sync.rs` if it should sync |
 | Touch playback | `crates/player/src/lib.rs`, `src/app/playback.rs`, `crates/ui/player.slint` |

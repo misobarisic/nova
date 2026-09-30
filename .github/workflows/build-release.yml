@@ -105,9 +105,7 @@ jobs:
           github_access_token: ${{ github.token }}
 
       - name: Build universal APK once
-        run: >-
-          nix develop .#android --command cargo apk2 build
-          --no-default-features --lib -p nova --release
+        run: nix develop .#android --command make android-build-release-universal
 
       - name: Derive, align, sign, and verify all three APKs
         run: nix develop .#android --command python3 .github/scripts/package-android.py

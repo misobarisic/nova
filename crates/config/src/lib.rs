@@ -48,8 +48,8 @@ fn default_torrent_max_mb() -> u64 {
 // Torrent / P2P settings
 // ---------------------------------------------------------------------------
 
-/// Torrent streaming settings (Settings → P2P), persisted in `settings.toml`
-/// next to the image-cache settings.
+/// Torrent streaming settings (Settings → P2P), persisted as JSON in the
+/// `torrent_settings` KV entry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TorrentSettings {
     /// Master switch for torrent playback. On by default.
@@ -310,8 +310,8 @@ pub struct CacheSettings {
     #[serde(default)]
     pub lazy_reencode: bool,
     /// One-shot migration request kept for backwards compatibility with
-    /// older `settings.toml` files (previously set by a toggle, applied on
-    /// save, then cleared). No longer exposed in the UI — the "Re-encode
+    /// older saved settings (previously set by a toggle, applied on save, then
+    /// cleared). No longer exposed in the UI — the "Re-encode
     /// now" button runs immediately instead. Always written as false.
     #[serde(default)]
     pub rewrite_existing: bool,
@@ -322,6 +322,10 @@ pub struct CacheSettings {
     /// values show smaller cards — e.g. 3 across on a phone.
     #[serde(default = "default_min_cols")]
     pub discover_min_cols: u32,
+    /// Show the owning addon's name before catalogs in Discover's All addons
+    /// picker. Display-only: catalog identity never depends on this setting.
+    #[serde(default = "default_true")]
+    pub discover_catalog_addon_names: bool,
     /// Minimum grid columns for My Library (same scheme).
     #[serde(default = "default_min_cols")]
     pub library_min_cols: u32,
@@ -393,6 +397,7 @@ impl Default for CacheSettings {
             rewrite_existing: false,
             categories: Vec::new(),
             discover_min_cols: 2,
+            discover_catalog_addon_names: true,
             library_min_cols: 2,
             android_hwdec: AndroidHwdec::HwPlus,
             player_external: false,
@@ -723,5 +728,16 @@ mod tests {
         assert_eq!(settings.language, Language::English);
         assert_eq!(settings.episode_start_behavior, EpisodeStartBehavior::Resume);
         assert_eq!(CacheSettings::default().language.index(), 0);
+    }
+
+    #[test]
+    fn catalog_addon_names_default_on_and_round_trip() {
+        let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
+        let mut settings: CacheSettings = serde_json::from_str(older).unwrap();
+        assert!(settings.discover_catalog_addon_names);
+        settings.discover_catalog_addon_names = false;
+        let encoded = serde_json::to_string(&settings).unwrap();
+        let restored: CacheSettings = serde_json::from_str(&encoded).unwrap();
+        assert!(!restored.discover_catalog_addon_names);
     }
 }

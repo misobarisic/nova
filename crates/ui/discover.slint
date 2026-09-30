@@ -1,4 +1,4 @@
-import { ScrollView, Button, Spinner } from "std-widgets.slint";
+import { ScrollView, Spinner } from "std-widgets.slint";
 import { MediaCard } from "types.slint";
 import { KbMark } from "kbnav.slint";
 import { SideNav, NavMetrics } from "sidenav.slint";
@@ -6,6 +6,7 @@ import { BottomNav } from "bottomnav.slint";
 import { Dropdown } from "dropdown.slint";
 import { SearchField } from "searchfield.slint";
 import { Anim } from "anim.slint";
+import { IcChevronLeft, IcChevronRight, IcSearch } from "icons.slint";
 
 // Filter header (nav buttons, title, addon/type/catalog/search pickers).
 // Instantiated twice by DiscoverPage — once pinned above the grid
@@ -17,15 +18,21 @@ component DiscoverHeader {
     in property <[string]> addon_names;
     in property <[string]> type_names;
     in property <[string]> catalog_names;
+    in property <[string]> catalog_labels;
+    in property <[string]> genre_names;
+    in property <[string]> search_history;
+    property <bool> search_focused: false;
+    property <bool> show_history: root.search_focused && root.search_text == "" && root.search_history.length > 0;
     in-out property <int> addon_combo_idx: -1;
     in-out property <int> type_combo_idx: -1;
     in-out property <int> catalog_combo_idx: -1;
+    in-out property <int> genre_combo_idx: 0;
     in-out property <string> search_text;
     in property <string> searchable_hint;
     // False when the chosen catalog declares no search extra: the search
-    // field + button go non-inputable instead of silently re-fetching.
+    // field is disabled instead of silently re-fetching.
     in property <bool> searchable: true;
-    in property <int> count;
+    in property <bool> results_open: false;
     in property <bool> narrow;
     in property <int> kb_zone;
     in property <int> kb_nav;
@@ -38,19 +45,246 @@ component DiscoverHeader {
     callback addon_picked(string);
     callback type_picked(string);
     callback catalog_picked(string);
+    callback genre_picked(string);
+    callback search_edited(string);
     callback search_submitted(string);
+    callback back_picked();
     callback search_done();
+    callback search_history_cleared();
+    callback filters_panned();
+    callback filters_pan_released();
 
     VerticalLayout {
         width: 100%;
         spacing: 12px;
 
-        // ---- Title + count: own line(s) so the header never
+        // Global Search is independent of the browse selectors below. Typing
+        // starts a debounced query across enabled catalogs that advertise the
+        // `search` extra.
+        if root.results_open: HorizontalLayout {
+            vertical-stretch: 0;
+            height: root.narrow ? 44px : 36px;
+            spacing: 12px;
+
+            Rectangle {
+                width: root.narrow ? 44px : 36px;
+                height: root.narrow ? 44px : 36px;
+                border-radius: 8px;
+                background: back_touch.has-hover ? #2b2b35 : #1f1f27;
+                accessible-role: button;
+                accessible-label: @tr("Back");
+
+                IcChevronLeft {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 22px;
+                    height: 22px;
+                    fill: #eeeeee;
+                }
+                back_touch := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    mouse-cursor: pointer;
+                    clicked => { root.back_picked(); }
+                }
+            }
+            Text {
+                text: @tr("Search results");
+                font-size: root.narrow ? 27px : 24px;
+                font-weight: 700;
+                color: #ffffff;
+                vertical-alignment: center;
+            }
+        }
+
+        if !root.results_open: HorizontalLayout {
+            vertical-stretch: 0;
+            height: 38px;
+            alignment: start;
+
+            Text {
+                text: @tr("Search");
+                font-size: root.narrow ? 32px : 26px;
+                font-weight: 700;
+                color: #ffffff;
+            }
+        }
+
+        if !root.narrow: HorizontalLayout {
+            width: 100%;
+            vertical-stretch: 0;
+            spacing: 8px;
+            height: 58px;
+
+            KbMark { on: root.kb_zone == 2 && root.kb_ctl == 3; active: root.kb_active; }
+            search_line := SearchField {
+                roomy: true;
+                prominent: true;
+                enabled: root.searchable;
+                text <=> root.search_text;
+                focus_changed(focused) => { root.search_focused = focused; }
+                placeholder-text: root.searchable ? @tr("Search movies, shows…") : root.searchable_hint;
+                accepted(t) => {
+                    root.kb_edit = false;
+                    root.search_done();
+                    root.search_submitted(t);
+                }
+                edited(t) => {
+                    root.search_edited(t);
+                }
+                horizontal-stretch: 1;
+            }
+
+            edit_t := Timer {
+                interval: 80ms;
+                running: root.kb_edit && !root.narrow;
+                triggered => { search_line.focus(); }
+            }
+
+        }
+
+        if root.narrow: HorizontalLayout {
+            width: 100%;
+            vertical-stretch: 0;
+            spacing: 8px;
+            height: 58px;
+
+            KbMark { on: root.kb_zone == 2 && root.kb_ctl == 3; active: root.kb_active; }
+            search_line_narrow := SearchField {
+                roomy: true;
+                prominent: true;
+                enabled: root.searchable;
+                text <=> root.search_text;
+                focus_changed(focused) => { root.search_focused = focused; }
+                placeholder-text: root.searchable ? @tr("Search movies, shows…") : root.searchable_hint;
+                accepted(t) => {
+                    root.kb_edit = false;
+                    root.search_done();
+                    root.search_submitted(t);
+                }
+                edited(t) => {
+                    root.search_edited(t);
+                }
+                horizontal-stretch: 1;
+            }
+
+            edit_tn := Timer {
+                interval: 80ms;
+                running: root.kb_edit && root.narrow;
+                triggered => { search_line_narrow.focus(); }
+            }
+
+        }
+
+        history_panel := Rectangle {
+            width: 100%;
+            height: root.show_history ? 54px + Math.min(5, root.search_history.length) * 40px : 0px;
+            opacity: root.show_history ? 1.0 : 0.0;
+            clip: true;
+            animate height { duration: Anim.transition_slide; easing: ease-in-out; }
+            animate opacity { duration: Anim.transition_fade; }
+            vertical-stretch: 0;
+            background: #18181f;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: #33333c;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
+                HorizontalLayout {
+                    height: 28px;
+                    Text {
+                        text: @tr("Recent searches");
+                        color: #d8d8e2;
+                        font-size: 13px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Rectangle {
+                        width: clear_label.preferred-width + 16px;
+                        height: 28px;
+                        border-radius: 8px;
+                        background: clear_history_touch.has-hover ? #ffffff14 : transparent;
+                        accessible-role: button;
+                        accessible-label: @tr("Clear history");
+                        clear_label := Text {
+                            text: @tr("Clear history");
+                            color: #a99ac9;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        clear_history_touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.search_history_cleared(); }
+                        }
+                    }
+                }
+                ScrollView {
+                    mouse-drag-pan-enabled: true;
+                    VerticalLayout {
+                        width: 100%;
+                        spacing: 0px;
+                        for query in root.search_history: Rectangle {
+                            height: 40px;
+                            border-radius: 8px;
+                            background: history_touch.has-hover ? #8b5cf61c : transparent;
+                            accessible-role: button;
+                            accessible-label: query;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 10px;
+                                Rectangle {
+                                    width: 18px;
+                                    height: 100%;
+                                    IcSearch {
+                                        width: 18px;
+                                        height: 18px;
+                                        y: (parent.height - self.height) / 2;
+                                        fill: #8b7eaa;
+                                    }
+                                }
+                                Text {
+                                    text: query;
+                                    color: #e6e6ea;
+                                    font-size: 14px;
+                                    min-width: 0px;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle {
+                                    width: 16px;
+                                    height: 100%;
+                                    IcChevronRight {
+                                        width: 16px;
+                                        height: 16px;
+                                        y: (parent.height - self.height) / 2;
+                                        fill: #8b7eaa;
+                                    }
+                                }
+                            }
+                            history_touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.search_text = query;
+                                    root.search_submitted(query);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Title: own line(s) so the header never
         // overflows on narrow windows --------------------------------
         // Pinned like every other header row: an unpinned row absorbs
         // free vertical space (it measured 421px tall on desktop),
         // leaving big blanks above/below the count.
-        HorizontalLayout {
+        if !root.results_open: HorizontalLayout {
             vertical-stretch: 0;
             height: 36px;
             spacing: 8px;
@@ -63,224 +297,112 @@ component DiscoverHeader {
                 color: #ffffff;
             }
 
-            Text {
-                text: @tr("({n} item)" | "({n} items)" % root.count);
-                font-size: 15px;
-                color: #6c6c7d;
-                vertical-alignment: center;
-            }
         }
 
-        // ---- Addon filter -------------------------------------------
-        // Installing / enabling / removing addons lives in Settings →
-        // Addons; this row only picks which installed addon to browse.
-        HorizontalLayout {
+        // The browse selectors keep readable widths rather than squeezing
+        // their labels on phones. Like stream filters/Home rails, this row
+        // owns a horizontal Flickable and leaves vertical drags to the page.
+        if !root.results_open: filter_flick := Flickable {
+            width: 100%;
             vertical-stretch: 0;
-            visible: root.addon_names.length > 0;
-            spacing: 8px;
-            // Explicit height: the row must stay at control height and
-            // never absorb free vertical space (see Settings rows).
             height: root.narrow ? 44px : 32px;
-
-            Text {
-                text: @tr("Addon");
-                font-size: 12px;
-                color: #6c6c7d;
-                vertical-alignment: center;
-            }
-
-            KbMark { on: root.kb_zone == 1; active: root.kb_active; }
-            addon_combo := Dropdown {
-                roomy: root.narrow;
-                model: root.addon_names;
-                current-index <=> root.addon_combo_idx;
-                selected(v) => { root.addon_picked(v); }
-                min-width: root.narrow ? 0px : 200px;
-                horizontal-stretch: 1;
-                max-width: 420px;
-            }
-
-            // Absorbs leftover width past the combo's max-width so the
-            // label/combo stay left-packed instead of the label's box
-            // growing and pushing the combo to the far right.
-            Rectangle { horizontal-stretch: 1; }
-        }
-
-        // ---- Catalog pickers ----------------------------------------
-        // Wide: single row. Narrow: search full-width on top, combos below
-        // (duplicated ids — `if` hides ids from page functions, so the
-        // keyboard focus branches on `narrow`, same as Settings).
-        if !root.narrow: HorizontalLayout {
-            vertical-stretch: 0;
-            spacing: 8px;
-            // Wide controls are naturally 32px tall — pin the row so it
-            // can never stretch into the grid's space.
-            height: 32px;
-
-            Text {
-                text: @tr("Type");
-                font-size: 12px;
-                color: #6c6c7d;
-                vertical-alignment: center;
-            }
-
-            KbMark { on: root.kb_zone == 2 && root.kb_ctl == 0; active: root.kb_active; }
-            type_combo := Dropdown {
-                roomy: root.narrow;
-                model: root.type_names;
-                current-index <=> root.type_combo_idx;
-                selected(v) => { root.type_picked(v); }
-                min-width: 110px;
-            }
-
-            Text {
-                text: @tr("Catalog");
-                font-size: 12px;
-                color: #6c6c7d;
-                vertical-alignment: center;
-            }
-
-            KbMark { on: root.kb_zone == 2 && root.kb_ctl == 1; active: root.kb_active; }
-            catalog_combo := Dropdown {
-                roomy: root.narrow;
-                model: root.catalog_names;
-                current-index <=> root.catalog_combo_idx;
-                selected(v) => { root.catalog_picked(v); }
-                min-width: 200px;
-                horizontal-stretch: 1;
-            }
-
-            KbMark { on: root.kb_zone == 2 && root.kb_ctl == 2; active: root.kb_active; }
-            search_line := SearchField {
-                roomy: root.narrow;
-                enabled: root.searchable;
-                text <=> root.search_text;
-                placeholder-text: root.searchable_hint;
-                accepted(t) => {
-                    root.kb_edit = false;
-                    root.search_done();
-                    root.search_submitted(t);
+            interactive: true;
+            content-width: filter_row.width;
+            content-height: self.height;
+            changed content-x => { root.filters_panned(); }
+            function reveal_control(left: length, control_width: length) {
+                if (left + self.content-x < 0px) {
+                    self.content-x = -left;
+                } else if (left + control_width + self.content-x > self.width) {
+                    self.content-x = self.width - left - control_width;
                 }
-                horizontal-stretch: 2;
             }
 
-            // Focuses the field on demand: page scope cannot see ids
-            // inside `if`, but this timer (inside the branch) can.
-            edit_t := Timer {
-                interval: 80ms;
-                running: root.kb_edit && !root.narrow;
-                triggered => { search_line.focus(); }
-            }
-
-            KbMark { on: root.kb_zone == 2 && root.kb_ctl == 3; active: root.kb_active; }
-            search_button := Button {
-                text: @tr("Search");
-                enabled: root.searchable;
-                min-height: root.narrow ? 44px : 0px;
-                clicked => { root.kb_active = false; root.search_submitted(search_line.full-text); }
-            }
-        }
-
-        if root.narrow: VerticalLayout {
-            vertical-stretch: 0;
-            spacing: 8px;
-
-            // Constrained to the page width: without width: 100% the
-            // LineEdit sizes to its preferred width and pushes the Search
-            // button off-screen on portrait phones.
-            HorizontalLayout {
-                width: 100%;
-                vertical-stretch: 0;
+            filter_row := HorizontalLayout {
+                width: self.preferred-width;
+                height: parent.height;
                 spacing: 8px;
-                // Narrow controls use 44px touch targets — pin the row.
-                height: 44px;
+                alignment: start;
 
-                KbMark { on: root.kb_zone == 2 && root.kb_ctl == 2; active: root.kb_active; }
-                search_line_narrow := SearchField {
-                    roomy: true;
-                    enabled: root.searchable;
-                    text <=> root.search_text;
-                    placeholder-text: root.searchable_hint;
-                    accepted(t) => {
-                        root.kb_edit = false;
-                        root.search_done();
-                        root.search_submitted(t);
+                if root.addon_names.length > 0: KbMark { on: root.kb_zone == 1; active: root.kb_active; }
+                if root.addon_names.length > 0: Dropdown {
+                    width: 180px;
+                    roomy: root.narrow;
+                    pill: true;
+                    rail-gesture: true;
+                    accessible-role: button;
+                    accessible-label: @tr("Addon");
+                    property <bool> kb_focused: root.kb_active && root.kb_zone == 1;
+                    changed kb_focused => {
+                        if (self.kb_focused) { filter_flick.reveal_control(self.x, self.width); }
                     }
-                    horizontal-stretch: 1;
+                    model: root.addon_names;
+                    current-index <=> root.addon_combo_idx;
+                    selected(v) => { root.addon_picked(v); }
+                    pan_hint => { root.filters_panned(); }
+                    pan_release => { root.filters_pan_released(); }
                 }
-
-                edit_tn := Timer {
-                    interval: 80ms;
-                    running: root.kb_edit && root.narrow;
-                    triggered => { search_line_narrow.focus(); }
-                }
-
-                KbMark { on: root.kb_zone == 2 && root.kb_ctl == 3; active: root.kb_active; }
-                search_button_narrow := Button {
-                    text: @tr("Search");
-                    enabled: root.searchable;
-                    min-height: 44px;
-                    clicked => { root.kb_active = false; root.search_submitted(search_line_narrow.full-text); }
-                }
-            }
-
-            // Narrow: one picker per row, full-width. Side-by-side
-            // combos size to their preferred widths and push each other
-            // off-screen on portrait phones (same overflow class as the
-            // search row had); stacked rows give each picker room.
-            HorizontalLayout {
-                width: 100%;
-                vertical-stretch: 0;
-                spacing: 8px;
-                height: 44px;
-
-                Text {
-                    text: @tr("Type");
-                    width: 60px;
-                    font-size: 12px;
-                    color: #6c6c7d;
-                    vertical-alignment: center;
-                }
-
                 KbMark { on: root.kb_zone == 2 && root.kb_ctl == 0; active: root.kb_active; }
-                type_combo_narrow := Dropdown {
-                    roomy: true;
+                Dropdown {
+                    width: 110px;
+                    roomy: root.narrow;
+                    pill: true;
+                    rail-gesture: true;
+                    accessible-role: button;
+                    accessible-label: @tr("Type");
+                    property <bool> kb_focused: root.kb_active && root.kb_zone == 2 && root.kb_ctl == 0;
+                    changed kb_focused => {
+                        if (self.kb_focused) { filter_flick.reveal_control(self.x, self.width); }
+                    }
                     model: root.type_names;
                     current-index <=> root.type_combo_idx;
                     selected(v) => { root.type_picked(v); }
-                    min-width: 0px;
-                    horizontal-stretch: 1;
+                    pan_hint => { root.filters_panned(); }
+                    pan_release => { root.filters_pan_released(); }
                 }
-            }
-
-            HorizontalLayout {
-                width: 100%;
-                vertical-stretch: 0;
-                spacing: 8px;
-                height: 44px;
-
-                Text {
-                    text: @tr("Catalog");
-                    width: 60px;
-                    font-size: 12px;
-                    color: #6c6c7d;
-                    vertical-alignment: center;
-                }
-
                 KbMark { on: root.kb_zone == 2 && root.kb_ctl == 1; active: root.kb_active; }
-                catalog_combo_narrow := Dropdown {
-                    roomy: true;
+                Dropdown {
+                    width: 220px;
+                    roomy: root.narrow;
+                    pill: true;
+                    rail-gesture: true;
+                    accessible-role: button;
+                    accessible-label: @tr("Catalog");
+                    property <bool> kb_focused: root.kb_active && root.kb_zone == 2 && root.kb_ctl == 1;
+                    changed kb_focused => {
+                        if (self.kb_focused) { filter_flick.reveal_control(self.x, self.width); }
+                    }
                     model: root.catalog_names;
+                    labels: root.catalog_labels;
                     current-index <=> root.catalog_combo_idx;
                     selected(v) => { root.catalog_picked(v); }
-                    min-width: 0px;
-                    horizontal-stretch: 1;
+                    pan_hint => { root.filters_panned(); }
+                    pan_release => { root.filters_pan_released(); }
+                }
+                if root.genre_names.length > 1: KbMark { on: root.kb_zone == 2 && root.kb_ctl == 2; active: root.kb_active; }
+                if root.genre_names.length > 1: Dropdown {
+                    width: 140px;
+                    roomy: root.narrow;
+                    pill: true;
+                    rail-gesture: true;
+                    accessible-role: button;
+                    accessible-label: @tr("Genre");
+                    property <bool> kb_focused: root.kb_active && root.kb_zone == 2 && root.kb_ctl == 2;
+                    changed kb_focused => {
+                        if (self.kb_focused) { filter_flick.reveal_control(self.x, self.width); }
+                    }
+                    model: root.genre_names;
+                    current-index <=> root.genre_combo_idx;
+                    selected(v) => { root.genre_picked(v); }
+                    pan_hint => { root.filters_panned(); }
+                    pan_release => { root.filters_pan_released(); }
                 }
             }
         }
 
-        Rectangle { height: 1px; background: #23232b; }
+        if !root.results_open: Rectangle { height: 1px; background: #23232b; }
     }
+
 }
 
 // Card grid (posters + loading spinner + empty state). Shared by both
@@ -295,7 +417,9 @@ component DiscoverGrid {
     in-out property <int> kb_zone;
     in-out property <int> kb_idx;
     in property <bool> loading_more;
+    in property <bool> loading: false;
     in property <string> empty_hint;
+    in property <bool> stagger: false;
 
     callback item_selected(string, int);
 
@@ -313,7 +437,7 @@ component DiscoverGrid {
             width: root.cols * (root.item-width + root.item-gap) - root.item-gap;
             spacing: root.item-gap;
 
-            for card[i] in root.catalog: Rectangle {
+            for card[i] in root.catalog: card_slot := Rectangle {
                 row: Math.floor(i / root.cols);
                 col: Math.mod(i, root.cols);
 
@@ -322,72 +446,93 @@ component DiscoverGrid {
                 // narrow (e.g. 3-across phone) cards shrink in height too
                 // instead of stretching tall. +50px title/year footer.
                 height: root.item-width * 3 / 2 + 50px;
-
-                Rectangle {
-                    width: 100%;
-                    height: 100%;
-                    background: #18181c;
-                    border-radius: 10px;
-                    border-width: root.kb_active && root.kb_zone == 3 && root.kb_idx == i ? 2px : 0px;
-                    border-color: #8b5cf6;
-
-                    y: touch.has-hover ? -6px : 0px;
-                    animate y { duration: Anim.hover_lift; easing: ease-in-out; }
-
-                    VerticalLayout {
-                        spacing: 0px;
-
-                        Rectangle {
-                            height: root.item-width * 3 / 2;
-                            border-radius: 10px;
-                            clip: true;
-                            background: #222228;
-
-                            if card.is_loaded: Image {
-                                source: card.poster;
-                                image-fit: cover;
-                                width: 100%;
-                                height: 100%;
-                            }
-
-                            if !card.is_loaded: Text {
-                                text: "🎬";
-                                font-size: 34px;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        VerticalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-                            padding-top: 6px;
-                            spacing: 2px;
-
-                            Text {
-                                text: card.title;
-                                color: #eeeeee;
-                                font-size: 13px;
-                                font-weight: 600;
-                                overflow: elide;
-                            }
-
-                            Text {
-                                text: card.year;
-                                color: #7a7a8c;
-                                font-size: 11px;
-                            }
-                        }
+                // Each delegate owns its one-shot reveal. Model row updates
+                // (especially posters) must never reset/cancel a page-wide
+                // reveal timer and strand this card at zero opacity.
+                property <bool> item_revealed: false;
+                property <duration> item_reveal_delay: Math.min(i, 12) * 30ms;
+                item_reveal_t := Timer {
+                    interval: 40ms;
+                    running: root.stagger && !card_slot.item_revealed;
+                    triggered => {
+                        card_slot.item_revealed = true;
                     }
                 }
 
-                touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.kb_active = false;
-                        root.kb_zone = 3;
-                        root.kb_idx = i;
-                        root.item_selected(card.id, i);
+                reveal_layer := Rectangle {
+                    width: 100%;
+                    height: 100%;
+                    opacity: !root.stagger || parent.item_revealed ? 1.0 : 0.0;
+                    y: !root.stagger || parent.item_revealed ? 0px : 12px;
+                    animate opacity { duration: Anim.transition_fade; delay: root.stagger ? parent.item_reveal_delay : 0ms; }
+                    animate y { duration: Anim.transition_slide; delay: root.stagger ? parent.item_reveal_delay : 0ms; }
+
+                    Rectangle {
+                        width: 100%;
+                        height: 100%;
+                        background: #18181c;
+                        border-radius: 10px;
+                        border-width: root.kb_active && root.kb_zone == 3 && root.kb_idx == i ? 2px : 0px;
+                        border-color: #8b5cf6;
+
+                        y: touch.has-hover ? -6px : 0px;
+                        animate y { duration: Anim.hover_lift; easing: ease-in-out; }
+
+                        VerticalLayout {
+                            spacing: 0px;
+
+                            Rectangle {
+                                height: root.item-width * 3 / 2;
+                                border-radius: 10px;
+                                clip: true;
+                                background: #222228;
+
+                                if card.is_loaded: Image {
+                                    source: card.poster;
+                                    image-fit: cover;
+                                    width: 100%;
+                                    height: 100%;
+                                }
+
+                                if !card.is_loaded: Text {
+                                    text: "🎬";
+                                    font-size: 34px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            VerticalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                padding-top: 6px;
+                                spacing: 2px;
+
+                                Text {
+                                    text: card.title;
+                                    color: #eeeeee;
+                                    font-size: 13px;
+                                    font-weight: 600;
+                                    overflow: elide;
+                                }
+
+                                Text {
+                                    text: card.year;
+                                    color: #7a7a8c;
+                                    font-size: 11px;
+                                }
+                            }
+                        }
+                    }
+
+                    touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.kb_active = false;
+                            root.kb_zone = 3;
+                            root.kb_idx = i;
+                            root.item_selected(card.id, i);
+                        }
                     }
                 }
             }
@@ -408,7 +553,19 @@ component DiscoverGrid {
         }
         }
 
-        if root.catalog.length == 0: VerticalLayout {
+        if root.catalog.length == 0 && root.loading: Rectangle {
+            width: 100%;
+            min-height: 180px;
+
+            Spinner {
+                width: self.preferred-width;
+                height: self.preferred-height;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+
+        if root.catalog.length == 0 && !root.loading: VerticalLayout {
             width: 100%;
             // Inside scrolling content stretches are meaningless — a
             // fixed body keeps the hint visible below the filters.
@@ -439,13 +596,24 @@ export component DiscoverPage {
     preferred-height: 100%;
 
     in-out property <[MediaCard]> catalog: [];
+    in-out property <[MediaCard]> search_results: [];
+    in property <[string]> search_history: [];
     in-out property <[string]> addon_names: [];
     in-out property <[string]> type_names: [];
     in-out property <[string]> catalog_names: [];
+    in property <[string]> catalog_labels: [];
+    in-out property <[string]> genre_names: [];
     in-out property <int> addon_combo_idx: -1;
     in-out property <int> type_combo_idx: -1;
     in-out property <int> catalog_combo_idx: -1;
+    in-out property <int> genre_combo_idx: 0;
     in-out property <string> search_text: "";
+    in-out property <bool> search_results_open: false;
+    in property <bool> animate_search_results: true;
+    in-out property <bool> search_loading: false;
+    in-out property <bool> search_loading_more: false;
+    in-out property <bool> search_can_load_more: false;
+    in-out property <string> search_empty_hint: @tr("No results for this search.");
     in-out property <bool> searchable: true;
     in-out property <string> empty_hint: @tr("No addons installed yet — add one in Settings → Addons.");
     in-out property <string> searchable_hint: "";
@@ -469,7 +637,11 @@ export component DiscoverPage {
     callback addon_picked(string);
     callback type_picked(string);
     callback catalog_picked(string);
+    callback genre_picked(string);
+    callback search_edited(string);
     callback search_submitted(string);
+    callback search_back_picked();
+    callback search_history_cleared();
     callback item_selected(string, int);
     callback home_picked();
     callback discover_picked();
@@ -482,6 +654,11 @@ export component DiscoverPage {
 
     in-out property <bool> can_load_more: false;
     in-out property <bool> loading_more: false;
+    property <[MediaCard]> display_catalog: root.search_results_open ? root.search_results : root.catalog;
+    property <bool> display_can_load_more: root.search_results_open ? root.search_can_load_more : root.can_load_more;
+    property <bool> display_loading_more: root.search_results_open ? root.search_loading_more : root.loading_more;
+    property <bool> display_loading: root.search_results_open && root.search_loading;
+    property <string> display_empty_hint: root.search_results_open ? root.search_empty_hint : root.empty_hint;
 
     // Compact layout for narrow (portrait) windows.
     in property <bool> narrow;
@@ -509,7 +686,7 @@ export component DiscoverPage {
     // (transient edit mode).
     in-out property <int> kb_zone: 0;
     in-out property <int> kb_nav: 1;
-    in-out property <int> kb_ctl: 0; // 0 type, 1 catalog, 2 search, 3 button
+    in-out property <int> kb_ctl: 0; // 0 type, 1 catalog, 2 genre, 3 search
     in-out property <int> kb_idx: 0;
     // Transient search edit mode, bound through to the mounted header
     // (Enter on the search field focuses it; submit exits).
@@ -518,9 +695,11 @@ export component DiscoverPage {
     // while true — set by any arrow/Enter keypress, cleared by mouse
     // clicks — so mouse-only UI carries no keyboard affordance cost.
     in-out property <bool> kb_active;
-    // Exact scroll offset (bound to AppWindow): the grid viewport syncs
-    // here continuously and restores absolutely on return.
+    // Browse and search keep distinct offsets so opening Results and backing
+    // out does not jump the catalog the user was viewing.
     in-out property <length> scroll_y: 0px;
+    in-out property <length> search_scroll_y: 0px;
+    property <length> display_scroll_y: root.search_results_open ? root.search_scroll_y : root.scroll_y;
     // Whole-page scroll on Android (filters scroll away with the grid);
     // desktop keeps the filter header pinned and scrolls only the grid.
     // Set once from Rust (target_os-gated).
@@ -531,14 +710,41 @@ export component DiscoverPage {
     property <length> sv_vh: 0px;
     property <length> sv_vph: 0px;
     property <length> sv_grid_top: 0px;
+    property <bool> transition_cover: false;
+    property <bool> page_pan_enabled: true;
+    function filters_panned() {
+        root.page_pan_enabled = false;
+        filter_pan_release_t.running = true;
+        filter_pan_release_t.restart();
+    }
+    function filters_pan_released() {
+        root.page_pan_enabled = true;
+        filter_pan_release_t.stop();
+    }
+    // Flickable may consume the up/cancel event; let an abandoned axis hint
+    // expire instead of leaving the page unable to scroll.
+    filter_pan_release_t := Timer {
+        interval: 200ms;
+        running: false;
+        triggered => {
+            self.stop();
+            root.page_pan_enabled = true;
+        }
+    }
 
     function kb_addon_on() -> bool { return root.addon_names.length > 0; }
+    function leave_search() {
+        root.kb_edit = false;
+        nav_scope.focus();
+        root.search_text = "";
+        root.search_back_picked();
+    }
 
     function kb_clamp_idx() {
-        if (root.catalog.length == 0) {
+        if (root.display_catalog.length == 0) {
             root.kb_idx = 0;
-        } else if (root.kb_idx >= root.catalog.length) {
-            root.kb_idx = root.catalog.length - 1;
+        } else if (root.kb_idx >= root.display_catalog.length) {
+            root.kb_idx = root.display_catalog.length - 1;
         } else if (root.kb_idx < 0) {
             root.kb_idx = 0;
         }
@@ -590,6 +796,18 @@ export component DiscoverPage {
         }
     }
 
+    function kb_cycle_genre(d: int) {
+        let n = root.genre_names.length;
+        if (n <= 1) {
+            return;
+        }
+        let v = root.kb_cycle(root.genre_combo_idx, d, n);
+        if (v != root.genre_combo_idx) {
+            root.genre_combo_idx = v;
+            root.genre_picked(root.genre_names[v]);
+        }
+    }
+
     function kb_up() {
         if (root.kb_zone == 3) {
             if (root.kb_idx >= root.cols) {
@@ -610,14 +828,14 @@ export component DiscoverPage {
         } else if (root.kb_zone == 1) {
             root.kb_zone = 2;
         } else if (root.kb_zone == 2) {
-            if (root.catalog.length > 0) {
+            if (root.display_catalog.length > 0) {
                 root.kb_zone = 3;
                 root.kb_clamp_idx();
             }
         } else {
-            if (root.kb_idx + root.cols < root.catalog.length) {
+            if (root.kb_idx + root.cols < root.display_catalog.length) {
                 root.kb_idx += root.cols;
-            } else if (root.can_load_more && !root.loading_more) {
+            } else if (root.display_can_load_more && !root.display_loading_more) {
                 root.load_more();
             }
         }
@@ -633,6 +851,8 @@ export component DiscoverPage {
                 root.kb_cycle_type(-1);
             } else if (root.kb_ctl == 1) {
                 root.kb_cycle_catalog(-1);
+            } else if (root.kb_ctl == 2) {
+                root.kb_cycle_genre(-1);
             } else {
                 root.kb_ctl -= 1;
             }
@@ -654,10 +874,10 @@ export component DiscoverPage {
             } else if (root.kb_ctl == 1) {
                 root.kb_cycle_catalog(1);
             } else if (root.kb_ctl == 2) {
-                root.kb_ctl = 3;
+                root.kb_cycle_genre(1);
             }
         } else {
-            if (root.kb_idx + 1 < root.catalog.length) {
+            if (root.kb_idx + 1 < root.display_catalog.length) {
                 root.kb_idx += 1;
             }
         }
@@ -682,19 +902,15 @@ export component DiscoverPage {
             } else if (root.kb_ctl == 1) {
                 root.kb_cycle_catalog(1);
             } else if (root.kb_ctl == 2) {
-                // No edit mode on catalogs without search support (the
-                // field is disabled there too).
+                root.kb_cycle_genre(1);
+            } else if (root.kb_ctl == 3) {
                 if (root.searchable) {
                     root.kb_edit = true;
                 }
-            } else {
-                if (root.searchable) {
-                    root.search_submitted(root.search_text);
-                }
             }
         } else {
-            if (root.kb_idx >= 0 && root.kb_idx < root.catalog.length) {
-                root.item_selected(root.catalog[root.kb_idx].id, root.kb_idx);
+            if (root.kb_idx >= 0 && root.kb_idx < root.display_catalog.length) {
+                root.item_selected(root.display_catalog[root.kb_idx].id, root.kb_idx);
             }
         }
     }
@@ -710,7 +926,7 @@ export component DiscoverPage {
     // layout (content-height 0) — the one-shot restore timer below
     // retries.
     function kb_follow() {
-        if (root.kb_zone != 3 || root.catalog.length == 0) {
+        if (root.kb_zone != 3 || root.display_catalog.length == 0) {
             return;
         }
         if (root.sv_vph == 0px) {
@@ -718,13 +934,13 @@ export component DiscoverPage {
         }
         let top = root.sv_grid_top + Math.floor(root.kb_idx / root.cols) * root.row_stride;
         let bot = top + root.row_stride;
-        let vy = root.scroll_y;
+        let vy = root.display_scroll_y;
         let vh = root.sv_vh;
         let min_y = Math.min(0px, vh - root.sv_vph);
         if (top < -vy) {
-            root.scroll_y = -top;
+            root.set_display_scroll_y(-top);
         } else if (bot > vh - vy) {
-            root.scroll_y = Math.max(min_y, vh - bot);
+            root.set_display_scroll_y(Math.max(min_y, vh - bot));
         }
     }
 
@@ -734,6 +950,34 @@ export component DiscoverPage {
         root.kb_clamp_idx();
         root.kb_follow();
     }
+    changed search_results => {
+        root.kb_clamp_idx();
+        root.kb_follow();
+    }
+    changed search_results_open => {
+        root.transition_cover = true;
+        if (root.search_results_open) {
+            root.search_scroll_y = 0px;
+            root.kb_idx = 0;
+            root.kb_zone = 2;
+            root.kb_ctl = 3;
+        }
+        root.kb_clamp_idx();
+        root.kb_follow();
+    }
+    transition_t := Timer {
+        interval: 100ms;
+        running: root.transition_cover;
+        triggered => { root.transition_cover = false; }
+    }
+
+    function set_display_scroll_y(value: length) {
+        if (root.search_results_open) {
+            root.search_scroll_y = value;
+        } else {
+            root.scroll_y = value;
+        }
+    }
 
     // Clamp the (restored) scroll offset into the valid range once laid
     // out: content may have shrunk while inside the entry.
@@ -742,7 +986,7 @@ export component DiscoverPage {
             return;
         }
         let min_y = Math.min(0px, root.sv_vh - root.sv_vph);
-        root.scroll_y = Math.max(min_y, Math.min(0px, root.scroll_y));
+        root.set_display_scroll_y(Math.max(min_y, Math.min(0px, root.display_scroll_y)));
     }
 
     Rectangle {
@@ -776,9 +1020,13 @@ export component DiscoverPage {
                 root.kb_active = true;
                 root.kb_enter();
                 accept
-            } else if (e.text == Key.Backspace || e.text == Key.Back) {
+            } else if (e.text == Key.Backspace || e.text == Key.Back || e.text == Key.Escape) {
                 root.kb_active = true;
-                root.home_picked();
+                if (root.search_results_open) {
+                    root.leave_search();
+                } else {
+                    root.home_picked();
+                }
                 accept
             } else {
                 reject
@@ -816,13 +1064,17 @@ export component DiscoverPage {
         fix_header := DiscoverHeader {
             width: 100%;
             catalog_names: root.catalog_names;
+            catalog_labels: root.catalog_labels;
+            genre_names: root.genre_names;
+            search_history: root.search_history;
             type_names: root.type_names;
             addon_names: root.addon_names;
             searchable: root.searchable;
-            count: root.catalog.length;
+            results_open: root.search_results_open;
             addon_combo_idx <=> root.addon_combo_idx;
             type_combo_idx <=> root.type_combo_idx;
             catalog_combo_idx <=> root.catalog_combo_idx;
+            genre_combo_idx <=> root.genre_combo_idx;
             search_text <=> root.search_text;
             searchable_hint: root.searchable_hint;
             narrow: root.narrow;
@@ -835,8 +1087,20 @@ export component DiscoverPage {
             addon_picked(v) => { root.addon_picked(v); }
             type_picked(v) => { root.type_picked(v); }
             catalog_picked(v) => { root.catalog_picked(v); }
-            search_submitted(v) => { root.search_submitted(v); }
+            genre_picked(v) => { root.genre_picked(v); }
+            search_edited(v) => {
+                root.search_scroll_y = 0px;
+                root.search_edited(v);
+            }
+            search_submitted(v) => {
+                root.search_scroll_y = 0px;
+                root.search_submitted(v);
+            }
+            back_picked => { root.leave_search(); }
+            search_history_cleared => { root.search_history_cleared(); }
             search_done => { nav_scope.focus(); }
+            filters_panned => { root.filters_panned(); }
+            filters_pan_released => { root.filters_pan_released(); }
         }
 
         Rectangle {
@@ -850,12 +1114,19 @@ export component DiscoverPage {
                 // the fluent-style ScrollView disables drag-pan by
                 // default, so opt in explicitly.
                 mouse-drag-pan-enabled: true;
+                // This viewport survives the browse/results header switch.
+                // Move it to the newly active model's stored offset so the
+                // two views keep independent scroll positions.
+                property <bool> results_mode: root.search_results_open;
+                changed results_mode => {
+                    self.content-y = root.display_scroll_y;
+                }
                 // One-way mirror (NOT a two-way binding): Flickable
                 // removes viewport bindings on the first press/drag, which
                 // silently froze scroll_y at 0 on touch devices. The init
                 // restores the persisted offset on page (re)creation; the
                 // changed handler keeps it truthful afterwards.
-                init => { self.content-y = root.scroll_y; }
+                init => { self.content-y = root.display_scroll_y; }
                 // Preload + unload reporting (Bridge::visible_range): row
                 // stride follows the card height (see row_stride); the
                 // reported window already preloads ±2 rows above/below
@@ -866,7 +1137,7 @@ export component DiscoverPage {
                 // >48 cards to avoid fetch churn.
                 property <int> reported_first: -1000000;
                 changed content-y => {
-                    root.scroll_y = self.content-y;
+                    root.set_display_scroll_y(self.content-y);
                     // Live metrics for the keyboard follow-up (page-level
                     // functions cannot read this gated scroll directly).
                     root.sv_vh = self.visible-height;
@@ -877,18 +1148,18 @@ export component DiscoverPage {
                     // remaining content below the viewport is
                     // content-height + content-y - visible-height. Fetch
                     // the next page only once that drops to 600px.
-                    if (root.catalog.length > 0 && root.can_load_more && !root.loading_more
+                    if (root.display_catalog.length > 0 && root.display_can_load_more && !root.display_loading_more
                         && self.content-y <= self.visible-height - self.content-height + 600px) {
                         root.load_more();
                     }
-                    if (root.catalog.length > 0) {
+                    if (root.display_catalog.length > 0) {
                         // The grid fills this scroll content from y=0 (no
                         // header above it — the whole-page branch below
                         // offsets by the header height instead).
                         let first_row = Math.max(0, Math.floor(-self.content-y / root.row_stride));
                         let vis_rows = Math.ceil(self.visible-height / root.row_stride);
                         let first_idx = Math.max(0, (first_row - 2) * root.cols);
-                        let last_idx = Math.min(root.catalog.length - 1, (first_row + vis_rows + 2) * root.cols - 1);
+                        let last_idx = Math.min(root.display_catalog.length - 1, (first_row + vis_rows + 2) * root.cols - 1);
                         if (self.reported_first < -100000) {
                             // First report: just sync, initial fetches are
                             // already in flight.
@@ -911,15 +1182,17 @@ export component DiscoverPage {
 
                 fix_grid := DiscoverGrid {
                     width: 100%;
-                    catalog: root.catalog;
+                    catalog: root.display_catalog;
                     cols: root.cols;
                     item-width: root.item-width;
                     item-gap: root.item-gap;
                     kb_active <=> root.kb_active;
                     kb_zone <=> root.kb_zone;
                     kb_idx <=> root.kb_idx;
-                    loading_more: root.loading_more;
-                    empty_hint: root.empty_hint;
+                    loading_more: root.display_loading_more;
+                    loading: root.display_loading;
+                    empty_hint: root.display_empty_hint;
+                    stagger: root.search_results_open && root.animate_search_results && Anim.enabled && Anim.transitions;
                     item_selected(id, i) => { root.item_selected(id, i); }
                 }
                 }
@@ -972,33 +1245,37 @@ export component DiscoverPage {
         // Touch devices scroll by dragging (there is no wheel):
         // the fluent-style ScrollView disables drag-pan by default,
         // so opt in explicitly.
-        mouse-drag-pan-enabled: true;
+        mouse-drag-pan-enabled: root.page_pan_enabled;
+        property <bool> results_mode: root.search_results_open;
+        changed results_mode => {
+            self.content-y = root.display_scroll_y;
+        }
         // One-way mirror, same pattern as the desktop grid scroll above.
-        init => { self.content-y = root.scroll_y; }
+        init => { self.content-y = root.display_scroll_y; }
         // Preload + unload reporting (Bridge::visible_range): same
         // row_stride as above, but the grid starts below the filter
         // header, so its top edge offsets the row math.
         property <int> reported_first: -1000000;
         changed content-y => {
-            root.scroll_y = self.content-y;
+            root.set_display_scroll_y(self.content-y);
             // Live metrics for the keyboard follow-up (page-level
             // functions cannot read this gated scroll directly).
             root.sv_vh = self.visible-height;
             root.sv_vph = self.content-height;
-            root.sv_grid_top = and_header.height;
+            // The active header mirrors its height into sv_grid_top below.
             // Near-bottom guard (same as the desktop grid scroll above):
             // content-y is 0 at the top and
             // visible-height - content-height at the bottom.
-            if (root.catalog.length > 0 && root.can_load_more && !root.loading_more
+            if (root.display_catalog.length > 0 && root.display_can_load_more && !root.display_loading_more
                 && self.content-y <= self.visible-height - self.content-height + 600px) {
                 root.load_more();
             }
-            if (root.catalog.length > 0) {
-                let grid_off = Math.max(0px, -self.content-y - and_header.height);
+            if (root.display_catalog.length > 0) {
+                let grid_off = Math.max(0px, -self.content-y - root.sv_grid_top);
                 let first_row = Math.floor(grid_off / root.row_stride);
                 let vis_rows = Math.ceil(self.visible-height / root.row_stride);
                 let first_idx = Math.max(0, (first_row - 2) * root.cols);
-                let last_idx = Math.min(root.catalog.length - 1, (first_row + vis_rows + 2) * root.cols - 1);
+                let last_idx = Math.min(root.display_catalog.length - 1, (first_row + vis_rows + 2) * root.cols - 1);
                 if (self.reported_first < -100000) {
                     // First report: just sync, initial fetches are
                     // already in flight.
@@ -1017,13 +1294,17 @@ export component DiscoverPage {
             and_header := DiscoverHeader {
                 width: 100%;
                 catalog_names: root.catalog_names;
+                catalog_labels: root.catalog_labels;
+                genre_names: root.genre_names;
+                search_history: root.search_history;
                 type_names: root.type_names;
                 addon_names: root.addon_names;
                 searchable: root.searchable;
-                count: root.catalog.length;
+                results_open: root.search_results_open;
                 addon_combo_idx <=> root.addon_combo_idx;
                 type_combo_idx <=> root.type_combo_idx;
                 catalog_combo_idx <=> root.catalog_combo_idx;
+                genre_combo_idx <=> root.genre_combo_idx;
                 search_text <=> root.search_text;
                 searchable_hint: root.searchable_hint;
                 narrow: root.narrow;
@@ -1036,21 +1317,36 @@ export component DiscoverPage {
                 addon_picked(v) => { root.addon_picked(v); }
                 type_picked(v) => { root.type_picked(v); }
                 catalog_picked(v) => { root.catalog_picked(v); }
-                search_submitted(v) => { root.search_submitted(v); }
+                genre_picked(v) => { root.genre_picked(v); }
+                search_edited(v) => {
+                    root.search_scroll_y = 0px;
+                    root.search_edited(v);
+                }
+                search_submitted(v) => {
+                    root.search_scroll_y = 0px;
+                    root.search_submitted(v);
+                }
+                back_picked => { root.leave_search(); }
+                search_history_cleared => { root.search_history_cleared(); }
                 search_done => { nav_scope.focus(); }
+                filters_panned => { root.filters_panned(); }
+                filters_pan_released => { root.filters_pan_released(); }
+                changed height => { root.sv_grid_top = self.height; }
             }
 
             and_grid := DiscoverGrid {
                 width: 100%;
-                catalog: root.catalog;
+                catalog: root.display_catalog;
                 cols: root.cols;
                 item-width: root.item-width;
                 item-gap: root.item-gap;
                 kb_active <=> root.kb_active;
                 kb_zone <=> root.kb_zone;
                 kb_idx <=> root.kb_idx;
-                loading_more: root.loading_more;
-                empty_hint: root.empty_hint;
+                loading_more: root.display_loading_more;
+                loading: root.display_loading;
+                empty_hint: root.display_empty_hint;
+                stagger: root.search_results_open && root.animate_search_results && Anim.enabled && Anim.transitions;
                 item_selected(id, i) => { root.item_selected(id, i); }
             }
         }
@@ -1092,6 +1388,16 @@ export component DiscoverPage {
         discover_picked => { root.discover_picked(); }
         library_picked => { root.library_picked(); }
         settings_picked => { root.settings_picked(); }
+    }
+
+    // Fade-through gives the switch between browse and results a brief,
+    // low-key transition without moving the scrollable card grid.
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000;
+        opacity: root.transition_cover ? 0.16 : 0.0;
+        animate opacity { duration: Anim.transition_fade; easing: ease-in-out; }
     }
     }
 }

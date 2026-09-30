@@ -7,8 +7,9 @@ license.workspace = true
 [dependencies]
 nova-config = { path = "../config" }
 slint = { workspace = true }
-# Pure-Rust image decode: desktop cache pipeline and Android fetch path.
-image = "0.25.10"
+# Image decode: desktop cache pipeline and Android fetch path; keep only artwork
+# formats used by the app.
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 
 # --- Desktop (non-Android) -------------------------------------------------
 [target.'cfg(not(target_os = "android"))'.dependencies]

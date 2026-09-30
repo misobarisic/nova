@@ -10,7 +10,7 @@ license.workspace = true
 [dependencies]
 nova-config = { path = "../config" }
 nova-ui = { path = "../ui" }
-slint = { workspace = true, features = ["backend-android-activity-06"] }
+slint = { workspace = true }
 # Vendored libmpv; build_libmpv stays off (see root Cargo.toml notes).
 libmpv2 = "6.0.0"
 # mpv track-list JSON parsing.

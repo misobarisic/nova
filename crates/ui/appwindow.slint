@@ -48,21 +48,39 @@ export component AppWindow inherits Window {
         : #0f0f12;
 
     in-out property <[MediaCard]> catalog: [];
+    in-out property <[MediaCard]> search_results: [];
+    in-out property <[string]> discover_search_history: [];
     in-out property <[string]> addon_names: [];
     in-out property <[string]> type_names: [];
     in-out property <[string]> catalog_names: [];
+    in-out property <[string]> catalog_labels: [];
+    in-out property <[string]> genre_names: [];
     in-out property <[AddonRow]> addon_rows: [];
     in-out property <[StreamRow]> streams: [];
     in-out property <int> addon_combo_idx: -1;
     in-out property <int> type_combo_idx: -1;
     in-out property <int> catalog_combo_idx: -1;
+    in-out property <int> genre_combo_idx: 0;
     in-out property <string> addon_url: "";
     in-out property <string> search_text: "";
-    // False when the chosen catalog declares no search extra: Discover
-    // disables its search field + button instead of silently re-fetching.
+    in-out property <bool> discover_search_open: false;
+    // Survives page recreation while opening a result's detail view.
+    in-out property <bool> discover_search_animate_results: true;
+    changed modal_visible => {
+        if (root.modal_visible && root.discover_search_open) {
+            root.discover_search_animate_results = false;
+        }
+    }
+    in-out property <bool> search_loading: false;
+    in-out property <bool> search_loading_more: false;
+    in-out property <bool> search_can_load_more: false;
+    in-out property <string> search_empty_hint: @tr("No results for this search.");
+    // False when no enabled catalog declares search: the global search
+    // field is disabled instead of silently changing browse data.
     in-out property <bool> searchable: true;
     // Minimum grid columns (Settings → Display), applied live on autosave.
     in-out property <int> discover_min_cols: 2;
+    in-out property <bool> discover_catalog_addon_names: true;
     in-out property <int> library_min_cols: 2;
     in-out property <string> empty_hint: @tr("No addons installed yet — add one in Settings → Addons.");
     in-out property <string> streams_hint: "";
@@ -285,6 +303,7 @@ export component AppWindow inherits Window {
     // backing out of an entry restores the absolute position (focus
     // follow-up only guarantees visibility, which drifts slightly).
     in-out property <length> discover_scroll_y: 0px;
+    in-out property <length> discover_search_scroll_y: 0px;
     in-out property <length> library_scroll_y: 0px;
     in-out property <length> home_scroll_y: 0px;
     // Home subpage scroll + the two carousel offsets (restored across the
@@ -311,7 +330,11 @@ export component AppWindow inherits Window {
     callback addon_picked(string);
     callback type_picked(string);
     callback catalog_picked(string);
+    callback genre_picked(string);
+    callback search_edited(string);
     callback search_submitted(string);
+    callback search_back_picked();
+    callback search_history_cleared();
     callback item_selected(string, int);
     callback stream_picked(int);
     callback stream_page_picked(int);
@@ -480,6 +503,16 @@ export component AppWindow inherits Window {
         root.catalog[idx].poster = img;
         root.catalog[idx].is_loaded = false;
     }
+    public function set_search_card_poster(idx: int, img: image) {
+        if (idx < 0 || idx >= root.search_results.length) { return; }
+        root.search_results[idx].poster = img;
+        root.search_results[idx].is_loaded = true;
+    }
+    public function clear_search_card_poster(idx: int, img: image) {
+        if (idx < 0 || idx >= root.search_results.length) { return; }
+        root.search_results[idx].poster = img;
+        root.search_results[idx].is_loaded = false;
+    }
     public function set_library_poster(idx: int, img: image) {
         if (idx < 0 || idx >= root.library.length) { return; }
         root.library[idx].poster = img;
@@ -497,12 +530,23 @@ export component AppWindow inherits Window {
         addon_names <=> root.addon_names;
         type_names <=> root.type_names;
         catalog_names <=> root.catalog_names;
+        catalog_labels: root.catalog_labels;
+        genre_names <=> root.genre_names;
         empty_hint <=> root.empty_hint;
         searchable_hint <=> root.searchable_hint;
         addon_combo_idx <=> root.addon_combo_idx;
         type_combo_idx <=> root.type_combo_idx;
         catalog_combo_idx <=> root.catalog_combo_idx;
+        genre_combo_idx <=> root.genre_combo_idx;
         search_text <=> root.search_text;
+        search_results <=> root.search_results;
+        search_history: root.discover_search_history;
+        search_results_open <=> root.discover_search_open;
+        animate_search_results: root.discover_search_animate_results;
+        search_loading <=> root.search_loading;
+        search_loading_more <=> root.search_loading_more;
+        search_can_load_more <=> root.search_can_load_more;
+        search_empty_hint <=> root.search_empty_hint;
         searchable <=> root.searchable;
         min_cols: root.discover_min_cols;
         can_load_more <=> root.can_load_more;
@@ -513,6 +557,7 @@ export component AppWindow inherits Window {
         kb_idx <=> root.discover_kb_idx;
         kb_active <=> root.kb_active;
         scroll_y <=> root.discover_scroll_y;
+        search_scroll_y <=> root.discover_search_scroll_y;
         scroll_page <=> root.discover_scroll_page;
         narrow: root.narrow_ui;
         safe-top: root.safe-area-insets.top;
@@ -523,7 +568,11 @@ export component AppWindow inherits Window {
         addon_picked(v) => { root.addon_picked(v); }
         type_picked(v) => { root.type_picked(v); }
         catalog_picked(v) => { root.catalog_picked(v); }
+        genre_picked(v) => { root.genre_picked(v); }
+        search_edited(v) => { root.search_edited(v); }
         search_submitted(v) => { root.search_submitted(v); }
+        search_back_picked => { root.search_back_picked(); }
+        search_history_cleared => { root.search_history_cleared(); }
         item_selected(id, i) => { root.item_selected(id, i); }
         discover_picked => { root.discover_picked(); }
         home_picked => { root.home_picked(); }
@@ -718,6 +767,7 @@ export component AppWindow inherits Window {
         cache_show_unwatched_thumbs <=> root.cache_show_unwatched_thumbs;
         cache_lru_mb <=> root.cache_lru_mb;
         cache_prefetch_metadata <=> root.cache_prefetch_metadata;
+        discover_catalog_addon_names <=> root.discover_catalog_addon_names;
         cache_lazy_reencode <=> root.cache_lazy_reencode;
         discover_min_cols <=> root.discover_min_cols;
         library_min_cols <=> root.library_min_cols;

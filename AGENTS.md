@@ -41,8 +41,9 @@ cargo test                          # workspace tests (app unit + integration)
 cargo test --test settings_sync_overflow   # headless Slint UI regression tests
 ```
 
-- Android is built with `--no-default-features`; verify desktop-only code is
-  gated (`#[cfg(feature = "desktop")]`, `#[cfg(not(target_os = "android"))]`).
+- Android is built with `--no-default-features --features android`; verify
+  desktop-only code is gated (`#[cfg(feature = "desktop")]`,
+  `#[cfg(not(target_os = "android"))]`).
 - Pull request CI runs default workspace and Windows GNU-target `cargo check`
   (see `.github/workflows/build-release.yml`); it does not run tests or Clippy.
   Run relevant tests locally for behavior changes.

@@ -7,8 +7,9 @@ license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
 # Slint GUI toolkit: single source of truth for the version. Crates opt into
-# features locally with `slint = { workspace = true, features = [...] }`.
-slint = "1.18.0"
+# backend/renderer features through the root package; avoid Slint's default
+# software renderer and desktop-only extras.
+slint = { version = "1.18.0", default-features = false, features = ["std", "accessibility", "compat-1-2"] }
 slint-build = "1.18.0"
 i-slint-backend-testing = "1.18.0"
 
@@ -23,12 +24,15 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["desktop"]
-# Desktop-only extras: legacy TOML migration and file parsing. The app code
+# Desktop entry: Winit/FemtoVG backend. The app code
 # itself compiles on desktop and Android (the APK builds with
-# `--no-default-features`).
+# `--no-default-features --features android`).
 desktop = [
-    "dep:toml",
+    "slint/backend-winit",
+    "slint/renderer-femtovg",
 ]
+# Android's activity backend selects Slint's Skia renderer on Android.
+android = ["slint/backend-android-activity-06"]
 # Opt-in interpreter-backed UI for Linux development. Not part of any default
 # or release build: run it explicitly, e.g.
 #   cargo run --features live-preview        (or: cargo dev)
@@ -38,9 +42,7 @@ desktop = [
 live-preview = ["nova-ui/live-preview"]
 
 [dependencies]
-# `backend-android-activity-06` compiles on every target_os (per Slint docs)
-# and is required for the Android entry point in src/lib.rs.
-slint = { workspace = true, features = ["backend-android-activity-06"] }
+slint = { workspace = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 # Addon protocol (URL building + response parsing). HTTP lives in nova-media.
@@ -55,9 +57,6 @@ nova-download = { path = "crates/download" }
 nova-player = { path = "crates/player" }
 nova-torrent = { path = "crates/torrent" }
 nova-sync = { path = "crates/sync" }
-
-# `settings.toml` / addons / library file parsing (desktop only).
-toml = { version = "1.1.5", optional = true }
 
 # QR encoding for the sync invite ticket (Settings → Sync). Disable default
 # features so we don't pull the `image` crate: we read the module matrix via
@@ -92,7 +91,7 @@ i-slint-backend-testing = { workspace = true }
 # Feed real touch phases (rather than mouse events) to the carousel gesture test.
 i-slint-core = "1.18.0"
 # Test fixtures build small PNGs.
-image = "0.25.10"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 # The QR round-trip test encodes a ticket and decodes the resulting raster;
 # on Android the same crate is a normal dependency. Listed here so the test
 # runs on desktop, where the target-gated dependency is not built.

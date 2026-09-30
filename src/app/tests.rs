@@ -576,27 +576,6 @@ mod persistence_tests {
     }
 
     #[test]
-    fn addons_file_round_trips_through_toml() {
-        let dir = scratch("addons");
-        let urls = vec![
-            ("https://a.example".to_string(), true),
-            ("https://b.example".to_string(), false),
-        ];
-        write_addons_file(&dir, &urls);
-
-        let text = fs::read_to_string(dir.join("addons.toml")).unwrap();
-        assert!(text.starts_with('#'), "header comment kept: {text}");
-        assert_eq!(read_addons_file(&dir), Some(urls));
-
-        // A missing file reads as empty; a corrupt file does not panic.
-        assert_eq!(read_addons_file(&scratch("none")), None);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("addons.toml"), "not [ valid toml").unwrap();
-        assert_eq!(read_addons_file(&dir), None);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn manifest_cache_round_trips_and_deletes() {
         let dir = scratch("manifests");
         let url = "https://v3-cinemeta.strem.io/";
@@ -651,14 +630,6 @@ mod persistence_tests {
 #[cfg(test)]
 mod library_tests {
     use super::super::*;
-
-    /// A scratch directory unique to this test binary/name.
-    fn scratch(sub: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("nova-library-test-{}-{sub}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        dir
-    }
 
     fn entry(id: &str, type_: &str, name: &str, year: &str, poster_url: &str) -> LibraryEntry {
         LibraryEntry {
@@ -725,26 +696,6 @@ mod library_tests {
     }
 
     #[test]
-    fn library_file_round_trips_and_keeps_order() {
-        let dir = scratch("roundtrip");
-        let items = vec![
-            entry("tt1", "movie", "Alpha", "2020", "https://img/a"),
-            entry("tt2", "series", "Beta", "1999", ""),
-            entry("tt3", "series", "Gamma", "", "https://img/c"),
-        ];
-        write_library_file(&dir, &items);
-        let back = read_library_file(&dir).expect("library.toml readable");
-        assert_eq!(back, items, "entries round-trip in order");
-
-        // A missing file reads as empty; a corrupt file does not panic.
-        assert!(read_library_file(&scratch("none")).is_none());
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("library.toml"), "not [ valid toml").unwrap();
-        assert!(read_library_file(&dir).is_none());
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn upsert_dedupes_by_id_and_removal_drops_entry() {
         let mut items = vec![entry("tt1", "movie", "Alpha", "2020", "u1")];
         // Same id overwrites in place (kept position), returns "not added".
@@ -773,35 +724,6 @@ mod library_tests {
     }
 
     #[test]
-    fn library_file_starts_with_header_comment() {
-        let dir = scratch("header");
-        let items = vec![entry("tt9", "movie", "Nine", "2022", "")];
-        write_library_file(&dir, &items);
-        let text = fs::read_to_string(dir.join("library.toml")).unwrap();
-        assert!(
-            text.starts_with("# nova — your library."),
-            "header comment kept: {text}"
-        );
-        assert_eq!(read_library_file(&dir).unwrap(), items);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn library_backdrop_url_round_trips_and_backfills() {
-        let dir = scratch("backdrop");
-        let items = vec![
-            entry_bg("tt1", "series", "Alpha", "2020", "https://img/a", "https://img/bg"),
-            entry("tt2", "series", "Beta", "1999", ""),
-        ];
-        write_library_file(&dir, &items);
-        let back = read_library_file(&dir).expect("library.toml readable");
-        assert_eq!(back, items, "backdrop URL round-trips");
-        assert_eq!(back[0].background_url, "https://img/bg");
-        assert_eq!(back[1].background_url, "", "old entries default to empty");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn library_backdrop_url_back_compat_missing_field() {
         // Entries written before the backdrop-URL fix carry no
         // `background_url` key; serde(default) must fill "" without failing.
@@ -826,8 +748,7 @@ mod library_tests {
     }
 
     #[test]
-    fn library_header_text_round_trips_and_backfills() {
-        let dir = scratch("header-text");
+    fn library_json_round_trips_header_metadata() {
         let items = vec![
             entry_full(
                 "tt1",
@@ -841,14 +762,13 @@ mod library_tests {
             ),
             entry("tt2", "series", "Beta", "1999", ""),
         ];
-        write_library_file(&dir, &items);
-        let back = read_library_file(&dir).expect("library.toml readable");
+        let json = serde_json::to_string(&items).unwrap();
+        let back: Vec<LibraryEntry> = serde_json::from_str(&json).unwrap();
         assert_eq!(back, items, "genres + description round-trip");
         assert_eq!(back[0].genres, vec!["Drama".to_string(), "Sci-Fi".to_string()]);
         assert_eq!(back[0].description, "A synopsis.");
         assert!(back[1].genres.is_empty());
         assert_eq!(back[1].description, "");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1114,11 +1034,8 @@ mod settings_tests {
     }
 
     #[test]
-    fn settings_round_trip_and_defaults() {
-        let dir = scratch("roundtrip");
-        // Missing file -> defaults.
-        let defaults = read_settings_file(&dir);
-        assert_eq!(defaults, CacheSettings::default());
+    fn settings_json_round_trip_and_defaults() {
+        let defaults = CacheSettings::default();
         assert!(!defaults.enabled);
         assert_eq!(defaults.format, CacheImageFormat::Webp);
 
@@ -1129,29 +1046,11 @@ mod settings_tests {
             downscale: false,
             ..CacheSettings::default()
         };
-        write_settings_file(&dir, &custom);
-        assert_eq!(read_settings_file(&dir), custom);
+        let json = serde_json::to_string(&custom).unwrap();
+        let back: CacheSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, custom);
         assert_eq!(custom.format.label(), "JPEG");
         assert_ne!(custom.config_key(), CacheSettings::default().config_key());
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn settings_corrupt_file_reads_as_defaults() {
-        let dir = scratch("corrupt");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("settings.toml"), "not [ valid").unwrap();
-        assert_eq!(read_settings_file(&dir), CacheSettings::default());
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn settings_file_starts_with_header_comment() {
-        let dir = scratch("header");
-        write_settings_file(&dir, &CacheSettings::default());
-        let text = fs::read_to_string(dir.join("settings.toml")).unwrap();
-        assert!(text.starts_with("# nova — settings."), "header kept: {text}");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1164,12 +1063,14 @@ mod settings_tests {
         )
         .expect("old JSON parses");
         assert!(old.cache_images);
-        // Explicit off survives a file round-trip.
-        let dir = scratch("cache-images-off");
-        let off = CacheSettings { cache_images: false, ..CacheSettings::default() };
-        write_settings_file(&dir, &off);
-        assert!(!read_settings_file(&dir).cache_images);
-        let _ = fs::remove_dir_all(&dir);
+        // Explicit off survives the JSON format used in the KV store.
+        let off = CacheSettings {
+            cache_images: false,
+            ..CacheSettings::default()
+        };
+        let json = serde_json::to_string(&off).unwrap();
+        let back: CacheSettings = serde_json::from_str(&json).unwrap();
+        assert!(!back.cache_images);
     }
 
     #[test]
@@ -1186,8 +1087,7 @@ mod settings_tests {
         )
         .expect("old JSON parses");
         assert!(old.animations);
-        // Explicit off survives a file round-trip.
-        let dir = scratch("animations-off");
+        // Explicit off survives the JSON format used in the KV store.
         let off = CacheSettings {
             animations: false,
             anim_transitions: false,
@@ -1195,9 +1095,9 @@ mod settings_tests {
             anim_player: false,
             ..CacheSettings::default()
         };
-        write_settings_file(&dir, &off);
-        assert_eq!(read_settings_file(&dir), off);
-        let _ = fs::remove_dir_all(&dir);
+        let json = serde_json::to_string(&off).unwrap();
+        let back: CacheSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, off);
     }
 
     #[test]
@@ -1220,16 +1120,15 @@ mod settings_tests {
         )
         .expect("old JSON parses");
         assert!(!old.player_external);
-        // Explicit external survives a file round-trip.
-        let dir = scratch("player-external");
+        // Explicit external selection survives the persisted JSON format.
         let ext = CacheSettings {
             player_external: true,
             desktop_external_app: nova_config::DesktopExternalApp::Vlc,
             ..CacheSettings::default()
         };
-        write_settings_file(&dir, &ext);
-        assert_eq!(read_settings_file(&dir), ext);
-        let _ = fs::remove_dir_all(&dir);
+        let json = serde_json::to_string(&ext).unwrap();
+        let back: CacheSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ext);
     }
 
     #[test]
@@ -1343,61 +1242,8 @@ mod settings_tests {
     }
 
     #[test]
-    fn torrent_settings_round_trip_and_defaults() {
-        let dir = scratch("torrent-roundtrip");
-        // Missing file -> defaults (streaming on, 20 GiB cap, no limit).
-        let defaults = read_torrent_settings_file(&dir);
-        assert_eq!(defaults, TorrentSettings::default());
-        assert!(defaults.enabled);
-        assert_eq!(defaults.max_mb, 20480);
-        assert_eq!(defaults.down_limit_kbps, 0);
-        assert!(!defaults.no_cache);
-
-        let custom = TorrentSettings {
-            enabled: false,
-            dir: "/media/torrents".into(),
-            max_mb: 4096,
-            down_limit_kbps: 2048,
-            no_cache: true,
-        };
-        write_torrent_settings_file(&dir, &custom);
-        assert_eq!(read_torrent_settings_file(&dir), custom);
-
-        // The two sections are written independently: a torrent-only write
-        // must preserve the image-cache settings and vice versa.
-        let cache = CacheSettings {
-            quality: 42,
-            ..CacheSettings::default()
-        };
-        write_settings_file(&dir, &cache);
-        assert_eq!(read_settings_file(&dir).quality, 42);
-        assert_eq!(read_torrent_settings_file(&dir), custom);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn torrent_settings_backfill_from_partial_section() {
-        let dir = scratch("torrent-backfill");
-        fs::create_dir_all(&dir).unwrap();
-        // A file written before later fields existed carries only `enabled`;
-        // the missing keys must fall back to their defaults.
-        fs::write(
-            dir.join("settings.toml"),
-            "[torrent]\nenabled = false\n",
-        )
-        .unwrap();
-        let s = read_torrent_settings_file(&dir);
-        assert!(!s.enabled);
-        assert_eq!(s.max_mb, 20480);
-        assert!(s.dir.is_empty());
-        assert!(!s.no_cache);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn torrent_settings_json_round_trip_and_backfill() {
-        // The KV store serializes torrent settings as JSON so Android (which
-        // has no `toml` dependency) persists them too; missing keys backfill.
+        // Missing fields in saved KV JSON must backfill from their defaults.
         let custom = TorrentSettings {
             enabled: false,
             dir: "/media/torrents".into(),
@@ -1600,42 +1446,6 @@ mod image_cache_tests {
         };
         let bytes = encode_for_cache(&settings, &solid_rgba(40, 30)).expect("jpeg bytes");
         assert!(bytes.starts_with(&[0xFF, 0xD8, 0xFF]));
-    }
-}
-
-
-#[cfg(test)]
-mod addons_file_tests {
-    use super::super::*;
-
-    #[test]
-    fn legacy_plain_url_list_reads_as_enabled() {
-        let dir = std::env::temp_dir().join(format!("nova-test-legacy-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join("addons.toml"),
-            "addons = [\"https://a.example\", \"https://b.example\"]\n",
-        )
-        .unwrap();
-        assert_eq!(
-            read_addons_file(&dir),
-            Some(vec![
-                ("https://a.example".to_string(), true),
-                ("https://b.example".to_string(), true),
-            ])
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn disabled_flag_is_preserved_across_rewrite() {
-        let dir = std::env::temp_dir().join(format!("nova-test-flags-{}", std::process::id()));
-        let entries = vec![("https://a.example".to_string(), false)];
-        write_addons_file(&dir, &entries);
-        let text = fs::read_to_string(dir.join("addons.toml")).unwrap();
-        assert!(text.contains("enabled = false"), "flag written: {text}");
-        assert_eq!(read_addons_file(&dir), Some(entries));
-        let _ = fs::remove_dir_all(&dir);
     }
 }
 

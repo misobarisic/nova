@@ -20,6 +20,7 @@ impl Bridge {
             app.set_cache_prefetch_metadata(settings.prefetch_metadata);
             app.set_cache_lazy_reencode(settings.lazy_reencode);
             app.set_discover_min_cols(settings.discover_min_cols as i32);
+            app.set_discover_catalog_addon_names(settings.discover_catalog_addon_names);
             app.set_library_min_cols(settings.library_min_cols as i32);
             app.set_android_hwdec_index(settings.android_hwdec.index());
             app.set_player_backend_index(if settings.player_external { 1 } else { 0 });
@@ -41,6 +42,7 @@ impl Bridge {
         self.download_settings_to_ui();
         self.apply_animations(&settings);
         self.apply_language(&settings);
+        self.apply_catalog_labels_to_ui();
         self.refresh_cache_disk_usage();
         self.apply_category_rows();
     }
@@ -145,6 +147,7 @@ impl Bridge {
                 lazy_reencode: app.get_cache_lazy_reencode(),
                 categories: state.cache_settings.categories.clone(),
                 discover_min_cols: app.get_discover_min_cols().clamp(2, 6) as u32,
+                discover_catalog_addon_names: app.get_discover_catalog_addon_names(),
                 library_min_cols: app.get_library_min_cols().clamp(2, 6) as u32,
                 android_hwdec: AndroidHwdec::from_index(app.get_android_hwdec_index()),
                 player_external: app.get_player_backend_index() == 1,
@@ -177,6 +180,7 @@ impl Bridge {
         write_settings(&settings);
         self.apply_animations(&settings);
         self.apply_language(&settings);
+        self.apply_catalog_labels_to_ui();
         self.refresh_cache_disk_usage();
 
         // Torrent settings share this debounce (the Settings → Torrents card
@@ -330,64 +334,6 @@ pub(crate) fn poster_cache_disk_usage(dir: &Path) -> (u64, usize) {
         }
     }
     (bytes, files)
-}
-#[cfg(feature = "desktop")]
-pub(crate) fn read_settings_file(dir: &Path) -> CacheSettings {
-    let Ok(text) = fs::read_to_string(dir.join("settings.toml")) else {
-        return CacheSettings::default();
-    };
-    toml::from_str::<SettingsFile>(&text)
-        .map(|f| f.cache)
-        .unwrap_or_default()
-}
-#[allow(dead_code)]
-#[cfg(feature = "desktop")]
-pub(crate) fn write_settings_file(dir: &Path, settings: &CacheSettings) {
-    if fs::create_dir_all(dir).is_err() {
-        eprintln!("nova: could not create config dir {:?}", dir);
-        return;
-    }
-    let body = toml::to_string_pretty(&SettingsFile {
-        cache: settings.clone(),
-        torrent: read_torrent_settings_file(dir),
-    })
-    .unwrap_or_default();
-    let header = "# nova — settings.\n\n";
-    let contents = format!("{header}{body}");
-    if let Err(e) = atomic_write(&dir.join("settings.toml"), &contents) {
-        eprintln!("nova: could not write settings.toml: {e}");
-    }
-}
-/// Read the torrent section from `settings.toml` (defaults when absent or
-/// unparseable). Native only.
-#[allow(dead_code)]
-#[cfg(feature = "desktop")]
-pub(crate) fn read_torrent_settings_file(dir: &Path) -> TorrentSettings {
-    let Ok(text) = fs::read_to_string(dir.join("settings.toml")) else {
-        return TorrentSettings::default();
-    };
-    toml::from_str::<SettingsFile>(&text)
-        .map(|f| f.torrent)
-        .unwrap_or_default()
-}
-/// Persist the torrent section, preserving the cached image settings.
-#[allow(dead_code)]
-#[cfg(feature = "desktop")]
-pub(crate) fn write_torrent_settings_file(dir: &Path, torrent: &TorrentSettings) {
-    if fs::create_dir_all(dir).is_err() {
-        eprintln!("nova: could not create config dir {:?}", dir);
-        return;
-    }
-    let body = toml::to_string_pretty(&SettingsFile {
-        cache: read_settings_file(dir),
-        torrent: torrent.clone(),
-    })
-    .unwrap_or_default();
-    let header = "# nova — settings.\n\n";
-    let contents = format!("{header}{body}");
-    if let Err(e) = atomic_write(&dir.join("settings.toml"), &contents) {
-        eprintln!("nova: could not write settings.toml: {e}");
-    }
 }
 /// App-wide cache settings (also mirrored in the settings page).
 pub(crate) fn read_settings() -> CacheSettings {

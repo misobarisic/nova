@@ -102,18 +102,6 @@ msgstr "Odaberite sezonu"
 msgid "Filter episodes…"
 msgstr "Filtrirajte epizode…"
 
-msgid "{n} episode · page {}/{}"
-msgid_plural "{n} episodes · page {}/{}"
-msgstr[0] "{n} epizoda · stranica {}/{}"
-msgstr[1] "{n} epizode · stranica {}/{}"
-msgstr[2] "{n} epizoda · stranica {}/{}"
-
-msgid "{n} episode"
-msgid_plural "{n} episodes"
-msgstr[0] "{n} epizoda"
-msgstr[1] "{n} epizode"
-msgstr[2] "{n} epizoda"
-
 msgid "Mark episode as unwatched"
 msgstr "Označite epizodu kao nepogledanu"
 
@@ -156,8 +144,41 @@ msgstr "Vrsta"
 msgid "Catalog"
 msgstr "Katalog"
 
+msgid "Genre"
+msgstr "Žanr"
+
+msgid "All genres"
+msgstr "Svi žanrovi"
+
 msgid "Search"
 msgstr "Pretraga"
+
+msgid "Search movies, shows…"
+msgstr "Pretražite filmove i serije…"
+
+msgid "No enabled catalogs support search."
+msgstr "Nijedan omogućeni katalog ne podržava pretraživanje."
+
+msgid "Search results"
+msgstr "Rezultati pretraživanja"
+
+msgid "Recent searches"
+msgstr "Nedavne pretrage"
+
+msgid "Clear history"
+msgstr "Obrišite povijest"
+
+msgid "Show addon names in catalogs"
+msgstr "Prikažite nazive dodataka u katalozima"
+
+msgid "Prefix catalog names with their addon in Discover's All addons view."
+msgstr "Dodajte naziv dodatka ispred naziva kataloga u prikazu Svi dodaci na stranici Otkrijte."
+
+msgid "Back"
+msgstr "Natrag"
+
+msgid "No results for this search."
+msgstr "Nema rezultata za ovu pretragu."
 
 msgid "Play"
 msgstr "Reproducirajte"

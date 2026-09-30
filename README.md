@@ -22,8 +22,10 @@ cargo test               # workspace tests (unit + headless Slint UI tests)
 cargo test -p nova-sync --lib   # fast sync-crate unit tests
 ```
 
-Android builds with `--no-default-features` inside `nix develop .#android`
-(see `Makefile` → `make apk`); details in `docs/PROJECT_STRUCTURE.md`.
+Android Cargo builds use `--no-default-features --features android`. Enter
+`nix develop .#android` before using Android Make targets; Make assumes the
+required toolchain is already active. See `docs/PROJECT_STRUCTURE.md` for all
+targets.
 
 ## License
 

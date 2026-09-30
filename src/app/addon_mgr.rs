@@ -448,6 +448,7 @@ impl Bridge {
         }
         state.chosen_type = 0;
         state.chosen_catalog = 0;
+        state.chosen_genre.clear();
         let has_grid_source = !state.type_defs.is_empty();
 
         // Collect the model contents while holding the lock.
@@ -522,6 +523,8 @@ impl Bridge {
         app.set_addon_combo_idx(if !enabled_idxs.is_empty() { addon_combo_idx as i32 } else { -1 });
         app.set_type_combo_idx(0);
         app.set_catalog_combo_idx(0);
+        self.apply_catalog_labels_to_ui();
+        self.apply_genre_selection_to_ui();
         self.apply_search_support_to_ui();
 
         if load && has_grid_source {
@@ -599,52 +602,6 @@ impl Bridge {
 
 }
 
-#[cfg(feature = "desktop")]
-pub(crate) fn read_addons_file(dir: &Path) -> Option<Vec<(String, bool)>> {
-    let text = fs::read_to_string(dir.join("addons.toml")).ok()?;
-    // Current format: per-addon tables with an `enabled` flag.
-    if let Ok(parsed) = toml::from_str::<AddonsFile>(&text) {
-        return Some(
-            parsed
-                .addons
-                .into_iter()
-                .map(|a| (a.url, a.enabled))
-                .collect(),
-        );
-    }
-    // Legacy format: a plain list of URLs (all enabled).
-    toml::from_str::<LegacyAddonsFile>(&text)
-        .ok()
-        .map(|p| p.addons.into_iter().map(|u| (u, true)).collect())
-}
-#[allow(dead_code)]
-#[cfg(feature = "desktop")]
-pub(crate) fn write_addons_file(dir: &Path, addons: &[(String, bool)]) {
-    if fs::create_dir_all(dir).is_err() {
-        eprintln!("nova: could not create config dir {:?}", dir);
-        return;
-    }
-    let body = toml::to_string_pretty(&AddonsFile {
-        addons: addons
-            .iter()
-            .map(|(url, enabled)| AddonRowFile {
-                url: url.clone(),
-                enabled: *enabled,
-            })
-            .collect(),
-    })
-    .unwrap_or_default();
-    let header = "# nova — installed addons. One entry per addon: the normalised base\n\
-                  # URL plus whether it is enabled. Disabled addons stay installed\n\
-                  # but are hidden from Discover and provide no catalogs/streams\n\
-                  # until re-enabled. Add, remove and toggle entries here or from\n\
-                  # Settings → Addons; NOVA_ADDONS / --addon add enabled addons at\n\
-                  # startup. Manifests live in the sibling manifests/ directory.\n\n";
-    let contents = format!("{header}{body}");
-    if let Err(e) = atomic_write(&dir.join("addons.toml"), &contents) {
-        eprintln!("nova: could not write addons.toml: {e}");
-    }
-}
 #[allow(dead_code)]
 #[cfg(feature = "desktop")]
 pub(crate) fn manifest_cache_dir(dir: &Path) -> PathBuf {
@@ -683,43 +640,6 @@ pub(crate) fn write_cached_manifest(dir: &Path, url: &str, manifest: &Manifest) 
 #[allow(dead_code)]
 pub(crate) fn delete_cached_manifest(dir: &Path, url: &str) {
     let _ = fs::remove_file(manifest_cache_path(dir, url));
-}
-/// Import the legacy `settings.toml` / `library.toml` / `addons.toml` into
-/// the KV store on first run.  Legacy files are left in place as backup.
-/// Episode + manifest caches are *not* migrated — their filenames are
-/// one-way hashes and they repopulate naturally.
-#[cfg(feature = "desktop")]
-pub(crate) fn migrate_legacy_storage(dir: &Path) {
-    if storage::get_str("settings").is_some() {
-        return; // already migrated or fresh install
-    }
-
-    // settings
-    let settings = read_settings_file(dir);
-    write_json("settings", &settings);
-
-    // library
-    if let Some(lib) = read_library_file(dir)
-        && !lib.is_empty()
-    {
-        write_json("library", &lib);
-    }
-
-    // addons
-    if let Some(addons) = read_addons_file(dir) {
-        let entries: Vec<AddonStore> = addons
-            .into_iter()
-            .map(|(url, enabled)| AddonStore {
-                url,
-                enabled,
-                configure_ok: None,
-                label: String::new(),
-            })
-            .collect();
-        write_json("addons", &entries);
-    }
-
-    eprintln!("nova: imported legacy settings/library/addons into nova.redb (files kept as backup)");
 }
 /// Persisted addons (URL + enabled flag + configure verdict + label) from the
 /// KV store (empty when absent/unreadable).
