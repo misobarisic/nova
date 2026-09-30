@@ -48,6 +48,12 @@ let
         je_cv_strerror_r_returns_char_with_gnu_source = "yes";
       };
 
+      rav1e = attrs: {
+        # rav1e's build script forwards Cargo's encoded rustflags to dependents;
+        # crate2nix does not set this variable for the crate derivation.
+        CARGO_ENCODED_RUSTFLAGS = "";
+      };
+
       av-scenechange = attrs: {
         # This build script forwards Cargo's encoded rustflags to dependents;
         # crate2nix does not set it when compiling the crate derivation.
