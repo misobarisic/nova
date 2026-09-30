@@ -64,14 +64,21 @@ download_verified \
 appimage="$dist/nova-x86_64-${artifact_tag}.AppImage"
 deb_file="$dist/nova-x86_64-${artifact_tag}.deb"
 app_icon="$appdir/usr/share/icons/hicolor/512x512/apps/nova.png"
+icon_512="$work/nova-512.png"
 
 install -D -m 755 "$binary" "$appdir/usr/bin/nova"
 install -D -m 755 "$binary" "$deb_root/usr/bin/nova"
-install -D -m 644 assets/logo.png "$app_icon"
+convert assets/logo.png -resize 512x512 -background none -gravity center -extent 512x512 "$icon_512"
+icon_dimensions="$(identify -format '%wx%h' "$icon_512")"
+if [[ "$icon_dimensions" != "512x512" ]]; then
+  echo "Expected a 512x512 AppImage icon, got $icon_dimensions" >&2
+  exit 1
+fi
+install -D -m 644 "$icon_512" "$app_icon"
 install -D -m 644 LICENSE "$appdir/usr/share/doc/nova/LICENSE"
 install -D -m 644 THIRD_PARTY_NOTICES.md "$appdir/usr/share/doc/nova/THIRD_PARTY_NOTICES.md"
 install -D -m 644 .github/scripts/nova.desktop "$deb_root/usr/share/applications/nova.desktop"
-install -D -m 644 assets/logo.png "$deb_root/usr/share/icons/hicolor/512x512/apps/nova.png"
+install -D -m 644 "$icon_512" "$deb_root/usr/share/icons/hicolor/512x512/apps/nova.png"
 install -D -m 644 LICENSE "$deb_root/usr/share/doc/nova/LICENSE"
 install -D -m 644 THIRD_PARTY_NOTICES.md "$deb_root/usr/share/doc/nova/THIRD_PARTY_NOTICES.md"
 install -D -m 644 .github/scripts/nova.desktop "$appdir/usr/share/applications/nova.desktop"
