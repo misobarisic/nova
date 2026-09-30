@@ -45,12 +45,18 @@ cargo apk2 run   --target aarch64-linux-android --no-default-features --lib -p n
 cargo check --workspace --locked --target x86_64-pc-windows-gnu
 ```
 
-Pull requests run host and Windows-target Cargo checks; they do not package
-platform builds or publish releases. Pushing a Git tag builds three Android APKs and a Windows x86_64 ZIP, then
-attaches all four to a GitHub Release. Android release filenames are
+Pull requests run host and Windows-target Cargo checks and exercise the Linux
+release packaging job. Pushing a Git tag builds three Android APKs, a Linux
+x86_64 `.deb` and AppImage, and a Windows x86_64 ZIP, then attaches all six
+files to a GitHub Release. Android release filenames are
 `nova-arm64-v8a-<tag>.apk`, `nova-x86_64-<tag>.apk`, and `nova-<tag>.apk`;
 the APK without an architecture suffix contains both arm64-v8a and x86_64.
-The Windows bundle is named `nova-windows-x86_64-<tag>.zip`.
+The Windows bundle is named `nova-windows-x86_64-<tag>.zip`. Linux release
+files are named `nova-x86_64-<tag>.deb` and
+`nova-x86_64-<tag>.AppImage`; both come from one native Ubuntu 22.04 build.
+The `.deb` declares shared-library dependencies, while the AppImage bundles
+libraries using linuxdeploy. Nova uses Slint's Winit/FemtoVG backend; Qt is
+not required.
 The Android workflow invokes cargo-apk2 once to build both architectures into
 a universal APK. `.github/scripts/package-android.py` derives the two
 architecture-specific APKs from that output, aligns and signs all three with

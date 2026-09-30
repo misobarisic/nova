@@ -5,6 +5,8 @@ on:
     paths:
       - ".github/workflows/build-release.yml"
       - ".github/scripts/package-android.py"
+      - ".github/scripts/package-linux.sh"
+      - ".github/scripts/nova.desktop"
       - ".cargo/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -118,6 +120,57 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  linux-build:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    name: Build Linux x86_64 packages (Ubuntu 22.04)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: stable
+
+      - name: Install Linux build and packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential clang cmake curl desktop-file-utils dpkg-dev imagemagick \
+            libasound2-dev libclang-dev libegl-dev libfontconfig1-dev \
+            libfreetype6-dev libfuse2 libgbm-dev libinput-dev libmpv-dev \
+            libseat-dev libssl-dev libudev-dev libvulkan-dev libwayland-dev \
+            libx11-dev libx11-xcb-dev libxcursor-dev libxi-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libxrandr-dev \
+            patchelf pkg-config \
+            squashfs-tools xinput
+
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --version 0.9.1 --features cli
+
+      - name: Build Nova release binary
+        run: cargo build --locked --release --bin nova
+
+      - name: Package Debian and AppImage artifacts
+        run: bash .github/scripts/package-linux.sh
+
+      - name: Upload Linux artifacts
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nova-linux-x86_64
+          path: |
+            dist/*.deb
+            dist/*.AppImage
+          if-no-files-found: error
+          retention-days: 1
+
   windows-build:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     name: Build Windows x86_64 (MinGW)
@@ -155,7 +208,7 @@ jobs:
   release:
     name: Publish tag release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: [android-build, windows-build]
+    needs: [android-build, linux-build, windows-build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -164,6 +217,12 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nova-android-apks
+          path: dist
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nova-linux-x86_64
           path: dist
 
       - name: Download Windows artifact

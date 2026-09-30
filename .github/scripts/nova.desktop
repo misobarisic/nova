@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Nova
+Comment=Media catalog and player
+Exec=nova
+Icon=nova
+Terminal=false
+Categories=AudioVideo;Player;
+StartupNotify=true
