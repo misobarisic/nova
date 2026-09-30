@@ -58,13 +58,6 @@ impl Bridge {
         self.apply_playback_speed(next);
     }
 
-    /// Main thread: write the stored rate to the KV store (debounced from the
-    /// UI — see `schedule_playback_speed_save` in `run.rs`).
-    pub(super) fn persist_playback_speed(&self) {
-        let settings = self.shared.lock().unwrap().cache_settings.clone();
-        write_settings(&settings);
-    }
-
     /// Remember `speed` in the in-memory settings and the runtime mirror the
     /// media/player crates read. No disk write: the caller persists.
     fn store_playback_speed(&self, speed: f32) {
@@ -82,7 +75,8 @@ impl Bridge {
     /// Persist the progress map, then repaint episode rows, season cards
     /// (watched check) and library badges. Uses the light `apply_*` path
     /// (no thumbnail re-queue) like the playback tracker does.
-    pub(super) fn persist_and_refresh_progress(&self) {        let map = self.shared.lock().unwrap().progress.clone();
+    pub(super) fn persist_and_refresh_progress(&self) {
+        let map = self.shared.lock().unwrap().progress.clone();
         write_progress_map(&map);
         self.apply_episode_rows();
         self.apply_season_cards();
@@ -150,8 +144,7 @@ impl Bridge {
                             // pause/delete it. The external fallback below has
                             // no close event, so it is not tracked here.
                             {
-                                bridge.shared.lock().unwrap().active_torrent =
-                                    Some(active_hash);
+                                bridge.shared.lock().unwrap().active_torrent = Some(active_hash);
                             }
                         } else {
                             // Built-in failed: external app as a fallback.
@@ -206,11 +199,14 @@ impl Bridge {
                 EpisodeStartBehavior::Resume | EpisodeStartBehavior::Ask => history_pos,
             };
             let ask = behavior == EpisodeStartBehavior::Ask;
-            let entry = state.progress.entry(key.clone()).or_insert_with(|| EpisodeProgress {
-                series_id: series_id.clone(),
-                episode_id: request_id.clone(),
-                ..Default::default()
-            });
+            let entry = state
+                .progress
+                .entry(key.clone())
+                .or_insert_with(|| EpisodeProgress {
+                    series_id: series_id.clone(),
+                    episode_id: request_id.clone(),
+                    ..Default::default()
+                });
             entry.series_id = series_id.clone();
             entry.episode_id = request_id.clone();
             if resume_choice.is_none() {
@@ -253,11 +249,14 @@ impl Bridge {
                 .get(&key)
                 .filter(|p| resumable_position(p.position_secs, p.duration_secs, p.watched))
                 .map(|p| p.position_secs);
-            let entry = state.progress.entry(key).or_insert_with(|| EpisodeProgress {
-                series_id: series_id.clone(),
-                episode_id: episode_id.clone(),
-                ..Default::default()
-            });
+            let entry = state
+                .progress
+                .entry(key)
+                .or_insert_with(|| EpisodeProgress {
+                    series_id: series_id.clone(),
+                    episode_id: episode_id.clone(),
+                    ..Default::default()
+                });
             entry.series_id = series_id.clone();
             entry.episode_id = episode_id.clone();
             entry.play_count += 1;
@@ -497,11 +496,14 @@ impl Bridge {
                 {
                     *t = target.clone();
                 }
-                let entry = state.progress.entry(key.clone()).or_insert_with(|| EpisodeProgress {
-                    series_id: target.series_id.clone(),
-                    episode_id: target.episode_id.clone(),
-                    ..Default::default()
-                });
+                let entry = state
+                    .progress
+                    .entry(key.clone())
+                    .or_insert_with(|| EpisodeProgress {
+                        series_id: target.series_id.clone(),
+                        episode_id: target.episode_id.clone(),
+                        ..Default::default()
+                    });
                 entry.position_secs = pos;
                 entry.duration_secs = dur;
                 entry.updated_at_secs = now;
@@ -521,10 +523,7 @@ impl Bridge {
                 write_progress_map(&map);
             }
             if newly_watched {
-                self.auto_delete_watched_downloads(
-                    &target.series_id,
-                    &[target.episode_id.clone()],
-                );
+                self.auto_delete_watched_downloads(&target.series_id, &[target.episode_id.clone()]);
             }
             if ui_refresh {
                 self.refresh_progress_ui();
@@ -533,10 +532,9 @@ impl Bridge {
             // Player just closed: finalize with the last observed values
             // (the close itself resets the UI props to 0). A close near the
             // end counts as watched the same as a natural EOF.
-            let (saw_frames, watched_now) =
-                (target.last_dur > 0.0 || target.last_pos > 0.0, {
-                    is_watched_position(target.last_pos, target.last_dur)
-                });
+            let (saw_frames, watched_now) = (target.last_dur > 0.0 || target.last_pos > 0.0, {
+                is_watched_position(target.last_pos, target.last_dur)
+            });
             {
                 let mut state = self.shared.lock().unwrap();
                 let still_mine = state
@@ -551,8 +549,10 @@ impl Bridge {
                 }
                 if saw_frames {
                     let key = progress_map_key(&target.series_id, &target.episode_id);
-                    let entry =
-                        state.progress.entry(key).or_insert_with(|| EpisodeProgress {
+                    let entry = state
+                        .progress
+                        .entry(key)
+                        .or_insert_with(|| EpisodeProgress {
                             series_id: target.series_id.clone(),
                             episode_id: target.episode_id.clone(),
                             ..Default::default()
@@ -572,10 +572,7 @@ impl Bridge {
                 }
             }
             if saw_frames && watched_now {
-                self.auto_delete_watched_downloads(
-                    &target.series_id,
-                    &[target.episode_id.clone()],
-                );
+                self.auto_delete_watched_downloads(&target.series_id, &[target.episode_id.clone()]);
             }
             self.refresh_progress_ui();
         }
@@ -619,7 +616,6 @@ impl Bridge {
             }
         }
     }
-
 }
 
 /// Decision for one live playback tick about the saved resume point.

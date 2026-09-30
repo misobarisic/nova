@@ -1,17 +1,76 @@
 //! Small shared helpers: KV JSON IO, atomic file writes, hashing,
 //! and human-readable formatting.
 use super::*;
+static UNREADABLE_KEYS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+static WRITE_FAILURES: AtomicU64 = AtomicU64::new(0);
+pub(crate) fn write_failures() -> u64 {
+    WRITE_FAILURES.load(Ordering::Relaxed)
+}
+pub(crate) fn block_unreadable(key: &str) {
+    UNREADABLE_KEYS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashSet::new)
+        .insert(key.to_string());
+}
+pub(crate) fn writable_key(key: &str) -> bool {
+    !UNREADABLE_KEYS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|keys| keys.contains(key))
+}
+
+pub(crate) fn read_json_result<T: serde::de::DeserializeOwned>(
+    key: &str,
+) -> Result<Option<T>, storage::Error> {
+    let raw = storage::try_get_str(key)?;
+    raw.map(|s| {
+        serde_json::from_str(&s).map_err(|e| storage::Error::new(storage::ErrorKind::Schema, e))
+    })
+    .transpose()
+}
 
 /// Deserialize a JSON string from the KV store.
 pub(crate) fn read_json<T: serde::de::DeserializeOwned>(key: &str) -> Option<T> {
-    let s = storage::get_str(key)?;
-    serde_json::from_str(&s).ok()
+    match read_json_result(key) {
+        Ok(value) => value,
+        Err(e) => {
+            block_unreadable(key);
+            storage::report(e);
+            None
+        }
+    }
 }
 /// Serialize a value to JSON and write it to the KV store.
 pub(crate) fn write_json(key: &str, value: &(impl Serialize + ?Sized)) {
+    if UNREADABLE_KEYS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|keys| keys.contains(key))
+    {
+        storage::report(storage::Error::new(
+            storage::ErrorKind::Schema,
+            "unreadable app data retained; writes blocked until recovery",
+        ));
+        WRITE_FAILURES.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     match serde_json::to_string(value) {
-        Ok(s) => storage::set_str(key, &s),
-        Err(e) => eprintln!("nova: serialize {key}: {e}"),
+        Ok(s) => {
+            if let Err(e) = persist_sync_snapshot(key, &s, false) {
+                WRITE_FAILURES.fetch_add(1, Ordering::Relaxed);
+                storage::report(storage::Error::new(
+                    storage::ErrorKind::Transaction,
+                    format!("persistence failed: {e:#}"),
+                ));
+            }
+        }
+        Err(e) => {
+            WRITE_FAILURES.fetch_add(1, Ordering::Relaxed);
+            storage::report(storage::Error::new(storage::ErrorKind::Serialization, e));
+        }
     }
 }
 /// Human-readable disk usage for the Settings page, e.g.

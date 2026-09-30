@@ -120,6 +120,7 @@ nova/
     ├── PROJECT_STRUCTURE.md  # this file
     ├── PLATFORM_STORAGE.md   # per-platform data and cache locations
     ├── sync-followons.md     # sync feature parking lot / status notes
+    ├── sync-hardening-plan.md # prioritized correctness/recovery implementation plan
     └── repo-follow-ons.md    # repository maintenance follow-ons
 ```
 
@@ -186,7 +187,7 @@ Defines the shared state and the UI bridge:
 | `library.rs` | My Library: entries, categories, persistence (`read/write_persisted_library`). Entering My Library always prefetches episode metadata — the Settings "Prefetch episode metadata" toggle gates Discover only (`catalog.rs`). Full behavior matrix (buckets, badges, checkmarks, menus, categories): `docs/library.md`. |
 | `playback.rs` | In-app playback flow, episode progress tracking (movies included: `open_player` arms a `PlaybackTarget` keyed to the movie's own id, and a resume clears any Continue Watching hide stamp), the per-device playback-rate methods (`apply_playback_speed` / `nudge_playback_speed`, applied to the live mpv session and persisted debounced), torrent settings runtime cache. |
 | `posters.rs` | Poster / backdrop / episode-thumbnail image pipeline (desktop worker pool + Android fetch path). |
-| `settings.rs` | Settings page: cache + torrent settings, episode resume behavior, maintenance, `read/write_settings`. |
+| `settings.rs` | Settings page: cache + torrent settings, episode resume behavior, maintenance, `read/write_settings`. `wire_settings_autosave` captures edits immediately and owns the application-lifetime 600 ms persistence debounce, shared with playback-rate controls. |
 | `streams.rs` | Stream-row mapping (`StreamSource`) and display-text helpers. |
 | `sync.rs` | Cross-device sync integration: decompose app state into records, apply remote records, Settings → Sync UI, pairing events. |
 | `qr.rs` | QR encoding of the sync invite ticket: renders the `NV1` ticket to a Slint image (`image-rendering: pixelated`) for desktop and Android. The Android scanner decodes the same payload, so display and scan agree by construction. |
@@ -261,14 +262,16 @@ and restoring the held playback rate still happen immediately.
 
 ### Primary store: redb (`nova-storage`)
 Single database at `<data_dir>/nova.redb`, table `kv` (`&str → &str`). Open once
-via `nova_storage::init_at(dir)` before any read/write; degrades to a no-op
-backend if it can't open. Keys used by the app:
+via `nova_storage::init_at(dir)` before any read/write. The `try_*` APIs distinguish
+missing keys from database/transaction failures; legacy convenience wrappers
+report failures through `last_error`. Unreadable app snapshots are write-blocked,
+and Settings displays a persistence warning. Keys used by the app:
 
 | Key | Content |
 |---|---|
 | `settings` | `CacheSettings` JSON (image cache + display + player backend/decoder + playback rate). Display's `discover_catalog_addon_names` defaults on and syncs as a settings field; hiding prefixes changes only dropdown labels, not catalog identity. Player backend choice (`player_external`, `desktop_external_app`), decoder (`android_hwdec`), episode start behavior (`episode_start_behavior`), playback rate (`playback_speed`, 0.5–2.0×), and UI `language` are device-local. |
 | `library` | `Vec<LibraryEntry>` JSON. |
-| `addons` | `Vec<AddonStore>` JSON (installed addons). |
+| `addons` | `Vec<AddonStore>` JSON (desired addons, including entries with unavailable manifests). Configure-page reachability is device-local. |
 | `manifest:{url}` | Cached addon `Manifest` JSON (one per addon). |
 | `discover:search_history` | Local-only JSON list of the 20 most recent unique completed Discover queries (2–256 characters). Loaded at startup, displayed on focusing the empty Discover input, and erased by Clear history. Never synced. |
 | `episode_progress` | `HashMap<String, EpisodeProgress>` JSON (watch history). Tracking = 250 ms tick mirroring mpv props (`playback.rs::note_player_progress_from_ui`): saves throttled to 30 s / 5 s delta (time-based saves skipped while paused), finalize-on-close, external player untracked. Series and movies both tracked: a movie's record is keyed `id\x01id`. |
@@ -282,7 +285,9 @@ backend if it can't open. Keys used by the app:
 | `sync:records` | Legacy whole-store JSON blob; migrated once to the per-record rows below, then removed. |
 | `srec:{len}:{domain}{key}` | One sync record row: `Record` JSON (`value` + `version`). Written individually (batched in one transaction on save), so a change touches one row instead of the whole store. |
 | `sync:records:hlc` | Persisted hybrid logical clock. |
-| `sync:records.corrupt.<ts>` / `<row>.corrupt.<ts>` | Quarantine backups (legacy blob or an unreadable record row). |
+| `sync:quarantine:<hash>` | Content-addressed JSON evidence (`key`, `raw`), outside active row prefixes; quarantining commits evidence and removal atomically. Old corrupt backups are retained/recovered without recursive suffixes. |
+| `sync:baseline:<domain>` | Materialized app values used as deletion/edit authority; unseen remote rows never participate in snapshot diffs. |
+| `sync:projection:pending` | Durable set of remotely changed domains awaiting projection; replayed on attachment, the UI poll, and restart. |
 | `sync:peer_acks` | Per-peer ack HLC map (local only; gates tombstone GC). |
 | `sync:invites` / `sync:pending_join` | Outstanding invites / in-flight join. |
 
@@ -290,6 +295,10 @@ Helpers: `src/app/io.rs` (`read_json`/`write_json`), and per-domain
 `read/write_persisted_*` functions. `nova-storage` exposes `write_batch`
 (single transaction for many rows) and `scan_prefix` (ordered prefix scan),
 which the sync store uses to persist per-record rows without rewriting a blob.
+Synced app snapshots, baselines, dirty rows, and HLC commit in one batch through
+`sync.rs::persist_sync_snapshot` and `nova_sync::prepare_snapshot`. Dirty work is
+retained until commit succeeds. Settings enum recovery is field-isolated and
+preserves unsupported raw values until that field is deliberately edited.
 
 ### Legacy files
 Legacy desktop `settings.toml`, `library.toml`, and `addons.toml` files are no
@@ -314,11 +323,17 @@ active `CacheSettings` in a global for media/player to read.
 The most intricate subsystem. Sync is **opt-in** (`sync:settings.enabled`);
 nothing binds a socket until `SyncEngine::setup()` runs.
 
+Correctness and recovery work is tracked in
+[`sync-hardening-plan.md`](sync-hardening-plan.md) (A–G code implemented; H partially implemented, device/power validation outstanding).
+
 ### Design
 - Generic, app-agnostic store: `domain -> key -> Record { value, version }`.
 - `Version` = HLC (`physical_ms`, `counter`) + `dev` id + `deleted` flag; LWW merge with tombstones. See `merge.rs`, `hlc.rs`, `store.rs`.
+- Socket-free `local_store` owns records even with networking disabled. Fresh untouched settings seed only a baseline; explicit settings edits publish intent even when selecting the default. Legacy persisted settings conservatively seed absent keys. Receive/reload reject or quarantine clocks beyond the one-hour drift bound.
+- Progress values carry JSON activity/watch/unwatch action registers (`__nova_progress_v1`), merged by deterministic action version. Watch stays sticky unless superseded by explicit unwatch; rewinds use the activity register, position/duration stay coherent, and play count takes max. Legacy values initialize registers from their record version.
 - Anti-entropy: each peer exchanges a **per-domain hash** of its version map, then full version maps only for domains that differ, then just the records the other lacks or has stale. One bidirectional QUIC stream per exchange (`protocol.rs`); an unchanged domain transfers no digest at all.
 - **Connection reuse:** the dialer keeps one connection per peer and opens a fresh bi stream per pass; the accept handler serves streams for the connection's lifetime. A closed/failed connection is evicted and redialed (`lib.rs`).
+- **Recovery/cadence:** periodic wakes honor monotonic per-peer backoff; explicit `sync_now` and completed network refreshes reset backoff for one bounded, coalesced pass. Overlapping network refreshes coalesce, and recovery wakes only after iroh refresh finishes. Interval/foreground changes recompute the pending periodic deadline immediately (`lib.rs`).
 - Sync frames are **postcard** inside a codec byte with optional **deflate** (`frame.rs`, `flate2`/miniz_oxide); pairing and removal keep raw postcard. postcard is non-self-describing, so schema changes require an ALPN bump. Current ALPNs:
   - `nova/sync/3` (`ALPN`) — record exchange (per-domain digest hashes + compressed frames)
   - `nova/pair/2` (`PAIR_ALPN`) — invite-ticket pairing
@@ -332,6 +347,8 @@ nothing binds a socket until `SyncEngine::setup()` runs.
 | `pair.rs` | `PairHandler`, invite lifecycle, join/accept flow, `PairEvent`. |
 | `ticket.rs` | Invite ticket codec (`NV1` + base32) and match code. |
 | `store.rs` | Durable `Store` (per-record rows in redb via `nova-storage`), digest/outbound/apply/GC, legacy-blob migration. |
+| `local.rs` | Socket-free record owner, atomic app snapshot/baseline preparation, unknown object-field preservation. |
+| `progress.rs` | Convergent activity/watch/unwatch registers embedded in progress JSON and action-clock validation. |
 | `merge.rs` | `Version`, `Record`, `resolve` (LWW + tombstone tie-break). |
 | `hlc.rs` | Hybrid logical clock (tick/observe, forward-drift cap). |
 | `frame.rs` | Length-prefixed postcard framing (raw + codec byte with deflate). |
@@ -344,8 +361,8 @@ item the user removed, value = removal unix secs; tombstones carry the
 "un-remove" when a resume or prune drops the key, and a stamp written while sync
 was off is kept and published like `progress`), plus
 `peers` (mesh membership) and `presence` (engine-owned sightings, see below).
-`sync_records` inserts/updates a domain and tombstones
-any live key not present in the local snapshot. New domains ride the existing
+`sync_records` compares against the materialized baseline, not the live store;
+only baseline keys absent from the edited snapshot become tombstones. New domains ride the existing
 record exchange with no wire-schema change (domain names travel as strings);
 the app ignores unknown domains, so old peers stay compatible.
 
@@ -355,15 +372,16 @@ the app ignores unknown domains, so old peers stay compatible.
 - **Additions** happen only via explicit pairing / manual add (`peers_add`, may resurrect a tombstoned peer). A routine sync only refreshes an existing live peer's name (`peers_refresh`) and never inserts/resurrects.
 - **Removals** are tombstones (`peers_remove`). Removal is made symmetric:
   - `SyncEngine::remove_peer` sends a best-effort `nova/remove/1` notice so the removed device drops the remover and shows a UI notice.
-  - If the notice is missed, a `"not a peer"` rejection during a sync triggers `Handler::note_rejected` on the removed side.
+  - If the notice is missed, a structured QUIC application-close code (`REVOKED_CODE`) triggers mutual removal. An unknown/not-yet-authorized peer does not get that code. Authorization is rechecked for every stream and under the store lock before apply; cached dialed connections close on removal.
 - **Stale third-party tombstones** are ignored: if `sync:peer_acks[X]` is newer than a tombstone's HLC, `apply_frames` keeps `X` (a peer you actively sync with survives someone else's removal).
 - **Presence (last-seen):** the engine-owned `presence` domain holds one record per `{observer}\x01{peer}` sighting (value = unix secs), written after each completed exchange and throttled to one rewrite per 15 min per peer. Each device writes only its own observer keys (no merge conflicts); readers take the max across observers plus the local ack clock (`SyncEngine::peer_last_seen`, shown as `SyncPeer.last_seen`). `peers_remove` tombstones sightings involving the removed peer.
 - **Self-records** are never applied (you never add yourself). A tombstone keyed by your own id sets a "removed us" signal.
 - **Tombstone GC** is gated by per-peer acks (`ack_floor`): a tombstone is only reclaimed once every current peer has acked past it (30-day TTL floor).
 
 ### App wiring
-- `Bridge::start_sync` (`src/app/sync.rs`) sets remote + pairing callbacks (marshalled to UI), installs the engine, applies existing domains, seeds local state, requests a pass.
-- `sync_apply` rebuilds app types from `engine.records(domain)`; `ApplyingGuard` suppresses echo writes.
+- Startup establishes/migrates baselines before projecting authoritative records, independently of networking. `Bridge::start_sync` attaches callbacks to `foreground_engine` even when a background lease already owns the engine, applies domains, and requests a pass.
+- `sync_apply` reads the socket-free owner; thread-local, nesting-safe `ApplyingGuard` suppresses echo writes. Deferred addon callbacks retain origin and generation, while desired order/flags are read at completion. `settings_edited(field)` preserves explicit default choices; `persistence_failed` exposes storage health through AppWindow and SettingsPage.
+- Durable apply marks pending domains before callback delivery. `Done` and valid stream completion are required for success/ack; writer tasks abort on every cancellation path, including joining. Pairing commits invite consumption and trust together, and the joiner installs trust before closing its completion connection.
 - Pairing UI: Settings → Sync (`settings.slint`), invite create/join, confirmation prompt with match code. The created ticket is also rendered as a QR image (`qr.rs`); on Android the invite card offers a camera scanner (`android_qr.rs` + `android/java/dev/misob/nova/QrScanActivity.java`) that decodes a ticket and joins automatically.
 
 ---
@@ -427,6 +445,7 @@ the app ignores unknown domains, so old peers stay compatible.
   - `android_back_nav.rs` — synthetic `Key.Back` via `Window::dispatch_event`: detail streams→episodes→close, settings subpage→landing→home, player close, Home subpage→landing, Home root → `exit_to_background`. One test fn (backend inits once per process); per-phase ticks because page create/destroy focus races sharing a tick, plus the 280 ms subpage close animation between double-Backs.
 - Sync tests use real iroh endpoints with the `Minimal` preset (`presets::Minimal`) and in-memory address lookups; see `crates/sync/src/protocol.rs` tests for patterns.
 - `src/app/qr.rs` unit test round-trips a real invite ticket through the QR encoder and `rqrr` decoder (the same crate the Android scanner uses), guarding the display↔scan payload path without a device.
+- `src/app/settings.rs` tests exercise real headless settings controls, immediate memory capture, navigation before autosave, current-state projection, and the shared playback-speed debounce. The test runs in an isolated child process because redb and Slint initialize once per process.
 - Verification commands: `cargo check`, `cargo test`, `cargo test -p nova-download --lib`, `cargo test -p nova-sync --lib`.
 
 ---
@@ -484,8 +503,8 @@ the app ignores unknown domains, so old peers stay compatible.
 - **Android packaging is `cargo-apk2`, not `cargo-apk`.** The Java background components (`android/java/`) must be compiled to DEX and the `<service>`/`foregroundServiceType` elements emitted, neither of which the old tool can do; `Cargo.toml` therefore uses `use_aapt2`, `java_sources`, `has_code = true`, and an explicit `[[…application.activity]]` (cargo-apk2 generates no implicit activity). The APK launcher icon is configured as `@mipmap/ic_launcher` and packaged from `android/res/`, derived from `assets/logo.png`. The `.#android` shell provides cargo-apk2 from the flake (nixpkgs has no such attr and upstream publishes no binstall artifacts, so it is built with `rustPlatform.buildRustPackage`) and unsets `CPATH` (host include leak breaks the NDK C build).
 - **Android builds use `--no-default-features --features android`**; guard desktop-only code with `#[cfg(feature = "desktop")]` or `#[cfg(not(target_os = "android"))]`.
 - **Download jobs are local-only**: `downloads:v1` and artifacts are never synced. HTTP resumes require matching `Range`/`ETag`/`Last-Modified`; retained torrent data is protected from playback cache eviction. Transfers are one-at-a-time, so a hung job must not pin the slot: HTTP connects/headers/body-gaps time out (60 s) and a torrent with no progress fails after 10 min; tapping Download again re-arms a `Failed` job in place. A transfer worker carries a done flag; the 250 ms tick reaps one that ended without finalizing (panic/unwind) and the state mutex is poison-tolerant, so a dead worker can never leave every later job stuck in `Queued`. Completed-job validation **canonicalizes** both paths before the root check (Android path aliases), and unreferenced HTTP artifacts under `<data>/downloads/http/` are re-adopted on startup rather than silently dropped (torrent artifacts are not re-adopted: sparse partial files look complete on disk). Deletion (`remove_owned_path`/`remove_owned_dir`) canonicalizes the target the same way — a lexical `starts_with` across the `/data/user/0` vs `/data/data` aliases previously skipped the unlink, clearing the row while leaving the file (and its app-storage footprint) on disk.
-- **`Store::load` quarantines** an unreadable sync blob instead of wiping it — check `sync:records.corrupt.*` if sync state looks empty.
-- **The Android background sync job must open storage before reading settings.** A job-only process has no Activity, so `android_bg::run_headless_sync` calls `nova_config::set_android_files_dir` + `storage::init_at` *before* any `nova_sync::read_settings()`: the store open is lazy and caches a permanent `None` when no path is set, so reading first made sync look permanently disabled. It then waits on `SyncStatus::pass_count` (a monotonic worker wake-up counter, bumped even by a no-peer pass) instead of the transient `syncing` flag, so it returns promptly; the Java service logs the native summary to logcat (`NovaSyncJob`).
+- **`Store::try_load` quarantines** unreadable rows/clocks without recursive backups — check `sync:quarantine:*` for evidence. Unreadable identity bytes are not replaced with a new identity.
+- **The Android background sync job must open storage before reading settings.** `android_bg::run_headless_sync` sets the files directory and opens storage first, checks both enable flags, and obtains a `BackgroundLease` only when no foreground engine exists. Lifecycle transitions are serialized; foreground attachment takes ownership before job release. `onStopJob` cancels a 120-second-budget `one_shot`, not the foreground worker, and Java finishes at most once. The outcome distinguishes completed/cancelled/timed-out/skipped/failed work; `pass_count` is not a success signal. Device validation remains required.
 - The working tree has historically carried uncommitted work on the `iroh`
   branch; check `git status` before assuming a file's committed state.
 
@@ -496,6 +515,7 @@ the app ignores unknown domains, so old peers stay compatible.
 | Task | Start here |
 |---|---|
 | Add a Settings option | `crates/ui/settings.slint`, `src/app/settings.rs`, `src/app/run.rs`, `crates/config/src/lib.rs` |
+| Settings edit loss / sync recovery | `src/app/settings.rs` (`capture_settings`, `wire_settings_autosave`, regression test), `crates/sync/src/lib.rs` (`peer_connection`, worker/cadence/recovery), `docs/sync-hardening-plan.md` |
 | Add a UI language / translate a string | `crates/ui/translations/<code>/LC_MESSAGES/nova-ui.po` (context-free), `crates/config/src/lib.rs` (`Language`), `src/app/i18n.rs`; mark strings `@tr("…")` in the `.slint` files |
 | Add a Discover feature / catalog change | `src/app/catalog.rs`, `crates/ui/discover.slint`, `crates/ui/appwindow.slint`, `crates/addons` |
 | Discover reveal / filter-drag regressions | `tests/discover_reveal_and_filters.rs` (animated opacity during poster updates, same-length result replacement, animation-off behavior, horizontal filter drags), `tests/discover_search_ui.rs` (browse/results navigation) |
@@ -512,6 +532,8 @@ the app ignores unknown domains, so old peers stay compatible.
 | Stream downloads | `crates/download/src/lib.rs`, `src/app/downloads.rs`, `crates/torrent/src/lib.rs`, `crates/ui/detail.slint` |
 | HTTP / images | `crates/media/src/net.rs`, `crates/media/src/cache.rs`, `src/app/posters.rs` |
 | Sync protocol / peers / pairing | `crates/sync/src/{lib,protocol,pair,store,merge}.rs`, `src/app/sync.rs`, `docs/sync-followons.md` |
+| Sync hardening / settings reset investigation | `docs/sync-hardening-plan.md` (findings, phased implementation, regression matrix, migration decisions) |
+| Offline mutations / projection replay / progress convergence | `crates/sync/src/{local,store,progress}.rs`, `src/app/{io,sync}.rs`, `crates/sync/tests/{local_mutations,store_persistence}.rs` |
 | Sync invite QR / Android camera scan | `src/app/qr.rs`, `src/app/android_qr.rs`, `android/java/dev/misob/nova/QrScanActivity.java`, `crates/ui/settings.slint`, `src/app/run.rs` |
 | Android background execution (downloads FGS + periodic sync) | `src/app/android_bg.rs`, `android/java/dev/misob/nova/{NovaBackgroundService,NovaSyncJobService}.java`, `nova_sync::SyncEngine::setup`, `DownloadCoordinator::has_active_work` |
 | App paths / shared settings | `crates/config/src/lib.rs` |

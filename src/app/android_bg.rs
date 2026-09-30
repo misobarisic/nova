@@ -42,6 +42,23 @@ static LAST_NOTIFICATION: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 static SERVICE_CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
 /// Cached global ref to the sync-job class.
 static JOB_CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
+static JOB_CANCEL: AtomicBool = AtomicBool::new(false);
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_misob_nova_NovaSyncJobService_nativeCancelSync(
+    _env: jni::JNIEnv,
+    _this: JObject,
+) {
+    JOB_CANCEL.store(true, Ordering::Release);
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_misob_nova_NovaSyncJobService_nativePrepareSync(
+    _env: jni::JNIEnv,
+    _this: JObject,
+) {
+    JOB_CANCEL.store(false, Ordering::Release);
+}
 
 /// Run `f` on the current thread with the app `Context` that `android-activity`
 /// published through `ndk-context`. Returns `None` when no Context is available
@@ -123,9 +140,9 @@ pub(crate) fn set_download_service(busy: bool, title: &str, text: &str) {
     {
         let mut last = LAST_NOTIFICATION.lock().unwrap();
         if !changed
-            && last
-                .as_ref()
-                .is_some_and(|(previous, at)| previous == &body && at.elapsed() < NOTIFICATION_REFRESH)
+            && last.as_ref().is_some_and(|(previous, at)| {
+                previous == &body && at.elapsed() < NOTIFICATION_REFRESH
+            })
         {
             return;
         }
@@ -195,6 +212,7 @@ pub extern "system" fn Java_dev_misob_nova_NovaSyncJobService_nativeRunSync(
 }
 
 fn run_headless_sync(env: &mut jni::JNIEnv, context: &JObject) -> Result<String, String> {
+    let started = Instant::now();
     // The app is alive: its own interval loop owns sync, so the job is a no-op.
     if nova_sync::is_running() {
         return Ok("skipped: app sync already running".to_string());
@@ -216,54 +234,24 @@ fn run_headless_sync(env: &mut jni::JNIEnv, context: &JObject) -> Result<String,
         .l()
         .map_err(|e| e.to_string())?;
     let jpath = unsafe { JString::from_raw(path.into_raw()) };
-    let path: String = env
-        .get_string(&jpath)
-        .map_err(|e| e.to_string())?
-        .into();
+    let path: String = env.get_string(&jpath).map_err(|e| e.to_string())?.into();
     nova_config::set_android_files_dir(PathBuf::from(path));
     crate::storage::init_at(&nova_config::app_data_dir());
 
-    if !nova_sync::read_settings().enabled {
+    let settings = nova_sync::read_settings();
+    if !settings.enabled || !settings.background_enabled || JOB_CANCEL.load(Ordering::Acquire) {
         return Ok("skipped: sync disabled".to_string());
     }
 
-    match nova_sync::SyncEngine::setup() {
-        Ok(engine) => {
-            nova_sync::install(engine);
-            let summary = if let Some(engine) = nova_sync::engine() {
-                // Read the counter before triggering, so a pass that finishes
-                // between the trigger and our first poll is not missed.
-                let before = engine.status().pass_count;
-                engine.sync_now();
-                wait_for_pass(&engine, before, Duration::from_secs(150));
-                let status = engine.status();
-                format!(
-                    "pass {}: peers={} last_sync={} err={:?}",
-                    status.pass_count.wrapping_sub(before),
-                    status.peer_count,
-                    status.last_sync_secs,
-                    status.last_error,
-                )
-            } else {
-                "engine vanished".to_string()
-            };
-            nova_sync::uninstall();
-            Ok(summary)
-        }
+    match nova_sync::background_engine() {
+        Ok(Some(lease)) => Ok(format!(
+            "{:?}",
+            lease.engine.one_shot(
+                &JOB_CANCEL,
+                Duration::from_secs(120).saturating_sub(started.elapsed())
+            )
+        )),
+        Ok(None) => Ok("skipped: foreground sync owns engine".to_string()),
         Err(error) => Err(format!("setup: {error:#}")),
-    }
-}
-
-/// Block until the worker has completed a wake-up after `before`, or `timeout`
-/// elapses. Watches the monotonic pass counter rather than the `syncing` flag,
-/// so a pass with no eligible peer (which never sets `syncing`) returns
-/// promptly instead of spinning for the full timeout.
-fn wait_for_pass(engine: &nova_sync::SyncEngine, before: u64, timeout: Duration) {
-    let started = Instant::now();
-    while started.elapsed() < timeout {
-        if engine.status().pass_count != before {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(100));
     }
 }

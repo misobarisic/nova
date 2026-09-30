@@ -4,10 +4,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::hlc::Hlc;
-use crate::merge::{resolve, Record, Version};
+use crate::merge::{Record, Version, resolve};
 
 /// Version digest exchanged at the start of a sync: every `(domain, key)`
 /// with its version, no values. Both sides use it to compute what to send.
@@ -29,6 +30,7 @@ const LEGACY_RECORDS_KEY: &str = "sync:records";
 const RECORD_PREFIX: &str = "srec:";
 /// Key holding the persisted hybrid logical clock.
 const CLOCK_KEY: &str = "sync:records:hlc";
+const PENDING_KEY: &str = "sync:projection:pending";
 /// How long a tombstone is retained before GC (covers offline peers).
 pub const TOMBSTONE_TTL_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 
@@ -42,7 +44,7 @@ fn parse_record_row_key(row: &str) -> Option<(String, String)> {
     let rest = row.strip_prefix(RECORD_PREFIX)?;
     let (len, after) = rest.split_once(':')?;
     let dlen: usize = len.parse().ok()?;
-    if after.len() < dlen {
+    if after.len() < dlen || !after.is_char_boundary(dlen) {
         return None;
     }
     let (domain, key) = after.split_at(dlen);
@@ -72,6 +74,16 @@ pub struct Store {
     /// moved instead of the whole store. Runtime-only (not serialized).
     #[serde(skip)]
     dirty: BTreeSet<(String, String)>,
+    #[serde(default)]
+    pending_domains: BTreeSet<String>,
+    #[serde(skip)]
+    extra: BTreeMap<String, Option<String>>,
+    #[serde(skip)]
+    blocked: bool,
+    #[serde(skip)]
+    clock_dirty: bool,
+    #[serde(skip)]
+    device: Option<u64>,
 }
 
 impl Store {
@@ -86,21 +98,83 @@ impl Store {
     /// and logged, so a parse failure can be recovered and never loses the
     /// peer list/history without a trace.
     pub fn load() -> Self {
-        if let Some(raw) = nova_storage::get_str(LEGACY_RECORDS_KEY) {
+        match Self::try_load() {
+            Ok(store) => store,
+            Err(e) => {
+                nova_storage::report(nova_storage::Error::new(
+                    nova_storage::ErrorKind::Schema,
+                    format!("sync store unavailable: {e:#}"),
+                ));
+                Self {
+                    blocked: true,
+                    ..Self::default()
+                }
+            }
+        }
+    }
+
+    pub fn try_load() -> Result<Self> {
+        if let Some(raw) = nova_storage::try_get_str(LEGACY_RECORDS_KEY)? {
             return match legacy_to_store(&raw) {
                 Ok(mut store) => {
+                    // Recover poisoned legacy clocks/rows without losing the
+                    // unaffected records or the original evidence.
+                    let invalid: Vec<_> = store
+                        .domains
+                        .iter()
+                        .flat_map(|(d, keys)| {
+                            keys.iter()
+                                .filter(move |(_, r)| {
+                                    !valid_clock(r.version.hlc())
+                                        || (d == "progress" && !crate::progress::valid(r))
+                                })
+                                .map(move |(k, r)| {
+                                    (
+                                        d.clone(),
+                                        k.clone(),
+                                        serde_json::to_string(r).expect("record JSON"),
+                                    )
+                                })
+                        })
+                        .collect();
+                    for (domain, key, raw) in invalid {
+                        let row = record_row_key(&domain, &key);
+                        let backup = format!(
+                            "sync:quarantine:{}",
+                            blake3::hash(format!("{row}\0{raw}").as_bytes()).to_hex()
+                        );
+                        store.queue_extra(
+                            &backup,
+                            Some(serde_json::json!({"key":row,"raw":raw}).to_string()),
+                        );
+                        store.domains.get_mut(&domain).unwrap().remove(&key);
+                    }
+                    store.domains.retain(|_, keys| !keys.is_empty());
+                    if !valid_clock(store.hlc) {
+                        let backup = format!(
+                            "sync:quarantine:{}",
+                            blake3::hash(format!("{LEGACY_RECORDS_KEY}\0{raw}").as_bytes())
+                                .to_hex()
+                        );
+                        store.queue_extra(
+                            &backup,
+                            Some(
+                                serde_json::json!({"key":LEGACY_RECORDS_KEY,"raw":raw}).to_string(),
+                            ),
+                        );
+                        store.hlc = Hlc::default();
+                    }
+                    store.reconcile_clock();
                     // Write every record as a row, then drop the blob so the
                     // migration runs once.
                     store.mark_all_dirty();
-                    store.save();
-                    nova_storage::remove(LEGACY_RECORDS_KEY);
+                    store.queue_extra(LEGACY_RECORDS_KEY, None);
+                    store.save()?;
                     eprintln!("nova sync: migrated sync:records to per-record rows");
-                    store
+                    Ok(store)
                 }
                 Err(reason) => {
-                    let backup =
-                        format!("{LEGACY_RECORDS_KEY}.corrupt.{}", crate::now_secs());
-                    nova_storage::set_str(&backup, &raw);
+                    let backup = quarantine(LEGACY_RECORDS_KEY, &raw)?;
                     eprintln!(
                         "nova sync: stored records are unreadable ({reason}); backed up to {backup}"
                     );
@@ -112,35 +186,41 @@ impl Store {
     }
 
     /// Rebuild the store from the per-record rows.
-    fn load_rows() -> Self {
+    fn load_rows() -> Result<Self> {
         let mut store = Self::default();
-        if let Some(hlc) = nova_storage::get_str(CLOCK_KEY)
-            .and_then(|s| serde_json::from_str::<Hlc>(&s).ok())
-        {
-            store.hlc = hlc;
+        if let Some(raw) = nova_storage::try_get_str(CLOCK_KEY)? {
+            match serde_json::from_str::<Hlc>(&raw) {
+                Ok(hlc) if valid_clock(hlc) => store.hlc = hlc,
+                _ => {
+                    quarantine(CLOCK_KEY, &raw)?;
+                }
+            }
         }
-        for (row, value) in nova_storage::scan_prefix(RECORD_PREFIX) {
+        if let Some(raw) = nova_storage::try_get_str(PENDING_KEY)? {
+            store.pending_domains = serde_json::from_str(&raw).context("projection metadata")?;
+        }
+        for (row, value) in nova_storage::try_scan_prefix(RECORD_PREFIX)? {
             let Some((domain, key)) = parse_record_row_key(&row) else {
-                eprintln!("nova sync: skipping malformed record row {row:?}");
+                quarantine(&row, &value)?;
                 continue;
             };
             match serde_json::from_str::<Record>(&value) {
-                Ok(record) => {
-                    store
-                        .domains
-                        .entry(domain)
-                        .or_default()
-                        .insert(key, record);
+                Ok(record)
+                    if valid_clock(record.version.hlc())
+                        && (domain != "progress" || crate::progress::valid(&record)) =>
+                {
+                    store.domains.entry(domain).or_default().insert(key, record);
                 }
-                Err(e) => {
-                    let backup = format!("{row}.corrupt.{}", crate::now_secs());
-                    nova_storage::set_str(&backup, &value);
-                    eprintln!("nova sync: record row {row:?} unreadable ({e}); backed up to {backup}");
+                _ => {
+                    quarantine(&row, &value)?;
+                    eprintln!(
+                        "nova sync: quarantined invalid/future record; check sync:quarantine:"
+                    );
                 }
             }
         }
         store.reconcile_clock();
-        store
+        Ok(store)
     }
 
     /// Mark every live record for rewrite (used by the legacy migration).
@@ -157,18 +237,39 @@ impl Store {
     pub fn record(&self, domain: &str, key: &str) -> Option<&Record> {
         self.domains.get(domain).and_then(|m| m.get(key))
     }
+    pub fn set_device(&mut self, device: u64) {
+        self.device = Some(device);
+    }
 
     /// Persist every record changed since the last save (plus the clock) as
     /// one batched transaction, instead of rewriting the whole store.
-    pub fn save(&mut self) {
-        let dirty = std::mem::take(&mut self.dirty);
+    pub fn save(&mut self) -> Result<()> {
+        if !self.needs_save() {
+            return Ok(());
+        }
+        #[cfg(test)]
+        if nova_storage::try_get_str(CLOCK_KEY).is_err() {
+            return self.save_with(|_| Ok(()));
+        }
+        self.save_with(nova_storage::try_write_batch)
+    }
+
+    fn save_with(
+        &mut self,
+        commit: impl FnOnce(&[(String, Option<String>)]) -> std::result::Result<(), nova_storage::Error>,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            !self.blocked,
+            "sync store is unreadable; writes blocked for recovery"
+        );
+        let dirty = &self.dirty;
         let mut batch: Vec<(String, Option<String>)> = Vec::with_capacity(dirty.len() + 1);
         for (domain, key) in dirty {
             let row = record_row_key(&domain, &key);
-            match self.domains.get(&domain).and_then(|m| m.get(&key)) {
+            match self.domains.get(domain).and_then(|m| m.get(key)) {
                 Some(record) => match serde_json::to_string(record) {
                     Ok(value) => batch.push((row, Some(value))),
-                    Err(e) => eprintln!("nova sync: serialize record {domain}/{key}: {e}"),
+                    Err(e) => return Err(e.into()),
                 },
                 // Removed (e.g. an acked tombstone collected by GC).
                 None => batch.push((row, None)),
@@ -178,9 +279,50 @@ impl Store {
         // record; persist it so monotonicity survives restarts.
         match serde_json::to_string(&self.hlc) {
             Ok(hlc) => batch.push((CLOCK_KEY.to_string(), Some(hlc))),
-            Err(e) => eprintln!("nova sync: serialize clock: {e}"),
+            Err(e) => return Err(e.into()),
         }
-        nova_storage::write_batch(&batch);
+        batch.push((
+            PENDING_KEY.to_string(),
+            Some(serde_json::to_string(&self.pending_domains)?),
+        ));
+        batch.extend(self.extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+        commit(&batch)?;
+        self.dirty.clear();
+        self.extra.clear();
+        self.clock_dirty = false;
+        Ok(())
+    }
+    pub fn needs_save(&self) -> bool {
+        !self.dirty.is_empty() || !self.extra.is_empty() || self.clock_dirty
+    }
+
+    pub fn queue_extra(&mut self, key: &str, value: Option<String>) {
+        self.extra.insert(key.to_string(), value);
+    }
+
+    pub fn extra_value(&self, key: &str) -> Result<Option<String>> {
+        match self.extra.get(key) {
+            Some(v) => Ok(v.clone()),
+            None => Ok(nova_storage::try_get_str(key)?),
+        }
+    }
+
+    pub fn pending_domains(&self) -> Vec<String> {
+        self.pending_domains.iter().cloned().collect()
+    }
+
+    pub fn mark_projected(
+        &mut self,
+        domain: &str,
+        basis: &BTreeMap<String, Version>,
+    ) -> Result<()> {
+        if self.digest().get(domain) == Some(basis) {
+            if self.pending_domains.remove(domain) {
+                self.clock_dirty = true;
+            }
+            self.save()?;
+        }
+        Ok(())
     }
 
     /// Ensure the clock is at least as new as every stored record, so a local
@@ -212,19 +354,27 @@ impl Store {
         observed_secs: u64,
         dev: u64,
     ) -> bool {
+        self.device = Some(dev);
         if let Some(cur) = self.domains.get(domain).and_then(|m| m.get(key))
             && cur.value == value
         {
             return false;
         }
-        let hlc = self
-            .hlc
-            .tick(crate::now_ms(), observed_secs.saturating_mul(1000));
+        let hlc = self.hlc.tick(
+            crate::now_ms(),
+            observed_secs
+                .saturating_mul(1000)
+                .min(crate::now_ms().saturating_add(crate::hlc::MAX_DRIFT_MS)),
+        );
+        self.clock_dirty = true;
         let deleted = value.is_none();
-        let record = Record {
-            value,
-            version: Version::from_hlc(hlc, dev, deleted),
+        let version = Version::from_hlc(hlc, dev, deleted);
+        let value = if domain == "progress" {
+            value.map(|value| crate::progress::local(self.record(domain, key), value, version))
+        } else {
+            value
         };
+        let record = Record { value, version };
         self.domains
             .entry(domain.to_string())
             .or_default()
@@ -236,13 +386,50 @@ impl Store {
     /// Apply a record received from a peer. Returns true when it superseded
     /// the local version. The remote clock is folded into ours first so a
     /// later local write always sorts after it (causality).
-    pub fn apply(&mut self, domain: &str, key: &str, remote: Record) -> bool {
+    pub fn apply(&mut self, domain: &str, key: &str, mut remote: Record) -> bool {
+        if !valid_clock(remote.version.hlc())
+            || (domain == "progress" && !crate::progress::valid(&remote))
+        {
+            nova_storage::report(nova_storage::Error::new(
+                nova_storage::ErrorKind::Schema,
+                "peer clock exceeds permitted drift; correct device clock",
+            ));
+            return false;
+        }
         self.hlc.observe(remote.version.hlc(), crate::now_ms());
+        self.clock_dirty = true;
+        if domain == "progress" {
+            if let Some(local) = self.record(domain, key) {
+                if !local.is_deleted() && !remote.is_deleted() {
+                    if let Some(value) = crate::progress::merge(local, &remote) {
+                        if local.value.as_ref() == Some(&value)
+                            && !remote.version.newer_than(&local.version)
+                        {
+                            return false;
+                        }
+                        let winner = if remote.version.newer_than(&local.version) {
+                            &remote
+                        } else {
+                            local
+                        };
+                        if winner.value.as_ref() != Some(&value) {
+                            let dev = self.device.unwrap_or(winner.version.dev);
+                            remote.version =
+                                Version::from_hlc(self.hlc.tick(crate::now_ms(), 0), dev, false);
+                        } else {
+                            remote.version = winner.version;
+                        }
+                        remote.value = Some(value);
+                    }
+                }
+            }
+        }
         let slot = self.domains.entry(domain.to_string()).or_default();
         match resolve(slot.get(key), &remote) {
             Some(record) => {
                 slot.insert(key.to_string(), record);
                 self.dirty.insert((domain.to_string(), key.to_string()));
+                self.pending_domains.insert(domain.to_string());
                 true
             }
             None => false,
@@ -313,9 +500,9 @@ impl Store {
     /// every current peer has seen records up to `h`, so a tombstone with
     /// `version <= h` is safe; `Blocked` retains everything; `NoPeers` applies
     /// plain TTL expiry. Live records are always kept.
-    pub fn gc(&mut self, now_ms: u64, max_age_ms: u64, floor: AckFloor) {
+    pub fn gc(&mut self, now_ms: u64, max_age_ms: u64, floor: AckFloor) -> usize {
         if floor == AckFloor::Blocked {
-            return;
+            return 0;
         }
         let mut removed: Vec<(String, String)> = Vec::new();
         for (domain, keys) in self.domains.iter_mut() {
@@ -337,8 +524,24 @@ impl Store {
             });
         }
         self.domains.retain(|_, keys| !keys.is_empty());
+        let count = removed.len();
         self.dirty.extend(removed);
+        count
     }
+}
+
+pub(crate) fn valid_clock(clock: Hlc) -> bool {
+    clock.physical_ms <= crate::now_ms().saturating_add(crate::hlc::MAX_DRIFT_MS)
+}
+
+fn quarantine(key: &str, raw: &str) -> Result<String> {
+    // Content addressing makes recovery idempotent; never use the active row
+    // prefix for evidence. Delete the bad row only in the same durable batch.
+    let hash = blake3::hash(format!("{key}\0{raw}").as_bytes());
+    let backup = format!("sync:quarantine:{}", hash.to_hex());
+    let evidence = serde_json::json!({"key": key, "raw": raw}).to_string();
+    nova_storage::try_write_batch(&[(backup.clone(), Some(evidence)), (key.to_string(), None)])?;
+    Ok(backup)
 }
 
 /// Parse a legacy whole-store blob into a `Store`, applying the pre-HLC
@@ -373,9 +576,7 @@ fn migrate_legacy(value: &mut serde_json::Value) -> bool {
                 version.insert("ts".to_string(), serde_json::json!(ts.saturating_mul(1000)));
                 migrated = true;
             }
-            version
-                .entry("deleted")
-                .or_insert(serde_json::json!(false));
+            version.entry("deleted").or_insert(serde_json::json!(false));
         }
     }
     migrated
@@ -407,6 +608,100 @@ mod tests {
         assert_eq!(parse_record_row_key("nope"), None);
         assert_eq!(parse_record_row_key("srec:zz:x"), None);
         assert_eq!(parse_record_row_key("srec:9:short"), None);
+        assert_eq!(parse_record_row_key("srec:1:é:key"), None);
+    }
+
+    #[test]
+    fn failed_commit_retains_the_complete_batch_for_retry() {
+        let mut store = Store::default();
+        store.set("library", "a", Some("1".into()), 0, DEV_A);
+        store.queue_extra("library", Some("snapshot".into()));
+        store.queue_extra(LEGACY_RECORDS_KEY, None);
+        let mut failed = Vec::new();
+        assert!(
+            store
+                .save_with(|batch| {
+                    failed = batch.to_vec();
+                    Err(nova_storage::Error::new(
+                        nova_storage::ErrorKind::Transaction,
+                        "injected commit failure",
+                    ))
+                })
+                .is_err()
+        );
+        assert!(store.needs_save());
+        store
+            .save_with(|batch| {
+                assert_eq!(batch, failed);
+                Ok(())
+            })
+            .unwrap();
+        assert!(!store.needs_save());
+        assert!(
+            failed
+                .iter()
+                .any(|(k, v)| k == LEGACY_RECORDS_KEY && v.is_none())
+        );
+        assert!(
+            failed
+                .iter()
+                .any(|(k, v)| k == "library" && v.as_deref() == Some("snapshot"))
+        );
+    }
+
+    #[test]
+    fn future_record_is_rejected_without_poisoning_local_order() {
+        let mut store = Store::default();
+        let future = Record::present("future".into(), Version::new(u64::MAX, 0, DEV_B, false));
+        assert!(!store.apply("library", "a", future));
+        store.set("library", "a", Some("local".into()), 0, DEV_A);
+        assert!(valid_clock(
+            store.record("library", "a").unwrap().version.hlc()
+        ));
+    }
+
+    #[test]
+    fn three_peer_progress_gossip_converges_without_reinventing_actions() {
+        let mut peers = [Store::default(), Store::default(), Store::default()];
+        for (i, store) in peers.iter_mut().enumerate() {
+            let dev = (i + 1) as u64;
+            store.set_device(dev);
+            let version = Version::new(crate::now_ms(), 0, dev, false);
+            let value = serde_json::json!({"watched":i==0,"unwatched_at_secs":if i==1 {1} else {0},
+                "position_secs":if i==0 {100} else if i==1 {0} else {12},
+                "duration_secs":100,"updated_at_secs":1,"play_count":dev})
+            .to_string();
+            let value = crate::progress::local(None, value, version);
+            assert!(store.apply(
+                "progress",
+                "episode",
+                Record {
+                    value: Some(value),
+                    version
+                }
+            ));
+        }
+        for _ in 0..6 {
+            let records: Vec<_> = peers
+                .iter()
+                .map(|p| p.record("progress", "episode").unwrap().clone())
+                .collect();
+            for store in &mut peers {
+                for record in &records {
+                    store.apply("progress", "episode", record.clone());
+                }
+            }
+        }
+        let record = peers[0].record("progress", "episode").unwrap().clone();
+        for store in &mut peers {
+            assert_eq!(store.record("progress", "episode").unwrap(), &record);
+            assert!(!store.apply("progress", "episode", record.clone()));
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(record.value.as_ref().unwrap()).unwrap();
+        assert_eq!(value["watched"], false);
+        assert_eq!(value["position_secs"], 12);
+        assert_eq!(value["play_count"], 3);
     }
 
     #[test]
@@ -464,10 +759,14 @@ mod tests {
     fn apply_merges_and_hides_tombstones() {
         let mut a = Store::default();
         a.set("d", "k", Some("v".into()), 0, DEV_A);
-        let rec = Record::present("remote".into(), Version::new(u64::MAX, 0, DEV_B, false));
+        let future = crate::now_ms() + crate::hlc::MAX_DRIFT_MS - 1000;
+        let rec = Record::present("remote".into(), Version::new(future, 0, DEV_B, false));
         assert!(a.apply("d", "k", rec));
-        assert_eq!(a.records("d"), vec![("k".to_string(), "remote".to_string())]);
-        let del = Record::tombstone(Version::new(u64::MAX, 0, DEV_B, true));
+        assert_eq!(
+            a.records("d"),
+            vec![("k".to_string(), "remote".to_string())]
+        );
+        let del = Record::tombstone(Version::new(future, 0, DEV_B, true));
         // Same (ts, counter, dev, deleted=false vs true) tie: tombstone ranks
         // above, so a tombstone with an equal version still wins.
         assert!(a.apply("d", "k", del));

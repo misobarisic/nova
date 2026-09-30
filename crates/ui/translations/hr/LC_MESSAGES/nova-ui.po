@@ -321,6 +321,9 @@ msgstr "Izvanmrežni sadržaj i pravila čišćenja"
 msgid "Settings"
 msgstr "Postavke"
 
+msgid "Changes could not be saved. Check storage and retry."
+msgstr "Promjene nisu spremljene. Provjerite pohranu i pokušajte ponovno."
+
 msgid "ADDONS"
 msgstr "DODACI"
 

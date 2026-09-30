@@ -44,6 +44,7 @@ const PROTO: u8 = 3;
 /// caller). Generous: a first sync of a large library over a relay can take a
 /// while, and aborting mid-flight drops the connection under the peer.
 const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(120);
+pub(crate) const REVOKED_CODE: u32 = 0x4e56;
 
 #[derive(Serialize, Deserialize)]
 enum Wire {
@@ -126,6 +127,7 @@ pub struct Handler {
     /// Set when a peer's `peers` list tombstoned us: the device name of the
     /// peer that removed us, awaiting a UI notice.
     removed_notice: Arc<Mutex<Option<String>>>,
+    pub(crate) joining: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl std::fmt::Debug for Handler {
@@ -137,6 +139,32 @@ impl std::fmt::Debug for Handler {
 }
 
 impl Handler {
+    pub(crate) fn note_peer_attempt(&self, id: &str) {
+        if let Ok(mut status) = self.status.lock() {
+            let attempt = status.peer_attempts.entry(id.to_string()).or_default();
+            attempt.last_attempt_secs = crate::now_secs();
+            attempt.in_flight = true;
+        }
+    }
+    pub(crate) fn note_peer_result(
+        &self,
+        id: &str,
+        error: Option<String>,
+        retry: u64,
+        duration: Duration,
+    ) {
+        if let Ok(mut status) = self.status.lock() {
+            let attempt = status.peer_attempts.entry(id.to_string()).or_default();
+            attempt.in_flight = false;
+            attempt.last_result_secs = crate::now_secs();
+            if error.is_none() {
+                attempt.last_success_secs = crate::now_secs();
+            }
+            attempt.last_error = error;
+            attempt.retry_after_secs = retry;
+            attempt.duration_ms = duration.as_millis().min(u64::MAX as u128) as u64;
+        }
+    }
     pub fn new(
         store: Arc<Mutex<Store>>,
         device: u64,
@@ -155,6 +183,7 @@ impl Handler {
             on_remote,
             acks,
             removed_notice: Arc::new(Mutex::new(None)),
+            joining: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -167,17 +196,30 @@ impl Handler {
     /// `at`. Using the digest snapshot (not completion time) means a tombstone
     /// created during the exchange is *not* considered acknowledged.
     /// Persisted so GC stays safe across restarts. Never records our own id.
-    fn record_ack(&self, id: &str, at: crate::Hlc) {
+    fn record_ack(&self, id: &str, at: crate::Hlc) -> Result<()> {
         if id == self.self_id {
-            return;
+            return Ok(());
         }
         if let Ok(mut acks) = self.acks.lock() {
-            let slot = acks.entry(id.to_string()).or_insert(at);
+            let mut next = acks.clone();
+            let slot = next.entry(id.to_string()).or_insert(at);
             if at.newer_than(*slot) {
                 *slot = at;
             }
-            crate::save_peer_acks(&acks);
+            let result =
+                nova_storage::try_set_str(crate::PEER_ACKS_KEY, &serde_json::to_string(&next)?);
+            #[cfg(test)]
+            let result = result.or_else(|e| {
+                if e.kind == nova_storage::ErrorKind::Unavailable {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            });
+            result?;
+            *acks = next;
         }
+        Ok(())
     }
 
     /// This device's direct ack clock for `id` (unix secs), if we ever
@@ -205,10 +247,13 @@ impl Handler {
             crate::ack_floor(&peers, &acks)
         };
         let mut store = self.store();
-        let before = store.domains();
-        store.gc(now_ms, crate::store::TOMBSTONE_TTL_MS, floor);
-        if store.domains() != before {
-            store.save();
+        if store.gc(now_ms, crate::store::TOMBSTONE_TTL_MS, floor) > 0 {
+            if let Err(e) = store.save() {
+                nova_storage::report(nova_storage::Error::new(
+                    nova_storage::ErrorKind::Transaction,
+                    e,
+                ));
+            }
         }
     }
 
@@ -228,8 +273,8 @@ impl Handler {
 
     /// Add/refresh a peer from an explicit user action (pairing or manual add).
     /// This is the only path allowed to resurrect a tombstoned peer.
-    pub(crate) fn add_peer_explicit(&self, id: &str, name: &str) {
-        crate::peers_add(&self.store, &self.peers, id, Some(name), self.device);
+    pub(crate) fn add_peer_explicit(&self, id: &str, name: &str) -> Result<()> {
+        crate::peers_add(&self.store, &self.peers, id, Some(name), self.device)
     }
 
     /// Drop a peer locally, tombstoning it so the removal replicates.
@@ -255,10 +300,7 @@ impl Handler {
 
     /// Take (and clear) a pending "we were removed by X" notice.
     pub(crate) fn take_removed_notice(&self) -> Option<String> {
-        self.removed_notice
-            .lock()
-            .ok()
-            .and_then(|mut n| n.take())
+        self.removed_notice.lock().ok().and_then(|mut n| n.take())
     }
 
     fn set_removed_notice(&self, name: String) {
@@ -284,7 +326,6 @@ impl Handler {
         if let Ok(mut s) = self.status.lock() {
             s.syncing = false;
             s.syncing_since = 0;
-            s.last_sync_secs = crate::now_secs();
             s.last_error = error;
         }
     }
@@ -317,7 +358,18 @@ impl ProtocolHandler for Handler {
     async fn accept(&self, conn: Connection) -> Result<(), iroh::protocol::AcceptError> {
         let remote = conn.remote_id().to_string();
         if !self.is_peer(&remote) {
-            conn.close(VarInt::from_u32(0), b"not a peer");
+            let removed = self
+                .store()
+                .record(crate::DOMAIN_PEERS, &remote)
+                .is_some_and(|r| r.is_deleted());
+            conn.close(
+                VarInt::from_u32(if removed { REVOKED_CODE } else { 0 }),
+                if removed {
+                    b"removed peer"
+                } else {
+                    b"not authorized"
+                },
+            );
             return Ok(());
         }
         // Serve streams for the life of the connection: the dialer reuses one
@@ -331,6 +383,10 @@ impl ProtocolHandler for Handler {
                 // reused connection, not an error.
                 Err(_) => return Ok(()),
             };
+            if !self.is_peer(&remote) {
+                conn.close(VarInt::from_u32(REVOKED_CODE), b"removed peer");
+                return Ok(());
+            }
             let handler = self.clone();
             let remote = remote.clone();
             tokio::spawn(async move {
@@ -461,7 +517,10 @@ fn apply_frames(
             }
         }
     }
-    Applied { changed, removed_us }
+    Applied {
+        changed,
+        removed_us,
+    }
 }
 
 /// Hash each domain's version map. BTreeMap order plus postcard encoding make
@@ -486,7 +545,10 @@ fn needs_digest_exchange(
     local: &BTreeMap<String, [u8; 16]>,
     peer: &BTreeMap<String, [u8; 16]>,
 ) -> bool {
-    local.len() != peer.len() || local.iter().any(|(domain, hash)| peer.get(domain) != Some(hash))
+    local.len() != peer.len()
+        || local
+            .iter()
+            .any(|(domain, hash)| peer.get(domain) != Some(hash))
 }
 
 /// Reconstruct the peer's full digest from the domains that agree (identical to
@@ -518,7 +580,14 @@ pub async fn run(conn: Connection, initiator: bool, handler: &Handler) -> Result
     } else {
         conn.accept_bi().await.context("accept bi stream")?
     };
-    exchange(send, recv, &conn.remote_id().to_string(), initiator, handler).await
+    exchange(
+        send,
+        recv,
+        &conn.remote_id().to_string(),
+        initiator,
+        handler,
+    )
+    .await
 }
 
 /// One exchange over an already-open bidirectional stream.
@@ -529,11 +598,13 @@ async fn exchange(
     initiator: bool,
     handler: &Handler,
 ) -> Result<()> {
+    anyhow::ensure!(handler.is_peer(remote_id), "peer authorization revoked");
     // Digest and the clock reading it was taken at, captured together: every
     // record in the digest has a version at or below `snapshot`, so recording
     // `snapshot` as the peer's ack later exactly means "it saw all of these".
     let (local_digest, local_hashes, snapshot) = {
-        let store = handler.store();
+        let mut store = handler.store();
+        store.save()?;
         let (digest, snapshot) = store.snapshot();
         let hashes = hash_digest(&digest);
         (digest, hashes, snapshot)
@@ -569,11 +640,23 @@ async fn exchange(
         // Sequential, like Hello: one side writes its (possibly large) digest
         // before the other, so the two writes cannot deadlock on flow control.
         let peer_changed = if initiator {
-            frame::write_frame_c(&mut send, &Wire::Digest { digest: local_changed }).await?;
+            frame::write_frame_c(
+                &mut send,
+                &Wire::Digest {
+                    digest: local_changed,
+                },
+            )
+            .await?;
             read_digest(&mut recv).await?
         } else {
             let peer_changed = read_digest(&mut recv).await?;
-            frame::write_frame_c(&mut send, &Wire::Digest { digest: local_changed }).await?;
+            frame::write_frame_c(
+                &mut send,
+                &Wire::Digest {
+                    digest: local_changed,
+                },
+            )
+            .await?;
             peer_changed
         };
         merge_peer_digest(&local_digest, &local_hashes, &peer_hashes, peer_changed)
@@ -600,14 +683,17 @@ async fn exchange(
     let (written_tx, written_rx) = tokio::sync::oneshot::channel::<()>();
     let (applied_tx, applied_rx) = tokio::sync::oneshot::channel::<()>();
     let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<()>();
-    let writer = WriterTask::spawn(write_side(send, frames, written_tx, applied_rx, finish_rx));
+    let mut writer = WriterTask::spawn(write_side(send, frames, written_tx, applied_rx, finish_rx));
 
     let mut incoming = Vec::new();
-    while let Some(frame) = frame::read_frame_c(&mut recv).await? {
+    loop {
+        let frame = frame::read_frame_c(&mut recv)
+            .await?
+            .context("peer closed before Done")?;
         match frame {
             Wire::Done => break,
             Wire::Records { .. } => incoming.push(frame),
-            Wire::Hello { .. } | Wire::Digest { .. } => {}
+            Wire::Hello { .. } | Wire::Digest { .. } => bail!("unexpected frame in records phase"),
         }
     }
 
@@ -616,10 +702,32 @@ async fn exchange(
     } else {
         let acks = handler.acks.lock().map(|a| a.clone()).unwrap_or_default();
         let mut store = handler.store();
-        let applied = apply_frames(&mut store, &incoming, &handler.self_id, &acks);
-        if !applied.changed.is_empty() {
-            store.save();
+        // Removal takes this same store lock before changing the allowlist:
+        // authorization and durable apply are one revocation boundary.
+        anyhow::ensure!(
+            handler.is_peer(remote_id),
+            "peer authorization revoked before apply"
+        );
+        for frame in &incoming {
+            if let Wire::Records { entries, .. } = frame {
+                anyhow::ensure!(
+                    entries.iter().all(|e| crate::store::valid_clock(e.hlc())),
+                    "peer clock exceeds permitted drift; correct device clock"
+                );
+                if let Wire::Records { domain, .. } = frame {
+                    if domain == "progress" {
+                        anyhow::ensure!(
+                            entries
+                                .iter()
+                                .all(|e| crate::progress::valid(&e.to_record())),
+                            "invalid progress action clock"
+                        );
+                    }
+                }
+            }
         }
+        let applied = apply_frames(&mut store, &incoming, &handler.self_id, &acks);
+        store.save()?;
         (applied.changed, applied.removed_us)
     };
 
@@ -644,15 +752,21 @@ async fn exchange(
     if handler.reconcile_peers() && !changed.iter().any(|d| d == crate::DOMAIN_PEERS) {
         changed.push(crate::DOMAIN_PEERS.to_string());
     }
+    // Projection is independent of transport completion. The durable pending
+    // domain marker is replayed on attachment, poll, and restart if scheduling
+    // this callback fails or the handshake is cancelled next.
+    if !changed.is_empty() {
+        handler.emit_remote(changed.clone());
+    }
 
     if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
         eprintln!(
-            "[sync] role={} digest_exchange={} sent_frames={} incoming_frames={} changed={:?}",
+            "[sync] role={} digest_exchange={} sent_frames={} incoming_frames={} changed_domains={}",
             if initiator { "init" } else { "resp" },
             exchange_digest,
             frame_count,
             incoming.len(),
-            changed
+            changed.len()
         );
     }
 
@@ -689,19 +803,29 @@ async fn exchange(
             Ok(true)
         );
         let ok = written && ended;
+        if ok {
+            handler.record_ack(remote_id, snapshot)?;
+        }
         // Release our stream end now that the ack (if earned) is recorded.
         let _ = finish_tx.send(());
-        let _ = tokio::time::timeout(EXCHANGE_TIMEOUT, writer.join()).await;
-        ok
+        let finished = matches!(
+            tokio::time::timeout(EXCHANGE_TIMEOUT, writer.join()).await,
+            Ok(Ok(()))
+        );
+        ok && finished
     };
     if acked {
-        handler.record_ack(remote_id, snapshot);
+        if initiator {
+            handler.record_ack(remote_id, snapshot)?;
+        }
         handler.note_seen(remote_id);
+        if let Ok(mut status) = handler.status.lock() {
+            status.success_count = status.success_count.saturating_add(1);
+            status.last_sync_secs = crate::now_secs();
+        }
     }
 
-    if !changed.is_empty() {
-        handler.emit_remote(changed);
-    }
+    anyhow::ensure!(acked, "sync completion handshake failed");
     Ok(())
 }
 
@@ -742,7 +866,7 @@ async fn write_side(
 async fn wait_for_end(recv: &mut RecvStream) -> bool {
     loop {
         match frame::read_frame_c::<Wire>(recv).await {
-            Ok(Some(_)) => {}
+            Ok(Some(_)) => return false,
             Ok(None) => return true,
             Err(_) => return false,
         }
@@ -758,14 +882,16 @@ impl WriterTask {
         Self(Some(tokio::spawn(fut)))
     }
 
-    async fn join(mut self) -> Result<()> {
-        match self.0.take() {
+    async fn join(&mut self) -> Result<()> {
+        let result = match self.0.as_mut() {
             Some(handle) => match handle.await {
                 Ok(result) => result,
                 Err(e) => Err(anyhow::anyhow!("writer task: {e}")),
             },
             None => Ok(()),
-        }
+        };
+        self.0.take();
+        result
     }
 }
 
@@ -812,11 +938,8 @@ const REMOVE_PROTO: u8 = 1;
 /// of keeping a dead peer and retrying forever. A failure is harmless (the peer
 /// will simply keep failing to sync until the user re-pairs or removes us).
 pub(crate) async fn notify_removed(endpoint: &Endpoint, addr: EndpointAddr, name: &str) {
-    let connect = tokio::time::timeout(
-        Duration::from_secs(10),
-        endpoint.connect(addr, REMOVE_ALPN),
-    )
-    .await;
+    let connect =
+        tokio::time::timeout(Duration::from_secs(10), endpoint.connect(addr, REMOVE_ALPN)).await;
     let Ok(Ok(conn)) = connect else {
         return;
     };
@@ -862,7 +985,8 @@ impl ProtocolHandler for RemoveHandler {
             self.handler.drop_peer(&remote);
             self.handler.set_removed_notice(notice.name);
             self.handler.reconcile_peers();
-            self.handler.emit_remote(vec![crate::DOMAIN_PEERS.to_string()]);
+            self.handler
+                .emit_remote(vec![crate::DOMAIN_PEERS.to_string()]);
             let _ = frame::write_frame(&mut send, &0u8).await;
             let _ = send.finish();
             Ok::<(), anyhow::Error>(())
@@ -896,6 +1020,14 @@ mod tests {
         self_id: &str,
         peers: Arc<Mutex<Vec<String>>>,
     ) -> Arc<Handler> {
+        // Production allowlists are derived from durable membership, never
+        // arbitrary vectors. Keep the transport fixtures faithful to that.
+        for peer in peers.lock().unwrap().iter() {
+            let mut records = store.lock().unwrap();
+            if records.record(crate::DOMAIN_PEERS, peer).is_none() {
+                records.set(crate::DOMAIN_PEERS, peer, Some("{}".into()), 1, device);
+            }
+        }
         Arc::new(Handler::new(
             store,
             device,
@@ -908,11 +1040,7 @@ mod tests {
     }
 
     fn acks_of(handler: &Arc<Handler>) -> crate::PeerAcks {
-        handler
-            .acks
-            .lock()
-            .map(|a| a.clone())
-            .unwrap_or_default()
+        handler.acks.lock().map(|a| a.clone()).unwrap_or_default()
     }
 
     async fn endpoint() -> iroh::Endpoint {
@@ -988,7 +1116,7 @@ mod tests {
             a_store.clone(),
             1,
             &a.id().to_string(),
-            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(vec![b.id().to_string()])),
         );
         // B trusts A (the allowlist boundary).
         let b_peers = Arc::new(Mutex::new(vec![a.id().to_string()]));
@@ -1004,6 +1132,153 @@ mod tests {
         // Each side now holds both records.
         assert_eq!(a_store.lock().unwrap().records("library").len(), 2);
         assert_eq!(b_store.lock().unwrap().records("library").len(), 2);
+    }
+
+    #[derive(Debug)]
+    struct IncompletePeer {
+        after_done: bool,
+        truncated_header: bool,
+        revoke: Option<(Arc<Handler>, String)>,
+    }
+
+    impl ProtocolHandler for IncompletePeer {
+        async fn accept(
+            &self,
+            conn: Connection,
+        ) -> std::result::Result<(), iroh::protocol::AcceptError> {
+            let (mut send, mut recv) = conn.accept_bi().await.unwrap();
+            expect_hello(frame::read_frame_c(&mut recv).await.unwrap()).unwrap();
+            frame::write_frame_c(
+                &mut send,
+                &Wire::Hello {
+                    proto: PROTO,
+                    device: 42,
+                    name: "test".into(),
+                    digest_hashes: BTreeMap::new(),
+                },
+            )
+            .await
+            .unwrap();
+            read_digest(&mut recv).await.unwrap();
+            frame::write_frame_c(
+                &mut send,
+                &Wire::Digest {
+                    digest: Digest::new(),
+                },
+            )
+            .await
+            .unwrap();
+            while !matches!(
+                frame::read_frame_c::<Wire>(&mut recv).await.unwrap(),
+                Some(Wire::Done)
+            ) {}
+            let record = Record::present(
+                "durable".into(),
+                Version::new(crate::now_ms(), 0, 42, false),
+            );
+            frame::write_frame_c(
+                &mut send,
+                &Wire::Records {
+                    domain: "library".into(),
+                    entries: vec![WireRecord::from(&Outbound {
+                        domain: "library".into(),
+                        key: "remote".into(),
+                        record,
+                    })],
+                },
+            )
+            .await
+            .unwrap();
+            if let Some((handler, id)) = &self.revoke {
+                handler.drop_peer(id);
+            }
+            if self.after_done {
+                frame::write_frame_c(&mut send, &Wire::Done).await.unwrap();
+                // A trailing frame violates the required Done + stream-end
+                // sequence after apply has already happened.
+                frame::write_frame_c(&mut send, &Wire::Done).await.unwrap();
+            }
+            if self.truncated_header {
+                send.write_all(&[0, 0]).await.unwrap();
+            }
+            send.finish().unwrap();
+            let _ = recv.read_to_end(1024).await;
+            Ok(())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn incomplete_exchange_never_acks_and_replays_already_applied_records() {
+        for (after_done, truncated_header) in [(false, false), (false, true), (true, false)] {
+            let a = endpoint().await;
+            let b = endpoint().await;
+            let store = store_with_peer(&b.id().to_string(), "local", "1", 1);
+            let handler = handler(store.clone(), 1, &a.id().to_string(), allowlist(&store));
+            let _router = iroh::protocol::Router::builder(b.clone())
+                .accept(
+                    ALPN,
+                    IncompletePeer {
+                        after_done,
+                        truncated_header,
+                        revoke: None,
+                    },
+                )
+                .spawn();
+            assert!(
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    run(a.connect(b.addr(), ALPN).await.unwrap(), true, &handler)
+                )
+                .await
+                .unwrap()
+                .is_err()
+            );
+            assert!(handler.acks.lock().unwrap().is_empty());
+            assert_eq!(handler.status.lock().unwrap().success_count, 0);
+            let store = store.lock().unwrap();
+            assert_eq!(store.record("library", "remote").is_some(), after_done);
+            assert_eq!(
+                store.pending_domains().contains(&"library".into()),
+                after_done
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn revocation_before_done_blocks_in_flight_apply() {
+        let a = endpoint().await;
+        let b = endpoint().await;
+        let bid = b.id().to_string();
+        let store = store_with_peer(&bid, "local", "1", 1);
+        let handler = handler(store.clone(), 1, &a.id().to_string(), allowlist(&store));
+        let _router = iroh::protocol::Router::builder(b.clone())
+            .accept(
+                ALPN,
+                IncompletePeer {
+                    after_done: true,
+                    truncated_header: false,
+                    revoke: Some((handler.clone(), bid.clone())),
+                },
+            )
+            .spawn();
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            run(a.connect(b.addr(), ALPN).await.unwrap(), true, &handler),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("authorization revoked before apply"));
+        assert!(store.lock().unwrap().record("library", "remote").is_none());
+        assert!(
+            store
+                .lock()
+                .unwrap()
+                .record(crate::DOMAIN_PEERS, &bid)
+                .unwrap()
+                .is_deleted()
+        );
+        assert!(handler.acks.lock().unwrap().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1025,7 +1300,7 @@ mod tests {
             a_store.clone(),
             1,
             &aid,
-            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(vec![bid.clone()])),
         );
         // B trusts A (the allowlist boundary).
         let b_peers = Arc::new(Mutex::new(vec![aid.clone()]));
@@ -1238,7 +1513,7 @@ mod tests {
             a_store.clone(),
             1,
             &aid,
-            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(vec![bid.clone()])),
         );
         let b_handler = handler(b_store.clone(), 2, &bid, Arc::new(Mutex::new(vec![aid])));
         let _router = iroh::protocol::Router::builder(b.clone())
@@ -1403,7 +1678,14 @@ mod tests {
             .lock()
             .unwrap()
             .set("library", "b2", Some("2".into()), 0, 2);
-        crate::run_pass(a.clone(), a_handler.clone(), peers, conns.clone(), health).await;
+        crate::run_pass(
+            a.clone(),
+            a_handler.clone(),
+            peers.clone(),
+            conns.clone(),
+            health.clone(),
+        )
+        .await;
         assert!(
             a_store
                 .lock()
@@ -1413,6 +1695,107 @@ mod tests {
                 .any(|(k, _)| k == "b2"),
             "reused connection did not carry the second pass"
         );
+
+        // Closing a retained connection must not deadlock cache eviction.
+        let closed = conns.lock().unwrap().get(&bid).unwrap().clone();
+        closed.close(0u32.into(), b"test redial");
+        closed.closed().await;
+        assert!(conns.try_lock().is_ok());
+        b_store
+            .lock()
+            .unwrap()
+            .set("library", "b3", Some("3".into()), 0, 2);
+        crate::run_pass(a.clone(), a_handler.clone(), peers, conns.clone(), health).await;
+        assert!(conns.try_lock().is_ok(), "redial left the cache locked");
+        assert!(
+            a_store
+                .lock()
+                .unwrap()
+                .records("library")
+                .iter()
+                .any(|(k, _)| k == "b3")
+        );
+        a.close().await;
+        b.close().await;
+    }
+
+    #[tokio::test]
+    async fn explicit_worker_wake_retries_backed_off_peer() {
+        let lookup = iroh::address_lookup::memory::MemoryLookup::new();
+        let a = endpoint_with_lookup(&lookup).await;
+        let b = endpoint_with_lookup(&lookup).await;
+        lookup.add_endpoint_info(b.addr());
+        let aid = a.id().to_string();
+        let bid = b.id().to_string();
+        let a_store = store_with_peer(&bid, "a", "1", 1);
+        let b_store = store_with_peer(&aid, "b", "2", 2);
+        let peers = allowlist(&a_store);
+        let a_handler = handler(a_store.clone(), 1, &aid, peers.clone());
+        let b_handler = handler(b_store.clone(), 2, &bid, allowlist(&b_store));
+        let router = iroh::protocol::Router::builder(b.clone())
+            .accept(ALPN, b_handler)
+            .spawn();
+        let health = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        crate::record_failure(&health, &bid);
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let force = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker = tokio::spawn(crate::sync_worker(
+            a.clone(),
+            a_handler.clone(),
+            peers,
+            Arc::new(Mutex::new(std::collections::HashMap::new())),
+            health.clone(),
+            notify.clone(),
+            stop.clone(),
+            force.clone(),
+        ));
+        // A periodic wake must respect backoff.
+        notify.notify_one();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while a_handler.status.lock().unwrap().pass_count < 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            !a_store
+                .lock()
+                .unwrap()
+                .records("library")
+                .iter()
+                .any(|(k, _)| k == "b")
+        );
+        // An explicit request bypasses backoff once.
+        force.store(true, std::sync::atomic::Ordering::Release);
+        notify.notify_one();
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while a_handler.status.lock().unwrap().pass_count < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            a_store
+                .lock()
+                .unwrap()
+                .records("library")
+                .iter()
+                .any(|(k, _)| k == "b")
+        );
+        assert!(!crate::should_skip(
+            &health,
+            &bid,
+            std::time::Instant::now()
+        ));
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        notify.notify_one();
+        worker.await.unwrap();
+        assert_eq!(a_handler.status.lock().unwrap().pass_count, 2);
+        router.shutdown().await.unwrap();
+        a.close().await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1485,7 +1868,11 @@ mod tests {
         let ts = a_store.lock().unwrap().digest()["library"]["gone"].ts;
         a_handler.gc_tombstones(ts + crate::store::TOMBSTONE_TTL_MS + 1);
         assert!(
-            a_store.lock().unwrap().domains().contains(&"library".to_string()),
+            a_store
+                .lock()
+                .unwrap()
+                .domains()
+                .contains(&"library".to_string()),
             "A GC'd the tombstone before B acknowledged it"
         );
 
@@ -1539,10 +1926,13 @@ mod tests {
             .spawn();
 
         let conn = a.connect(b.addr(), ALPN).await.unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(60), run(conn, true, &a_handler))
-            .await
-            .expect("large sync stalled (flow control?)")
-            .unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            run(conn, true, &a_handler),
+        )
+        .await
+        .expect("large sync stalled (flow control?)")
+        .unwrap();
         // Both sides converge to the union.
         assert_eq!(a_store.lock().unwrap().records("library").len(), 6000);
         assert_eq!(b_store.lock().unwrap().records("library").len(), 6000);
@@ -1647,7 +2037,11 @@ mod tests {
         let now = ts + crate::store::TOMBSTONE_TTL_MS + 1;
         handler.gc_tombstones(now);
         assert!(
-            store.lock().unwrap().domains().contains(&"library".to_string()),
+            store
+                .lock()
+                .unwrap()
+                .domains()
+                .contains(&"library".to_string()),
             "tombstone must survive while a peer has not synced past it"
         );
 
@@ -1657,7 +2051,11 @@ mod tests {
             .insert(peer_id.clone(), crate::Hlc::new(now, 0));
         handler.gc_tombstones(now);
         assert!(
-            !store.lock().unwrap().domains().contains(&"library".to_string()),
+            !store
+                .lock()
+                .unwrap()
+                .domains()
+                .contains(&"library".to_string()),
             "tombstone should be reclaimed once every peer has acked"
         );
     }
@@ -1792,9 +2190,21 @@ mod tests {
     fn note_rejected_drops_the_peer_with_a_notice() {
         let store = store_with_peers(&[("peer-x", "X")]);
         let handler = handler(store.clone(), 1, "self", allowlist(&store));
-        assert!(handler.peers.lock().unwrap().contains(&"peer-x".to_string()));
+        assert!(
+            handler
+                .peers
+                .lock()
+                .unwrap()
+                .contains(&"peer-x".to_string())
+        );
         handler.note_rejected("peer-x");
-        assert!(!handler.peers.lock().unwrap().contains(&"peer-x".to_string()));
+        assert!(
+            !handler
+                .peers
+                .lock()
+                .unwrap()
+                .contains(&"peer-x".to_string())
+        );
         assert_eq!(handler.take_removed_notice().as_deref(), Some("X"));
     }
 }

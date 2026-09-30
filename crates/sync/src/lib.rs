@@ -24,34 +24,37 @@
 
 mod frame;
 mod hlc;
+mod local;
 mod merge;
 mod pair;
+mod progress;
 mod protocol;
 mod store;
 mod ticket;
+pub use local::{commit_snapshot, local_device, local_store, prepare_snapshot, preserve_unknown};
 
 pub use hlc::Hlc;
-pub use merge::Version;
+pub use merge::{Record, Version};
 pub use pair::{ALPN as PAIR_ALPN, IncomingPair, Invite, PairCallback, PairEvent, PairHandler};
 pub use protocol::ALPN;
-pub use store::Store;
+pub use store::{AckFloor, Store};
 pub use ticket::{decode_ticket, encode_ticket};
 
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
-use iroh::endpoint::presets;
+use anyhow::Context;
+pub use anyhow::Result;
 use iroh::endpoint::Connection;
+use iroh::endpoint::presets;
 use iroh::protocol::Router;
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
 use serde::{Deserialize, Serialize};
 
 use protocol::Handler;
-use store::AckFloor;
 
 pub(crate) use nova_config::{now_ms, now_secs};
 
@@ -132,6 +135,9 @@ static FOREGROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 /// stays `true`.
 pub fn set_foreground(foreground: bool) {
     FOREGROUND.store(foreground, std::sync::atomic::Ordering::Relaxed);
+    if let Some(engine) = engine() {
+        engine.cadence_notify.notify_one();
+    }
 }
 
 /// Read the persisted sync settings (defaults = disabled).
@@ -146,6 +152,9 @@ pub fn write_settings(settings: &SyncSettings) {
     match serde_json::to_string(settings) {
         Ok(s) => nova_storage::set_str(SETTINGS_KEY, &s),
         Err(e) => eprintln!("nova sync: serialize settings: {e}"),
+    }
+    if let Some(engine) = engine() {
+        engine.cadence_notify.notify_one();
     }
 }
 
@@ -179,6 +188,20 @@ pub struct SyncStatus {
     /// wait for "a pass attempt finished" without inferring it from the
     /// transient `syncing` flag.
     pub pass_count: u64,
+    /// Completed durable exchanges, not merely worker wakes.
+    pub success_count: u64,
+    pub peer_attempts: HashMap<String, PeerAttempt>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PeerAttempt {
+    pub in_flight: bool,
+    pub last_attempt_secs: u64,
+    pub last_result_secs: u64,
+    pub last_success_secs: u64,
+    pub last_error: Option<String>,
+    pub retry_after_secs: u64,
+    pub duration_ms: u64,
 }
 
 /// Called after a sync applies remote records, with the domains that changed.
@@ -204,6 +227,12 @@ pub struct SyncEngine {
     conns: Arc<Mutex<HashMap<String, Connection>>>,
     /// Wakes the sync worker; coalesces overlapping triggers.
     sync_notify: Arc<tokio::sync::Notify>,
+    /// Recompute the periodic deadline without requesting a pass.
+    cadence_notify: Arc<tokio::sync::Notify>,
+    /// One explicit recovery pass may bypass old failure health.
+    force_attempt: Arc<AtomicBool>,
+    /// At most one iroh path refresh is scheduled at a time.
+    network_refreshing: Arc<AtomicBool>,
     device: u64,
     stop: Arc<AtomicBool>,
 }
@@ -211,7 +240,7 @@ pub struct SyncEngine {
 /// Per-peer failure state driving the backoff between passes.
 #[derive(Default)]
 struct PeerHealth {
-    last_fail: u64,
+    last_fail: Option<Instant>,
     fail_count: u32,
 }
 
@@ -240,7 +269,7 @@ const MAX_SYNCING_SECS: u64 = MAX_PASS_SECS + 30;
 const MAX_PASS_ROUNDS: usize = 5;
 
 /// Whether a peer is still within its backoff window and should be skipped.
-fn should_skip(health: &Arc<Mutex<HashMap<String, PeerHealth>>>, id: &str, now: u64) -> bool {
+fn should_skip(health: &Arc<Mutex<HashMap<String, PeerHealth>>>, id: &str, now: Instant) -> bool {
     let map = health.lock().unwrap_or_else(|e| e.into_inner());
     match map.get(id) {
         Some(state) if state.fail_count > 0 => {
@@ -248,7 +277,9 @@ fn should_skip(health: &Arc<Mutex<HashMap<String, PeerHealth>>>, id: &str, now: 
             let backoff = BACKOFF_BASE_SECS
                 .saturating_mul(1u64 << shifts)
                 .min(BACKOFF_MAX_SECS);
-            now < state.last_fail.saturating_add(backoff)
+            state.last_fail.is_some_and(|failed| {
+                now.saturating_duration_since(failed) < Duration::from_secs(backoff)
+            })
         }
         _ => false,
     }
@@ -257,7 +288,7 @@ fn should_skip(health: &Arc<Mutex<HashMap<String, PeerHealth>>>, id: &str, now: 
 fn record_failure(health: &Arc<Mutex<HashMap<String, PeerHealth>>>, id: &str) {
     let mut map = health.lock().unwrap_or_else(|e| e.into_inner());
     let state = map.entry(id.to_string()).or_default();
-    state.last_fail = now_secs();
+    state.last_fail = Some(Instant::now());
     state.fail_count = state.fail_count.saturating_add(1);
 }
 
@@ -267,10 +298,47 @@ fn record_success(health: &Arc<Mutex<HashMap<String, PeerHealth>>>, id: &str) {
 }
 
 impl SyncEngine {
+    /// A job owns this pass future, not the engine worker. Cancellation drops
+    /// its JoinSet/writers without stopping an attached foreground owner.
+    pub fn one_shot(&self, cancel: &AtomicBool, budget: Duration) -> OneShotOutcome {
+        if cancel.load(Ordering::Acquire) || self.stop.load(Ordering::Relaxed) {
+            return OneShotOutcome::Cancelled;
+        }
+        if budget.is_zero() {
+            return OneShotOutcome::TimedOut;
+        }
+        let started = Instant::now();
+        let outcome = self.rt.block_on(async {
+            tokio::select! {
+                outcome = run_pass(self.endpoint.clone(), self.handler.clone(), self.peers.clone(),
+                    self.conns.clone(), Arc::new(Mutex::new(HashMap::new()))) => outcome,
+                _ = tokio::time::sleep(budget) => OneShotOutcome::TimedOut,
+                _ = async {
+                    while !cancel.load(Ordering::Acquire) && !self.stop.load(Ordering::Relaxed) {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                } => OneShotOutcome::Cancelled,
+            }
+        });
+        if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
+            let class = match &outcome {
+                OneShotOutcome::Completed => "completed",
+                OneShotOutcome::Cancelled => "cancelled",
+                OneShotOutcome::TimedOut => "timed_out",
+                OneShotOutcome::Skipped => "skipped",
+                OneShotOutcome::Failed(_) => "failed",
+            };
+            eprintln!(
+                "[sync] trigger=one_shot outcome={class} duration_ms={}",
+                started.elapsed().as_millis()
+            );
+        }
+        outcome
+    }
     /// Load identity/peers, bind the endpoint, start the accept router and the
     /// background sync loop. Requires `nova-storage` to be initialized.
     pub fn setup() -> Result<Self> {
-        let secret = load_or_create_secret();
+        let secret = load_or_create_secret()?;
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -297,7 +365,7 @@ impl SyncEngine {
 
         let device = nova_config::fnv1a(endpoint.id().as_bytes());
 
-        let store = Arc::new(Mutex::new(Store::load()));
+        let store = local_store()?;
         let self_id = endpoint.id().to_string();
         {
             let now = now_secs();
@@ -306,9 +374,12 @@ impl SyncEngine {
             // synced `peers` domain (before the allowlist is derived below).
             let legacy = load_legacy_peers();
             if migrate_peers(&mut s, &legacy, now, device) {
-                eprintln!("nova sync: migrated {} peer(s) into the peers domain", legacy.len());
+                eprintln!(
+                    "nova sync: migrated {} peer(s) into the peers domain",
+                    legacy.len()
+                );
             }
-            s.save();
+            s.save()?;
         }
 
         let peers = Arc::new(Mutex::new(allowlist_from_store(
@@ -325,10 +396,8 @@ impl SyncEngine {
             let floor = ack_floor(&peer_list, &acks_snapshot);
             let now = now_ms();
             let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
-            let before = s.domains();
-            s.gc(now, store::TOMBSTONE_TTL_MS, floor);
-            if s.domains() != before {
-                s.save();
+            if s.gc(now, store::TOMBSTONE_TTL_MS, floor) > 0 {
+                s.save()?;
             }
         }
 
@@ -385,8 +454,9 @@ impl SyncEngine {
         });
 
         let stop = Arc::new(AtomicBool::new(false));
-        let health: Arc<Mutex<HashMap<String, PeerHealth>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let cadence_notify = Arc::new(tokio::sync::Notify::new());
+        let force_attempt = Arc::new(AtomicBool::new(false));
+        let health: Arc<Mutex<HashMap<String, PeerHealth>>> = Arc::new(Mutex::new(HashMap::new()));
         let conns: Arc<Mutex<HashMap<String, Connection>>> = Arc::new(Mutex::new(HashMap::new()));
         {
             // The worker runs one bounded-parallel pass per wake-up; triggers
@@ -399,8 +469,16 @@ impl SyncEngine {
             let conns = conns.clone();
             let sync_notify = sync_notify.clone();
             let stop = stop.clone();
+            let force_attempt = force_attempt.clone();
             rt.spawn(sync_worker(
-                endpoint, handler, peers, conns, health, sync_notify, stop,
+                endpoint,
+                handler,
+                peers,
+                conns,
+                health,
+                sync_notify,
+                stop,
+                force_attempt,
             ));
         }
         {
@@ -410,8 +488,15 @@ impl SyncEngine {
             let on_pair = pair_handler.on_pair.clone();
             let sync_notify = sync_notify.clone();
             let stop = stop.clone();
+            let cadence_notify = cadence_notify.clone();
             rt.spawn(interval_loop(
-                endpoint, handler, status, on_pair, sync_notify, stop,
+                endpoint,
+                handler,
+                status,
+                on_pair,
+                sync_notify,
+                stop,
+                cadence_notify,
             ));
         }
 
@@ -426,6 +511,9 @@ impl SyncEngine {
             status,
             conns,
             sync_notify,
+            cadence_notify,
+            force_attempt,
+            network_refreshing: Arc::new(AtomicBool::new(false)),
             device,
             stop,
         })
@@ -442,10 +530,7 @@ impl SyncEngine {
     }
 
     pub fn peers(&self) -> Vec<String> {
-        self.peers
-            .lock()
-            .map(|p| p.clone())
-            .unwrap_or_default()
+        self.peers.lock().map(|p| p.clone()).unwrap_or_default()
     }
 
     /// Add a peer by endpoint id (validated + normalized). Deduplicates. The
@@ -454,7 +539,7 @@ impl SyncEngine {
     pub fn add_peer(&self, id: &str) -> Result<()> {
         let parsed = EndpointId::from_str(id.trim()).context("invalid endpoint id")?;
         let normalized = parsed.to_string();
-        peers_add(&self.store, &self.peers, &normalized, None, self.device);
+        peers_add(&self.store, &self.peers, &normalized, None, self.device)?;
         self.refresh_peer_count();
         // Dial the new peer (and let it introduce us to its peers) now.
         self.sync_now();
@@ -464,6 +549,14 @@ impl SyncEngine {
     /// Remove a peer. The tombstone replicates, so it disappears mesh-wide.
     pub fn remove_peer(&self, id: &str) {
         peers_remove(&self.store, &self.peers, id, self.device);
+        if let Some(conn) = self
+            .conns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id)
+        {
+            conn.close(protocol::REVOKED_CODE.into(), b"removed peer");
+        }
         self.refresh_peer_count();
         // Push the tombstone out promptly instead of waiting for the interval.
         self.sync_now();
@@ -497,12 +590,13 @@ impl SyncEngine {
     }
 
     pub fn status(&self) -> SyncStatus {
-        let mut snapshot = self
-            .status
-            .lock()
-            .map(|s| s.clone())
-            .unwrap_or_default();
+        let mut snapshot = self.status.lock().map(|s| s.clone()).unwrap_or_default();
         snapshot.peer_count = self.peers.lock().map(|p| p.len()).unwrap_or(0);
+        for attempt in snapshot.peer_attempts.values_mut() {
+            if attempt.in_flight && now_secs().saturating_sub(attempt.last_attempt_secs) > 160 {
+                attempt.last_error = Some("peer worker exceeded its attempt deadline".to_string());
+            }
+        }
         // Watchdog: if a pass has been "syncing" for implausibly long, stop
         // reporting it so the UI can't get stuck on "Syncing…" forever. The
         // pass itself is bounded in `sync_worker`; this covers the status.
@@ -511,6 +605,7 @@ impl SyncEngine {
             && now_secs().saturating_sub(snapshot.syncing_since) > MAX_SYNCING_SECS
         {
             snapshot.syncing = false;
+            snapshot.last_error = Some("sync worker exceeded its pass deadline".to_string());
         }
         snapshot
     }
@@ -604,6 +699,10 @@ impl SyncEngine {
     /// Ask the sync worker to run a pass. Coalesced: a request made while a
     /// pass is running queues exactly one follow-up pass.
     pub fn sync_now(&self) {
+        if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
+            eprintln!("[sync] trigger=explicit");
+        }
+        self.force_attempt.store(true, Ordering::Release);
         self.sync_notify.notify_one();
     }
 
@@ -612,17 +711,30 @@ impl SyncEngine {
     /// them here; this re-establishes relay/direct paths, then requests a sync
     /// so a regained network is used promptly.
     pub fn notify_network_change(&self) {
+        if self.network_refreshing.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
+            eprintln!("[sync] trigger=network_refresh");
+        }
         // Drop cached connections: their paths/relay assignment may be stale
         // after a network change, so redial rather than reuse.
-        self.conns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        self.conns.lock().unwrap_or_else(|e| e.into_inner()).clear();
         let endpoint = self.endpoint.clone();
+        let refreshing = self.network_refreshing.clone();
+        let force_attempt = self.force_attempt.clone();
+        let notify = self.sync_notify.clone();
+        let stop = self.stop.clone();
         self.rt.spawn(async move {
-            endpoint.network_change().await;
+            recover_network(
+                endpoint.network_change(),
+                &refreshing,
+                &force_attempt,
+                &notify,
+                &stop,
+            )
+            .await;
         });
-        self.sync_now();
     }
 
     /// Record a local change. `ts` is the observation time (0 = stamp now).
@@ -630,7 +742,12 @@ impl SyncEngine {
     pub fn notify(&self, domain: &str, key: &str, value: Option<&str>, ts: u64) {
         let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
         if store.set(domain, key, value.map(str::to_string), ts, self.device) {
-            store.save();
+            if let Err(e) = store.save() {
+                nova_storage::report(nova_storage::Error::new(
+                    nova_storage::ErrorKind::Transaction,
+                    e,
+                ));
+            }
         }
     }
 
@@ -646,7 +763,12 @@ impl SyncEngine {
             changed |= store.set(domain, key, value.clone(), *ts, self.device);
         }
         if changed {
-            store.save();
+            if let Err(e) = store.save() {
+                nova_storage::report(nova_storage::Error::new(
+                    nova_storage::ErrorKind::Transaction,
+                    e,
+                ));
+            }
         }
     }
 
@@ -657,6 +779,13 @@ impl SyncEngine {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .records(domain)
+    }
+    pub fn record(&self, domain: &str, key: &str) -> Option<Record> {
+        self.store
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record(domain, key)
+            .cloned()
     }
 
     /// Domains that currently hold at least one record (live or tombstone).
@@ -671,10 +800,8 @@ impl SyncEngine {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
         self.sync_notify.notify_one();
-        self.conns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        self.cadence_notify.notify_one();
+        self.conns.lock().unwrap_or_else(|e| e.into_inner()).clear();
         let router = self.router.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(router) = router {
             self.rt.spawn(async move {
@@ -702,11 +829,18 @@ async fn sync_worker(
     health: Arc<Mutex<HashMap<String, PeerHealth>>>,
     sync_notify: Arc<tokio::sync::Notify>,
     stop: Arc<AtomicBool>,
+    force_attempt: Arc<AtomicBool>,
 ) {
     loop {
         sync_notify.notified().await;
         if stop.load(Ordering::Relaxed) {
             return;
+        }
+        // Explicit requests and refreshed connectivity get one bounded retry.
+        // Periodic/pairing wakes retain normal backoff. A request during a pass
+        // is consumed only by its coalesced follow-up, not the current pass.
+        if force_attempt.swap(false, Ordering::AcqRel) {
+            health.lock().unwrap_or_else(|e| e.into_inner()).clear();
         }
         // Bound the whole pass. If it overruns, drop it (aborting its spawned
         // tasks) and clear the flag so the UI recovers; the next pass retries.
@@ -722,15 +856,14 @@ async fn sync_worker(
         )
         .await
         {
-            Ok(()) => {}
+            Ok(_) => {}
             Err(_) => {
                 eprintln!("nova sync: pass timed out after {MAX_PASS_SECS}s; aborting");
                 handler.finish_sync(Some(format!("sync pass timed out after {MAX_PASS_SECS}s")));
             }
         }
-        // Signal completion even when the pass had nothing to do (no peers, or
-        // all in backoff): a one-shot caller (Android background job) waits on
-        // this rather than the transient `syncing` flag.
+        // Count worker wakes even with no eligible peer. Android uses the
+        // separate one-shot outcome, never this counter, for completion.
         handler.note_pass_done();
     }
 }
@@ -749,7 +882,7 @@ async fn run_pass(
     peers: Arc<Mutex<Vec<String>>>,
     conns: Arc<Mutex<HashMap<String, Connection>>>,
     health: Arc<Mutex<HashMap<String, PeerHealth>>>,
-) {
+) -> OneShotOutcome {
     let debug = std::env::var_os("NOVA_SYNC_DEBUG").is_some();
     let started_at = now_secs();
     let mut last_err = None;
@@ -759,7 +892,7 @@ async fn run_pass(
             .lock()
             .map(|p| p.iter().cloned().collect())
             .unwrap_or_default();
-        let now = now_secs();
+        let now = Instant::now();
         let targets: Vec<String> = before
             .iter()
             .filter(|id| !should_skip(&health, id, now))
@@ -772,7 +905,6 @@ async fn run_pass(
             handler.set_syncing(true);
             started = true;
         }
-        last_err = None;
         let semaphore = Arc::new(tokio::sync::Semaphore::new(SYNC_CONCURRENCY));
         let mut tasks = tokio::task::JoinSet::new();
         for peer in targets {
@@ -803,7 +935,7 @@ async fn run_pass(
         }
     }
     if started {
-        handler.finish_sync(last_err);
+        handler.finish_sync(last_err.clone());
     }
     if debug {
         eprintln!(
@@ -815,6 +947,22 @@ async fn run_pass(
     // after the round loop so acks recorded by this pass are taken into
     // account immediately.
     handler.gc_tombstones(now_ms());
+    if let Some(error) = last_err {
+        OneShotOutcome::Failed(error)
+    } else if started {
+        OneShotOutcome::Completed
+    } else {
+        OneShotOutcome::Skipped
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum OneShotOutcome {
+    Completed,
+    Cancelled,
+    TimedOut,
+    Skipped,
+    Failed(String),
 }
 
 /// Sync with one peer, recording success/failure for backoff. Returns the
@@ -826,21 +974,43 @@ async fn sync_one(
     conns: &Arc<Mutex<HashMap<String, Connection>>>,
     health: &Arc<Mutex<HashMap<String, PeerHealth>>>,
 ) -> Option<String> {
+    let started = Instant::now();
+    handler.note_peer_attempt(peer);
     let id = match EndpointId::from_str(peer) {
         Ok(id) => id,
         Err(e) => {
             record_failure(health, peer);
-            return Some(format!("bad peer id {peer}: {e}"));
+            let msg = format!("bad peer id {peer}: {e}");
+            handler.note_peer_result(
+                peer,
+                Some(msg.clone()),
+                BACKOFF_BASE_SECS,
+                started.elapsed(),
+            );
+            return Some(msg);
         }
     };
     let conn = match peer_connection(endpoint, conns, peer, id).await {
         Ok(conn) => conn,
         Err(msg) => {
             record_failure(health, peer);
+            let failures = health
+                .lock()
+                .unwrap()
+                .get(peer)
+                .map(|h| h.fail_count)
+                .unwrap_or(1);
+            let retry = (BACKOFF_BASE_SECS * (1u64 << failures.saturating_sub(1).min(6)))
+                .min(BACKOFF_MAX_SECS);
+            handler.note_peer_result(peer, Some(msg.clone()), retry, started.elapsed());
             return Some(msg);
         }
     };
-    let outcome = match tokio::time::timeout(EXCHANGE_TIMEOUT, protocol::run(conn, true, handler)).await
+    let outcome = match tokio::time::timeout(
+        EXCHANGE_TIMEOUT,
+        protocol::run(conn.clone(), true, handler),
+    )
+    .await
     {
         Ok(Ok(())) => {
             record_success(health, peer);
@@ -850,10 +1020,11 @@ async fn sync_one(
             // A cached connection may have gone stale between passes; drop it
             // so the next pass redials instead of failing against it again.
             forget_connection(conns, peer);
-            let msg = e.to_string();
+            let msg = format!("{e:#}");
             // The remote explicitly refused us as a peer: it removed us. Drop
             // it instead of retrying (and backing off) forever.
-            if msg.contains("not a peer") {
+            if matches!(conn.close_reason(), Some(iroh::endpoint::ConnectionError::ApplicationClosed(ref reason)) if reason.error_code == protocol::REVOKED_CODE.into())
+            {
                 handler.note_rejected(peer);
             }
             record_failure(health, peer);
@@ -865,6 +1036,18 @@ async fn sync_one(
             Some(format!("sync with {peer} timed out"))
         }
     };
+    let failures = health
+        .lock()
+        .unwrap()
+        .get(peer)
+        .map(|h| h.fail_count)
+        .unwrap_or(0);
+    let retry = if failures == 0 {
+        0
+    } else {
+        (BACKOFF_BASE_SECS * (1u64 << failures.saturating_sub(1).min(6))).min(BACKOFF_MAX_SECS)
+    };
+    handler.note_peer_result(peer, outcome.clone(), retry, started.elapsed());
     if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
         eprintln!(
             "[sync] peer {}: {}",
@@ -885,16 +1068,26 @@ async fn peer_connection(
     peer: &str,
     id: EndpointId,
 ) -> Result<Connection, String> {
-    if let Some(conn) = conns
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(peer)
-        .cloned()
-    {
+    // The if-let scrutinee's temporary guard otherwise lives through the
+    // body, deadlocking when eviction tries to lock the same cache again.
+    let cached = {
+        conns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(peer)
+            .cloned()
+    };
+    if let Some(conn) = cached {
         if conn.close_reason().is_none() {
+            if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
+                eprintln!("[sync] connection=reuse peer={}", short_id(peer));
+            }
             return Ok(conn);
         }
         forget_connection(conns, peer);
+    }
+    if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
+        eprintln!("[sync] connection=redial peer={}", short_id(peer));
     }
     match tokio::time::timeout(
         CONNECT_TIMEOUT,
@@ -917,10 +1110,7 @@ async fn peer_connection(
 /// Drop a cached connection for `peer` after a failure, so the next pass
 /// redials instead of reusing a dead handle.
 fn forget_connection(conns: &Arc<Mutex<HashMap<String, Connection>>>, peer: &str) {
-    conns
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(peer);
+    conns.lock().unwrap_or_else(|e| e.into_inner()).remove(peer);
 }
 
 async fn interval_loop(
@@ -930,28 +1120,24 @@ async fn interval_loop(
     on_pair: Arc<Mutex<Option<PairCallback>>>,
     sync_notify: Arc<tokio::sync::Notify>,
     stop: Arc<AtomicBool>,
+    cadence_notify: Arc<tokio::sync::Notify>,
 ) {
+    let mut last_pass = tokio::time::Instant::now();
     loop {
-        // Sleep in short steps so `stop()` is observed promptly. Foreground
-        // uses the user's interval; backgrounded-but-alive clamps it to 5 min
-        // so a long download's foreground service doesn't poll aggressively.
-        let interval = read_settings().interval_secs;
-        let secs = if FOREGROUND.load(Ordering::Relaxed) {
-            interval
-        } else {
-            interval.max(300)
-        }
-        .clamp(5, 24 * 60 * 60);
-        let mut waited = 0u64;
-        while waited < secs {
-            if stop.load(Ordering::Relaxed) {
-                return;
-            }
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            waited += 5;
-        }
-        if stop.load(Ordering::Relaxed) {
+        if !wait_for_cadence(last_pass, &cadence_notify, &stop, || {
+            effective_interval(
+                read_settings().interval_secs,
+                FOREGROUND.load(Ordering::Relaxed),
+            )
+        })
+        .await
+        {
             return;
+        }
+        #[cfg(target_os = "android")]
+        if !FOREGROUND_OWNER.load(Ordering::Acquire) {
+            last_pass = tokio::time::Instant::now();
+            continue; // headless leases run only their cancellable one-shot
         }
         // Retry an outstanding invite join before the periodic pass.
         if pair::load_pending_join().is_some() {
@@ -964,7 +1150,58 @@ async fn interval_loop(
             )
             .await;
         }
+        if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
+            eprintln!("[sync] trigger=periodic");
+        }
         sync_notify.notify_one();
+        last_pass = tokio::time::Instant::now();
+    }
+}
+
+fn effective_interval(interval: u64, foreground: bool) -> u64 {
+    (if foreground {
+        interval
+    } else {
+        interval.max(300)
+    })
+    .clamp(5, 24 * 60 * 60)
+}
+
+/// Recompute from the last periodic wake, not from the settings-change time.
+/// Reducing an already-elapsed interval therefore wakes promptly; increasing
+/// it postpones the old deadline rather than issuing one extra early pass.
+async fn wait_for_cadence(
+    last_pass: tokio::time::Instant,
+    notify: &tokio::sync::Notify,
+    stop: &AtomicBool,
+    interval: impl Fn() -> u64,
+) -> bool {
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return false;
+        }
+        tokio::select! {
+            biased;
+            _ = notify.notified() => continue,
+            _ = tokio::time::sleep_until(last_pass + Duration::from_secs(interval())) => {
+                return !stop.load(Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+async fn recover_network(
+    refresh: impl std::future::Future<Output = ()>,
+    refreshing: &AtomicBool,
+    force_attempt: &AtomicBool,
+    notify: &tokio::sync::Notify,
+    stop: &AtomicBool,
+) {
+    refresh.await;
+    refreshing.store(false, Ordering::Release);
+    if !stop.load(Ordering::Relaxed) {
+        force_attempt.store(true, Ordering::Release);
+        notify.notify_one();
     }
 }
 
@@ -978,6 +1215,9 @@ async fn attempt_join(
     on_pair: Arc<Mutex<Option<PairCallback>>>,
     sync_notify: Arc<tokio::sync::Notify>,
 ) {
+    let Ok(_join) = handler.joining.try_lock() else {
+        return;
+    };
     let Some(pending) = pair::load_pending_join() else {
         return;
     };
@@ -997,19 +1237,23 @@ async fn attempt_join(
     };
     let name = effective_device_name(&read_settings());
     let host_id_string = host_id.to_string();
-    match pair::initiate(
-        &endpoint,
-        EndpointAddr::from(host_id),
-        &secret,
-        &name,
-        &host_id_string,
+    match tokio::time::timeout(
+        Duration::from_secs(90),
+        pair::initiate_with_trust(
+            &endpoint,
+            EndpointAddr::from(host_id),
+            &secret,
+            &name,
+            &host_id_string,
+            |name| handler.add_peer_explicit(&host_id_string, name),
+        ),
     )
     .await
+    .unwrap_or_else(|_| Err(anyhow::anyhow!("pairing timed out")))
     {
         Ok(host_name) => {
             // Trust the host and record its name; an explicit re-pair is
             // allowed to re-add a peer that was previously removed.
-            handler.add_peer_explicit(&host_id_string, &host_name);
             pair::clear_pending_join();
             if let Ok(mut s) = status.lock() {
                 s.last_error = None;
@@ -1034,8 +1278,50 @@ async fn attempt_join(
 // ---------------------------------------------------------------------------
 
 static ENGINE: LazyLock<Mutex<Option<Arc<SyncEngine>>>> = LazyLock::new(|| Mutex::new(None));
+// Setup/install/release is serialized independently of short singleton reads.
+static LIFECYCLE: Mutex<()> = Mutex::new(());
+static FOREGROUND_OWNER: AtomicBool = AtomicBool::new(false);
+
+pub fn foreground_engine() -> Result<Arc<SyncEngine>> {
+    let _transition = LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner());
+    if engine().is_none() {
+        install_inner(SyncEngine::setup()?);
+    }
+    FOREGROUND_OWNER.store(true, Ordering::Release);
+    engine().context("engine unavailable after setup")
+}
+
+pub struct BackgroundLease {
+    pub engine: Arc<SyncEngine>,
+}
+impl Drop for BackgroundLease {
+    fn drop(&mut self) {
+        let _transition = LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut slot = ENGINE.lock().unwrap_or_else(|e| e.into_inner());
+        if !FOREGROUND_OWNER.load(Ordering::Acquire)
+            && slot.as_ref().is_some_and(|e| Arc::ptr_eq(e, &self.engine))
+        {
+            if let Some(engine) = slot.take() {
+                engine.stop();
+            }
+        }
+    }
+}
+pub fn background_engine() -> Result<Option<BackgroundLease>> {
+    let _transition = LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner());
+    if engine().is_some() {
+        return Ok(None);
+    }
+    install_inner(SyncEngine::setup()?);
+    Ok(engine().map(|engine| BackgroundLease { engine }))
+}
 
 pub fn install(engine: SyncEngine) {
+    let _transition = LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner());
+    FOREGROUND_OWNER.store(true, Ordering::Release);
+    install_inner(engine);
+}
+fn install_inner(engine: SyncEngine) {
     let mut slot = ENGINE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(old) = slot.replace(Arc::new(engine)) {
         old.stop();
@@ -1043,6 +1329,8 @@ pub fn install(engine: SyncEngine) {
 }
 
 pub fn uninstall() {
+    let _transition = LIFECYCLE.lock().unwrap_or_else(|e| e.into_inner());
+    FOREGROUND_OWNER.store(false, Ordering::Release);
     let old = ENGINE.lock().unwrap_or_else(|e| e.into_inner()).take();
     if let Some(old) = old {
         old.stop();
@@ -1069,16 +1357,18 @@ pub fn is_running() -> bool {
 // Identity + peer persistence helpers
 // ---------------------------------------------------------------------------
 
-fn load_or_create_secret() -> SecretKey {
-    if let Some(hex) = nova_storage::get_str(IDENTITY_KEY)
-        && let Some(bytes) = hex_decode(&hex)
-        && let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice())
-    {
-        return SecretKey::from_bytes(&arr);
+fn load_or_create_secret() -> Result<SecretKey> {
+    static IDENTITY_LOCK: Mutex<()> = Mutex::new(());
+    let _identity = IDENTITY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(hex) = nova_storage::try_get_str(IDENTITY_KEY)? {
+        let bytes = hex_decode(&hex)
+            .context("unreadable sync identity; restore backup, do not regenerate")?;
+        let arr = <[u8; 32]>::try_from(bytes.as_slice()).context("invalid sync identity length")?;
+        return Ok(SecretKey::from_bytes(&arr));
     }
     let secret = SecretKey::generate();
-    nova_storage::set_str(IDENTITY_KEY, &hex_encode(&secret.to_bytes()));
-    secret
+    nova_storage::try_set_str(IDENTITY_KEY, &hex_encode(&secret.to_bytes()))?;
+    Ok(secret)
 }
 
 /// The `peers` sync domain: key = endpoint id, value = JSON [`PeerValue`].
@@ -1111,12 +1401,7 @@ fn parse_presence(value: &str) -> Option<u64> {
 /// Record that `peer` completed an exchange with us just now, publishing our
 /// observation into the mesh `presence` domain. Throttled: a still-fresh
 /// observation is left alone. Never records our own id.
-pub(crate) fn presence_note(
-    store: &Arc<Mutex<Store>>,
-    self_id: &str,
-    peer: &str,
-    dev: u64,
-) {
+pub(crate) fn presence_note(store: &Arc<Mutex<Store>>, self_id: &str, peer: &str, dev: u64) {
     if peer == self_id {
         return;
     }
@@ -1131,7 +1416,12 @@ pub(crate) fn presence_note(
         return;
     }
     if store.set(DOMAIN_PRESENCE, &key, Some(now.to_string()), 0, dev) {
-        store.save();
+        if let Err(e) = store.save() {
+            nova_storage::report(nova_storage::Error::new(
+                nova_storage::ErrorKind::Transaction,
+                e,
+            ));
+        }
     }
 }
 
@@ -1177,14 +1467,6 @@ pub(crate) fn load_peer_acks() -> PeerAcks {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     raw.into_iter().map(|(k, v)| (k, v.into_hlc())).collect()
-}
-
-/// Persist the local per-peer ack map.
-pub(crate) fn save_peer_acks(acks: &PeerAcks) {
-    match serde_json::to_string(acks) {
-        Ok(s) => nova_storage::set_str(PEER_ACKS_KEY, &s),
-        Err(e) => eprintln!("nova sync: serialize peer acks: {e}"),
-    }
 }
 
 /// The tombstone GC floor from the current peers' ack clocks. With no peers,
@@ -1299,7 +1581,7 @@ fn ordered_peer_ids(store: &Store, self_id: &str) -> Vec<String> {
 
 /// Short form of a peer id for logs.
 fn short_id(id: &str) -> &str {
-    &id[..id.len().min(12)]
+    id.get(..12).unwrap_or(id)
 }
 
 /// Add (or refresh) a peer in both the store and the live allowlist. Used for
@@ -1312,12 +1594,12 @@ pub(crate) fn peers_add(
     id: &str,
     name: Option<&str>,
     dev: u64,
-) {
+) -> Result<()> {
     let ts = now_secs();
     let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
     let changed = peer_upsert(&mut store, id, name, ts, dev, true, true);
     if changed {
-        store.save();
+        store.save()?;
         if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
             eprintln!("[sync] peer added/updated {}", short_id(id));
         }
@@ -1326,6 +1608,7 @@ pub(crate) fn peers_add(
     if !list.iter().any(|p| p == id) {
         list.push(id.to_string());
     }
+    Ok(())
 }
 
 /// Refresh the name of an already-live peer during a sync. Never inserts and
@@ -1340,7 +1623,12 @@ pub(crate) fn peers_refresh(
     let ts = now_secs();
     let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
     if peer_upsert(&mut store, id, Some(name), ts, dev, false, false) {
-        store.save();
+        if let Err(e) = store.save() {
+            nova_storage::report(nova_storage::Error::new(
+                nova_storage::ErrorKind::Transaction,
+                e,
+            ));
+        }
     }
     // A peer we are syncing with is live by construction; make sure the
     // allowlist agrees (defensive against a missed reconcile).
@@ -1376,7 +1664,12 @@ pub(crate) fn peers_remove(
         changed |= store.set(DOMAIN_PRESENCE, &key, None, now, dev);
     }
     if changed {
-        store.save();
+        if let Err(e) = store.save() {
+            nova_storage::report(nova_storage::Error::new(
+                nova_storage::ErrorKind::Transaction,
+                e,
+            ));
+        }
         eprintln!("nova sync: removed peer {}", short_id(id));
     }
     let mut list = peers.lock().unwrap_or_else(|e| e.into_inner());
@@ -1547,10 +1840,34 @@ mod tests {
         let store = Arc::new(Mutex::new(Store::default()));
         {
             let mut s = store.lock().unwrap();
-            s.set(DOMAIN_PRESENCE, &presence_key("a", "p"), Some("100".into()), 0, 1);
-            s.set(DOMAIN_PRESENCE, &presence_key("b", "p"), Some("300".into()), 0, 2);
-            s.set(DOMAIN_PRESENCE, &presence_key("c", "p"), Some("not-a-time".into()), 0, 3);
-            s.set(DOMAIN_PRESENCE, &presence_key("a", "other"), Some("999".into()), 0, 1);
+            s.set(
+                DOMAIN_PRESENCE,
+                &presence_key("a", "p"),
+                Some("100".into()),
+                0,
+                1,
+            );
+            s.set(
+                DOMAIN_PRESENCE,
+                &presence_key("b", "p"),
+                Some("300".into()),
+                0,
+                2,
+            );
+            s.set(
+                DOMAIN_PRESENCE,
+                &presence_key("c", "p"),
+                Some("not-a-time".into()),
+                0,
+                3,
+            );
+            s.set(
+                DOMAIN_PRESENCE,
+                &presence_key("a", "other"),
+                Some("999".into()),
+                0,
+                1,
+            );
         }
         assert_eq!(presence_newest(&store, "p"), Some(300));
         assert_eq!(presence_newest(&store, "other"), Some(999));
@@ -1561,8 +1878,8 @@ mod tests {
     fn peers_remove_tombstones_presence() {
         let store = Arc::new(Mutex::new(Store::default()));
         let peers = Arc::new(Mutex::new(Vec::new()));
-        peers_add(&store, &peers, "peer-a", Some("A"), 1);
-        peers_add(&store, &peers, "peer-b", Some("B"), 1);
+        peers_add(&store, &peers, "peer-a", Some("A"), 1).unwrap();
+        peers_add(&store, &peers, "peer-b", Some("B"), 1).unwrap();
         presence_note(&store, "self", "peer-a", 1);
         presence_note(&store, "peer-b", "peer-a", 2);
         presence_note(&store, "self", "peer-b", 1);
@@ -1612,8 +1929,8 @@ mod tests {
     fn peer_names_round_trip_and_ignore_placeholders() {
         let store = Arc::new(Mutex::new(Store::default()));
         let peers = Arc::new(Mutex::new(Vec::new()));
-        peers_add(&store, &peers, "peer-a", Some("Pixel 8"), 1);
-        peers_add(&store, &peers, "peer-b", Some(""), 1);
+        peers_add(&store, &peers, "peer-a", Some("Pixel 8"), 1).unwrap();
+        peers_add(&store, &peers, "peer-b", Some(""), 1).unwrap();
         let names = peer_names_from_store(&store);
         assert_eq!(names.get("peer-a").map(String::as_str), Some("Pixel 8"));
         assert!(!names.contains_key("peer-b"));
@@ -1623,8 +1940,8 @@ mod tests {
     fn reconcile_peers_drops_removed_ids() {
         let store = Arc::new(Mutex::new(Store::default()));
         let peers = Arc::new(Mutex::new(Vec::new()));
-        peers_add(&store, &peers, "peer-a", Some("A"), 1);
-        peers_add(&store, &peers, "peer-b", None, 1);
+        peers_add(&store, &peers, "peer-a", Some("A"), 1).unwrap();
+        peers_add(&store, &peers, "peer-b", None, 1).unwrap();
         assert!(!reconcile_peers(&store, &peers, "")); // already in sync
         peers_remove(&store, &peers, "peer-a", 1);
         assert_eq!(peers.lock().unwrap().as_slice(), &["peer-b".to_string()]);
@@ -1634,7 +1951,7 @@ mod tests {
     fn refresh_does_not_resurrect_a_removed_peer() {
         let store = Arc::new(Mutex::new(Store::default()));
         let peers = Arc::new(Mutex::new(Vec::new()));
-        peers_add(&store, &peers, "peer-a", Some("A"), 1);
+        peers_add(&store, &peers, "peer-a", Some("A"), 1).unwrap();
         peers_remove(&store, &peers, "peer-a", 1);
         assert!(store.lock().unwrap().records(DOMAIN_PEERS).is_empty());
 
@@ -1644,7 +1961,7 @@ mod tests {
         assert!(store.lock().unwrap().records(DOMAIN_PEERS).is_empty());
 
         // An explicit re-pair may.
-        peers_add(&store, &peers, "peer-a", Some("A"), 1);
+        peers_add(&store, &peers, "peer-a", Some("A"), 1).unwrap();
         assert!(peers.lock().unwrap().contains(&"peer-a".to_string()));
         assert_eq!(store.lock().unwrap().records(DOMAIN_PEERS).len(), 1);
     }
@@ -1653,7 +1970,7 @@ mod tests {
     fn refresh_keeps_a_live_peer_name() {
         let store = Arc::new(Mutex::new(Store::default()));
         let peers = Arc::new(Mutex::new(Vec::new()));
-        peers_add(&store, &peers, "peer-a", Some("Pixel"), 1);
+        peers_add(&store, &peers, "peer-a", Some("Pixel"), 1).unwrap();
         // An empty name from a sync must not clear the learned label.
         peers_refresh(&store, &peers, "peer-a", "", 1);
         let names = peer_names_from_store(&store);
@@ -1666,16 +1983,104 @@ mod tests {
 
     #[test]
     fn backoff_skips_then_recovers() {
-        let health: Arc<Mutex<HashMap<String, PeerHealth>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-        assert!(!should_skip(&health, "p", 1000));
+        let health: Arc<Mutex<HashMap<String, PeerHealth>>> = Arc::new(Mutex::new(HashMap::new()));
+        let now = Instant::now();
+        assert!(!should_skip(&health, "p", now));
         record_failure(&health, "p");
-        assert!(should_skip(&health, "p", now_secs()));
+        assert!(should_skip(&health, "p", Instant::now()));
         // Rewind the failure so its window has elapsed.
-        health.lock().unwrap().get_mut("p").unwrap().last_fail = 1000;
-        assert!(!should_skip(&health, "p", 1000 + BACKOFF_BASE_SECS + 1));
+        health.lock().unwrap().get_mut("p").unwrap().last_fail = Some(now);
+        assert!(!should_skip(
+            &health,
+            "p",
+            now + Duration::from_secs(BACKOFF_BASE_SECS + 1),
+        ));
         record_success(&health, "p");
-        assert!(!should_skip(&health, "p", 1000));
+        assert!(!should_skip(&health, "p", now));
+    }
+
+    #[test]
+    fn interval_respects_foreground_and_safety_bounds() {
+        assert_eq!(effective_interval(30, true), 30);
+        assert_eq!(effective_interval(30, false), 300);
+        assert_eq!(effective_interval(900, false), 900);
+        assert_eq!(effective_interval(0, true), 5);
+        assert_eq!(effective_interval(u64::MAX, true), 86400);
+    }
+
+    #[tokio::test]
+    async fn cadence_change_recomputes_pending_deadline() {
+        let notify = tokio::sync::Notify::new();
+        let stop = AtomicBool::new(false);
+        let interval = std::sync::atomic::AtomicU64::new(900);
+        let last = tokio::time::Instant::now() - Duration::from_secs(60);
+        let wait = wait_for_cadence(last, &notify, &stop, || interval.load(Ordering::Relaxed));
+        tokio::pin!(wait);
+        tokio::select! {
+            biased;
+            _ = &mut wait => panic!("long interval fired early"),
+            _ = tokio::task::yield_now() => {}
+        }
+        interval.store(30, Ordering::Relaxed);
+        notify.notify_one();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), &mut wait)
+                .await
+                .unwrap()
+        );
+
+        // A pending foreground wake must be postponed after backgrounding.
+        interval.store(300, Ordering::Relaxed);
+        notify.notify_one();
+        let wait = wait_for_cadence(last, &notify, &stop, || interval.load(Ordering::Relaxed));
+        tokio::pin!(wait);
+        tokio::select! {
+            biased;
+            _ = &mut wait => panic!("background interval fired early"),
+            _ = tokio::task::yield_now() => {}
+        }
+        stop.store(true, Ordering::Relaxed);
+        notify.notify_one();
+        assert!(!wait.await);
+    }
+
+    #[tokio::test]
+    async fn network_recovery_wakes_only_after_refresh_and_not_after_stop() {
+        let refreshing = AtomicBool::new(true);
+        let force = AtomicBool::new(false);
+        let stop = AtomicBool::new(false);
+        let notify = tokio::sync::Notify::new();
+        let (release, barrier) = tokio::sync::oneshot::channel();
+        let recovery = recover_network(
+            async {
+                barrier.await.unwrap();
+            },
+            &refreshing,
+            &force,
+            &notify,
+            &stop,
+        );
+        tokio::pin!(recovery);
+        tokio::select! {
+            biased;
+            _ = &mut recovery => panic!("refresh completed without barrier"),
+            _ = tokio::task::yield_now() => {}
+        }
+        assert!(refreshing.load(Ordering::Acquire));
+        assert!(!force.load(Ordering::Acquire));
+        release.send(()).unwrap();
+        recovery.await;
+        assert!(!refreshing.load(Ordering::Acquire));
+        assert!(force.swap(false, Ordering::AcqRel));
+        notify.notified().await;
+        stop.store(true, Ordering::Relaxed);
+        recover_network(async {}, &refreshing, &force, &notify, &stop).await;
+        assert!(!force.load(Ordering::Acquire));
+        tokio::select! {
+            biased;
+            _ = notify.notified() => panic!("stopped engine was woken"),
+            _ = tokio::task::yield_now() => {}
+        }
     }
 
     #[test]
@@ -1684,8 +2089,20 @@ mod tests {
         let peers = Arc::new(Mutex::new(Vec::new()));
         {
             let mut s = store.lock().unwrap();
-            s.set(DOMAIN_PEERS, "older", Some("{\"added_at\":100}".into()), 1, 1);
-            s.set(DOMAIN_PEERS, "newer", Some("{\"added_at\":200}".into()), 1, 1);
+            s.set(
+                DOMAIN_PEERS,
+                "older",
+                Some("{\"added_at\":100}".into()),
+                1,
+                1,
+            );
+            s.set(
+                DOMAIN_PEERS,
+                "newer",
+                Some("{\"added_at\":200}".into()),
+                1,
+                1,
+            );
         }
         assert!(reconcile_peers(&store, &peers, ""));
         assert_eq!(

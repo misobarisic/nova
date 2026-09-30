@@ -1,11 +1,108 @@
 //! Settings page: cache + torrent settings, maintenance.
 use super::*;
+static UNSUPPORTED_SETTINGS: Mutex<Option<HashMap<String, serde_json::Value>>> = Mutex::new(None);
+
+pub(crate) fn protect_setting_field(field: &str, raw: serde_json::Value) {
+    UNSUPPORTED_SETTINGS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(field.to_string(), raw);
+}
+
+pub(crate) fn allow_setting_field(field: &str) {
+    if let Some(fields) = UNSUPPORTED_SETTINGS.lock().unwrap().as_mut() {
+        if field == "cache" {
+            for key in [
+                "cache_images",
+                "enabled",
+                "format",
+                "quality",
+                "downscale",
+                "lazy_reencode",
+                "lru_cache_mb",
+            ] {
+                fields.remove(key);
+            }
+        } else {
+            fields.remove(field);
+        }
+    }
+}
+
+pub(crate) fn preserve_unsupported_settings(_old: Option<&str>, new: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(new) else {
+        return new.to_string();
+    };
+    if let (Some(map), Some(fields)) = (
+        value.as_object_mut(),
+        UNSUPPORTED_SETTINGS.lock().unwrap().as_ref(),
+    ) {
+        for (field, raw) in fields {
+            map.insert(field.clone(), raw.clone());
+        }
+    }
+    value.to_string()
+}
+
+pub(crate) fn recover_settings(value: serde_json::Value) -> Option<CacheSettings> {
+    let source = value.as_object()?;
+    let mut current = serde_json::to_value(CacheSettings::default()).ok()?;
+    for (key, value) in source {
+        let mut trial = current.clone();
+        trial.as_object_mut()?.insert(key.clone(), value.clone());
+        if serde_json::from_value::<CacheSettings>(trial.clone()).is_ok() {
+            current = trial;
+        } else {
+            protect_setting_field(key, value.clone());
+            storage::report(storage::Error::new(
+                storage::ErrorKind::Schema,
+                format!("unsupported settings field {key}; raw value retained"),
+            ));
+        }
+    }
+    serde_json::from_value(current).ok()
+}
 
 impl Bridge {
+    /// Wire the Settings page to an application-owned timer. Return the same
+    /// scheduler for playback-rate edits, which share the settings snapshot.
+    pub(super) fn wire_settings_autosave(&self) -> impl Fn() + Clone + 'static {
+        let timer = Rc::new(slint::Timer::default());
+        let b = self.clone();
+        let schedule = move || {
+            let b = b.clone();
+            timer.start(
+                slint::TimerMode::SingleShot,
+                Duration::from_millis(600),
+                move || b.persist_settings(),
+            );
+        };
+        if let Some(app) = self.app() {
+            let b = self.clone();
+            let callback_schedule = schedule.clone();
+            app.on_save_settings(move || {
+                b.capture_settings();
+                callback_schedule();
+            });
+            let b = self.clone();
+            let callback_schedule = schedule.clone();
+            app.on_settings_edited(move |field| {
+                allow_setting_field(&field);
+                b.capture_settings();
+                let settings = b.shared.lock().unwrap().cache_settings.clone();
+                notify_setting_choice(&field, &settings);
+                callback_schedule();
+            });
+        }
+        schedule
+    }
+
     /// Mirror the stored cache settings onto the Settings page controls.
     pub(super) fn settings_to_ui(&self) {
         let settings = self.shared.lock().unwrap().cache_settings.clone();
         if let Some(app) = self.app() {
+            app.set_persistence_failed(storage::last_error().is_some());
             app.set_cache_images(settings.cache_images);
             app.set_cache_enabled(settings.enabled);
             app.set_cache_format_index(match settings.format {
@@ -37,7 +134,9 @@ impl Bridge {
             app.set_anim_player(settings.anim_player);
             app.set_anim_nav_slide(settings.anim_nav_slide);
             app.set_language_index(settings.language.index());
-            app.set_language_names(Rc::new(VecModel::<SharedString>::from(language_labels())).into());
+            app.set_language_names(
+                Rc::new(VecModel::<SharedString>::from(language_labels())).into(),
+            );
         }
         self.download_settings_to_ui();
         self.apply_animations(&settings);
@@ -118,10 +217,9 @@ impl Bridge {
         self.sync_status_to_ui();
     }
 
-    /// Read the page controls, clamp, persist and remember the settings.
-    /// Called automatically (debounced) after any Settings edit — there is
-    /// no Save button.
-    pub(super) fn save_settings(&self) {
+    /// Capture controls into authoritative memory before navigation or a
+    /// remote refresh can replace them. Only the disk snapshot is debounced.
+    pub(super) fn capture_settings(&self) {
         let Some(app) = self.app() else {
             return;
         };
@@ -177,15 +275,14 @@ impl Bridge {
             state.cache_settings = settings.clone();
         }
         set_active_cache_settings(settings.clone());
-        write_settings(&settings);
+        if !applying() {
+            notify_settings(&settings);
+        }
         self.apply_animations(&settings);
         self.apply_language(&settings);
         self.apply_catalog_labels_to_ui();
-        self.refresh_cache_disk_usage();
 
-        // Torrent settings share this debounce (the Settings → Torrents card
-        // restarts the same autosave timer), so a slider drag or path edit
-        // persists once the user pauses instead of on every keystroke.
+        // Torrent controls share the same immediate capture and disk debounce.
         let torrent = TorrentSettings {
             enabled: app.get_torrent_enabled(),
             dir: app.get_torrent_dir().to_string(),
@@ -193,8 +290,20 @@ impl Bridge {
             down_limit_kbps: app.get_torrent_down_limit().max(0.0).round() as u32,
             no_cache: app.get_torrent_no_cache(),
         };
-        write_torrent_settings(&torrent);
+        *CURRENT_TORRENT_SETTINGS.lock().unwrap() = torrent.clone();
         sync_torrent_engine(&torrent);
+    }
+
+    /// Persist current memory, never stale controls captured by a timer.
+    pub(super) fn persist_settings(&self) {
+        let settings = self.shared.lock().unwrap().cache_settings.clone();
+        write_settings(&settings);
+        write_torrent_settings(&active_torrent_settings());
+    }
+
+    pub(super) fn save_settings(&self) {
+        self.capture_settings();
+        self.persist_settings();
     }
 
     /// Immediate one-shot for the "Re-encode now" button: persist the
@@ -286,7 +395,6 @@ impl Bridge {
             app.set_selected_genre_list(Rc::new(VecModel::from(vec![])).into());
         }
     }
-
 }
 
 /// Delete every file in the on-disk image cache `dir` (leaving the dir
@@ -337,11 +445,344 @@ pub(crate) fn poster_cache_disk_usage(dir: &Path) -> (u64, usize) {
 }
 /// App-wide cache settings (also mirrored in the settings page).
 pub(crate) fn read_settings() -> CacheSettings {
-    read_json::<CacheSettings>("settings").unwrap_or_default()
+    match read_json_result::<serde_json::Value>("settings") {
+        Ok(None) => CacheSettings::default(),
+        Ok(Some(value)) => recover_settings(value).unwrap_or_else(|| {
+            block_unreadable("settings");
+            storage::report(storage::Error::new(
+                storage::ErrorKind::Schema,
+                "unreadable settings object retained",
+            ));
+            CacheSettings::default()
+        }),
+        Err(e) => {
+            block_unreadable("settings");
+            storage::report(e);
+            CacheSettings::default()
+        }
+    }
 }
 pub(crate) fn write_settings(settings: &CacheSettings) {
     write_json("settings", settings);
     if !applying() {
         notify_settings(settings);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autosave_survives_navigation_and_preserves_current_memory() {
+        // Storage and Slint initialize once per process. Isolate this test
+        // from unit tests that intentionally run with an uninitialized KV
+        // backend, and close redb before removing its files (also on Windows).
+        const TEST_DIR: &str = "NOVA_SETTINGS_AUTOSAVE_TEST_DIR";
+        let Some(root) = std::env::var_os(TEST_DIR) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-settings-test-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(TEST_DIR, &root)
+                .args([
+                    "--exact",
+                    "app::settings::tests::autosave_survives_navigation_and_preserves_current_memory",
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        app.window().set_size(slint::PhysicalSize::new(360, 800));
+        app.window().show().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let downloads = DownloadCoordinator::new(root.join("downloads"));
+        #[cfg(feature = "desktop")]
+        let bridge = {
+            let (hi, _) = mpsc::channel();
+            let (lo, _) = mpsc::channel();
+            Bridge::new(
+                app.as_weak(),
+                PosterTx { hi, lo },
+                Arc::new(Mutex::new(PosterStore::new(1))),
+                Arc::new(AtomicU64::new(0)),
+                player,
+                downloads,
+            )
+        };
+        #[cfg(not(feature = "desktop"))]
+        let bridge = Bridge::new(
+            app.as_weak(),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            downloads,
+        );
+        let schedule = bridge.wire_settings_autosave();
+        bridge.sync_seed();
+        let owner = nova_sync::local_store().unwrap();
+        assert!(
+            owner.lock().unwrap().records(DOMAIN_SETTINGS).is_empty(),
+            "untouched defaults must not be published on first sync"
+        );
+        {
+            let mut store = owner.lock().unwrap();
+            let version = nova_sync::Version::new(nova_config::now_ms(), 0, 999, false);
+            store.apply(
+                DOMAIN_SETTINGS,
+                "discover_min_cols",
+                nova_sync::Record {
+                    value: Some("5".into()),
+                    version,
+                },
+            );
+            store.save().unwrap();
+        }
+        bridge.sync_apply(vec![DOMAIN_SETTINGS.into()]);
+        assert_eq!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .cache_settings
+                .discover_min_cols,
+            5
+        );
+        app.invoke_settings_edited("discover_catalog_addon_names".into());
+        assert_eq!(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_SETTINGS, "discover_catalog_addon_names")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("true"),
+            "explicitly choosing the default still records intent"
+        );
+        bridge.settings_to_ui();
+        bridge.torrent_settings_to_ui();
+        bridge.persist_settings();
+        let initial = read_settings();
+        app.set_show_home(false);
+        app.set_show_settings(true);
+        // Exercise a real page control, not just the exported callback: the
+        // page must report the edit synchronously, before any debounce fires.
+        app.global::<crate::Anim>().set_enabled(false);
+        let tap = |element: i_slint_backend_testing::ElementHandle| {
+            let p = element.absolute_position();
+            let size = element.size();
+            let position =
+                slint::LogicalPosition::new(p.x + size.width / 2.0, p.y + size.height / 2.0);
+            for event in [
+                slint::platform::WindowEvent::PointerPressed {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                },
+                slint::platform::WindowEvent::PointerReleased {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                },
+            ] {
+                app.window().dispatch_event(event);
+            }
+        };
+        tap(
+            i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app, "SettingsLink")
+                .nth(3)
+                .unwrap(),
+        );
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+        tap(
+            i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app, "ToggleSwitch")
+                .next()
+                .unwrap(),
+        );
+        assert_eq!(
+            bridge.shared.lock().unwrap().cache_settings.date_relative,
+            !initial.date_relative
+        );
+        app.set_discover_min_cols(6);
+        app.set_torrent_dir("pending-torrent-dir".into());
+        app.invoke_save_settings();
+        assert_eq!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .cache_settings
+                .discover_min_cols,
+            6,
+        );
+        assert_eq!(active_torrent_settings().dir, "pending-torrent-dir");
+        assert_eq!(read_settings().discover_min_cols, initial.discover_min_cols);
+
+        // Destroy the page before its old 600 ms timer would have fired.
+        app.set_show_settings(false);
+        app.set_show_home(true);
+        bridge.settings_to_ui();
+        bridge.torrent_settings_to_ui();
+        assert_eq!(app.get_discover_min_cols(), 6);
+        assert_eq!(app.get_torrent_dir(), "pending-torrent-dir");
+
+        // Simulate the remote projection path updating an unrelated field.
+        // The timer must persist the latest backend state, not its old snapshot
+        // or controls that existed before the UI refresh.
+        bridge.shared.lock().unwrap().cache_settings.date_relative = false;
+        bridge.settings_to_ui();
+        bridge.apply_playback_speed(1.25);
+        schedule();
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(601));
+        let saved = read_settings();
+        assert_eq!(saved.discover_min_cols, 6);
+        assert!(!saved.date_relative);
+        assert_eq!(saved.playback_speed, 1.25);
+        assert_eq!(read_torrent_settings().dir, "pending-torrent-dir");
+        // A queued save must not replay stale values over a newer projection.
+        app.set_show_settings(true);
+        app.set_show_home(false);
+        app.set_discover_min_cols(5);
+        app.invoke_save_settings();
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .discover_min_cols = 4;
+        bridge.settings_to_ui();
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(601));
+        assert_eq!(read_settings().discover_min_cols, 4);
+
+        // Exercise the actual app persistence and reconciliation paths with a
+        // stale mirror while headless changes are waiting for their callback.
+        write_continue_hidden(&HashMap::from([("old".into(), 1)]));
+        {
+            let mut store = owner.lock().unwrap();
+            let version = nova_sync::Version::new(nova_config::now_ms() + 1000, 0, 999, true);
+            assert!(store.apply(
+                DOMAIN_CONTINUE_HIDDEN,
+                "old",
+                nova_sync::Record {
+                    value: None,
+                    version
+                }
+            ));
+            assert!(store.apply(
+                DOMAIN_CONTINUE_HIDDEN,
+                "remote",
+                nova_sync::Record {
+                    value: Some("3".into()),
+                    version: nova_sync::Version {
+                        deleted: false,
+                        ..version
+                    }
+                }
+            ));
+            store.save().unwrap();
+        }
+        write_continue_hidden(&HashMap::from([("old".into(), 1), ("local".into(), 2)]));
+        assert!(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_CONTINUE_HIDDEN, "old")
+                .unwrap()
+                .is_deleted(),
+            "unchanged stale mirror must not resurrect a remote tombstone"
+        );
+        // Hide pruning is meaningful only for items with recorded activity.
+        for id in ["remote", "local"] {
+            bridge.shared.lock().unwrap().progress.insert(
+                id.into(),
+                EpisodeProgress {
+                    series_id: id.into(),
+                    updated_at_secs: 1,
+                    ..EpisodeProgress::default()
+                },
+            );
+        }
+        bridge.sync_apply(vec![DOMAIN_CONTINUE_HIDDEN.into()]);
+        let hidden = read_continue_hidden();
+        assert!(!hidden.contains_key("old"));
+        assert_eq!(hidden.get("remote"), Some(&3));
+        assert_eq!(hidden.get("local"), Some(&2));
+        bridge.assert_desired_addon_regression();
+
+        // Unsupported enum values affect only their field, and remain raw on
+        // disk when an unrelated supported setting is changed.
+        let mut raw = serde_json::to_value(read_settings()).unwrap();
+        raw["language"] = "future-language".into();
+        raw["date_relative"] = false.into();
+        storage::try_set_str("settings", &raw.to_string()).unwrap();
+        let mut recovered = read_settings();
+        assert!(!recovered.date_relative);
+        recovered.date_relative = true;
+        write_settings(&recovered);
+        let saved: serde_json::Value =
+            serde_json::from_str(&storage::try_get_str("settings").unwrap().unwrap()).unwrap();
+        assert_eq!(saved["language"], "future-language");
+        assert_eq!(saved["date_relative"], true);
+        {
+            let mut store = owner.lock().unwrap();
+            store.set(
+                DOMAIN_SETTINGS,
+                "cache",
+                Some(r#"{"format":"future-format","cache_images":true}"#.into()),
+                0,
+                999,
+            );
+            store.save().unwrap();
+        }
+        bridge.sync_apply(vec![DOMAIN_SETTINGS.into()]);
+        app.set_cache_quality(88.0);
+        app.invoke_settings_edited("quality".into());
+        bridge.persist_settings();
+        let cache: serde_json::Value = serde_json::from_str(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_SETTINGS, "cache")
+                .unwrap()
+                .value
+                .as_ref()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            cache["format"], "future-format",
+            "editing a different field in the group must retain unsupported enum intent"
+        );
+        assert_eq!(cache["quality"], 88);
+        app.invoke_settings_edited("format".into());
+        let cache: serde_json::Value = serde_json::from_str(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_SETTINGS, "cache")
+                .unwrap()
+                .value
+                .as_ref()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_ne!(
+            cache["format"], "future-format",
+            "only an explicit format choice replaces the unsupported value"
+        );
+        drop(bridge);
+        drop(app);
     }
 }

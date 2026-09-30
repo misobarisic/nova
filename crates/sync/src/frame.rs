@@ -54,7 +54,8 @@ pub(crate) async fn read_frame<T: DeserializeOwned>(recv: &mut RecvStream) -> Re
     let mut len = [0u8; 4];
     match recv.read_exact(&mut len).await {
         Ok(()) => {}
-        Err(ReadExactError::FinishedEarly(_)) => return Ok(None),
+        Err(ReadExactError::FinishedEarly(0)) => return Ok(None),
+        Err(ReadExactError::FinishedEarly(_)) => bail!("truncated frame header"),
         Err(ReadExactError::ReadError(e)) => return Err(e.into()),
     }
     let n = u32::from_be_bytes(len) as usize;
@@ -95,7 +96,9 @@ pub(crate) async fn write_frame_c<T: Serialize>(send: &mut SendStream, msg: &T) 
     let mut header = [0u8; 5];
     header[..4].copy_from_slice(&(total as u32).to_be_bytes());
     header[4] = codec;
-    send.write_all(&header).await.context("write frame header")?;
+    send.write_all(&header)
+        .await
+        .context("write frame header")?;
     send.write_all(&body).await.context("write frame body")?;
     Ok(())
 }
@@ -105,7 +108,8 @@ pub(crate) async fn read_frame_c<T: DeserializeOwned>(recv: &mut RecvStream) -> 
     let mut len = [0u8; 4];
     match recv.read_exact(&mut len).await {
         Ok(()) => {}
-        Err(ReadExactError::FinishedEarly(_)) => return Ok(None),
+        Err(ReadExactError::FinishedEarly(0)) => return Ok(None),
+        Err(ReadExactError::FinishedEarly(_)) => bail!("truncated frame header"),
         Err(ReadExactError::ReadError(e)) => return Err(e.into()),
     }
     let n = u32::from_be_bytes(len) as usize;
@@ -113,9 +117,13 @@ pub(crate) async fn read_frame_c<T: DeserializeOwned>(recv: &mut RecvStream) -> 
         bail!("bad frame length {n}");
     }
     let mut codec = [0u8; 1];
-    recv.read_exact(&mut codec).await.context("read frame codec")?;
+    recv.read_exact(&mut codec)
+        .await
+        .context("read frame codec")?;
     let mut body = vec![0u8; n - 1];
-    recv.read_exact(&mut body).await.context("read frame body")?;
+    recv.read_exact(&mut body)
+        .await
+        .context("read frame body")?;
     match codec[0] {
         CODEC_RAW => decode(&body),
         // A hostile/buggy peer could inflate a small frame into a huge one;

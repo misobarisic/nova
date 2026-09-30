@@ -7,6 +7,7 @@ import android.app.job.JobService;
 import android.content.ComponentName;
 import android.content.Context;
 import android.util.Log;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Periodic background-sync job. JobScheduler wakes the process roughly every
@@ -22,6 +23,8 @@ public class NovaSyncJobService extends JobService {
     private static final String TAG = "NovaSyncJob";
     private static final int JOB_ID = 0x52;
     private static final long PERIOD_MS = 15 * 60 * 1000L;
+    private static final AtomicBoolean running = new AtomicBoolean(false);
+    private static final AtomicBoolean stopped = new AtomicBoolean(false);
 
     static {
         // The native library is normally loaded by the NativeActivity; a
@@ -57,6 +60,9 @@ public class NovaSyncJobService extends JobService {
 
     @Override
     public boolean onStartJob(JobParameters params) {
+        if (!running.compareAndSet(false, true)) { return false; }
+        stopped.set(false);
+        nativePrepareSync();
         // Never block the main thread: run the pass on a worker and finish the
         // job when it returns.
         Thread worker = new Thread(() -> {
@@ -68,7 +74,8 @@ public class NovaSyncJobService extends JobService {
                 // rescheduled by the system.
                 Log.e(TAG, "background sync failed", error);
             } finally {
-                jobFinished(params, false);
+                if (!stopped.getAndSet(true)) { jobFinished(params, false); }
+                running.set(false);
             }
         }, "nova-sync-job");
         worker.start();
@@ -77,13 +84,17 @@ public class NovaSyncJobService extends JobService {
 
     @Override
     public boolean onStopJob(JobParameters params) {
+        stopped.set(true);
+        nativeCancelSync();
         // The system stopped us (e.g. constraints changed): reschedule.
         return true;
     }
 
     /**
      * Runs one bounded sync pass in Rust. `this` is the JobService Context.
-     * Returns a short summary ("skipped: …", "pass N: …") for logging.
+     * Returns a classified completion/cancellation/failure summary for logging.
      */
     private native String nativeRunSync();
+    private native void nativeCancelSync();
+    private native void nativePrepareSync();
 }

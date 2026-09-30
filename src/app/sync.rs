@@ -27,27 +27,38 @@ pub(crate) const DOMAIN_CATEGORY: &str = "category";
 /// it simply ignore it.
 pub(crate) const DOMAIN_CONTINUE_HIDDEN: &str = "continue_hidden";
 
-/// True while remote records are being applied locally.
-static APPLYING: AtomicBool = AtomicBool::new(false);
+// Origin is scoped to synchronous work on this thread, not a global flag that
+// could suppress an unrelated mutation on another worker. Nesting is safe.
+thread_local! { static APPLYING: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
 
 /// Whether the current write is an apply of remote data (suppresses echo).
 pub(crate) fn applying() -> bool {
-    APPLYING.load(Ordering::Relaxed)
+    APPLYING.with(|depth| depth.get() != 0)
 }
 
-struct ApplyingGuard;
+pub(super) struct ApplyingGuard(std::marker::PhantomData<Rc<()>>);
 
 impl ApplyingGuard {
-    fn new() -> Self {
-        APPLYING.store(true, Ordering::Relaxed);
-        Self
+    pub(super) fn new() -> Self {
+        APPLYING.with(|depth| depth.set(depth.get() + 1));
+        Self(std::marker::PhantomData)
     }
 }
 
 impl Drop for ApplyingGuard {
     fn drop(&mut self) {
-        APPLYING.store(false, Ordering::Relaxed);
+        APPLYING.with(|depth| depth.set(depth.get() - 1));
     }
+}
+
+struct ProjectionStore(std::sync::Arc<Mutex<nova_sync::Store>>);
+impl ProjectionStore {
+    fn records(&self, domain: &str) -> Vec<(String, String)> {
+        self.0.lock().unwrap().records(domain)
+    }
+}
+fn projection_store() -> Option<ProjectionStore> {
+    nova_sync::local_store().ok().map(ProjectionStore)
 }
 
 /// Wire format for one synced addon entry. `label` travels so every device
@@ -69,26 +80,142 @@ struct SyncedAddon {
 /// present in the list, as one batched store write (a seed of a large library
 /// would otherwise save once per record).
 fn sync_records(domain: &str, records: Vec<(String, String, u64)>) {
-    let Some(engine) = nova_sync::engine() else {
-        return;
+    let key = match domain {
+        DOMAIN_LIBRARY => "library",
+        DOMAIN_PROGRESS => "episode_progress",
+        DOMAIN_ADDONS => "addons",
+        DOMAIN_SETTINGS | DOMAIN_CATEGORY => "settings",
+        DOMAIN_CONTINUE_HIDDEN => "continue_hidden",
+        _ => "",
     };
-    let current: HashSet<&str> = records.iter().map(|(k, _, _)| k.as_str()).collect();
-    let mut batch: Vec<(String, Option<String>, u64)> = Vec::new();
-    for (key, _) in engine.records(domain) {
-        if !current.contains(key.as_str()) {
-            batch.push((key, None, 0));
+    if !writable_key(key) {
+        return;
+    }
+    if let Err(e) = nova_sync::commit_snapshot(domain, &records, None, applying(), false) {
+        storage::report(storage::Error::new(storage::ErrorKind::Transaction, e));
+    }
+}
+
+/// App snapshots and record mutations share one transaction, even with sync
+/// disabled. A persisted baseline is the only deletion authority.
+pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sync::Result<()> {
+    if !writable_key(key) {
+        return Err(storage::Error::new(
+            storage::ErrorKind::Schema,
+            "unreadable snapshot retained",
+        )
+        .into());
+    }
+    let domains: Vec<(&str, Vec<(String, String, u64)>)> = match key {
+        "library" => {
+            let entries: Vec<LibraryEntry> = serde_json::from_str(raw)?;
+            vec![(
+                DOMAIN_LIBRARY,
+                entries
+                    .iter()
+                    .map(|e| Ok((e.id.clone(), serde_json::to_string(e)?, 0)))
+                    .collect::<Result<_, serde_json::Error>>()?,
+            )]
         }
+        "episode_progress" => {
+            let map: HashMap<String, EpisodeProgress> = serde_json::from_str(raw)?;
+            vec![(
+                DOMAIN_PROGRESS,
+                map.iter()
+                    .map(|(k, v)| Ok((k.clone(), serde_json::to_string(v)?, v.updated_at_secs)))
+                    .collect::<Result<_, serde_json::Error>>()?,
+            )]
+        }
+        "continue_hidden" => {
+            let map: HashMap<String, u64> = serde_json::from_str(raw)?;
+            vec![(
+                DOMAIN_CONTINUE_HIDDEN,
+                map.into_iter()
+                    .map(|(k, v)| (k, v.to_string(), v))
+                    .collect(),
+            )]
+        }
+        "addons" => {
+            let addons: Vec<AddonStore> = serde_json::from_str(raw)?;
+            let mut records = addons
+                .iter()
+                .map(|a| {
+                    Ok((
+                        a.url.clone(),
+                        serde_json::to_string(&SyncedAddon {
+                            label: a.label.clone(),
+                            enabled: a.enabled,
+                            configure_ok: None,
+                        })?,
+                        0,
+                    ))
+                })
+                .collect::<Result<Vec<_>, serde_json::Error>>()?;
+            records.push(addon_order_record(&addons));
+            vec![(DOMAIN_ADDONS, records)]
+        }
+        "settings" => {
+            let settings: CacheSettings = serde_json::from_str(raw)?;
+            vec![
+                (DOMAIN_SETTINGS, settings_fields(&settings)),
+                (
+                    DOMAIN_CATEGORY,
+                    settings
+                        .categories
+                        .iter()
+                        .map(|n| (n.clone(), "1".to_string(), 0))
+                        .collect(),
+                ),
+            ]
+        }
+        _ => {
+            storage::try_set_str(key, raw)?;
+            return Ok(());
+        }
+    };
+    let owner = nova_sync::local_store()?;
+    let dev = nova_sync::local_device()?;
+    let mut store = owner.lock().unwrap();
+    for (domain, records) in domains {
+        // Untouched installation defaults are projection-only. Legacy installs
+        // with an existing settings object conservatively retain all choices.
+        let untouched =
+            seed && domain == DOMAIN_SETTINGS && storage::try_get_str("settings")?.is_none();
+        nova_sync::prepare_snapshot(
+            &mut store,
+            dev,
+            domain,
+            &records,
+            None,
+            applying() || untouched,
+            seed,
+        )?;
     }
-    for (key, value, ts) in records {
-        batch.push((key, Some(value), ts));
-    }
-    engine.notify_batch(domain, &batch);
+    let old = store.extra_value(key)?;
+    let raw = if key == "settings" {
+        preserve_unsupported_settings(old.as_deref(), raw)
+    } else {
+        raw.to_string()
+    };
+    // Map entries are user data, not unknown schema fields: retaining absent
+    // keys here would resurrect projected progress/hide deletions on restart.
+    let raw = if key == "settings" {
+        nova_sync::preserve_unknown(old.as_deref(), &raw)
+    } else {
+        raw
+    };
+    store.queue_extra(key, Some(raw));
+    store.save()
 }
 
 pub(crate) fn notify_library(entries: &[LibraryEntry]) {
     let records = entries
         .iter()
-        .filter_map(|e| serde_json::to_string(e).ok().map(|json| (e.id.clone(), json, 0)))
+        .filter_map(|e| {
+            serde_json::to_string(e)
+                .ok()
+                .map(|json| (e.id.clone(), json, 0))
+        })
         .collect();
     sync_records(DOMAIN_LIBRARY, records);
 }
@@ -133,6 +260,7 @@ pub(crate) fn notify_continue_hidden(map: &HashMap<String, u64>) {
 /// The watch/unwatch paths keep the `unwatched_at_secs` invariant that makes
 /// this sound: setting watched always clears it, unwatch always stamps it.
 /// Ties go to local (stable, no flapping between identical merges).
+#[cfg(test)]
 pub(crate) fn merge_progress(
     local: Option<&EpisodeProgress>,
     remote: &EpisodeProgress,
@@ -171,7 +299,7 @@ pub(crate) fn notify_addons(addons: &[AddonStore]) {
             let entry = SyncedAddon {
                 label: addon.label.clone(),
                 enabled: addon.enabled,
-                configure_ok: addon.configure_ok,
+                configure_ok: None,
             };
             serde_json::to_string(&entry)
                 .ok()
@@ -261,7 +389,12 @@ fn settings_group_fields(record: &str) -> Option<&'static [&'static str]> {
 /// top-level field, plus one object-valued record per group. Serializing the
 /// struct generically means new fields sync without any wiring.
 fn settings_fields(settings: &CacheSettings) -> Vec<(String, String, u64)> {
-    let Ok(serde_json::Value::Object(map)) = serde_json::to_value(settings) else {
+    let Ok(raw) = serde_json::to_string(settings) else {
+        return Vec::new();
+    };
+    let old = storage::try_get_str("settings").ok().flatten();
+    let raw = preserve_unsupported_settings(old.as_deref(), &raw);
+    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&raw) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -307,12 +440,40 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
             {
                 for (field, value) in group {
                     if allowed.contains(&field.as_str()) {
-                        map.insert(field, value);
+                        let mut trial = map.clone();
+                        trial.insert(field.clone(), value.clone());
+                        if serde_json::from_value::<CacheSettings>(serde_json::Value::Object(
+                            trial.clone(),
+                        ))
+                        .is_ok()
+                        {
+                            map = trial;
+                            allow_setting_field(&field);
+                        } else {
+                            protect_setting_field(&field, value);
+                            storage::report(storage::Error::new(
+                                storage::ErrorKind::Schema,
+                                "unsupported synced settings field retained in record store",
+                            ));
+                        }
                     }
                 }
             }
         } else if let Ok(value) = serde_json::from_str::<serde_json::Value>(json) {
-            map.insert(name.clone(), value);
+            let mut trial = map.clone();
+            trial.insert(name.clone(), value.clone());
+            if serde_json::from_value::<CacheSettings>(serde_json::Value::Object(trial.clone()))
+                .is_ok()
+            {
+                map = trial;
+                allow_setting_field(name);
+            } else {
+                protect_setting_field(name, value);
+                storage::report(storage::Error::new(
+                    storage::ErrorKind::Schema,
+                    "unsupported synced settings field retained in record store",
+                ));
+            }
         }
     }
     let mut merged: CacheSettings =
@@ -326,6 +487,9 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
 }
 
 pub(crate) fn notify_settings(settings: &CacheSettings) {
+    if !writable_key("settings") {
+        return;
+    }
     // Independent settings sync per field so concurrent edits on different
     // devices union; the cache group syncs as one coupled record (see above).
     // `sync_records` tombstones any live settings key that is no longer
@@ -337,6 +501,31 @@ pub(crate) fn notify_settings(settings: &CacheSettings) {
         .map(|name| (name.clone(), "1".to_string(), 0))
         .collect();
     sync_records(DOMAIN_CATEGORY, categories);
+}
+
+pub(crate) fn notify_setting_choice(field: &str, settings: &CacheSettings) {
+    let key = settings_group_of(field).unwrap_or(field);
+    if let Some((key, value, _)) = settings_fields(settings)
+        .into_iter()
+        .find(|(k, _, _)| k == key)
+    {
+        let result = (|| -> nova_sync::Result<()> {
+            let dev = nova_sync::local_device()?;
+            let owner = nova_sync::local_store()?;
+            let mut store = owner.lock().unwrap();
+            let value = nova_sync::preserve_unknown(
+                store
+                    .record(DOMAIN_SETTINGS, &key)
+                    .and_then(|r| r.value.as_deref()),
+                &value,
+            );
+            store.set(DOMAIN_SETTINGS, &key, Some(value), 0, dev);
+            store.save()
+        })();
+        if let Err(e) = result {
+            storage::report(storage::Error::new(storage::ErrorKind::Transaction, e));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -366,11 +555,51 @@ impl Bridge {
                 state.cache_settings.clone(),
             )
         };
-        notify_library(&entries);
-        notify_progress(&progress);
-        notify_continue_hidden(&hidden);
-        notify_addons(&addons);
-        notify_settings(&settings);
+        for (key, domain, raw) in [
+            ("library", DOMAIN_LIBRARY, serde_json::to_string(&entries)),
+            (
+                "episode_progress",
+                DOMAIN_PROGRESS,
+                serde_json::to_string(&progress),
+            ),
+            (
+                "continue_hidden",
+                DOMAIN_CONTINUE_HIDDEN,
+                serde_json::to_string(&hidden),
+            ),
+            ("addons", DOMAIN_ADDONS, serde_json::to_string(&addons)),
+            (
+                "settings",
+                DOMAIN_SETTINGS,
+                serde_json::to_string(&settings),
+            ),
+        ] {
+            let result = (|| -> nova_sync::Result<()> {
+                if storage::try_get_str(&format!("sync:baseline:{domain}"))?.is_none() {
+                    persist_sync_snapshot(key, &raw?, true)?;
+                }
+                Ok(())
+            })();
+            if let Err(e) = result {
+                storage::report(storage::Error::new(storage::ErrorKind::Transaction, e));
+            }
+        }
+    }
+
+    pub(super) fn replay_sync_projection(&self) {
+        if let Ok(owner) = nova_sync::local_store() {
+            let pending = {
+                let mut store = owner.lock().unwrap();
+                if let Err(e) = store.save() {
+                    storage::report(storage::Error::new(storage::ErrorKind::Transaction, e));
+                    return;
+                }
+                store.pending_domains()
+            };
+            if !pending.is_empty() {
+                self.sync_apply(pending);
+            }
+        }
     }
 
     /// Apply remote records for the given domains. Runs on the UI thread.
@@ -378,6 +607,10 @@ impl Bridge {
         let _guard = ApplyingGuard::new();
         let peers_changed = domains.iter().any(|d| d == nova_sync::DOMAIN_PEERS);
         for domain in domains {
+            let failures = write_failures();
+            let basis = nova_sync::local_store()
+                .ok()
+                .and_then(|s| s.lock().unwrap().digest().get(&domain).cloned());
             match domain.as_str() {
                 DOMAIN_LIBRARY => self.sync_apply_library(),
                 DOMAIN_PROGRESS => self.sync_apply_progress(),
@@ -385,6 +618,25 @@ impl Bridge {
                 DOMAIN_SETTINGS | DOMAIN_CATEGORY => self.sync_apply_settings(),
                 DOMAIN_CONTINUE_HIDDEN => self.sync_apply_continue_hidden(),
                 _ => {}
+            }
+            if let (Ok(owner), Some(basis)) = (
+                nova_sync::local_store(),
+                basis.filter(|_| write_failures() == failures),
+            ) {
+                if let Err(e) = owner.lock().unwrap().mark_projected(&domain, &basis) {
+                    storage::report(storage::Error::new(storage::ErrorKind::Transaction, e));
+                } else if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
+                    let revision = basis.values().fold(nova_sync::Hlc::default(), |clock, v| {
+                        let next = v.hlc();
+                        if next.newer_than(clock) { next } else { clock }
+                    });
+                    eprintln!(
+                        "[sync] projection basis={}:{} record_count={}",
+                        revision.physical_ms,
+                        revision.counter,
+                        basis.len()
+                    );
+                }
             }
         }
         if peers_changed {
@@ -411,7 +663,7 @@ impl Bridge {
     }
 
     fn sync_apply_library(&self) {
-        let Some(engine) = nova_sync::engine() else {
+        let Some(engine) = projection_store() else {
             return;
         };
         let mut entries: Vec<LibraryEntry> = engine
@@ -438,56 +690,24 @@ impl Bridge {
     }
 
     fn sync_apply_progress(&self) {
-        let Some(engine) = nova_sync::engine() else {
+        let Some(engine) = projection_store() else {
             return;
         };
         let live = engine.records(DOMAIN_PROGRESS);
-        let local = self.shared.lock().unwrap().progress.clone();
         // Reconcile per key instead of replacing wholesale: plain record-LWW
         // would let a stale unwatched record clobber a watched one (see
         // `merge_progress`). Garbage values are skipped, as before.
         let mut merged_map: HashMap<String, EpisodeProgress> = HashMap::new();
-        let mut writebacks: Vec<(String, String)> = Vec::new();
         for (key, value) in &live {
             let Ok(remote): Result<EpisodeProgress, _> = serde_json::from_str(value) else {
                 continue;
             };
-            let merged = merge_progress(local.get(key), &remote);
-            match serde_json::to_string(&merged) {
-                Ok(json) => {
-                    // Publish converged records back mesh-wide (direct
-                    // notify: ApplyingGuard only gates the write_* hooks, so
-                    // this intentionally bypasses it). Byte-compare keeps it
-                    // idempotent: identical merges never re-notify.
-                    if json != *value {
-                        writebacks.push((key.clone(), json));
-                    }
-                    merged_map.insert(key.clone(), merged);
-                }
-                Err(_) => {
-                    merged_map.insert(key.clone(), remote);
-                }
-            }
-        }
-        // Local-only keys (written while sync was off): keep and push.
-        for (key, entry) in &local {
-            if !merged_map.contains_key(key)
-                && let Ok(json) = serde_json::to_string(entry)
-            {
-                merged_map.insert(key.clone(), entry.clone());
-                writebacks.push((key.clone(), json));
-            }
+            merged_map.insert(key.clone(), remote);
         }
         {
             self.shared.lock().unwrap().progress = merged_map.clone();
         }
         write_progress_map(&merged_map);
-        // Publish every converged record in one batched write.
-        let writeback_batch: Vec<(String, Option<String>, u64)> = writebacks
-            .into_iter()
-            .map(|(key, json)| (key, Some(json), 0))
-            .collect();
-        engine.notify_batch(DOMAIN_PROGRESS, &writeback_batch);
         self.rebuild_continue_list();
         self.rebuild_upcoming_list();
         self.update_library_badges();
@@ -505,7 +725,7 @@ impl Bridge {
     /// A key the user removed while sync was off has no store record at all:
     /// that one is kept and published, exactly like `progress`.
     fn sync_apply_continue_hidden(&self) {
-        let Some(engine) = nova_sync::engine() else {
+        let Some(engine) = projection_store() else {
             return;
         };
         let mut map: HashMap<String, u64> = HashMap::new();
@@ -517,24 +737,16 @@ impl Bridge {
         // Local-only stamps (removed with sync off / before the domain
         // existed): keep and push. When both sides have the id, `records` is
         // already the LWW winner, so the store value stays.
-        let mut writebacks: Vec<(String, Option<String>, u64)> = Vec::new();
-        for (id, at) in self.shared.lock().unwrap().continue_hidden.clone() {
-            if !map.contains_key(&id) {
-                writebacks.push((id.clone(), Some(at.to_string()), at));
-                map.insert(id, at);
-            }
-        }
         self.shared.lock().unwrap().continue_hidden = map.clone();
         // Persist locally; the ApplyingGuard keeps this from echoing back, so
         // the local-only stamps are published explicitly below.
         write_continue_hidden(&map);
-        engine.notify_batch(DOMAIN_CONTINUE_HIDDEN, &writebacks);
         self.rebuild_continue_list();
         self.apply_home_to_ui();
     }
 
     fn sync_apply_addons(&self) {
-        let Some(engine) = nova_sync::engine() else {
+        let Some(engine) = projection_store() else {
             return;
         };
         let live = engine.records(DOMAIN_ADDONS);
@@ -635,8 +847,7 @@ impl Bridge {
             };
             let changed = {
                 let mut state = self.shared.lock().unwrap();
-                let current: Vec<String> =
-                    state.installed.iter().map(|a| a.url.clone()).collect();
+                let current: Vec<String> = state.installed.iter().map(|a| a.url.clone()).collect();
                 if current == sorted {
                     false
                 } else {
@@ -694,7 +905,7 @@ impl Bridge {
     }
 
     fn sync_apply_settings(&self) {
-        let Some(engine) = nova_sync::engine() else {
+        let Some(engine) = projection_store() else {
             return;
         };
         let local = self.shared.lock().unwrap().cache_settings.clone();
@@ -733,11 +944,8 @@ pub(crate) fn backfill_added_at(entries: &mut [LibraryEntry]) -> bool {
 /// running.
 impl Bridge {
     pub(super) fn start_sync(&self) {
-        if nova_sync::is_running() {
-            return;
-        }
         ensure_device_name();
-        match nova_sync::SyncEngine::setup() {
+        match nova_sync::foreground_engine() {
             Ok(engine) => {
                 // Remote changes arrive on the tokio runtime thread; marshal
                 // them onto the UI thread before touching app state.
@@ -752,7 +960,6 @@ impl Bridge {
                     let b = b.clone();
                     let _ = slint::invoke_from_event_loop(move || b.sync_pair_event(event));
                 }));
-                nova_sync::install(engine);
                 // Keep the Android periodic job in step with the enable +
                 // background flags: it runs a bounded pass with no Activity.
                 #[cfg(target_os = "android")]
@@ -765,7 +972,6 @@ impl Bridge {
                 if !domains.is_empty() {
                     self.sync_apply(domains);
                 }
-                self.sync_seed();
                 self.sync_status_to_ui();
                 if let Some(engine) = nova_sync::engine() {
                     engine.sync_now();
@@ -787,7 +993,6 @@ impl Bridge {
     }
 }
 
-
 impl Bridge {
     /// Refresh the Settings → Sync readout from the engine (enable flag,
     /// identity, peers, status line).
@@ -796,6 +1001,7 @@ impl Bridge {
             return;
         };
         let settings = nova_sync::read_settings();
+        app.set_persistence_failed(storage::last_error().is_some());
         app.set_sync_enabled(settings.enabled);
         app.set_sync_device_name(SharedString::from(&settings.device_name));
         app.set_sync_pair_confirm(settings.require_confirmation);
@@ -805,6 +1011,7 @@ impl Bridge {
         match nova_sync::engine() {
             Some(engine) => {
                 let names = engine.peer_names();
+                let status = engine.status();
                 let peers: Vec<SyncPeer> = engine
                     .peers()
                     .into_iter()
@@ -812,10 +1019,26 @@ impl Bridge {
                         let name = names.get(&id).cloned().unwrap_or_default();
                         // Mesh-wide freshness: our direct ack or anyone's
                         // sighting, whichever is newer.
-                        let last_seen = match engine.peer_last_seen(&id) {
+                        let mut last_seen = match engine.peer_last_seen(&id) {
                             Some(secs) => text::last_connected(&format_ago(secs)),
                             None => text::tr("Never connected").to_string(),
                         };
+                        if let Some(attempt) = status.peer_attempts.get(&id) {
+                            if attempt.in_flight {
+                                last_seen = if attempt.last_error.as_deref()
+                                    == Some("peer worker exceeded its attempt deadline")
+                                {
+                                    text::peer_retry(0)
+                                } else {
+                                    text::tr("Syncing…").to_string()
+                                };
+                            } else if attempt.last_error.is_some() {
+                                let retry = attempt.retry_after_secs.saturating_sub(
+                                    now_secs().saturating_sub(attempt.last_result_secs),
+                                );
+                                last_seen = text::peer_retry(retry);
+                            }
+                        }
                         SyncPeer {
                             id: id.into(),
                             name: name.into(),
@@ -1164,7 +1387,21 @@ pub(crate) fn format_ago(secs: u64) -> String {
 mod tests {
     use super::*;
 
-    fn entry(id: &str, added_at_secs: u64) -> LibraryEntry {        LibraryEntry {
+    #[test]
+    fn projection_origin_is_nested_and_thread_local() {
+        let outer = ApplyingGuard::new();
+        {
+            let _inner = ApplyingGuard::new();
+            assert!(applying());
+        }
+        assert!(applying());
+        assert!(!std::thread::spawn(applying).join().unwrap());
+        drop(outer);
+        assert!(!applying());
+    }
+
+    fn entry(id: &str, added_at_secs: u64) -> LibraryEntry {
+        LibraryEntry {
             id: id.into(),
             type_: "movie".into(),
             name: id.into(),
@@ -1448,10 +1685,7 @@ mod tests {
             ("cache".to_string(), "{\"quality\":77}".to_string()),
             ("android_hwdec".to_string(), "\"hw+\"".to_string()),
             ("player_external".to_string(), "false".to_string()),
-            (
-                "desktop_external_app".to_string(),
-                "\"system\"".to_string(),
-            ),
+            ("desktop_external_app".to_string(), "\"system\"".to_string()),
             ("rewrite_existing".to_string(), "true".to_string()),
         ];
         let merged = merge_settings_fields(&base, &records);

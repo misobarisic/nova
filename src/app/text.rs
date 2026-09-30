@@ -193,7 +193,10 @@ pub(crate) fn unaired(count: usize, leading_separator: bool) -> String {
 pub(crate) fn left(remaining: usize) -> String {
     if croatian() {
         let n = remaining as u64;
-        format!("još {remaining} {}", plural(n, "epizoda", "epizode", "epizoda"))
+        format!(
+            "još {remaining} {}",
+            plural(n, "epizoda", "epizode", "epizoda")
+        )
     } else {
         format!("{remaining} left")
     }
@@ -446,6 +449,20 @@ pub(crate) fn ago(secs: u64) -> String {
         } else {
             format!("{hours}h ago")
         }
+    }
+}
+
+pub(crate) fn peer_retry(secs: u64) -> String {
+    if croatian() {
+        if secs == 0 {
+            "Posljednji pokušaj nije uspio".to_string()
+        } else {
+            format!("Pokušaj nije uspio · novi za {secs} s")
+        }
+    } else if secs == 0 {
+        "Last attempt failed".to_string()
+    } else {
+        format!("Attempt failed · retry in {secs}s")
     }
 }
 

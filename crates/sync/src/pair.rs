@@ -146,6 +146,7 @@ pub struct PairHandler {
     /// Wakes the sync worker so pairing immediately fans the new device out to
     /// the rest of the mesh. Set once during engine setup.
     sync_notify: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
+    slots: tokio::sync::Semaphore,
 }
 
 impl std::fmt::Debug for PairHandler {
@@ -173,6 +174,7 @@ impl PairHandler {
             on_pair,
             pending,
             sync_notify: Arc::new(Mutex::new(None)),
+            slots: tokio::sync::Semaphore::new(4),
         }
     }
 
@@ -186,6 +188,9 @@ impl PairHandler {
     /// Ask the sync worker to run a pass now, so a just-paired device is
     /// introduced to the whole mesh without waiting for the interval.
     fn wake_sync(&self) {
+        if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
+            eprintln!("[sync] trigger=pairing");
+        }
         if let Some(notify) = self.sync_notify.lock().ok().and_then(|n| n.clone()) {
             notify.notify_one();
         }
@@ -199,25 +204,9 @@ impl PairHandler {
 
     /// Resolve a pending confirmation prompt. No-op when the id is unknown.
     pub fn respond(&self, id: &str, accept: bool) {
-        let sender = self
-            .pending
-            .lock()
-            .ok()
-            .and_then(|mut p| p.remove(id));
+        let sender = self.pending.lock().ok().and_then(|mut p| p.remove(id));
         if let Some(sender) = sender {
             let _ = sender.send(accept);
-        }
-    }
-
-    fn add_peer(&self, id: &str, name: &str) {
-        // Written to the synced `peers` domain so it replicates to the mesh.
-        crate::peers_add(&self.store, &self.peers, id, Some(name), self.device);
-    }
-
-    fn consume_invite(&self, invite_id: &str) {
-        if let Ok(mut invites) = self.invites.lock() {
-            invites.retain(|i| i.id != invite_id);
-            save_invites(&invites);
         }
     }
 
@@ -257,7 +246,14 @@ impl PairHandler {
 
 impl ProtocolHandler for PairHandler {
     async fn accept(&self, conn: Connection) -> Result<(), iroh::protocol::AcceptError> {
-        if let Err(e) = handle_incoming(conn, self).await {
+        let Ok(_slot) = self.slots.try_acquire() else {
+            conn.close(0u32.into(), b"pairing busy");
+            return Ok(());
+        };
+        if let Err(e) = tokio::time::timeout(Duration::from_secs(90), handle_incoming(conn, self))
+            .await
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("pairing timed out")))
+        {
             eprintln!("nova sync: pairing failed: {e:#}");
         }
         Ok(())
@@ -269,7 +265,12 @@ async fn handle_incoming(conn: Connection, handler: &PairHandler) -> Result<()> 
     let frame: Wire = frame::read_frame(&mut recv)
         .await?
         .context("peer closed before pairing request")?;
-    let Wire::Request { proto, secret, name } = frame else {
+    let Wire::Request {
+        proto,
+        secret,
+        name,
+    } = frame
+    else {
         bail!("unexpected pairing frame");
     };
     if proto != PROTO {
@@ -318,11 +319,39 @@ async fn handle_incoming(conn: Connection, handler: &PairHandler) -> Result<()> 
         return Ok(());
     }
 
-    handler.consume_invite(&invite_id);
-    handler.add_peer(&joiner_id, &name);
-    // Fan the new peer out to the rest of the mesh right away; the sync pass
-    // also pulls in any peers the joiner already knows.
-    handler.wake_sync();
+    // Invite consumption and trust commit atomically. A second simultaneous
+    // request cannot spend the same bearer invitation after confirmation.
+    {
+        let mut invites = handler.invites.lock().unwrap_or_else(|e| e.into_inner());
+        anyhow::ensure!(
+            invites
+                .iter()
+                .any(|i| i.id == invite_id && i.expires_at > crate::now_secs()),
+            "invite already consumed"
+        );
+        let next: Vec<_> = invites
+            .iter()
+            .filter(|i| i.id != invite_id)
+            .cloned()
+            .collect();
+        let mut store = handler.store.lock().unwrap_or_else(|e| e.into_inner());
+        crate::peer_upsert(
+            &mut store,
+            &joiner_id,
+            Some(&name),
+            crate::now_secs(),
+            handler.device,
+            true,
+            true,
+        );
+        store.queue_extra(INVITES_KEY, Some(serde_json::to_string(&next)?));
+        store.save()?;
+        *invites = next;
+        let mut peers = handler.peers.lock().unwrap_or_else(|e| e.into_inner());
+        if !peers.contains(&joiner_id) {
+            peers.push(joiner_id.clone());
+        }
+    }
     frame::write_frame(
         &mut send,
         &Wire::Ok {
@@ -334,12 +363,17 @@ async fn handle_incoming(conn: Connection, handler: &PairHandler) -> Result<()> 
     send.finish().context("finish pairing reply")?;
     // Wait for the joiner to read the reply and close, so a hard close here
     // cannot discard it (the same ordering used by the sync exchange).
-    let _ = tokio::time::timeout(CONFIRM_TIMEOUT, conn.closed()).await;
+    let closed = tokio::time::timeout(CONFIRM_TIMEOUT, conn.closed())
+        .await
+        .context("joiner did not confirm installed trust")?;
+    anyhow::ensure!(
+        matches!(closed, iroh::endpoint::ConnectionError::ApplicationClosed(ref c) if c.error_code == 0u32.into()),
+        "pairing completion was interrupted"
+    );
+    handler.wake_sync();
 
     if let Some(cb) = handler.on_pair.lock().ok().and_then(|c| c.clone()) {
-        cb(PairEvent::Paired {
-            name: name.clone(),
-        });
+        cb(PairEvent::Paired { name: name.clone() });
     }
     Ok(())
 }
@@ -374,12 +408,24 @@ fn find_invite(invites: &Arc<Mutex<Vec<Invite>>>, secret: &[u8; 16], now: u64) -
 // ---------------------------------------------------------------------------
 
 /// Dial `addr`, present the secret, and return the host's name on success.
+#[cfg(test)]
 pub(crate) async fn initiate(
     endpoint: &iroh::Endpoint,
     addr: EndpointAddr,
     secret: &[u8; 16],
     name: &str,
     host_id: &str,
+) -> Result<String> {
+    initiate_with_trust(endpoint, addr, secret, name, host_id, |_| Ok(())).await
+}
+
+pub(crate) async fn initiate_with_trust(
+    endpoint: &iroh::Endpoint,
+    addr: EndpointAddr,
+    secret: &[u8; 16],
+    name: &str,
+    host_id: &str,
+    trust: impl FnOnce(&str) -> Result<()>,
 ) -> Result<String> {
     let conn = endpoint
         .connect(addr, ALPN)
@@ -407,6 +453,7 @@ pub(crate) async fn initiate(
             if code != expected {
                 bail!("pairing code mismatch (expected {expected}, got {code})");
             }
+            trust(&name)?;
             Ok(name)
         }
         Wire::Rejected { reason } => Err(anyhow::anyhow!("pairing rejected: {reason}")),
@@ -525,4 +572,3 @@ mod tests {
         assert!(handler.ask_user("joiner", "Joiner", "000000").await);
     }
 }
-

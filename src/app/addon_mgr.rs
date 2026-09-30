@@ -1,7 +1,54 @@
 //! Addon install / remove / refresh and the addon picker rows.
 use super::*;
+static ADDON_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 impl Bridge {
+    #[cfg(test)]
+    pub(super) fn assert_desired_addon_regression(&self) {
+        let a = "http://127.0.0.1:1/a";
+        let b = "http://127.0.0.1:1/b";
+        let generation = self.ensure_desired_addon(a, false, Some(false), Some("A".into()));
+        self.ensure_desired_addon(b, true, Some(false), Some("B".into()));
+        assert_eq!(
+            read_persisted_addons()
+                .iter()
+                .map(|a| a.url.as_str())
+                .collect::<Vec<_>>(),
+            vec![a, b]
+        );
+        assert!(
+            self.shared
+                .lock()
+                .unwrap()
+                .installed
+                .iter()
+                .all(|a| !a.available)
+        );
+        let manifest = |name: &str| {
+            serde_json::from_value::<Manifest>(
+                serde_json::json!({"id":name,"version":"1","name":name}),
+            )
+            .unwrap()
+        };
+        // Opposite completion order and stale enabled arguments must not alter
+        // desired order/flags captured after the fetch started.
+        self.install_ok(b.into(), manifest("B"), false, Some(false), None);
+        self.install_ok(a.into(), manifest("A"), true, Some(false), None);
+        let persisted = read_persisted_addons();
+        assert_eq!(
+            persisted.iter().map(|a| a.url.as_str()).collect::<Vec<_>>(),
+            vec![a, b]
+        );
+        assert!(!persisted[0].enabled);
+        assert!(persisted[1].enabled);
+        self.remove_addon_at(0);
+        assert!(!self.addon_generation_matches(a, generation));
+        self.install_ok(a.into(), manifest("stale"), true, Some(false), None);
+        assert_eq!(read_persisted_addons().len(), 1);
+        self.ensure_desired_addon(a, true, Some(false), Some("new".into()));
+        assert!(!self.addon_generation_matches(a, generation));
+    }
+
     /// Validate + normalise the URL on the main thread, then fetch the
     /// manifest on a worker thread. New UI addons are installed enabled.
     pub(super) fn add_addon(&self, raw: &str) {
@@ -19,7 +66,7 @@ impl Bridge {
         {
             let mut state = self.shared.lock().unwrap();
             let dup = state.installed.iter().position(|a| a.url == base);
-            if let Some(i) = dup {
+            if let Some(i) = dup.filter(|&i| state.installed[i].available) {
                 // Pasting a URL that is installed but disabled re-enables it.
                 if !state.installed[i].enabled {
                     state.installed[i].enabled = true;
@@ -33,32 +80,38 @@ impl Bridge {
             }
         }
 
+        let generation = self.ensure_desired_addon(&base, enabled, None, label.clone());
+        if !self.shared.lock().unwrap().refreshing.insert(base.clone()) {
+            return;
+        }
+        let remote_origin = applying() || self.shared.lock().unwrap().loading_addons;
         let bridge = self.clone();
         let manifest_url = addon.manifest_url();
-        crate::web_log(&format!("nova: fetching addon manifest {manifest_url}"));
+        crate::web_log("nova: fetching addon manifest");
         net::fetch_bytes(manifest_url, move |result| {
             let bridge2 = bridge.clone();
             // Panic-guarded: a panic inside this UI-thread closure would
             // otherwise kill the event loop (app crash with no message).
             // Log it with the cause.
             let _ = slint::invoke_from_event_loop(move || {
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    match result {
+                if !bridge2.addon_generation_matches(&base, generation) {
+                    return;
+                }
+                bridge2.shared.lock().unwrap().refreshing.remove(&base);
+                let _origin = remote_origin.then(ApplyingGuard::new);
+                let outcome =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match result {
                         Ok(bytes) => match Addon::parse_manifest(&bytes) {
                             Ok(manifest) => {
-                                crate::web_log(&format!(
-                                    "nova: addon manifest OK — installing “{}”",
-                                    manifest.name
-                                ));
+                                crate::web_log("nova: addon manifest OK — installing");
                                 bridge2.install_ok(base, manifest, enabled, None, label.clone());
                                 None
                             }
                             Err(e) => Some(text::invalid_manifest(&e.to_string())),
                         },
                         Err(e) => Some(text::addon_unreachable(&e.to_message())),
-                    }
-                }));
-                let msg = match outcome {
+                    }));
+                let _msg = match outcome {
                     Ok(None) => return,
                     Ok(Some(msg)) => msg,
                     Err(payload) => {
@@ -72,9 +125,54 @@ impl Bridge {
                         text::install_failed(&detail)
                     }
                 };
-                crate::web_log(&format!("nova: {msg}"));
+                crate::web_log("nova: addon installation failed");
             });
         });
+    }
+
+    fn ensure_desired_addon(
+        &self,
+        base: &str,
+        enabled: bool,
+        configure: Option<bool>,
+        label: Option<String>,
+    ) -> u64 {
+        let generation = {
+            let mut state = self.shared.lock().unwrap();
+            if let Some(a) = state.installed.iter().find(|a| a.url == base) {
+                return a.generation;
+            }
+            let generation = ADDON_GENERATION.fetch_add(1, Ordering::Relaxed);
+            let label = label
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| base.to_string());
+            let manifest: Manifest = serde_json::from_value(
+                serde_json::json!({"id":"pending","version":"0","name":label}),
+            )
+            .unwrap();
+            state.installed.push(Installed {
+                url: base.to_string(),
+                label,
+                enabled,
+                configure_ok: configure,
+                manifest,
+                available: false,
+                generation,
+            });
+            generation
+        };
+        self.persist_installed();
+        self.apply_addon_rows();
+        generation
+    }
+
+    fn addon_generation_matches(&self, base: &str, generation: u64) -> bool {
+        self.shared
+            .lock()
+            .unwrap()
+            .installed
+            .iter()
+            .any(|a| a.url == base && a.generation == generation)
     }
 
     /// Main thread: record a successfully fetched addon, refresh pickers and
@@ -86,38 +184,34 @@ impl Bridge {
         &self,
         url: String,
         manifest: Manifest,
-        enabled: bool,
-        configure: Option<bool>,
-        label_override: Option<String>,
+        _enabled: bool,
+        _configure: Option<bool>,
+        _label_override: Option<String>,
     ) {
         let label = {
             let state = self.shared.lock().unwrap();
-            match label_override
-                .map(|label| label.trim().to_string())
-                .filter(|label| !label.is_empty())
-            {
-                // A label synced from another device wins.
-                Some(label) => label,
-                // Otherwise derive one, disambiguating duplicate names.
-                None => {
-                    let base = manifest.name.clone();
-                    if state.installed.iter().any(|a| a.label == base) {
-                        format!("{base} ({url})")
-                    } else {
-                        base
-                    }
+            let Some(desired) = state.installed.iter().find(|a| a.url == url) else {
+                return;
+            };
+            if desired.label != url && !desired.label.trim().is_empty() {
+                desired.label.clone()
+            } else {
+                let base = manifest.name.clone();
+                if state.installed.iter().any(|a| a.label == base) {
+                    format!("{base} ({url})")
+                } else {
+                    base
                 }
             }
         };
         {
             let mut state = self.shared.lock().unwrap();
-            state.installed.push(Installed {
-                url: url.clone(),
-                label: label.clone(),
-                enabled,
-                configure_ok: configure,
-                manifest: manifest.clone(),
-            });
+            let Some(entry) = state.installed.iter_mut().find(|a| a.url == url) else {
+                return;
+            };
+            entry.label = label;
+            entry.manifest = manifest.clone();
+            entry.available = true;
             // Stay on "All addons" so the new addon's catalogs are visible.
             state.chosen_addon = usize::MAX;
         }
@@ -130,7 +224,15 @@ impl Bridge {
         // Verify the addon's configure page in the background unless a
         // verdict is already written down; the Configure button appears
         // only once a probe answers 2xx.
-        if configure.is_none() {
+        if self
+            .shared
+            .lock()
+            .unwrap()
+            .installed
+            .iter()
+            .find(|a| a.url == url)
+            .is_some_and(|a| a.configure_ok.is_none())
+        {
             self.probe_configure_page(url);
         }
     }
@@ -146,11 +248,17 @@ impl Bridge {
             let pairs: Vec<(String, String)> = state
                 .installed
                 .iter()
+                .filter(|a| a.available)
                 .map(|a| (a.manifest.name.clone(), a.url.clone()))
                 .collect();
             let labels = unique_labels(&pairs);
             let mut changed = false;
-            for (addon, label) in state.installed.iter_mut().zip(labels) {
+            for (addon, label) in state
+                .installed
+                .iter_mut()
+                .filter(|a| a.available)
+                .zip(labels)
+            {
                 if addon.label != label {
                     addon.label = label;
                     changed = true;
@@ -169,11 +277,26 @@ impl Bridge {
     /// page. A 404 (or any failure) simply leaves the Configure button
     /// hidden; the body is discarded.
     pub(super) fn probe_configure_page(&self, base: String) {
+        let Some(generation) = self
+            .shared
+            .lock()
+            .unwrap()
+            .installed
+            .iter()
+            .find(|a| a.url == base)
+            .map(|a| a.generation)
+        else {
+            return;
+        };
         let url = format!("{}/configure", base.trim_end_matches('/'));
         let bridge = self.clone();
         net::fetch_bytes(url, move |result| {
             let ok = result.is_ok();
             let _ = slint::invoke_from_event_loop(move || {
+                if !bridge.addon_generation_matches(&base, generation) {
+                    return;
+                }
+                let _guard = ApplyingGuard::new(); // reachability is device-local derived state
                 bridge.set_configure_state(&base, ok);
             });
         });
@@ -215,10 +338,11 @@ impl Bridge {
         };
         {
             let state = self.shared.lock().unwrap();
-            if state.installed.iter().any(|a| a.url == base) {
+            if state.installed.iter().any(|a| a.url == base && a.available) {
                 return; // already installed (duplicate entry or UI add)
             }
         }
+        self.ensure_desired_addon(&base, enabled, configure, label.clone());
         match read_cached_manifest_for(&base) {
             Some(manifest) => self.install_ok(base, manifest, enabled, configure, label),
             None => self.install_new(url, enabled, label),
@@ -228,6 +352,9 @@ impl Bridge {
     /// Snapshot the installed addons (URLs + enabled flags + configure
     /// verdicts) into the KV store.
     pub(super) fn persist_installed(&self) {
+        if self.shared.lock().unwrap().loading_addons {
+            return;
+        }
         let addons: Vec<AddonStore> = {
             let state = self.shared.lock().unwrap();
             state
@@ -271,45 +398,45 @@ impl Bridge {
     /// derived from it (label, manifest + manifest cache, merged catalogs,
     /// configure-page verdict). Keeps the old data on failure.
     pub(super) fn refresh_addon(&self, idx: usize) {
-        let (base, label) = {
+        let (base, generation) = {
             let mut state = self.shared.lock().unwrap();
             let Some(entry) = state.installed.get(idx) else {
                 return;
             };
             let base = entry.url.clone();
-            let label = entry.label.clone();
+            let generation = entry.generation;
             if !state.refreshing.insert(base.clone()) {
                 return; // a refresh for this addon is already in flight
             }
-            (base, label)
+            (base, generation)
         };
         let manifest_url = match Addon::new(&base) {
             Ok(a) => a.manifest_url(),
-            Err(e) => {
+            Err(_) => {
                 self.shared.lock().unwrap().refreshing.remove(&base);
-                crate::web_log(&format!("nova: cannot refresh “{label}”: {e}"));
+                crate::web_log("nova: cannot refresh invalid addon URL");
                 return;
             }
         };
         let bridge = self.clone();
-        crate::web_log(&format!("nova: refreshing addon manifest {manifest_url}"));
+        crate::web_log("nova: refreshing addon manifest");
         net::fetch_bytes(manifest_url, move |result| {
-            let _ = slint::invoke_from_event_loop(move || match result {
-                Ok(bytes) => match Addon::parse_manifest(&bytes) {
-                    Ok(manifest) => bridge.refresh_ok(base, manifest),
-                    Err(e) => {
+            let _ = slint::invoke_from_event_loop(move || {
+                if !bridge.addon_generation_matches(&base, generation) {
+                    return;
+                }
+                match result {
+                    Ok(bytes) => match Addon::parse_manifest(&bytes) {
+                        Ok(manifest) => bridge.refresh_ok(base, manifest),
+                        Err(_) => {
+                            bridge.shared.lock().unwrap().refreshing.remove(&base);
+                            crate::web_log("nova: invalid refreshed addon manifest");
+                        }
+                    },
+                    Err(_) => {
                         bridge.shared.lock().unwrap().refreshing.remove(&base);
-                        crate::web_log(&format!(
-                            "nova: invalid refreshed manifest for “{label}”: {e}"
-                        ));
+                        crate::web_log("nova: addon refresh request failed");
                     }
-                },
-                Err(e) => {
-                    bridge.shared.lock().unwrap().refreshing.remove(&base);
-                    crate::web_log(&format!(
-                        "nova: couldn’t refresh “{label}”: {}",
-                        e.to_message()
-                    ));
                 }
             });
         });
@@ -344,6 +471,7 @@ impl Bridge {
                 };
             }
             entry.manifest = manifest.clone();
+            entry.available = true;
         }
         write_cached_manifest_for(&base, &manifest);
         self.persist_installed();
@@ -363,6 +491,7 @@ impl Bridge {
             }
             let idx = idx.min(state.installed.len() - 1);
             let removed = state.installed.remove(idx);
+            state.refreshing.remove(&removed.url);
             if state.chosen_addon != usize::MAX {
                 if state.chosen_addon == idx {
                     // The removed addon was the one being browsed.
@@ -520,7 +649,11 @@ impl Bridge {
                 .map(|p| p + 1)
                 .unwrap_or(0)
         };
-        app.set_addon_combo_idx(if !enabled_idxs.is_empty() { addon_combo_idx as i32 } else { -1 });
+        app.set_addon_combo_idx(if !enabled_idxs.is_empty() {
+            addon_combo_idx as i32
+        } else {
+            -1
+        });
         app.set_type_combo_idx(0);
         app.set_catalog_combo_idx(0);
         self.apply_catalog_labels_to_ui();
@@ -599,7 +732,6 @@ impl Bridge {
             copy_to_clipboard(url);
         }
     }
-
 }
 
 #[allow(dead_code)]
@@ -692,7 +824,6 @@ pub(crate) fn configured_addon_urls() -> Vec<String> {
 
         urls
     }
-
 }
 
 /// Compute unique display labels for `(manifest_name, url)` pairs: within a

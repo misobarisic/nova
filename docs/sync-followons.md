@@ -12,6 +12,16 @@ for duplicates, identical on every device).
 
 Legend: **effort** (S/M/L), **risk**, **value**.
 
+For prioritized correctness fixes, reset prevention, connection recovery, and
+Android lifecycle hardening, use the
+[implementation plan](sync-hardening-plan.md). It records gaps in some of the
+shipped mechanisms described as "done" below. A–G code now covers recovery,
+durable offline mutation ownership, projection replay, desired addons, progress
+registers, completion/revocation, and Android leases/cancellation. Per-peer H diagnostics
+are implemented; Android lifecycle/device and retained-connection power
+measurements remain outstanding. Behavioral tests stay local (no CI test steps,
+as requested).
+
 ## Pairing & onboarding
 
 - **mDNS / LAN discovery (M–L / medium / medium).** Publish and browse
@@ -62,7 +72,8 @@ Legend: **effort** (S/M/L), **risk**, **value**.
   …": the engine publishes   `{observer}\x01{peer}` sightings into the mesh
   `presence` domain after every completed exchange (throttled to 15 min),
   and readers take the max across observers plus the local ack clock.
-  Remaining ideas: last-error / record counts per peer (local-only).
+  Local attempt/success/error/backoff/duration diagnostics now exist; rows show
+  attempts and retry delay. Remaining idea: record counts per peer.
 - **Background sync on mobile (downloads done; periodic sync done).** Stream
   downloads keep the process alive with a work-only `dataSync` foreground
   service while a transfer is active (with a partial wake lock + notification),

@@ -49,7 +49,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app = AppWindow::new()?;
     app.set_license_catalog(OPEN_SOURCE_LICENSE_CATALOG.into());
     app.set_license_sources(
-        Rc::new(VecModel::<LicenseSource>::from(open_source_license_sources())).into(),
+        Rc::new(VecModel::<LicenseSource>::from(
+            open_source_license_sources(),
+        ))
+        .into(),
     );
     storage::init_at(&app_data_dir());
     crate::web_log("nova: window created");
@@ -92,7 +95,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         let (lo_tx, lo_rx) = mpsc::channel::<PosterJob>();
         let hi_rx = Arc::new(Mutex::new(hi_rx));
         let lo_rx = Arc::new(Mutex::new(lo_rx));
-        let num_workers = thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+        let num_workers = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
 
         fn next_job(
             hi_rx: &Arc<Mutex<mpsc::Receiver<PosterJob>>>,
@@ -109,7 +114,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 // No preload waiting: block briefly for one (a scroll may land
                 // while we idle), then fall back to one background job.
-                match hi_rx.lock().unwrap().recv_timeout(Duration::from_millis(10)) {
+                match hi_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_millis(10))
+                {
                     Ok(job) => return Ok(job),
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
                         // High-priority lane gone: block on the background lane.
@@ -120,7 +129,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(job) = lo_rx.lock().unwrap().try_recv() {
                     return Ok(job);
                 }
-                match lo_rx.lock().unwrap().recv_timeout(Duration::from_millis(50)) {
+                match lo_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_millis(50))
+                {
                     Ok(job) => return Ok(job),
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
                         // Background lane gone: block on the preload lane.
@@ -184,7 +197,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
         }
-        (poster_cache, PosterTx { hi: hi_tx, lo: lo_tx })
+        (
+            poster_cache,
+            PosterTx {
+                hi: hi_tx,
+                lo: lo_tx,
+            },
+        )
     };
 
     // In-app player (same window, like the reference prototype): mpv underlay
@@ -202,7 +221,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         downloads,
     );
     #[cfg(not(feature = "desktop"))]
-    let bridge = Bridge::new(app.as_weak(), catalog_gen.clone(), player.clone(), downloads);
+    let bridge = Bridge::new(
+        app.as_weak(),
+        catalog_gen.clone(),
+        player.clone(),
+        downloads,
+    );
 
     // Publish the bridge for the Android camera scanner's JNI entry point
     // (android_qr.rs), which runs off the UI thread.
@@ -422,8 +446,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         crate::player::move_task_to_back();
     });
 
-    let b = bridge.clone();
-    app.on_save_settings(move || b.save_settings());
+    // Application-lifetime debounce, shared with the player's rate controls.
+    // Capture first so page destruction and remote UI refresh cannot lose edits.
+    let schedule_settings_save = bridge.wire_settings_autosave();
 
     let b = bridge.clone();
     app.on_clear_cache(move || b.clear_image_cache());
@@ -570,6 +595,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         bridge.install_persisted(url, true, None, None);
     }
     bridge.shared.lock().unwrap().loading_addons = false;
+    bridge.persist_installed();
 
     // Library: restore saved items and render them in the Library page.
     {
@@ -625,6 +651,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Android also reconciles the periodic JobScheduler job with the enable +
     // background flags, so a disabled sync/background cancels a stale job.
     let sync_settings = nova_sync::read_settings();
+    // Initialize/migrate socket-free mutation ownership before networking or
+    // projection. Headless changes remain authoritative over old snapshots.
+    bridge.sync_seed();
+    if let Ok(store) = nova_sync::local_store() {
+        let domains = store.lock().unwrap().domains();
+        bridge.sync_apply(domains);
+    }
     #[cfg(target_os = "android")]
     crate::app::android_bg::set_periodic_sync(
         sync_settings.enabled && sync_settings.background_enabled,
@@ -670,19 +703,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // panel (here) and Settings → Player. Both paths store it and push it into
     // the running session immediately; the KV write is debounced so a slider
     // drag persists once when the user pauses.
-    let speed_save_timer = Arc::new(Mutex::new(slint::Timer::default()));
-    let schedule_speed_save = {
-        let timer = speed_save_timer.clone();
-        let b = bridge.clone();
-        move || {
-            let b = b.clone();
-            timer.lock().unwrap().start(
-                slint::TimerMode::SingleShot,
-                Duration::from_millis(600),
-                move || b.persist_playback_speed(),
-            );
-        }
-    };
+    let schedule_speed_save = schedule_settings_save;
 
     let b = bridge.clone();
     let schedule_speed_save1 = schedule_speed_save.clone();
@@ -746,9 +767,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Hover previews: the timestamp under the cursor (seekbar) and the
     // volume percentage (volume slider). Formatting lives in Rust because
     // Slint has no int→string conversion for bindings.
-    app.on_format_time(move |secs| {
-        SharedString::from(crate::player::format_time(secs as f64))
-    });
+    app.on_format_time(move |secs| SharedString::from(crate::player::format_time(secs as f64)));
     app.on_format_volume(move |v| SharedString::from(format!("{:.0}%", v.max(0.0))));
 
     let p = player.clone();
@@ -778,15 +797,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 let aw = app_weak.clone();
                 let timer = osd_timer.lock().unwrap();
-                timer.start(
-                    slint::TimerMode::SingleShot,
-                    timeout,
-                    move || {
-                        if let Some(app) = aw.upgrade() {
-                            app.set_osd_visible(false);
-                        }
-                    },
-                );
+                timer.start(slint::TimerMode::SingleShot, timeout, move || {
+                    if let Some(app) = aw.upgrade() {
+                        app.set_osd_visible(false);
+                    }
+                });
             }
         });
     }
@@ -801,10 +816,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         slint::TimerMode::Repeated,
         Duration::from_millis(250),
         move || {
-             tick_player.tick();
-             tick_bridge.note_player_progress_from_ui();
-             tick_bridge.note_torrent_progress_from_ui();
-             tick_bridge.refresh_download_rows();
+            tick_player.tick();
+            tick_bridge.note_player_progress_from_ui();
+            tick_bridge.note_torrent_progress_from_ui();
+            tick_bridge.refresh_download_rows();
         },
     );
 
@@ -816,6 +831,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         slint::TimerMode::Repeated,
         Duration::from_secs(2),
         move || {
+            sync_tick_bridge.replay_sync_projection();
             // Android doesn't surface connectivity changes to native code, so
             // poll the active network and hand changes to iroh.
             #[cfg(target_os = "android")]

@@ -850,9 +850,10 @@ export component SettingsPage {
     // Playback rate ± one 0.05 step (Settings → Player). The backend
     // quantizes it and writes the property back.
     callback playback_speed_stepped(int);
-    // Autosave entrypoint: fired by the debounce timer below after the
-    // user stops editing. No Save button — settings persist naturally.
+    // Capture edits immediately; the application owns persistence debouncing.
     callback save_settings();
+    in property <bool> persistence_failed: false;
+    callback settings_edited(string);
     callback clear_cache();
     // Immediate one-shot: persist current config, then re-encode the
     // existing on-disk cache to it.
@@ -883,14 +884,18 @@ export component SettingsPage {
     callback sync_scan_qr();
     callback sync_respond_pair(string, bool);
 
-    // Debounce user edits: every control restarts this; it fires once
-    // the user pauses, persisting without a Save button.
-    autosave := Timer {
-        interval: 600ms;
-        triggered => { root.save_settings(); }
+    function schedule_save() {
+        if (root.kb_zone == 5 && root.kb_hr < 7) {
+            root.settings_edited(["cache_images", "enabled", "format", "quality", "downscale", "lazy_reencode", "lru_cache_mb"][root.kb_hr]);
+        } else if (root.kb_zone == 6 && root.kb_dr != 5) {
+            root.settings_edited(["date_relative", "prefetch_metadata", "show_unwatched_thumbs", "discover_min_cols", "library_min_cols", "language", "discover_catalog_addon_names"][root.kb_dr]);
+        } else if (root.kb_zone == 10) {
+            root.settings_edited(["animations", "anim_transitions", "anim_hover", "anim_player", "anim_nav_slide"][root.kb_anr]);
+        } else {
+            root.save_settings();
+        }
     }
-
-    function schedule_save() { autosave.restart(); }
+    function schedule_setting(field: string) { root.settings_edited(field); }
 
     // Nested "Downloaded episodes" list (Settings → Downloads) entrance. A
     // subpage swap inside the already-open subpage layer would otherwise pop
@@ -1860,6 +1865,14 @@ export component SettingsPage {
             // (see DiscoverPage), stretching the page instead of leaving the
             // slack blank at the bottom.
             Rectangle { vertical-stretch: 0; height: 1px; background: #23232b; }
+            if root.persistence_failed: Text {
+                text: @tr("Changes could not be saved. Check storage and retry.");
+                color: #ffaaaa;
+                font-size: 13px;
+                min-width: 0;
+                wrap: word-wrap;
+                vertical-stretch: 0;
+            }
 
             // Settings content host: the landing menu and the open subpage
             // are stacked here and slide/fade between each other. Edits
@@ -3183,7 +3196,7 @@ export component SettingsPage {
                                     ToggleSwitch {
                                         checked <=> root.cache_date_relative;
                                         focused: root.kb_zone == 6 && root.kb_dr == 0;
-                                        toggled => { root.kb_active = false; root.kb_zone = 6; root.kb_dr = 0; root.schedule_save(); }
+                                        toggled => { root.kb_active = false; root.kb_zone = 6; root.kb_dr = 0; root.schedule_setting("date_relative"); }
                                     }
                                 }
 
@@ -3195,7 +3208,7 @@ export component SettingsPage {
                                     ToggleSwitch {
                                         checked <=> root.cache_prefetch_metadata;
                                         focused: root.kb_zone == 6 && root.kb_dr == 1;
-                                        toggled => { root.kb_active = false; root.kb_zone = 6; root.kb_dr = 1; root.schedule_save(); }
+                                        toggled => { root.kb_active = false; root.kb_zone = 6; root.kb_dr = 1; root.schedule_setting("prefetch_metadata"); }
                                     }
                                 }
 
@@ -3207,7 +3220,7 @@ export component SettingsPage {
                                     ToggleSwitch {
                                         checked <=> root.cache_show_unwatched_thumbs;
                                         focused: root.kb_zone == 6 && root.kb_dr == 2;
-                                        toggled => { root.kb_active = false; root.kb_zone = 6; root.kb_dr = 2; root.schedule_save(); }
+                                        toggled => { root.kb_active = false; root.kb_zone = 6; root.kb_dr = 2; root.schedule_setting("show_unwatched_thumbs"); }
                                     }
                                 }
 
@@ -3220,7 +3233,7 @@ export component SettingsPage {
                                         labels: ["2", "3", "4", "5", "6"];
                                         current-index: Math.max(0, Math.min(4, root.discover_min_cols - 2));
                                         focused: root.kb_zone == 6 && root.kb_dr == 3;
-                                        picked(i) => { root.kb_active = false; root.kb_zone = 6; root.kb_dr = 3; root.discover_min_cols = i + 2; root.schedule_save(); }
+                                        picked(i) => { root.kb_active = false; root.kb_zone = 6; root.kb_dr = 3; root.discover_min_cols = i + 2; root.schedule_setting("discover_min_cols"); }
                                     }
                                 }
 
@@ -3233,7 +3246,7 @@ export component SettingsPage {
                                         labels: ["2", "3", "4", "5", "6"];
                                         current-index: Math.max(0, Math.min(4, root.library_min_cols - 2));
                                         focused: root.kb_zone == 6 && root.kb_dr == 4;
-                                        picked(i) => { root.kb_active = false; root.kb_zone = 6; root.kb_dr = 4; root.library_min_cols = i + 2; root.schedule_save(); }
+                                        picked(i) => { root.kb_active = false; root.kb_zone = 6; root.kb_dr = 4; root.library_min_cols = i + 2; root.schedule_setting("library_min_cols"); }
                                     }
                                 }
 
@@ -3260,7 +3273,7 @@ export component SettingsPage {
                                     ToggleSwitch {
                                         checked <=> root.discover_catalog_addon_names;
                                         focused: root.kb_zone == 6 && root.kb_dr == 6;
-                                        toggled => { root.kb_active = false; root.kb_zone = 6; root.kb_dr = 6; root.schedule_save(); }
+                                        toggled => { root.kb_active = false; root.kb_zone = 6; root.kb_dr = 6; root.schedule_setting("discover_catalog_addon_names"); }
                                     }
                                 }
                             }

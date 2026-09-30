@@ -43,7 +43,7 @@ fn legacy_blob_migrates_and_rows_round_trip() {
     // A later single-record write persists just its row and survives a reload.
     let mut s = Store::load();
     s.set("library", "b", Some("2".to_string()), 0, 9);
-    s.save();
+    s.save().unwrap();
     let after = Store::load();
     assert_eq!(
         after.record("library", "b").unwrap().value.as_deref(),
@@ -52,5 +52,57 @@ fn legacy_blob_migrates_and_rows_round_trip() {
     assert_eq!(
         after.record("library", "a").unwrap().value.as_deref(),
         Some("1")
+    );
+
+    // GC must persist even if this domain still has a live record.
+    let mut s = Store::try_load().unwrap();
+    let gone = s.record("progress", "gone").unwrap().version;
+    s.set("progress", "live", Some("1".into()), 0, 9);
+    assert_eq!(
+        s.gc(
+            gone.ts + 31 * 24 * 60 * 60 * 1000,
+            30 * 24 * 60 * 60 * 1000,
+            nova_sync::AckFloor::NoPeers
+        ),
+        1
+    );
+    s.save().unwrap();
+    let after = Store::try_load().unwrap();
+    assert!(after.record("progress", "gone").is_none());
+    assert!(after.record("progress", "live").is_some());
+
+    // Bad keys, poisoned clocks, and old active-prefix backups recover once.
+    nova_storage::try_write_batch(&[
+        ("srec:1:é:key".into(), Some("bad".into())),
+        ("srec:7:library:bad".into(), Some("{broken".into())),
+        (
+            "srec:7:library:bad.corrupt.1".into(),
+            Some("{broken".into()),
+        ),
+        (
+            "srec:7:library:future".into(),
+            Some(
+                serde_json::to_string(&nova_sync::Record {
+                    value: Some("bad".into()),
+                    version: nova_sync::Version::new(u64::MAX, 0, 1, false),
+                })
+                .unwrap(),
+            ),
+        ),
+        (
+            "sync:records:hlc".into(),
+            Some(r#"{"physical_ms":18446744073709551615,"counter":0}"#.into()),
+        ),
+    ])
+    .unwrap();
+    let recovered = Store::try_load().unwrap();
+    let evidence = nova_storage::try_scan_prefix("sync:quarantine:").unwrap();
+    assert_eq!(evidence.len(), 5);
+    assert!(recovered.record("library", "a").is_some());
+    assert!(recovered.record("library", "future").is_none());
+    Store::try_load().unwrap();
+    assert_eq!(
+        nova_storage::try_scan_prefix("sync:quarantine:").unwrap(),
+        evidence
     );
 }

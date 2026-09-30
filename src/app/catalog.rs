@@ -42,8 +42,8 @@ impl Bridge {
         } else {
             app.get_catalog()
         };
-        let search_previews = searching
-            .then(|| self.shared.lock().unwrap().search_previews.clone());
+        let search_previews =
+            searching.then(|| self.shared.lock().unwrap().search_previews.clone());
         let len = model.row_count();
         if len == 0 {
             return;
@@ -119,11 +119,15 @@ impl Bridge {
         }
         let (skip, supports_skip, exhausted) = {
             let state = self.shared.lock().unwrap();
-            (state.next_skip, {
-                let ty = state.type_defs.get(state.chosen_type);
-                let cat = ty.and_then(|t| t.catalogs.get(state.chosen_catalog));
-                cat.map_or(false, |c| c.supports_skip)
-            }, state.catalog_exhausted)
+            (
+                state.next_skip,
+                {
+                    let ty = state.type_defs.get(state.chosen_type);
+                    let cat = ty.and_then(|t| t.catalogs.get(state.chosen_catalog));
+                    cat.map_or(false, |c| c.supports_skip)
+                },
+                state.catalog_exhausted,
+            )
         };
         if !supports_skip || exhausted || skip == 0 {
             return;
@@ -383,7 +387,9 @@ impl Bridge {
                 drop(state);
 
                 app.set_catalog(Rc::new(VecModel::from(cards)).into());
-                app.set_empty_hint(SharedString::from(text::tr("No results for this selection.")));
+                app.set_empty_hint(SharedString::from(text::tr(
+                    "No results for this selection.",
+                )));
                 crate::web_log(&format!(
                     "nova: catalog applied ({} items)",
                     new_metas.len()
@@ -484,12 +490,15 @@ impl Bridge {
         let candidates: Vec<(String, String)> = metas
             .iter()
             .filter_map(|m| {
-                let t = if m.type_.is_empty() { &current_type } else { &m.type_ };
+                let t = if m.type_.is_empty() {
+                    &current_type
+                } else {
+                    &m.type_
+                };
                 if t == "movie" || m.id.is_empty() {
                     return None;
                 }
-                if read_episodes_cache_for(t, &m.id).is_some() && header_text_cached(t, &m.id)
-                {
+                if read_episodes_cache_for(t, &m.id).is_some() && header_text_cached(t, &m.id) {
                     return None;
                 }
                 Some((t.clone(), m.id.clone()))
@@ -532,10 +541,7 @@ impl Bridge {
             eprintln!("prefetch: no addons with meta support, skipping");
             return;
         }
-        eprintln!(
-            "prefetch: {} addon(s) with meta support",
-            installed.len()
-        );
+        eprintln!("prefetch: {} addon(s) with meta support", installed.len());
 
         // Work items: one (type_, id) pair with the meta URLs of every
         // meta-capable addon, tried in order. Fetched sequentially via
@@ -553,11 +559,7 @@ impl Bridge {
             .collect();
 
         let bridge = self.clone();
-        fn run(
-            bridge: Bridge,
-            mut work: VecDeque<(String, String, Vec<String>)>,
-            mut cached: u32,
-        ) {
+        fn run(bridge: Bridge, mut work: VecDeque<(String, String, Vec<String>)>, mut cached: u32) {
             // Next pair?
             let Some((type_, id, mut urls)) = work.pop_front() else {
                 let msg = text::prefetch_done(cached as usize);
@@ -1002,21 +1004,16 @@ impl Bridge {
             let query = state.search.clone();
             // Stable sorting leaves the existing add-on/catalog order intact
             // for equally relevant matches.
-            state.search_previews.sort_by_cached_key(|meta| {
-                std::cmp::Reverse(search_relevance_score(&query, meta))
-            });
+            state
+                .search_previews
+                .sort_by_cached_key(|meta| std::cmp::Reverse(search_relevance_score(&query, meta)));
             let ranked_metas = state.search_previews.clone();
             state.search_loading_more = false;
             let can_load_more = state
                 .search_targets
                 .iter()
                 .any(|target| target.supports_skip && !target.exhausted);
-            (
-                old_previews,
-                ranked_metas,
-                new_count,
-                can_load_more,
-            )
+            (old_previews, ranked_metas, new_count, can_load_more)
         };
 
         // Rebuild in relevance order while carrying already-decoded posters
@@ -1116,7 +1113,10 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_discover_search_history(
                 Rc::new(VecModel::from(
-                    history.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+                    history
+                        .into_iter()
+                        .map(SharedString::from)
+                        .collect::<Vec<_>>(),
                 ))
                 .into(),
             );
@@ -1133,7 +1133,10 @@ impl Bridge {
         write_json("discover:search_history", &history);
         app.set_discover_search_history(
             Rc::new(VecModel::from(
-                history.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+                history
+                    .into_iter()
+                    .map(SharedString::from)
+                    .collect::<Vec<_>>(),
             ))
             .into(),
         );
@@ -1396,7 +1399,10 @@ fn search_match_score(query: &str, title: &str, year: Option<&str>) -> u32 {
         return 990_000;
     }
 
-    let suffix_len = title_and_year.chars().count().saturating_sub(query.chars().count());
+    let suffix_len = title_and_year
+        .chars()
+        .count()
+        .saturating_sub(query.chars().count());
     if title.starts_with(&query) || title_and_year.starts_with(&query) {
         return 900_000u32.saturating_sub(suffix_len.min(10_000) as u32);
     }
@@ -1460,9 +1466,7 @@ fn search_match_score(query: &str, title: &str, year: Option<&str>) -> u32 {
         if fuzzy_hits == 0 {
             return 720_000 + in_order.min(20) as u32 * 1_000;
         }
-        return 650_000
-            + in_order.min(20) as u32 * 1_000
-            + exact_hits.min(20) as u32 * 500;
+        return 650_000 + in_order.min(20) as u32 * 1_000 + exact_hits.min(20) as u32 * 500;
     }
     if matched > 0 {
         return 350_000
@@ -1727,6 +1731,8 @@ mod tests {
 
     fn installed(enabled: bool, catalogs: Vec<addons::Catalog>) -> Installed {
         Installed {
+            available: true,
+            generation: 0,
             url: "https://catalog.example".into(),
             label: "Catalog addon".into(),
             enabled,

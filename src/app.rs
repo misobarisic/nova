@@ -3,29 +3,37 @@ use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, Model, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
-use std::path::PathBuf;
 use std::path::Path;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
 #[cfg(feature = "desktop")]
 use std::sync::mpsc;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::{
-    AddonRow, AppWindow, CalCell, CategoryRow, ContinueRow, DownloadRow, EpisodeRow,
-    LicenseSource, MediaCard, SeasonCard, SheetItem, StreamRow, SyncInvite, SyncPeer, UpcomingRow,
-};
 use crate::download::DownloadJob;
+use crate::{
+    AddonRow, AppWindow, CalCell, CategoryRow, ContinueRow, DownloadRow, EpisodeRow, LicenseSource,
+    MediaCard, SeasonCard, SheetItem, StreamRow, SyncInvite, SyncPeer, UpcomingRow,
+};
 
 pub(crate) const OPEN_SOURCE_LICENSE_CATALOG: &str =
     include_str!(concat!(env!("OUT_DIR"), "/nova_license_catalog.txt"));
 
 pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
     const WORKSPACE_CRATES: [&str; 10] = [
-        "nova", "addons", "nova-ui", "nova-storage", "nova-config",
-        "nova-download", "nova-torrent", "nova-media", "nova-player", "nova-sync",
+        "nova",
+        "addons",
+        "nova-ui",
+        "nova-storage",
+        "nova-config",
+        "nova-download",
+        "nova-torrent",
+        "nova-media",
+        "nova-player",
+        "nova-sync",
     ];
 
     let mut sources = include_str!(concat!(env!("OUT_DIR"), "/nova_license_sources.tsv"))
@@ -65,9 +73,9 @@ pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
 use crate::net;
 use crate::storage;
 use nova_config::{
-    active_cache_settings, app_cache_dir, app_data_dir, now_secs, poster_cache_dir,
-    set_cache_settings, AndroidHwdec, CacheImageFormat, CacheSettings, DesktopExternalApp,
-    DownloadSettings, EpisodeStartBehavior, Language,
+    AndroidHwdec, CacheImageFormat, CacheSettings, DesktopExternalApp, DownloadSettings,
+    EpisodeStartBehavior, Language, active_cache_settings, app_cache_dir, app_data_dir, now_secs,
+    poster_cache_dir, set_cache_settings,
 };
 // Everything from the image-cache subsystem now lives in `nova-media`.
 use nova_media::cache::*;
@@ -94,6 +102,9 @@ pub(crate) struct Installed {
     /// so each addon is probed once per lifetime, not every launch.
     configure_ok: Option<bool>,
     manifest: Manifest,
+    /// Desired entries exist even when their manifest is unavailable.
+    available: bool,
+    generation: u64,
 }
 
 struct CatDef {
@@ -423,7 +434,11 @@ struct PosterStore {
 #[cfg(feature = "desktop")]
 impl PosterStore {
     fn new(cap: usize) -> Self {
-        Self { map: HashMap::new(), order: VecDeque::new(), cap: cap.max(1) }
+        Self {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+            cap: cap.max(1),
+        }
     }
 
     fn get(&self, key: &(u64, usize)) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
@@ -545,27 +560,27 @@ struct Bridge {
     stream_seq: Arc<AtomicU64>,
 }
 
-mod bridge;
 mod addon_mgr;
+mod bridge;
 mod catalog;
 mod detail;
 mod downloads;
-mod posters;
-mod playback;
-mod library;
 mod home;
-mod settings;
+mod library;
+mod playback;
+mod posters;
 mod run;
+mod settings;
 pub use run::run;
 
 mod qr;
 
+mod clipboard;
+mod episodes;
+mod i18n;
 mod io;
 mod streams;
-mod episodes;
 mod sync;
-mod clipboard;
-mod i18n;
 mod text;
 
 // Android background execution glue (foreground service + JobScheduler sync).
@@ -580,22 +595,22 @@ pub(crate) mod android_qr;
 #[cfg(target_os = "android")]
 pub(crate) mod android_player;
 
-pub(crate) use io::*;
-pub(crate) use streams::*;
-pub(crate) use episodes::*;
-pub(crate) use clipboard::*;
 pub(crate) use addon_mgr::*;
-pub(crate) use sync::*;
-pub(crate) use home::*;
 pub(crate) use catalog::*;
+pub(crate) use clipboard::*;
 pub(crate) use detail::*;
 pub(crate) use downloads::*;
-pub(crate) use posters::*;
-pub(crate) use playback::*;
-pub(crate) use library::*;
-pub(crate) use settings::*;
-pub(crate) use qr::*;
+pub(crate) use episodes::*;
+pub(crate) use home::*;
 pub(crate) use i18n::*;
+pub(crate) use io::*;
+pub(crate) use library::*;
+pub(crate) use playback::*;
+pub(crate) use posters::*;
+pub(crate) use qr::*;
+pub(crate) use settings::*;
+pub(crate) use streams::*;
+pub(crate) use sync::*;
 
 #[cfg(test)]
 mod tests;
