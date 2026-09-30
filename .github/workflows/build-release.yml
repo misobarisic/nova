@@ -121,7 +121,7 @@ jobs:
           retention-days: 1
 
   linux-build:
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     name: Build Linux x86_64 packages (Ubuntu 22.04)
     runs-on: ubuntu-22.04
     timeout-minutes: 120
