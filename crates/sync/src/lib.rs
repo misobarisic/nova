@@ -53,6 +53,7 @@ use iroh::endpoint::presets;
 use iroh::protocol::Router;
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
 use serde::{Deserialize, Serialize};
+use tracing::Instrument;
 
 use protocol::Handler;
 
@@ -151,7 +152,7 @@ pub fn read_settings() -> SyncSettings {
 pub fn write_settings(settings: &SyncSettings) {
     match serde_json::to_string(settings) {
         Ok(s) => nova_storage::set_str(SETTINGS_KEY, &s),
-        Err(e) => eprintln!("nova sync: serialize settings: {e}"),
+        Err(e) => tracing::error!(error = %e, "serialize sync settings failed"),
     }
     if let Some(engine) = engine() {
         engine.cadence_notify.notify_one();
@@ -320,19 +321,19 @@ impl SyncEngine {
                 } => OneShotOutcome::Cancelled,
             }
         });
-        if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
-            let class = match &outcome {
-                OneShotOutcome::Completed => "completed",
-                OneShotOutcome::Cancelled => "cancelled",
-                OneShotOutcome::TimedOut => "timed_out",
-                OneShotOutcome::Skipped => "skipped",
-                OneShotOutcome::Failed(_) => "failed",
-            };
-            eprintln!(
-                "[sync] trigger=one_shot outcome={class} duration_ms={}",
-                started.elapsed().as_millis()
-            );
-        }
+        let class = match &outcome {
+            OneShotOutcome::Completed => "completed",
+            OneShotOutcome::Cancelled => "cancelled",
+            OneShotOutcome::TimedOut => "timed_out",
+            OneShotOutcome::Skipped => "skipped",
+            OneShotOutcome::Failed(_) => "failed",
+        };
+        tracing::debug!(
+            trigger = "one_shot",
+            outcome = class,
+            duration_ms = started.elapsed().as_millis(),
+            "one-shot sync finished"
+        );
         outcome
     }
     /// Load identity/peers, bind the endpoint, start the accept router and the
@@ -374,10 +375,7 @@ impl SyncEngine {
             // synced `peers` domain (before the allowlist is derived below).
             let legacy = load_legacy_peers();
             if migrate_peers(&mut s, &legacy, now, device) {
-                eprintln!(
-                    "nova sync: migrated {} peer(s) into the peers domain",
-                    legacy.len()
-                );
+                tracing::info!(peer_count = legacy.len(), "migrated legacy peers");
             }
             s.save()?;
         }
@@ -699,9 +697,7 @@ impl SyncEngine {
     /// Ask the sync worker to run a pass. Coalesced: a request made while a
     /// pass is running queues exactly one follow-up pass.
     pub fn sync_now(&self) {
-        if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
-            eprintln!("[sync] trigger=explicit");
-        }
+        tracing::debug!(trigger = "explicit", "sync requested");
         self.force_attempt.store(true, Ordering::Release);
         self.sync_notify.notify_one();
     }
@@ -714,9 +710,10 @@ impl SyncEngine {
         if self.network_refreshing.swap(true, Ordering::AcqRel) {
             return;
         }
-        if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
-            eprintln!("[sync] trigger=network_refresh");
-        }
+        tracing::debug!(
+            trigger = "network_refresh",
+            "sync network refresh requested"
+        );
         // Drop cached connections: their paths/relay assignment may be stale
         // after a network change, so redial rather than reuse.
         self.conns.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -858,7 +855,10 @@ async fn sync_worker(
         {
             Ok(_) => {}
             Err(_) => {
-                eprintln!("nova sync: pass timed out after {MAX_PASS_SECS}s; aborting");
+                tracing::warn!(
+                    timeout_secs = MAX_PASS_SECS,
+                    "sync pass timed out; aborting"
+                );
                 handler.finish_sync(Some(format!("sync pass timed out after {MAX_PASS_SECS}s")));
             }
         }
@@ -876,6 +876,7 @@ async fn sync_worker(
 /// interval, we immediately run another round against the grown set, so a newly
 /// paired device fans out across the whole mesh in one wake-up. Bounded by
 /// [`MAX_PASS_ROUNDS`] so cluster-wide convergence cannot loop forever.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn run_pass(
     endpoint: Endpoint,
     handler: Arc<Handler>,
@@ -883,8 +884,7 @@ async fn run_pass(
     conns: Arc<Mutex<HashMap<String, Connection>>>,
     health: Arc<Mutex<HashMap<String, PeerHealth>>>,
 ) -> OneShotOutcome {
-    let debug = std::env::var_os("NOVA_SYNC_DEBUG").is_some();
-    let started_at = now_secs();
+    let started_at = Instant::now();
     let mut last_err = None;
     let mut started = false;
     for _ in 0..MAX_PASS_ROUNDS {
@@ -913,10 +913,13 @@ async fn run_pass(
             let conns = conns.clone();
             let health = health.clone();
             let semaphore = semaphore.clone();
-            tasks.spawn(async move {
-                let _permit = semaphore.acquire_owned().await;
-                sync_one(&endpoint, &handler, &peer, &conns, &health).await
-            });
+            tasks.spawn(
+                async move {
+                    let _permit = semaphore.acquire_owned().await;
+                    sync_one(&endpoint, &handler, &peer, &conns, &health).await
+                }
+                .in_current_span(),
+            );
         }
         while let Some(result) = tasks.join_next().await {
             match result {
@@ -937,12 +940,12 @@ async fn run_pass(
     if started {
         handler.finish_sync(last_err.clone());
     }
-    if debug {
-        eprintln!(
-            "[sync] pass done in {}s (started={started})",
-            now_secs().saturating_sub(started_at)
-        );
-    }
+    tracing::debug!(
+        duration_ms = started_at.elapsed().as_millis(),
+        started,
+        failed = last_err.is_some(),
+        "sync pass finished"
+    );
     // Reclaim tombstones that every current peer has now acknowledged. Runs
     // after the round loop so acks recorded by this pass are taken into
     // account immediately.
@@ -967,6 +970,7 @@ pub enum OneShotOutcome {
 
 /// Sync with one peer, recording success/failure for backoff. Returns the
 /// error string on failure.
+#[tracing::instrument(level = "debug", skip_all, fields(peer = short_id(peer)))]
 async fn sync_one(
     endpoint: &Endpoint,
     handler: &Arc<Handler>,
@@ -1048,13 +1052,7 @@ async fn sync_one(
         (BACKOFF_BASE_SECS * (1u64 << failures.saturating_sub(1).min(6))).min(BACKOFF_MAX_SECS)
     };
     handler.note_peer_result(peer, outcome.clone(), retry, started.elapsed());
-    if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
-        eprintln!(
-            "[sync] peer {}: {}",
-            &peer[..peer.len().min(12)],
-            outcome.as_deref().unwrap_or("ok")
-        );
-    }
+    tracing::debug!(duration_ms = started.elapsed().as_millis(), retry_after_secs = retry, error = ?outcome, "peer attempt finished");
     outcome
 }
 
@@ -1079,16 +1077,20 @@ async fn peer_connection(
     };
     if let Some(conn) = cached {
         if conn.close_reason().is_none() {
-            if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
-                eprintln!("[sync] connection=reuse peer={}", short_id(peer));
-            }
+            tracing::debug!(
+                connection = "reuse",
+                peer = short_id(peer),
+                "sync connection selected"
+            );
             return Ok(conn);
         }
         forget_connection(conns, peer);
     }
-    if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
-        eprintln!("[sync] connection=redial peer={}", short_id(peer));
-    }
+    tracing::debug!(
+        connection = "redial",
+        peer = short_id(peer),
+        "sync connection selected"
+    );
     match tokio::time::timeout(
         CONNECT_TIMEOUT,
         endpoint.connect(EndpointAddr::from(id), ALPN),
@@ -1150,9 +1152,7 @@ async fn interval_loop(
             )
             .await;
         }
-        if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
-            eprintln!("[sync] trigger=periodic");
-        }
+        tracing::debug!(trigger = "periodic", "sync requested");
         sync_notify.notify_one();
         last_pass = tokio::time::Instant::now();
     }
@@ -1600,9 +1600,7 @@ pub(crate) fn peers_add(
     let changed = peer_upsert(&mut store, id, name, ts, dev, true, true);
     if changed {
         store.save()?;
-        if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
-            eprintln!("[sync] peer added/updated {}", short_id(id));
-        }
+        tracing::debug!(peer = short_id(id), "peer added or updated");
     }
     let mut list = peers.lock().unwrap_or_else(|e| e.into_inner());
     if !list.iter().any(|p| p == id) {
@@ -1670,7 +1668,7 @@ pub(crate) fn peers_remove(
                 e,
             ));
         }
-        eprintln!("nova sync: removed peer {}", short_id(id));
+        tracing::info!(peer = short_id(id), "peer removed");
     }
     let mut list = peers.lock().unwrap_or_else(|e| e.into_inner());
     list.retain(|p| p != id);

@@ -18,6 +18,7 @@ license.workspace = true
 nova-config = { path = "../config" }
 nova-storage = { path = "../storage" }
 anyhow = "1"
+tracing = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 # Wire format: compact binary serde. `alloc` enables to_allocvec/take_from_bytes
 # for the Vec/String-bearing frames.

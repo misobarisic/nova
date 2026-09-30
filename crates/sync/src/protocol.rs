@@ -289,9 +289,9 @@ impl Handler {
         let name = crate::peer_names_from_store(&self.store)
             .remove(id)
             .unwrap_or_default();
-        eprintln!(
-            "nova sync: {} rejected us as a peer; dropping it",
-            &id[..id.len().min(12)]
+        tracing::info!(
+            peer = crate::short_id(id),
+            "peer revoked our authorization; dropping it"
         );
         self.drop_peer(id);
         self.set_removed_notice(name);
@@ -401,16 +401,14 @@ impl ProtocolHandler for Handler {
                         // Peer went away mid-exchange (restart, network change,
                         // or a timeout on its side). Transient; the next pass
                         // retries on a fresh connection.
-                        if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
-                            eprintln!("[sync] incoming exchange dropped: {e:#}");
-                        }
+                        tracing::debug!(error = %format_args!("{e:#}"), "incoming exchange dropped");
                     }
                     Ok(Err(e)) => {
-                        eprintln!("nova sync: incoming sync failed: {e:#}");
+                        tracing::warn!(error = %format_args!("{e:#}"), "incoming sync failed");
                         handler.finish_sync(Some(e.to_string()));
                     }
                     Err(_) => {
-                        eprintln!("nova sync: incoming sync timed out");
+                        tracing::warn!("incoming sync timed out");
                         handler.finish_sync(Some("incoming sync timed out".to_string()));
                     }
                 }
@@ -490,24 +488,19 @@ fn apply_frames(
                             .get(&entry.key)
                             .is_some_and(|ack| ack.newer_than(entry.hlc()))
                     {
-                        if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
-                            eprintln!(
-                                "[sync] ignoring stale peer tombstone for {} (ack newer than removal)",
-                                &entry.key[..entry.key.len().min(12)]
-                            );
-                        }
+                        tracing::debug!(
+                            peer = crate::short_id(&entry.key),
+                            "ignored stale peer tombstone; ack newer than removal"
+                        );
                         continue;
                     }
                 }
                 if store.apply(domain, &entry.key, entry.to_record()) {
                     any = true;
-                    if domain == crate::DOMAIN_PEERS
-                        && entry.deleted
-                        && std::env::var_os("NOVA_SYNC_DEBUG").is_some()
-                    {
-                        eprintln!(
-                            "[sync] applied peer tombstone for {}",
-                            &entry.key[..entry.key.len().min(12)]
+                    if domain == crate::DOMAIN_PEERS && entry.deleted {
+                        tracing::debug!(
+                            peer = crate::short_id(&entry.key),
+                            "applied peer tombstone"
                         );
                     }
                 }
@@ -591,6 +584,7 @@ pub async fn run(conn: Connection, initiator: bool, handler: &Handler) -> Result
 }
 
 /// One exchange over an already-open bidirectional stream.
+#[tracing::instrument(level = "debug", skip_all, fields(peer = crate::short_id(remote_id), initiator))]
 async fn exchange(
     mut send: SendStream,
     mut recv: RecvStream,
@@ -736,9 +730,9 @@ async fn exchange(
     // removed side would keep the remover forever (the remover rejects our
     // syncs, so we could never learn otherwise).
     if removed_us {
-        eprintln!(
-            "nova sync: {} removed us; dropping it",
-            &remote_id[..remote_id.len().min(12)]
+        tracing::info!(
+            peer = crate::short_id(remote_id),
+            "peer removed us; dropping it"
         );
         handler.drop_peer(&remote_id);
         handler.set_removed_notice(peer_name.clone());
@@ -759,16 +753,13 @@ async fn exchange(
         handler.emit_remote(changed.clone());
     }
 
-    if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
-        eprintln!(
-            "[sync] role={} digest_exchange={} sent_frames={} incoming_frames={} changed_domains={}",
-            if initiator { "init" } else { "resp" },
-            exchange_digest,
-            frame_count,
-            incoming.len(),
-            changed.len()
-        );
-    }
+    tracing::debug!(
+        digest_exchange = exchange_digest,
+        sent_frames = frame_count,
+        incoming_frames = incoming.len(),
+        changed_domains = changed.len(),
+        "durable exchange apply finished"
+    );
 
     // Close handshake using stream end instead of a wire frame. Each side
     // finishes its send stream only *after* applying, so the peer's stream end
@@ -981,7 +972,7 @@ impl ProtocolHandler for RemoveHandler {
             if notice.proto != REMOVE_PROTO {
                 bail!("unsupported removal protocol {}", notice.proto);
             }
-            eprintln!("nova sync: {} removed us", &remote[..remote.len().min(12)]);
+            tracing::info!(peer = crate::short_id(&remote), "peer removed us");
             self.handler.drop_peer(&remote);
             self.handler.set_removed_notice(notice.name);
             self.handler.reconcile_peers();
@@ -992,10 +983,8 @@ impl ProtocolHandler for RemoveHandler {
             Ok::<(), anyhow::Error>(())
         }
         .await;
-        if let Err(e) = result
-            && std::env::var_os("NOVA_SYNC_DEBUG").is_some()
-        {
-            eprintln!("[sync] removal notice failed: {e:#}");
+        if let Err(e) = result {
+            tracing::debug!(error = %format_args!("{e:#}"), "removal notice failed");
         }
         Ok(())
     }

@@ -170,14 +170,12 @@ impl Store {
                     store.mark_all_dirty();
                     store.queue_extra(LEGACY_RECORDS_KEY, None);
                     store.save()?;
-                    eprintln!("nova sync: migrated sync:records to per-record rows");
+                    tracing::info!("migrated sync records to per-record rows");
                     Ok(store)
                 }
                 Err(reason) => {
                     let backup = quarantine(LEGACY_RECORDS_KEY, &raw)?;
-                    eprintln!(
-                        "nova sync: stored records are unreadable ({reason}); backed up to {backup}"
-                    );
+                    tracing::warn!(reason, backup, "quarantined unreadable sync records");
                     Self::load_rows()
                 }
             };
@@ -213,9 +211,7 @@ impl Store {
                 }
                 _ => {
                     quarantine(&row, &value)?;
-                    eprintln!(
-                        "nova sync: quarantined invalid/future record; check sync:quarantine:"
-                    );
+                    tracing::warn!("quarantined invalid or future record; check sync:quarantine:");
                 }
             }
         }

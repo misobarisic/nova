@@ -153,7 +153,7 @@ nova/
 | `nova-download` | `crates/download` | Durable stream-job model, manifest helpers, cancellation, and progressive/resumable HTTP file transfers. |
 | `nova-player` | `crates/player` | In-window mpv player (desktop + Android) + external launch: the *video* app (`open_external` — desktop target app, Android video-MIME `ACTION_VIEW` for stream fallback) and the system *browser* (`open_browser` — `xdg-open`, or on Android `ACTION_VIEW` marked `BROWSABLE` + `FLAG_ACTIVITY_NEW_TASK` so only web-link handlers can claim it, for links like addon config pages); Android JNI glue. |
 | `nova-torrent` | `crates/torrent` | Embedded BitTorrent (librqbit); resolves `infoHash` → loopback HTTP URL for mpv. |
-| `nova-sync` | `crates/sync` | Cross-device sync over iroh (generic record store + ALPN protocols). |
+| `nova-sync` | `crates/sync` | Cross-device sync over iroh (generic record store + ALPN protocols); emits structured `tracing` events/spans, with subscriber setup owned by the root app. |
 | `addons` | `crates/addons` | Stremio addon protocol: URL builders + response parsers; optional blocking HTTP client (`client` feature). |
 
 ---
@@ -163,6 +163,7 @@ nova/
 ### Entry points
 - `src/main.rs` — desktop `main`; installs jemalloc on Linux, calls `nova::app::run()`.
 - `src/lib.rs` — re-exports leaf crates under stable paths (`crate::storage`, `crate::player`, `crate::torrent`, `crate::download`, `crate::net`, `nova_ui::*`), declares `pub mod app`, and holds `android_main` (Slint Android backend init + `app::run()`).
+- `src/diagnostics.rs` — initializes the process-wide `tracing-subscriber` once without replacing an embedding subscriber. `RUST_LOG` filters events (default `warn,nova_sync=info`; `RUST_LOG=nova_sync=debug` enables sync diagnostics). Desktop writes to stderr; Android writes directly to logcat under `Nova`, including job-only startup. Sync leaf code emits structured events/spans through `tracing`; it does not install a subscriber.
 
 ### `src/app.rs` — the spine
 Defines the shared state and the UI bridge:
@@ -538,5 +539,6 @@ the app ignores unknown domains, so old peers stay compatible.
 | Android background execution (downloads FGS + periodic sync) | `src/app/android_bg.rs`, `android/java/dev/misob/nova/{NovaBackgroundService,NovaSyncJobService}.java`, `nova_sync::SyncEngine::setup`, `DownloadCoordinator::has_active_work` |
 | App paths / shared settings | `crates/config/src/lib.rs` |
 | Persistence backend | `crates/storage/src/lib.rs` |
+| Sync diagnostic events / log filtering | `src/diagnostics.rs`, `crates/sync/src/{lib,protocol,pair,store}.rs`, `src/app/sync.rs`; `RUST_LOG=nova_sync=debug` (no `NOVA_SYNC_DEBUG`) |
 | Android glue / external player | `src/lib.rs` (`android_main`), `crates/player/src/external.rs` (Android), `crates/player/src/lib.rs::open_external` (desktop) |
 | Build/packaging | `Cargo.toml` (`[package.metadata.android]`), `build.rs`, `flake.nix`, `Makefile` |

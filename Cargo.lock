@@ -5124,6 +5124,8 @@ dependencies = [
  "serde_json",
  "slint",
  "tikv-jemallocator",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -5197,6 +5199,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

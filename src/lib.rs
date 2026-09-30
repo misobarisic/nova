@@ -31,6 +31,7 @@ pub use nova_torrent as torrent;
 
 // The full catalog app.
 pub mod app;
+mod diagnostics;
 
 // Android entry point: cargo-apk / xbuild launch `android_main`, not
 // `main`. Initializes the Slint Android backend, then runs the same catalog
@@ -38,6 +39,7 @@ pub mod app;
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: slint::android::AndroidApp) {
+    diagnostics::init();
     // Record panic messages for on-screen diagnostics (see nova-media/net).
     crate::net::install_panic_hook();
     // App-private dirs: the redb database lives in the internal files dir

@@ -201,6 +201,7 @@ pub extern "system" fn Java_dev_misob_nova_NovaSyncJobService_nativeRunSync(
     mut env: jni::JNIEnv,
     this: JObject,
 ) -> jni::sys::jstring {
+    crate::diagnostics::init();
     let summary = match run_headless_sync(&mut env, &this) {
         Ok(summary) => summary,
         Err(error) => format!("failed: {error}"),

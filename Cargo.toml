@@ -12,6 +12,7 @@ license = "GPL-3.0-or-later"
 slint = { version = "1.18.0", default-features = false, features = ["std", "accessibility", "compat-1-2"] }
 slint-build = "1.18.0"
 i-slint-backend-testing = "1.18.0"
+tracing = "0.1"
 
 [package]
 name = "nova"
@@ -57,6 +58,8 @@ nova-download = { path = "crates/download" }
 nova-player = { path = "crates/player" }
 nova-torrent = { path = "crates/torrent" }
 nova-sync = { path = "crates/sync" }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 
 # QR encoding for the sync invite ticket (Settings → Sync). Disable default
 # features so we don't pull the `image` crate: we read the module matrix via

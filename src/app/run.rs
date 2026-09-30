@@ -32,6 +32,7 @@ fn note_nav_switch(bridge: &Bridge, next: i32) {
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    crate::diagnostics::init();
     // Native desktop: in-app playback renders through mpv's OpenGL underlay
     // (src/player.rs). Like the reference prototype, the app runs on the
     // default femtovg GL renderer (it exposes GraphicsAPI::NativeOpenGL to

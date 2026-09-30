@@ -625,17 +625,14 @@ impl Bridge {
             ) {
                 if let Err(e) = owner.lock().unwrap().mark_projected(&domain, &basis) {
                     storage::report(storage::Error::new(storage::ErrorKind::Transaction, e));
-                } else if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
+                } else if tracing::enabled!(target: "nova_sync::projection", tracing::Level::DEBUG)
+                {
                     let revision = basis.values().fold(nova_sync::Hlc::default(), |clock, v| {
                         let next = v.hlc();
                         if next.newer_than(clock) { next } else { clock }
                     });
-                    eprintln!(
-                        "[sync] projection basis={}:{} record_count={}",
-                        revision.physical_ms,
-                        revision.counter,
-                        basis.len()
-                    );
+                    tracing::debug!(target: "nova_sync::projection", basis_ms = revision.physical_ms,
+                        basis_counter = revision.counter, record_count = basis.len(), "projection finished");
                 }
             }
         }
@@ -978,7 +975,7 @@ impl Bridge {
                 }
             }
             Err(e) => {
-                eprintln!("nova sync: could not start: {e:#}");
+                tracing::error!(target: "nova_sync::app", error = %format_args!("{e:#}"), "could not start sync");
                 self.sync_status_to_ui();
             }
         }

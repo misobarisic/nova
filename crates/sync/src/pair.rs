@@ -96,7 +96,7 @@ pub fn load_invites() -> Vec<Invite> {
 pub fn save_invites(invites: &[Invite]) {
     match serde_json::to_string(invites) {
         Ok(s) => nova_storage::set_str(INVITES_KEY, &s),
-        Err(e) => eprintln!("nova sync: serialize invites: {e}"),
+        Err(e) => tracing::error!(error = %e, "serialize invites failed"),
     }
 }
 
@@ -188,9 +188,7 @@ impl PairHandler {
     /// Ask the sync worker to run a pass now, so a just-paired device is
     /// introduced to the whole mesh without waiting for the interval.
     fn wake_sync(&self) {
-        if std::env::var_os("NOVA_SYNC_DEBUG").is_some() {
-            eprintln!("[sync] trigger=pairing");
-        }
+        tracing::debug!(trigger = "pairing", "sync requested");
         if let Some(notify) = self.sync_notify.lock().ok().and_then(|n| n.clone()) {
             notify.notify_one();
         }
@@ -254,7 +252,7 @@ impl ProtocolHandler for PairHandler {
             .await
             .unwrap_or_else(|_| Err(anyhow::anyhow!("pairing timed out")))
         {
-            eprintln!("nova sync: pairing failed: {e:#}");
+            tracing::warn!(error = %format_args!("{e:#}"), "pairing failed");
         }
         Ok(())
     }

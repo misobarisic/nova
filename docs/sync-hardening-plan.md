@@ -294,9 +294,13 @@ Keep Android code target-gated and preserve storage-before-settings initializati
 - [x] Record bounded, payload-free diagnostics for trigger reason, connection
   reuse/redial, duration, domain counts, projection revision, and cancellation.
   Never log invite secrets, private identities, or credential-bearing addon URLs.
-  `NOVA_SYNC_DEBUG` logs reason/reuse/redial/duration/counts and projection basis;
+  `RUST_LOG=nova_sync=debug` enables structured `tracing` events/spans for
+  reason/reuse/redial/duration/counts and projection basis;
   one-shot outcomes classify cancellation/timeout without payloads. Addon
   install/refresh logs no longer print configured URLs, labels, or response errors.
+  The app installs the subscriber once (desktop stderr, Android `Nova` logcat,
+  including job-only startup). `NOVA_SYNC_DEBUG` was removed in the separate
+  tracing follow-up commit; user-visible status/persistence errors are unchanged.
 - [ ] **H18:** measure retained-connection traffic and battery cost on Android.
   Choose a foreground/background connection-retention policy from measurements;
   do not increase timeouts or disable keepalives blindly.
