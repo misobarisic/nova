@@ -41,6 +41,11 @@ component DiscoverHeader {
     // Transient search edit mode (physical-keyboard flow), bound
     // through from the page so Enter-to-edit works in both layouts.
     in-out property <bool> kb_edit: false;
+    // Keep the search field flush with the history panel unless its keyboard
+    // focus marker is actually visible (the HorizontalLayout gap otherwise
+    // remains even when the marker has zero width).
+    property <bool> search_mark_on: root.kb_active && root.kb_zone == 2 && root.kb_ctl == 3;
+    property <length> search_mark_gap: root.search_mark_on ? 8px : 0px;
 
     callback addon_picked(string);
     callback type_picked(string);
@@ -113,10 +118,10 @@ component DiscoverHeader {
         if !root.narrow: HorizontalLayout {
             width: 100%;
             vertical-stretch: 0;
-            spacing: 8px;
+            spacing: root.search_mark_gap;
             height: 58px;
 
-            KbMark { on: root.kb_zone == 2 && root.kb_ctl == 3; active: root.kb_active; }
+            KbMark { on: root.search_mark_on; active: root.kb_active; }
             search_line := SearchField {
                 roomy: true;
                 prominent: true;
@@ -146,10 +151,10 @@ component DiscoverHeader {
         if root.narrow: HorizontalLayout {
             width: 100%;
             vertical-stretch: 0;
-            spacing: 8px;
+            spacing: root.search_mark_gap;
             height: 58px;
 
-            KbMark { on: root.kb_zone == 2 && root.kb_ctl == 3; active: root.kb_active; }
+            KbMark { on: root.search_mark_on; active: root.kb_active; }
             search_line_narrow := SearchField {
                 roomy: true;
                 prominent: true;
