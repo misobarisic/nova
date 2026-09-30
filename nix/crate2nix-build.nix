@@ -48,6 +48,12 @@ let
         je_cv_strerror_r_returns_char_with_gnu_source = "yes";
       };
 
+      av-scenechange = attrs: {
+        # This build script forwards Cargo's encoded rustflags to dependents;
+        # crate2nix does not set it when compiling the crate derivation.
+        CARGO_ENCODED_RUSTFLAGS = "";
+      };
+
       yeslogic-fontconfig-sys = attrs: {
         nativeBuildInputs = (attrs.nativeBuildInputs or []) ++ [ rustPkgs.pkg-config ];
         buildInputs = (attrs.buildInputs or []) ++ [ rustPkgs.fontconfig ];
