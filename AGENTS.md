@@ -35,6 +35,8 @@ add it only if it helps someone navigate the code without reading it.
 Run the narrowest check that covers your change, then the broader ones:
 
 ```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo check                         # whole workspace (default = desktop)
 cargo test -p nova-sync --lib       # fast unit tests for the sync crate
 cargo test                          # workspace tests (app unit + integration)
@@ -44,10 +46,12 @@ cargo test --test settings_sync_overflow   # headless Slint UI regression tests
 - Android is built with `--no-default-features --features android`; verify
   desktop-only code is gated (`#[cfg(feature = "desktop")]`,
   `#[cfg(not(target_os = "android"))]`).
-- Pull request CI runs default workspace and Windows GNU-target `cargo check`
-  (see `.github/workflows/build-release.yml`); it does not run tests or Clippy.
-  Run relevant tests locally for behavior changes.
-- There is no dedicated lint target.
+- CI runs Rust formatting, Clippy, the default workspace `cargo check`, and
+  Windows GNU-target `cargo check` on pull requests and source/build changes
+  pushed to `main` (see `.github/workflows/build-release.yml`). Tag pushes build
+  releases. CI does not run tests; run relevant tests locally for behavior
+  changes.
+- There is no Makefile lint target; run the formatting and Clippy commands above.
 - If you add a test, put it next to the code (`#[cfg(test)] mod tests`) or in
   `tests/` for headless Slint tests.
 

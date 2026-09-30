@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - ".github/workflows/build-release.yml"
+      - ".rustfmt.toml"
+      - "rustfmt.toml"
+      - "rust-toolchain"
+      - "rust-toolchain.toml"
       - ".github/scripts/package-android.py"
       - ".github/scripts/package-linux.sh"
       - ".github/scripts/nova.desktop"
@@ -20,21 +24,44 @@ on:
       - "flake.nix"
       - "flake.lock"
   push:
+    branches:
+      - "main"
+    paths:
+      - ".github/workflows/build-release.yml"
+      - ".rustfmt.toml"
+      - "rustfmt.toml"
+      - "rust-toolchain"
+      - "rust-toolchain.toml"
+      - ".github/scripts/package-android.py"
+      - ".github/scripts/package-linux.sh"
+      - ".github/scripts/nova.desktop"
+      - ".cargo/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "about.toml"
+      - "build.rs"
+      - "crates/**"
+      - "src/**"
+      - "android/**"
+      - "vendor/**"
+      - "assets/**"
+      - "flake.nix"
+      - "flake.lock"
     tags:
       - "**"
 
 permissions:
   contents: read
 
-# Cancel stale pull-request runs when a new commit arrives.
+# Cancel stale pull-request and main-branch runs when newer commits arrive.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
 
 jobs:
   check-linux:
-    name: Linux workspace check on pull requests
-    if: github.event_name == 'pull_request'
+    name: Linux formatting, Clippy, and workspace check
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -50,12 +77,18 @@ jobs:
         with:
           github_access_token: ${{ github.token }}
 
+      - name: Check Rust formatting
+        run: nix develop .#default --command cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: nix develop .#default --command cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: Check Rust workspace
         run: nix develop .#default --command cargo check --workspace --locked
 
   check-windows:
-    name: Windows GNU target check on pull requests
-    if: github.event_name == 'pull_request'
+    name: Windows GNU target check
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
