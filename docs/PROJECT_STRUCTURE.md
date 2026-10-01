@@ -119,6 +119,7 @@ nova/
 ├── tests/                    # headless Slint UI integration tests
 └── docs/
     ├── PROJECT_STRUCTURE.md  # this file
+    ├── ui-design-audit.md     # source-based UI consistency inventory and visual review checklist
     ├── PLATFORM_STORAGE.md   # per-platform data and cache locations
     ├── sync-followons.md     # sync feature parking lot / status notes
     ├── sync-hardening-plan.md # prioritized correctness/recovery implementation plan
@@ -579,6 +580,7 @@ the app ignores unknown domains, so old peers stay compatible.
 | Settings edit loss / sync recovery | `src/app/settings.rs` (`capture_settings`, `wire_settings_autosave`, regression test), `crates/sync/src/lib.rs` (`peer_connection`, worker/cadence/recovery), `docs/sync-hardening-plan.md` |
 | Add a UI language / translate a string | `crates/ui/translations/<code>/LC_MESSAGES/nova-ui.po` (context-free), `crates/config/src/lib.rs` (`Language`), `src/app/i18n.rs`; mark strings `@tr("…")` in the `.slint` files |
 | Add a Discover feature / catalog change | `src/app/catalog.rs`, `crates/ui/discover.slint`, `crates/ui/appwindow.slint`, `crates/addons` |
+| Review UI consistency / plan visual unification | `docs/ui-design-audit.md` (source-backed findings and visual review checklist), `crates/ui/*.slint` |
 | Home featured banner layout / touch paging / crossfade | `crates/ui/home.slint` (`FeaturedShowcase`, `FeaturedCaption`, and badge/action/pager components), `assets/featured-backdrop-scrim.svg`; catalog metadata, artwork and revision publication in `src/app/home.rs` |
 | Discover reveal / filter-drag regressions | `tests/discover_reveal_and_filters.rs` (animated opacity during poster updates, same-length result replacement, animation-off behavior, horizontal filter drags), `tests/discover_search_ui.rs` (browse/results navigation) |
 | Home / Discover / Library clipping and responsive grids | `crates/ui/{home,discover,library}.slint` (measured headings, viewport widths, pointer-only hover and grid origins), `tests/page_layout_fit.rs` |
