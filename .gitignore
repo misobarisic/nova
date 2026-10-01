@@ -1,9 +1,9 @@
-/target
-/pkg
+/target/
+/pkg/
 web-console.log
-crates/proxy/web-console.log
+
 # Android build outputs
-/target/x
 *.apk
 *.aab
 /.reasonix/
+/.omx/
