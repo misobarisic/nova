@@ -67,9 +67,9 @@ component DiscoverHeader {
         // Global Search is independent of the browse selectors below. Typing
         // starts a debounced query across enabled catalogs that advertise the
         // `search` extra.
-        if root.results_open: HorizontalLayout {
+        if root.results_open: results_heading := HorizontalLayout {
             vertical-stretch: 0;
-            height: root.narrow ? 44px : 36px;
+            height: Math.max(root.narrow ? 44px : 36px, results_title.preferred-height);
             spacing: 12px;
 
             Rectangle {
@@ -94,18 +94,21 @@ component DiscoverHeader {
                     clicked => { root.back_picked(); }
                 }
             }
-            Text {
+            results_title := Text {
                 text: @tr("Search results");
                 font-size: root.narrow ? 27px : 24px;
                 font-weight: 700;
                 color: #ffffff;
                 vertical-alignment: center;
+                min-width: 0px;
+                height: self.preferred-height;
+                wrap: word-wrap;
             }
         }
 
         if !root.results_open: HorizontalLayout {
             vertical-stretch: 0;
-            height: 38px;
+            min-height: 38px;
             alignment: start;
 
             Text {
@@ -113,6 +116,9 @@ component DiscoverHeader {
                 font-size: root.narrow ? 32px : 26px;
                 font-weight: 700;
                 color: #ffffff;
+                min-width: 0px;
+                height: self.preferred-height;
+                wrap: word-wrap;
             }
         }
 
@@ -316,7 +322,7 @@ component DiscoverHeader {
         // leaving big blanks above/below the count.
         if !root.results_open: HorizontalLayout {
             vertical-stretch: 0;
-            height: 36px;
+            min-height: 36px;
             spacing: 8px;
             alignment: start;
 
@@ -325,6 +331,9 @@ component DiscoverHeader {
                 font-size: 26px;
                 font-weight: 700;
                 color: #ffffff;
+                min-width: 0px;
+                height: self.preferred-height;
+                wrap: word-wrap;
             }
 
         }
@@ -450,11 +459,13 @@ component DiscoverGrid {
     in property <bool> loading: false;
     in property <string> empty_hint;
     in property <bool> stagger: false;
+    in property <bool> touch_menus: false;
 
     callback item_selected(string, int);
 
     VerticalLayout {
         width: 100%;
+        padding-top: 8px;
 
         // Centered: when cards hit max-card the grid is narrower than the
         // viewport and centers; when fluid it spans the full width and
@@ -497,7 +508,7 @@ component DiscoverGrid {
                     animate opacity { duration: Anim.transition_fade; delay: root.stagger ? parent.item_reveal_delay : 0ms; }
                     animate y { duration: Anim.transition_slide; delay: root.stagger ? parent.item_reveal_delay : 0ms; }
 
-                    Rectangle {
+                    lift := Rectangle {
                         width: 100%;
                         height: 100%;
                         background: #18181c;
@@ -505,7 +516,9 @@ component DiscoverGrid {
                         border-width: root.kb_active && root.kb_zone == 3 && root.kb_idx == i ? 2px : 0px;
                         border-color: #8b5cf6;
 
-                        y: touch.has-hover ? -6px : 0px;
+                        // Touch hover can remain latched after a scroll;
+                        // keep the lift exclusive to a released pointer.
+                        y: touch.has-hover && !touch.pressed && !root.touch_menus ? -6px : 0px;
                         animate y { duration: Anim.hover_lift; easing: ease-in-out; }
 
                         VerticalLayout {
@@ -550,6 +563,7 @@ component DiscoverGrid {
                                     text: card.year;
                                     color: #7a7a8c;
                                     font-size: 11px;
+                                    overflow: elide;
                                 }
                             }
                         }
@@ -614,6 +628,7 @@ component DiscoverGrid {
                 color: #8a8a9a;
                 horizontal-alignment: center;
                 wrap: word-wrap;
+                min-width: 0px;
             }
         }
     }
@@ -659,10 +674,11 @@ export component DiscoverPage {
     in property <int> min_cols: 2;
     // Left inset reserved by the wide-layout navigation rail (0 on narrow).
     property <length> rail_w: root.narrow ? 0px : NavMetrics.rail-width;
-    // The 36px below is the page's own 2 × 18px padding; `rail_w` is the
-    // column the rail takes out of that width.
-    property <int> cols: Math.max(root.min_cols, Math.floor((self.width - 36px - root.rail_w + root.item-gap) / (root.min-card + root.item-gap)));
-    property <length> item-width: Math.min(root.max-card, (self.width - 36px - root.rail_w - (root.cols - 1) * root.item-gap) / root.cols);
+    // The active ScrollView reports its measured width; it already clears
+    // page padding, the rail, cutouts and scroll chrome.
+    property <length> grid-width: Math.max(1px, root.sv_vw);
+    property <int> cols: Math.max(root.min_cols, Math.floor((root.grid-width + root.item-gap) / (root.min-card + root.item-gap)));
+    property <length> item-width: Math.max(1px, Math.min(root.max-card, (root.grid-width - (root.cols - 1) * root.item-gap) / root.cols));
 
     callback addon_picked(string);
     callback type_picked(string);
@@ -703,6 +719,7 @@ export component DiscoverPage {
     // Bottom system-bar inset (Android gesture/nav bar), for the bottom
     // tab bar. 0 on desktop/web.
     in property <length> safe-bottom: 0px;
+    in property <bool> touch_menus: false;
 
     // ---- 6-button keyboard nav (arrows + Enter + Backspace) ----
     // Zones: 0 page-nav (0 Home, 1 Discover, 2 Library, 3 Settings),
@@ -738,6 +755,7 @@ export component DiscoverPage {
     // Live metrics of whichever scroll is mounted (written by its
     // viewport handler; the keyboard follow-up reads only these because
     // page functions cannot touch ids inside the `if`-gated branches).
+    property <length> sv_vw: 0px;
     property <length> sv_vh: 0px;
     property <length> sv_vph: 0px;
     property <length> sv_grid_top: 0px;
@@ -1065,22 +1083,6 @@ export component DiscoverPage {
         }
     }
 
-    // One-shot restore: the page is recreated on return (bound kb
-    // props arrive pre-set, so no `changed` fires) — clamp + scroll
-    // to the focused card once layout is ready. The bound scroll
-    // offset restores the absolute position; the clamp guards
-    // shrunk content and follow is a no-op when already visible.
-    restore_t := Timer {
-        interval: 120ms;
-        running: true;
-        triggered => {
-            root.kb_clamp_idx();
-            root.kb_clamp_view();
-            root.kb_follow();
-            self.running = false;
-        }
-    }
-
     // Desktop: filter header pinned, only the grid scrolls (same tree
     // as before — header + grid region in a padded column).
     if !root.scroll_page: fix_col := VerticalLayout {
@@ -1142,6 +1144,9 @@ export component DiscoverPage {
             grid_scroll := ScrollView {
                 width: 100%;
                 height: 100%;
+                changed visible-width => { root.sv_vw = self.visible-width; }
+                changed visible-height => { root.sv_vh = self.visible-height; }
+                changed content-height => { root.sv_vph = self.content-height; }
                 // Touch devices scroll by dragging (there is no wheel):
                 // the fluent-style ScrollView disables drag-pan by
                 // default, so opt in explicitly.
@@ -1158,7 +1163,42 @@ export component DiscoverPage {
                 // silently froze scroll_y at 0 on touch devices. The init
                 // restores the persisted offset on page (re)creation; the
                 // changed handler keeps it truthful afterwards.
-                init => { self.content-y = root.display_scroll_y; }
+                property <length> want_y: root.display_scroll_y;
+                property <length> mirrored_y: 0px;
+                changed want_y => {
+                    // Keyboard/backend writes need to reach this gated
+                    // viewport. Ignore echoes of native scrolling so reading
+                    // the next inertia frame cannot cancel the animation.
+                    if (self.want_y != self.mirrored_y) {
+                        self.mirrored_y = self.want_y;
+                        self.content-y = self.want_y;
+                    }
+                }
+                init => {
+                    root.sv_vw = self.visible-width;
+                    root.sv_vh = self.visible-height;
+                    root.sv_vph = self.content-height;
+                    self.content-y = root.display_scroll_y;
+                    self.mirrored_y = self.content-y;
+                }
+                // Initial child/model bindings can settle after init without
+                // a geometry change notification. Sample the mounted viewport
+                // before restoring keyboard focus, including on scroll-mode
+                // swaps where the page itself is retained.
+                grid_restore_t := Timer {
+                    interval: 120ms;
+                    running: true;
+                    triggered => {
+                        root.sv_vw = grid_scroll.visible-width;
+                        root.sv_vh = grid_scroll.visible-height;
+                        root.sv_vph = grid_scroll.content-height;
+                        root.sv_grid_top = 8px;
+                        root.kb_clamp_idx();
+                        root.kb_clamp_view();
+                        root.kb_follow();
+                        self.running = false;
+                    }
+                }
                 // Preload + unload reporting (Bridge::visible_range): row
                 // stride follows the card height (see row_stride); the
                 // reported window already preloads ±2 rows above/below
@@ -1169,12 +1209,13 @@ export component DiscoverPage {
                 // >48 cards to avoid fetch churn.
                 property <int> reported_first: -1000000;
                 changed content-y => {
+                    self.mirrored_y = self.content-y;
                     root.set_display_scroll_y(self.content-y);
                     // Live metrics for the keyboard follow-up (page-level
                     // functions cannot read this gated scroll directly).
                     root.sv_vh = self.visible-height;
                     root.sv_vph = self.content-height;
-                    root.sv_grid_top = 0px;
+                    root.sv_grid_top = 8px;
                     // Near-bottom guard: content-y runs 0 (top) down to
                     // visible-height - content-height (bottom, negative), so
                     // remaining content below the viewport is
@@ -1185,10 +1226,9 @@ export component DiscoverPage {
                         root.load_more();
                     }
                     if (root.display_catalog.length > 0) {
-                        // The grid fills this scroll content from y=0 (no
-                        // header above it — the whole-page branch below
-                        // offsets by the header height instead).
-                        let first_row = Math.max(0, Math.floor(-self.content-y / root.row_stride));
+                        // Only the hover inset precedes this grid; the
+                        // whole-page branch also has its header above it.
+                        let first_row = Math.max(0, Math.floor((-self.content-y - 8px) / root.row_stride));
                         let vis_rows = Math.ceil(self.visible-height / root.row_stride);
                         let first_idx = Math.max(0, (first_row - 2) * root.cols);
                         let last_idx = Math.min(root.display_catalog.length - 1, (first_row + vis_rows + 2) * root.cols - 1);
@@ -1225,6 +1265,8 @@ export component DiscoverPage {
                     loading: root.display_loading;
                     empty_hint: root.display_empty_hint;
                     stagger: root.search_results_open && root.animate_search_results && Anim.enabled && Anim.transitions;
+                    touch_menus: root.touch_menus;
+                    init => { root.sv_grid_top = 8px; }
                     item_selected(id, i) => { root.item_selected(id, i); }
                 }
                 }
@@ -1274,6 +1316,9 @@ export component DiscoverPage {
         page_scroll := ScrollView {
             width: 100%;
             height: 100%;
+            changed visible-width => { root.sv_vw = self.visible-width; }
+            changed visible-height => { root.sv_vh = self.visible-height; }
+            changed content-height => { root.sv_vph = self.content-height; }
         // Touch devices scroll by dragging (there is no wheel):
         // the fluent-style ScrollView disables drag-pan by default,
         // so opt in explicitly.
@@ -1283,18 +1328,48 @@ export component DiscoverPage {
             self.content-y = root.display_scroll_y;
         }
         // One-way mirror, same pattern as the desktop grid scroll above.
-        init => { self.content-y = root.display_scroll_y; }
+        property <length> want_y: root.display_scroll_y;
+        property <length> mirrored_y: 0px;
+        changed want_y => {
+            if (self.want_y != self.mirrored_y) {
+                self.mirrored_y = self.want_y;
+                self.content-y = self.want_y;
+            }
+        }
+        init => {
+            root.sv_vw = self.visible-width;
+            root.sv_vh = self.visible-height;
+            root.sv_vph = self.content-height;
+            self.content-y = root.display_scroll_y;
+            self.mirrored_y = self.content-y;
+        }
+        // Same post-layout sampling as the pinned-grid branch above.
+        page_restore_t := Timer {
+            interval: 120ms;
+            running: true;
+            triggered => {
+                root.sv_vw = page_scroll.visible-width;
+                root.sv_vh = page_scroll.visible-height;
+                root.sv_vph = page_scroll.content-height;
+                root.sv_grid_top = and_grid.y + 8px;
+                root.kb_clamp_idx();
+                root.kb_clamp_view();
+                root.kb_follow();
+                self.running = false;
+            }
+        }
         // Preload + unload reporting (Bridge::visible_range): same
         // row_stride as above, but the grid starts below the filter
         // header, so its top edge offsets the row math.
         property <int> reported_first: -1000000;
         changed content-y => {
+            self.mirrored_y = self.content-y;
             root.set_display_scroll_y(self.content-y);
             // Live metrics for the keyboard follow-up (page-level
             // functions cannot read this gated scroll directly).
             root.sv_vh = self.visible-height;
             root.sv_vph = self.content-height;
-            // The active header mirrors its height into sv_grid_top below.
+            // The grid mirrors its actual origin, including the header gap.
             // Near-bottom guard (same as the desktop grid scroll above):
             // content-y is 0 at the top and
             // visible-height - content-height at the bottom.
@@ -1364,7 +1439,6 @@ export component DiscoverPage {
                 search_done => { nav_scope.focus(); }
                 filters_panned => { root.filters_panned(); }
                 filters_pan_released => { root.filters_pan_released(); }
-                changed height => { root.sv_grid_top = self.height; }
             }
 
             and_grid := DiscoverGrid {
@@ -1380,6 +1454,8 @@ export component DiscoverPage {
                 loading: root.display_loading;
                 empty_hint: root.display_empty_hint;
                 stagger: root.search_results_open && root.animate_search_results && Anim.enabled && Anim.transitions;
+                touch_menus: root.touch_menus;
+                changed y => { root.sv_grid_top = self.y + 8px; }
                 item_selected(id, i) => { root.item_selected(id, i); }
             }
         }

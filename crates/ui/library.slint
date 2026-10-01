@@ -39,10 +39,12 @@ export component LibraryPage {
     in property <int> min_cols: 2;
     // Left inset reserved by the wide-layout navigation rail (0 on narrow).
     property <length> rail_w: root.narrow ? 0px : NavMetrics.rail-width;
-    // The 36px below is the page's own 2 × 18px padding; `rail_w` is the
-    // column the rail takes out of that width.
-    property <int> cols: Math.max(root.min_cols, Math.floor((self.width - 36px - root.rail_w + root.item-gap) / (root.min-card + root.item-gap)));
-    property <length> item-width: Math.min(root.max-card, (self.width - 36px - root.rail_w - (root.cols - 1) * root.item-gap) / root.cols);
+    // Use the measured viewport: page padding, the rail, cutouts and scroll
+    // chrome have already taken their space out of it.
+    property <length> grid-width: Math.max(1px, lib_scroll.visible-width);
+    property <length> grid-top: 8px;
+    property <int> cols: Math.max(root.min_cols, Math.floor((root.grid-width + root.item-gap) / (root.min-card + root.item-gap)));
+    property <length> item-width: Math.max(1px, Math.min(root.max-card, (root.grid-width - (root.cols - 1) * root.item-gap) / root.cols));
 
     callback discover_picked();
     callback home_picked();
@@ -231,7 +233,7 @@ export component LibraryPage {
         if (!root.grid_ready) {
             return;
         }
-        let top = Math.floor(root.kb_idx / root.cols) * root.row_stride;
+        let top = root.grid-top + Math.floor(root.kb_idx / root.cols) * root.row_stride;
         let bot = top + root.row_stride;
         let vy = lib_scroll.content-y;
         let vh = lib_scroll.visible-height;
@@ -267,7 +269,7 @@ export component LibraryPage {
         if (!root.grid_ready) {
             return;
         }
-        let top = Math.floor(root.kb_idx / root.cols) * root.row_stride;
+        let top = root.grid-top + Math.floor(root.kb_idx / root.cols) * root.row_stride;
         let bot = top + root.row_stride;
         let vy = lib_scroll.content-y;
         let vh = lib_scroll.visible-height;
@@ -343,8 +345,9 @@ export component LibraryPage {
             padding-top: 18px + safe-top;
             spacing: 12px;
 
-            HorizontalLayout {
+            library_heading := HorizontalLayout {
                 vertical-stretch: 0;
+                min-height: 36px;
                 spacing: 8px;
                 alignment: start;
 
@@ -353,6 +356,11 @@ export component LibraryPage {
                     font-size: 26px;
                     font-weight: 700;
                     color: #ffffff;
+                    min-width: 0px;
+                    max-width: self.preferred-width;
+                    horizontal-stretch: 1;
+                    height: self.preferred-height;
+                    wrap: word-wrap;
                 }
 
                 Text {
@@ -449,6 +457,7 @@ export component LibraryPage {
                     color: #8a8a9a;
                     horizontal-alignment: center;
                     wrap: word-wrap;
+                    min-width: 0px;
                     max-width: 560px;
                 }
             }
@@ -503,7 +512,7 @@ export component LibraryPage {
                     changed content-y => {
                         root.scroll_y = self.content-y;
                         if (root.library.length > 0) {
-                            let first_row = Math.max(0, Math.floor(-self.content-y / root.row_stride));
+                            let first_row = Math.max(0, Math.floor((-self.content-y - root.grid-top) / root.row_stride));
                             let vis_rows = Math.ceil(self.visible-height / root.row_stride);
                             let first_idx = Math.max(0, (first_row - 2) * root.cols);
                             let last_idx = Math.min(root.library.length - 1, (first_row + vis_rows + 2) * root.cols - 1);
@@ -522,9 +531,12 @@ export component LibraryPage {
                     // the full width and the centering is a no-op.
                     HorizontalLayout {
                         width: 100%;
+                        // Keep the first row's pointer hover lift inside the
+                        // ScrollView's clip, just like Home's landing rails.
+                        padding-top: root.grid-top;
                         alignment: center;
 
-                    GridLayout {
+                    library_grid := GridLayout {
                         // Exact content width so centering above has an effect.
                         width: root.cols * (root.item-width + root.item-gap) - root.item-gap;
                         spacing: root.item-gap;
@@ -633,7 +645,7 @@ export component LibraryPage {
                                 }
                             }
 
-                            Rectangle {
+                            library_lift := Rectangle {
                                 width: 100%;
                                 height: 100%;
                                 background: #18181c;
@@ -641,7 +653,9 @@ export component LibraryPage {
                                 border-width: root.kb_active && root.kb_zone == 2 && root.kb_idx == i ? 2px : 0px;
                                 border-color: #8b5cf6;
 
-                                y: touch_lib.has-hover ? -6px : 0px;
+                                // A delayed touch press can strand has-hover.
+                                // Match Home: only a released pointer lifts.
+                                y: touch_lib.has-hover && !touch_lib.pressed && !root.touch_menus ? -6px : 0px;
                                 animate y { duration: Anim.hover_lift; easing: ease-in-out; }
 
                                 VerticalLayout {
@@ -706,6 +720,7 @@ export component LibraryPage {
                                             text: card.year;
                                             color: #7a7a8c;
                                             font-size: 11px;
+                                            overflow: elide;
                                         }
 
                                         if card.badge != "": Text {

@@ -8,11 +8,11 @@
 //! derives and it cannot scroll).
 
 use slint::{ComponentHandle, LogicalPosition, SharedString, VecModel};
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::rc::Rc;
 
-fn after(ms: u64, body: impl FnOnce() + 'static) {
-    slint::Timer::single_shot(std::time::Duration::from_millis(ms), body);
+fn idle(ms: u64) {
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(ms));
 }
 
 fn press(app: &nova::AppWindow, position: LogicalPosition) {
@@ -64,13 +64,14 @@ fn find_landing_card(app: &nova::AppWindow) -> Option<i_slint_backend_testing::E
 
 #[test]
 fn carousels_render_headers_open_subpages_and_subpage_scrolls() {
-    i_slint_backend_testing::init_integration_test_with_system_time();
+    i_slint_backend_testing::init_integration_test_with_mock_time();
 
     let app = nova::AppWindow::new().unwrap();
     app.window().set_size(slint::PhysicalSize::new(360, 800));
     app.window().show().unwrap();
     app.set_show_home(true);
     app.set_home_view(0);
+    app.set_touch_menus(true);
 
     let cont: Vec<nova::ContinueRow> = (0..10)
         .map(|i| nova::ContinueRow {
@@ -97,154 +98,71 @@ fn carousels_render_headers_open_subpages_and_subpage_scrolls() {
     app.set_home_continue(Rc::new(VecModel::from(cont)).into());
     app.set_home_upcoming(Rc::new(VecModel::from(up)).into());
 
-    let failures: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
-    let fail = |failures: &Rc<RefCell<Vec<String>>>, cond: bool, msg: &str| {
-        if !cond {
-            failures.borrow_mut().push(msg.to_string());
-        }
-    };
-
     // Count card picks. The test drives AppWindow directly, so wire the
     // generated callbacks instead of the real app's detail-opening path.
-    let picks: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let picks = Rc::new(Cell::new(0));
     {
         let picks = picks.clone();
-        app.on_continue_picked(move |i| picks.borrow_mut().push(format!("c{i}")));
+        app.on_continue_picked(move |_| picks.set(picks.get() + 1));
     }
     {
         let picks = picks.clone();
-        app.on_upcoming_picked(move |i| picks.borrow_mut().push(format!("u{i}")));
+        app.on_upcoming_picked(move |_| picks.set(picks.get() + 1));
     }
 
-    let app1 = app.as_weak();
-    let failures1 = failures.clone();
-    let picks1 = picks.clone();
-    after(300, move || {
-        let app = app1.upgrade().unwrap();
-
-        // ---- Landing: a horizontal drag scrolls, does not open ----
-        let Some(card) = find_landing_card(&app) else {
-            fail(&failures1, false, "DIAG: no visible landing carousel card");
-            slint::quit_event_loop().unwrap();
-            return;
-        };
-        let c = center(&card);
-        press(&app, c);
-        for dx in [10.0, 30.0, 60.0, 90.0, 120.0] {
-            moved(&app, LogicalPosition::new(c.x - dx, c.y));
-        }
-        release(&app, LogicalPosition::new(c.x - 120.0, c.y));
-        fail(
-            &failures1,
-            app.get_home_continue_x() < 0.0,
-            "dragging a landing card must scroll the carousel",
-        );
-        fail(
-            &failures1,
-            picks1.borrow().is_empty(),
-            "a horizontal drag must not open a card",
-        );
-        // The rail is driven by hand (no Flickable momentum), so a flick must
-        // coast on by itself after the release.
-        let at_release = app.get_home_continue_x();
-
-        let app2 = app.as_weak();
-        let failures2 = failures1.clone();
-        let picks2 = picks1.clone();
-        after(150, move || {
-            let app = app2.upgrade().unwrap();
-            fail(
-                &failures2,
-                app.get_home_continue_x() < at_release,
-                "a released flick must coast on (touch inertia)",
-            );
-
-            // ---- Landing: a stationary tap opens the card ----
-            match find_landing_card(&app) {
-                Some(card) => {
-                    let c = center(&card);
-                    press(&app, c);
-                    release(&app, c);
-                }
-                None => fail(&failures2, false, "DIAG: no card for the tap phase"),
-            }
-            fail(
-                &failures2,
-                picks2.borrow().len() == 1,
-                "a tap on a landing card must open it exactly once",
-            );
-
-            // ---- Header opens the subpage (existing behaviour) ----
-            let failures3 = failures2.clone();
-            slint::spawn_local(async move {
-                let Some(header) =
-                    i_slint_backend_testing::ElementHandle::find_by_element_type_name(
-                        &app,
-                        "SectionHeader",
-                    )
-                    .next()
-                else {
-                    fail(&failures3, false, "DIAG: no SectionHeader found");
-                    slint::quit_event_loop().unwrap();
-                    return;
-                };
-                let app4 = app.as_weak();
-                let failures4 = failures3.clone();
-                slint::spawn_local(async move {
-                    header
-                        .single_click(slint::platform::PointerEventButton::Left)
-                        .await;
-                    after(400, move || {
-                        let app = app4.upgrade().unwrap();
-                        fail(
-                            &failures4,
-                            app.get_home_view() == 1,
-                            "tapping the Continue header must open its subpage",
-                        );
-
-                        // The subpage grid must scroll: drag a visible grid card up.
-                        let cards: Vec<_> =
-                            i_slint_backend_testing::ElementHandle::find_by_element_type_name(
-                                &app,
-                                "ContinueCard",
-                            )
-                            .collect();
-                        let sub = cards.iter().find(|c| {
-                            let p = c.absolute_position();
-                            // Grid cards are wider than carousel cards; on-screen.
-                            c.size().width > 140.0 && p.x >= 20.0 && p.y > 60.0 && p.y < 600.0
-                        });
-                        match sub {
-                            Some(card) => {
-                                let c = center(card);
-                                press(&app, c);
-                                for dy in [10.0, 30.0, 60.0, 90.0, 120.0] {
-                                    moved(&app, LogicalPosition::new(c.x, c.y - dy));
-                                }
-                                release(&app, LogicalPosition::new(c.x, c.y - 120.0));
-                                fail(
-                                    &failures4,
-                                    app.get_home_all_scroll_y() != 0.0,
-                                    "subpage grid must scroll vertically",
-                                );
-                            }
-                            None => fail(&failures4, false, "DIAG: no visible subpage card"),
-                        }
-                        slint::quit_event_loop().unwrap();
-                    });
-                })
-                .unwrap();
-            })
-            .unwrap();
-        });
-    });
-
-    slint::run_event_loop().unwrap();
-
-    let failures = failures.borrow();
+    idle(400);
+    let card = find_landing_card(&app).expect("visible landing carousel card");
+    let c = center(&card);
+    press(&app, c);
+    idle(120);
+    // Native inertia samples elapsed time; a burst of moves in one tick
+    // is a position change, not a measurable flick.
+    for dx in [10.0, 30.0, 60.0, 90.0, 120.0] {
+        moved(&app, LogicalPosition::new(c.x - dx, c.y));
+        idle(20);
+    }
+    release(&app, LogicalPosition::new(c.x - 120.0, c.y));
+    let at_release = app.get_home_continue_x();
+    assert!(at_release < 0.0, "dragging must scroll the carousel");
+    assert_eq!(picks.get(), 0, "a horizontal drag must not open a card");
+    idle(150);
     assert!(
-        failures.is_empty(),
-        "home carousel failures:\n  {}",
-        failures.join("\n  ")
+        app.get_home_continue_x() < at_release,
+        "a released flick must coast on"
+    );
+
+    let c = center(&find_landing_card(&app).expect("card for tap phase"));
+    press(&app, c);
+    release(&app, c);
+    assert_eq!(picks.get(), 1, "a tap must open the card exactly once");
+
+    let header =
+        i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app, "SectionHeader")
+            .next()
+            .expect("Continue header");
+    let c = center(&header);
+    press(&app, c);
+    release(&app, c);
+    idle(400);
+    assert_eq!(app.get_home_view(), 1, "header must open its subpage");
+
+    let sub =
+        i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app, "ContinueCard")
+            .find(|c| {
+                let p = c.absolute_position();
+                c.size().width > 140.0 && p.x >= 18.0 && p.y > 60.0 && p.y < 600.0
+            })
+            .expect("visible subpage card");
+    let c = center(&sub);
+    press(&app, c);
+    idle(120);
+    for dy in [10.0, 30.0, 60.0, 90.0, 120.0] {
+        moved(&app, LogicalPosition::new(c.x, c.y - dy));
+        idle(20);
+    }
+    release(&app, LogicalPosition::new(c.x, c.y - 120.0));
+    assert!(
+        app.get_home_all_scroll_y() < 0.0,
+        "subpage grid must scroll vertically"
     );
 }

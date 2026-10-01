@@ -231,11 +231,15 @@ fn upcoming_calendar_toggles_picks_days_and_resolves_indices() {
                 .iter()
                 .map(|c| c.absolute_position().y)
                 .fold(f32::MAX, f32::min);
+            let weekday = ElementHandle::find_by_accessible_label(&app, "Mon")
+                .next()
+                .expect("weekday label");
+            let weekday_bottom = weekday.absolute_position().y + weekday.size().height;
             fail(
                 &failures2,
-                first_y < 165.0,
+                first_y >= weekday_bottom && first_y - weekday_bottom <= 16.0,
                 &format!(
-                    "first date row too low ({first_y:.1}) — slack distributed into the bands"
+                    "first date row too far below weekdays ({weekday_bottom:.1} -> {first_y:.1}) — slack distributed into the bands"
                 ),
             );
             let cards = ElementHandle::find_by_element_type_name(&app, "UpcomingCard")

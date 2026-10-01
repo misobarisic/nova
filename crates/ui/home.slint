@@ -10,7 +10,8 @@ import { IcChevronLeft, IcChevronRight, IcPlay, IcInfo, IcStarBorder, IcSchedule
 // only when the card offers the next episode of a series still being
 // watched (a resume already has the progress rail).
 component NextUpBadge inherits Rectangle {
-    width: badge_lbl.preferred-width + 16px;
+    in property <length> available-width;
+    width: Math.min(root.available-width, badge_lbl.preferred-width + 16px);
     height: 22px;
     border-radius: 8px;
     background: #8b5cf6;
@@ -20,6 +21,8 @@ component NextUpBadge inherits Rectangle {
         font-size: 11px;
         font-weight: 700;
         color: #ffffff;
+        width: Math.max(0px, root.width - 16px);
+        overflow: elide;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
     }
@@ -28,7 +31,8 @@ component NextUpBadge inherits Rectangle {
 // Small "New Episode" pill, same slot: shown when everything else dated and
 // released is already watched, so the offered episode is new.
 component NewEpisodeBadge inherits Rectangle {
-    width: badge_lbl.preferred-width + 16px;
+    in property <length> available-width;
+    width: Math.min(root.available-width, badge_lbl.preferred-width + 16px);
     height: 22px;
     border-radius: 8px;
     background: #8b5cf6;
@@ -38,6 +42,8 @@ component NewEpisodeBadge inherits Rectangle {
         font-size: 11px;
         font-weight: 700;
         color: #ffffff;
+        width: Math.max(0px, root.width - 16px);
+        overflow: elide;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
     }
@@ -58,6 +64,9 @@ component ContinueCard inherits Rectangle {
     in property <bool> rail-gesture: false;
     callback pan_hint();
     callback pan_release();
+    // A rail can capture the first move before delivering an axis hint.
+    // Clear keyboard modality on the press so a later rebuild keeps its pan.
+    callback pointer_pressed();
     // On touch surfaces a stationary hold (or a mouse right-click) opens the
     // page-level sheet, exactly like a My Library card. Desktop opens the
     // native popup below instead.
@@ -141,6 +150,7 @@ component ContinueCard inherits Rectangle {
             mouse-cursor: pointer;
             pointer-event(ev) => {
                 if (ev.kind == PointerEventKind.down) {
+                    root.pointer_pressed();
                     touch.hint_x = touch.mouse-x;
                     touch.hint_y = touch.mouse-y;
                     touch.hint_live = true;
@@ -263,10 +273,12 @@ component ContinueCard inherits Rectangle {
                     // Episode" when everything else is already watched.
                     // Resumes (badge 0) show the progress rail instead.
                     if root.entry.badge == 1: NextUpBadge {
+                        available-width: Math.max(0px, parent.width - 12px);
                         x: parent.width - self.width - 6px;
                         y: 6px;
                     }
                     if root.entry.badge == 2: NewEpisodeBadge {
+                        available-width: Math.max(0px, parent.width - 12px);
                         x: parent.width - self.width - 6px;
                         y: 6px;
                     }
@@ -326,6 +338,7 @@ component UpcomingCard inherits Rectangle {
     in property <bool> rail-gesture: false;
     callback pan_hint();
     callback pan_release();
+    callback pointer_pressed();
     // See ContinueCard: touch platforms have no hover, and `has-hover` can
     // latch under a finger, so pointer-only flourishes (the lift below) are off
     // there.
@@ -366,6 +379,7 @@ component UpcomingCard inherits Rectangle {
             mouse-cursor: pointer;
             pointer-event(ev) => {
                 if (ev.kind == PointerEventKind.down) {
+                    root.pointer_pressed();
                     touch.hint_x = touch.mouse-x;
                     touch.hint_y = touch.mouse-y;
                     touch.hint_live = true;
@@ -487,12 +501,13 @@ component SectionHeader inherits Rectangle {
     in property <int> count;
     callback open_all();
 
-    height: 36px;
+    height: Math.max(36px, header_layout.preferred-height);
+    vertical-stretch: 0;
     border-radius: 8px;
     background: header_touch.has-hover ? #ffffff0a : transparent;
     animate background { duration: Anim.hover_fast; }
 
-    HorizontalLayout {
+    header_layout := HorizontalLayout {
         padding-left: 4px;
         padding-right: 4px;
         spacing: 8px;
@@ -503,6 +518,11 @@ component SectionHeader inherits Rectangle {
             font-size: 26px;
             font-weight: 700;
             color: #ffffff;
+            min-width: 0px;
+            max-width: self.preferred-width;
+            horizontal-stretch: 1;
+            height: self.preferred-height;
+            wrap: word-wrap;
         }
 
         Text {
@@ -679,6 +699,8 @@ component FeaturedActionButton inherits Rectangle {
             font-weight: 700;
             color: #f4f4f5;
             vertical-alignment: center;
+            min-width: 0px;
+            overflow: elide;
         }
     }
     action_touch := TouchArea {
@@ -691,9 +713,10 @@ component FeaturedActionButton inherits Rectangle {
     }
 }
 
-component FeaturedActions inherits HorizontalLayout {
+component FeaturedActions inherits Rectangle {
     in property <bool> narrow;
     in property <bool> compact;
+    in property <length> available-width: 100000px;
     callback picked();
     callback watch_now();
 
@@ -701,19 +724,25 @@ component FeaturedActions inherits HorizontalLayout {
     // for the longer translated Details label on a portrait phone.
     property <length> narrow_button_width: Math.max(details_button.content_width, watch_button.content_width)
         + (root.compact ? 24px : 28px);
-    width: details_button.width + watch_button.width + 12px;
-    height: root.narrow ? 46px : 54px;
-    spacing: 12px;
+    property <length> details_width: root.narrow ? root.narrow_button_width : details_button.content_width + (root.compact ? 24px : 40px);
+    property <length> watch_width: root.narrow ? root.narrow_button_width : watch_button.content_width + (root.compact ? 24px : 40px);
+    property <bool> stacked: root.narrow && root.details_width + root.watch_width + 12px > root.available-width;
+    width: Math.min(root.available-width, root.stacked ? root.narrow_button_width : root.details_width + root.watch_width + 12px);
+    height: root.stacked ? 104px : (root.narrow ? 46px : 54px);
 
     details_button := FeaturedActionButton {
-        width: root.narrow ? root.narrow_button_width : self.content_width + (root.compact ? 24px : 40px);
+        x: 0px;
+        y: 0px;
+        width: Math.min(root.width, root.details_width);
         label: @tr("DETAILS");
         narrow: root.narrow;
         compact: root.compact;
         picked => { root.picked(); }
     }
     watch_button := FeaturedActionButton {
-        width: root.narrow ? root.narrow_button_width : self.content_width + (root.compact ? 24px : 40px);
+        x: root.stacked ? 0px : details_button.width + 12px;
+        y: root.stacked ? 58px : 0px;
+        width: Math.min(root.width, root.watch_width);
         label: @tr("WATCH NOW");
         play: true;
         narrow: root.narrow;
@@ -728,7 +757,12 @@ component FeaturedBadge inherits Rectangle {
     in property <int> icon;
     in property <bool> narrow;
 
-    width: badge_label.preferred-width + 22px + (root.icon == 0 ? 0px : 21px);
+    // Let the metadata row shrink only when the combined natural widths do
+    // not fit. An equal per-badge cap needlessly elides longer runtime labels.
+    preferred-width: badge_label.preferred-width + 22px + (root.icon == 0 ? 0px : 21px);
+    min-width: 22px + (root.icon == 0 ? 0px : 21px);
+    max-width: self.preferred-width;
+    horizontal-stretch: 1;
     height: root.narrow ? 30px : 32px;
     border-radius: self.height / 2;
     background: #00000055;
@@ -763,6 +797,8 @@ component FeaturedBadge inherits Rectangle {
             font-weight: 600;
             color: #ededee;
             vertical-alignment: center;
+            min-width: 0px;
+            overflow: elide;
         }
     }
 }
@@ -861,6 +897,7 @@ component FeaturedCaption inherits VerticalLayout {
         horizontal-alignment: center;
         wrap: word-wrap;
         overflow: elide;
+        min-width: 0px;
     }
     if !root.narrow && root.slide.description != "": Text {
         text: root.slide.description;
@@ -872,6 +909,7 @@ component FeaturedCaption inherits VerticalLayout {
         horizontal-alignment: center;
         wrap: word-wrap;
         overflow: elide;
+        min-width: 0px;
     }
 }
 
@@ -942,12 +980,14 @@ component FeaturedShowcase inherits Rectangle {
         }
         // Rapid steps retarget the incoming layer without resetting opacity
         // or replacing the outgoing layer in the middle of its fade.
-        root.displayed_slide = incoming;
+        // Compare before assigning: Slint's Rust generator moves this local
+        // struct into the property, so reading its fields afterward fails AOT.
         root.fade_text = root.previous_slide.title != incoming.title
             || root.previous_slide.media_type != incoming.media_type
             || root.previous_slide.rating != incoming.rating
             || root.previous_slide.runtime != incoming.runtime
             || root.previous_slide.description != incoming.description;
+        root.displayed_slide = incoming;
     }
 
     init => { root.sync_slide(); }
@@ -972,8 +1012,12 @@ component FeaturedShowcase inherits Rectangle {
     }
 
     width: 100%;
+    // Stacked translated actions and wrapped captions need real room. Reserve
+    // the counter band above them, including the taller outgoing fade layer.
     height: root.narrow
-        ? Math.min(480px, Math.max(300px, root.width * 0.73))
+        ? Math.max(Math.min(480px, Math.max(300px, root.width * 0.73)),
+            Math.max(current_caption.height, root.fading ? previous_caption.height : 0px)
+                + narrow_actions.height + 32px + (root.count > 1 ? 78px : 20px))
         : Math.min(560px, Math.max(380px, root.width * 0.276));
     border-radius: root.narrow ? 10px : 8px;
     clip: true;
@@ -1122,27 +1166,29 @@ component FeaturedShowcase inherits Rectangle {
 
     // Each caption keeps its own wrapping/height while fading; the narrow
     // action pills are anchored separately, below both caption layers.
-    FeaturedCaption {
+    previous_caption := FeaturedCaption {
         slide: root.previous_slide;
         narrow: root.narrow;
         banner_width: root.width;
         x: root.narrow ? 16px : 18px;
-        y: root.height - self.height - (root.narrow ? 78px : 22px);
+        y: root.height - self.height - (root.narrow ? narrow_actions.height + 32px : 22px);
         width: root.narrow ? root.width - 32px : Math.min(root.width * 0.51, wide_actions.x - 36px);
         opacity: root.fading && root.fade_text ? 1.0 - root.mix : 0.0;
     }
-    FeaturedCaption {
+    current_caption := FeaturedCaption {
         slide: root.displayed_slide;
         narrow: root.narrow;
         banner_width: root.width;
         x: root.narrow ? 16px : 18px;
-        y: root.height - self.height - (root.narrow ? 78px : 22px);
+        y: root.height - self.height - (root.narrow ? narrow_actions.height + 32px : 22px);
         width: root.narrow ? root.width - 32px : Math.min(root.width * 0.51, wide_actions.x - 36px);
         opacity: root.fading && root.fade_text ? root.mix : 1.0;
     }
-    if root.narrow: FeaturedActions {
+    narrow_actions := FeaturedActions {
+        visible: root.narrow;
         narrow: true;
         compact: root.width < 400px;
+        available-width: Math.max(0px, root.width - 32px);
         x: (root.width - self.width) / 2;
         y: root.height - self.height - 20px;
         picked => { root.picked(); }
@@ -1200,29 +1246,23 @@ export component HomePage {
     in property <int> min_cols: 2;
     // Left inset reserved by the wide-layout navigation rail (0 on narrow).
     property <length> rail_w: root.narrow ? 0px : NavMetrics.rail-width;
-    // The 36px below is the page's own 2 × 18px padding; `rail_w` is the
-    // column the rail takes out of that width.
-    property <int> grid_cols: Math.max(root.min_cols, Math.floor((self.width - 36px - root.rail_w + root.item-gap) / (root.min-card + root.item-gap)));
-    property <length> grid_item_width: Math.min(root.max-card, (self.width - 36px - root.rail_w - (root.grid_cols - 1) * root.item-gap) / root.grid_cols);
+    // Use the measured scroll viewport so cutouts and scroll chrome cannot
+    // leave the last column wider than the space it actually occupies.
+    property <length> grid_width: Math.max(1px, sub_scroll.visible-width);
+    property <length> grid_top: 8px;
+    property <int> grid_cols: Math.max(root.min_cols, Math.floor((root.grid_width + root.item-gap) / (root.min-card + root.item-gap)));
+    property <length> grid_item_width: Math.max(1px, Math.min(root.max-card, (root.grid_width - (root.grid_cols - 1) * root.item-gap) / root.grid_cols));
     // Landing carousel card: ~2.5 cards across on narrow (Android), the
     // grid card elsewhere.
     property <length> rail_item_width: root.narrow
-        ? Math.max(96px, (self.width - 36px + root.item-gap) / 2.5 - root.item-gap)
+        ? Math.max(96px, (land_scroll.width + root.item-gap) / 2.5 - root.item-gap)
         : root.grid_item_width;
     property <length> rail_h: root.rail_item_width * 3 / 2 + 76px;
     property <length> rail_h_up: root.rail_item_width * 3 / 2 + 88px;
-    property <length> featured_width: self.width - 36px - root.rail_w - root.safe-left - root.safe-right;
-    property <length> featured_h: root.featured_count > 0
-        ? (root.narrow
-            ? Math.min(480px, Math.max(300px, root.featured_width * 0.73))
-            : Math.min(560px, Math.max(380px, root.featured_width * 0.276))) + 12px
-        : 0px;
-    // Approximate landing section heights for keyboard follow (header +
-    // divider + carousel + spacing).
-    property <length> cont_section_h: root.continue_rows.length > 0
-        ? (36px + 1px + root.rail_h + 8px + 12px) : 0px;
-    property <length> up_section_h: root.upcoming_rows.length > 0
-        ? (36px + 1px + root.rail_h_up + 8px + 12px) : 0px;
+    // Conditional headers report their actual positions; wrapped headings
+    // and a taller showcase must not invalidate keyboard scroll estimates.
+    property <length> continue_top: 0px;
+    property <length> upcoming_top: 0px;
     // Stagger only when transitions are on, so disabling animations makes
     // the cards appear at once (no per-card delay left running).
     property <bool> stagger: Anim.enabled && Anim.transitions;
@@ -1239,6 +1279,11 @@ export component HomePage {
     function rail_pan_released() {
         root.page_pan_enabled = true;
         rail_pan_release_t.stop();
+    }
+
+    function toggle_calendar() {
+        if (root.cal_open) { root.upcoming_cal_close(); }
+        else { root.upcoming_cal_open(); }
     }
 
     function restart_showcase_rotation() {
@@ -1533,12 +1578,12 @@ export component HomePage {
             let cw = root.rail_item_width;
             let x = root.kb_idx * (cw + root.item-gap);
             rail_continue.content-x = root.rail_show(rail_continue.content-x, x, cw, rail_continue.width, rail_continue.content-width);
-            root.kb_scroll_to(root.featured_h, root.featured_h + root.cont_section_h);
+            root.kb_scroll_to(root.continue_top, continue_rail_host.y + continue_rail_host.height);
         } else if (root.kb_zone == 2 && root.upcoming_rows.length > 0) {
             let cw = root.rail_item_width;
             let x = root.kb_up_idx * (cw + root.item-gap);
             rail_upcoming.content-x = root.rail_show(rail_upcoming.content-x, x, cw, rail_upcoming.width, rail_upcoming.content-width);
-            root.kb_scroll_to(root.featured_h + root.cont_section_h, root.featured_h + root.cont_section_h + root.up_section_h);
+            root.kb_scroll_to(root.upcoming_top, upcoming_rail_host.y + upcoming_rail_host.height);
         }
     }
 
@@ -1564,9 +1609,10 @@ export component HomePage {
             return;
         }
         let stride = root.view == 2 ? root.row_stride_up : root.row_stride;
-        let top = Math.floor(root.kb_idx / root.grid_cols) * stride;
-        // +56px: the subpage's back header + divider.
-        root.kb_scroll_sub(top + 56px, top + stride + 56px);
+        let top = root.grid_top + Math.floor(root.kb_idx / root.grid_cols) * stride;
+        // The back bar is outside this viewport; only the hover inset belongs
+        // to the scroll content before the first row.
+        root.kb_scroll_sub(top, top + stride);
     }
 
     function kb_scroll_to(top: length, bot: length) {
@@ -1819,6 +1865,7 @@ export component HomePage {
                             if root.continue_rows.length > 0: SectionHeader {
                                 title: @tr("Continue Watching");
                                 count: root.continue_rows.length;
+                                changed y => { root.continue_top = self.y; }
                                 open_all => { root.open_subpage(1); }
                             }
 
@@ -1828,7 +1875,7 @@ export component HomePage {
                             // dragging and native momentum, like the stream
                             // filter pills. Cards report early axis hints so
                             // the vertical page does not steal the gesture.
-                            Rectangle {
+                            continue_rail_host := Rectangle {
                                 visible: root.continue_rows.length > 0;
                                 width: 100%;
                                 height: root.rail_h + 8px;
@@ -1859,6 +1906,7 @@ export component HomePage {
                                             rail-gesture: root.view == 0;
                                             touch_menus: root.touch_menus;
                                             focused: root.kb_active && root.kb_zone == 1 && root.kb_idx == i;
+                                            pointer_pressed => { root.kb_active = false; }
                                             picked => {
                                                 root.kb_active = false;
                                                 root.kb_zone = 1;
@@ -1884,12 +1932,13 @@ export component HomePage {
                             if root.upcoming_rows.length > 0: SectionHeader {
                                 title: @tr("Upcoming");
                                 count: root.upcoming_rows.length;
+                                changed y => { root.upcoming_top = self.y; }
                                 open_all => { root.open_subpage(2); }
                             }
 
                             if root.upcoming_rows.length > 0: Rectangle { height: 1px; background: #23232b; }
 
-                            Rectangle {
+                            upcoming_rail_host := Rectangle {
                                 visible: root.upcoming_rows.length > 0;
                                 width: 100%;
                                 height: root.rail_h_up + 8px;
@@ -1920,6 +1969,7 @@ export component HomePage {
                                             rail-gesture: root.view == 0;
                                             touch_menus: root.touch_menus;
                                             focused: root.kb_active && root.kb_zone == 2 && root.kb_up_idx == i;
+                                            pointer_pressed => { root.kb_active = false; }
                                             picked => {
                                                 root.kb_active = false;
                                                 root.kb_zone = 2;
@@ -1955,9 +2005,9 @@ export component HomePage {
                         spacing: 12px;
 
                         // Back bar: returns to the landing (Backspace too).
-                        HorizontalLayout {
+                        sub_heading := HorizontalLayout {
                             vertical-stretch: 0;
-                            height: 36px;
+                            min-height: 36px;
                             spacing: 10px;
                             alignment: start;
 
@@ -1999,6 +2049,11 @@ export component HomePage {
                                 font-weight: 700;
                                 color: #ffffff;
                                 vertical-alignment: center;
+                                min-width: 0px;
+                                max-width: self.preferred-width;
+                                horizontal-stretch: 1;
+                                height: self.preferred-height;
+                                wrap: word-wrap;
                             }
 
                             Text {
@@ -2013,15 +2068,21 @@ export component HomePage {
 
                             // Upcoming only: the episode grid ⇄ month calendar
                             // switch. The button reads what it opens to.
-                            if root.view == 2: CalToggle {
+                            if root.view == 2 && !root.narrow: CalToggle {
                                 open: root.cal_open;
-                                toggled => {
-                                    if (root.cal_open) {
-                                        root.upcoming_cal_close();
-                                    } else {
-                                        root.upcoming_cal_open();
-                                    }
-                                }
+                                toggled => { root.toggle_calendar(); }
+                            }
+                        }
+
+                        // A separate touch row keeps Calendar/List reachable
+                        // even while the translated heading wraps.
+                        if root.view == 2 && root.narrow: HorizontalLayout {
+                            height: 36px;
+                            vertical-stretch: 0;
+                            alignment: end;
+                            CalToggle {
+                                open: root.cal_open;
+                                toggled => { root.toggle_calendar(); }
                             }
                         }
 
@@ -2048,6 +2109,7 @@ export component HomePage {
                                 // the view-gated grids.
                                 VerticalLayout {
                                     width: 100%;
+                                    padding-top: root.grid_top;
                                     spacing: 12px;
 
                                     // ---- All Continue Watching ------
@@ -2059,7 +2121,7 @@ export component HomePage {
                                             width: 100%;
                                             alignment: center;
 
-                                            GridLayout {
+                                            continue_grid := GridLayout {
                                                 // Exact content width so centering above has an effect.
                                                 width: root.grid_cols * (root.grid_item_width + root.item-gap) - root.item-gap;
                                                 spacing: root.item-gap;
@@ -2074,6 +2136,7 @@ export component HomePage {
                                                     focused: root.kb_active && root.kb_zone == 1 && root.kb_idx == i;
                                                     reveal: root.sub_revealed;
                                                     reveal-delay: root.stagger ? i * 30ms : 0ms;
+                                                    pointer_pressed => { root.kb_active = false; }
                                                     picked => {
                                                         root.kb_active = false;
                                                         root.kb_zone = 1;
@@ -2107,7 +2170,7 @@ export component HomePage {
                                             width: 100%;
                                             alignment: center;
 
-                                            GridLayout {
+                                            upcoming_grid := GridLayout {
                                                 width: root.grid_cols * (root.grid_item_width + root.item_gap) - root.item-gap;
                                                 spacing: root.item-gap;
 
@@ -2121,6 +2184,7 @@ export component HomePage {
                                                     focused: root.kb_active && root.kb_zone == 1 && root.kb_idx == i;
                                                     reveal: root.sub_revealed;
                                                     reveal-delay: root.stagger ? i * 30ms : 0ms;
+                                                    pointer_pressed => { root.kb_active = false; }
                                                     picked => {
                                                         root.kb_active = false;
                                                         root.kb_zone = 1;
@@ -2251,7 +2315,7 @@ export component HomePage {
                                             width: 100%;
                                             alignment: center;
 
-                                            GridLayout {
+                                            calendar_day_grid := GridLayout {
                                                 width: root.grid_cols * (root.grid_item_width + root.item-gap) - root.item-gap;
                                                 spacing: root.item-gap;
 
@@ -2263,6 +2327,7 @@ export component HomePage {
                                                     card-width: root.grid_item_width;
                                                     touch_menus: root.touch_menus;
                                                     reveal: root.sub_revealed;
+                                                    pointer_pressed => { root.kb_active = false; }
                                                     picked => {
                                                         root.kb_active = false;
                                                         root.upcoming_picked(u.index);
