@@ -667,6 +667,9 @@ export component DetailPage {
     // Set by AppWindow when the streams view was entered directly (Home
     // Continue deep-link) without visiting the episode list — see kb_back.
     in property <bool> deep_stream: false;
+    in property <int> system_back_request: 0;
+    property <int> last_system_back_request: -1;
+    property <bool> filter_focused: false;
     // Compact layout for narrow (portrait) windows.
     in property <bool> narrow;
     // Top system-bar inset (Android status bar): Window.safe-area-insets,
@@ -926,6 +929,29 @@ export component DetailPage {
         }
     }
 
+    function system_back() {
+        root.kb_active = true;
+        if (root.stream_action_open) {
+            root.stream_action_open = false;
+        } else if (root.menu_kind >= 0) {
+            root.close_menu();
+        } else if (root.kb_edit || root.filter_focused) {
+            root.kb_edit = false;
+            root.filter_focused = false;
+            nav_scope.focus();
+        } else {
+            root.kb_back();
+        }
+    }
+
+    changed system_back_request => {
+        if (root.last_system_back_request >= 0
+            && root.system_back_request != root.last_system_back_request) {
+            root.last_system_back_request = root.system_back_request;
+            root.system_back();
+        }
+    }
+
     // ---- Page pan lock (pill-bar axis lock) ----------------------------
     // Nested Flickables have no axis locking in Slint: whichever one crosses
     // the 8px grab threshold first owns the whole gesture, and a Flickable
@@ -1106,7 +1132,10 @@ export component DetailPage {
         nav_scope := FocusScope {
             width: 100%;
             height: 100%;
-            init => { self.focus(); }
+            init => {
+                self.focus();
+                root.last_system_back_request = root.system_back_request;
+            }
             key-pressed(e) => {
                 if (root.stream_action_open) {
                     root.stream_action_open = false;
@@ -1891,6 +1920,7 @@ export component DetailPage {
                                             min-width: 0px;
                                             text <=> root.episode_filter;
                                             placeholder-text: @tr("Filter episodes…");
+                                            focus_changed(focused) => { root.filter_focused = focused; }
                                             horizontal-stretch: 1;
                                             edited(t) => { root.episode_filter_changed(t); }
                                             accepted(t) => {

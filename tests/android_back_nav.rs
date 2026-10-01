@@ -1,20 +1,40 @@
 //! Android system-back navigation (headless).
 //!
 //! The Android backend maps the system back gesture/button to Slint
-//! `Key::Back`. Each page scope handles it like `Backspace` (pop one layer),
-//! except the Home root screen, which backgrounds the app via
-//! `exit_to_background`. Synthetic key events go through the public
-//! `Window::dispatch_event` API, so this runs headless like the overflow
-//! tests. One test function: the testing backend initializes once per
+//! `Key::Back`. AppWindow captures press/release before focused inputs and
+//! routes each press to the active screen; screens pop their nearest layer,
+//! while Home's root backgrounds the app through `exit_to_background`.
+//! Synthetic key events go through `Window::dispatch_event`, so this runs
+//! headless. One test function: the testing backend initializes once per
 //! process, so phases run sequentially on a single window.
 
-use slint::{ComponentHandle, SharedString};
+use i_slint_backend_testing::ElementHandle;
+use slint::{ComponentHandle, SharedString, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
 
 fn back(app: &nova::AppWindow) {
     app.window()
         .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+            text: slint::platform::Key::Back.into(),
+        });
+}
+
+fn back_with_repeat(app: &nova::AppWindow) {
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressRepeated {
+            text: slint::platform::Key::Back.into(),
+        });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased {
             text: slint::platform::Key::Back.into(),
         });
 }
@@ -71,10 +91,15 @@ fn system_back_pops_one_layer_at_a_time() {
     });
 
     // ---- Home root screen backgrounds the app ---------------------------
-    let backgrounded = Rc::new(RefCell::new(false));
+    let background_count = Rc::new(RefCell::new(0usize));
     app.on_exit_to_background({
-        let backgrounded = backgrounded.clone();
-        move || *backgrounded.borrow_mut() = true
+        let background_count = background_count.clone();
+        move || *background_count.borrow_mut() += 1
+    });
+
+    app.on_resume_cancel({
+        let app = app.as_weak();
+        move || app.upgrade().unwrap().set_resume_prompt_visible(false)
     });
 
     // NOTE: each phase gets its own tick. Creating a page focuses its key
@@ -84,12 +109,24 @@ fn system_back_pops_one_layer_at_a_time() {
     app.set_modal_visible(true);
     app.set_modal_episodes(false);
     app.set_episode_context(SharedString::from("S1 E1"));
+    app.set_resume_prompt_visible(true);
 
     let app1 = app.as_weak();
     let failures1 = failures.clone();
     after(400, move || {
         let app = app1.upgrade().unwrap();
 
+        back(&app);
+        fail(
+            &failures1,
+            !app.get_resume_prompt_visible() && app.get_modal_visible(),
+            "Back in the resume prompt must dismiss only the prompt",
+        );
+        fail(
+            &failures1,
+            !app.get_modal_episodes(),
+            "dismissing the resume prompt must keep detail on streams",
+        );
         back(&app);
         fail(
             &failures1,
@@ -101,7 +138,6 @@ fn system_back_pops_one_layer_at_a_time() {
             app.get_modal_visible(),
             "modal closed too early",
         );
-        // `back` clears the props in Slint itself; no wiring needed.
         back(&app);
         fail(
             &failures1,
@@ -193,7 +229,7 @@ fn system_back_pops_one_layer_at_a_time() {
                                 let failures6 = failures5.clone();
                                 after(400, move || {
                                     let app = app6.upgrade().unwrap();
-                                    back(&app);
+                                    back_with_repeat(&app);
                                     fail(
                                         &failures6,
                                         app.get_home_view() == 0,
@@ -201,8 +237,8 @@ fn system_back_pops_one_layer_at_a_time() {
                                     );
                                     fail(
                                         &failures6,
-                                        !*backgrounded.borrow(),
-                                        "Back in a Home subpage must not background the app",
+                                        *background_count.borrow() == 0,
+                                        "a held Back in a Home subpage must not background the app",
                                     );
 
                                     let app6b = app.as_weak();
@@ -212,7 +248,7 @@ fn system_back_pops_one_layer_at_a_time() {
                                         back(&app);
                                         fail(
                                             &failures6b,
-                                            *backgrounded.borrow(),
+                                            *background_count.borrow() == 1,
                                             "Back on the root screen must background the app",
                                         );
 
@@ -226,10 +262,17 @@ fn system_back_pops_one_layer_at_a_time() {
                                         app.set_modal_episodes(false);
                                         app.set_episode_context(SharedString::from("S1 E1"));
                                         app.set_detail_deep_stream(true);
+                                        app.set_categories_modal(true);
                                         let app7 = app.as_weak();
                                         let failures7 = failures6b.clone();
                                         after(400, move || {
                                             let app = app7.upgrade().unwrap();
+                                            back(&app);
+                                            fail(
+                                                &failures7,
+                                                !app.get_categories_modal() && app.get_modal_visible(),
+                                                "Back in the category picker must dismiss only the picker",
+                                            );
                                             back(&app);
                                             fail(
                                                 &failures7,
@@ -241,7 +284,129 @@ fn system_back_pops_one_layer_at_a_time() {
                                                 !app.get_modal_episodes(),
                                                 "Back in deep-linked streams must not show episodes",
                                             );
-                                            slint::quit_event_loop().unwrap();
+                                            app.set_show_home(false);
+
+                                            // A focused search field must first
+                                            // yield focus; it must not swallow
+                                            // Back or send the user out of Discover.
+                                            let app8 = app.as_weak();
+                                            let failures8 = failures7.clone();
+                                            let went_home8 = went_home.clone();
+                                            after(350, move || {
+                                                let app = app8.upgrade().unwrap();
+                                                let Some(search) = ElementHandle::find_by_element_type_name(
+                                                    &app,
+                                                    "SearchField",
+                                                )
+                                                .next() else {
+                                                    fail(&failures8, false, "Discover search field must be present");
+                                                    slint::quit_event_loop().unwrap();
+                                                    return;
+                                                };
+                                                let app9 = app.as_weak();
+                                                let failures9 = failures8.clone();
+                                                slint::spawn_local(async move {
+                                                    search
+                                                        .single_click(slint::platform::PointerEventButton::Left)
+                                                        .await;
+                                                    after(100, move || {
+                                                        let app = app9.upgrade().unwrap();
+                                                        fail(
+                                                            &failures9,
+                                                            app.get_discover_search_focused(),
+                                                            "tapping the search field must focus it",
+                                                        );
+                                                        *went_home8.borrow_mut() = false;
+                                                        back(&app);
+                                                        fail(
+                                                            &failures9,
+                                                            !app.get_discover_search_focused(),
+                                                            "Back with search focused must return focus to Discover",
+                                                        );
+                                                        fail(
+                                                            &failures9,
+                                                            !*went_home8.borrow(),
+                                                            "Back with search focused must not leave Discover",
+                                                        );
+                                                        back(&app);
+                                                        fail(
+                                                            &failures9,
+                                                            *went_home8.borrow(),
+                                                            "the next Back with search unfocused must leave Discover",
+                                                        );
+                                                        *went_home8.borrow_mut() = false;
+                                                        app.set_type_names(
+                                                            Rc::new(VecModel::from(vec![
+                                                                SharedString::from("Movie"),
+                                                                SharedString::from("Series"),
+                                                            ]))
+                                                            .into(),
+                                                        );
+                                                        let Some(dropdown) = ElementHandle::find_by_element_type_name(
+                                                            &app,
+                                                            "Dropdown",
+                                                        )
+                                                        .next() else {
+                                                            fail(&failures9, false, "Discover type dropdown must be present");
+                                                            slint::quit_event_loop().unwrap();
+                                                            return;
+                                                        };
+                                                        let text_count_before = ElementHandle::find_by_element_type_name(
+                                                            &app,
+                                                            "Text",
+                                                        )
+                                                        .count();
+                                                        let back_request_before = app.get_system_back_request();
+                                                        let app10 = app.as_weak();
+                                                        let failures10 = failures9.clone();
+                                                        slint::spawn_local(async move {
+                                                            dropdown
+                                                                .single_click(slint::platform::PointerEventButton::Left)
+                                                                .await;
+                                                            after(100, move || {
+                                                                let app = app10.upgrade().unwrap();
+                                                                let popup_text_count = ElementHandle::find_by_element_type_name(
+                                                                    &app,
+                                                                    "Text",
+                                                                )
+                                                                .count();
+                                                                fail(
+                                                                    &failures10,
+                                                                    popup_text_count > text_count_before,
+                                                                    "opening the type dropdown must show its popup rows",
+                                                                );
+                                                                back(&app);
+                                                                fail(
+                                                                    &failures10,
+                                                                    app.get_system_back_request() == back_request_before,
+                                                                    "Back in a dropdown popup must not route to the underlying page",
+                                                                );
+                                                                fail(
+                                                                    &failures10,
+                                                                    !*went_home8.borrow(),
+                                                                    "Back in a dropdown popup must not leave Discover",
+                                                                );
+                                                                after(100, move || {
+                                                                    let app = app10.upgrade().unwrap();
+                                                                    fail(
+                                                                        &failures10,
+                                                                        ElementHandle::find_by_element_type_name(
+                                                                            &app,
+                                                                            "Text",
+                                                                        )
+                                                                        .count()
+                                                                            == text_count_before,
+                                                                        "Back must close the dropdown popup",
+                                                                    );
+                                                                    slint::quit_event_loop().unwrap();
+                                                                });
+                                                            });
+                                                        })
+                                                        .unwrap();
+                                                    });
+                                                })
+                                                .unwrap();
+                                            });
                                         });
                                     });
                                 });

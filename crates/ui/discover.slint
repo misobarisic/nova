@@ -21,7 +21,7 @@ component DiscoverHeader {
     in property <[string]> catalog_labels;
     in property <[string]> genre_names;
     in property <[string]> search_history;
-    property <bool> search_focused: false;
+    in-out property <bool> search_focused: false;
     property <bool> show_history: root.search_focused && root.search_text == "" && root.search_history.length > 0;
     in-out property <int> addon_combo_idx: -1;
     in-out property <int> type_combo_idx: -1;
@@ -653,6 +653,9 @@ export component DiscoverPage {
     in-out property <int> catalog_combo_idx: -1;
     in-out property <int> genre_combo_idx: 0;
     in-out property <string> search_text: "";
+    in-out property <bool> search_focused: false;
+    in property <int> system_back_request: 0;
+    property <int> last_system_back_request: -1;
     in-out property <bool> search_results_open: false;
     in property <bool> animate_search_results: true;
     in-out property <bool> search_loading: false;
@@ -787,6 +790,27 @@ export component DiscoverPage {
         nav_scope.focus();
         root.search_text = "";
         root.search_back_picked();
+    }
+
+    function system_back() {
+        root.kb_active = true;
+        if (root.search_results_open) {
+            root.leave_search();
+        } else if (root.search_focused) {
+            root.kb_edit = false;
+            root.search_focused = false;
+            nav_scope.focus();
+        } else {
+            root.home_picked();
+        }
+    }
+
+    changed system_back_request => {
+        if (root.last_system_back_request >= 0
+            && root.system_back_request != root.last_system_back_request) {
+            root.last_system_back_request = root.system_back_request;
+            root.system_back();
+        }
     }
 
     function kb_clamp_idx() {
@@ -1047,7 +1071,10 @@ export component DiscoverPage {
     nav_scope := FocusScope {
         width: 100%;
         height: 100%;
-        init => { self.focus(); }
+        init => {
+            self.focus();
+            root.last_system_back_request = root.system_back_request;
+        }
         key-pressed(e) => {
             if (e.text == Key.UpArrow) {
                 root.kb_active = true;
@@ -1109,6 +1136,7 @@ export component DiscoverPage {
             catalog_combo_idx <=> root.catalog_combo_idx;
             genre_combo_idx <=> root.genre_combo_idx;
             search_text <=> root.search_text;
+            search_focused <=> root.search_focused;
             searchable_hint: root.searchable_hint;
             narrow: root.narrow;
             kb_zone: root.kb_zone;
@@ -1413,6 +1441,7 @@ export component DiscoverPage {
                 catalog_combo_idx <=> root.catalog_combo_idx;
                 genre_combo_idx <=> root.genre_combo_idx;
                 search_text <=> root.search_text;
+                search_focused <=> root.search_focused;
                 searchable_hint: root.searchable_hint;
                 narrow: root.narrow;
                 kb_zone: root.kb_zone;

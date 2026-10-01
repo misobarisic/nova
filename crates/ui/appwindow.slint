@@ -64,13 +64,19 @@ export component AppWindow inherits Window {
     in-out property <string> addon_url: "";
     in-out property <string> search_text: "";
     in-out property <bool> discover_search_open: false;
+    in-out property <bool> discover_search_focused: false;
     // Survives page recreation while opening a result's detail view.
     in-out property <bool> discover_search_animate_results: true;
     changed modal_visible => {
         if (root.modal_visible && root.discover_search_open) {
             root.discover_search_animate_results = false;
         }
+        if (root.modal_visible) { root.discover_search_focused = false; }
     }
+    changed show_home => { if (root.show_home) { root.discover_search_focused = false; } }
+    changed show_library => { if (root.show_library) { root.discover_search_focused = false; } }
+    changed show_settings => { if (root.show_settings) { root.discover_search_focused = false; } }
+    changed player_open => { if (root.player_open) { root.discover_search_focused = false; } }
     in-out property <bool> search_loading: false;
     in-out property <bool> search_loading_more: false;
     in-out property <bool> search_can_load_more: false;
@@ -167,6 +173,10 @@ export component AppWindow inherits Window {
     in-out property <float> playback_speed: 1.0;
     in-out property <int> episode_start_index: 1;
     in-out property <bool> resume_prompt_visible: false;
+    // Monotonic signal used to route Android system Back through the active
+    // page even while a text field owns focus. Per-page handlers remember
+    // the last request so a newly mounted page cannot consume the same press.
+    in-out property <int> system_back_request: 0;
     // --- Settings (animations) ----------------------------------------
     // Master + per-category animation switches (Settings → Look and feel).
     in-out property <bool> animations: true;
@@ -555,7 +565,40 @@ export component AppWindow inherits Window {
         root.library[idx].is_loaded = false;
     }
 
-    // ---- Discover page ------------------------------------------------
+    // Android delivers Back as a key event, but focused inputs and page-local
+    // scopes can reject or consume it before the active screen handles it.
+    // Capture it at the shared window layer; separate PopupWindows (such as
+    // Dropdown) install their own capture handler.
+    system_back_scope := FocusScope {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+
+        capture-key-pressed(e) => {
+            if (e.text != Key.Back) {
+                reject
+            } else if (e.repeat) {
+                // A held Back must not pop one page and then background the
+                // newly exposed root screen on the next auto-repeat.
+                accept
+            } else if (root.resume_prompt_visible) {
+                root.resume_cancel();
+                accept
+            } else if (root.categories_modal) {
+                root.categories_modal = false;
+                accept
+            } else {
+                root.system_back_request += 1;
+                accept
+            }
+        }
+
+        capture-key-released(e) => {
+            if (e.text == Key.Back) { accept } else { reject }
+        }
+
+        // ---- Discover page --------------------------------------------
     if !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_home: DiscoverPage {
         catalog <=> root.catalog;
         addon_names <=> root.addon_names;
@@ -573,6 +616,8 @@ export component AppWindow inherits Window {
         search_results <=> root.search_results;
         search_history: root.discover_search_history;
         search_results_open <=> root.discover_search_open;
+        search_focused <=> root.discover_search_focused;
+        system_back_request: root.system_back_request;
         animate_search_results: root.discover_search_animate_results;
         search_loading <=> root.search_loading;
         search_loading_more <=> root.search_loading_more;
@@ -642,6 +687,7 @@ export component AppWindow inherits Window {
         kb_active <=> root.kb_active;
         scroll_y <=> root.home_scroll_y;
         view <=> root.home_view;
+        system_back_request: root.system_back_request;
         all_scroll_y <=> root.home_all_scroll_y;
         continue_x <=> root.home_continue_x;
         upcoming_x <=> root.home_upcoming_x;
@@ -710,6 +756,7 @@ export component AppWindow inherits Window {
         episode_total <=> root.episode_total;
         episode_context <=> root.episode_context;
         deep_stream: root.detail_deep_stream;
+        system_back_request: root.system_back_request;
         popup_open: root.categories_modal;
         kb_zone <=> root.detail_kb_zone;
         kb_top <=> root.detail_kb_top;
@@ -772,6 +819,7 @@ export component AppWindow inherits Window {
         library_filter_category <=> root.library_filter_category;
         min_cols: root.library_min_cols;
         library_empty_hint <=> root.library_empty_hint;
+        system_back_request: root.system_back_request;
 
         discover_picked => { root.discover_picked(); }
         home_picked => { root.home_picked(); }
@@ -812,6 +860,7 @@ export component AppWindow inherits Window {
         home_catalog_genre_names <=> root.home_catalog_genre_names;
         home_catalog_genre_index <=> root.home_catalog_genre_index;
         home_catalog_add_open <=> root.home_catalog_add_open;
+        system_back_request: root.system_back_request;
         home_catalog_add_error <=> root.home_catalog_add_error;
         cache_images <=> root.cache_images;
         cache_disk_usage <=> root.cache_disk_usage;
@@ -954,6 +1003,7 @@ export component AppWindow inherits Window {
         scrim_image <=> root.scrim_image;
         player_poster <=> root.player_poster;
         kb_active <=> root.kb_active;
+        system_back_request: root.system_back_request;
         is_android: root.is_android;
         narrow: root.narrow_ui;
         safe-top: root.safe-area-insets.top;
@@ -1015,5 +1065,6 @@ export component AppWindow inherits Window {
                 }
             }
         }
+    }
     }
 }

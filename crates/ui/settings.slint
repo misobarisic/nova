@@ -753,6 +753,9 @@ export component SettingsPage {
     in-out property <[string]> home_catalog_genre_names: [];
     in-out property <int> home_catalog_genre_index: 0;
     in-out property <bool> home_catalog_add_open: false;
+    in property <int> system_back_request: 0;
+    property <int> last_system_back_request: -1;
+    property <bool> input_focused: false;
     in-out property <string> home_catalog_add_error: "";
     in-out property <string> category_input: "";
     in-out property <bool> cache_images: true;
@@ -1168,6 +1171,30 @@ export component SettingsPage {
         // Returning to the landing menu: drop any horizontal pan it may have
         // picked up so it is never left shifted to the right.
         land_scroll.content-x = 0px;
+    }
+
+    function system_back() {
+        if (root.home_catalog_add_open) {
+            root.home_catalog_add_open = false;
+        } else if (root.sync_remove_prompt_visible) {
+            root.sync_remove_prompt_visible = false;
+        } else if (root.input_focused || root.kb_edit != 0) {
+            root.kb_edit = 0;
+            root.input_focused = false;
+            nav_scope.focus();
+        } else if (root.sel >= 0) {
+            root.close_page();
+        } else {
+            root.home_picked();
+        }
+    }
+
+    changed system_back_request => {
+        if (root.last_system_back_request >= 0
+            && root.system_back_request != root.last_system_back_request) {
+            root.last_system_back_request = root.system_back_request;
+            root.system_back();
+        }
     }
 
 
@@ -1885,7 +1912,10 @@ export component SettingsPage {
         nav_scope := FocusScope {
             width: 100%;
             height: 100%;
-            init => { self.focus(); }
+            init => {
+                self.focus();
+                root.last_system_back_request = root.system_back_request;
+            }
             key-pressed(e) => {
                 // Edit mode belongs to the text fields (native there);
                 // swallow one stray keypress to recover a lost focus.
@@ -2324,6 +2354,7 @@ export component SettingsPage {
                                                     roomy: root.narrow;
                                                     text <=> root.addon_url;
                                                     placeholder-text: @tr("Addon install URL — e.g. https://v3-cinemeta.strem.io");
+                                                    focus_changed(focused) => { root.input_focused = focused; }
                                                     // Redundant with the two-way binding on
                                                     // desktop, but keeps the model in sync on
                                                     // Android IME commit paths.
@@ -2403,6 +2434,7 @@ export component SettingsPage {
                                                 roomy: true;
                                                 text <=> root.addon_url;
                                                 placeholder-text: @tr("Addon install URL — e.g. https://v3-cinemeta.strem.io");
+                                                focus_changed(focused) => { root.input_focused = focused; }
                                                 edited(t) => { root.addon_url = t; }
                                                 accepted(t) => {
                                                     root.addon_url = t;
@@ -2694,6 +2726,7 @@ export component SettingsPage {
                                                     roomy: root.narrow;
                                                     text <=> root.category_input;
                                                     placeholder-text: @tr("New category name");
+                                                    focus_changed(focused) => { root.input_focused = focused; }
                                                     edited(t) => { root.category_input = t; }
                                                     accepted(t) => {
                                                         root.category_input = t;
@@ -2760,6 +2793,7 @@ export component SettingsPage {
                                                 roomy: true;
                                                 text <=> root.category_input;
                                                 placeholder-text: @tr("New category name");
+                                                focus_changed(focused) => { root.input_focused = focused; }
                                                 edited(t) => { root.category_input = t; }
                                                 accepted(t) => {
                                                     root.category_input = t;
@@ -3466,6 +3500,7 @@ export component SettingsPage {
                                                     torrent_dir_wide := SearchField {
                                                         text <=> root.torrent_dir;
                                                         placeholder-text: @tr("Default (app cache folder)");
+                                                        focus_changed(focused) => { root.input_focused = focused; }
                                                         edited(t) => { root.torrent_dir = t; root.schedule_save(); }
                                                         accepted(t) => {
                                                             root.torrent_dir = t;
@@ -3524,6 +3559,7 @@ export component SettingsPage {
                                                     roomy: true;
                                                     text <=> root.torrent_dir;
                                                     placeholder-text: @tr("Default (app cache folder)");
+                                                    focus_changed(focused) => { root.input_focused = focused; }
                                                     edited(t) => { root.torrent_dir = t; root.schedule_save(); }
                                                     accepted(t) => {
                                                         root.torrent_dir = t;
@@ -4271,6 +4307,7 @@ export component SettingsPage {
                                         roomy: root.narrow;
                                         text <=> root.sync_device_name;
                                         placeholder-text: @tr("Device name");
+                                        focus_changed(focused) => { root.input_focused = focused; }
                                         edited(t) => { root.sync_device_name_edited(t); }
                                         accepted(t) => { root.sync_device_name_edited(t); }
                                         min-width: 0px;
@@ -4515,6 +4552,7 @@ export component SettingsPage {
                                             roomy: root.narrow;
                                             text <=> root.sync_join_input;
                                             placeholder-text: @tr("paste invite code");
+                                            focus_changed(focused) => { root.input_focused = focused; }
                                             horizontal-stretch: 1;
                                             min-width: 0px;
                                             accepted(t) => { root.sync_join_invite(t); }
@@ -4588,6 +4626,7 @@ export component SettingsPage {
                                                     roomy: root.narrow;
                                                     text <=> root.sync_peer_input;
                                                     placeholder-text: @tr("peer endpoint id");
+                                                    focus_changed(focused) => { root.input_focused = focused; }
                                                     horizontal-stretch: 1;
                                                     min-width: 0px;
                                                     accepted(t) => { root.sync_add_peer(t); }

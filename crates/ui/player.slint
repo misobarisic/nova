@@ -568,6 +568,16 @@ export component PlayerOverlay {
     pure callback format_volume(float) -> string;
     // Keyboard modality (bound to AppWindow).
     in-out property <bool> kb_active;
+    in property <int> system_back_request: 0;
+    property <int> last_system_back_request: -1;
+
+    changed system_back_request => {
+        if (root.last_system_back_request >= 0
+            && root.system_back_request != root.last_system_back_request) {
+            root.last_system_back_request = root.system_back_request;
+            root.system_back();
+        }
+    }
 
     // ---- 6-button keyboard nav (arrows + Enter + Backspace) ----
     // Control strip (Left/Right): 0 close, 1 pause, 2 volume/mute,
@@ -616,6 +626,18 @@ export component PlayerOverlay {
             root.kb_menu = 0;
         } else {
             root.open_popup = 0;
+        }
+    }
+
+    function system_back() {
+        root.osd_mouse_moved();
+        root.kb_active = true;
+        if (root.open_popup == 4) {
+            root.settings_back();
+        } else if (root.open_popup != 0) {
+            root.open_popup = 0;
+        } else {
+            root.close_player();
         }
     }
 
@@ -947,7 +969,10 @@ export component PlayerOverlay {
         key_scope := FocusScope {
             width: 100%;
             height: 100%;
-            init => { self.focus(); }
+            init => {
+                self.focus();
+                root.last_system_back_request = root.system_back_request;
+            }
             key-pressed(e) => {
                 root.osd_mouse_moved();
                 // No text entry on this screen: any keypress is keyboard use.

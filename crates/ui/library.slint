@@ -28,6 +28,8 @@ export component LibraryPage {
     // library_filter_category as a position so the dropdown selection
     // follows chip/keyboard/category changes made outside the dropdown.
     in-out property <int> category_index: -1;
+    in property <int> system_back_request: 0;
+    property <int> last_system_back_request: -1;
 
     property <length> item-gap: 18px;
     // Same fluid scheme as Discover: column count from a 160px minimum
@@ -73,6 +75,20 @@ export component LibraryPage {
 
     function close_menu() {
         root.menu_open = false;
+    }
+    function system_back() {
+        if (root.menu_open) {
+            root.close_menu();
+        } else {
+            root.home_picked();
+        }
+    }
+    changed system_back_request => {
+        if (root.last_system_back_request >= 0
+            && root.system_back_request != root.last_system_back_request) {
+            root.last_system_back_request = root.system_back_request;
+            root.system_back();
+        }
     }
     // Preload fetch window (visible ±2 rows), see DiscoverPage.
     callback library_visible_range(int, int);
@@ -300,7 +316,10 @@ export component LibraryPage {
         nav_scope := FocusScope {
             width: 100%;
             height: 100%;
-            init => { self.focus(); }
+            init => {
+                self.focus();
+                root.last_system_back_request = root.system_back_request;
+            }
             key-pressed(e) => {
                 if (root.menu_open) {
                     // An open sheet eats Backspace (dismiss only).

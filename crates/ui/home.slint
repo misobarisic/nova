@@ -1236,6 +1236,8 @@ export component HomePage {
     in property <int> featured_revision;
     // 0 = landing carousels, 1 = all Continue, 2 = all Upcoming.
     in-out property <int> view: 0;
+    in property <int> system_back_request: 0;
+    property <int> last_system_back_request: -1;
 
     property <length> item-gap: 18px;
     // Same fluid scheme as Library: column count from a 160px minimum
@@ -1315,6 +1317,13 @@ export component HomePage {
     }
 
     changed featured_index => { root.restart_showcase_rotation(); }
+    changed system_back_request => {
+        if (root.last_system_back_request >= 0
+            && root.system_back_request != root.last_system_back_request) {
+            root.last_system_back_request = root.system_back_request;
+            root.system_back();
+        }
+    }
 
     callback home_picked();
     callback discover_picked();
@@ -1360,6 +1369,18 @@ export component HomePage {
 
     function close_menu() {
         root.menu_open = false;
+    }
+
+    function system_back() {
+        if (root.menu_open) {
+            root.close_menu();
+        } else if (root.view == 2 && root.cal_open) {
+            root.upcoming_cal_close();
+        } else if (root.view != 0) {
+            root.view = 0;
+        } else {
+            root.exit_to_background();
+        }
     }
 
     // Exact scroll offsets: landing page, subpage page, and the two
@@ -1706,7 +1727,10 @@ export component HomePage {
         nav_scope := FocusScope {
             width: 100%;
             height: 100%;
-            init => { self.focus(); }
+            init => {
+                self.focus();
+                root.last_system_back_request = root.system_back_request;
+            }
             key-pressed(e) => {
                 if (e.text == Key.UpArrow) {
                     root.kb_active = true;
