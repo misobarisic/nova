@@ -802,6 +802,79 @@ component FeaturedPagerButton inherits Rectangle {
     }
 }
 
+// A complete visual snapshot, captured at the backend publication boundary.
+struct FeaturedSlideData {
+    title: string,
+    media_type: string,
+    rating: string,
+    runtime: string,
+    description: string,
+    backdrop: image,
+}
+
+// Kept separate from the controls so only title-specific content crossfades.
+component FeaturedCaption inherits VerticalLayout {
+    in property <FeaturedSlideData> slide;
+    in property <bool> narrow;
+    in property <length> banner_width;
+    height: self.preferred-height;
+    spacing: root.narrow ? 12px : 10px;
+
+    function media_label() -> string {
+        if (root.slide.media_type == "series") { return @tr("TV"); }
+        if (root.slide.media_type == "movie") { return @tr("MOVIE"); }
+        if (root.slide.media_type == "anime") { return @tr("ANIME"); }
+        return root.slide.media_type;
+    }
+
+    HorizontalLayout {
+        width: 100%;
+        height: root.narrow ? 30px : 32px;
+        spacing: 7px;
+        alignment: center;
+
+        if root.slide.media_type != "": FeaturedBadge {
+            label: root.media_label();
+            narrow: root.narrow;
+        }
+        if root.slide.rating != "": FeaturedBadge {
+            label: root.slide.rating;
+            icon: 1;
+            narrow: root.narrow;
+        }
+        if root.narrow && root.slide.runtime != "": FeaturedBadge {
+            label: root.slide.runtime;
+            icon: 2;
+            narrow: root.narrow;
+        }
+    }
+    Text {
+        text: root.slide.title;
+        width: 100%;
+        height: self.preferred-height;
+        max-lines: 2;
+        font-size: root.narrow
+            ? (root.banner_width < 400px ? 24px : 28px)
+            : Math.min(48px, Math.max(32px, root.banner_width * 0.03));
+        font-weight: 700;
+        color: root.narrow ? #fff1b7 : #ededee;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+        overflow: elide;
+    }
+    if !root.narrow && root.slide.description != "": Text {
+        text: root.slide.description;
+        width: 100%;
+        height: self.preferred-height;
+        max-lines: 3;
+        font-size: root.banner_width < 1200px ? 14px : 16px;
+        color: #b4b4b7;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+        overflow: elide;
+    }
+}
+
 // Catalog-driven backdrop at the top of Home. Text is centered within the
 // left column on wide screens; narrow screens stack the actions beneath it.
 component FeaturedShowcase inherits Rectangle {
@@ -813,6 +886,8 @@ component FeaturedShowcase inherits Rectangle {
     in property <image> backdrop;
     in property <int> index;
     in property <int> count;
+    // Backend advances this only after the full incoming payload is published.
+    in property <int> revision;
     in property <bool> narrow;
     callback picked();
     callback watch_now();
@@ -820,11 +895,80 @@ component FeaturedShowcase inherits Rectangle {
     callback pan_hint();
     callback pan_release();
 
-    function media_label() -> string {
-        if (root.media_type == "series") { return @tr("TV"); }
-        if (root.media_type == "movie") { return @tr("MOVIE"); }
-        if (root.media_type == "anime") { return @tr("ANIME"); }
-        return root.media_type;
+    private property <FeaturedSlideData> displayed_slide;
+    private property <FeaturedSlideData> previous_slide;
+    private property <bool> initialized: false;
+    private property <bool> fading: false;
+    private property <bool> advancing: false;
+    private property <bool> fade_text: false;
+    private property <bool> motion_enabled: Anim.enabled && Anim.transitions;
+    private property <float> mix: 1.0;
+    animate mix { duration: root.advancing ? Anim.transition_fade : 0ms; easing: ease-in-out; }
+
+    function finish_transition() {
+        fade_start.stop();
+        fade_end.stop();
+        root.advancing = false;
+        root.mix = 1.0;
+        root.fading = false;
+        // Drop the outgoing artwork; keep only the currently displayed image.
+        root.previous_slide = root.displayed_slide;
+    }
+
+    function sync_slide() {
+        let incoming = {
+            title: root.title,
+            media_type: root.media_type,
+            rating: root.rating,
+            runtime: root.runtime,
+            description: root.description,
+            backdrop: root.backdrop,
+        };
+        if (!root.initialized || !root.motion_enabled) {
+            root.displayed_slide = incoming;
+            root.initialized = root.count > 0;
+            root.finish_transition();
+            return;
+        }
+        if (!root.fading) {
+            root.previous_slide = root.displayed_slide;
+            root.advancing = false;
+            root.mix = 0.0;
+            root.fading = true;
+            // Paint the outgoing baseline before animating the incoming frame.
+            // These timers stop after each fade; restart() alone does not start
+            // an inactive Slint timer, leaving the outgoing slide opaque.
+            fade_start.start();
+        }
+        // Rapid steps retarget the incoming layer without resetting opacity
+        // or replacing the outgoing layer in the middle of its fade.
+        root.displayed_slide = incoming;
+        root.fade_text = root.previous_slide.title != incoming.title
+            || root.previous_slide.media_type != incoming.media_type
+            || root.previous_slide.rating != incoming.rating
+            || root.previous_slide.runtime != incoming.runtime
+            || root.previous_slide.description != incoming.description;
+    }
+
+    init => { root.sync_slide(); }
+    changed revision => { root.sync_slide(); }
+    changed motion_enabled => {
+        if (!root.motion_enabled) { root.finish_transition(); }
+    }
+    fade_start := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => {
+            self.stop();
+            root.advancing = true;
+            root.mix = 1.0;
+            fade_end.start();
+        }
+    }
+    fade_end := Timer {
+        interval: Anim.transition_fade;
+        running: false;
+        triggered => { root.finish_transition(); }
     }
 
     width: 100%;
@@ -836,10 +980,24 @@ component FeaturedShowcase inherits Rectangle {
     background: #08080a;
 
     Image {
-        source: root.backdrop;
+        source: root.displayed_slide.backdrop;
         image-fit: cover;
         width: 100%;
         height: 100%;
+    }
+    // An empty outgoing image still fades from the banner's opaque fallback.
+    if root.fading && root.previous_slide.backdrop.width == 0: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #08080a;
+        opacity: 1.0 - root.mix;
+    }
+    Image {
+        source: root.previous_slide.backdrop;
+        image-fit: cover;
+        width: 100%;
+        height: 100%;
+        opacity: root.fading ? 1.0 - root.mix : 0.0;
     }
     // FemtoVG can flatten brush gradients. An SVG rasterized into a tall
     // alpha ramp gives both desktop and Android one continuous bottom fade.
@@ -962,71 +1120,33 @@ component FeaturedShowcase inherits Rectangle {
         }
     }
 
-    VerticalLayout {
+    // Each caption keeps its own wrapping/height while fading; the narrow
+    // action pills are anchored separately, below both caption layers.
+    FeaturedCaption {
+        slide: root.previous_slide;
+        narrow: root.narrow;
+        banner_width: root.width;
         x: root.narrow ? 16px : 18px;
-        y: root.height - self.height - (root.narrow ? 20px : 22px);
-        // Keep the wide text clear of the action pills even just above the
-        // narrow breakpoint, where both columns have much less room.
+        y: root.height - self.height - (root.narrow ? 78px : 22px);
         width: root.narrow ? root.width - 32px : Math.min(root.width * 0.51, wide_actions.x - 36px);
-        height: self.preferred-height;
-        spacing: root.narrow ? 12px : 10px;
-
-        HorizontalLayout {
-            width: 100%;
-            height: root.narrow ? 30px : 32px;
-            spacing: 7px;
-            alignment: center;
-
-            if root.media_type != "": FeaturedBadge {
-                label: root.media_label();
-                narrow: root.narrow;
-            }
-            if root.rating != "": FeaturedBadge {
-                label: root.rating;
-                icon: 1;
-                narrow: root.narrow;
-            }
-            if root.narrow && root.runtime != "": FeaturedBadge {
-                label: root.runtime;
-                icon: 2;
-                narrow: root.narrow;
-            }
-        }
-        Text {
-            text: root.title;
-            width: 100%;
-            height: self.preferred-height;
-            max-lines: 2;
-            font-size: root.narrow
-                ? (root.width < 400px ? 24px : 28px)
-                : Math.min(48px, Math.max(32px, root.width * 0.03));
-            font-weight: 700;
-            color: root.narrow ? #fff1b7 : #ededee;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-            overflow: elide;
-        }
-        if !root.narrow && root.description != "": Text {
-            text: root.description;
-            width: 100%;
-            height: self.preferred-height;
-            max-lines: 3;
-            font-size: root.width < 1200px ? 14px : 16px;
-            color: #b4b4b7;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-            overflow: elide;
-        }
-        if root.narrow: HorizontalLayout {
-            width: 100%;
-            alignment: center;
-            FeaturedActions {
-                narrow: true;
-                compact: root.width < 400px;
-                picked => { root.picked(); }
-                watch_now => { root.watch_now(); }
-            }
-        }
+        opacity: root.fading && root.fade_text ? 1.0 - root.mix : 0.0;
+    }
+    FeaturedCaption {
+        slide: root.displayed_slide;
+        narrow: root.narrow;
+        banner_width: root.width;
+        x: root.narrow ? 16px : 18px;
+        y: root.height - self.height - (root.narrow ? 78px : 22px);
+        width: root.narrow ? root.width - 32px : Math.min(root.width * 0.51, wide_actions.x - 36px);
+        opacity: root.fading && root.fade_text ? root.mix : 1.0;
+    }
+    if root.narrow: FeaturedActions {
+        narrow: true;
+        compact: root.width < 400px;
+        x: (root.width - self.width) / 2;
+        y: root.height - self.height - 20px;
+        picked => { root.picked(); }
+        watch_now => { root.watch_now(); }
     }
 
     wide_actions := FeaturedActions {
@@ -1067,6 +1187,7 @@ export component HomePage {
     in property <image> featured_backdrop;
     in property <int> featured_index;
     in property <int> featured_count;
+    in property <int> featured_revision;
     // 0 = landing carousels, 1 = all Continue, 2 = all Upcoming.
     in-out property <int> view: 0;
 
@@ -1659,6 +1780,7 @@ export component HomePage {
                                 backdrop: root.featured_backdrop;
                                 index: root.featured_index;
                                 count: root.featured_count;
+                                revision: root.featured_revision;
                                 narrow: root.narrow;
                                 picked => {
                                     root.kb_active = false;

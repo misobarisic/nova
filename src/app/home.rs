@@ -99,6 +99,7 @@ impl Bridge {
             app.set_home_featured_backdrop(Image::default());
             app.set_home_featured_index(0);
             app.set_home_featured_count(0);
+            app.set_home_featured_revision(app.get_home_featured_revision().wrapping_add(1));
         }
     }
 
@@ -134,6 +135,7 @@ impl Bridge {
                 app.set_home_featured_backdrop(Image::default());
                 app.set_home_featured_index(0);
                 app.set_home_featured_count(0);
+                app.set_home_featured_revision(app.get_home_featured_revision().wrapping_add(1));
             }
             return;
         };
@@ -153,6 +155,7 @@ impl Bridge {
             app.set_home_featured_backdrop(Image::default());
             app.set_home_featured_index(0);
             app.set_home_featured_count(count as i32);
+            app.set_home_featured_revision(app.get_home_featured_revision().wrapping_add(1));
         }
         self.ensure_home_showcase_art(0, generation);
     }
@@ -271,6 +274,7 @@ impl Bridge {
             app.set_home_featured_backdrop(backdrop.map(Image::from_rgba8).unwrap_or_default());
             app.set_home_featured_index(index as i32);
             app.set_home_featured_count(count as i32);
+            app.set_home_featured_revision(app.get_home_featured_revision().wrapping_add(1));
         }
 
         if count > 1 {
