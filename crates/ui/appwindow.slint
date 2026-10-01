@@ -336,6 +336,7 @@ export component AppWindow inherits Window {
     callback search_submitted(string);
     callback search_back_picked();
     callback search_history_cleared();
+    callback search_history_item_removed(string);
     callback item_selected(string, int);
     callback stream_picked(int);
     callback stream_page_picked(int);
@@ -576,6 +577,7 @@ export component AppWindow inherits Window {
         search_submitted(v) => { root.search_submitted(v); }
         search_back_picked => { root.search_back_picked(); }
         search_history_cleared => { root.search_history_cleared(); }
+        search_history_item_removed(query) => { root.search_history_item_removed(query); }
         item_selected(id, i) => { root.item_selected(id, i); }
         discover_picked => { root.discover_picked(); }
         home_picked => { root.home_picked(); }

@@ -6,7 +6,7 @@ import { BottomNav } from "bottomnav.slint";
 import { Dropdown } from "dropdown.slint";
 import { SearchField } from "searchfield.slint";
 import { Anim } from "anim.slint";
-import { IcChevronLeft, IcChevronRight, IcSearch } from "icons.slint";
+import { IcChevronLeft, IcChevronRight, IcDelete, IcSearch } from "icons.slint";
 
 // Filter header (nav buttons, title, addon/type/catalog/search pickers).
 // Instantiated twice by DiscoverPage — once pinned above the grid
@@ -56,6 +56,7 @@ component DiscoverHeader {
     callback back_picked();
     callback search_done();
     callback search_history_cleared();
+    callback search_history_item_removed(string);
     callback filters_panned();
     callback filters_pan_released();
 
@@ -235,8 +236,6 @@ component DiscoverHeader {
                             height: 40px;
                             border-radius: 8px;
                             background: history_touch.has-hover ? #8b5cf61c : transparent;
-                            accessible-role: button;
-                            accessible-label: query;
                             HorizontalLayout {
                                 padding-left: 8px;
                                 padding-right: 8px;
@@ -253,12 +252,32 @@ component DiscoverHeader {
                                 }
                                 Text {
                                     text: query;
+                                    height: 100%;
                                     color: #e6e6ea;
                                     font-size: 14px;
                                     min-width: 0px;
                                     horizontal-stretch: 1;
                                     overflow: elide;
                                     vertical-alignment: center;
+                                }
+                                Rectangle {
+                                    width: 30px;
+                                    height: 100%;
+                                    border-radius: 8px;
+                                    background: remove_touch.has-hover ? #ffffff14 : transparent;
+                                    accessible-role: button;
+                                    accessible-label: @tr("Remove search: {}", query);
+                                    IcDelete {
+                                        width: 16px;
+                                        height: 16px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        fill: #a99ac9;
+                                    }
+                                    remove_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.search_history_item_removed(query); }
+                                    }
                                 }
                                 Rectangle {
                                     width: 16px;
@@ -272,7 +291,13 @@ component DiscoverHeader {
                                 }
                             }
                             history_touch := TouchArea {
+                                x: 0;
+                                y: 0;
+                                width: parent.width - 74px;
+                                height: 100%;
                                 mouse-cursor: pointer;
+                                accessible-role: button;
+                                accessible-label: query;
                                 clicked => {
                                     root.search_text = query;
                                     root.search_submitted(query);
@@ -647,6 +672,7 @@ export component DiscoverPage {
     callback search_submitted(string);
     callback search_back_picked();
     callback search_history_cleared();
+    callback search_history_item_removed(string);
     callback item_selected(string, int);
     callback home_picked();
     callback discover_picked();
@@ -1103,6 +1129,7 @@ export component DiscoverPage {
             }
             back_picked => { root.leave_search(); }
             search_history_cleared => { root.search_history_cleared(); }
+            search_history_item_removed(query) => { root.search_history_item_removed(query); }
             search_done => { nav_scope.focus(); }
             filters_panned => { root.filters_panned(); }
             filters_pan_released => { root.filters_pan_released(); }
@@ -1333,6 +1360,7 @@ export component DiscoverPage {
                 }
                 back_picked => { root.leave_search(); }
                 search_history_cleared => { root.search_history_cleared(); }
+                search_history_item_removed(query) => { root.search_history_item_removed(query); }
                 search_done => { nav_scope.focus(); }
                 filters_panned => { root.filters_panned(); }
                 filters_pan_released => { root.filters_pan_released(); }

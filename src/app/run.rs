@@ -301,6 +301,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.load_search_history();
     let b = bridge.clone();
     app.on_search_history_cleared(move || b.clear_search_history());
+    let b = bridge.clone();
+    app.on_search_history_item_removed(move |query| b.remove_search_history_item(&query));
 
     let b = bridge.clone();
     app.on_item_selected(move |_id, idx| b.item_selected(idx as usize));

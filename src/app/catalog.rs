@@ -1150,6 +1150,32 @@ impl Bridge {
         }
     }
 
+    pub(super) fn remove_search_history_item(&self, query: &str) {
+        let Some(app) = self.app() else {
+            return;
+        };
+        let mut history: Vec<String> = app
+            .get_discover_search_history()
+            .iter()
+            .map(|value| value.to_string())
+            .collect();
+        let previous_len = history.len();
+        history.retain(|saved| saved != query);
+        if history.len() == previous_len {
+            return;
+        }
+        write_json("discover:search_history", &history);
+        app.set_discover_search_history(
+            Rc::new(VecModel::from(
+                history
+                    .into_iter()
+                    .map(SharedString::from)
+                    .collect::<Vec<_>>(),
+            ))
+            .into(),
+        );
+    }
+
     /// Refresh just the catalog combo (after type/catalog index changes).
     pub(super) fn apply_selection_to_ui(&self) {
         let app = match self.app() {

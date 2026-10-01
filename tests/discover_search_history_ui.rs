@@ -36,6 +36,13 @@ fn history_focus_replay_back_and_clear() {
             .unwrap()
             .set_discover_search_history(Rc::new(VecModel::<SharedString>::default()).into());
     });
+    let weak = app.as_weak();
+    app.on_search_history_item_removed(move |query| {
+        let app = weak.upgrade().unwrap();
+        let mut history: Vec<_> = app.get_discover_search_history().iter().collect();
+        history.retain(|saved| saved != &query);
+        app.set_discover_search_history(Rc::new(VecModel::from(history)).into());
+    });
     app.show().unwrap();
     let failures = Rc::new(RefCell::new(Vec::<String>::new()));
     let failures1 = failures.clone();
@@ -132,27 +139,65 @@ fn history_focus_replay_back_and_clear() {
                                         .await;
                                     after(150, move || {
                                         let app = weak.upgrade().unwrap();
-                                        let clear = ElementHandle::find_by_accessible_label(
+                                        let remove = ElementHandle::find_by_accessible_label(
                                             &app,
-                                            "Clear history",
+                                            "Remove search: Dune",
                                         )
                                         .next()
                                         .unwrap();
                                         let weak = app.as_weak();
                                         let _ = slint::spawn_local(async move {
-                                            clear
+                                            remove
                                                 .single_click(
                                                     slint::platform::PointerEventButton::Left,
                                                 )
                                                 .await;
-                                            let app = weak.upgrade().unwrap();
-                                            if app.get_discover_search_history().row_count() != 0 {
-                                                failures1.borrow_mut().push(
+                                            after(150, move || {
+                                                let app = weak.upgrade().unwrap();
+                                                let history = app.get_discover_search_history();
+                                                let remaining = history
+                                                    .row_data(0)
+                                                    .map(|query| query.to_string());
+                                                if history.row_count() != 1
+                                                    || remaining.as_deref() != Some("Star Wars")
+                                                {
+                                                    failures1.borrow_mut().push(
+                                                         "removing Dune must preserve the other recent search"
+                                                             .into(),
+                                                     );
+                                                }
+                                                if submissions.borrow().as_slice() != ["Dune"] {
+                                                    failures1.borrow_mut().push(
+                                                         "removing a history item must not submit it"
+                                                             .into(),
+                                                     );
+                                                }
+                                                let clear =
+                                                    ElementHandle::find_by_accessible_label(
+                                                        &app,
+                                                        "Clear history",
+                                                    )
+                                                    .next()
+                                                    .unwrap();
+                                                let weak = app.as_weak();
+                                                let _ = slint::spawn_local(async move {
+                                                    clear
+                                                .single_click(
+                                                    slint::platform::PointerEventButton::Left,
+                                                )
+                                                .await;
+                                                    let app = weak.upgrade().unwrap();
+                                                    if app.get_discover_search_history().row_count()
+                                                        != 0
+                                                    {
+                                                        failures1.borrow_mut().push(
                                                     "Clear history must remove the recent queries"
                                                         .into(),
                                                 );
-                                            }
-                                            slint::quit_event_loop().unwrap();
+                                                    }
+                                                    slint::quit_event_loop().unwrap();
+                                                });
+                                            });
                                         });
                                     });
                                 });

@@ -168,6 +168,9 @@ msgstr "Nedavne pretrage"
 msgid "Clear history"
 msgstr "Obrišite povijest"
 
+msgid "Remove search: {}"
+msgstr "Uklonite pretragu: {}"
+
 msgid "Show addon names in catalogs"
 msgstr "Prikažite nazive dodataka u katalozima"
 
