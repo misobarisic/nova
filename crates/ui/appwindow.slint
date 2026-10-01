@@ -469,6 +469,7 @@ export component AppWindow inherits Window {
     callback upcoming_cal_pick(int);
     callback upcoming_cal_activate();
     callback home_featured_picked();
+    callback home_featured_watch_now();
     callback home_featured_step(int);
     callback library_watch_action(int, int);
     callback library_status_action(int, int);
@@ -663,6 +664,7 @@ export component AppWindow inherits Window {
         upcoming_cal_pick(e) => { root.upcoming_cal_pick(e); }
         upcoming_cal_activate => { root.upcoming_cal_activate(); }
         featured_picked => { root.home_featured_picked(); }
+        featured_watch_now => { root.home_featured_watch_now(); }
         featured_step(d) => { root.home_featured_step(d); }
         exit_to_background => { root.exit_to_background(); }
     }

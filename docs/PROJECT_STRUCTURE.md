@@ -269,7 +269,19 @@ where users select catalogs;
 each selected catalog contributes up to five titles. Home preloads the current
 and next backdrop at source resolution, restarts the rotation delay when a step
 is requested and when a new selection is displayed, and opens a picked title
-without borrowing Discover's current grid model.
+without borrowing Discover's current grid model. Home's Details and Watch Now
+have separate callbacks through `AppWindow` and `run.rs`: Details opens the
+normal detail flow; Watch Now shares the detail page's automatic selection of
+the first dated, released, unwatched episode across all seasons (extras last).
+Stream choice remains manual; if no eligible episode exists, the episode picker
+remains available. Cached metadata resolves immediately when possible; otherwise
+`ModalItem` holds a one-shot Watch Now origin and an episode-loading flag. A
+per-opening token rejects stale metadata callbacks, including same-title reopens;
+manual navigation cancels pending selection. Home Watch Now uses the same Back
+shortcut as Continue Watching; detail-page Watch Now returns to the episode list.
+The featured backdrop also forwards early touch-axis hints to Home's page-pan
+lock, just like Continue Watching and Upcoming: horizontal drags block vertical
+scrolling; vertical drags, release and cancellation return control to the page.
 Settings → Home also independently toggles the Continue Watching and Upcoming
 rows; both default on and sync with other general settings.
 
@@ -556,12 +568,12 @@ the app ignores unknown domains, so old peers stay compatible.
 | Settings edit loss / sync recovery | `src/app/settings.rs` (`capture_settings`, `wire_settings_autosave`, regression test), `crates/sync/src/lib.rs` (`peer_connection`, worker/cadence/recovery), `docs/sync-hardening-plan.md` |
 | Add a UI language / translate a string | `crates/ui/translations/<code>/LC_MESSAGES/nova-ui.po` (context-free), `crates/config/src/lib.rs` (`Language`), `src/app/i18n.rs`; mark strings `@tr("…")` in the `.slint` files |
 | Add a Discover feature / catalog change | `src/app/catalog.rs`, `crates/ui/discover.slint`, `crates/ui/appwindow.slint`, `crates/addons` |
-| Home featured banner layout / paging / backdrop fade | `crates/ui/home.slint` (`FeaturedShowcase` and its badge/action/pager components), `assets/featured-backdrop-scrim.svg`; catalog metadata and artwork in `src/app/home.rs` |
+| Home featured banner layout / touch paging / backdrop fade | `crates/ui/home.slint` (`FeaturedShowcase` and its badge/action/pager components), `assets/featured-backdrop-scrim.svg`; catalog metadata and artwork in `src/app/home.rs` |
 | Discover reveal / filter-drag regressions | `tests/discover_reveal_and_filters.rs` (animated opacity during poster updates, same-length result replacement, animation-off behavior, horizontal filter drags), `tests/discover_search_ui.rs` (browse/results navigation) |
 | Text-input overflow / clear controls | `crates/ui/searchfield.slint` (shared by all inputs; follows the caret on edits and viewport resize), `tests/searchfield_overflow.rs` (compact, touch and prominent fields: long text, End/Home, window shrink, clear buttons) |
 | Discover local search history | `src/app/catalog.rs` (local KV + bounded MRU list), `crates/ui/discover.slint` (scrollable recent-search panel shows up to five rows, supports individual removal, and expands/collapses on empty-input focus), `tests/discover_search_history_ui.rs` (expansion, focus, replay, Back, individual removal, clear) |
 | Discover catalog labels / return animation | `src/app/catalog.rs` (`apply_catalog_labels_to_ui`, separate labels and identity values), Settings → Display's `discover_catalog_addon_names`; `crates/ui/appwindow.slint` (`discover_search_animate_results` survives detail-page recreation, resets for a fresh search), `tests/discover_reveal_and_filters.rs` |
-| Change the detail/stream flow | `src/app/detail.rs`, `src/app/streams.rs`, `crates/ui/detail.slint` |
+| Change the detail/stream flow / Watch Now selection | `src/app/detail.rs`, `src/app/streams.rs`, `crates/ui/detail.slint` |
 | Add a persisted app field | `src/app.rs` (struct), `src/app/io.rs` + relevant module's `read/write_persisted_*`, then `src/app/sync.rs` if it should sync |
 | Touch playback | `crates/player/src/lib.rs`, `src/app/playback.rs`, `crates/ui/player.slint` |
 | Bottom-sheet / player feedback motion | `crates/ui/menusheet.slint` (`open` + retained exit), `crates/ui/player.slint` (`flash_pill`), `crates/ui/anim.slint` (category durations), `tests/animation_feedback.rs` |

@@ -402,6 +402,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_home_featured_picked(move || b.home_showcase_picked());
 
     let b = bridge.clone();
+    app.on_home_featured_watch_now(move || b.home_showcase_watch_now());
+
+    let b = bridge.clone();
     app.on_home_featured_step(move |d| b.home_showcase_step(d));
 
     let b = bridge.clone();

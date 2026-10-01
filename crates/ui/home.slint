@@ -695,6 +695,7 @@ component FeaturedActions inherits HorizontalLayout {
     in property <bool> narrow;
     in property <bool> compact;
     callback picked();
+    callback watch_now();
 
     // Equal pills match the centered narrow layout; compact type leaves room
     // for the longer translated Details label on a portrait phone.
@@ -717,7 +718,7 @@ component FeaturedActions inherits HorizontalLayout {
         play: true;
         narrow: root.narrow;
         compact: root.compact;
-        picked => { root.picked(); }
+        picked => { root.watch_now(); }
     }
 }
 
@@ -814,6 +815,7 @@ component FeaturedShowcase inherits Rectangle {
     in property <int> count;
     in property <bool> narrow;
     callback picked();
+    callback watch_now();
     callback step(int);
     callback pan_hint();
     callback pan_release();
@@ -857,19 +859,34 @@ component FeaturedShowcase inherits Rectangle {
         property <length> start_x: 0px;
         property <length> start_y: 0px;
         property <bool> swiping: false;
+        property <bool> hint_live: false;
         pointer-event(ev) => {
             if (ev.kind == PointerEventKind.down) {
                 swipe_area.start_x = swipe_area.mouse-x;
                 swipe_area.start_y = swipe_area.mouse-y;
                 swipe_area.swiping = false;
+                swipe_area.hint_live = true;
             } else if (ev.kind == PointerEventKind.move) {
+                if (!(swipe_area.pressed || ev.touch-finger-id != 0)) {
+                    return;
+                }
+                if (!swipe_area.hint_live) {
+                    swipe_area.start_x = swipe_area.mouse-x;
+                    swipe_area.start_y = swipe_area.mouse-y;
+                    swipe_area.hint_live = true;
+                }
                 let dx = swipe_area.mouse-x - swipe_area.start_x;
                 let dy = swipe_area.mouse-y - swipe_area.start_y;
-                if (Math.abs(dx) > 10px && Math.abs(dx) > Math.abs(dy)) {
-                    swipe_area.swiping = true;
-                    root.pan_hint();
-                } else if (Math.abs(dy) > 10px && Math.abs(dy) > Math.abs(dx)) {
+                if (Math.abs(dy) > 8px && Math.abs(dy) > Math.abs(dx)) {
+                    swipe_area.swiping = false;
                     root.pan_release();
+                } else {
+                    // Hint before the page's 8px grab threshold, and keep
+                    // renewing the hold while a horizontal drag is active.
+                    root.pan_hint();
+                    if (Math.abs(dx) > 10px && Math.abs(dx) > Math.abs(dy)) {
+                        swipe_area.swiping = true;
+                    }
                 }
             } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
                 let dx = swipe_area.mouse-x - swipe_area.start_x;
@@ -881,12 +898,14 @@ component FeaturedShowcase inherits Rectangle {
                     root.step(dx < 0px ? 1 : -1);
                 }
                 swipe_area.swiping = false;
+                swipe_area.hint_live = false;
                 root.pan_release();
             }
         }
         changed pressed => {
-            if (!self.pressed && swipe_area.swiping) {
+            if (!self.pressed && swipe_area.hint_live) {
                 swipe_area.swiping = false;
+                swipe_area.hint_live = false;
                 root.pan_release();
             }
         }
@@ -1005,6 +1024,7 @@ component FeaturedShowcase inherits Rectangle {
                 narrow: true;
                 compact: root.width < 400px;
                 picked => { root.picked(); }
+                watch_now => { root.watch_now(); }
             }
         }
     }
@@ -1015,6 +1035,7 @@ component FeaturedShowcase inherits Rectangle {
         y: root.height - self.height - 18px;
         compact: root.width < 1000px;
         picked => { root.picked(); }
+        watch_now => { root.watch_now(); }
     }
 }
 
@@ -1150,6 +1171,7 @@ export component HomePage {
     callback upcoming_cal_pick(int);
     callback upcoming_cal_activate();
     callback featured_picked();
+    callback featured_watch_now();
     callback featured_step(int);
     // System back on the root screen: background the app (Android moves
     // the task to the back, keeping process state; desktop never fires it).
@@ -1642,6 +1664,15 @@ export component HomePage {
                                     root.kb_active = false;
                                     root.featured_picked();
                                 }
+                                watch_now => {
+                                    root.kb_active = false;
+                                    root.featured_watch_now();
+                                }
+                                pan_hint => {
+                                    root.kb_active = false;
+                                    root.rail_panned();
+                                }
+                                pan_release => { root.rail_pan_released(); }
                                 step(d) => { root.step_featured(d); }
                             }
 

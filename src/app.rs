@@ -317,8 +317,20 @@ impl SyncNotice {
     }
 }
 
+/// Determines Back behavior after Watch Now opens an episode directly.
+#[derive(Clone, Copy)]
+enum WatchNowOrigin {
+    Featured,
+    Detail,
+}
+
 /// The item whose detail modal is currently open.
 struct ModalItem {
+    /// Identity of this opening, including reopens of the same title.
+    open_token: Arc<()>,
+    /// One-shot selection intent; never persisted or carried to another modal.
+    pending_watch_now: Option<WatchNowOrigin>,
+    episodes_loading: bool,
     /// The item's own id (movie or series id).
     id: String,
     type_: String,

@@ -264,6 +264,9 @@ impl Bridge {
         {
             let mut state = self.shared.lock().unwrap();
             state.modal_item = Some(ModalItem {
+                open_token: Arc::new(()),
+                pending_watch_now: None,
+                episodes_loading: false,
                 id: e.id.clone(),
                 type_: e.type_.clone(),
                 request_id: e.id.clone(),

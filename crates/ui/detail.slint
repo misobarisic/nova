@@ -917,7 +917,7 @@ export component DetailPage {
     }
 
     function kb_back() {
-        // A deep-linked streams view (Home Continue) skips the episode list,
+        // A deep-linked streams view (Home Continue / Watch Now) skips the episode list,
         // so back closes the modal instead of revealing a screen never seen.
         if (!root.modal_episodes && root.episode_context != "" && !root.deep_stream) {
             root.episodes_back();

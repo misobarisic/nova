@@ -296,12 +296,20 @@ impl Bridge {
     }
 
     pub(super) fn home_showcase_picked(&self) {
+        self.open_home_showcase(false);
+    }
+
+    pub(super) fn home_showcase_watch_now(&self) {
+        self.open_home_showcase(true);
+    }
+
+    fn open_home_showcase(&self, watch_now: bool) {
         let preview = {
             let state = self.shared.lock().unwrap();
             state.home_showcase.get(state.home_showcase_index).cloned()
         };
         if let Some(preview) = preview {
-            self.open_preview(preview, 0, false, None);
+            self.open_preview(preview, 0, false, None, watch_now);
         }
     }
 

@@ -36,7 +36,7 @@ impl Bridge {
             None => return,
         };
 
-        self.open_preview(preview, generation, searching, Some(index));
+        self.open_preview(preview, generation, searching, Some(index), false);
     }
 
     /// Open any catalog preview in the shared detail flow. Home's featured
@@ -48,6 +48,7 @@ impl Bridge {
         generation: u64,
         searching: bool,
         discover_index: Option<usize>,
+        watch_now: bool,
     ) {
         let app = match self.app() {
             Some(a) => a,
@@ -57,6 +58,10 @@ impl Bridge {
         {
             let mut state = self.shared.lock().unwrap();
             state.modal_item = Some(ModalItem {
+                open_token: Arc::new(()),
+                pending_watch_now: (watch_now && preview.type_ != "movie")
+                    .then_some(WatchNowOrigin::Featured),
+                episodes_loading: false,
                 id: preview.id.clone(),
                 type_: if preview.type_.is_empty() {
                     state
@@ -187,6 +192,7 @@ impl Bridge {
         self.restore_detail_snapshot(&item_id);
 
         if modal_type == "movie" {
+            self.cancel_watch_now();
             // Movies keep the direct behaviour: fetch streams right away.
             self.start_stream_search(item_id);
         } else {
@@ -320,6 +326,14 @@ impl Bridge {
     /// installed addon with a `meta` resource for this type. Falls back to
     /// the plain stream search when nobody can list episodes.
     pub(super) fn prepare_episodes(&self, id: String, modal_type: String) {
+        let open_token = {
+            let mut state = self.shared.lock().unwrap();
+            let Some(modal) = state.modal_item.as_mut().filter(|m| m.id == id) else {
+                return;
+            };
+            modal.episodes_loading = true;
+            modal.open_token.clone()
+        };
         // Fast path: if this item's episode list was fetched before, show the
         // cached version instantly while the background refresh below runs.
         let had_cache = if let Some(cached) = read_episodes_cache_for(&modal_type, &id) {
@@ -386,6 +400,7 @@ impl Bridge {
             modal_type: String,
             id: String,
             refresh: bool,
+            open_token: Arc<()>,
             mut urls: Vec<String>,
             mut found: Option<MetaItem>,
         ) {
@@ -399,14 +414,14 @@ impl Bridge {
                 write_episodes_cache_for(&modal_type, &id, &videos);
                 let bridge2 = bridge.clone();
                 let _ = slint::invoke_from_event_loop(move || {
-                    bridge2.apply_episode_meta(id, Some(item), refresh);
+                    bridge2.apply_episode_meta(id, Some(item), refresh, open_token);
                 });
                 return;
             }
             let Some(url) = (!urls.is_empty()).then(|| urls.remove(0)) else {
                 let bridge2 = bridge.clone();
                 let _ = slint::invoke_from_event_loop(move || {
-                    bridge2.apply_episode_meta(id, None, refresh);
+                    bridge2.apply_episode_meta(id, None, refresh, open_token);
                 });
                 return;
             };
@@ -418,11 +433,11 @@ impl Bridge {
                 {
                     found = Some(item);
                 }
-                run(bridge2, modal_type, id, refresh, urls, found);
+                run(bridge2, modal_type, id, refresh, open_token, urls, found);
             });
         }
 
-        run(bridge, modal_type, id, refresh, meta_urls, None);
+        run(bridge, modal_type, id, refresh, open_token, meta_urls, None);
     }
 
     /// Fill empty `ModalItem` header slots (background/description/genres/
@@ -628,11 +643,20 @@ impl Bridge {
     /// still receives the fresh videos in place when the show is unfinished.
     /// When no addon can provide episodes, fall back to plain streams unless
     /// a cached list is already being shown.
-    pub(super) fn apply_episode_meta(&self, id: String, found: Option<MetaItem>, refresh: bool) {
+    pub(super) fn apply_episode_meta(
+        &self,
+        id: String,
+        found: Option<MetaItem>,
+        refresh: bool,
+        open_token: Arc<()>,
+    ) {
         let (still_open, modal_type) = {
-            let state = self.shared.lock().unwrap();
-            match state.modal_item.as_ref() {
-                Some(m) if m.id == id => (true, m.type_.clone()),
+            let mut state = self.shared.lock().unwrap();
+            match state.modal_item.as_mut() {
+                Some(m) if m.id == id && Arc::ptr_eq(&m.open_token, &open_token) => {
+                    m.episodes_loading = false;
+                    (true, m.type_.clone())
+                }
                 _ => (false, String::new()),
             }
         };
@@ -686,15 +710,18 @@ impl Bridge {
                 let on_top_level = app.get_modal_episodes()
                     && app.get_episode_context().is_empty()
                     && app.get_streams().row_count() == 0;
-                let untouched = {
+                let (untouched, awaiting_watch_now) = {
                     let state = self.shared.lock().unwrap();
                     state
                         .modal_item
                         .as_ref()
-                        .map(|m| m.id == id && m.season_index == 0)
-                        .unwrap_or(false)
+                        .filter(|m| m.id == id)
+                        .map(|m| (m.season_index == 0, m.pending_watch_now.is_some()))
+                        .unwrap_or((false, false))
                 };
-                if on_top_level && untouched {
+                // A pending explicit request also needs fresh metadata after
+                // an empty/stale cache, even if no picker could be displayed.
+                if (on_top_level && untouched) || awaiting_watch_now {
                     eprintln!(
                         "nova: detail refresh {modal_type}/{id}: status={status:?}, picker swap, {} videos",
                         videos.len()
@@ -738,6 +765,7 @@ impl Bridge {
                 }
             }
         }
+        self.resolve_watch_now();
     }
 
     /// Main thread: swap fresh episode metadata into the open modal without
@@ -1180,6 +1208,7 @@ impl Bridge {
     /// Main thread: the Episodes tab pager moved to `page` (absolute; clamped
     /// here). Rebuilds the page's rows and queues its thumbnails.
     pub(super) fn episode_page_picked(&self, page: i32) {
+        self.cancel_watch_now();
         let total = self.current_episode_rows().len();
         let pages = page_count(total) as i32;
         let page = page.clamp(0, pages.saturating_sub(1));
@@ -1303,6 +1332,7 @@ impl Bridge {
     pub(super) fn show_episode_picker(&self, id: String, videos: Vec<Video>) {
         let seasons = ordered_seasons(&videos);
         if seasons.is_empty() {
+            self.resolve_watch_now();
             self.start_stream_search(id);
             return;
         }
@@ -1370,10 +1400,13 @@ impl Bridge {
                 app.set_detail_kb_ep(i as i32);
             }
         }
+        // Cached metadata can satisfy Watch Now before the refresh answers.
+        self.resolve_watch_now();
     }
 
     /// Main thread: switch the episode list to another season.
     pub(super) fn season_picked(&self, index: usize) {
+        self.cancel_watch_now();
         self.reset_episode_page();
         let idx = {
             let mut state = self.shared.lock().unwrap();
@@ -1619,6 +1652,7 @@ impl Bridge {
     /// Main thread: an episode was picked — show its streams. `index` is
     /// into the currently displayed (filter-narrowed) episode rows.
     pub(super) fn episode_picked(&self, index: usize) {
+        self.cancel_watch_now();
         let (series_id, request_id, context, thumb_url) = {
             let state = self.shared.lock().unwrap();
             let m = match state.modal_item.as_ref() {
@@ -1718,6 +1752,7 @@ impl Bridge {
 
     /// Main thread: go back from an episode's streams to the episode list.
     pub(super) fn episodes_back(&self) {
+        self.cancel_watch_now();
         let is_episodic = {
             let state = self.shared.lock().unwrap();
             state
@@ -1748,6 +1783,7 @@ impl Bridge {
     /// Series episode streams render inside the Episodes tab, so stepping
     /// into/out of streams keeps the tab in sync.
     pub(super) fn detail_tab_picked(&self, tab: i32) {
+        self.cancel_watch_now();
         let Some(app) = self.app() else {
             return;
         };
@@ -1758,6 +1794,7 @@ impl Bridge {
 
     /// Episode filter box: re-render the (filtered) rows + thumbnails.
     pub(super) fn episode_filter_changed(&self, text: SharedString) {
+        self.cancel_watch_now();
         self.reset_episode_page();
         if let Some(app) = self.app() {
             app.set_episode_filter(text);
@@ -1767,21 +1804,78 @@ impl Bridge {
         self.refresh_episode_rows();
     }
 
-    /// Sidebar WATCH NOW: series jump to the Episodes tab (the user picks an
-    /// episode, then a stream — auto-playing a quality blind is wrong);
-    /// movies already list their streams, so this is a no-op for them.
+    /// Both Watch Now entry points share the same episode selection; streams
+    /// remain a manual choice so quality/addon preferences are respected.
     pub(super) fn watch_now(&self) {
-        let is_episodic = {
-            let state = self.shared.lock().unwrap();
-            state
-                .modal_item
-                .as_ref()
-                .map(|m| !m.seasons.is_empty())
-                .unwrap_or(false)
-        };
-        if is_episodic && let Some(app) = self.app() {
+        {
+            let mut state = self.shared.lock().unwrap();
+            let Some(modal) = state.modal_item.as_mut() else {
+                return;
+            };
+            if modal.type_ == "movie" {
+                return;
+            }
+            modal.pending_watch_now = Some(WatchNowOrigin::Detail);
+        }
+        if let Some(app) = self.app() {
             app.set_detail_tab(3);
-            app.set_detail_kb_zone(2);
+            app.set_detail_kb_zone(3);
+        }
+        self.resolve_watch_now();
+    }
+
+    fn cancel_watch_now(&self) {
+        if let Some(modal) = self.shared.lock().unwrap().modal_item.as_mut() {
+            modal.pending_watch_now = None;
+        }
+    }
+
+    /// Consume one pending intent once an eligible episode is known. With
+    /// no cached candidate, keep waiting for the fresh metadata lookup.
+    fn resolve_watch_now(&self) {
+        let selected = {
+            let mut state = self.shared.lock().unwrap();
+            let Some(modal) = state.modal_item.as_ref() else {
+                return;
+            };
+            let Some(origin) = modal.pending_watch_now else {
+                return;
+            };
+            let target = next_episode_to_watch(&modal.id, &modal.videos, &state.progress).and_then(
+                |video| {
+                    let season = video.season?;
+                    let row = Self::filtered_row_index(&modal.videos, season, "", &video.id)?;
+                    let season_index = modal.seasons.iter().position(|&s| s == season)?;
+                    Some((season_index, row))
+                },
+            );
+            if target.is_none() && modal.episodes_loading {
+                return;
+            }
+            let modal = state.modal_item.as_mut().unwrap();
+            modal.pending_watch_now = None;
+            target.map(|(season_index, row)| {
+                modal.season_index = season_index;
+                modal.episode_page = 0;
+                (season_index, row, origin)
+            })
+        };
+        let Some((season_index, row, origin)) = selected else {
+            self.episodes_back();
+            return;
+        };
+        let Some(app) = self.app() else {
+            return;
+        };
+        app.set_episode_filter(SharedString::default());
+        app.set_season_combo_idx(season_index as i32);
+        self.refresh_episode_rows();
+        self.episode_picked(row);
+        if matches!(origin, WatchNowOrigin::Featured)
+            && !app.get_modal_episodes()
+            && !app.get_episode_context().is_empty()
+        {
+            app.set_detail_deep_stream(true);
         }
     }
 
