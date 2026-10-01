@@ -225,6 +225,12 @@ export component AppWindow inherits Window {
     in-out property <[CategoryRow]> category_rows: [];
     in-out property <string> category_input: "";
     in-out property <[HomeCatalogRow]> home_catalog_rows: [];
+    in-out property <[string]> home_catalog_candidate_names: [];
+    in-out property <int> home_catalog_candidate_index: -1;
+    in-out property <[string]> home_catalog_genre_names: [];
+    in-out property <int> home_catalog_genre_index: 0;
+    in-out property <bool> home_catalog_add_open: false;
+    in-out property <string> home_catalog_add_error: "";
     // Library filter: empty string = show all, otherwise filter by category.
     in-out property <string> library_filter_category: "";
     // Category names for the library filter dropdown.
@@ -500,7 +506,10 @@ export component AppWindow inherits Window {
     callback sync_respond_pair(string, bool);
     callback category_added(string);
     callback category_removed(int);
-    callback home_catalog_toggled(int);
+    callback home_catalog_add_requested();
+    callback home_catalog_candidate_picked(int);
+    callback home_catalog_added(int, int);
+    callback home_catalog_removed(int);
     callback category_renamed(int, string);
     callback toggle_entry_category(string);
     callback library_filter_picked(string);
@@ -786,6 +795,12 @@ export component AppWindow inherits Window {
         category_rows <=> root.category_rows;
         category_input <=> root.category_input;
         home_catalog_rows <=> root.home_catalog_rows;
+        home_catalog_candidate_names <=> root.home_catalog_candidate_names;
+        home_catalog_candidate_index <=> root.home_catalog_candidate_index;
+        home_catalog_genre_names <=> root.home_catalog_genre_names;
+        home_catalog_genre_index <=> root.home_catalog_genre_index;
+        home_catalog_add_open <=> root.home_catalog_add_open;
+        home_catalog_add_error <=> root.home_catalog_add_error;
         cache_images <=> root.cache_images;
         cache_disk_usage <=> root.cache_disk_usage;
         cache_enabled <=> root.cache_enabled;
@@ -869,7 +884,10 @@ export component AppWindow inherits Window {
         playback_speed_stepped(d) => { root.playback_speed_stepped(d); }
         category_added(n) => { root.category_added(n); }
         category_removed(i) => { root.category_removed(i); }
-        home_catalog_toggled(i) => { root.home_catalog_toggled(i); }
+        home_catalog_add_requested => { root.home_catalog_add_requested(); }
+        home_catalog_candidate_picked(i) => { root.home_catalog_candidate_picked(i); }
+        home_catalog_added(c, g) => { root.home_catalog_added(c, g); }
+        home_catalog_removed(i) => { root.home_catalog_removed(i); }
         save_settings => { root.save_settings(); }
         settings_edited(field) => { root.settings_edited(field); }
         clear_cache => { root.clear_cache(); }

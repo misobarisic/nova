@@ -90,9 +90,10 @@ pub struct DownloadSettings {
     pub auto_delete_watched: bool,
 }
 
-/// One device-local catalog selected for the Home featured showcase.
-/// Identity uses the addon install URL plus protocol type and catalog id; the
-/// display name is deliberately not persisted because manifests can rename it.
+/// One catalog and optional genre selected for the synced Home featured
+/// showcase. Identity uses the addon install URL plus protocol type, catalog
+/// id and genre; the display name is deliberately not persisted because
+/// manifests can rename it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HomeCatalogSource {
@@ -100,6 +101,9 @@ pub struct HomeCatalogSource {
     #[serde(rename = "type")]
     pub type_: String,
     pub catalog_id: String,
+    /// Empty means all genres. Missing in older settings files.
+    #[serde(default)]
+    pub genre: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -329,7 +333,8 @@ pub struct CacheSettings {
     #[serde(default = "default_true")]
     pub discover_catalog_addon_names: bool,
     /// Catalogs whose titles are featured and rotated at the top of Home.
-    /// Device-local: addon order and available catalogs can differ by device.
+    /// This selection syncs; a device can fetch it only when the matching
+    /// addon is available and enabled there.
     #[serde(default)]
     pub home_catalog_sources: Vec<HomeCatalogSource>,
     /// Minimum grid columns for My Library (same scheme).
@@ -753,10 +758,18 @@ mod tests {
         let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
         let mut settings: CacheSettings = serde_json::from_str(older).unwrap();
         assert!(settings.home_catalog_sources.is_empty());
+        let legacy_source: HomeCatalogSource = serde_json::from_value(serde_json::json!({
+            "addonUrl": "https://example.test/manifest.json",
+            "type": "series",
+            "catalogId": "trending"
+        }))
+        .unwrap();
+        assert!(legacy_source.genre.is_empty());
         settings.home_catalog_sources.push(HomeCatalogSource {
             addon_url: "https://example.test/manifest.json".into(),
             type_: "series".into(),
             catalog_id: "trending".into(),
+            genre: "Action".into(),
         });
         let encoded = serde_json::to_string(&settings).unwrap();
         let restored: CacheSettings = serde_json::from_str(&encoded).unwrap();
@@ -766,7 +779,8 @@ mod tests {
             serde_json::json!({
                 "addonUrl": "https://example.test/manifest.json",
                 "type": "series",
-                "catalogId": "trending"
+                "catalogId": "trending",
+                "genre": "Action"
             })
         );
     }

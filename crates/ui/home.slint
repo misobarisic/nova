@@ -908,6 +908,17 @@ export component HomePage {
         rail_pan_release_t.stop();
     }
 
+    function restart_showcase_rotation() {
+        if (root.view == 0 && root.featured_count > 1) {
+            showcase_rotation_t.restart();
+        }
+    }
+
+    function step_featured(delta: int) {
+        root.restart_showcase_rotation();
+        root.featured_step(delta);
+    }
+
     // A card may lose its up/cancel when the Flickable captures a swipe.
     // Like the stream pills, allow the axis hint to lapse if movement stops.
     rail_pan_release_t := Timer {
@@ -922,8 +933,10 @@ export component HomePage {
     showcase_rotation_t := Timer {
         interval: 9s;
         running: root.view == 0 && root.featured_count > 1;
-        triggered => { root.featured_step(1); }
+        triggered => { root.step_featured(1); }
     }
+
+    changed featured_index => { root.restart_showcase_rotation(); }
 
     callback home_picked();
     callback discover_picked();
@@ -1437,7 +1450,7 @@ export component HomePage {
                                     root.kb_active = false;
                                     root.featured_picked();
                                 }
-                                step(d) => { root.featured_step(d); }
+                                step(d) => { root.step_featured(d); }
                             }
 
                             if root.continue_rows.length == 0 && root.upcoming_rows.length == 0: VerticalLayout {

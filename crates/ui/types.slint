@@ -75,12 +75,12 @@ export struct CategoryRow {
     name: string,
 }
 
-/// One selectable addon catalog in Settings → Home.
+/// One configured addon catalog/genre source in Settings → Home.
 export struct HomeCatalogRow {
     title: string,
     addon: string,
     media_type: string,
-    selected: bool,
+    genre: string,
     /// Whether its addon manifest is currently known (not removed/unavailable).
     available: bool,
     /// Whether the addon is enabled and can provide titles right now.

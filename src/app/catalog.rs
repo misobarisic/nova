@@ -1752,7 +1752,7 @@ pub(crate) fn build_merged_type_defs(installed: &[Installed]) -> Vec<TypeDef> {
         .collect()
 }
 
-fn catalog_genres(catalog: &addons::Catalog) -> Vec<String> {
+pub(super) fn catalog_genres(catalog: &addons::Catalog) -> Vec<String> {
     let Some(extra) = catalog.extra.iter().find(|extra| extra.name == "genre") else {
         return Vec::new();
     };

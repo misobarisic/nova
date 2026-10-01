@@ -559,7 +559,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_category_removed(move |i| b.remove_category_from_ui(i as usize));
 
     let b = bridge.clone();
-    app.on_home_catalog_toggled(move |i| b.home_catalog_toggled(i as usize));
+    app.on_home_catalog_add_requested(move || b.home_catalog_add_requested());
+
+    let b = bridge.clone();
+    app.on_home_catalog_candidate_picked(move |i| b.home_catalog_candidate_picked(i));
+
+    let b = bridge.clone();
+    app.on_home_catalog_added(move |catalog, genre| b.home_catalog_added(catalog, genre));
+
+    let b = bridge.clone();
+    app.on_home_catalog_removed(move |i| b.home_catalog_removed(i as usize));
 
     let b = bridge.clone();
     app.on_toggle_entry_category(move |name| b.toggle_entry_category(&name));

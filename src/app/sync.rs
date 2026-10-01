@@ -341,7 +341,7 @@ pub(crate) fn sort_by_order(current: Vec<String>, order: &[String]) -> Vec<Strin
 
 /// `CacheSettings` fields that are never synced: device-specific
 /// (`android_hwdec`, `player_external`, `desktop_external_app`,
-/// `playback_speed`, `language`, `home_catalog_sources`) or local-only
+/// `episode_start_behavior`, `playback_speed`, `language`) or local-only
 /// (`rewrite_existing`);
 /// `categories` sync as their own domain so concurrent additions union.
 const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
@@ -353,7 +353,6 @@ const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
     "language",
     "rewrite_existing",
     "categories",
-    "home_catalog_sources",
 ];
 
 /// Image-cache controls are interdependent (re-encoding only applies to the
@@ -1626,6 +1625,7 @@ mod tests {
                 addon_url: "https://example.test/manifest.json".into(),
                 type_: "series".into(),
                 catalog_id: "trending".into(),
+                genre: "Action".into(),
             }],
             ..Default::default()
         };
@@ -1642,15 +1642,22 @@ mod tests {
         assert_eq!(cache["quality"], 91);
         assert_eq!(cache["cache_images"], true);
         assert!(!fields.contains_key("quality"));
-        // Local-only fields never sync here: the playback rate belongs to this
-        // device (its speakers / headphones), not to the account.
+        // Categories use their own union domain; player and display choices
+        // below are device-specific.
         assert!(!fields.contains_key("categories"));
         assert!(!fields.contains_key("android_hwdec"));
         assert!(!fields.contains_key("player_external"));
         assert!(!fields.contains_key("desktop_external_app"));
         assert!(!fields.contains_key("playback_speed"));
         assert!(!fields.contains_key("rewrite_existing"));
-        assert!(!fields.contains_key("home_catalog_sources"));
+        let home_sources: serde_json::Value = serde_json::from_str(
+            fields
+                .get("home_catalog_sources")
+                .expect("Home catalog selections sync as one setting"),
+        )
+        .unwrap();
+        assert_eq!(home_sources[0]["catalogId"], "trending");
+        assert_eq!(home_sources[0]["genre"], "Action");
     }
 
     #[test]
@@ -1692,14 +1699,30 @@ mod tests {
             android_hwdec: AndroidHwdec::Sw,
             player_external: true,
             desktop_external_app: DesktopExternalApp::Mpv,
+            home_catalog_sources: vec![HomeCatalogSource {
+                addon_url: "https://local.test/manifest.json".into(),
+                type_: "series".into(),
+                catalog_id: "local".into(),
+                genre: String::new(),
+            }],
             ..Default::default()
         };
+        let remote_home_sources = vec![HomeCatalogSource {
+            addon_url: "https://remote.test/manifest.json".into(),
+            type_: "series".into(),
+            catalog_id: "trending".into(),
+            genre: "Action".into(),
+        }];
         let records = vec![
             ("cache".to_string(), "{\"quality\":77}".to_string()),
             ("android_hwdec".to_string(), "\"hw+\"".to_string()),
             ("player_external".to_string(), "false".to_string()),
             ("desktop_external_app".to_string(), "\"system\"".to_string()),
             ("rewrite_existing".to_string(), "true".to_string()),
+            (
+                "home_catalog_sources".to_string(),
+                serde_json::to_string(&remote_home_sources).unwrap(),
+            ),
         ];
         let merged = merge_settings_fields(&base, &records);
         assert_eq!(merged.quality, 77);
@@ -1707,6 +1730,7 @@ mod tests {
         assert_eq!(merged.android_hwdec, AndroidHwdec::Sw);
         assert!(merged.player_external);
         assert_eq!(merged.desktop_external_app, DesktopExternalApp::Mpv);
+        assert_eq!(merged.home_catalog_sources, remote_home_sources);
         assert!(!merged.rewrite_existing);
     }
 

@@ -1,4 +1,5 @@
 import { ScrollView, Button } from "std-widgets.slint";
+import { Dropdown } from "dropdown.slint";
 import { SearchField } from "searchfield.slint";
 import { AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, LicenseSource } from "types.slint";
 import { IcExtension, IcTag, IcImage, IcDisplay, IcPlay, IcChevronLeft, IcChevronRight, IcSettingsGear, IcSync, IcDelete } from "icons.slint";
@@ -96,51 +97,6 @@ component ToggleSwitch inherits Rectangle {
             checked = !checked;
             toggled();
         }
-    }
-}
-
-// Read-only model-backed switch used by Settings → Home. Rust owns each
-// selected value, so the control reports intent without editing a stale copy
-// of the catalog row.
-component CatalogToggle inherits Rectangle {
-    in property <bool> checked: false;
-    in property <string> name: "";
-    in property <bool> focused: false;
-    callback toggled();
-    width: 44px;
-    height: 32px;
-    border-width: focused ? 2px : 0px;
-    border-color: #8b5cf6;
-    border-radius: 6px;
-
-    Rectangle {
-        y: (parent.height - self.height) / 2;
-        width: 100%;
-        height: 24px;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: root.checked ? #a89af5 : #33333c;
-        background: root.checked ? #a89af5 : #26262e;
-        animate background { duration: Anim.hover_fast; }
-
-        Rectangle {
-            x: root.checked ? parent.width - self.width - 3px : 3px;
-            y: (parent.height - self.height) / 2;
-            width: 18px;
-            height: 18px;
-            border-radius: 9px;
-            background: root.checked ? #14141a : #d9d9e2;
-            animate x { duration: Anim.hover_fast; }
-        }
-    }
-
-    TouchArea {
-        accessible-role: button;
-        accessible-label: root.name + (root.checked ? @tr("Selected") : @tr("Not selected"));
-        width: 100%;
-        height: 100%;
-        mouse-cursor: pointer;
-        clicked => { root.toggled(); }
     }
 }
 
@@ -790,6 +746,12 @@ export component SettingsPage {
     in-out property <[LicenseSource]> license_sources: [];
     in-out property <[CategoryRow]> category_rows: [];
     in-out property <[HomeCatalogRow]> home_catalog_rows: [];
+    in-out property <[string]> home_catalog_candidate_names: [];
+    in-out property <int> home_catalog_candidate_index: -1;
+    in-out property <[string]> home_catalog_genre_names: [];
+    in-out property <int> home_catalog_genre_index: 0;
+    in-out property <bool> home_catalog_add_open: false;
+    in-out property <string> home_catalog_add_error: "";
     in-out property <string> category_input: "";
     in-out property <bool> cache_images: true;
     in-out property <string> cache_disk_usage: "";
@@ -904,7 +866,10 @@ export component SettingsPage {
     callback addon_copy_link(string);
     callback category_added(string);
     callback category_removed(int);
-    callback home_catalog_toggled(int);
+    callback home_catalog_add_requested();
+    callback home_catalog_candidate_picked(int);
+    callback home_catalog_added(int, int);
+    callback home_catalog_removed(int);
     // Playback rate ± one 0.05 step (Settings → Player). The backend
     // quantizes it and writes the property back.
     callback playback_speed_stepped(int);
@@ -1217,6 +1182,17 @@ export component SettingsPage {
     // on Enter (Left/Right no-op); row 1 opens text edit mode.
     function kb_torrent_n() -> int { return root.torrent_enabled ? 6 : 1; }
 
+    // One remove action per configured entry plus the final Add catalog row.
+    function kb_home_n() -> int { return root.home_catalog_rows.length + 1; }
+
+    function kb_home_activate() {
+        if (root.kb_home < root.home_catalog_rows.length) {
+            root.home_catalog_removed(root.kb_home);
+        } else {
+            root.home_catalog_add_requested();
+        }
+    }
+
     function kb_ac_has_config() -> bool {
         if (root.kb_ar < 0 || root.kb_ar >= root.addon_rows.length) {
             return false;
@@ -1241,8 +1217,8 @@ export component SettingsPage {
         if (root.kb_dlr >= root.downloads_rows.length) {
             root.kb_dlr = Math.max(0, root.downloads_rows.length - 1);
         }
-        if (root.kb_home >= root.home_catalog_rows.length) {
-            root.kb_home = Math.max(0, root.home_catalog_rows.length - 1);
+        if (root.kb_home >= root.kb_home_n()) {
+            root.kb_home = Math.max(0, root.kb_home_n() - 1);
         }
         if (root.kb_about_idx >= root.license_sources.length) {
             root.kb_about_idx = Math.max(0, root.license_sources.length - 1);
@@ -1373,7 +1349,7 @@ export component SettingsPage {
         if (root.kb_zone == 15) {
             root.kb_nudge(-150px);
         } else if (root.kb_zone == 16) {
-            if (root.kb_home + 1 < root.home_catalog_rows.length) {
+            if (root.kb_home + 1 < root.kb_home_n()) {
                 root.kb_home += 1;
                 root.kb_nudge(-50px);
             }
@@ -1697,8 +1673,8 @@ export component SettingsPage {
             }
         } else if (root.kb_zone == 10) {
             root.kb_anim_flip(root.kb_anr);
-        } else if (root.kb_zone == 16 && root.kb_home >= 0 && root.kb_home < root.home_catalog_rows.length) {
-            root.home_catalog_toggled(root.kb_home);
+        } else if (root.kb_zone == 16) {
+            root.kb_home_activate();
         }
     }
 
@@ -1755,8 +1731,8 @@ export component SettingsPage {
             }
         } else if (root.kb_zone == 10) {
             root.kb_anim_flip(root.kb_anr);
-        } else if (root.kb_zone == 16 && root.kb_home >= 0 && root.kb_home < root.home_catalog_rows.length) {
-            root.home_catalog_toggled(root.kb_home);
+        } else if (root.kb_zone == 16) {
+            root.kb_home_activate();
         }
     }
 
@@ -1843,8 +1819,8 @@ export component SettingsPage {
             }
         } else if (root.kb_zone == 10) {
             root.kb_anim_flip(root.kb_anr);
-        } else if (root.kb_zone == 16 && root.kb_home >= 0 && root.kb_home < root.home_catalog_rows.length) {
-            root.home_catalog_toggled(root.kb_home);
+        } else if (root.kb_zone == 16) {
+            root.kb_home_activate();
         }
     }
 
@@ -1904,7 +1880,21 @@ export component SettingsPage {
             key-pressed(e) => {
                 // Edit mode belongs to the text fields (native there);
                 // swallow one stray keypress to recover a lost focus.
-                if (root.kb_edit != 0) {
+                if (root.home_catalog_add_open
+                    && (e.text == Key.Backspace || e.text == Key.Back || e.text == Key.Escape)) {
+                    root.home_catalog_add_open = false;
+                    accept
+                } else if (root.home_catalog_add_open && e.text == Key.Return) {
+                    if (root.home_catalog_candidate_names.length > 0) {
+                        root.home_catalog_added(
+                            root.home_catalog_candidate_index,
+                            root.home_catalog_genre_index
+                        );
+                    }
+                    accept
+                } else if (root.home_catalog_add_open) {
+                    reject
+                } else if (root.kb_edit != 0) {
                     root.kb_edit = 0;
                     self.focus();
                     accept
@@ -4648,7 +4638,7 @@ export component SettingsPage {
 
                             Text {
                                 width: 100%;
-                                text: @tr("Choose catalogs whose titles should rotate at the top of Home. Each selected catalog contributes up to five titles.");
+                                text: @tr("Add catalogs with an optional genre filter. Each selection contributes up to five titles.");
                                 font-size: 12px;
                                 color: #b9b9c4;
                                 wrap: word-wrap;
@@ -4666,13 +4656,13 @@ export component SettingsPage {
 
                                     if root.home_catalog_rows.length == 0: Rectangle {
                                         background: #121214;
-                                        min-height: 56px;
+                                        min-height: 64px;
 
                                         Text {
                                             x: 16px;
                                             y: (parent.height - self.height) / 2;
                                             width: parent.width - 32px;
-                                            text: @tr("No catalogs available. Install an addon with catalogs in Settings → Addons.");
+                                            text: @tr("No featured catalogs selected. Add one to choose its genre.");
                                             font-size: 12px;
                                             color: #8a8a92;
                                             wrap: word-wrap;
@@ -4683,20 +4673,34 @@ export component SettingsPage {
                                         tinted: Math.mod(i, 2) == 0;
                                         row-title: home.title;
                                         row-desc: home.addon + " · " + home.media_type
+                                            + " · " + (home.genre == "" ? @tr("All genres") : home.genre)
                                             + (home.available ? (home.enabled ? "" : " · " + @tr("Addon disabled")) : " · " + @tr("Unavailable addon"));
 
-                                        CatalogToggle {
-                                            checked: home.selected;
-                                            name: home.title;
+                                        home_catalog_remove := PillButton {
+                                            label: @tr("Remove");
+                                            roomy: root.narrow;
                                             focused: root.kb_zone == 16 && root.kb_home == i && root.kb_active;
-                                            toggled => {
+                                            clicked => {
                                                 root.kb_active = false;
                                                 root.kb_zone = 16;
                                                 root.kb_home = i;
-                                                root.home_catalog_toggled(i);
+                                                root.home_catalog_removed(i);
                                             }
                                         }
                                     }
+                                }
+                            }
+
+                            home_catalog_add := PillButton {
+                                label: @tr("Add catalog");
+                                primary: true;
+                                roomy: root.narrow;
+                                focused: root.kb_zone == 16 && root.kb_home == root.home_catalog_rows.length && root.kb_active;
+                                clicked => {
+                                    root.kb_active = false;
+                                    root.kb_zone = 16;
+                                    root.kb_home = root.home_catalog_rows.length;
+                                    root.home_catalog_add_requested();
                                 }
                             }
                         }
@@ -5000,6 +5004,129 @@ export component SettingsPage {
             discover_picked => { root.discover_picked(); }
             library_picked => { root.library_picked(); }
             settings_picked => { root.settings_picked(); }
+        }
+
+        if root.home_catalog_add_open: Rectangle {
+            width: 100%;
+            height: 100%;
+            background: #000000aa;
+
+            TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => { root.home_catalog_add_open = false; }
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: Math.min(parent.width - 32px, 520px);
+                height: Math.min(parent.height - 32px, 420px);
+                background: #17171d;
+                border-width: 1px;
+                border-color: #454552;
+                border-radius: 12px;
+                clip: true;
+
+                VerticalLayout {
+                    width: 100%;
+                    height: 100%;
+                    padding: 18px;
+                    spacing: 10px;
+
+                    Text {
+                        text: @tr("Add featured catalog");
+                        font-size: 17px;
+                        font-weight: 700;
+                        color: #f2f2f4;
+                    }
+
+                    Text {
+                        width: 100%;
+                        text: @tr("Choose a catalog and optional genre to feature on Home.");
+                        font-size: 12px;
+                        color: #b9b9c4;
+                        wrap: word-wrap;
+                    }
+
+                    Text {
+                        text: @tr("Catalog");
+                        font-size: 12px;
+                        color: #c9c9d4;
+                    }
+
+                    Dropdown {
+                        width: 100%;
+                        model: root.home_catalog_candidate_names;
+                        current-index <=> root.home_catalog_candidate_index;
+                        placeholder-text: @tr("Select catalog");
+                        enabled: root.home_catalog_candidate_names.length > 0;
+                        roomy: root.narrow;
+                        selected(_) => {
+                            root.home_catalog_add_error = "";
+                            root.home_catalog_candidate_picked(root.home_catalog_candidate_index);
+                        }
+                    }
+
+                    Text {
+                        text: @tr("Genre");
+                        font-size: 12px;
+                        color: #c9c9d4;
+                    }
+
+                    Dropdown {
+                        width: 100%;
+                        model: root.home_catalog_genre_names;
+                        current-index <=> root.home_catalog_genre_index;
+                        placeholder-text: @tr("All genres");
+                        enabled: root.home_catalog_candidate_names.length > 0;
+                        roomy: root.narrow;
+                        selected(_) => { root.home_catalog_add_error = ""; }
+                    }
+
+                    if root.home_catalog_candidate_names.length == 0: Text {
+                        width: 100%;
+                        text: @tr("No enabled addon catalogs are available. Enable an addon with catalogs first.");
+                        font-size: 12px;
+                        color: #e3b5b5;
+                        wrap: word-wrap;
+                    }
+
+                    if root.home_catalog_add_error != "": Text {
+                        width: 100%;
+                        text: root.home_catalog_add_error;
+                        font-size: 12px;
+                        color: #e3b5b5;
+                        wrap: word-wrap;
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+
+                    HorizontalLayout {
+                        width: 100%;
+                        spacing: 10px;
+                        alignment: end;
+
+                        PillButton {
+                            label: @tr("Cancel");
+                            roomy: root.narrow;
+                            clicked => { root.home_catalog_add_open = false; }
+                        }
+
+                        if root.home_catalog_candidate_names.length > 0: home_catalog_modal_add := PillButton {
+                            label: @tr("Add");
+                            primary: true;
+                            roomy: root.narrow;
+                            clicked => {
+                                root.home_catalog_added(
+                                    root.home_catalog_candidate_index,
+                                    root.home_catalog_genre_index
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

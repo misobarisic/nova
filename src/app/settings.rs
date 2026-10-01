@@ -296,57 +296,77 @@ impl Bridge {
         sync_torrent_engine(&torrent);
     }
 
-    /// Build selectable Home catalog sources from installed manifests while
-    /// retaining selected-but-unavailable sources as removable rows.
+    /// Build the configured Home catalog/genre rows, retaining stale entries
+    /// so removed catalogs can still be removed from settings.
     fn home_catalog_choices(&self) -> Vec<(HomeCatalogSource, HomeCatalogRow)> {
         let state = self.shared.lock().unwrap();
-        let selected: HashSet<HomeCatalogSource> = state
+        state
             .cache_settings
             .home_catalog_sources
             .iter()
-            .cloned()
-            .collect();
+            .map(|source| {
+                let addon = state
+                    .installed
+                    .iter()
+                    .find(|addon| addon.url == source.addon_url);
+                let catalog = addon.and_then(|addon| {
+                    addon
+                        .manifest
+                        .catalog_for(&source.type_, &source.catalog_id)
+                });
+                let available = addon.is_some_and(|addon| addon.available) && catalog.is_some();
+                let enabled = available && addon.is_some_and(|addon| addon.enabled);
+                (
+                    source.clone(),
+                    HomeCatalogRow {
+                        title: SharedString::from(
+                            catalog
+                                .map(|catalog| catalog.name.as_str())
+                                .unwrap_or(&source.catalog_id),
+                        ),
+                        addon: SharedString::from(
+                            addon
+                                .map(|addon| addon.label.as_str())
+                                .unwrap_or(&source.addon_url),
+                        ),
+                        media_type: SharedString::from(&source.type_),
+                        genre: SharedString::from(&source.genre),
+                        available,
+                        enabled,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Addable choices come only from addons that can currently serve Home.
+    /// Each candidate carries the genre options declared by its manifest.
+    fn home_catalog_candidates(&self) -> Vec<(HomeCatalogSource, String, Vec<String>)> {
+        let state = self.shared.lock().unwrap();
         let mut seen = HashSet::new();
-        let mut choices = Vec::new();
-        for addon in &state.installed {
+        let mut candidates = Vec::new();
+        for addon in state
+            .installed
+            .iter()
+            .filter(|addon| addon.available && addon.enabled)
+        {
             for catalog in &addon.manifest.catalogs {
                 let source = HomeCatalogSource {
                     addon_url: addon.url.clone(),
                     type_: catalog.type_.clone(),
                     catalog_id: catalog.id.clone(),
+                    genre: String::new(),
                 };
-                if !seen.insert(source.clone()) {
-                    continue;
+                if seen.insert(source.clone()) {
+                    candidates.push((
+                        source,
+                        format!("{} — {} · {}", addon.label, catalog.name, catalog.type_),
+                        super::catalog::catalog_genres(catalog),
+                    ));
                 }
-                choices.push((
-                    source.clone(),
-                    HomeCatalogRow {
-                        title: SharedString::from(&catalog.name),
-                        addon: SharedString::from(&addon.label),
-                        media_type: SharedString::from(&catalog.type_),
-                        selected: selected.contains(&source),
-                        available: addon.available,
-                        enabled: addon.available && addon.enabled,
-                    },
-                ));
             }
         }
-        for source in &state.cache_settings.home_catalog_sources {
-            if seen.insert(source.clone()) {
-                choices.push((
-                    source.clone(),
-                    HomeCatalogRow {
-                        title: SharedString::from(&source.catalog_id),
-                        addon: SharedString::from(&source.addon_url),
-                        media_type: SharedString::from(&source.type_),
-                        selected: true,
-                        available: false,
-                        enabled: false,
-                    },
-                ));
-            }
-        }
-        choices
+        candidates
     }
 
     pub(super) fn apply_home_catalog_rows(&self) {
@@ -360,10 +380,113 @@ impl Bridge {
         }
     }
 
-    /// Toggle one catalog in Settings → Home. The choice is persisted
-    /// immediately and stays device-local; browsing back to Home reloads its
-    /// bounded featured list from the updated selection.
-    pub(super) fn home_catalog_toggled(&self, index: usize) {
+    pub(super) fn home_catalog_add_requested(&self) {
+        let candidates = self.home_catalog_candidates();
+        if let Some(app) = self.app() {
+            let names = candidates
+                .iter()
+                .map(|(_, name, _)| SharedString::from(name.as_str()))
+                .collect::<Vec<_>>();
+            let genres = candidates
+                .first()
+                .map(|(_, _, genres)| genres.as_slice())
+                .unwrap_or_default();
+            app.set_home_catalog_candidate_names(Rc::new(VecModel::from(names)).into());
+            app.set_home_catalog_candidate_index(if candidates.is_empty() { -1 } else { 0 });
+            app.set_home_catalog_genre_names(
+                Rc::new(VecModel::from(
+                    std::iter::once(SharedString::from(text::tr("All genres")))
+                        .chain(
+                            genres
+                                .iter()
+                                .map(|genre| SharedString::from(genre.as_str())),
+                        )
+                        .collect::<Vec<_>>(),
+                ))
+                .into(),
+            );
+            app.set_home_catalog_genre_index(0);
+            app.set_home_catalog_add_error(SharedString::default());
+            app.set_home_catalog_add_open(true);
+        }
+    }
+
+    pub(super) fn home_catalog_candidate_picked(&self, index: i32) {
+        let candidates = self.home_catalog_candidates();
+        let Some((_, _, genres)) = usize::try_from(index)
+            .ok()
+            .and_then(|index| candidates.get(index))
+        else {
+            return;
+        };
+        if let Some(app) = self.app() {
+            app.set_home_catalog_candidate_index(index);
+            app.set_home_catalog_genre_names(
+                Rc::new(VecModel::from(
+                    std::iter::once(SharedString::from(text::tr("All genres")))
+                        .chain(
+                            genres
+                                .iter()
+                                .map(|genre| SharedString::from(genre.as_str())),
+                        )
+                        .collect::<Vec<_>>(),
+                ))
+                .into(),
+            );
+            app.set_home_catalog_genre_index(0);
+            app.set_home_catalog_add_error(SharedString::default());
+        }
+    }
+
+    /// Persist a catalog and optional declared genre as one synced setting.
+    /// Legacy sources deserialize with an empty genre (all genres).
+    pub(super) fn home_catalog_added(&self, candidate_index: i32, genre_index: i32) {
+        let candidates = self.home_catalog_candidates();
+        let Some((mut source, _, genres)) = usize::try_from(candidate_index)
+            .ok()
+            .and_then(|index| candidates.get(index).cloned())
+        else {
+            return;
+        };
+        if genre_index > 0 {
+            let Some(genre) = usize::try_from(genre_index - 1)
+                .ok()
+                .and_then(|index| genres.get(index))
+            else {
+                return;
+            };
+            source.genre = genre.clone();
+        } else if genre_index < 0 {
+            return;
+        }
+
+        let (settings, duplicate) = {
+            let mut state = self.shared.lock().unwrap();
+            let duplicate = state.cache_settings.home_catalog_sources.contains(&source);
+            if !duplicate {
+                state.cache_settings.home_catalog_sources.push(source);
+            }
+            (state.cache_settings.clone(), duplicate)
+        };
+        if duplicate {
+            if let Some(app) = self.app() {
+                app.set_home_catalog_add_error(SharedString::from(text::tr(
+                    "This catalog and genre are already added.",
+                )));
+            }
+            return;
+        }
+        set_active_cache_settings(settings.clone());
+        write_settings(&settings);
+        self.apply_home_catalog_rows();
+        self.invalidate_home_showcase();
+        if let Some(app) = self.app() {
+            app.set_home_catalog_add_open(false);
+            app.set_persistence_failed(storage::last_error().is_some());
+        }
+    }
+
+    pub(super) fn home_catalog_removed(&self, index: usize) {
         let choices = self.home_catalog_choices();
         let Some((source, _)) = choices.get(index) else {
             return;
@@ -371,14 +494,10 @@ impl Bridge {
         let source = source.clone();
         let settings = {
             let mut state = self.shared.lock().unwrap();
-            if state.cache_settings.home_catalog_sources.contains(&source) {
-                state
-                    .cache_settings
-                    .home_catalog_sources
-                    .retain(|saved| saved != &source);
-            } else {
-                state.cache_settings.home_catalog_sources.push(source);
-            }
+            state
+                .cache_settings
+                .home_catalog_sources
+                .retain(|saved| saved != &source);
             state.cache_settings.clone()
         };
         set_active_cache_settings(settings.clone());

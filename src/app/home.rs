@@ -31,8 +31,13 @@ impl Bridge {
                         .manifest
                         .catalog_for(&source.type_, &source.catalog_id)?;
                     let addon = Addon::new(&addon.url).ok()?;
+                    let extra = if source.genre.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![("genre", source.genre.as_str())]
+                    };
                     Some((
-                        addon.catalog_url(&source.type_, &source.catalog_id, &[]),
+                        addon.catalog_url(&source.type_, &source.catalog_id, &extra),
                         source.type_.clone(),
                     ))
                 })

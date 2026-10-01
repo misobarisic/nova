@@ -64,11 +64,26 @@ msgstr "Izdvojeni naslovi i izvori kataloga"
 msgid "FEATURED SHOWCASE"
 msgstr "ISTAKNUTI NASLOVI"
 
-msgid "Choose catalogs whose titles should rotate at the top of Home. Each selected catalog contributes up to five titles."
-msgstr "Odaberite kataloge čiji će se naslovi izmjenjivati na početku Početne. Svaki odabrani katalog daje do pet naslova."
+msgid "Add catalogs with an optional genre filter. Each selection contributes up to five titles."
+msgstr "Dodajte kataloge uz neobavezni filtar žanra. Svaki odabir daje do pet naslova."
 
-msgid "No catalogs available. Install an addon with catalogs in Settings → Addons."
-msgstr "Nema dostupnih kataloga. Instalirajte dodatak s katalozima u Postavke → Dodaci."
+msgid "No featured catalogs selected. Add one to choose its genre."
+msgstr "Nema odabranih kataloga za isticanje. Dodajte katalog i odaberite njegov žanr."
+
+msgid "Add catalog"
+msgstr "Dodajte katalog"
+
+msgid "Add featured catalog"
+msgstr "Dodavanje kataloga za isticanje"
+
+msgid "Choose a catalog and optional genre to feature on Home."
+msgstr "Odaberite katalog i po želji žanr za isticanje na Početnoj."
+
+msgid "Select catalog"
+msgstr "Odaberite katalog"
+
+msgid "No enabled addon catalogs are available. Enable an addon with catalogs first."
+msgstr "Nema dostupnih kataloga omogućenih dodataka. Najprije omogućite dodatak s katalozima."
 
 msgid "Addon disabled"
 msgstr "Dodatak je onemogućen"

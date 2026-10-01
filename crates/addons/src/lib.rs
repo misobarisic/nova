@@ -486,6 +486,10 @@ mod tests {
             "https://v3-cinemeta.strem.io/catalog/movie/top/search=batman.json"
         );
         assert_eq!(
+            addon.catalog_url("movie", "top", &[("genre", "Action & Adventure")]),
+            "https://v3-cinemeta.strem.io/catalog/movie/top/genre=Action%20%26%20Adventure.json"
+        );
+        assert_eq!(
             addon.meta_url("series", "tt0944947"),
             "https://v3-cinemeta.strem.io/meta/series/tt0944947.json"
         );
