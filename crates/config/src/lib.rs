@@ -337,6 +337,15 @@ pub struct CacheSettings {
     /// addon is available and enabled there.
     #[serde(default)]
     pub home_catalog_sources: Vec<HomeCatalogSource>,
+    /// Show the Continue Watching row on Home. Synced with the rest of the
+    /// general settings; older settings snapshots keep the existing visible
+    /// behavior.
+    #[serde(default = "default_true")]
+    pub home_continue_enabled: bool,
+    /// Show the Upcoming row on Home. Synced with the rest of the general
+    /// settings; older settings snapshots keep the existing visible behavior.
+    #[serde(default = "default_true")]
+    pub home_upcoming_enabled: bool,
     /// Minimum grid columns for My Library (same scheme).
     #[serde(default = "default_min_cols")]
     pub library_min_cols: u32,
@@ -410,6 +419,8 @@ impl Default for CacheSettings {
             discover_min_cols: 2,
             discover_catalog_addon_names: true,
             home_catalog_sources: Vec::new(),
+            home_continue_enabled: true,
+            home_upcoming_enabled: true,
             library_min_cols: 2,
             android_hwdec: AndroidHwdec::HwPlus,
             player_external: false,

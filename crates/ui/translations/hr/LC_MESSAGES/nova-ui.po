@@ -61,6 +61,15 @@ msgstr "Početna"
 msgid "Featured titles and catalog sources"
 msgstr "Izdvojeni naslovi i izvori kataloga"
 
+msgid "HOME ROWS"
+msgstr "REDOVI POČETNE STRANICE"
+
+msgid "Show the Continue Watching row on Home."
+msgstr "Prikažite redak „Nastavak gledanja” na Početnoj stranici."
+
+msgid "Show the Upcoming row on Home."
+msgstr "Prikažite redak „Uskoro” na Početnoj stranici."
+
 msgid "FEATURED SHOWCASE"
 msgstr "ISTAKNUTI NASLOVI"
 

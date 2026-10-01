@@ -853,6 +853,7 @@ export component HomePage {
     in-out property <int> cal_epoch: -1;
     in-out property <bool> cal_open: false;
     in-out property <string> home_empty_hint: @tr("Nothing to continue — start watching a show or movie and it will show up here.");
+    in property <bool> continue_enabled: true;
     in property <string> featured_title;
     in property <string> featured_year;
     in property <string> featured_type;
@@ -1453,7 +1454,10 @@ export component HomePage {
                                 step(d) => { root.step_featured(d); }
                             }
 
-                            if root.continue_rows.length == 0 && root.upcoming_rows.length == 0: VerticalLayout {
+                            if root.continue_rows.length == 0
+                                && root.upcoming_rows.length == 0
+                                && root.featured_count == 0
+                                && root.continue_enabled: VerticalLayout {
                                 alignment: center;
                                 // Take enough height to center in the viewport.
                                 min-height: 300px;

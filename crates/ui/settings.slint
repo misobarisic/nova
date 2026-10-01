@@ -746,6 +746,8 @@ export component SettingsPage {
     in-out property <[LicenseSource]> license_sources: [];
     in-out property <[CategoryRow]> category_rows: [];
     in-out property <[HomeCatalogRow]> home_catalog_rows: [];
+    in-out property <bool> home_continue_enabled: true;
+    in-out property <bool> home_upcoming_enabled: true;
     in-out property <[string]> home_catalog_candidate_names: [];
     in-out property <int> home_catalog_candidate_index: -1;
     in-out property <[string]> home_catalog_genre_names: [];
@@ -1182,12 +1184,19 @@ export component SettingsPage {
     // on Enter (Left/Right no-op); row 1 opens text edit mode.
     function kb_torrent_n() -> int { return root.torrent_enabled ? 6 : 1; }
 
-    // One remove action per configured entry plus the final Add catalog row.
-    function kb_home_n() -> int { return root.home_catalog_rows.length + 1; }
+    // Continue + Upcoming switches, one remove action per configured entry,
+    // then the final Add catalog row.
+    function kb_home_n() -> int { return root.home_catalog_rows.length + 3; }
 
     function kb_home_activate() {
-        if (root.kb_home < root.home_catalog_rows.length) {
-            root.home_catalog_removed(root.kb_home);
+        if (root.kb_home == 0) {
+            root.home_continue_enabled = !root.home_continue_enabled;
+            root.schedule_setting("home_continue_enabled");
+        } else if (root.kb_home == 1) {
+            root.home_upcoming_enabled = !root.home_upcoming_enabled;
+            root.schedule_setting("home_upcoming_enabled");
+        } else if (root.kb_home < root.home_catalog_rows.length + 2) {
+            root.home_catalog_removed(root.kb_home - 2);
         } else {
             root.home_catalog_add_requested();
         }
@@ -4633,6 +4642,58 @@ export component SettingsPage {
 
                             SectionHeader {
                                 icon-kind: 4;
+                                label: @tr("HOME ROWS");
+                            }
+
+                            Rectangle {
+                                background: #131316;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: #232329;
+                                clip: true;
+
+                                VerticalLayout {
+                                    spacing: 0px;
+
+                                    SettingsRow {
+                                        row-title: @tr("Continue Watching");
+                                        row-desc: @tr("Show the Continue Watching row on Home.");
+
+                                        KbMark { on: root.kb_zone == 16 && root.kb_home == 0; active: root.kb_active; }
+                                        ToggleSwitch {
+                                            checked <=> root.home_continue_enabled;
+                                            focused: root.kb_zone == 16 && root.kb_home == 0 && root.kb_active;
+                                            toggled => {
+                                                root.kb_active = false;
+                                                root.kb_zone = 16;
+                                                root.kb_home = 0;
+                                                root.schedule_setting("home_continue_enabled");
+                                            }
+                                        }
+                                    }
+
+                                    SettingsRow {
+                                        tinted: true;
+                                        row-title: @tr("Upcoming");
+                                        row-desc: @tr("Show the Upcoming row on Home.");
+
+                                        KbMark { on: root.kb_zone == 16 && root.kb_home == 1; active: root.kb_active; }
+                                        ToggleSwitch {
+                                            checked <=> root.home_upcoming_enabled;
+                                            focused: root.kb_zone == 16 && root.kb_home == 1 && root.kb_active;
+                                            toggled => {
+                                                root.kb_active = false;
+                                                root.kb_zone = 16;
+                                                root.kb_home = 1;
+                                                root.schedule_setting("home_upcoming_enabled");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            SectionHeader {
+                                icon-kind: 4;
                                 label: @tr("FEATURED SHOWCASE");
                             }
 
@@ -4679,11 +4740,11 @@ export component SettingsPage {
                                         home_catalog_remove := PillButton {
                                             label: @tr("Remove");
                                             roomy: root.narrow;
-                                            focused: root.kb_zone == 16 && root.kb_home == i && root.kb_active;
+                                            focused: root.kb_zone == 16 && root.kb_home == i + 2 && root.kb_active;
                                             clicked => {
                                                 root.kb_active = false;
                                                 root.kb_zone = 16;
-                                                root.kb_home = i;
+                                                root.kb_home = i + 2;
                                                 root.home_catalog_removed(i);
                                             }
                                         }
@@ -4695,11 +4756,11 @@ export component SettingsPage {
                                 label: @tr("Add catalog");
                                 primary: true;
                                 roomy: root.narrow;
-                                focused: root.kb_zone == 16 && root.kb_home == root.home_catalog_rows.length && root.kb_active;
+                                focused: root.kb_zone == 16 && root.kb_home == root.home_catalog_rows.length + 2 && root.kb_active;
                                 clicked => {
                                     root.kb_active = false;
                                     root.kb_zone = 16;
-                                    root.kb_home = root.home_catalog_rows.length;
+                                    root.kb_home = root.home_catalog_rows.length + 2;
                                     root.home_catalog_add_requested();
                                 }
                             }

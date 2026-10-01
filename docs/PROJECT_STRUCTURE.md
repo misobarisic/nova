@@ -261,6 +261,8 @@ up to five titles. Home preloads the current and next backdrop at source
 resolution, restarts the rotation delay when a step is requested and when a
 new selection is displayed, and opens a picked title without borrowing
 Discover's current grid model.
+Settings → Home also independently toggles the Continue Watching and Upcoming
+rows; both default on and sync with other general settings.
 
 **Animated feedback:** `menusheet.slint` stays mounted in Home, Library and
 Detail: callers bind its `open` property instead of conditionally creating it.
@@ -288,7 +290,7 @@ and Settings displays a persistence warning. Keys used by the app:
 
 | Key | Content |
 |---|---|
-| `settings` | `CacheSettings` JSON (image cache + display + player backend/decoder + playback rate). Display's `discover_catalog_addon_names` defaults on and syncs as a settings field; hiding prefixes changes only dropdown labels, not catalog identity. Home's selected catalog/genre list also syncs as one settings field. Player backend choice (`player_external`, `desktop_external_app`), decoder (`android_hwdec`), episode start behavior (`episode_start_behavior`), playback rate (`playback_speed`, 0.5–2.0×), and UI `language` are device-local. |
+| `settings` | `CacheSettings` JSON (image cache + display + player backend/decoder + playback rate). Display's `discover_catalog_addon_names` defaults on and syncs as a settings field; hiding prefixes changes only dropdown labels, not catalog identity. Home's `home_continue_enabled` and `home_upcoming_enabled` visibility switches (both default on) and selected catalog/genre list sync as settings fields. Player backend choice (`player_external`, `desktop_external_app`), decoder (`android_hwdec`), episode start behavior (`episode_start_behavior`), playback rate (`playback_speed`, 0.5–2.0×), and UI `language` are device-local. |
 | `library` | `Vec<LibraryEntry>` JSON. |
 | `addons` | `Vec<AddonStore>` JSON (desired addons, including entries with unavailable manifests). Configure-page reachability is device-local. |
 | `manifest:{url}` | Cached addon `Manifest` JSON (one per addon). |
@@ -541,7 +543,7 @@ the app ignores unknown domains, so old peers stay compatible.
 
 | Task | Start here |
 |---|---|
-| Add a Settings option | `crates/ui/settings.slint`, `src/app/settings.rs`, `src/app/run.rs`, `crates/config/src/lib.rs` |
+| Add a Settings option | `crates/ui/settings.slint`, `crates/ui/appwindow.slint`, `src/app/settings.rs`, `src/app/run.rs`, `crates/config/src/lib.rs` |
 | Settings edit loss / sync recovery | `src/app/settings.rs` (`capture_settings`, `wire_settings_autosave`, regression test), `crates/sync/src/lib.rs` (`peer_connection`, worker/cadence/recovery), `docs/sync-hardening-plan.md` |
 | Add a UI language / translate a string | `crates/ui/translations/<code>/LC_MESSAGES/nova-ui.po` (context-free), `crates/config/src/lib.rs` (`Language`), `src/app/i18n.rs`; mark strings `@tr("…")` in the `.slint` files |
 | Add a Discover feature / catalog change | `src/app/catalog.rs`, `crates/ui/discover.slint`, `crates/ui/appwindow.slint`, `crates/addons` |

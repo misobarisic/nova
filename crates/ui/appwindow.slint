@@ -225,6 +225,8 @@ export component AppWindow inherits Window {
     in-out property <[CategoryRow]> category_rows: [];
     in-out property <string> category_input: "";
     in-out property <[HomeCatalogRow]> home_catalog_rows: [];
+    in-out property <bool> home_continue_enabled: true;
+    in-out property <bool> home_upcoming_enabled: true;
     in-out property <[string]> home_catalog_candidate_names: [];
     in-out property <int> home_catalog_candidate_index: -1;
     in-out property <[string]> home_catalog_genre_names: [];
@@ -639,6 +641,7 @@ export component AppWindow inherits Window {
         upcoming_x <=> root.home_upcoming_x;
         narrow: root.narrow_ui;
         touch_menus: root.touch_menus;
+        continue_enabled: root.home_continue_enabled;
         safe-top: root.safe-area-insets.top;
         safe-left: root.safe-area-insets.left;
         safe-right: root.safe-area-insets.right;
@@ -795,6 +798,8 @@ export component AppWindow inherits Window {
         category_rows <=> root.category_rows;
         category_input <=> root.category_input;
         home_catalog_rows <=> root.home_catalog_rows;
+        home_continue_enabled <=> root.home_continue_enabled;
+        home_upcoming_enabled <=> root.home_upcoming_enabled;
         home_catalog_candidate_names <=> root.home_catalog_candidate_names;
         home_catalog_candidate_index <=> root.home_catalog_candidate_index;
         home_catalog_genre_names <=> root.home_catalog_genre_names;
