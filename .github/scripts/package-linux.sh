@@ -56,11 +56,11 @@ download_verified() {
 download_verified \
   "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" \
   "$tools_dir/linuxdeploy-x86_64.AppImage" \
-  "36a2d7e274d12e1050d0e9ecfe11d339ed54720b2bec464c286d53f8b07f5c62"
+  "8aea8da0f7f7039d2a2cecb14657d752a222a5e1d3825caeef186c82f751cdd1"
 download_verified \
   "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage" \
   "$tools_dir/linuxdeploy-plugin-appimage-x86_64.AppImage" \
-  "0441769ab38009504d2678c38cd7e526955388dd30a215b4a20afaa5471652f2"
+  "49d6a17160675a6bd1781699aae6bdf7692d98552e02a3671d2183d10547842e"
 
 appimage="$dist/Nova-Linux-x86_64-${artifact_tag}.AppImage"
 deb_file="$dist/Nova-Linux-x86_64-${artifact_tag}.deb"
