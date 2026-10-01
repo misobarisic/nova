@@ -895,11 +895,11 @@ component FeaturedShowcase inherits Rectangle {
     if root.count > 1: HorizontalLayout {
         x: root.width - self.width - (root.narrow ? 20px : 18px);
         y: root.narrow ? 20px : 18px;
-        width: root.narrow ? 198px : 188px;
+        width: root.narrow ? 86px : 188px;
         height: root.narrow ? 46px : 44px;
         spacing: 10px;
 
-        FeaturedPagerButton {
+        if !root.narrow: FeaturedPagerButton {
             narrow: root.narrow;
             stepped => { root.step(-1); }
         }
@@ -936,7 +936,7 @@ component FeaturedShowcase inherits Rectangle {
                 }
             }
         }
-        FeaturedPagerButton {
+        if !root.narrow: FeaturedPagerButton {
             next: true;
             narrow: root.narrow;
             stepped => { root.step(1); }
