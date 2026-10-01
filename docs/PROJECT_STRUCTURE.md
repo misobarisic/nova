@@ -264,6 +264,8 @@ each selected catalog contributes up to five titles. Home preloads the current
 and next backdrop at source resolution, restarts the rotation delay when a step
 is requested and when a new selection is displayed, and opens a picked title
 without borrowing Discover's current grid model.
+Settings → Home also independently toggles the Continue Watching and Upcoming
+rows; both default on and sync with other general settings.
 
 **Animated feedback:** `menusheet.slint` stays mounted in Home, Library and
 Detail: callers bind its `open` property instead of conditionally creating it.

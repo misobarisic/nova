@@ -415,14 +415,18 @@ impl Bridge {
     /// entries for title/poster and the episode cache for the label).
     /// Posters paint instantly when already decoded, otherwise dispatch.
     pub(super) fn current_continue_rows(&self) -> Vec<ContinueRow> {
-        let (entries, progress, list) = {
+        let (entries, progress, list, enabled) = {
             let state = self.shared.lock().unwrap();
             (
                 state.entries.clone(),
                 state.progress.clone(),
                 state.continue_list.clone(),
+                state.cache_settings.home_continue_enabled,
             )
         };
+        if !enabled {
+            return Vec::new();
+        }
         list.iter()
             .filter_map(|c| {
                 let e = entries.iter().find(|e| e.id == c.series_id)?;
@@ -605,14 +609,18 @@ impl Bridge {
     /// Upcoming list, so filtered views (the calendar's selected day) still
     /// resolve picks.
     pub(super) fn current_upcoming_rows(&self) -> Vec<UpcomingRow> {
-        let (entries, list, date_relative) = {
+        let (entries, list, date_relative, enabled) = {
             let state = self.shared.lock().unwrap();
             (
                 state.entries.clone(),
                 state.upcoming_list.clone(),
                 state.cache_settings.date_relative,
+                state.cache_settings.home_upcoming_enabled,
             )
         };
+        if !enabled {
+            return Vec::new();
+        }
         list.iter()
             .enumerate()
             .filter_map(|(i, u)| upcoming_row(&entries, u, i, date_relative))
@@ -623,14 +631,18 @@ impl Bridge {
     /// as [`Self::current_upcoming_rows`]; `index` still positions into the
     /// full Upcoming list, so card taps resolve through `upcoming_picked`.
     pub(super) fn current_upcoming_day_rows(&self, day: i64) -> Vec<UpcomingRow> {
-        let (entries, list, date_relative) = {
+        let (entries, list, date_relative, enabled) = {
             let state = self.shared.lock().unwrap();
             (
                 state.entries.clone(),
                 state.upcoming_list.clone(),
                 state.cache_settings.date_relative,
+                state.cache_settings.home_upcoming_enabled,
             )
         };
+        if !enabled {
+            return Vec::new();
+        }
         list.iter()
             .enumerate()
             .filter(|(_, u)| u.air_days == day)

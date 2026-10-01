@@ -118,6 +118,8 @@ impl Bridge {
             app.set_cache_lazy_reencode(settings.lazy_reencode);
             app.set_discover_min_cols(settings.discover_min_cols as i32);
             app.set_discover_catalog_addon_names(settings.discover_catalog_addon_names);
+            app.set_home_continue_enabled(settings.home_continue_enabled);
+            app.set_home_upcoming_enabled(settings.home_upcoming_enabled);
             app.set_library_min_cols(settings.library_min_cols as i32);
             app.set_android_hwdec_index(settings.android_hwdec.index());
             app.set_player_backend_index(if settings.player_external { 1 } else { 0 });
@@ -246,6 +248,8 @@ impl Bridge {
                 lazy_reencode: app.get_cache_lazy_reencode(),
                 categories: state.cache_settings.categories.clone(),
                 home_catalog_sources: state.cache_settings.home_catalog_sources.clone(),
+                home_continue_enabled: app.get_home_continue_enabled(),
+                home_upcoming_enabled: app.get_home_upcoming_enabled(),
                 discover_min_cols: app.get_discover_min_cols().clamp(2, 6) as u32,
                 discover_catalog_addon_names: app.get_discover_catalog_addon_names(),
                 library_min_cols: app.get_library_min_cols().clamp(2, 6) as u32,
