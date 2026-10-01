@@ -511,77 +511,88 @@ component SettingsRow inherits Rectangle {
     in property <length> row-min-height: 64px;
     background: tinted ? #17171a : #121214;
 
-    // Dynamic row height: base minimum or the actual wrapped title+description
-    // height, whichever is larger. Slint's layout preferred-height pass
-    // measures wrapped text at its *unwrapped intrinsic* width (always one
-    // line), so the row would otherwise clip multi-line content. A hidden copy
-    // of the whole text column at the same live width provides the real height
-    // — including a title that wraps on narrow screens, which a
-    // description-only measurement missed.
-    min-height: Math.max(row-min-height, 28px + measure_col.preferred-height);
+    property <length> inner-width: Math.max(0px, self.width - 32px);
+    property <length> control-width: controls.preferred-width;
+    property <length> control-height: controls.preferred-height;
+    // Keep the text column from sprawling across a very wide settings card,
+    // while making its narrow-width limit explicit instead of splitting free
+    // space with an invisible spacer.
+    property <length> side-text-width: Math.min(
+        Math.max(0px, root.inner-width - root.control-width - 16px),
+        root.inner-width * 0.62
+    );
+    property <bool> stack-controls: root.side-text-width < 150px;
+    property <length> text-width: root.stack-controls
+        ? root.inner-width
+        : root.side-text-width;
+    property <length> text-height: measure_col.preferred-height;
 
-    HorizontalLayout {
-        width: 100%;
-        padding-top: 14px;
-        padding-bottom: 14px;
-        padding-left: 16px;
-        padding-right: 16px;
-        spacing: 16px;
+    // Keep at least 150px for a readable text column. Rows whose controls
+    // would crowd it instead put the controls on a second line; small controls
+    // such as toggles stay beside their text. The wrapped measurement is at
+    // that same live text width, so both layouts reserve enough height for
+    // titles and descriptions that wrap.
+    height: Math.max(
+        row-min-height,
+        28px + (root.stack-controls
+            ? root.text-height + 10px + root.control-height
+            : Math.max(root.text-height, root.control-height))
+    );
 
-        // Text column: stretches with the window (up to 62% so controls
-        // keep breathing room); the description wraps accordingly.
-        // Text column: takes 2/3 of the leftover space (2:1 against the
-        // spacer) so it grows into empty space on wide windows while the
-        // description wraps accordingly on narrow ones.
-        title_col := VerticalLayout {
-            horizontal-stretch: 2;
-            alignment: center;
-            spacing: 3px;
+    title_col := VerticalLayout {
+        x: 16px;
+        y: root.stack-controls
+            ? 14px
+            : (root.height - self.height) / 2;
+        width: root.text-width;
+        height: root.text-height;
+        alignment: center;
+        spacing: 3px;
 
-            Text {
-                text: row-title;
-                font-size: 14px;
-                font-weight: 600;
-                color: #f2f2f4;
-                // min-width: 0 lets the column shrink past a long
-                // unbreakable token (an addon URL, a slug); otherwise the
-                // text's intrinsic word width forces the row (and the whole
-                // page) wider than the viewport.
-                min-width: 0px;
-                wrap: word-wrap;
-            }
-
-            if row-desc != "": Text {
-                text: row-desc;
-                font-size: 12px;
-                color: #8a8a92;
-                min-width: 0px;
-                wrap: word-wrap;
-            }
+        Text {
+            text: row-title;
+            font-size: 14px;
+            font-weight: 600;
+            color: #f2f2f4;
+            // min-width: 0 lets the column shrink past a long unbreakable token
+            // (an addon URL, a slug) without widening the settings page.
+            min-width: 0px;
+            wrap: word-wrap;
         }
 
-        // Absorbs whatever the capped column leaves over so the controls
-        // stay flush right.
-        Rectangle {
-            horizontal-stretch: 1;
+        if row-desc != "": Text {
+            text: row-desc;
+            font-size: 12px;
+            color: #8a8a92;
+            min-width: 0px;
+            wrap: word-wrap;
         }
+    }
 
-        // Control zone: fixed-height children (toggles, buttons) top-align
-        // inside a stretchy row, so they are stacked in a vertical layout
-        // that centers them within the (possibly tall) row. Callers with
-        // several controls pass them pre-grouped in a horizontal layout.
-        VerticalLayout {
-            height: 100%;
-            alignment: center;
+    // A single slot keeps caller-provided controls intact (including grouped
+    // controls). It is right-aligned beside the text when there is room, and
+    // left-aligned below it when the control group would leave under 150px for
+    // the label and description.
+    controls := HorizontalLayout {
+        x: root.stack-controls
+            ? 16px
+            : root.width - 16px - root.control-width;
+        y: root.stack-controls
+            ? 14px + root.text-height + 10px
+            : (root.height - self.height) / 2;
+        width: root.stack-controls ? root.inner-width : root.control-width;
+        height: root.control-height;
+        alignment: start;
 
-            @children
-        }
+        @children
     }
 
     // Hidden measurement copy of the whole text column (same text, fonts,
     // width and spacing as `title_col`; clipped to zero height so it renders
     // nothing) — its natural wrapped height drives the row minimum above.
     Rectangle {
+        x: 0px;
+        y: 0px;
         height: 0;
         clip: true;
 

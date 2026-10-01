@@ -51,6 +51,34 @@ fn drag_horizontal(app: &nova::AppWindow, from: LogicalPosition, to: LogicalPosi
             });
 }
 
+fn scroll_landing_down(app: &nova::AppWindow) {
+    let from = LogicalPosition::new(220.0, 680.0);
+    let to = LogicalPosition::new(220.0, 180.0);
+    let _ = app
+        .window()
+        .dispatch_event_with_result(slint::platform::WindowEvent::PointerPressed {
+            position: from,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    for step in 1..=4 {
+        let t = step as f32 / 4.0;
+        let _ =
+            app.window()
+                .dispatch_event_with_result(slint::platform::WindowEvent::PointerMoved {
+                    position: LogicalPosition::new(
+                        from.x + (to.x - from.x) * t,
+                        from.y + (to.y - from.y) * t,
+                    ),
+                });
+    }
+    let _ =
+        app.window()
+            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
+                position: to,
+                button: slint::platform::PointerEventButton::Left,
+            });
+}
+
 fn check_alignment(app: &nova::AppWindow, label: &str, failures: &Rc<RefCell<Vec<String>>>) {
     let rows: Vec<_> =
         ElementHandle::find_by_element_id(app, "SettingsPage::source_card").collect();
@@ -144,9 +172,10 @@ fn about_opens_nested_licenses_and_centers_source_buttons() {
     let failures1 = failures.clone();
     after(400, move || {
         let app = app1.upgrade().unwrap();
-        // About is the final Settings landing entry (after Downloads).
-        let Some(about) = ElementHandle::find_by_element_type_name(&app, "SettingsLink").nth(9)
-        else {
+        // About follows Downloads and the Home showcase entry, so scroll the
+        // landing list before looking up its link on a phone-sized window.
+        scroll_landing_down(&app);
+        let Some(about) = ElementHandle::find_by_accessible_label(&app, "About").next() else {
             fail(&failures1, false, "DIAG: no About landing entry");
             slint::quit_event_loop().unwrap();
             return;
@@ -254,12 +283,9 @@ fn about_opens_nested_licenses_and_centers_source_buttons() {
                                     let app = app6.upgrade().unwrap();
                                     fail(
                                         &failures6,
-                                        ElementHandle::find_by_element_type_name(
-                                            &app,
-                                            "SettingsLink",
-                                        )
-                                        .count()
-                                            == 10
+                                        ElementHandle::find_by_accessible_label(&app, "About")
+                                            .count()
+                                            == 1
                                             && ElementHandle::find_by_element_id(
                                                 &app,
                                                 "SettingsPage::about_licenses_button",
