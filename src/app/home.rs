@@ -92,7 +92,6 @@ impl Bridge {
         }
         if let Some(app) = self.app() {
             app.set_home_featured_title(SharedString::default());
-            app.set_home_featured_narrow_title(SharedString::default());
             app.set_home_featured_type(SharedString::default());
             app.set_home_featured_rating(SharedString::default());
             app.set_home_featured_runtime(SharedString::default());
@@ -128,7 +127,6 @@ impl Bridge {
         let Some(first) = first else {
             if let Some(app) = self.app() {
                 app.set_home_featured_title(SharedString::default());
-                app.set_home_featured_narrow_title(SharedString::default());
                 app.set_home_featured_type(SharedString::default());
                 app.set_home_featured_rating(SharedString::default());
                 app.set_home_featured_runtime(SharedString::default());
@@ -144,7 +142,6 @@ impl Bridge {
         // it is considered ready for rotation.
         if let Some(app) = self.app() {
             app.set_home_featured_title(SharedString::from(first.title()));
-            app.set_home_featured_narrow_title(SharedString::from(first.title().to_uppercase()));
             app.set_home_featured_type(SharedString::from(&first.type_));
             app.set_home_featured_rating(SharedString::from(Self::showcase_rating(&first)));
             app.set_home_featured_runtime(SharedString::from(
@@ -263,7 +260,6 @@ impl Bridge {
 
         if let Some(app) = self.app() {
             app.set_home_featured_title(SharedString::from(preview.title()));
-            app.set_home_featured_narrow_title(SharedString::from(preview.title().to_uppercase()));
             app.set_home_featured_type(SharedString::from(&preview.type_));
             app.set_home_featured_rating(SharedString::from(Self::showcase_rating(&preview)));
             app.set_home_featured_runtime(SharedString::from(

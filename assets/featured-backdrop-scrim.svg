@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1024" viewBox="0 0 2 1024">
+  <!-- Rasterized as one continuous alpha ramp before the UI stretches it. -->
+  <defs>
+    <linearGradient id="shade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#000" stop-opacity="0.18"/>
+      <stop offset="0.32" stop-color="#000" stop-opacity="0.22"/>
+      <stop offset="0.55" stop-color="#000" stop-opacity="0.44"/>
+      <stop offset="0.76" stop-color="#000" stop-opacity="0.76"/>
+      <stop offset="0.92" stop-color="#000" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0.99"/>
+    </linearGradient>
+  </defs>
+  <rect width="2" height="1024" fill="url(#shade)"/>
+</svg>

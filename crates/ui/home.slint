@@ -4,7 +4,7 @@ import { MenuSheet } from "menusheet.slint";
 import { SideNav, NavMetrics } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
 import { Anim } from "anim.slint";
-import { IcChevronLeft, IcChevronRight, IcPlay } from "icons.slint";
+import { IcChevronLeft, IcChevronRight, IcPlay, IcInfo, IcStarBorder, IcSchedule } from "icons.slint";
 
 // Small "Next up" pill pinned to a Continue card's poster top-right. Shown
 // only when the card offers the next episode of a series still being
@@ -624,102 +624,187 @@ component CalToggle inherits Rectangle {
     }
 }
 
-component FeaturedActions inherits HorizontalLayout {
+component FeaturedActionButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> play;
     in property <bool> narrow;
+    in property <bool> compact;
+    out property <length> content_width: action_label.preferred-width + 28px;
     callback picked();
 
-    width: details_button.width + watch_button.width + 10px;
-    height: root.narrow ? 48px : 52px;
-    spacing: 10px;
-    alignment: end;
+    width: root.content_width + (root.compact ? 24px : (root.narrow ? 28px : 40px));
+    height: root.narrow ? 46px : 54px;
+    border-radius: self.height / 2;
+    border-width: 1px;
+    border-color: #ffffff20;
+    background: action_touch.has-hover ? #ffffff20 : #00000099;
+    animate background { duration: Anim.hover_fast; }
 
-    details_button := Rectangle {
-        width: Math.max(details_label.preferred-width + 42px, watch_button.width);
-        height: root.narrow ? 48px : 52px;
-        border-radius: 26px;
-        border-width: 1px;
-        border-color: #ffffff22;
-        background: #00000088;
-
-        Text {
-            x: 13px;
-            y: (parent.height - self.height) / 2;
-            text: "ⓘ";
-            font-size: 17px;
-            color: #ffffff;
-        }
-        Text {
-            x: 35px;
-            y: (parent.height - self.height) / 2;
-            text: @tr("DETAILS");
-            font-size: 13px;
-            font-weight: 700;
-            color: #ffffff;
-        }
-        details_label := Text {
-            visible: false;
-            text: @tr("DETAILS");
-            font-size: 13px;
-            font-weight: 700;
-        }
-        TouchArea {
-            accessible-role: button;
-            accessible-label: @tr("DETAILS");
-            width: 100%;
-            height: 100%;
-            mouse-cursor: pointer;
-            clicked => { root.picked(); }
-        }
-    }
-
-    watch_button := Rectangle {
-        width: watch_label.preferred-width + 56px;
-        height: root.narrow ? 48px : 52px;
-        border-radius: 26px;
-        border-width: 1px;
-        border-color: #ffffff22;
-        background: #00000088;
+    HorizontalLayout {
+        width: 100%;
+        height: 100%;
+        padding-left: root.compact ? 12px : (root.narrow ? 14px : 20px);
+        padding-right: root.compact ? 12px : (root.narrow ? 14px : 20px);
+        spacing: 8px;
+        alignment: center;
 
         Rectangle {
-            x: 12px;
-            y: (parent.height - 22px) / 2;
-            width: 22px;
-            height: 22px;
-            border-radius: 11px;
-            background: #ffffff;
-        }
-        IcPlay {
-            x: 17px;
-            y: (parent.height - 12px) / 2;
-            width: 12px;
-            height: 12px;
-            fill: #111111;
-        }
-        watch_label := Text {
-            x: 41px;
-            y: (parent.height - self.height) / 2;
-            text: @tr("WATCH NOW");
-            font-size: 13px;
-            font-weight: 700;
-            color: #ffffff;
-        }
-        TouchArea {
-            accessible-role: button;
-            accessible-label: @tr("WATCH NOW");
-            width: 100%;
+            width: 20px;
             height: 100%;
-            mouse-cursor: pointer;
-            clicked => { root.picked(); }
+
+            if root.play: Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                border-radius: 10px;
+                background: #f4f4f5;
+                IcPlay {
+                    x: 3px;
+                    y: 3px;
+                    width: 14px;
+                    height: 14px;
+                    fill: #151517;
+                }
+            }
+            if !root.play: IcInfo {
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                fill: #f4f4f5;
+            }
+        }
+        action_label := Text {
+            text: root.label;
+            font-size: root.narrow ? (root.compact ? 13px : 14px) : 16px;
+            font-weight: 700;
+            color: #f4f4f5;
+            vertical-alignment: center;
+        }
+    }
+    action_touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+}
+
+component FeaturedActions inherits HorizontalLayout {
+    in property <bool> narrow;
+    in property <bool> compact;
+    callback picked();
+
+    // Equal pills match the centered narrow layout; compact type leaves room
+    // for the longer translated Details label on a portrait phone.
+    property <length> narrow_button_width: Math.max(details_button.content_width, watch_button.content_width)
+        + (root.compact ? 24px : 28px);
+    width: details_button.width + watch_button.width + 12px;
+    height: root.narrow ? 46px : 54px;
+    spacing: 12px;
+
+    details_button := FeaturedActionButton {
+        width: root.narrow ? root.narrow_button_width : self.content_width + (root.compact ? 24px : 40px);
+        label: @tr("DETAILS");
+        narrow: root.narrow;
+        compact: root.compact;
+        picked => { root.picked(); }
+    }
+    watch_button := FeaturedActionButton {
+        width: root.narrow ? root.narrow_button_width : self.content_width + (root.compact ? 24px : 40px);
+        label: @tr("WATCH NOW");
+        play: true;
+        narrow: root.narrow;
+        compact: root.compact;
+        picked => { root.picked(); }
+    }
+}
+
+component FeaturedBadge inherits Rectangle {
+    in property <string> label;
+    // 0 = plain media type, 1 = rating, 2 = runtime.
+    in property <int> icon;
+    in property <bool> narrow;
+
+    width: badge_label.preferred-width + 22px + (root.icon == 0 ? 0px : 21px);
+    height: root.narrow ? 30px : 32px;
+    border-radius: self.height / 2;
+    background: #00000055;
+
+    HorizontalLayout {
+        width: 100%;
+        height: 100%;
+        padding-left: 11px;
+        padding-right: 11px;
+        spacing: 5px;
+        alignment: center;
+
+        if root.icon != 0: Rectangle {
+            width: 16px;
+            height: 100%;
+            if root.icon == 1: IcStarBorder {
+                y: (parent.height - self.height) / 2;
+                width: 16px;
+                height: 16px;
+                fill: #ededee;
+            }
+            if root.icon == 2: IcSchedule {
+                y: (parent.height - self.height) / 2;
+                width: 16px;
+                height: 16px;
+                fill: #ededee;
+            }
+        }
+        badge_label := Text {
+            text: root.label;
+            font-size: root.narrow ? 13px : 16px;
+            font-weight: 600;
+            color: #ededee;
+            vertical-alignment: center;
         }
     }
 }
 
-// Large catalog-driven title at the top of Home. Its contents are scalar
-// AppWindow properties so the backend can fetch artwork only for the active
-// item while the list itself rotates locally in Shared state.
+component FeaturedPagerButton inherits Rectangle {
+    in property <bool> next;
+    in property <bool> narrow;
+    callback stepped();
+
+    width: root.narrow ? 46px : 44px;
+    height: self.width;
+    border-radius: 9px;
+    background: pager_touch.has-hover ? #ffffff28 : #00000055;
+    animate background { duration: Anim.hover_fast; }
+
+    if !root.next: IcChevronLeft {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 24px;
+        height: 24px;
+        fill: #f4f4f5;
+    }
+    if root.next: IcChevronRight {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 24px;
+        height: 24px;
+        fill: #f4f4f5;
+    }
+    pager_touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.next ? @tr("Next featured title") : @tr("Previous featured title");
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { root.stepped(); }
+    }
+}
+
+// Catalog-driven backdrop at the top of Home. Text is centered within the
+// left column on wide screens; narrow screens stack the actions beneath it.
 component FeaturedShowcase inherits Rectangle {
     in property <string> title;
-    in property <string> narrow_title;
     in property <string> media_type;
     in property <string> rating;
     in property <string> runtime;
@@ -734,25 +819,19 @@ component FeaturedShowcase inherits Rectangle {
     callback pan_release();
 
     function media_label() -> string {
-        if (root.media_type == "series") {
-            return @tr("TV");
-        }
-        if (root.media_type == "movie") {
-            return @tr("MOVIE");
-        }
-        if (root.media_type == "anime") {
-            return @tr("ANIME");
-        }
+        if (root.media_type == "series") { return @tr("TV"); }
+        if (root.media_type == "movie") { return @tr("MOVIE"); }
+        if (root.media_type == "anime") { return @tr("ANIME"); }
         return root.media_type;
     }
 
     width: 100%;
     height: root.narrow
-        ? Math.min(420px, Math.max(300px, root.width * 0.70))
-        : 430px;
-    border-radius: 18px;
+        ? Math.min(480px, Math.max(300px, root.width * 0.73))
+        : Math.min(560px, Math.max(380px, root.width * 0.276));
+    border-radius: root.narrow ? 10px : 8px;
     clip: true;
-    background: #17171d;
+    background: #08080a;
 
     Image {
         source: root.backdrop;
@@ -760,12 +839,13 @@ component FeaturedShowcase inherits Rectangle {
         width: 100%;
         height: 100%;
     }
-
-    // Keep one smooth scrim over the artwork so the overlay stays legible.
-    Rectangle {
+    // FemtoVG can flatten brush gradients. An SVG rasterized into a tall
+    // alpha ramp gives both desktop and Android one continuous bottom fade.
+    Image {
+        source: @image-url("../../assets/featured-backdrop-scrim.svg");
+        image-fit: fill;
         width: 100%;
         height: 100%;
-        background: @linear-gradient(180deg, #00000044 0%, #000000aa 100%);
     }
 
     // Horizontal swipe changes the active title. During a horizontal gesture
@@ -812,223 +892,129 @@ component FeaturedShowcase inherits Rectangle {
         }
     }
 
-    VerticalLayout {
-        width: 100%;
-        height: 100%;
-        padding: root.narrow ? 14px : 22px;
-        spacing: 8px;
+    if root.count > 1: HorizontalLayout {
+        x: root.width - self.width - (root.narrow ? 20px : 18px);
+        y: root.narrow ? 20px : 18px;
+        width: root.narrow ? 198px : 188px;
+        height: root.narrow ? 46px : 44px;
+        spacing: 10px;
 
-        HorizontalLayout {
-            width: 100%;
-            height: 42px;
-            alignment: end;
-            spacing: 8px;
-
-            Rectangle { horizontal-stretch: 1; }
-
-            if root.count > 1: Rectangle {
-                width: 42px;
-                height: 42px;
-                border-radius: 12px;
-                background: #00000077;
-
-                IcChevronLeft {
-                    x: 11px;
-                    y: 11px;
-                    width: 20px;
-                    height: 20px;
-                    fill: #ffffff;
-                }
-                TouchArea {
-                    accessible-role: button;
-                    accessible-label: @tr("Previous featured title");
-                    width: 100%;
-                    height: 100%;
-                    mouse-cursor: pointer;
-                    clicked => { root.step(-1); }
-                }
-            }
-
-            if root.count > 1: Rectangle {
-                width: 78px;
-                height: 42px;
-                border-radius: 12px;
-                background: #00000077;
-
+        FeaturedPagerButton {
+            narrow: root.narrow;
+            stepped => { root.step(-1); }
+        }
+        Rectangle {
+            width: root.narrow ? 86px : 80px;
+            height: root.narrow ? 46px : 44px;
+            border-radius: 9px;
+            background: #00000055;
+            HorizontalLayout {
+                width: 100%;
+                height: 100%;
+                spacing: 4px;
+                alignment: center;
                 Text {
-                    width: 100%;
-                    height: 100%;
-                    text: (root.index + 1) + " / " + root.count;
-                    font-size: 14px;
+                    text: root.index + 1;
+                    font-size: 21px;
                     font-weight: 700;
-                    color: #ffffff;
-                    horizontal-alignment: center;
+                    color: #f4f4f5;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "/";
+                    font-size: 21px;
+                    font-weight: 600;
+                    color: #f4f4f5;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.count;
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #f4f4f5;
                     vertical-alignment: center;
                 }
             }
-
-            if root.count > 1: Rectangle {
-                width: 42px;
-                height: 42px;
-                border-radius: 12px;
-                background: #00000077;
-
-                IcChevronRight {
-                    x: 11px;
-                    y: 11px;
-                    width: 20px;
-                    height: 20px;
-                    fill: #ffffff;
-                }
-                TouchArea {
-                    accessible-role: button;
-                    accessible-label: @tr("Next featured title");
-                    width: 100%;
-                    height: 100%;
-                    mouse-cursor: pointer;
-                    clicked => { root.step(1); }
-                }
-            }
         }
+        FeaturedPagerButton {
+            next: true;
+            narrow: root.narrow;
+            stepped => { root.step(1); }
+        }
+    }
 
-        Rectangle { vertical-stretch: 1; }
+    VerticalLayout {
+        x: root.narrow ? 16px : 18px;
+        y: root.height - self.height - (root.narrow ? 20px : 22px);
+        // Keep the wide text clear of the action pills even just above the
+        // narrow breakpoint, where both columns have much less room.
+        width: root.narrow ? root.width - 32px : Math.min(root.width * 0.51, wide_actions.x - 36px);
+        height: self.preferred-height;
+        spacing: root.narrow ? 12px : 10px;
 
         HorizontalLayout {
             width: 100%;
-            spacing: 8px;
-            alignment: root.narrow ? center : start;
+            height: root.narrow ? 30px : 32px;
+            spacing: 7px;
+            alignment: center;
 
-            Rectangle {
-                width: type_label.preferred-width + 24px;
-                height: 28px;
-                border-radius: 16px;
-                border-width: 1px;
-                border-color: #ffffff33;
-                background: #00000055;
-
-                Text {
-                    x: 12px;
-                    y: (parent.height - self.height) / 2;
-                    text: root.media_label();
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: #ffffff;
-                }
-                type_label := Text {
-                    visible: false;
-                    text: root.media_label();
-                    font-size: 12px;
-                    font-weight: 600;
-                }
+            if root.media_type != "": FeaturedBadge {
+                label: root.media_label();
+                narrow: root.narrow;
             }
-
-            if root.rating != "": Rectangle {
-                width: rating_label.preferred-width + 28px;
-                height: 28px;
-                border-radius: 16px;
-                border-width: 1px;
-                border-color: #ffffff33;
-                background: #00000055;
-
-                Text {
-                    x: 10px;
-                    y: (parent.height - self.height) / 2;
-                    text: "☆";
-                    font-size: 16px;
-                    color: #ffffff;
-                }
-                Text {
-                    x: 28px;
-                    y: (parent.height - self.height) / 2;
-                    text: root.rating;
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: #ffffff;
-                }
-                rating_label := Text {
-                    visible: false;
-                    text: root.rating;
-                    font-size: 12px;
-                    font-weight: 600;
-                }
+            if root.rating != "": FeaturedBadge {
+                label: root.rating;
+                icon: 1;
+                narrow: root.narrow;
             }
-
-            if root.narrow && root.runtime != "": Rectangle {
-                width: runtime_label.preferred-width + 30px;
-                height: 28px;
-                border-radius: 16px;
-                border-width: 1px;
-                border-color: #ffffff33;
-                background: #00000055;
-
-                Text {
-                    x: 9px;
-                    y: (parent.height - self.height) / 2;
-                    text: "◷";
-                    font-size: 15px;
-                    color: #ffffff;
-                }
-                Text {
-                    x: 27px;
-                    y: (parent.height - self.height) / 2;
-                    text: root.runtime;
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: #ffffff;
-                }
-                runtime_label := Text {
-                    visible: false;
-                    text: root.runtime;
-                    font-size: 12px;
-                    font-weight: 600;
-                }
+            if root.narrow && root.runtime != "": FeaturedBadge {
+                label: root.runtime;
+                icon: 2;
+                narrow: root.narrow;
             }
         }
-
         Text {
-            text: root.narrow ? root.narrow_title : root.title;
+            text: root.title;
             width: 100%;
-            font-size: root.narrow ? 26px : 46px;
-            font-weight: 800;
-            color: #f7c58f;
-            horizontal-alignment: root.narrow ? center : start;
+            height: self.preferred-height;
+            max-lines: 2;
+            font-size: root.narrow
+                ? (root.width < 400px ? 24px : 28px)
+                : Math.min(48px, Math.max(32px, root.width * 0.03));
+            font-weight: 700;
+            color: root.narrow ? #fff1b7 : #ededee;
+            horizontal-alignment: center;
             wrap: word-wrap;
-            max-height: root.narrow ? 64px : 110px;
             overflow: elide;
         }
-
-        if !root.narrow: HorizontalLayout {
+        if !root.narrow && root.description != "": Text {
+            text: root.description;
             width: 100%;
-            spacing: 12px;
-
-            Text {
-                text: root.description;
-                width: root.width * 0.48;
-                height: 52px;
-                font-size: 13px;
-                color: #e4e4e7;
-                wrap: word-wrap;
-                overflow: elide;
-            }
-
-            Rectangle { horizontal-stretch: 1; }
-
-            FeaturedActions {
-                narrow: false;
-                picked => { root.picked(); }
-            }
+            height: self.preferred-height;
+            max-lines: 3;
+            font-size: root.width < 1200px ? 14px : 16px;
+            color: #b4b4b7;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+            overflow: elide;
         }
-
         if root.narrow: HorizontalLayout {
             width: 100%;
             alignment: center;
             FeaturedActions {
                 narrow: true;
+                compact: root.width < 400px;
                 picked => { root.picked(); }
             }
         }
+    }
 
-        Rectangle { height: 4px; }
+    wide_actions := FeaturedActions {
+        visible: !root.narrow;
+        x: root.width - self.width - 18px;
+        y: root.height - self.height - 18px;
+        compact: root.width < 1000px;
+        picked => { root.picked(); }
     }
 }
 
@@ -1053,7 +1039,6 @@ export component HomePage {
     in-out property <string> home_empty_hint: @tr("Nothing to continue — start watching a show or movie and it will show up here.");
     in property <bool> continue_enabled: true;
     in property <string> featured_title;
-    in property <string> featured_narrow_title;
     in property <string> featured_type;
     in property <string> featured_rating;
     in property <string> featured_runtime;
@@ -1084,8 +1069,11 @@ export component HomePage {
         : root.grid_item_width;
     property <length> rail_h: root.rail_item_width * 3 / 2 + 76px;
     property <length> rail_h_up: root.rail_item_width * 3 / 2 + 88px;
+    property <length> featured_width: self.width - 36px - root.rail_w - root.safe-left - root.safe-right;
     property <length> featured_h: root.featured_count > 0
-        ? (root.narrow ? Math.min(420px, Math.max(300px, (self.width - 36px - root.rail_w) * 0.70)) : 430px) + 12px
+        ? (root.narrow
+            ? Math.min(480px, Math.max(300px, root.featured_width * 0.73))
+            : Math.min(560px, Math.max(380px, root.featured_width * 0.276))) + 12px
         : 0px;
     // Approximate landing section heights for keyboard follow (header +
     // divider + carousel + spacing).
@@ -1642,7 +1630,6 @@ export component HomePage {
 
                             if root.featured_count > 0: FeaturedShowcase {
                                 title: root.featured_title;
-                                narrow_title: root.featured_narrow_title;
                                 media_type: root.featured_type;
                                 rating: root.featured_rating;
                                 runtime: root.featured_runtime;
