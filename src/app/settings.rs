@@ -138,6 +138,7 @@ impl Bridge {
                 Rc::new(VecModel::<SharedString>::from(language_labels())).into(),
             );
         }
+        self.apply_home_catalog_rows();
         self.download_settings_to_ui();
         self.apply_animations(&settings);
         self.apply_language(&settings);
@@ -244,6 +245,7 @@ impl Bridge {
                 rewrite_existing: false,
                 lazy_reencode: app.get_cache_lazy_reencode(),
                 categories: state.cache_settings.categories.clone(),
+                home_catalog_sources: state.cache_settings.home_catalog_sources.clone(),
                 discover_min_cols: app.get_discover_min_cols().clamp(2, 6) as u32,
                 discover_catalog_addon_names: app.get_discover_catalog_addon_names(),
                 library_min_cols: app.get_library_min_cols().clamp(2, 6) as u32,
@@ -292,6 +294,100 @@ impl Bridge {
         };
         *CURRENT_TORRENT_SETTINGS.lock().unwrap() = torrent.clone();
         sync_torrent_engine(&torrent);
+    }
+
+    /// Build selectable Home catalog sources from installed manifests while
+    /// retaining selected-but-unavailable sources as removable rows.
+    fn home_catalog_choices(&self) -> Vec<(HomeCatalogSource, HomeCatalogRow)> {
+        let state = self.shared.lock().unwrap();
+        let selected: HashSet<HomeCatalogSource> = state
+            .cache_settings
+            .home_catalog_sources
+            .iter()
+            .cloned()
+            .collect();
+        let mut seen = HashSet::new();
+        let mut choices = Vec::new();
+        for addon in &state.installed {
+            for catalog in &addon.manifest.catalogs {
+                let source = HomeCatalogSource {
+                    addon_url: addon.url.clone(),
+                    type_: catalog.type_.clone(),
+                    catalog_id: catalog.id.clone(),
+                };
+                if !seen.insert(source.clone()) {
+                    continue;
+                }
+                choices.push((
+                    source.clone(),
+                    HomeCatalogRow {
+                        title: SharedString::from(&catalog.name),
+                        addon: SharedString::from(&addon.label),
+                        media_type: SharedString::from(&catalog.type_),
+                        selected: selected.contains(&source),
+                        available: addon.available,
+                        enabled: addon.available && addon.enabled,
+                    },
+                ));
+            }
+        }
+        for source in &state.cache_settings.home_catalog_sources {
+            if seen.insert(source.clone()) {
+                choices.push((
+                    source.clone(),
+                    HomeCatalogRow {
+                        title: SharedString::from(&source.catalog_id),
+                        addon: SharedString::from(&source.addon_url),
+                        media_type: SharedString::from(&source.type_),
+                        selected: true,
+                        available: false,
+                        enabled: false,
+                    },
+                ));
+            }
+        }
+        choices
+    }
+
+    pub(super) fn apply_home_catalog_rows(&self) {
+        if let Some(app) = self.app() {
+            let rows = self
+                .home_catalog_choices()
+                .into_iter()
+                .map(|(_, row)| row)
+                .collect::<Vec<_>>();
+            app.set_home_catalog_rows(Rc::new(VecModel::from(rows)).into());
+        }
+    }
+
+    /// Toggle one catalog in Settings → Home. The choice is persisted
+    /// immediately and stays device-local; browsing back to Home reloads its
+    /// bounded featured list from the updated selection.
+    pub(super) fn home_catalog_toggled(&self, index: usize) {
+        let choices = self.home_catalog_choices();
+        let Some((source, _)) = choices.get(index) else {
+            return;
+        };
+        let source = source.clone();
+        let settings = {
+            let mut state = self.shared.lock().unwrap();
+            if state.cache_settings.home_catalog_sources.contains(&source) {
+                state
+                    .cache_settings
+                    .home_catalog_sources
+                    .retain(|saved| saved != &source);
+            } else {
+                state.cache_settings.home_catalog_sources.push(source);
+            }
+            state.cache_settings.clone()
+        };
+        set_active_cache_settings(settings.clone());
+        write_settings(&settings);
+        self.apply_home_catalog_rows();
+        self.invalidate_home_showcase();
+        if let Some(app) = self.app() {
+            app.set_persistence_failed(storage::last_error().is_some());
+        }
     }
 
     /// Persist current memory, never stale controls captured by a timer.

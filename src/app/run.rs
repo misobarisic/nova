@@ -399,6 +399,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let b = bridge.clone();
+    app.on_home_featured_picked(move || b.home_showcase_picked());
+
+    let b = bridge.clone();
+    app.on_home_featured_step(move |d| b.home_showcase_step(d));
+
+    let b = bridge.clone();
     app.on_continue_picked(move |i| b.continue_picked(i as usize));
 
     let b = bridge.clone();
@@ -553,6 +559,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_category_removed(move |i| b.remove_category_from_ui(i as usize));
 
     let b = bridge.clone();
+    app.on_home_catalog_toggled(move |i| b.home_catalog_toggled(i as usize));
+
+    let b = bridge.clone();
     app.on_toggle_entry_category(move |name| b.toggle_entry_category(&name));
 
     let b = bridge.clone();
@@ -632,6 +641,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         set_active_cache_settings(state.cache_settings.clone());
     }
     bridge.settings_to_ui();
+    // Addon manifests may still be loading asynchronously; this first fetch
+    // uses every currently available selected catalog, and each later
+    // manifest completion invalidates/rebuilds it as needed.
+    bridge.refresh_home_showcase();
 
     // Torrent settings: restore + mirror into the runtime cache read by the
     // engine and the player-close cleanup path.

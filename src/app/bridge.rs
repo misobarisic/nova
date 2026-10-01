@@ -38,6 +38,7 @@ impl Bridge {
                 ..Shared::default()
             })),
             catalog_gen,
+            home_showcase_gen: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "desktop")]
             poster_tx,
             #[cfg(feature = "desktop")]

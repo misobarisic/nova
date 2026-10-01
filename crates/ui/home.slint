@@ -624,6 +624,216 @@ component CalToggle inherits Rectangle {
     }
 }
 
+// Large catalog-driven title at the top of Home. Its contents are scalar
+// AppWindow properties so the backend can fetch artwork only for the active
+// item while the list itself rotates locally in Shared state.
+component FeaturedShowcase inherits Rectangle {
+    in property <string> title;
+    in property <string> year;
+    in property <string> media_type;
+    in property <string> description;
+    in property <image> backdrop;
+    in property <int> index;
+    in property <int> count;
+    in property <bool> narrow;
+    callback picked();
+    callback step(int);
+    callback pan_hint();
+    callback pan_release();
+
+    width: 100%;
+    height: narrow ? 320px : 430px;
+    border-radius: 14px;
+    clip: true;
+    background: #17171d;
+
+    Image {
+        source: root.backdrop;
+        image-fit: cover;
+        width: 100%;
+        height: 100%;
+    }
+
+    // The dark scrim keeps metadata legible over bright poster photography.
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000088;
+    }
+
+    // Horizontal swipe changes the active title. During a horizontal gesture
+    // the Home page's vertical Flickable temporarily yields, just like it does
+    // for the Continue Watching and Upcoming rails.
+    swipe_area := TouchArea {
+        width: 100%;
+        height: 100%;
+        property <length> start_x: 0px;
+        property <length> start_y: 0px;
+        property <bool> swiping: false;
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.down) {
+                swipe_area.start_x = swipe_area.mouse-x;
+                swipe_area.start_y = swipe_area.mouse-y;
+                swipe_area.swiping = false;
+            } else if (ev.kind == PointerEventKind.move) {
+                let dx = swipe_area.mouse-x - swipe_area.start_x;
+                let dy = swipe_area.mouse-y - swipe_area.start_y;
+                if (Math.abs(dx) > 10px && Math.abs(dx) > Math.abs(dy)) {
+                    swipe_area.swiping = true;
+                    root.pan_hint();
+                } else if (Math.abs(dy) > 10px && Math.abs(dy) > Math.abs(dx)) {
+                    root.pan_release();
+                }
+            } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                let dx = swipe_area.mouse-x - swipe_area.start_x;
+                let dy = swipe_area.mouse-y - swipe_area.start_y;
+                if (ev.kind == PointerEventKind.up
+                    && swipe_area.swiping
+                    && Math.abs(dx) > 44px
+                    && Math.abs(dx) > Math.abs(dy)) {
+                    root.step(dx < 0px ? 1 : -1);
+                }
+                swipe_area.swiping = false;
+                root.pan_release();
+            }
+        }
+        changed pressed => {
+            if (!self.pressed && swipe_area.swiping) {
+                swipe_area.swiping = false;
+                root.pan_release();
+            }
+        }
+    }
+
+    VerticalLayout {
+        width: 100%;
+        height: 100%;
+        padding: root.narrow ? 16px : 22px;
+        spacing: root.narrow ? 6px : 9px;
+
+        Rectangle { vertical-stretch: 1; }
+
+        Text {
+            text: root.title;
+            font-size: root.narrow ? 30px : 46px;
+            font-weight: 800;
+            color: #ffffff;
+            wrap: word-wrap;
+            max-height: root.narrow ? 76px : 110px;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.media_type + (root.year == "" ? "" : "  ·  " + root.year);
+            font-size: 13px;
+            font-weight: 600;
+            color: #e4e4e7;
+        }
+
+        if root.description != "": Text {
+            text: root.description;
+            width: root.narrow ? 100% : 68%;
+            height: root.narrow ? 42px : 52px;
+            font-size: 13px;
+            color: #e4e4e7;
+            wrap: word-wrap;
+            overflow: elide;
+        }
+
+        HorizontalLayout {
+            width: 100%;
+            spacing: 10px;
+            alignment: start;
+
+            Rectangle {
+                width: details_label.preferred-width + 30px;
+                height: 40px;
+                border-radius: 8px;
+                background: #6d5bd0;
+
+                Text {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: @tr("View details");
+                    font-size: 13px;
+                    font-weight: 700;
+                    color: #ffffff;
+                }
+                details_label := Text {
+                    visible: false;
+                    text: @tr("View details");
+                    font-size: 13px;
+                    font-weight: 700;
+                }
+
+                TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    mouse-cursor: pointer;
+                    clicked => { root.picked(); }
+                }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            if root.count > 1: Rectangle {
+                width: 34px;
+                height: 34px;
+                border-radius: 17px;
+                background: #00000077;
+
+                IcChevronLeft {
+                    x: 9px;
+                    y: 9px;
+                    width: 16px;
+                    height: 16px;
+                    fill: #ffffff;
+                }
+                TouchArea {
+                    accessible-role: button;
+                    accessible-label: @tr("Previous featured title");
+                    width: 100%;
+                    height: 100%;
+                    mouse-cursor: pointer;
+                    clicked => { root.step(-1); }
+                }
+            }
+
+            Text {
+                visible: root.count > 1;
+                text: (root.index + 1) + " / " + root.count;
+                height: 34px;
+                font-size: 12px;
+                color: #ffffff;
+                vertical-alignment: center;
+            }
+
+            if root.count > 1: Rectangle {
+                width: 34px;
+                height: 34px;
+                border-radius: 17px;
+                background: #00000077;
+
+                IcChevronRight {
+                    x: 9px;
+                    y: 9px;
+                    width: 16px;
+                    height: 16px;
+                    fill: #ffffff;
+                }
+                TouchArea {
+                    accessible-role: button;
+                    accessible-label: @tr("Next featured title");
+                    width: 100%;
+                    height: 100%;
+                    mouse-cursor: pointer;
+                    clicked => { root.step(1); }
+                }
+            }
+        }
+    }
+}
+
 export component HomePage {
     // Custom components placed in a Window are sized by their preferred size;
     // make this page fill the window (its parent).
@@ -643,6 +853,13 @@ export component HomePage {
     in-out property <int> cal_epoch: -1;
     in-out property <bool> cal_open: false;
     in-out property <string> home_empty_hint: @tr("Nothing to continue — start watching a show or movie and it will show up here.");
+    in property <string> featured_title;
+    in property <string> featured_year;
+    in property <string> featured_type;
+    in property <string> featured_description;
+    in property <image> featured_backdrop;
+    in property <int> featured_index;
+    in property <int> featured_count;
     // 0 = landing carousels, 1 = all Continue, 2 = all Upcoming.
     in-out property <int> view: 0;
 
@@ -666,6 +883,7 @@ export component HomePage {
         : root.grid_item_width;
     property <length> rail_h: root.rail_item_width * 3 / 2 + 76px;
     property <length> rail_h_up: root.rail_item_width * 3 / 2 + 88px;
+    property <length> featured_h: root.featured_count > 0 ? (root.narrow ? 320px : 430px) + 12px : 0px;
     // Approximate landing section heights for keyboard follow (header +
     // divider + carousel + spacing).
     property <length> cont_section_h: root.continue_rows.length > 0
@@ -701,6 +919,12 @@ export component HomePage {
         }
     }
 
+    showcase_rotation_t := Timer {
+        interval: 9s;
+        running: root.view == 0 && root.featured_count > 1;
+        triggered => { root.featured_step(1); }
+    }
+
     callback home_picked();
     callback discover_picked();
     callback library_picked();
@@ -721,6 +945,8 @@ export component HomePage {
     callback upcoming_cal_month(int);
     callback upcoming_cal_pick(int);
     callback upcoming_cal_activate();
+    callback featured_picked();
+    callback featured_step(int);
     // System back on the root screen: background the app (Android moves
     // the task to the back, keeping process state; desktop never fires it).
     callback exit_to_background();
@@ -960,12 +1186,12 @@ export component HomePage {
             let cw = root.rail_item_width;
             let x = root.kb_idx * (cw + root.item-gap);
             rail_continue.content-x = root.rail_show(rail_continue.content-x, x, cw, rail_continue.width, rail_continue.content-width);
-            root.kb_scroll_to(0px, root.cont_section_h);
+            root.kb_scroll_to(root.featured_h, root.featured_h + root.cont_section_h);
         } else if (root.kb_zone == 2 && root.upcoming_rows.length > 0) {
             let cw = root.rail_item_width;
             let x = root.kb_up_idx * (cw + root.item-gap);
             rail_upcoming.content-x = root.rail_show(rail_upcoming.content-x, x, cw, rail_upcoming.width, rail_upcoming.content-width);
-            root.kb_scroll_to(root.cont_section_h, root.cont_section_h + root.up_section_h);
+            root.kb_scroll_to(root.featured_h + root.cont_section_h, root.featured_h + root.cont_section_h + root.up_section_h);
         }
     }
 
@@ -1197,6 +1423,22 @@ export component HomePage {
                         VerticalLayout {
                             width: 100%;
                             spacing: 12px;
+
+                            if root.featured_count > 0: FeaturedShowcase {
+                                title: root.featured_title;
+                                year: root.featured_year;
+                                media_type: root.featured_type;
+                                description: root.featured_description;
+                                backdrop: root.featured_backdrop;
+                                index: root.featured_index;
+                                count: root.featured_count;
+                                narrow: root.narrow;
+                                picked => {
+                                    root.kb_active = false;
+                                    root.featured_picked();
+                                }
+                                step(d) => { root.featured_step(d); }
+                            }
 
                             if root.continue_rows.length == 0 && root.upcoming_rows.length == 0: VerticalLayout {
                                 alignment: center;

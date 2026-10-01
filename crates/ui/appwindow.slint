@@ -15,7 +15,7 @@ export { NavState } from "sidenav.slint";
 // Shared structs used by the property declarations below; they are exported
 // from types.slint, so the generated Rust module (`slint::include_modules!`)
 // exposes them to the backend.
-import { MediaCard, StreamRow, EpisodeRow, AddonRow, CategoryRow, SyncPeer, SyncInvite, TrackRow, SeasonCard, ContinueRow, UpcomingRow, CalCell, SheetItem, DownloadRow, LicenseSource } from "types.slint";
+import { MediaCard, StreamRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, TrackRow, SeasonCard, ContinueRow, UpcomingRow, CalCell, SheetItem, DownloadRow, LicenseSource } from "types.slint";
 
 // AppWindow owns every property / callback the backend drives (all the
 // `set_*`, `get_*`, `on_*` and `invoke_*` calls in desktop.rs / web.rs) and
@@ -103,6 +103,15 @@ export component AppWindow inherits Window {
     // --- Home (landing page, Continue Watching) ------------------------
     in-out property <[ContinueRow]> home_continue: [];
     in-out property <[UpcomingRow]> home_upcoming: [];
+    // Independent catalog-driven feature at the top of Home. Rust keeps its
+    // selected preview and fetches the active backdrop on demand.
+    in-out property <string> home_featured_title: "";
+    in-out property <string> home_featured_year: "";
+    in-out property <string> home_featured_type: "";
+    in-out property <string> home_featured_description: "";
+    in-out property <image> home_featured_backdrop;
+    in-out property <int> home_featured_index: 0;
+    in-out property <int> home_featured_count: 0;
     // Home → Upcoming calendar (the "see all" subpage's month view): the 42
     // grid cells, the month title, the selected day's episode rows, the
     // selected epoch day (-1 = none) and the list/calendar switch. The
@@ -215,6 +224,7 @@ export component AppWindow inherits Window {
     // User-defined library categories.
     in-out property <[CategoryRow]> category_rows: [];
     in-out property <string> category_input: "";
+    in-out property <[HomeCatalogRow]> home_catalog_rows: [];
     // Library filter: empty string = show all, otherwise filter by category.
     in-out property <string> library_filter_category: "";
     // Category names for the library filter dropdown.
@@ -449,6 +459,8 @@ export component AppWindow inherits Window {
     callback upcoming_cal_month(int);
     callback upcoming_cal_pick(int);
     callback upcoming_cal_activate();
+    callback home_featured_picked();
+    callback home_featured_step(int);
     callback library_watch_action(int, int);
     callback library_status_action(int, int);
     callback add_to_library();
@@ -488,6 +500,7 @@ export component AppWindow inherits Window {
     callback sync_respond_pair(string, bool);
     callback category_added(string);
     callback category_removed(int);
+    callback home_catalog_toggled(int);
     callback category_renamed(int, string);
     callback toggle_entry_category(string);
     callback library_filter_picked(string);
@@ -597,6 +610,13 @@ export component AppWindow inherits Window {
         cal_epoch <=> root.home_cal_epoch;
         cal_open <=> root.home_cal_open;
         home_empty_hint <=> root.home_empty_hint;
+        featured_title <=> root.home_featured_title;
+        featured_year <=> root.home_featured_year;
+        featured_type <=> root.home_featured_type;
+        featured_description <=> root.home_featured_description;
+        featured_backdrop <=> root.home_featured_backdrop;
+        featured_index <=> root.home_featured_index;
+        featured_count <=> root.home_featured_count;
         min_cols: root.library_min_cols;
         kb_zone <=> root.home_kb_zone;
         kb_nav <=> root.home_kb_nav;
@@ -628,6 +648,8 @@ export component AppWindow inherits Window {
         upcoming_cal_month(d) => { root.upcoming_cal_month(d); }
         upcoming_cal_pick(e) => { root.upcoming_cal_pick(e); }
         upcoming_cal_activate => { root.upcoming_cal_activate(); }
+        featured_picked => { root.home_featured_picked(); }
+        featured_step(d) => { root.home_featured_step(d); }
         exit_to_background => { root.exit_to_background(); }
     }
 
@@ -763,6 +785,7 @@ export component AppWindow inherits Window {
         addon_url <=> root.addon_url;
         category_rows <=> root.category_rows;
         category_input <=> root.category_input;
+        home_catalog_rows <=> root.home_catalog_rows;
         cache_images <=> root.cache_images;
         cache_disk_usage <=> root.cache_disk_usage;
         cache_enabled <=> root.cache_enabled;
@@ -846,6 +869,7 @@ export component AppWindow inherits Window {
         playback_speed_stepped(d) => { root.playback_speed_stepped(d); }
         category_added(n) => { root.category_added(n); }
         category_removed(i) => { root.category_removed(i); }
+        home_catalog_toggled(i) => { root.home_catalog_toggled(i); }
         save_settings => { root.save_settings(); }
         settings_edited(field) => { root.settings_edited(field); }
         clear_cache => { root.clear_cache(); }

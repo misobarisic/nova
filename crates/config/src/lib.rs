@@ -90,6 +90,18 @@ pub struct DownloadSettings {
     pub auto_delete_watched: bool,
 }
 
+/// One device-local catalog selected for the Home featured showcase.
+/// Identity uses the addon install URL plus protocol type and catalog id; the
+/// display name is deliberately not persisted because manifests can rename it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeCatalogSource {
+    pub addon_url: String,
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub catalog_id: String,
+}
+
 // ---------------------------------------------------------------------------
 // Image-cache settings
 // ---------------------------------------------------------------------------
@@ -316,6 +328,10 @@ pub struct CacheSettings {
     /// picker. Display-only: catalog identity never depends on this setting.
     #[serde(default = "default_true")]
     pub discover_catalog_addon_names: bool,
+    /// Catalogs whose titles are featured and rotated at the top of Home.
+    /// Device-local: addon order and available catalogs can differ by device.
+    #[serde(default)]
+    pub home_catalog_sources: Vec<HomeCatalogSource>,
     /// Minimum grid columns for My Library (same scheme).
     #[serde(default = "default_min_cols")]
     pub library_min_cols: u32,
@@ -388,6 +404,7 @@ impl Default for CacheSettings {
             categories: Vec::new(),
             discover_min_cols: 2,
             discover_catalog_addon_names: true,
+            home_catalog_sources: Vec::new(),
             library_min_cols: 2,
             android_hwdec: AndroidHwdec::HwPlus,
             player_external: false,
@@ -729,5 +746,28 @@ mod tests {
         let encoded = serde_json::to_string(&settings).unwrap();
         let restored: CacheSettings = serde_json::from_str(&encoded).unwrap();
         assert!(!restored.discover_catalog_addon_names);
+    }
+
+    #[test]
+    fn home_catalog_sources_default_empty_and_round_trip() {
+        let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
+        let mut settings: CacheSettings = serde_json::from_str(older).unwrap();
+        assert!(settings.home_catalog_sources.is_empty());
+        settings.home_catalog_sources.push(HomeCatalogSource {
+            addon_url: "https://example.test/manifest.json".into(),
+            type_: "series".into(),
+            catalog_id: "trending".into(),
+        });
+        let encoded = serde_json::to_string(&settings).unwrap();
+        let restored: CacheSettings = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored.home_catalog_sources, settings.home_catalog_sources);
+        assert_eq!(
+            serde_json::to_value(&restored.home_catalog_sources[0]).unwrap(),
+            serde_json::json!({
+                "addonUrl": "https://example.test/manifest.json",
+                "type": "series",
+                "catalogId": "trending"
+            })
+        );
     }
 }

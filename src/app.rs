@@ -15,8 +15,9 @@ use std::time::Duration;
 
 use crate::download::DownloadJob;
 use crate::{
-    AddonRow, AppWindow, CalCell, CategoryRow, ContinueRow, DownloadRow, EpisodeRow, LicenseSource,
-    MediaCard, SeasonCard, SheetItem, StreamRow, SyncInvite, SyncPeer, UpcomingRow,
+    AddonRow, AppWindow, CalCell, CategoryRow, ContinueRow, DownloadRow, EpisodeRow,
+    HomeCatalogRow, LicenseSource, MediaCard, SeasonCard, SheetItem, StreamRow, SyncInvite,
+    SyncPeer, UpcomingRow,
 };
 
 pub(crate) const OPEN_SOURCE_LICENSE_CATALOG: &str =
@@ -74,8 +75,8 @@ use crate::net;
 use crate::storage;
 use nova_config::{
     AndroidHwdec, CacheImageFormat, CacheSettings, DesktopExternalApp, DownloadSettings,
-    EpisodeStartBehavior, Language, active_cache_settings, app_cache_dir, app_data_dir, now_secs,
-    poster_cache_dir, set_cache_settings,
+    EpisodeStartBehavior, HomeCatalogSource, Language, active_cache_settings, app_cache_dir,
+    app_data_dir, now_secs, poster_cache_dir, set_cache_settings,
 };
 // Everything from the image-cache subsystem now lives in `nova-media`.
 use nova_media::cache::*;
@@ -166,6 +167,16 @@ struct StreamUi {
     download: Option<DownloadJob>,
 }
 
+/// Decoded artwork retained for an item in Home's small featured carousel.
+/// `*_done` also covers a missing URL or a failed fetch, so one bad image does
+/// not stall automatic rotation.
+#[derive(Default)]
+struct HomeShowcaseArtwork {
+    backdrop: Option<SharedPixelBuffer<Rgba8Pixel>>,
+    backdrop_done: bool,
+    backdrop_loading: bool,
+}
+
 #[derive(Default)]
 struct Shared {
     installed: Vec<Installed>,
@@ -232,6 +243,12 @@ struct Shared {
     /// Home → Upcoming entries, rebuilt alongside (`continue_list`):
     /// unaired episodes of caught-up library series, air-date first.
     upcoming_list: Vec<UpcomingEntry>,
+    /// Selected catalog previews for Home's independent featured showcase.
+    home_showcase: Vec<MetaPreview>,
+    home_showcase_index: usize,
+    home_showcase_pending_index: Option<usize>,
+    home_showcase_artwork: HashMap<usize, HomeShowcaseArtwork>,
+    home_showcase_loaded: bool,
     /// Home → Upcoming calendar month/selection/open flag (UI-only).
     upcoming_cal: UpcomingCal,
     /// Episode currently playing (series flow); `None` for movies / idle.
@@ -547,6 +564,8 @@ struct Bridge {
     app: slint::Weak<AppWindow>,
     shared: Arc<Mutex<Shared>>,
     catalog_gen: Arc<AtomicU64>,
+    /// Stale-response guard for the independent Home showcase fetches.
+    home_showcase_gen: Arc<AtomicU64>,
     // Native-only poster worker pipeline (dual-priority channels, see
     // `PosterTx`). Android fetches each grid poster via net::fetch_image instead.
     #[cfg(feature = "desktop")]

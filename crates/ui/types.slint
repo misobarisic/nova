@@ -75,6 +75,18 @@ export struct CategoryRow {
     name: string,
 }
 
+/// One selectable addon catalog in Settings → Home.
+export struct HomeCatalogRow {
+    title: string,
+    addon: string,
+    media_type: string,
+    selected: bool,
+    /// Whether its addon manifest is currently known (not removed/unavailable).
+    available: bool,
+    /// Whether the addon is enabled and can provide titles right now.
+    enabled: bool,
+}
+
 /// One trusted peer device shown in the Settings → Sync list.
 export struct LicenseSource {
     label: string,

@@ -1,7 +1,297 @@
 //! Home page: Continue Watching + Upcoming.
 use super::*;
 
+const HOME_SHOWCASE_PER_CATALOG: usize = 5;
+
 impl Bridge {
+    /// Load a small first page from each selected Home catalog. Each catalog
+    /// contributes at most five distinct titles; Discover's current picker,
+    /// pagination and search state are intentionally untouched.
+    pub(super) fn refresh_home_showcase(&self) {
+        let generation = self.home_showcase_gen.fetch_add(1, Ordering::Relaxed) + 1;
+        let targets = {
+            let mut state = self.shared.lock().unwrap();
+            state.home_showcase_loaded = true;
+            state.home_showcase.clear();
+            state.home_showcase_index = 0;
+            state.home_showcase_pending_index = None;
+            state.home_showcase_artwork.clear();
+            let sources = state.cache_settings.home_catalog_sources.clone();
+            let mut seen = HashSet::new();
+            sources
+                .iter()
+                .filter_map(|source| {
+                    if !seen.insert(source.clone()) {
+                        return None;
+                    }
+                    let addon = state.installed.iter().find(|addon| {
+                        addon.url == source.addon_url && addon.enabled && addon.available
+                    })?;
+                    addon
+                        .manifest
+                        .catalog_for(&source.type_, &source.catalog_id)?;
+                    let addon = Addon::new(&addon.url).ok()?;
+                    Some((
+                        addon.catalog_url(&source.type_, &source.catalog_id, &[]),
+                        source.type_.clone(),
+                    ))
+                })
+                .collect::<Vec<_>>()
+        };
+        if targets.is_empty() {
+            self.apply_home_showcase(generation, Vec::new());
+            return;
+        }
+
+        let results = Arc::new(Mutex::new(Vec::<(usize, Vec<MetaPreview>)>::new()));
+        let remaining = Arc::new(AtomicUsize::new(targets.len()));
+        for (target_index, (url, type_)) in targets.into_iter().enumerate() {
+            let bridge = self.clone();
+            let results = results.clone();
+            let remaining = remaining.clone();
+            net::fetch_bytes(url, move |result| {
+                let previews = result
+                    .ok()
+                    .and_then(|bytes| Addon::parse_catalog(&bytes).ok())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|mut preview| {
+                        if preview.type_.is_empty() {
+                            preview.type_ = type_.clone();
+                        }
+                        preview
+                    })
+                    .collect();
+                results.lock().unwrap().push((target_index, previews));
+                if remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
+                    let batches = std::mem::take(&mut *results.lock().unwrap());
+                    let _ = slint::invoke_from_event_loop(move || {
+                        bridge.apply_home_showcase(generation, batches);
+                    });
+                }
+            });
+        }
+    }
+
+    /// Invalidate any in-flight response when addon/catalog preferences
+    /// change. The next visit to Home starts a fresh bounded fetch.
+    pub(super) fn invalidate_home_showcase(&self) {
+        self.home_showcase_gen.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut state = self.shared.lock().unwrap();
+            state.home_showcase_loaded = false;
+            state.home_showcase.clear();
+            state.home_showcase_index = 0;
+            state.home_showcase_pending_index = None;
+            state.home_showcase_artwork.clear();
+        }
+        if let Some(app) = self.app() {
+            app.set_home_featured_title(SharedString::default());
+            app.set_home_featured_year(SharedString::default());
+            app.set_home_featured_type(SharedString::default());
+            app.set_home_featured_description(SharedString::default());
+            app.set_home_featured_backdrop(Image::default());
+            app.set_home_featured_index(0);
+            app.set_home_featured_count(0);
+        }
+    }
+
+    pub(super) fn ensure_home_showcase_loaded(&self) {
+        if !self.shared.lock().unwrap().home_showcase_loaded {
+            self.refresh_home_showcase();
+        }
+    }
+
+    fn apply_home_showcase(&self, generation: u64, batches: Vec<(usize, Vec<MetaPreview>)>) {
+        if generation != self.home_showcase_gen.load(Ordering::Relaxed) {
+            return;
+        }
+        let previews = merge_home_showcase_results(batches);
+        let (first, count) = {
+            let mut state = self.shared.lock().unwrap();
+            state.home_showcase = previews;
+            state.home_showcase_index = 0;
+            state.home_showcase_pending_index = (!state.home_showcase.is_empty()).then_some(0);
+            state.home_showcase_artwork.clear();
+            (
+                state.home_showcase.first().cloned(),
+                state.home_showcase.len(),
+            )
+        };
+        let Some(first) = first else {
+            if let Some(app) = self.app() {
+                app.set_home_featured_title(SharedString::default());
+                app.set_home_featured_year(SharedString::default());
+                app.set_home_featured_type(SharedString::default());
+                app.set_home_featured_description(SharedString::default());
+                app.set_home_featured_backdrop(Image::default());
+                app.set_home_featured_index(0);
+                app.set_home_featured_count(0);
+            }
+            return;
+        };
+
+        // Publish the first title immediately; its backdrop is fetched before
+        // it is considered ready for rotation.
+        if let Some(app) = self.app() {
+            app.set_home_featured_title(SharedString::from(first.title()));
+            app.set_home_featured_year(SharedString::from(first.year_str().unwrap_or_default()));
+            app.set_home_featured_type(SharedString::from(&first.type_));
+            app.set_home_featured_description(SharedString::from(
+                first.description.as_deref().unwrap_or_default(),
+            ));
+            app.set_home_featured_backdrop(Image::default());
+            app.set_home_featured_index(0);
+            app.set_home_featured_count(count as i32);
+        }
+        self.ensure_home_showcase_art(0, generation);
+    }
+
+    /// Begin loading the requested slide's art, while keeping the currently
+    /// displayed slide intact. The next slide is prefetched after every commit.
+    fn ensure_home_showcase_art(&self, index: usize, generation: u64) {
+        if generation != self.home_showcase_gen.load(Ordering::Relaxed) {
+            return;
+        }
+        let (backdrop, ready) = {
+            let mut state = self.shared.lock().unwrap();
+            let Some(preview) = state.home_showcase.get(index) else {
+                return;
+            };
+            let backdrop_url = preview.background.clone().unwrap_or_default();
+            let artwork = state.home_showcase_artwork.entry(index).or_default();
+            if backdrop_url.is_empty() {
+                artwork.backdrop_done = true;
+            }
+            let backdrop = if !backdrop_url.is_empty()
+                && !artwork.backdrop_done
+                && !artwork.backdrop_loading
+            {
+                artwork.backdrop_loading = true;
+                Some(backdrop_url)
+            } else {
+                None
+            };
+            (backdrop, artwork.backdrop_done)
+        };
+
+        if ready {
+            let should_commit =
+                self.shared.lock().unwrap().home_showcase_pending_index == Some(index);
+            if should_commit {
+                self.commit_home_showcase_index(index, generation);
+            }
+        }
+        if let Some(url) = backdrop {
+            self.fetch_home_showcase_artwork(index, generation, url);
+        }
+    }
+
+    fn fetch_home_showcase_artwork(&self, index: usize, generation: u64, url: String) {
+        let bridge = self.clone();
+        // Keep the add-on-provided source resolution for the large hero rather
+        // than using the smaller detail-banner derivative.
+        net::fetch_image(url, None, move |pixels| {
+            let _ = slint::invoke_from_event_loop(move || {
+                bridge.finish_home_showcase_artwork(index, generation, pixels);
+            });
+        });
+    }
+
+    fn finish_home_showcase_artwork(
+        &self,
+        index: usize,
+        generation: u64,
+        pixels: Option<SharedPixelBuffer<Rgba8Pixel>>,
+    ) {
+        if generation != self.home_showcase_gen.load(Ordering::Relaxed) {
+            return;
+        }
+        let should_commit = {
+            let mut state = self.shared.lock().unwrap();
+            let pending = state.home_showcase_pending_index == Some(index);
+            let Some(artwork) = state.home_showcase_artwork.get_mut(&index) else {
+                return;
+            };
+            artwork.backdrop_loading = false;
+            artwork.backdrop_done = true;
+            artwork.backdrop = pixels;
+            pending && artwork.backdrop_done
+        };
+        if should_commit {
+            self.commit_home_showcase_index(index, generation);
+        }
+    }
+
+    fn commit_home_showcase_index(&self, index: usize, generation: u64) {
+        if generation != self.home_showcase_gen.load(Ordering::Relaxed) {
+            return;
+        }
+        let (preview, backdrop, count) = {
+            let mut state = self.shared.lock().unwrap();
+            if state.home_showcase_pending_index != Some(index) {
+                return;
+            }
+            let Some(artwork) = state.home_showcase_artwork.get(&index) else {
+                return;
+            };
+            if !artwork.backdrop_done {
+                return;
+            }
+            let Some(preview) = state.home_showcase.get(index).cloned() else {
+                return;
+            };
+            let backdrop = artwork.backdrop.clone();
+            let count = state.home_showcase.len();
+            state.home_showcase_index = index;
+            state.home_showcase_pending_index = None;
+            (preview, backdrop, count)
+        };
+
+        if let Some(app) = self.app() {
+            app.set_home_featured_title(SharedString::from(preview.title()));
+            app.set_home_featured_year(SharedString::from(preview.year_str().unwrap_or_default()));
+            app.set_home_featured_type(SharedString::from(&preview.type_));
+            app.set_home_featured_description(SharedString::from(
+                preview.description.as_deref().unwrap_or_default(),
+            ));
+            app.set_home_featured_backdrop(backdrop.map(Image::from_rgba8).unwrap_or_default());
+            app.set_home_featured_index(index as i32);
+            app.set_home_featured_count(count as i32);
+        }
+
+        if count > 1 {
+            self.ensure_home_showcase_art((index + 1) % count, generation);
+        }
+    }
+
+    pub(super) fn home_showcase_step(&self, delta: i32) {
+        let (index, generation) = {
+            let mut state = self.shared.lock().unwrap();
+            let count = state.home_showcase.len();
+            if count < 2 {
+                return;
+            }
+            let base = state
+                .home_showcase_pending_index
+                .unwrap_or(state.home_showcase_index);
+            let index = (base as i64 + delta as i64).rem_euclid(count as i64) as usize;
+            state.home_showcase_pending_index = Some(index);
+            (index, self.home_showcase_gen.load(Ordering::Relaxed))
+        };
+        self.ensure_home_showcase_art(index, generation);
+    }
+
+    pub(super) fn home_showcase_picked(&self) {
+        let preview = {
+            let state = self.shared.lock().unwrap();
+            state.home_showcase.get(state.home_showcase_index).cloned()
+        };
+        if let Some(preview) = preview {
+            self.open_preview(preview, 0, false, None);
+        }
+    }
+
     /// Rebuild [`Shared::continue_list`] from the progress map: one entry per
     /// library item with resumable playback — a series' in-progress or next
     /// not-yet-watched episode, or a movie still in progress. An in-progress
@@ -426,6 +716,7 @@ impl Bridge {
         self.apply_home_to_ui();
         self.dispatch_continue_posters();
         self.dispatch_upcoming_posters();
+        self.ensure_home_showcase_loaded();
     }
 
     // ---- Upcoming calendar -------------------------------------------
@@ -542,6 +833,30 @@ impl Bridge {
             self.upcoming_picked(i);
         }
     }
+}
+
+/// Preserve the settings order of selected catalogs, cap each at five distinct
+/// titles, and avoid showing the same `(type, id)` twice when catalogs overlap.
+fn merge_home_showcase_results(mut batches: Vec<(usize, Vec<MetaPreview>)>) -> Vec<MetaPreview> {
+    batches.sort_by_key(|(index, _)| *index);
+    let mut seen = HashSet::new();
+    let mut merged = Vec::new();
+    for (_, previews) in batches {
+        let mut added = 0;
+        for preview in previews {
+            if preview.id.is_empty() || preview.title().trim().is_empty() {
+                continue;
+            }
+            if seen.insert((preview.type_.clone(), preview.id.clone())) {
+                merged.push(preview);
+                added += 1;
+                if added == HOME_SHOWCASE_PER_CATALOG {
+                    break;
+                }
+            }
+        }
+    }
+    merged
 }
 
 /// One Home → Upcoming display row: library + episode-cache joins for a
@@ -975,5 +1290,38 @@ mod tests {
         assert_eq!((marked.count, marked.selected), (2, true));
         assert_eq!(cells.iter().filter(|c| c.today).count(), 1);
         assert!(cells.iter().filter(|c| c.in_month).count() == 30);
+    }
+
+    #[test]
+    fn home_showcase_merges_catalogs_in_order_with_five_distinct_titles_each() {
+        fn preview(id: &str, type_: &str) -> MetaPreview {
+            MetaPreview {
+                id: id.into(),
+                type_: type_.into(),
+                name: id.into(),
+                ..MetaPreview::default()
+            }
+        }
+
+        let first = (b'a'..=b'g')
+            .map(|id| preview(&(id as char).to_string(), "series"))
+            .collect();
+        let second = ["a", "b", "f", "g", "h", "i", "j", "k"]
+            .into_iter()
+            .map(|id| preview(id, "series"))
+            .collect();
+        // Same id with a different protocol type is a different metadata item.
+        let third = vec![preview("a", "movie")];
+        let merged = merge_home_showcase_results(vec![(2, third), (1, second), (0, first)]);
+
+        assert_eq!(merged.len(), 11);
+        assert_eq!(merged[0].id, "a");
+        assert_eq!(merged[4].id, "e");
+        assert_eq!(merged[5].id, "f");
+        assert_eq!(merged[9].id, "j");
+        assert_eq!(
+            (merged[10].id.as_str(), merged[10].type_.as_str()),
+            ("a", "movie")
+        );
     }
 }

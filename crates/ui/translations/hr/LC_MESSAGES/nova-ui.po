@@ -39,6 +39,42 @@ msgstr "Moja biblioteka je prazna — otvorite film, seriju ili anime i pritisni
 msgid "Nothing to continue — start watching a show or movie and it will show up here."
 msgstr "Nema što nastaviti — počnite gledati seriju ili film i pojavit će se ovdje."
 
+msgid "View details"
+msgstr "Pogledajte pojedinosti"
+
+msgid "Previous featured title"
+msgstr "Prethodni izdvojeni naslov"
+
+msgid "Next featured title"
+msgstr "Sljedeći izdvojeni naslov"
+
+msgid "Selected"
+msgstr "Odabrano"
+
+msgid "Not selected"
+msgstr "Nije odabrano"
+
+msgid "Home"
+msgstr "Početna"
+
+msgid "Featured titles and catalog sources"
+msgstr "Izdvojeni naslovi i izvori kataloga"
+
+msgid "FEATURED SHOWCASE"
+msgstr "ISTAKNUTI NASLOVI"
+
+msgid "Choose catalogs whose titles should rotate at the top of Home. Each selected catalog contributes up to five titles."
+msgstr "Odaberite kataloge čiji će se naslovi izmjenjivati na početku Početne. Svaki odabrani katalog daje do pet naslova."
+
+msgid "No catalogs available. Install an addon with catalogs in Settings → Addons."
+msgstr "Nema dostupnih kataloga. Instalirajte dodatak s katalozima u Postavke → Dodaci."
+
+msgid "Addon disabled"
+msgstr "Dodatak je onemogućen"
+
+msgid "Unavailable addon"
+msgstr "Dodatak nije dostupan"
+
 msgid "Assign categories"
 msgstr "Dodijelite kategorije"
 

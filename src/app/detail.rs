@@ -36,6 +36,19 @@ impl Bridge {
             None => return,
         };
 
+        self.open_preview(preview, generation, searching, Some(index));
+    }
+
+    /// Open any catalog preview in the shared detail flow. Home's featured
+    /// showcase supplies its own preview without borrowing or mutating the
+    /// Discover grid's current catalog model.
+    pub(super) fn open_preview(
+        &self,
+        preview: MetaPreview,
+        generation: u64,
+        searching: bool,
+        discover_index: Option<usize>,
+    ) {
         let app = match self.app() {
             Some(a) => a,
             None => return,
@@ -84,11 +97,13 @@ impl Bridge {
 
         app.set_selected_title(SharedString::from(preview.title()));
         app.set_selected_year(SharedString::from(&paint_year));
-        app.set_selected_index(index as i32);
-        // Grid return target: backing out re-focuses the opened card (the
-        // lifted kb props survive the grid page's recreation).
-        app.set_discover_kb_zone(3);
-        app.set_discover_kb_idx(index as i32);
+        app.set_selected_index(discover_index.map(|i| i as i32).unwrap_or(-1));
+        if let Some(index) = discover_index {
+            // Grid return target: backing out re-focuses the opened card (the
+            // lifted kb props survive the grid page's recreation).
+            app.set_discover_kb_zone(3);
+            app.set_discover_kb_idx(index as i32);
+        }
         self.clear_streams();
         app.set_modal_visible(true);
         // Reset any leftover episode-picker state from a previous item.
@@ -130,6 +145,7 @@ impl Bridge {
         app.set_player_poster(Image::default());
         #[cfg(feature = "desktop")]
         if !searching
+            && let Some(index) = discover_index
             && let Some(buffer) = self.poster_cache.lock().unwrap().get(&(generation, index))
         {
             app.set_selected_poster(Image::from_rgba8(buffer.clone()));

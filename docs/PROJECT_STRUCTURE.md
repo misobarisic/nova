@@ -200,6 +200,12 @@ Defines the shared state and the UI bridge:
 | `text.rs` | Text the backend formats itself (download states, sync status, stream/episode hints, relative air dates, count labels) in the current language: `tr(english)` for fixed strings, named helpers for templated ones, plus the Croatian 1/2-4/5+ noun forms. The `@tr` catalogs cannot reach Rust code, so this is their counterpart. |
 | `tests.rs` | Unit tests for the app modules (moved out of `app.rs`). |
 
+The Home landing also has an independent featured-showcase fetch: Settings →
+Home stores selected addon URL/type/catalog-ID tuples, and `home.rs` fetches at
+most five titles per selected catalog, rotates them above the existing rails,
+and opens a picked title through the shared detail flow. This selection is
+device-local; it does not alter Continue Watching or Discover's catalog state.
+
 ### Threading model (important)
 - **All Slint property/callback access is main-thread only.** `Bridge` methods are called from UI callbacks on the main thread.
 - Background work (HTTP, decode, torrent, sync) runs on worker threads or tokio runtimes and hops back with `slint::invoke_from_event_loop(...)`.
@@ -243,6 +249,13 @@ Defines the shared state and the UI bridge:
 | `player.slint` | Player overlay (OSD, controls, tracks, subtitles). On Android the volume control is hidden (volume pinned to 100% at play start; swipe adjusts after) and play/pause (larger, on a dark base for bright video) with ±10s sit in a centered floating transport cluster declared before the OSD so the track popups and settings modal paint above it; the bottom bar keeps the seekbar, gear and the timestamp (shown on narrow too). The gear's settings panel has submenus for subtitles, audio, the Android decoder and — on every platform — **playback speed** (Up/Down step it by 0.05; the value is the same per-device setting Settings → Player edits). The video backdrop owns taps (OSD toggle), double-taps on the outer thirds (∓10 s seek: the first tap acts normally, the second seeks and re-wakes), a 500 ms press-and-hold (transient 2× via `playback_speed_preview`, restored on release) and, on Android only, vertical swipes (left = window brightness, right = system volume via `android/java/.../PlayerFx.java` + `src/app/android_player.rs`); popups dismiss and OSD wakes stay immediate. |
 | `categories.slint`, `dropdown.slint`, `searchfield.slint`, `menusheet.slint`, `speedcontrol.slint` | Reusable widgets / popups. `searchfield.slint` is the app's single text-input component (custom `TextInput` + placeholder + an in-field clear "×" shown only while it has text); every input uses it, and long text scrolls horizontally to keep the caret visible. `speedcontrol.slint` is the playback-rate control (0.5–2.0 slider + ± 0.05 buttons + two-decimal readout, with 1× / 1.25× / 1.5× / 2× preset chips under the slider) shared by Settings → Player and the player's settings panel; the step buttons carry accessible names ("Slower"/"Faster"). |
 | `bottomnav.slint`, `sidenav.slint`, `kbnav.slint`, `icons.slint`, `anim.slint` | Navigation, icons, animations, keyboard-nav helpers. Page navigation is responsive and **per page** — every page hosts its own instance of both and switches on `narrow`: `bottomnav.slint` (`BottomNav`) is the icon-only bottom capsule on narrow layouts, `sidenav.slint` (`SideNav`) is the same design turned upright on wide ones — a full-height, flush, square-cornered 64px panel down the left edge (x/y are pinned inside the component: Slint centres a plain child of a non-layout parent, which would float it mid-window) with the four items listed top to bottom. Pages reserve its footprint by adding `NavMetrics.rail-width` (the exported global) to their own left padding, and subtract the same amount in their grid math; the rail also eats stray taps in that strip. Wide subpages keep the rail (window chrome), the narrow bottom bar hides on them. The purple marker snaps immediately and stays circular; shared `NavFeedback` (in `sidenav.slint`) briefly enlarges only the incoming icon by up to 2px, then settles over 220ms. `NavState.from` suppresses feedback on same-page rebuilds; the existing persisted `anim_nav_slide` switch now controls this icon-only effect, labelled Navigation feedback. |
+
+**Home showcase:** `home.slint` renders the rotating, full-width featured backdrop
+above—but independently of—the Continue Watching and Upcoming rails. `settings.slint`
+adds Settings → Home, where users select catalogs; each selected catalog contributes
+up to five titles. Home preloads the current and next backdrop at source
+resolution, and opens a picked title without borrowing Discover's current grid
+model.
 
 **Animated feedback:** `menusheet.slint` stays mounted in Home, Library and
 Detail: callers bind its `open` property instead of conditionally creating it.
@@ -291,6 +304,10 @@ and Settings displays a persistence warning. Keys used by the app:
 | `sync:projection:pending` | Durable set of remotely changed domains awaiting projection; replayed on attachment, the UI poll, and restart. |
 | `sync:peer_acks` | Per-peer ack HLC map (local only; gates tombstone GC). |
 | `sync:invites` / `sync:pending_join` | Outstanding invites / in-flight join. |
+
+The `settings` JSON also includes `home_catalog_sources` (addon URL, media type,
+catalog ID). It survives unavailable or removed addon manifests so the Settings
+page can show and remove stale selections, and it is excluded from settings sync.
 
 Helpers: `src/app/io.rs` (`read_json`/`write_json`), and per-domain
 `read/write_persisted_*` functions. `nova-storage` exposes `write_batch`

@@ -1,6 +1,6 @@
 import { ScrollView, Button } from "std-widgets.slint";
 import { SearchField } from "searchfield.slint";
-import { AddonRow, CategoryRow, SyncPeer, SyncInvite, DownloadRow, LicenseSource } from "types.slint";
+import { AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, LicenseSource } from "types.slint";
 import { IcExtension, IcTag, IcImage, IcDisplay, IcPlay, IcChevronLeft, IcChevronRight, IcSettingsGear, IcSync, IcDelete } from "icons.slint";
 import { KbMark } from "kbnav.slint";
 import { SideNav, NavMetrics } from "sidenav.slint";
@@ -96,6 +96,51 @@ component ToggleSwitch inherits Rectangle {
             checked = !checked;
             toggled();
         }
+    }
+}
+
+// Read-only model-backed switch used by Settings → Home. Rust owns each
+// selected value, so the control reports intent without editing a stale copy
+// of the catalog row.
+component CatalogToggle inherits Rectangle {
+    in property <bool> checked: false;
+    in property <string> name: "";
+    in property <bool> focused: false;
+    callback toggled();
+    width: 44px;
+    height: 32px;
+    border-width: focused ? 2px : 0px;
+    border-color: #8b5cf6;
+    border-radius: 6px;
+
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        width: 100%;
+        height: 24px;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: root.checked ? #a89af5 : #33333c;
+        background: root.checked ? #a89af5 : #26262e;
+        animate background { duration: Anim.hover_fast; }
+
+        Rectangle {
+            x: root.checked ? parent.width - self.width - 3px : 3px;
+            y: (parent.height - self.height) / 2;
+            width: 18px;
+            height: 18px;
+            border-radius: 9px;
+            background: root.checked ? #14141a : #d9d9e2;
+            animate x { duration: Anim.hover_fast; }
+        }
+    }
+
+    TouchArea {
+        accessible-role: button;
+        accessible-label: root.name + (root.checked ? @tr("Selected") : @tr("Not selected"));
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
     }
 }
 
@@ -733,6 +778,7 @@ export component SettingsPage {
     in-out property <string> license_catalog: "";
     in-out property <[LicenseSource]> license_sources: [];
     in-out property <[CategoryRow]> category_rows: [];
+    in-out property <[HomeCatalogRow]> home_catalog_rows: [];
     in-out property <string> category_input: "";
     in-out property <bool> cache_images: true;
     in-out property <string> cache_disk_usage: "";
@@ -847,6 +893,7 @@ export component SettingsPage {
     callback addon_copy_link(string);
     callback category_added(string);
     callback category_removed(int);
+    callback home_catalog_toggled(int);
     // Playback rate ± one 0.05 step (Settings → Player). The backend
     // quantizes it and writes the property back.
     callback playback_speed_stepped(int);
@@ -962,7 +1009,8 @@ export component SettingsPage {
     // 1 addon install [field, add], 2 addon rows, 3 category install
     // [field, add], 4 category rows, 5 image-cache rows, 6 display rows,
     // 7 torrent rows, 9 player rows, 10 look-and-feel rows, 11 sync rows,
-    // 12 downloads rows, 14 license source links, 15 About → Licenses button.
+    // 12 downloads rows, 14 license source links, 15 About → Licenses button,
+    // 16 Home catalog rows.
     // Left/Right moves between rows/zones; Enter activates; Backspace returns to the
     // landing (or Home at the landing). Text fields use edit mode (0 none, 1
     // addon url, 2 category, 3 torrent dir): Enter focuses the field, Enter
@@ -984,9 +1032,10 @@ export component SettingsPage {
     property <int> kb_dlr: 0; // downloaded-episodes list row
     property <int> kb_about_idx: 0; // source row on Settings → About → Licenses
     property <int> kb_edit: 0;
-    // Landing selection (section ids: 0–8 for Addons through Downloads;
-    // 10 About; ids 9 and 11 are nested Downloaded Episodes and Licenses pages).
+    // Landing selection (section ids: 0–8 for Addons through Downloads, 13
+    // Home, 10 About; ids 9 and 11 are nested Downloads and Licenses pages).
     property <int> kb_land: 0;
+    property <int> kb_home: 0;
 
     // ---- Landing / subpage navigation state ----
     // `sel` = section id whose content is built (-1 = landing). `sub_open`
@@ -1007,7 +1056,7 @@ export component SettingsPage {
         if (id == 4) { return root.show_torrents; }
         if (id == 5) { return true; }
         if (id == 7) { return true; }
-        if (id == 8 || id == 10) { return true; }
+        if (id == 8 || id == 10 || id == 13) { return true; }
         return (id >= 0 && id <= 3) || id == 6;
     }
 
@@ -1021,12 +1070,14 @@ export component SettingsPage {
         if (root.land_avail(6)) { return 6; }
         if (root.land_avail(7)) { return 7; }
         if (root.land_avail(8)) { return 8; }
+        if (root.land_avail(13)) { return 13; }
         if (root.land_avail(10)) { return 10; }
         return 10;
     }
 
     // Next/previous available section id, clamped at the ends.
     function land_next(id: int) -> int {
+        if (id == 13 && root.land_avail(10)) { return 10; }
         if (id < 1 && root.land_avail(1)) { return 1; }
         if (id < 2 && root.land_avail(2)) { return 2; }
         if (id < 3 && root.land_avail(3)) { return 3; }
@@ -1035,11 +1086,13 @@ export component SettingsPage {
         if (id < 6 && root.land_avail(6)) { return 6; }
         if (id < 7 && root.land_avail(7)) { return 7; }
         if (id < 8 && root.land_avail(8)) { return 8; }
+        if (id < 13 && root.land_avail(13)) { return 13; }
         if (id < 10 && root.land_avail(10)) { return 10; }
         return id;
     }
 
     function land_prev(id: int) -> int {
+        if (id == 10 && root.land_avail(13)) { return 13; }
         if (id > 8 && root.land_avail(8)) { return 8; }
         if (id > 7 && root.land_avail(7)) { return 7; }
         if (id > 6 && root.land_avail(6)) { return 6; }
@@ -1060,6 +1113,7 @@ export component SettingsPage {
         if (id == 5) { return @tr("Player"); }
         if (id == 6) { return @tr("Look and feel"); }
         if (id == 7) { return @tr("Sync"); }
+        if (id == 13) { return @tr("Home"); }
         if (id == 9) { return @tr("Downloaded episodes"); }
         if (id == 10) { return @tr("About"); }
         if (id == 11) { return @tr("Licenses"); }
@@ -1075,6 +1129,7 @@ export component SettingsPage {
         if (id == 5) { return @tr("Built-in or external player"); }
         if (id == 6) { return @tr("Motion, transitions and hover effects"); }
         if (id == 7) { return @tr("Sync library and watch history between devices"); }
+        if (id == 13) { return @tr("Featured titles and catalog sources"); }
         if (id == 9) { return @tr("Episode files stored on this device"); }
         if (id == 10) { return @tr("Information about Nova"); }
         return @tr("Offline media and cleanup policy");
@@ -1091,6 +1146,7 @@ export component SettingsPage {
         if (root.sel == 6) { return 10; }
         if (root.sel == 7) { return 11; }
         if (root.sel == 8) { return 12; }
+        if (root.sel == 13) { return 16; }
         if (root.sel == 9) { return 13; }
         if (root.sel == 10) { return 15; }
         if (root.sel == 11) { return 14; }
@@ -1174,6 +1230,9 @@ export component SettingsPage {
         if (root.kb_dlr >= root.downloads_rows.length) {
             root.kb_dlr = Math.max(0, root.downloads_rows.length - 1);
         }
+        if (root.kb_home >= root.home_catalog_rows.length) {
+            root.kb_home = Math.max(0, root.home_catalog_rows.length - 1);
+        }
         if (root.kb_about_idx >= root.license_sources.length) {
             root.kb_about_idx = Math.max(0, root.license_sources.length - 1);
         }
@@ -1197,7 +1256,15 @@ export component SettingsPage {
     }
 
     function kb_up() {
-        if (root.kb_zone == 15) {
+        if (root.kb_zone == 16) {
+            if (root.kb_home > 0) {
+                root.kb_home -= 1;
+                root.kb_nudge(50px);
+            } else {
+                root.kb_zone = 0;
+                root.kb_nudge(150px);
+            }
+        } else if (root.kb_zone == 15) {
             root.kb_zone = 0;
             root.kb_nudge(150px);
         } else if (root.kb_zone == 14) {
@@ -1294,6 +1361,11 @@ export component SettingsPage {
     function kb_down() {
         if (root.kb_zone == 15) {
             root.kb_nudge(-150px);
+        } else if (root.kb_zone == 16) {
+            if (root.kb_home + 1 < root.home_catalog_rows.length) {
+                root.kb_home += 1;
+                root.kb_nudge(-50px);
+            }
         } else if (root.kb_zone == 14) {
             if (root.kb_about_idx + 1 < root.license_sources.length) {
                 root.kb_about_idx += 1;
@@ -1614,6 +1686,8 @@ export component SettingsPage {
             }
         } else if (root.kb_zone == 10) {
             root.kb_anim_flip(root.kb_anr);
+        } else if (root.kb_zone == 16 && root.kb_home >= 0 && root.kb_home < root.home_catalog_rows.length) {
+            root.home_catalog_toggled(root.kb_home);
         }
     }
 
@@ -1670,6 +1744,8 @@ export component SettingsPage {
             }
         } else if (root.kb_zone == 10) {
             root.kb_anim_flip(root.kb_anr);
+        } else if (root.kb_zone == 16 && root.kb_home >= 0 && root.kb_home < root.home_catalog_rows.length) {
+            root.home_catalog_toggled(root.kb_home);
         }
     }
 
@@ -1756,12 +1832,15 @@ export component SettingsPage {
             }
         } else if (root.kb_zone == 10) {
             root.kb_anim_flip(root.kb_anr);
+        } else if (root.kb_zone == 16 && root.kb_home >= 0 && root.kb_home < root.home_catalog_rows.length) {
+            root.home_catalog_toggled(root.kb_home);
         }
     }
 
     changed addon_rows => { root.kb_clamp_all(); }
     changed downloads_rows => { root.kb_clamp_all(); }
     changed category_rows => { root.kb_clamp_all(); }
+    changed home_catalog_rows => { root.kb_clamp_all(); }
     changed cache_enabled => {
         if (root.kb_hr >= root.kb_cache_n()) {
             root.kb_hr = root.kb_cache_n() - 1;
@@ -2018,13 +2097,21 @@ export component SettingsPage {
                                              picked => { root.open_page(7); }
                                          }
                                          if root.land_avail(8): SettingsLink {
-                                             icon-kind: 8;
-                                             title: root.land_title(8);
-                                             subtitle: root.land_desc(8);
-                                             focused: root.kb_zone == 8 && root.kb_land == 8 && root.kb_active;
-                                             interactive: !root.sub_open;
-                                             picked => { root.open_page(8); }
-                                         }
+                                              icon-kind: 8;
+                                              title: root.land_title(8);
+                                              subtitle: root.land_desc(8);
+                                              focused: root.kb_zone == 8 && root.kb_land == 8 && root.kb_active;
+                                              interactive: !root.sub_open;
+                                              picked => { root.open_page(8); }
+                                          }
+                                        if root.land_avail(13): SettingsLink {
+                                            icon-kind: 4;
+                                            title: root.land_title(13);
+                                            subtitle: root.land_desc(13);
+                                            focused: root.kb_zone == 8 && root.kb_land == 13 && root.kb_active;
+                                            interactive: !root.sub_open;
+                                            picked => { root.open_page(13); }
+                                        }
                                         if root.land_avail(10): SettingsLink {
                                             icon-kind: 6;
                                             title: root.land_title(10);
@@ -4539,6 +4626,70 @@ export component SettingsPage {
                             }
                         }
                         }
+                        if root.sel == 13: VerticalLayout {
+                            vertical-stretch: 0;
+                            spacing: 18px;
+
+                            SectionHeader {
+                                icon-kind: 4;
+                                label: @tr("FEATURED SHOWCASE");
+                            }
+
+                            Text {
+                                width: 100%;
+                                text: @tr("Choose catalogs whose titles should rotate at the top of Home. Each selected catalog contributes up to five titles.");
+                                font-size: 12px;
+                                color: #b9b9c4;
+                                wrap: word-wrap;
+                            }
+
+                            Rectangle {
+                                background: #131316;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: #232329;
+                                clip: true;
+
+                                VerticalLayout {
+                                    spacing: 0px;
+
+                                    if root.home_catalog_rows.length == 0: Rectangle {
+                                        background: #121214;
+                                        min-height: 56px;
+
+                                        Text {
+                                            x: 16px;
+                                            y: (parent.height - self.height) / 2;
+                                            width: parent.width - 32px;
+                                            text: @tr("No catalogs available. Install an addon with catalogs in Settings → Addons.");
+                                            font-size: 12px;
+                                            color: #8a8a92;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+
+                                    for home[i] in root.home_catalog_rows: SettingsRow {
+                                        tinted: Math.mod(i, 2) == 0;
+                                        row-title: home.title;
+                                        row-desc: home.addon + " · " + home.media_type
+                                            + (home.available ? (home.enabled ? "" : " · " + @tr("Addon disabled")) : " · " + @tr("Unavailable addon"));
+
+                                        CatalogToggle {
+                                            checked: home.selected;
+                                            name: home.title;
+                                            focused: root.kb_zone == 16 && root.kb_home == i && root.kb_active;
+                                            toggled => {
+                                                root.kb_active = false;
+                                                root.kb_zone = 16;
+                                                root.kb_home = i;
+                                                root.home_catalog_toggled(i);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         if root.sel == 8: VerticalLayout {
                             vertical-stretch: 0;
                             spacing: 18px;

@@ -659,6 +659,11 @@ impl Bridge {
         self.apply_catalog_labels_to_ui();
         self.apply_genre_selection_to_ui();
         self.apply_search_support_to_ui();
+        self.apply_home_catalog_rows();
+        self.invalidate_home_showcase();
+        if app.get_show_home() {
+            self.ensure_home_showcase_loaded();
+        }
 
         if load && has_grid_source {
             self.load_catalog();

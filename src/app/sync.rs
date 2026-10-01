@@ -341,7 +341,8 @@ pub(crate) fn sort_by_order(current: Vec<String>, order: &[String]) -> Vec<Strin
 
 /// `CacheSettings` fields that are never synced: device-specific
 /// (`android_hwdec`, `player_external`, `desktop_external_app`,
-/// `playback_speed`, `language`) or local-only (`rewrite_existing`);
+/// `playback_speed`, `language`, `home_catalog_sources`) or local-only
+/// (`rewrite_existing`);
 /// `categories` sync as their own domain so concurrent additions union.
 const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
     "android_hwdec",
@@ -352,6 +353,7 @@ const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
     "language",
     "rewrite_existing",
     "categories",
+    "home_catalog_sources",
 ];
 
 /// Image-cache controls are interdependent (re-encoding only applies to the
@@ -1613,6 +1615,11 @@ mod tests {
             desktop_external_app: DesktopExternalApp::Vlc,
             rewrite_existing: true,
             playback_speed: 1.5,
+            home_catalog_sources: vec![HomeCatalogSource {
+                addon_url: "https://example.test/manifest.json".into(),
+                type_: "series".into(),
+                catalog_id: "trending".into(),
+            }],
             ..Default::default()
         };
 
@@ -1636,6 +1643,7 @@ mod tests {
         assert!(!fields.contains_key("desktop_external_app"));
         assert!(!fields.contains_key("playback_speed"));
         assert!(!fields.contains_key("rewrite_existing"));
+        assert!(!fields.contains_key("home_catalog_sources"));
     }
 
     #[test]
