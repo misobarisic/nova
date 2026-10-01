@@ -6,8 +6,9 @@
 //! gettext catalogs under `crates/ui/translations/<code>/` into the binary.
 //! Switching language is therefore a single Slint call — it selects the catalog
 //! whose folder name is the language code and marks every translation dirty, so
-//! all `@tr` bindings re-evaluate in place. No page is rebuilt and no string is
-//! pushed from here.
+//! all `@tr` bindings re-evaluate in place. Rust-built model text is different:
+//! after changing the backend language, the bridge refreshes those existing UI
+//! models from their semantic state without restarting requests or the page.
 //!
 //! English is the source language, so `"en"` restores the built-in strings and
 //! is the fallback whenever a catalog (or a single string) is missing; Croatian
@@ -111,6 +112,30 @@ impl Bridge {
                  `cargo build` / `cargo run` bundles them."
             );
         }
+        self.refresh_language_dependent_ui();
+    }
+
+    /// Rust formats text before passing it to Slint, so existing model values
+    /// must be refreshed explicitly when the selected language changes.
+    fn refresh_language_dependent_ui(&self) {
+        self.apply_category_rows();
+        self.update_library_badges();
+        self.refresh_home_language_text();
+        self.refresh_addon_picker_language_text();
+        self.refresh_catalog_language_text();
+        self.refresh_detail_language_text();
+
+        // Settings surfaces whose text is formatted from live state.
+        self.refresh_cache_disk_usage();
+        self.refresh_torrent_disk_usage();
+        self.downloads_list_to_ui();
+        self.refresh_download_background_status();
+        self.sync_status_to_ui();
+        self.refresh_sync_link_notice();
+
+        // Torrent buffering status is normally refreshed by the player tick;
+        // update it immediately when the user changes language in Settings.
+        self.note_torrent_progress_from_ui();
     }
 }
 
@@ -132,5 +157,108 @@ mod tests {
 
         assert!(!Catalogs::Unavailable.needs_select("en"));
         assert!(!Catalogs::Unavailable.needs_select("hr"));
+    }
+
+    #[test]
+    fn language_change_refreshes_rust_generated_library_text() {
+        const TEST_DIR: &str = "NOVA_I18N_REFRESH_TEST_DIR";
+        let Some(root) = std::env::var_os(TEST_DIR) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-i18n-test-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(TEST_DIR, &root)
+                .args([
+                    "--exact",
+                    "app::i18n::tests::language_change_refreshes_rust_generated_library_text",
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        app.window().set_size(slint::PhysicalSize::new(900, 700));
+        app.window().show().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let downloads = DownloadCoordinator::new(root.join("downloads"));
+        #[cfg(feature = "desktop")]
+        let bridge = {
+            let (hi, _) = mpsc::channel();
+            let (lo, _) = mpsc::channel();
+            Bridge::new(
+                app.as_weak(),
+                PosterTx { hi, lo },
+                Arc::new(Mutex::new(PosterStore::new(1))),
+                Arc::new(AtomicU64::new(0)),
+                player,
+                downloads,
+            )
+        };
+        #[cfg(not(feature = "desktop"))]
+        let bridge = Bridge::new(
+            app.as_weak(),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            downloads,
+        );
+
+        bridge.shared.lock().unwrap().entries = vec![LibraryEntry {
+            id: "show-1".into(),
+            type_: "series".into(),
+            name: "Show".into(),
+            year: "2024".into(),
+            poster_url: String::new(),
+            background_url: String::new(),
+            genres: Vec::new(),
+            description: String::new(),
+            categories: Vec::new(),
+            watch_status: WatchStatus::OnHold,
+            added_at_secs: 1,
+        }];
+
+        let catalogs_available = slint::select_bundled_translation("hr").is_ok();
+        let mut settings = CacheSettings {
+            language: Language::English,
+            ..CacheSettings::default()
+        };
+        bridge.apply_language(&settings);
+        bridge.apply_library_to_ui();
+        bridge.apply_category_rows();
+        assert_eq!(app.get_library().row_data(0).unwrap().badge, "On Hold");
+
+        settings.language = Language::Croatian;
+        bridge.apply_language(&settings);
+        let expected = if catalogs_available {
+            "Na čekanju"
+        } else {
+            "On Hold"
+        };
+        assert_eq!(app.get_library().row_data(0).unwrap().badge, expected);
+        assert_eq!(
+            app.get_library_category_labels().row_data(3).unwrap(),
+            expected
+        );
+
+        settings.language = Language::English;
+        bridge.apply_language(&settings);
+        assert_eq!(app.get_library().row_data(0).unwrap().badge, "On Hold");
+        assert_eq!(
+            app.get_library_category_labels().row_data(3).unwrap(),
+            "On Hold"
+        );
     }
 }

@@ -223,6 +223,10 @@ struct Shared {
     stream_addons: Vec<String>,
     /// Labels of the addons still being queried (pills show a spinner).
     stream_pending: Vec<String>,
+    /// A one-off, localized stream hint. Derived stream-list hints are
+    /// rebuilt from `stream_pending`/`stream_all`; this stores only hints whose
+    /// source is an action or status outside that model.
+    stream_hint: Option<StreamHint>,
     /// Active per-addon filter: 0 = All, otherwise `index + 1` into
     /// `stream_addons`.
     stream_filter: usize,
@@ -267,6 +271,50 @@ struct Shared {
     /// of an entry and reopening it restores tab, season, focused
     /// episode/stream and keyboard focus instead of starting fresh.
     detail_snapshots: HashMap<String, DetailSnapshot>,
+    /// Most recent sync notice, retained in semantic form so a language switch
+    /// can rerender it instead of leaving the old translation on screen.
+    sync_link_notice: Option<SyncNotice>,
+}
+
+#[derive(Clone, Debug)]
+enum StreamHint {
+    Fixed(&'static str),
+    LoadingEpisodes(usize),
+    Playing(String),
+    P2pUnavailable(String),
+}
+
+impl StreamHint {
+    fn render(&self) -> String {
+        match self {
+            Self::Fixed(source) => text::tr(source).to_string(),
+            Self::LoadingEpisodes(count) => text::loading_episodes(*count),
+            Self::Playing(name) => text::playing(name),
+            Self::P2pUnavailable(error) => text::p2p_unavailable(error),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum SyncNotice {
+    Fixed(&'static str),
+    PairedWith(String),
+    RemovedFromSync(Option<String>),
+    CouldNotCreateInvite(String),
+    InvalidInvite(String),
+}
+
+impl SyncNotice {
+    fn render(&self) -> String {
+        match self {
+            Self::Fixed(source) => text::tr(source).to_string(),
+            Self::PairedWith(name) => text::paired_with(name),
+            Self::RemovedFromSync(Some(name)) => text::removed_from_sync(name),
+            Self::RemovedFromSync(None) => text::removed_from_sync(text::tr("another device")),
+            Self::CouldNotCreateInvite(error) => text::could_not_create_invite(error),
+            Self::InvalidInvite(error) => text::invalid_invite(error),
+        }
+    }
 }
 
 /// The item whose detail modal is currently open.
@@ -600,7 +648,7 @@ mod i18n;
 mod io;
 mod streams;
 mod sync;
-mod text;
+pub(crate) use nova_ui::backend_text as text;
 
 // Android background execution glue (foreground service + JobScheduler sync).
 #[cfg(target_os = "android")]
@@ -624,6 +672,8 @@ pub(crate) use home::*;
 pub(crate) use i18n::*;
 pub(crate) use io::*;
 pub(crate) use library::*;
+#[cfg(test)]
+pub(crate) use nova_ui::backend_text::grouped_count;
 pub(crate) use playback::*;
 pub(crate) use posters::*;
 pub(crate) use qr::*;

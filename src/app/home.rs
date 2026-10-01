@@ -402,7 +402,7 @@ impl Bridge {
                     .iter()
                     .find(|v| v.id == c.episode_id)
                     .map(|v| format!("{} · {}", episode_badge(v), episode_row_label(v)))
-                    .unwrap_or_else(|| "Resume".to_string());
+                    .unwrap_or_else(|| text::tr("Resume").to_string());
                 let record = progress.get(&progress_map_key(&c.series_id, &c.episode_id));
                 let fraction = record
                     .map(|p| progress_fraction(p.position_secs, p.duration_secs))
@@ -451,6 +451,75 @@ impl Bridge {
             app.set_home_upcoming(Rc::new(VecModel::from(self.current_upcoming_rows())).into());
         }
         self.apply_upcoming_cal_to_ui();
+    }
+
+    /// Refresh language-dependent Home row text without replacing poster
+    /// images or disturbing the carousel models when their shape is unchanged.
+    pub(super) fn refresh_home_language_text(&self) {
+        let Some(app) = self.app() else { return };
+
+        let continue_rows = self.current_continue_rows();
+        let continue_model = app.get_home_continue();
+        if continue_model.row_count() == continue_rows.len() {
+            for (index, fresh) in continue_rows.into_iter().enumerate() {
+                if let Some(mut current) = continue_model.row_data(index)
+                    && current.subtitle != fresh.subtitle
+                {
+                    current.subtitle = fresh.subtitle;
+                    continue_model.set_row_data(index, current);
+                }
+            }
+        } else {
+            app.set_home_continue(Rc::new(VecModel::from(continue_rows)).into());
+        }
+
+        let upcoming_rows = self.current_upcoming_rows();
+        let upcoming_model = app.get_home_upcoming();
+        if upcoming_model.row_count() == upcoming_rows.len() {
+            for (index, fresh) in upcoming_rows.into_iter().enumerate() {
+                if let Some(mut current) = upcoming_model.row_data(index)
+                    && (current.subtitle != fresh.subtitle || current.date != fresh.date)
+                {
+                    current.subtitle = fresh.subtitle;
+                    current.date = fresh.date;
+                    upcoming_model.set_row_data(index, current);
+                }
+            }
+        } else {
+            app.set_home_upcoming(Rc::new(VecModel::from(upcoming_rows)).into());
+        }
+
+        let day = app.get_home_cal_epoch();
+        let day_rows = if day >= 0 {
+            self.current_upcoming_day_rows(day as i64)
+        } else {
+            Vec::new()
+        };
+        let day_model = app.get_home_cal_day();
+        if day_model.row_count() == day_rows.len() {
+            for (index, fresh) in day_rows.into_iter().enumerate() {
+                if let Some(mut current) = day_model.row_data(index)
+                    && (current.subtitle != fresh.subtitle || current.date != fresh.date)
+                {
+                    current.subtitle = fresh.subtitle;
+                    current.date = fresh.date;
+                    day_model.set_row_data(index, current);
+                }
+            }
+        } else {
+            app.set_home_cal_day(Rc::new(VecModel::from(day_rows)).into());
+        }
+
+        let first = {
+            let state = self.shared.lock().unwrap();
+            if state.upcoming_cal.first == 0 {
+                month_first(today_days())
+            } else {
+                state.upcoming_cal.first
+            }
+        };
+        let (year, month, _) = civil_from_days(first);
+        app.set_home_cal_title(SharedString::from(text::cal_month_title(month, year)));
     }
 
     /// Rebuild [`Shared::upcoming_list`]: unaired episodes of library

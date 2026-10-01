@@ -236,11 +236,6 @@ impl Bridge {
 
         let requested: Vec<String> = stream_urls.iter().map(|(l, _)| l.clone()).collect();
         let addon_count = requested.len();
-        let hint = if addon_count == 0 {
-            text::tr("No installed addon provides streams for this type.").to_string()
-        } else {
-            text::searching_streams(addon_count)
-        };
         // Show one pill per addon being queried right away (spinner), then
         // drop each one that answers with no streams.
         {
@@ -271,10 +266,10 @@ impl Bridge {
         self.apply_stream_filter();
         // `apply_stream_filter` picks the generic hint; restore the specific
         // "no addon provides streams" message when there is nothing to query.
-        if addon_count == 0
-            && let Some(app) = self.app()
-        {
-            app.set_streams_hint(SharedString::from(&hint));
+        if addon_count == 0 {
+            self.set_stream_hint(Some(StreamHint::Fixed(
+                "No installed addon provides streams for this type.",
+            )));
         }
 
         // Query every addon in parallel; each answer is pushed to the UI the
@@ -364,13 +359,11 @@ impl Bridge {
         // (Skipped when a cached picker is already visible.)
         if !had_cache {
             let hint = if candidates.is_empty() {
-                text::tr("No installed addon provides details for this type.").to_string()
+                StreamHint::Fixed("No installed addon provides details for this type.")
             } else {
-                text::loading_episodes(candidates.len())
+                StreamHint::LoadingEpisodes(candidates.len())
             };
-            if let Some(app) = self.app() {
-                app.set_streams_hint(SharedString::from(&hint));
-            }
+            self.set_stream_hint(Some(hint));
         }
 
         // Background refresh: fetch fresh episode metadata and remember it on
@@ -1015,7 +1008,8 @@ impl Bridge {
                 false,
                 progress_fraction(p.position_secs, p.duration_secs),
                 format!(
-                    " · ▶ Resume {}",
+                    " · {} {}",
+                    text::tr("▶ Resume"),
                     crate::player::format_time(p.position_secs)
                 ),
             ),
@@ -1348,7 +1342,7 @@ impl Bridge {
             app.set_season_names(Rc::new(VecModel::from(season_names)).into());
             app.set_season_combo_idx(season_idx as i32);
             self.clear_streams();
-            app.set_streams_hint(SharedString::default());
+            self.set_stream_hint(None);
             // Series land on the Episodes tab; a same-entry reopen restores
             // its saved tab instead (e.g. Overview).
             app.set_detail_tab(snapshot.as_ref().map(|s| s.tab).unwrap_or(3));
@@ -1678,7 +1672,7 @@ impl Bridge {
             app.set_detail_deep_stream(false);
             app.set_episode_context(SharedString::from(&context));
             self.clear_streams();
-            app.set_streams_hint(SharedString::from(text::tr("Loading streams…")));
+            self.set_stream_hint(Some(StreamHint::Fixed("Loading streams…")));
             // Streams render inside the Episodes tab for series.
             app.set_detail_tab(3);
             // The picked episode can live on another page (Home's resume row):
@@ -1742,7 +1736,7 @@ impl Bridge {
             app.set_detail_deep_stream(false);
             app.set_episode_context(SharedString::default());
             self.clear_streams();
-            app.set_streams_hint(SharedString::default());
+            self.set_stream_hint(None);
             // Return to the Episodes tab (streams live there for series).
             app.set_detail_tab(3);
             app.set_detail_kb_zone(3);
@@ -2009,6 +2003,7 @@ impl Bridge {
             let start = page * STREAM_PAGE_SIZE;
             let end = (start + STREAM_PAGE_SIZE).min(stream_rows.len());
             state.streams = displayed;
+            state.stream_hint = None;
             (
                 page,
                 page_count,
@@ -2136,7 +2131,9 @@ impl Bridge {
                 self.play_torrent(&stream.display, info_hash, file_idx);
             }
             StreamSource::Unsupported => {
-                self.set_streams_hint(text::tr("This stream cannot be played here."));
+                self.set_stream_hint(Some(StreamHint::Fixed(
+                    "This stream cannot be played here.",
+                )));
             }
             StreamSource::Downloaded { job_id, path } => {
                 let job = self.downloads.job(&job_id);
@@ -2145,16 +2142,110 @@ impl Bridge {
                 {
                     let _ = self.open_player(path.to_string_lossy().into_owned());
                 } else {
-                    self.set_streams_hint(text::tr("This download is not complete yet."));
+                    self.set_stream_hint(Some(StreamHint::Fixed(
+                        "This download is not complete yet.",
+                    )));
                 }
             }
         }
     }
 
-    /// Set the detail modal's stream-list hint line.
-    pub(super) fn set_streams_hint(&self, text: &str) {
+    /// Set a one-off detail hint in semantic form so it can be rerendered after
+    /// a language change. Stream-list-derived hints are set by
+    /// `apply_stream_filter` instead.
+    pub(super) fn set_stream_hint(&self, hint: Option<StreamHint>) {
+        let rendered = hint.as_ref().map(StreamHint::render).unwrap_or_default();
+        self.shared.lock().unwrap().stream_hint = hint;
         if let Some(app) = self.app() {
-            app.set_streams_hint(SharedString::from(text));
+            app.set_streams_hint(SharedString::from(rendered));
+        }
+    }
+
+    /// Refresh localized labels in an open detail modal while preserving its
+    /// decoded artwork and current list delegates wherever the row shape is
+    /// unchanged.
+    pub(super) fn refresh_detail_language_text(&self) {
+        let Some(app) = self.app() else { return };
+        if !app.get_modal_visible() {
+            return;
+        }
+
+        let (seasons, episode_page) = {
+            let state = self.shared.lock().unwrap();
+            let Some(modal) = state.modal_item.as_ref() else {
+                return;
+            };
+            (modal.seasons.clone(), modal.episode_page)
+        };
+        app.set_season_names(
+            Rc::new(VecModel::from(
+                seasons
+                    .iter()
+                    .map(|&season| SharedString::from(season_label(season)))
+                    .collect::<Vec<_>>(),
+            ))
+            .into(),
+        );
+
+        let season_cards = self.current_season_cards();
+        let season_model = app.get_season_cards();
+        if season_model.row_count() == season_cards.len() {
+            for (index, fresh) in season_cards.into_iter().enumerate() {
+                if let Some(mut current) = season_model.row_data(index)
+                    && current.name != fresh.name
+                {
+                    current.name = fresh.name;
+                    season_model.set_row_data(index, current);
+                }
+            }
+        } else {
+            app.set_season_cards(Rc::new(VecModel::from(season_cards)).into());
+        }
+
+        let page_rows: Vec<EpisodeRow> = self
+            .current_episode_rows()
+            .into_iter()
+            .skip(episode_page * EPISODE_PAGE_SIZE)
+            .take(EPISODE_PAGE_SIZE)
+            .collect();
+        let episode_model = app.get_episode_rows();
+        if episode_model.row_count() == page_rows.len() {
+            for (index, fresh) in page_rows.into_iter().enumerate() {
+                if let Some(mut current) = episode_model.row_data(index) {
+                    let changed = current.text != fresh.text
+                        || current.details != fresh.details
+                        || current.lines != fresh.lines
+                        || current.date != fresh.date;
+                    if changed {
+                        current.text = fresh.text;
+                        current.details = fresh.details;
+                        current.lines = fresh.lines;
+                        current.date = fresh.date;
+                        episode_model.set_row_data(index, current);
+                    }
+                }
+            }
+        } else {
+            self.apply_episode_rows();
+        }
+
+        let (one_off_hint, has_stream_model) = {
+            let state = self.shared.lock().unwrap();
+            (
+                state.stream_hint.clone(),
+                !state.stream_pending.is_empty()
+                    || !state.stream_all.is_empty()
+                    || !state.streams.is_empty(),
+            )
+        };
+        if one_off_hint.is_some() || has_stream_model || !app.get_streams_hint().is_empty() {
+            self.apply_stream_filter();
+            if let Some(hint) = one_off_hint {
+                self.set_stream_hint(Some(hint));
+            }
+        }
+        if app.get_stream_action_open() {
+            self.open_stream_action(app.get_stream_action_id().as_str());
         }
     }
 }

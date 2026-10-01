@@ -56,8 +56,8 @@ catalog is generated from the locked dependency graph at build time. See
 - A Slint change is three steps: page component + `AppWindow`
   property/callback + `src/app/run.rs` wiring.
 - User-facing Slint strings use `@tr("…")` (English source, Croatian
-  catalog bundled); text the Rust side formats goes through
-  `src/app/text.rs`.
+  catalog bundled); text formatted by the Rust side is owned by
+  `crates/ui/src/backend_text.rs`.
 - `cargo check` + the test suite are the gate; do not commit unless asked.
 
 ### Commit messages

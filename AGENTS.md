@@ -71,12 +71,13 @@ cargo test --test settings_sync_overflow   # headless Slint UI regression tests
   time (`crates/ui/translations/<code>/LC_MESSAGES/nova-ui.po`; English is the
   source language, Croatian is the second one); the language is picked in
   Settings → Display and applied by `src/app/i18n.rs`. Adding a language =
-  catalog + a `nova_config::Language` variant + the `src/app/text.rs` table.
+  catalog + a `nova_config::Language` variant + translations in
+  `crates/ui/src/backend_text.rs`.
   Catalogs are context-free (`build.rs`), so an entry is keyed by the source
   string alone.
 - **Text the Rust side formats** (statuses, hints, dates, counts) goes through
-  `src/app/text.rs` — keyed by the English source as well, so both mechanisms
-  stay greppable. Stored *identifiers* (the automatic library buckets,
+  `crates/ui/src/backend_text.rs`, owned by the same crate as the Slint UI.
+  Stored *identifiers* (the automatic library buckets,
   `WatchStatus` labels) keep their English value and are translated for display
   only (`category_labels`, `text::tr(badge_label())`).
 - **`ApplyingGuard`** must wrap remote-apply paths so writes don't echo back into

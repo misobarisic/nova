@@ -6,9 +6,10 @@
 # with `slint-tr-extractor --no-default-translation-context` after marking new
 # strings — the catalogs are context-free (see crates/ui/build.rs).
 #
-# Text the Rust backend formats itself (download states, sync status, relative
-# dates) is NOT here: it lives in src/app/text.rs, keyed by the same English
-# source strings.
+# Rust backend-formatted UI text is owned by `crates/ui/src/backend_text.rs`.
+# Slint's bundled PO catalog is compiled from the `.slint` literals; backend
+# formatting uses its Rust API in the same crate because it needs dynamic
+# helpers and plural forms.
 #
 # Register: the interface addresses the user in the formal plural ("vi") —
 # "Prikažite…", "Izbrišite…", "Pridružite se". Two labels are deliberately

@@ -100,15 +100,17 @@ impl Bridge {
     pub(super) fn play_torrent(&self, display: &str, info_hash: String, file_idx: Option<u32>) {
         let settings = active_torrent_settings();
         if !settings.enabled {
-            self.set_streams_hint(text::tr("P2P streaming is disabled in Settings → P2P."));
+            self.set_stream_hint(Some(StreamHint::Fixed(
+                "P2P streaming is disabled in Settings → P2P.",
+            )));
             return;
         }
         let Some(engine) = crate::torrent::engine() else {
-            self.set_streams_hint(text::tr("P2P engine unavailable."));
+            self.set_stream_hint(Some(StreamHint::Fixed("P2P engine unavailable.")));
             return;
         };
         if !engine.is_ready() {
-            self.set_streams_hint(text::tr("P2P engine could not start."));
+            self.set_stream_hint(Some(StreamHint::Fixed("P2P engine could not start.")));
             return;
         }
         // A new torrent replaces any still-playing one: stop it first so a
@@ -119,7 +121,7 @@ impl Bridge {
         // later line, not the first), which helps pick the right file inside
         // the torrent.
         let requested_name = display.trim().to_string();
-        self.set_streams_hint(text::tr("Connecting to peers…"));
+        self.set_stream_hint(Some(StreamHint::Fixed("Connecting to peers…")));
         let bridge = self.clone();
         let active_hash = info_hash.clone();
         engine.resolve(
@@ -132,7 +134,7 @@ impl Bridge {
                 let active_hash = active_hash.clone();
                 let _ = slint::invoke_from_event_loop(move || match result {
                     Ok(ready) => {
-                        bridge.set_streams_hint(&text::playing(&ready.display_name));
+                        bridge.set_stream_hint(Some(StreamHint::Playing(ready.display_name)));
                         if nova_config::active_cache_settings().player_external {
                             // User choice (Settings → Player): external player,
                             // always. Not tracked: there is no close event.
@@ -152,7 +154,9 @@ impl Bridge {
                             let _ = crate::player::open_external(&ready.url);
                         }
                     }
-                    Err(e) => bridge.set_streams_hint(&text::p2p_unavailable(&e.to_string())),
+                    Err(e) => {
+                        bridge.set_stream_hint(Some(StreamHint::P2pUnavailable(e.to_string())))
+                    }
                 });
             },
         );

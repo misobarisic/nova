@@ -628,7 +628,7 @@ impl DownloadCoordinator {
                 )
             {
                 job.phase = DownloadPhase::Failed;
-                job.error = Some(text::tr("Download worker stopped unexpectedly.").into());
+                job.error = Some("Download worker stopped unexpectedly.".into());
                 job.bytes_per_second = 0;
                 job.updated_at = crate::download::unix_timestamp();
             }
@@ -834,7 +834,7 @@ fn normalize_manifest(manifest: &mut DownloadManifest, root: &Path) {
                 root.display()
             );
             job.phase = DownloadPhase::Failed;
-            job.error = Some(text::tr("Downloaded file is missing.").into());
+            job.error = Some("Downloaded file is missing.".into());
         }
     }
 }
@@ -963,6 +963,22 @@ fn persist_manifest(manifest: &DownloadManifest) {
     }
 }
 
+/// Download manifests from older builds may contain one of these fixed errors
+/// already rendered in Croatian. Keep the persisted diagnostic language-free
+/// going forward, and normalize legacy values when building the UI.
+fn localized_download_error(error: &str) -> String {
+    match error {
+        "Download worker stopped unexpectedly."
+        | "Radna dretva za preuzimanje neočekivano se zaustavila." => {
+            text::tr("Download worker stopped unexpectedly.").to_string()
+        }
+        "Downloaded file is missing." | "Preuzeta datoteka nedostaje." => {
+            text::tr("Downloaded file is missing.").to_string()
+        }
+        _ => error.to_string(),
+    }
+}
+
 pub(crate) fn read_download_settings() -> DownloadSettings {
     read_json(DOWNLOAD_SETTINGS_KEY).unwrap_or_default()
 }
@@ -999,7 +1015,8 @@ impl DownloadCoordinator {
             DownloadPhase::Completed => text::tr("Downloaded").into(),
             DownloadPhase::Failed => job
                 .error
-                .clone()
+                .as_deref()
+                .map(localized_download_error)
                 .unwrap_or_else(|| text::tr("Download failed").into()),
         }
     }
@@ -1193,21 +1210,25 @@ impl Bridge {
 
     pub(super) fn download_stream(&self, stream: &StreamUi) {
         if let StreamSource::Unsupported = stream.source {
-            self.set_streams_hint(text::tr("This stream cannot be downloaded here."));
+            self.set_stream_hint(Some(StreamHint::Fixed(
+                "This stream cannot be downloaded here.",
+            )));
             return;
         }
         if let StreamSource::Url(url) = &stream.source
             && crate::download::is_manifest_url(url)
         {
-            self.set_streams_hint(text::tr(
+            self.set_stream_hint(Some(StreamHint::Fixed(
                 "HLS, DASH, and YouTube streams cannot be downloaded here.",
-            ));
+            )));
             return;
         }
         if matches!(stream.source, StreamSource::Torrent { .. })
             && (!active_torrent_settings().enabled || crate::torrent::engine().is_none())
         {
-            self.set_streams_hint(text::tr("P2P downloads are disabled or unavailable."));
+            self.set_stream_hint(Some(StreamHint::Fixed(
+                "P2P downloads are disabled or unavailable.",
+            )));
             return;
         }
         let (media_type, media_id, request_id, title, year) = {
@@ -1332,6 +1353,16 @@ impl Bridge {
         }
     }
 
+    /// Re-render the Android foreground notification after a language change.
+    pub(super) fn refresh_download_background_status(&self) {
+        #[cfg(target_os = "android")]
+        {
+            let busy = self.downloads.has_active_work();
+            let (title, text) = self.downloads.background_status();
+            crate::app::android_bg::set_download_service(busy, &title, &text);
+        }
+    }
+
     pub(super) fn refresh_download_rows(&self) {
         // Reap a transfer thread that died without finalizing before reading
         // the revision: recovery bumps it, so the UI picks up the Failed row
@@ -1341,12 +1372,7 @@ impl Bridge {
         // deliberately before the revision early-return (the service must stop
         // even when a completion did not change the row set) and is throttled
         // internally to state changes + ~1 Hz.
-        #[cfg(target_os = "android")]
-        {
-            let busy = self.downloads.has_active_work();
-            let (title, text) = self.downloads.background_status();
-            crate::app::android_bg::set_download_service(busy, &title, &text);
-        }
+        self.refresh_download_background_status();
         let revision = self.downloads.revision();
         if revision == self.downloads_seen.load(Ordering::Acquire) {
             return;

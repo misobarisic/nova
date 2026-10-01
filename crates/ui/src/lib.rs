@@ -4,4 +4,6 @@
 // Kept in its own leaf crate so edits to the app logic (crate `nova`'s
 // `src/app.rs`) no longer re-expand and re-typecheck this large generated
 // code on every debug rebuild — it only rebuilds when a `.slint` file changes.
+pub mod backend_text;
+
 slint::include_modules!();

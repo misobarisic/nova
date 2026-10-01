@@ -1,5 +1,5 @@
-//! Text the backend builds itself, in the language picked in Settings →
-//! Display.
+//! Localized text the app backend builds itself, owned by `nova-ui` alongside
+//! the Slint UI and its translation catalogs.
 //!
 //! The `@tr("…")` catalogs only reach `.slint` files, so the strings the Rust
 //! side formats — download states, sync status, stream/episode hints, relative
@@ -8,20 +8,18 @@
 //! value interpolated into it gets a small named helper so the sentence can be
 //! reordered for the target language.
 //!
-//! The language is remembered by [`set_language`] — called from
-//! `Bridge::apply_language` (`i18n.rs`), the one place that already knows the
-//! stored setting — so formatting a status string does not re-read the settings
-//! blob. Default is English: tests and any path that runs before the UI exists
-//! keep the source text.
-use super::*;
+//! The language is remembered by [`set_language`] — called from the app bridge
+//! when it applies Settings → Display — so formatting a status string does not
+//! re-read the settings blob. Default is English.
+use nova_config::Language;
 use std::sync::Mutex;
 
 /// What the UI is currently showing. Process-wide (not per-thread like the
 /// Slint catalog state): worker threads format status text too.
 static LANGUAGE: Mutex<Language> = Mutex::new(Language::English);
 
-/// Remember the language the UI is showing. Called by `Bridge::apply_language`.
-pub(crate) fn set_language(language: Language) {
+/// Remember the language the UI is showing. Called by the app bridge.
+pub fn set_language(language: Language) {
     *LANGUAGE.lock().unwrap() = language;
 }
 
@@ -30,13 +28,10 @@ fn croatian() -> bool {
     *LANGUAGE.lock().unwrap() == Language::Croatian
 }
 
-/// Run `f` with the given language and restore the previous one afterwards.
-///
-/// Test-only: the language is process-wide, and the test harness runs tests in
-/// parallel threads, so every language-dependent test goes through this — it
-/// serializes them on a lock and leaves the language as it found it.
-#[cfg(test)]
-pub(crate) fn with_language<T>(language: Language, f: impl FnOnce() -> T) -> T {
+/// Run `f` with a language selected and restore the previous value. Useful for
+/// language-dependent tests; also serializes tests that share this process-wide
+/// language state.
+pub fn with_language<T>(language: Language, f: impl FnOnce() -> T) -> T {
     static TEST_LOCK: Mutex<()> = Mutex::new(());
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let previous = *LANGUAGE.lock().unwrap();
@@ -63,7 +58,7 @@ fn plural(n: u64, one: &'static str, few: &'static str, many: &'static str) -> &
 }
 
 /// Croatian for a fixed backend-built string; unknown keys stay English.
-pub(crate) fn tr(english: &'static str) -> &'static str {
+pub fn tr(english: &'static str) -> &'static str {
     if !croatian() {
         return english;
     }
@@ -122,9 +117,14 @@ pub(crate) fn tr(english: &'static str) -> &'static str {
         "No results for this selection." => "Nema rezultata za ovaj odabir.",
         "No results for this search." => "Nema rezultata za ovu pretragu.",
         "Type at least 2 characters to search." => "Upišite barem 2 znaka za pretraživanje.",
+        "Search movies, shows…" => "Pretražite filmove i serije…",
+        "No enabled catalogs support search." => {
+            "Nijedan omogućeni katalog ne podržava pretraživanje."
+        }
         "Search (e.g. a movie title)" => "Pretražite (npr. naslov filma)",
         "This catalog has no search" => "Ovaj katalog ne podržava pretraživanje",
         "All addons" => "Svi dodaci",
+        "All genres" => "Svi žanrovi",
         "No addons installed yet — add one in Settings → Addons." => {
             "Još nema instaliranih dodataka — dodajte ga u Postavke → Dodaci."
         }
@@ -145,6 +145,7 @@ pub(crate) fn tr(english: &'static str) -> &'static str {
         "Caught up" => "Sve pogledano",
         "Specials" => "Specijali",
         "Episode" => "Epizoda",
+        "Resume" => "Nastavite",
         "Connecting…" => "Povezivanje…",
         // ---- Library buckets and watch statuses ------------------------
         // Display only: the stored value stays the English identifier (the
@@ -160,7 +161,7 @@ pub(crate) fn tr(english: &'static str) -> &'static str {
 }
 
 /// `"Season 3"` / `"Specials"`.
-pub(crate) fn season_label(season: u32) -> String {
+pub fn season_label(season: u32) -> String {
     if season == 0 {
         return tr("Specials").to_string();
     }
@@ -173,7 +174,7 @@ pub(crate) fn season_label(season: u32) -> String {
 
 /// Episode-badge suffix for episodes that have not aired yet:
 /// `" · 2 unaired"`, or `"2 unaired"` on its own in an otherwise empty badge.
-pub(crate) fn unaired(count: usize, leading_separator: bool) -> String {
+pub fn unaired(count: usize, leading_separator: bool) -> String {
     if croatian() {
         let n = count as u64;
         let noun = plural(n, "neemitirana", "neemitirane", "neemitiranih");
@@ -190,7 +191,7 @@ pub(crate) fn unaired(count: usize, leading_separator: bool) -> String {
 }
 
 /// Episode-badge text for a series with episodes still to watch: `"8 left"`.
-pub(crate) fn left(remaining: usize) -> String {
+pub fn left(remaining: usize) -> String {
     if croatian() {
         let n = remaining as u64;
         format!(
@@ -203,7 +204,7 @@ pub(crate) fn left(remaining: usize) -> String {
 }
 
 /// Torrent peer count for the player status line: `"12 peers"`.
-pub(crate) fn peers(count: usize) -> String {
+pub fn peers(count: usize) -> String {
     if croatian() {
         let n = count as u64;
         format!("{count} {}", plural(n, "čvor", "čvora", "čvorova"))
@@ -214,7 +215,7 @@ pub(crate) fn peers(count: usize) -> String {
 
 /// Settings hint after a metadata prefetch finished:
 /// `"Prefetch done — cached 12 items."`.
-pub(crate) fn prefetch_done(cached: usize) -> String {
+pub fn prefetch_done(cached: usize) -> String {
     if croatian() {
         let n = cached as u64;
         format!(
@@ -227,7 +228,7 @@ pub(crate) fn prefetch_done(cached: usize) -> String {
 }
 
 /// Download notification title: `"Downloading 3 files"`.
-pub(crate) fn downloading_files(pending: usize) -> String {
+pub fn downloading_files(pending: usize) -> String {
     if croatian() {
         let n = pending as u64;
         format!(
@@ -240,7 +241,7 @@ pub(crate) fn downloading_files(pending: usize) -> String {
 }
 
 /// `"Searching 3 add-ons for streams…"`.
-pub(crate) fn searching_streams(addons: usize) -> String {
+pub fn searching_streams(addons: usize) -> String {
     if croatian() {
         let n = addons as u64;
         format!(
@@ -253,7 +254,7 @@ pub(crate) fn searching_streams(addons: usize) -> String {
 }
 
 /// `"Loading episode list from 2 add-ons…"`.
-pub(crate) fn loading_episodes(addons: usize) -> String {
+pub fn loading_episodes(addons: usize) -> String {
     if croatian() {
         let n = addons as u64;
         format!(
@@ -266,7 +267,7 @@ pub(crate) fn loading_episodes(addons: usize) -> String {
 }
 
 /// `"12 streams from 3 add-ons."`.
-pub(crate) fn streams_found(streams: usize, addons: usize) -> String {
+pub fn streams_found(streams: usize, addons: usize) -> String {
     if croatian() {
         let s = streams as u64;
         let a = addons as u64;
@@ -281,7 +282,7 @@ pub(crate) fn streams_found(streams: usize, addons: usize) -> String {
 }
 
 /// `"4 streams from this add-on."`.
-pub(crate) fn streams_found_single(streams: usize) -> String {
+pub fn streams_found_single(streams: usize) -> String {
     if croatian() {
         let s = streams as u64;
         format!(
@@ -294,7 +295,7 @@ pub(crate) fn streams_found_single(streams: usize) -> String {
 }
 
 /// `"4 streams from Torrentio."` (the addon name is data).
-pub(crate) fn streams_found_from(streams: usize, addon: &str) -> String {
+pub fn streams_found_from(streams: usize, addon: &str) -> String {
     if croatian() {
         let s = streams as u64;
         format!(
@@ -307,7 +308,7 @@ pub(crate) fn streams_found_from(streams: usize, addon: &str) -> String {
 }
 
 /// `"Addon unreachable: timeout"` — the error text itself stays as reported.
-pub(crate) fn addon_unreachable(error: &str) -> String {
+pub fn addon_unreachable(error: &str) -> String {
     if croatian() {
         format!("Dodatak nije dostupan: {error}")
     } else {
@@ -316,7 +317,7 @@ pub(crate) fn addon_unreachable(error: &str) -> String {
 }
 
 /// `"Invalid addon manifest: …"`.
-pub(crate) fn invalid_manifest(error: &str) -> String {
+pub fn invalid_manifest(error: &str) -> String {
     if croatian() {
         format!("Neispravan manifest dodatka: {error}")
     } else {
@@ -325,7 +326,7 @@ pub(crate) fn invalid_manifest(error: &str) -> String {
 }
 
 /// `"Install failed (UI thread panicked: …)"`.
-pub(crate) fn install_failed(detail: &str) -> String {
+pub fn install_failed(detail: &str) -> String {
     if croatian() {
         format!("Instalacija nije uspjela (UI dretva se srušila: {detail})")
     } else {
@@ -334,7 +335,7 @@ pub(crate) fn install_failed(detail: &str) -> String {
 }
 
 /// `"X provides streams but no browsable catalogs — …"`.
-pub(crate) fn no_browsable_catalogs(base: &str) -> String {
+pub fn no_browsable_catalogs(base: &str) -> String {
     if croatian() {
         format!(
             "{base} nudi zapise, ali nema kataloga za pregledavanje — dodajte dodatak s katalozima (npr. Cinemeta) za pregled."
@@ -347,7 +348,7 @@ pub(crate) fn no_browsable_catalogs(base: &str) -> String {
 }
 
 /// `"Paired with Kitchen"`.
-pub(crate) fn paired_with(name: &str) -> String {
+pub fn paired_with(name: &str) -> String {
     if croatian() {
         format!("Upareno s uređajem {name}")
     } else {
@@ -356,7 +357,7 @@ pub(crate) fn paired_with(name: &str) -> String {
 }
 
 /// `"Removed from Kitchen's sync"`.
-pub(crate) fn removed_from_sync(name: &str) -> String {
+pub fn removed_from_sync(name: &str) -> String {
     if croatian() {
         format!("Uklonjeno iz sinkronizacije uređaja {name}")
     } else {
@@ -365,7 +366,7 @@ pub(crate) fn removed_from_sync(name: &str) -> String {
 }
 
 /// `"Could not create invite: …"`.
-pub(crate) fn could_not_create_invite(error: &str) -> String {
+pub fn could_not_create_invite(error: &str) -> String {
     if croatian() {
         format!("Nije moguće izraditi pozivnicu: {error}")
     } else {
@@ -374,7 +375,7 @@ pub(crate) fn could_not_create_invite(error: &str) -> String {
 }
 
 /// `"Invalid invite: …"`.
-pub(crate) fn invalid_invite(error: &str) -> String {
+pub fn invalid_invite(error: &str) -> String {
     if croatian() {
         format!("Neispravna pozivnica: {error}")
     } else {
@@ -383,7 +384,7 @@ pub(crate) fn invalid_invite(error: &str) -> String {
 }
 
 /// `"Last sync failed: …"`.
-pub(crate) fn last_sync_failed(error: &str) -> String {
+pub fn last_sync_failed(error: &str) -> String {
     if croatian() {
         format!("Posljednja sinkronizacija nije uspjela: {error}")
     } else {
@@ -392,7 +393,7 @@ pub(crate) fn last_sync_failed(error: &str) -> String {
 }
 
 /// `"Last synced 5m ago"`.
-pub(crate) fn last_synced(ago: &str) -> String {
+pub fn last_synced(ago: &str) -> String {
     if croatian() {
         format!("Posljednja sinkronizacija: {ago}")
     } else {
@@ -401,7 +402,7 @@ pub(crate) fn last_synced(ago: &str) -> String {
 }
 
 /// `"Last connected 2h ago"`.
-pub(crate) fn last_connected(ago: &str) -> String {
+pub fn last_connected(ago: &str) -> String {
     if croatian() {
         format!("Posljednja veza: {ago}")
     } else {
@@ -410,7 +411,7 @@ pub(crate) fn last_connected(ago: &str) -> String {
 }
 
 /// `"Playing Show S1 E2"` (the display name is data).
-pub(crate) fn playing(name: &str) -> String {
+pub fn playing(name: &str) -> String {
     if croatian() {
         format!("Reprodukcija: {name}")
     } else {
@@ -419,7 +420,7 @@ pub(crate) fn playing(name: &str) -> String {
 }
 
 /// `"P2P unavailable: …"`.
-pub(crate) fn p2p_unavailable(error: &str) -> String {
+pub fn p2p_unavailable(error: &str) -> String {
     if croatian() {
         format!("P2P nije dostupan: {error}")
     } else {
@@ -428,7 +429,7 @@ pub(crate) fn p2p_unavailable(error: &str) -> String {
 }
 
 /// Sync status "last seen" stamp: `"45s ago"` / `"3m ago"` / `"2h ago"`.
-pub(crate) fn ago(secs: u64) -> String {
+pub fn ago(secs: u64) -> String {
     if secs < 60 {
         if croatian() {
             format!("prije {secs} s")
@@ -452,7 +453,7 @@ pub(crate) fn ago(secs: u64) -> String {
     }
 }
 
-pub(crate) fn peer_retry(secs: u64) -> String {
+pub fn peer_retry(secs: u64) -> String {
     if croatian() {
         if secs == 0 {
             "Posljednji pokušaj nije uspio".to_string()
@@ -467,7 +468,7 @@ pub(crate) fn peer_retry(secs: u64) -> String {
 }
 
 /// `"128.4 MB · 1,203 files"` (units are international, the count is not).
-pub(crate) fn files_label(files: usize) -> String {
+pub fn files_label(files: usize) -> String {
     if croatian() {
         let n = files as u64;
         format!(
@@ -482,9 +483,22 @@ pub(crate) fn files_label(files: usize) -> String {
     }
 }
 
+/// Thousands-grouped count (`1203` → `"1,203"`) for compact UI readouts.
+pub fn grouped_count(n: usize) -> String {
+    let digits: Vec<char> = n.to_string().chars().collect();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.iter().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(*ch);
+    }
+    out
+}
+
 /// Air-date stamp for an episode: `"3 days ago"`, `"in 2 weeks"`, `"today"`.
 /// `diff` is days since the air date (negative = in the future).
-pub(crate) fn relative_days(diff: i64) -> String {
+pub fn relative_days(diff: i64) -> String {
     if !croatian() {
         return match diff {
             0 => "today".to_string(),
@@ -549,7 +563,7 @@ pub(crate) fn relative_days(diff: i64) -> String {
 }
 
 /// Absolute air date: `"Mar 15, 2024"` / `"15. ožu 2024."`.
-pub(crate) fn absolute_date(day: u32, month: u32, year: i64) -> String {
+pub fn absolute_date(day: u32, month: u32, year: i64) -> String {
     const EN: &[&str] = &[
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
@@ -566,7 +580,7 @@ pub(crate) fn absolute_date(day: u32, month: u32, year: i64) -> String {
 
 /// Full month name for the Home → Upcoming calendar title
 /// (`cal_month_title` below): `"February"` / `"veljača"`.
-pub(crate) fn month_name(month: u32) -> &'static str {
+pub fn month_name(month: u32) -> &'static str {
     const EN: &[&str] = &[
         "January",
         "February",
@@ -600,7 +614,7 @@ pub(crate) fn month_name(month: u32) -> &'static str {
 }
 
 /// Upcoming calendar month title: `"February 2026"` / `"veljača 2026"`.
-pub(crate) fn cal_month_title(month: u32, year: i64) -> String {
+pub fn cal_month_title(month: u32, year: i64) -> String {
     format!("{} {year}", month_name(month))
 }
 

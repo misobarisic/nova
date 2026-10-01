@@ -648,15 +648,13 @@ impl Bridge {
             if let Some(engine) = nova_sync::engine() {
                 // A peer removed us from its sync: say so instead of silently
                 // dropping it from the list.
-                if let Some(name) = engine.take_removed_notice()
-                    && let Some(app) = self.app()
-                {
+                if let Some(name) = engine.take_removed_notice() {
                     let name = if name.trim().is_empty() {
-                        text::tr("another device").to_string()
+                        None
                     } else {
-                        name
+                        Some(name)
                     };
-                    app.set_sync_link_notice(SharedString::from(text::removed_from_sync(&name)));
+                    self.set_sync_notice(SyncNotice::RemovedFromSync(name));
                 }
                 engine.sync_now();
             }
@@ -1068,6 +1066,22 @@ impl Bridge {
         }
     }
 
+    fn set_sync_notice(&self, notice: SyncNotice) {
+        let rendered = notice.render();
+        self.shared.lock().unwrap().sync_link_notice = Some(notice);
+        if let Some(app) = self.app() {
+            app.set_sync_link_notice(SharedString::from(rendered));
+        }
+    }
+
+    /// Re-render the latest one-off sync notice using the selected language.
+    pub(super) fn refresh_sync_link_notice(&self) {
+        let notice = self.shared.lock().unwrap().sync_link_notice.clone();
+        if let (Some(notice), Some(app)) = (notice, self.app()) {
+            app.set_sync_link_notice(SharedString::from(notice.render()));
+        }
+    }
+
     /// Settings → Sync: the enable toggle flipped. Persists the flag and
     /// starts/stops the engine.
     pub(super) fn sync_set_enabled(&self, enabled: bool) {
@@ -1137,8 +1151,8 @@ impl Bridge {
                     app.set_sync_join_input(SharedString::default());
                     app.set_sync_invite_ticket(SharedString::default());
                     app.set_sync_invite_qr(Image::default());
-                    app.set_sync_link_notice(SharedString::from(text::paired_with(&name)));
                 }
+                self.set_sync_notice(SyncNotice::PairedWith(name));
                 self.sync_status_to_ui();
                 // Spread the new device to the rest of the mesh.
                 fan_out();
@@ -1214,17 +1228,13 @@ impl Bridge {
                 if let Some(app) = self.app() {
                     app.set_sync_invite_qr(invite_qr_image(&ticket).unwrap_or_default());
                     app.set_sync_invite_ticket(SharedString::from(&ticket));
-                    app.set_sync_link_notice(SharedString::from(text::tr(
-                        "Invite ready — share the code; it expires in 15 minutes.",
-                    )));
                 }
+                self.set_sync_notice(SyncNotice::Fixed(
+                    "Invite ready — share the code; it expires in 15 minutes.",
+                ));
             }
             Err(e) => {
-                if let Some(app) = self.app() {
-                    app.set_sync_link_notice(SharedString::from(text::could_not_create_invite(
-                        &e.to_string(),
-                    )));
-                }
+                self.set_sync_notice(SyncNotice::CouldNotCreateInvite(e.to_string()));
             }
         }
         self.sync_status_to_ui();
@@ -1257,11 +1267,10 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_sync_join_input(SharedString::default());
             match result {
-                Ok(()) => app.set_sync_link_notice(SharedString::from(text::tr(
-                    "Connecting to the other device…",
-                ))),
-                Err(e) => app
-                    .set_sync_link_notice(SharedString::from(text::invalid_invite(&e.to_string()))),
+                Ok(()) => {
+                    self.set_sync_notice(SyncNotice::Fixed("Connecting to the other device…"))
+                }
+                Err(e) => self.set_sync_notice(SyncNotice::InvalidInvite(e.to_string())),
             }
         }
     }
@@ -1275,11 +1284,9 @@ impl Bridge {
         crate::app::android_qr::start_scan();
         #[cfg(not(target_os = "android"))]
         {
-            if let Some(app) = self.app() {
-                app.set_sync_link_notice(SharedString::from(text::tr(
-                    "Camera scanning is available on Android only.",
-                )));
-            }
+            self.set_sync_notice(SyncNotice::Fixed(
+                "Camera scanning is available on Android only.",
+            ));
         }
     }
 }

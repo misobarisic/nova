@@ -108,18 +108,6 @@ pub(crate) fn format_rate(bytes_per_sec: u64) -> String {
         format!("{bytes_per_sec} B")
     }
 }
-/// Thousands-grouped count (`1203` → `"1,203"`) for the usage readout.
-pub(crate) fn grouped_count(n: usize) -> String {
-    let digits: Vec<char> = n.to_string().chars().collect();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, ch) in digits.iter().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(*ch);
-    }
-    out
-}
 /// Write `contents` to `path` via a temp file + rename, so a crash mid-write
 /// never leaves a truncated file behind.
 #[allow(dead_code)]

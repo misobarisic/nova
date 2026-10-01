@@ -1341,6 +1341,44 @@ impl Bridge {
         app.set_searchable_hint(SharedString::from(hint));
         app.set_searchable(searchable);
     }
+
+    /// Rebuild localized Discover labels without changing the active catalog,
+    /// query, pagination, or search-result models.
+    pub(super) fn refresh_catalog_language_text(&self) {
+        let Some(app) = self.app() else { return };
+        let (has_grid, searchable) = {
+            let state = self.shared.lock().unwrap();
+            let searchable = state.installed.iter().any(|addon| {
+                addon.enabled
+                    && addon
+                        .manifest
+                        .catalogs
+                        .iter()
+                        .any(|catalog| catalog.supports_extra("search"))
+            });
+            (!state.type_defs.is_empty(), searchable)
+        };
+        app.set_searchable(searchable && has_grid);
+        app.set_searchable_hint(SharedString::from(if has_grid {
+            if searchable {
+                text::tr("Search movies, shows…")
+            } else {
+                text::tr("No enabled catalogs support search.")
+            }
+        } else {
+            ""
+        }));
+
+        let query = app.get_search_text();
+        let search_hint = if query.trim().chars().count() >= 2 {
+            text::tr("No results for this search.")
+        } else {
+            text::tr("Type at least 2 characters to search.")
+        };
+        app.set_search_empty_hint(SharedString::from(search_hint));
+        self.apply_catalog_labels_to_ui();
+        self.apply_genre_selection_to_ui();
+    }
 }
 
 fn build_search_targets(installed: &[Installed]) -> Vec<SearchTarget> {

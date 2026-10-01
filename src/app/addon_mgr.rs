@@ -676,6 +676,41 @@ impl Bridge {
         }
     }
 
+    /// Refresh only localized Discover picker text. `refresh_all` also resets
+    /// selection and loads a catalog, so it is not appropriate for a language
+    /// change while the user is already browsing.
+    pub(super) fn refresh_addon_picker_language_text(&self) {
+        let Some(app) = self.app() else { return };
+        let (names, empty_hint) = {
+            let state = self.shared.lock().unwrap();
+            let enabled: Vec<&Installed> = state.installed.iter().filter(|a| a.enabled).collect();
+            let mut names =
+                Vec::with_capacity(enabled.len() + if enabled.is_empty() { 0 } else { 1 });
+            if !enabled.is_empty() {
+                names.push(SharedString::from(text::tr("All addons")));
+            }
+            names.extend(enabled.iter().map(|addon| SharedString::from(&addon.label)));
+
+            let hint = if enabled.is_empty() {
+                if state.installed.is_empty() && !state.loading_addons {
+                    text::tr("No addons installed yet — add one in Settings → Addons.").to_string()
+                } else if !state.installed.is_empty() && !state.loading_addons {
+                    text::tr("All addons are disabled — enable one in Settings → Addons.")
+                        .to_string()
+                } else {
+                    text::tr("Loading configured add-ons…").to_string()
+                }
+            } else if state.type_defs.is_empty() {
+                text::no_browsable_catalogs(&enabled[0].label)
+            } else {
+                text::tr("No results for this selection.").to_string()
+            };
+            (names, hint)
+        };
+        app.set_addon_names(Rc::new(VecModel::from(names)).into());
+        app.set_empty_hint(SharedString::from(empty_hint));
+    }
+
     /// The addon's web configuration page (`<addon base>/configure`, e.g.
     /// https://torrentio.strem.fun/configure). Only returned once a probe
     /// of that URL has answered 2xx (see `probe_configure_page`) — addons

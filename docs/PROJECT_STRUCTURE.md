@@ -113,7 +113,8 @@ nova/
 │   └── windows-libs/         # Windows libmpv archive pin and SOURCES provenance
 ├── src/                      # root app crate `nova`
 ├── crates/                   # leaf crates (see below)
-│   ├── ui/translations/      # UI translation catalogs: <code>/LC_MESSAGES/nova-ui.po (build-time bundled)
+│   ├── ui/src/backend_text.rs # Rust-side UI text formatting/translations, owned by nova-ui
+│   ├── ui/translations/      # Slint translation catalogs: <code>/LC_MESSAGES/nova-ui.po (build-time bundled)
 │   └── download/             # durable stream jobs + progressive HTTP transfer
 ├── tests/                    # headless Slint UI integration tests
 └── docs/
@@ -134,8 +135,8 @@ nova/
   ▼              ▼              ▼              ▼              ▼              ▼
   nova-ui        nova-player    nova-media     nova-download  nova-torrent   nova-sync    addons
   │              │              │              │              │
-  slint          nova-config,   nova-config,   serde,         nova-config,   (standalone)
-                 nova-ui,       slint,         tokio,         nova-storage,
+  slint,         nova-config,   nova-config,   serde,         nova-config,   (standalone)
+  nova-config    nova-ui,       slint,         tokio,         nova-storage,
                  slint          addons,        reqwest        iroh,tokio
                                 image,webp
 
@@ -146,7 +147,7 @@ nova/
 | Crate | Path | Role |
 |---|---|---|
 | `nova` | `src/` | App logic, UI bridge, entry points. Depends on everything. |
-| `nova-ui` | `crates/ui` | Compiled Slint components (`.slint` → Rust via `include_modules!`). Leaf, so UI edits don't recompile app logic. |
+| `nova-ui` | `crates/ui` | Compiled Slint components (`.slint` → Rust via `include_modules!`) and the Rust-side localized text API (`backend_text.rs`). Depends on Slint and `nova-config`; UI edits don't recompile app logic. |
 | `nova-config` | `crates/config` | Shared settings types, runtime cache settings, platform app paths, playback-rate bounds/helpers (`clamp_playback_speed` / `quantize_playback_speed`), `fnv1a`, `now_secs`/`now_ms`. Leaf. |
 | `nova-storage` | `crates/storage` | Platform-agnostic persistent KV store (redb) at `<data>/nova.redb`. Leaf. |
 | `nova-media` | `crates/media` | HTTP transport (`net`) + decoded/poster image cache (`cache`); artwork decoding is limited to JPEG, PNG, and WebP. |
@@ -196,8 +197,7 @@ Defines the shared state and the UI bridge:
 | `android_qr.rs` | Android-only JNI glue (`#[cfg(target_os = "android")]`): launches `QrScanActivity` and decodes each camera frame's luma plane with `rqrr`, then joins the scanned invite on the UI thread. The camera pipeline itself (permission, Camera2 session, preview, `ImageReader`) is Java. |
 | `io.rs` | KV JSON read/write, atomic file writes, hashing, formatting. |
 | `clipboard.rs` | Best-effort system clipboard writes (`copy_to_clipboard`): Android via the activity's `ClipboardManager` over JNI (`player::set_clipboard`), desktop via `wl-copy`/`xclip`/`xsel`. Used by Settings → Sync "Copy identity"/"Copy invite code" and Settings → Addons "Copy link". |
-| `i18n.rs` | UI language (Settings → Display → Language): `apply_language` points Slint's bundled catalogs at the stored language (`slint::select_bundled_translation`) and hands the same setting to `text.rs`, and `language_labels` builds the picker list from `nova_config::Language::ALL`. |
-| `text.rs` | Text the backend formats itself (download states, sync status, stream/episode hints, relative air dates, count labels) in the current language: `tr(english)` for fixed strings, named helpers for templated ones, plus the Croatian 1/2-4/5+ noun forms. The `@tr` catalogs cannot reach Rust code, so this is their counterpart. |
+| `i18n.rs` | UI language (Settings → Display → Language): `apply_language` points Slint's bundled catalogs at the stored language (`slint::select_bundled_translation`) and hands the same setting to `nova-ui::backend_text`; it also refreshes already-materialized Rust text. `language_labels` builds the picker list from `nova_config::Language::ALL`. |
 | `tests.rs` | Unit tests for the app modules (moved out of `app.rs`). |
 
 The Home landing also has an independent featured-showcase fetch: Settings →
@@ -219,7 +219,7 @@ device-local; it does not alter Continue Watching or Discover's catalog state.
 
 - `build.rs` compiles `appwindow.slint` with `slint-build` (AOT), except Linux debug + `live-preview` → interpreter/hot-reload. `SLINT_EMIT_DEBUG_INFO` toggles debug info.
 - Runtime Slint dependencies disable default features: desktop enables Winit/FemtoVG, Android enables the Activity/Skia backend, and neither includes the software renderer.
-- `src/lib.rs` is just `slint::include_modules!()`. The root `AppWindow` owns every property/callback the backend drives and forwards to page components.
+- `src/lib.rs` exposes `backend_text` and runs `slint::include_modules!()`. The root `AppWindow` owns every property/callback the backend drives and forwards to page components.
 
 ### Translations (i18n)
 
@@ -227,11 +227,11 @@ device-local; it does not alter Continue Watching or Discover's catalog state.
 - **Counts that inflect use Slint's plural form**: `@tr("{n} episode" | "{n} episodes" % count)` (the syntax is `"singular" | "plural" % n`, extra `{}` args follow). The `hr` catalog carries the three Croatian forms and the header's `Plural-Forms` selects them.
 - `build.rs` points `slint-build` at `translations/`, so the gettext catalogs are compiled into the binary at build time (domain = `CARGO_PKG_NAME` = `nova-ui`, i.e. `translations/<code>/LC_MESSAGES/nova-ui.po`). The directory must hold at least one catalog — `translations/en/` exists for exactly that reason and is deliberately header-only: English is the source language, and a missing entry falls back to it.
 - **Catalogs are context-free**: `build.rs` sets `DefaultTranslationContext::None`, so an entry is keyed by the source string alone. Slint's default context is the *component* a string sits in, which would silently unmatch an entry when a `@tr` literal moves to another component. Regenerate/verify catalogs with `slint-tr-extractor --no-default-translation-context`; a string that means two different things in two places can still name a context (`@tr("ctx" => "…")`).
-- **Text the Rust backend formats goes through `src/app/text.rs`** (download states, sync status, stream/episode hints, relative air dates, count labels). Fixed strings are keyed by the English source there too (`text::tr("Queued")`); anything with a value in it has a small named helper (`text::searching_streams(n)`), and Croatian noun forms (1 / 2-4 / 5+) come from the internal `plural` helper. `Bridge::apply_language` calls `text::set_language`, so both mechanisms follow the same setting.
+- **Text the Rust backend formats goes through `crates/ui/src/backend_text.rs`** (download states, sync status, stream/episode hints, relative air dates, count labels). Fixed strings are keyed by the English source (`text::tr("Queued")`); templated text uses named helpers, plus Croatian 1/2-4/5+ noun forms. This API is owned by `nova-ui` alongside the Slint UI and translation catalogs. `Bridge::apply_language` updates it and refreshes already-materialized Rust text in visible models (library badges/category labels, Home rows, detail rows, Discover hints, and Settings status).
 - **Stored identifiers are never translated, only their labels.** The automatic library buckets (`Plan to Watch`, `Watching`, …) and the `WatchStatus` labels are *keys*: the filter comparison, `auto_bucket` and the persisted values use the English identifier, while the UI shows a localized label — `library.rs` pushes `category_names` (values) plus `category_labels` (display) and `Dropdown` renders the latter (`labels` property) while `selected` still reports the value. Watch-status badges are translated at the two display sites (`text::tr(badge_label())`).
-- **Languages**: English (source) and Croatian (`hr`, `crates/ui/translations/hr/…` + the table in `src/app/text.rs`). Croatian addresses the user in the formal plural ("vi"); labels stay short, which the Croatian-width phases in `settings_addon_row_fit.rs` / `settings_sync_overflow.rs` enforce (a longer label overflowed a 320px phone row, and one unwrapped card heading widened the whole Sync subpage).
-- Switching language is one Slint call — `slint::select_bundled_translation(code)` in `src/app/i18n.rs` — which marks every translation dirty, so all `@tr` bindings re-evaluate in place (no page rebuild, no strings pushed from Rust). `"en"` restores the source strings. The chosen language is Settings → Display → Language (`nova_config::Language`), per-device and never synced.
-- Adding a language: catalog directory + a `Language` variant (`ALL`/`index`/`code`/`label` arms in `crates/config/src/lib.rs`; the picker list is built from `ALL`, so the row follows automatically) + the `text.rs` table. Untranslated strings stay English.
+- **Languages**: English (source) and Croatian (`hr`, `crates/ui/translations/hr/…` + backend helpers in `crates/ui/src/backend_text.rs`). Croatian addresses the user in the formal plural ("vi"); labels stay short, which the Croatian-width phases in `settings_addon_row_fit.rs` / `settings_sync_overflow.rs` enforce (a longer label overflowed a 320px phone row, and one unwrapped card heading widened the whole Sync subpage).
+- Switching language selects Slint's bundled catalog with `slint::select_bundled_translation(code)` in `src/app/i18n.rs`, which marks every `@tr` binding dirty. Rust-built strings are values rather than bindings, so the bridge separately refreshes localized model text from existing state without refetching content or rebuilding poster pipelines. `"en"` restores the source strings. The chosen language is Settings → Display → Language (`nova_config::Language`), per-device and never synced.
+- Adding a language: catalog directory + a `Language` variant (`ALL`/`index`/`code`/`label` arms in `crates/config/src/lib.rs`; the picker list is built from `ALL`, so the row follows automatically) + backend translations/helpers in `crates/ui/src/backend_text.rs`. Untranslated strings stay English.
 - The interpreter-backed dev build (`cargo dev` / `live-preview`) compiles the `.slint` files at runtime; the ahead-of-time generator is the only one that emits the catalog registration, so that build can never select a translation. `apply_language` reports this **once** (then stays quiet — every settings mirror calls it) and the strings stay English there. Use `cargo run` / `cargo build` to see translations.
 
 ### Slint files

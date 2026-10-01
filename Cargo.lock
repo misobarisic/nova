@@ -5220,6 +5220,7 @@ dependencies = [
 name = "nova-ui"
 version = "0.1.0"
 dependencies = [
+ "nova-config",
  "slint",
  "slint-build",
 ]
