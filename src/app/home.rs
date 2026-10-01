@@ -92,8 +92,10 @@ impl Bridge {
         }
         if let Some(app) = self.app() {
             app.set_home_featured_title(SharedString::default());
-            app.set_home_featured_year(SharedString::default());
+            app.set_home_featured_narrow_title(SharedString::default());
             app.set_home_featured_type(SharedString::default());
+            app.set_home_featured_rating(SharedString::default());
+            app.set_home_featured_runtime(SharedString::default());
             app.set_home_featured_description(SharedString::default());
             app.set_home_featured_backdrop(Image::default());
             app.set_home_featured_index(0);
@@ -126,8 +128,10 @@ impl Bridge {
         let Some(first) = first else {
             if let Some(app) = self.app() {
                 app.set_home_featured_title(SharedString::default());
-                app.set_home_featured_year(SharedString::default());
+                app.set_home_featured_narrow_title(SharedString::default());
                 app.set_home_featured_type(SharedString::default());
+                app.set_home_featured_rating(SharedString::default());
+                app.set_home_featured_runtime(SharedString::default());
                 app.set_home_featured_description(SharedString::default());
                 app.set_home_featured_backdrop(Image::default());
                 app.set_home_featured_index(0);
@@ -140,8 +144,12 @@ impl Bridge {
         // it is considered ready for rotation.
         if let Some(app) = self.app() {
             app.set_home_featured_title(SharedString::from(first.title()));
-            app.set_home_featured_year(SharedString::from(first.year_str().unwrap_or_default()));
+            app.set_home_featured_narrow_title(SharedString::from(first.title().to_uppercase()));
             app.set_home_featured_type(SharedString::from(&first.type_));
+            app.set_home_featured_rating(SharedString::from(Self::showcase_rating(&first)));
+            app.set_home_featured_runtime(SharedString::from(
+                first.runtime.as_deref().unwrap_or_default(),
+            ));
             app.set_home_featured_description(SharedString::from(
                 first.description.as_deref().unwrap_or_default(),
             ));
@@ -255,8 +263,12 @@ impl Bridge {
 
         if let Some(app) = self.app() {
             app.set_home_featured_title(SharedString::from(preview.title()));
-            app.set_home_featured_year(SharedString::from(preview.year_str().unwrap_or_default()));
+            app.set_home_featured_narrow_title(SharedString::from(preview.title().to_uppercase()));
             app.set_home_featured_type(SharedString::from(&preview.type_));
+            app.set_home_featured_rating(SharedString::from(Self::showcase_rating(&preview)));
+            app.set_home_featured_runtime(SharedString::from(
+                preview.runtime.as_deref().unwrap_or_default(),
+            ));
             app.set_home_featured_description(SharedString::from(
                 preview.description.as_deref().unwrap_or_default(),
             ));
@@ -294,6 +306,18 @@ impl Bridge {
         };
         if let Some(preview) = preview {
             self.open_preview(preview, 0, false, None);
+        }
+    }
+
+    fn showcase_rating(preview: &MetaPreview) -> String {
+        let Some(rating) = preview.rating_str() else {
+            return String::new();
+        };
+        match rating.parse::<f32>() {
+            // Stremio's IMDb catalog values use a 0–10 scale; the showcase uses
+            // the compact 0–100 score shown in its rating pill.
+            Ok(value) if (0.0..=10.0).contains(&value) => format!("{:.0}", value * 10.0),
+            _ => rating,
         }
     }
 

@@ -106,8 +106,10 @@ export component AppWindow inherits Window {
     // Independent catalog-driven feature at the top of Home. Rust keeps its
     // selected preview and fetches the active backdrop on demand.
     in-out property <string> home_featured_title: "";
-    in-out property <string> home_featured_year: "";
+    in-out property <string> home_featured_narrow_title: "";
     in-out property <string> home_featured_type: "";
+    in-out property <string> home_featured_rating: "";
+    in-out property <string> home_featured_runtime: "";
     in-out property <string> home_featured_description: "";
     in-out property <image> home_featured_backdrop;
     in-out property <int> home_featured_index: 0;
@@ -620,8 +622,10 @@ export component AppWindow inherits Window {
         cal_open <=> root.home_cal_open;
         home_empty_hint <=> root.home_empty_hint;
         featured_title <=> root.home_featured_title;
-        featured_year <=> root.home_featured_year;
+        featured_narrow_title <=> root.home_featured_narrow_title;
         featured_type <=> root.home_featured_type;
+        featured_rating <=> root.home_featured_rating;
+        featured_runtime <=> root.home_featured_runtime;
         featured_description <=> root.home_featured_description;
         featured_backdrop <=> root.home_featured_backdrop;
         featured_index <=> root.home_featured_index;

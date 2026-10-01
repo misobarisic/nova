@@ -40,8 +40,20 @@ msgstr "Moja biblioteka je prazna — otvorite film, seriju ili anime i pritisni
 msgid "Nothing to continue — start watching a show or movie and it will show up here."
 msgstr "Nema što nastaviti — počnite gledati seriju ili film i pojavit će se ovdje."
 
-msgid "View details"
-msgstr "Pogledajte pojedinosti"
+msgid "DETAILS"
+msgstr "POJEDINOSTI"
+
+msgid "WATCH NOW"
+msgstr "GLEDATI"
+
+msgid "TV"
+msgstr "TV"
+
+msgid "MOVIE"
+msgstr "FILM"
+
+msgid "ANIME"
+msgstr "ANIME"
 
 msgid "Previous featured title"
 msgstr "Prethodni izdvojeni naslov"
