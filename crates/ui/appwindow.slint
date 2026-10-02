@@ -1,3 +1,6 @@
+// Bundle the same UI family on desktop and Android, including a real bold face.
+import "../../assets/fonts/Roboto-Regular.ttf";
+import "../../assets/fonts/Roboto-Bold.ttf";
 import { DiscoverPage } from "discover.slint";
 import { HomePage } from "home.slint";
 import { DetailPage } from "detail.slint";
@@ -22,6 +25,7 @@ import { TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMapp
 // forwards them into the per-screen components below. The screen switching
 // guards live here so each page component stays self-contained.
 export component AppWindow inherits Window {
+    default-font-family: "Roboto";
     in-out property <[TrackingAccountRow]> tracking_accounts;
     in-out property <[TrackingLinkRow]> tracking_links;
     in-out property <[TrackingCandidateRow]> tracking_candidates;

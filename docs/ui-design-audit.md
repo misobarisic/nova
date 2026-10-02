@@ -79,10 +79,10 @@ review. Some differences are intentional and are recorded after the findings.
 - **Medium — Heading and body scales vary by screen.** Main headings range from
   18px in Settings to 26px in Library and Home, and 26–32px in Discover. Detail
   and Settings subpage headings use additional sizes from 16–24px.
-- **Check visually — The app has no declared UI font family.** The repository
-  includes Roboto, but the Slint UI does not reference it. Compare glyph widths,
-  wrapping, and emoji across desktop and Android before deciding whether to
-  bundle a font.
+- **Resolved 2026-10-02 — The UI uses bundled Roboto.** `AppWindow` now imports
+  Roboto Regular/Bold and declares the default family for desktop and Android;
+  packaged builds embed the fonts. Compare wrapping and system fallback glyphs
+  (including emoji) in rendered builds across platforms.
 - **Medium — Capitalization is inconsistent.** Examples include `DETAILS`,
   `WATCH NOW`, `New Episode`, and `Next up`. Check consistency in both English
   and Croatian translations.

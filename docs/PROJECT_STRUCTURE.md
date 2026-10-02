@@ -253,6 +253,7 @@ featured row does not alter Continue Watching or Discover's catalog state.
 - `build.rs` compiles `appwindow.slint` with `slint-build` (AOT), except Linux debug + `live-preview` → interpreter/hot-reload. `SLINT_EMIT_DEBUG_INFO` toggles debug info.
 - Runtime Slint dependencies disable default features: desktop enables Winit/FemtoVG, Android enables the Activity/Skia backend, and neither includes the software renderer.
 - `src/lib.rs` exposes `backend_text` and runs `slint::include_modules!()`. The root `AppWindow` owns every property/callback the backend drives and forwards to page components.
+- `appwindow.slint` imports Roboto Regular/Bold from `assets/fonts/` and sets the window's default family to Roboto on every platform. `build.rs` embeds font/image files in packaged builds; Linux live preview reads the same fonts from the checkout. System fallback covers missing glyphs (for example emoji). Font provenance and the shared Apache-2.0 license are in `assets/fonts/README.md` and `LICENSE.txt`; Android subtitles reuse the regular face.
 
 ### Translations (i18n)
 
@@ -633,6 +634,7 @@ the app ignores unknown domains, so old peers stay compatible.
 | Tracker identity normalization / conflicting MAL or AniList IDs | `crates/providers/src/ids.rs` (`ExternalId`, `IdNamespace`, `ExternalIds::resolve_id`), `crates/providers/src/stremio.rs` (bounded addon fields, typed TMDB movie/TV evidence). Source/playback IDs stay opaque; this layer resolves identity only, not episode coverage. |
 | Addon resource routing / ID namespaces | `crates/addons/src/types.rs` (`Manifest::accepts`), `src/app/{detail,catalog}.rs` |
 | Review UI consistency / plan visual unification | `docs/ui-design-audit.md` (source-backed findings and visual review checklist), `crates/ui/*.slint` |
+| UI font / bundled Roboto | `crates/ui/appwindow.slint` (`default-font-family`, font imports), `crates/ui/build.rs` (resource embedding), `assets/fonts/README.md` (provenance/license) |
 | Home featured banner layout / touch paging / crossfade | `crates/ui/home.slint` (`FeaturedShowcase`, `FeaturedCaption`, and badge/action/pager components), `assets/featured-backdrop-scrim.svg`; catalog metadata, artwork and revision publication in `src/app/home.rs` |
 | Discover reveal / filter-drag regressions | `tests/discover_reveal_and_filters.rs` (animated opacity during poster updates, same-length result replacement, animation-off behavior, horizontal filter drags), `tests/discover_search_ui.rs` (browse/results navigation) |
 | Home / Discover / Library clipping and responsive grids | `crates/ui/{home,discover,library}.slint` (measured headings, viewport widths, pointer-only hover and grid origins), `tests/page_layout_fit.rs` |

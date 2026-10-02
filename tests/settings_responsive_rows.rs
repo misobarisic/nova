@@ -45,7 +45,7 @@ fn row_for(app: &nova::AppWindow, target: Rect) -> Option<Rect> {
 fn check_segmented_rows(
     app: &nova::AppWindow,
     label: &str,
-    expected: usize,
+    minimum_visible: usize,
     stacked: bool,
     failures: &Rc<RefCell<Vec<String>>>,
 ) {
@@ -55,9 +55,11 @@ fn check_segmented_rows(
             size.width > 0.0 && size.height > 0.0
         })
         .collect();
-    if controls.len() != expected {
+    // Font metrics and translated wrapping can bring another row into the
+    // viewport. Require the core controls, then check every visible row.
+    if controls.len() < minimum_visible {
         failures.borrow_mut().push(format!(
-            "{label}: expected {expected} segmented controls, found {}",
+            "{label}: expected at least {minimum_visible} segmented controls, found {}",
             controls.len()
         ));
         return;

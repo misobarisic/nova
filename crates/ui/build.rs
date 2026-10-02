@@ -40,6 +40,9 @@ fn main() {
     slint_build::compile_with_config(
         "appwindow.slint",
         slint_build::CompilerConfiguration::new()
+            // Imported fonts must ship in the executable/APK, rather than
+            // depend on absolute paths into the build machine's checkout.
+            .embed_resources(slint_build::EmbedResourcesKind::EmbedFiles)
             .with_debug_info(debug_info)
             .with_bundled_translations("translations")
             .with_default_translation_context(slint_build::DefaultTranslationContext::None),
