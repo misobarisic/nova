@@ -82,9 +82,7 @@ impl Bridge {
     }
     fn tracking_context(&self) -> Option<SourceContext> {
         let state = self.shared.lock().unwrap();
-        let Some(modal) = state.modal_item.as_ref() else {
-            return None;
-        };
+        let modal = state.modal_item.as_ref()?;
         let episodes = if modal.type_ == "movie" {
             vec![(modal.id.clone(), modal.name.clone())]
         } else {

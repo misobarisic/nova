@@ -65,17 +65,25 @@ impl Authorization {
         };
         let mut url = url::Url::parse(endpoint).map_err(|_| ApiError::InvalidInput)?;
         url.query_pairs_mut()
-            .append_pair("client_id", &self.registration.client_id)
-            .append_pair("redirect_uri", &self.registration.redirect_uri)
-            .append_pair("state", self.state.expose())
-            .append_pair(
-                "response_type",
-                if self.service == Service::MyAnimeList {
-                    "code"
-                } else {
-                    "token"
-                },
-            );
+            .append_pair("client_id", &self.registration.client_id);
+        // AniList's PIN page uses the redirect registered with the service.
+        // Match its minimal authorization link; the token is accepted only
+        // through explicit paste into this pending PIN session, then verified.
+        let pin = self.service == Service::AniList
+            && self.registration.redirect_uri == "https://anilist.co/api/v2/oauth/pin";
+        if !pin {
+            url.query_pairs_mut()
+                .append_pair("redirect_uri", &self.registration.redirect_uri)
+                .append_pair("state", self.state.expose());
+        }
+        url.query_pairs_mut().append_pair(
+            "response_type",
+            if self.service == Service::MyAnimeList {
+                "code"
+            } else {
+                "token"
+            },
+        );
         if let Some(verifier) = &self.verifier {
             url.query_pairs_mut()
                 .append_pair("code_challenge", verifier.expose())

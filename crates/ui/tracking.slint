@@ -15,6 +15,7 @@ component AccountEditor inherits Rectangle {
     vertical-stretch: 0;
     property <string> client: root.entry.client_id;
     property <string> redirect: root.entry.redirect_uri;
+    property <bool> pin_sign_in: root.entry.service == 1 && root.entry.redirect_uri == "https://anilist.co/api/v2/oauth/pin";
     VerticalLayout {
         padding: 12px; spacing: 8px;
         Text { text: root.entry.service == 0 ? "MyAnimeList" : "AniList"; color: #f2f2f4; font-weight: 700; }
@@ -31,8 +32,8 @@ component AccountEditor inherits Rectangle {
         }
         if root.entry.signing_in: VerticalLayout {
             spacing: 8px;
-            Text { text: @tr("Finish in your browser. For the PIN fallback, paste the AniList token here; otherwise paste the full return URL if automatic return fails."); color: #c9c9d4; wrap: word-wrap; min-width: 0; }
-            returned := LineEdit { changed has-focus => {root.input_focus(self.has-focus);} placeholder-text: @tr("PIN token or full return URL"); accessible-label: @tr("PIN token or full return URL"); input-type: password; }
+            Text { text: root.pin_sign_in ? @tr("Approve Nova in AniList, then copy the displayed token and paste it below.") : @tr("Finish sign-in in your browser. Paste the full return URL here if automatic return fails."); color: #c9c9d4; wrap: word-wrap; min-width: 0; }
+            returned := LineEdit { changed has-focus => {root.input_focus(self.has-focus);} placeholder-text: root.pin_sign_in ? @tr("AniList token") : @tr("Full return URL"); accessible-label: root.pin_sign_in ? @tr("AniList token") : @tr("Full return URL"); input-type: password; }
             Button { text: @tr("Finish sign-in"); clicked => {root.complete(root.entry.service,returned.text);returned.text="";} }
             Button { text: @tr("Cancel sign-in"); clicked => {returned.text="";root.cancel(root.entry.service);} }
         }

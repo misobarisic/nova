@@ -15,7 +15,7 @@ enum Record {
         assignments: Vec<Assignment>,
         enabled: bool,
         account_name: String,
-        media: Option<Media>,
+        media: Option<Box<Media>>,
     },
     Preference {
         version: u32,
@@ -67,7 +67,7 @@ pub fn peer_records(state: &TrackingState) -> Result<Vec<(String, String, u64)>,
                 .snapshots
                 .iter()
                 .find(|s| s.target == binding.target)
-                .map(|s| s.media.clone()),
+                .map(|s| Box::new(s.media.clone())),
         };
         let key = link_key(&binding.source, &binding.target)?;
         if let Some((_, raw, _)) = records.iter_mut().find(|(old, _, _)| *old == key) {
@@ -209,6 +209,7 @@ pub fn apply_peer_records(
                     state.targets.push(target.clone());
                 }
                 if let Some(media) = media {
+                    let media = *media;
                     if let Some(snapshot) =
                         state.snapshots.iter_mut().find(|s| s.target == target.key)
                     {
@@ -413,6 +414,30 @@ pub fn peer_connections(
         .collect()
 }
 
+/// Publish only the safety pause caused by conflicting peer coverage. This
+/// intentional reconciliation converges both peers; ordinary apply never echoes.
+pub fn conflict_pauses(
+    state: &TrackingState,
+    incoming: &[(String, String)],
+) -> Result<Vec<(String, String, u64)>, ValidationError> {
+    let mut pauses = vec![];
+    for (key, value, ts) in peer_records(state)? {
+        let Some((_, old)) = incoming.iter().find(|(k, _)| *k == key) else {
+            continue;
+        };
+        if matches!(
+            serde_json::from_str::<Record>(old),
+            Ok(Record::Link { enabled: true, .. })
+        ) && matches!(
+            serde_json::from_str::<Record>(&value),
+            Ok(Record::Link { enabled: false, .. })
+        ) {
+            pauses.push((key, value, ts));
+        }
+    }
+    Ok(pauses)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,6 +490,40 @@ mod tests {
             .into_iter()
             .map(|(k, v, _)| (k, v))
             .collect()
+    }
+    #[test]
+    fn shared_media_keeps_its_existing_json_shape() {
+        let source = sample();
+        let mut records = snapshot(&source);
+        let (_, raw) = records
+            .iter_mut()
+            .find(|(key, _)| key.starts_with("link:"))
+            .unwrap();
+        let media = serde_json::json!({
+            "id": 12,
+            "mal_id": null,
+            "title": "Fixture release",
+            "format": "TV",
+            "episodes": 12,
+            "finished": true,
+            "year": 2021,
+        });
+        // Read the original unboxed JSON format, then publish the restored
+        // snapshot again: changing the in-memory enum must not change sync.
+        let mut record: serde_json::Value = serde_json::from_str(raw).unwrap();
+        record["media"] = media.clone();
+        *raw = record.to_string();
+        let restored =
+            apply_peer_records(&TrackingState::default(), &records, 42, |_| false).unwrap();
+        assert_eq!(restored.snapshots[0].media.title, "Fixture release");
+        let published = snapshot(&restored);
+        let (_, raw) = published
+            .iter()
+            .find(|(key, _)| key.starts_with("link:"))
+            .unwrap();
+        let record: serde_json::Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(record["version"], 1);
+        assert_eq!(record["media"], media);
     }
     #[test]
     fn peer_links_keep_stable_coverage_but_use_local_revisions_and_history_without_uploading() {
@@ -627,28 +686,4 @@ mod tests {
             apply_peer_records(&applied, &[("future".into(), "{}".into())], 10, |_| false).is_err()
         );
     }
-}
-
-/// Publish only the safety pause caused by conflicting peer coverage. This
-/// intentional reconciliation converges both peers; ordinary apply never echoes.
-pub fn conflict_pauses(
-    state: &TrackingState,
-    incoming: &[(String, String)],
-) -> Result<Vec<(String, String, u64)>, ValidationError> {
-    let mut pauses = vec![];
-    for (key, value, ts) in peer_records(state)? {
-        let Some((_, old)) = incoming.iter().find(|(k, _)| *k == key) else {
-            continue;
-        };
-        if matches!(
-            serde_json::from_str::<Record>(old),
-            Ok(Record::Link { enabled: true, .. })
-        ) && matches!(
-            serde_json::from_str::<Record>(&value),
-            Ok(Record::Link { enabled: false, .. })
-        ) {
-            pauses.push((key, value, ts));
-        }
-    }
-    Ok(pauses)
 }

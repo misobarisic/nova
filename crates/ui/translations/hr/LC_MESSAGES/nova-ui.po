@@ -1015,6 +1015,21 @@ msgstr "Dodjelu epizoda treba pregledati. Ažuriranja u redu su pauzirana."
 msgid "Finish date"
 msgstr "Datum završetka"
 
+msgid "AniList token"
+msgstr "AniList token"
+
+msgid "Approve Nova in AniList, then copy the displayed token and paste it below."
+msgstr "Odobrite Novu na AniListu, zatim kopirajte prikazani token i zalijepite ga ispod."
+
+msgid "Copy the token from AniList and paste it below to finish sign-in."
+msgstr "Kopirajte token s AniLista i zalijepite ga ispod kako biste dovršili prijavu."
+
+msgid "Finish sign-in in your browser. Paste the full return URL here if automatic return fails."
+msgstr "Dovršite prijavu u pregledniku. Ovdje zalijepite cijeli povratni URL ako automatski povratak ne uspije."
+
+msgid "Full return URL"
+msgstr "Cijeli povratni URL"
+
 msgid "Finish in your browser. For the PIN fallback, paste the AniList token here; otherwise paste the full return URL if automatic return fails."
 msgstr "Dovršite u pregledniku. Za prijavu putem PIN-a ovdje zalijepite AniList token; inače zalijepite cijeli povratni URL ako automatski povratak ne uspije."
 

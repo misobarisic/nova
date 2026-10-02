@@ -39,6 +39,23 @@ async fn click(app: &nova::AppWindow, label: &str) {
         .await;
     settle().await;
 }
+async fn scroll_down(app: &nova::AppWindow) {
+    let from = slint::LogicalPosition::new(220.0, 680.0);
+    let to = slint::LogicalPosition::new(220.0, 180.0);
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+            position: from,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: to });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+            position: to,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    settle().await;
+}
 fn check_width(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) {
     let width = app.window().size().width as f32;
     for element in ElementQuery::from_root(app)
@@ -77,6 +94,7 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
             nova::TrackingAccountRow {
                 service: 1,
                 redirect_uri: s("https://anilist.co/api/v2/oauth/pin"),
+                signing_in: true,
                 ..Default::default()
             },
         ]))
@@ -134,25 +152,22 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
         settle().await;
         let app = weak.upgrade().unwrap();
         // The tracking link follows Downloads; reveal it before clicking.
-        let from = slint::LogicalPosition::new(220.0, 680.0);
-        let to = slint::LogicalPosition::new(220.0, 180.0);
-        app.window()
-            .dispatch_event(slint::platform::WindowEvent::PointerPressed {
-                position: from,
-                button: slint::platform::PointerEventButton::Left,
-            });
-        app.window()
-            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: to });
-        app.window()
-            .dispatch_event(slint::platform::WindowEvent::PointerReleased {
-                position: to,
-                button: slint::platform::PointerEventButton::Left,
-            });
+        scroll_down(&app).await;
         click(&app, "Tracking").await;
         check_width(&app, &f);
         assert_eq!(
             ElementHandle::find_by_element_type_name(&app, "AccountEditor").count(),
             2
+        );
+        // AniList is below MAL on a phone; reveal its pending sign-in controls.
+        scroll_down(&app).await;
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&app, "AniList token").count(),
+            1
+        );
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&app, "Finish sign-in").count(),
+            1
         );
         app.set_show_settings(false);
         app.set_modal_visible(true);

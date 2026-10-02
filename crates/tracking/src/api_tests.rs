@@ -251,17 +251,22 @@ fn mal_exchange_uses_public_client_and_expiry() {
     assert!(format!("{:?}", tokens.access).contains("redacted"));
 }
 #[test]
-fn pin_fallback_requires_pin_registration() {
+fn pin_login_uses_minimal_url_and_requires_pin_registration() {
     let reg = ClientRegistration {
         client_id: "123".into(),
         redirect_uri: "https://anilist.co/api/v2/oauth/pin".into(),
     };
-    assert!(
-        Authorization::begin(Service::AniList, reg)
-            .unwrap()
-            .finish_pin("token".into())
-            .is_ok()
+    let auth = Authorization::begin(Service::AniList, reg).unwrap();
+    assert_eq!(
+        auth.url().unwrap(),
+        "https://anilist.co/api/v2/oauth/authorize?client_id=123&response_type=token"
     );
+    let transport = Fixture::new(vec![]);
+    let tokens = auth
+        .finish_return(AuthReturn::new(" token ".into()).unwrap(), &&transport, 100)
+        .unwrap();
+    assert_eq!(tokens.access.expose(), "token");
+    assert!(transport.requests.lock().unwrap().is_empty());
     let reg = ClientRegistration {
         client_id: "123".into(),
         redirect_uri: "http://127.0.0.1:53926/callback".into(),

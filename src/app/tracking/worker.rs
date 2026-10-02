@@ -862,7 +862,17 @@ impl Coordinator {
             )
             .into());
         }
-        self.notice = text::tr("Finish sign-in in your browser.").into();
+        self.notice = text::tr(
+            if service == Service::AniList
+                && self.registrations.get(service).redirect_uri
+                    == "https://anilist.co/api/v2/oauth/pin"
+            {
+                "Copy the token from AniList and paste it below to finish sign-in."
+            } else {
+                "Finish sign-in in your browser."
+            },
+        )
+        .into();
         Ok(())
     }
     fn complete(&mut self, service: Service, value: AuthReturn, epoch: u64) -> Result<(), String> {
@@ -3080,13 +3090,14 @@ mod batch_link_tests {
     fn n(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).unwrap()
     }
-    fn fixture() -> (
+    type Fixture = (
         TrackingState,
         SourceRef,
         Viewer,
         HashMap<String, EpisodeProgress>,
         Vec<(Choice, Option<RemoteEntry>, Media)>,
-    ) {
+    );
+    fn fixture() -> Fixture {
         let source = SourceRef {
             provider_id: "nova".into(),
             source_id: "merged".into(),

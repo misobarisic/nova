@@ -65,15 +65,15 @@ fn compatible(episode: &EpisodeInfo, release: &ReleaseDetails) -> bool {
     let Some(day) = full_date(episode.released) else {
         return true;
     };
-    if let Some(start) = full_date(release.start) {
-        if day.signed_duration_since(start).num_days() < -14 {
-            return false;
-        }
+    if let Some(start) = full_date(release.start)
+        && day.signed_duration_since(start).num_days() < -14
+    {
+        return false;
     }
-    if let Some(end) = full_date(release.end) {
-        if day.signed_duration_since(end).num_days() > 14 {
-            return false;
-        }
+    if let Some(end) = full_date(release.end)
+        && day.signed_duration_since(end).num_days() > 14
+    {
+        return false;
     }
     true
 }

@@ -39,14 +39,30 @@ pub struct HttpsTransport {
 }
 impl HttpsTransport {
     pub fn new() -> Result<Self, ApiError> {
-        let client = reqwest::blocking::Client::builder()
+        let builder = reqwest::blocking::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
-            .user_agent("Nova/0.1 anime-tracking")
-            .build()
-            .map_err(|_| ApiError::Offline)?;
+            .user_agent("Nova/0.1 anime-tracking");
+        // Like the other Android HTTP clients, use bundled roots: reqwest's
+        // platform verifier requires JNI initialization and a Kotlin AAR that
+        // cargo-apk2 does not package. Its panic would strand the tracker actor
+        // after the browser callback, including subsequent Cancel commands.
+        #[cfg(target_os = "android")]
+        let builder = {
+            let mut roots = rustls::RootCertStore::empty();
+            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            let tls = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+                rustls::crypto::aws_lc_rs::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .map_err(|_| ApiError::Offline)?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+            builder.tls_backend_preconfigured(tls)
+        };
+        let client = builder.build().map_err(|_| ApiError::Offline)?;
         Ok(Self { client })
     }
 }
@@ -413,10 +429,11 @@ impl<T: Transport> Client<T> {
         }
         let mut aliases = vec![];
         let mut add = |value: &Value| {
-            if let Some(title) = value.as_str().filter(|s| !s.is_empty() && s.len() <= 512) {
-                if aliases.len() < 16 && !aliases.iter().any(|s| s == title) {
-                    aliases.push(title.to_owned());
-                }
+            if let Some(title) = value.as_str().filter(|s| !s.is_empty() && s.len() <= 512)
+                && aliases.len() < 16
+                && !aliases.iter().any(|s| s == title)
+            {
+                aliases.push(title.to_owned());
             }
         };
         let (start, end, relations) = match self.service {

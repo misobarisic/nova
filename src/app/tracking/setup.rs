@@ -27,10 +27,8 @@ impl Coordinator {
         {
             return Err(api_message(ApiError::RateLimited { retry_at: until }));
         }
-        if !fresh {
-            if let Some(details) = self.cache.release(service, id, now_secs()) {
-                return Ok(details);
-            }
+        if !fresh && let Some(details) = self.cache.release(service, id, now_secs()) {
+            return Ok(details);
         }
         let result = self
             .session(service)?

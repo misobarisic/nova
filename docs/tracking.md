@@ -18,10 +18,13 @@ Nova includes its public application IDs and redirect URLs as defaults.
 Existing custom registrations remain available in the connection form. Never
 enter a client secret. MAL uses a public/native application, plain PKCE, and a
 loopback redirect such as `http://127.0.0.1:53926/callback`. The port must be available locally.
-AniList supports a loopback implicit callback or its documented PIN redirect
-`https://anilist.co/api/v2/oauth/pin`. For PIN sign-in, paste the browser's token
-into the password field and finish sign-in. A loopback return can also be pasted
-as its full URL if automatic capture fails. Returned identity is verified before
+AniList defaults to manual token sign-in using its registered PIN redirect
+`https://anilist.co/api/v2/oauth/pin`. Nova opens the minimal authorization URL
+with only `client_id` and `response_type=token`; AniList uses the redirect in its
+application settings. Approve Nova, copy the displayed token, paste it into the
+**AniList token** field, and select **Finish sign-in**. Custom registrations can
+still use a loopback implicit callback with state checking. A loopback return can
+also be pasted as its full URL if automatic capture fails. Returned identity is verified before
 any link can use that session. Sign-in attempts expire after five minutes.
 
 The automatic-tracking checkbox applies to the service's linked releases.

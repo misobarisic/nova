@@ -5372,9 +5372,11 @@ dependencies = [
  "getrandom 0.3.4",
  "nova-storage",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "url",
+ "webpki-roots",
  "zeroize",
 ]
 

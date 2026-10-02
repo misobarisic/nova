@@ -203,6 +203,17 @@ pub fn tr(english: &'static str) -> &'static str {
             "Dodjelu epizoda treba pregledati. Ažuriranja u redu su pauzirana."
         }
         "Finish date" => "Datum završetka",
+        "AniList token" => "AniList token",
+        "Approve Nova in AniList, then copy the displayed token and paste it below." => {
+            "Odobrite Novu na AniListu, zatim kopirajte prikazani token i zalijepite ga ispod."
+        }
+        "Copy the token from AniList and paste it below to finish sign-in." => {
+            "Kopirajte token s AniLista i zalijepite ga ispod kako biste dovršili prijavu."
+        }
+        "Finish sign-in in your browser. Paste the full return URL here if automatic return fails." => {
+            "Dovršite prijavu u pregledniku. Ovdje zalijepite cijeli povratni URL ako automatski povratak ne uspije."
+        }
+        "Full return URL" => "Cijeli povratni URL",
         "Finish in your browser. For the PIN fallback, paste the AniList token here; otherwise paste the full return URL if automatic return fails." => {
             "Dovršite u pregledniku. Za prijavu putem PIN-a ovdje zalijepite AniList token; inače zalijepite cijeli povratni URL ako automatski povratak ne uspije."
         }
