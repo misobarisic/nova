@@ -6,6 +6,7 @@ mod setup;
 use nova_tracking::{
     api::{Client, HttpsTransport},
     auth::{AuthReturn, Authorization, ClientRegistration, Tokens},
+    credentials::{CredentialError, SavedConnection},
     *,
 };
 use std::num::{NonZeroU32, NonZeroU64};
@@ -191,6 +192,8 @@ struct Coordinator {
     busy: bool,
     completion: Option<Completion>,
     cache: CatalogCache,
+    restore_after: [u64; 2],
+    pending_restore: Vec<SavedConnection>,
 }
 enum Completion {
     Progress(DeliveryAttempt, DeliveryOutcome, Option<RemoteEntry>),
@@ -254,11 +257,14 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
         notice: String::new(),
         busy: false,
         completion: None,
+        restore_after: [0; 2],
+        pending_restore: vec![],
         cache: read_json_result(CATALOG_CACHE_KEY)
             .ok()
             .flatten()
             .unwrap_or_default(),
     };
+    coordinator.restore_connections();
     coordinator.publish();
     loop {
         match rx.recv_timeout(Duration::from_secs(2)) {
@@ -290,6 +296,7 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
             coordinator.publish();
             continue;
         }
+        coordinator.restore_connections();
         coordinator.deliver();
         coordinator.publish();
     }
@@ -298,6 +305,111 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
     }
 }
 impl Coordinator {
+    fn restore_connections(&mut self) {
+        let now = now_secs();
+        for service in [Service::MyAnimeList, Service::AniList] {
+            let index = service_index(service);
+            if now < self.restore_after[index] {
+                continue;
+            }
+            self.restore_after[index] = now.saturating_add(60);
+            if let Some(until) = self.store.state().outbox.service_retry_at(service, now) {
+                self.restore_after[index] = until;
+                continue;
+            }
+            if self
+                .sessions
+                .iter()
+                .any(|s| s.service == service && !s.paused)
+                || self.logins.iter().any(|l| l.service == service)
+            {
+                continue;
+            }
+            let Some(account) = self
+                .store
+                .state()
+                .active_accounts
+                .iter()
+                .find(|a| a.service == service)
+                .cloned()
+            else {
+                continue;
+            };
+            let retained = self
+                .pending_restore
+                .iter()
+                .position(|c| c.account == account)
+                .map(|index| self.pending_restore.remove(index));
+            let loaded = match retained {
+                Some(connection) => Ok(Some(connection)),
+                None => SavedConnection::load(&KvStorage, service),
+            };
+            let mut connection = match loaded {
+                Ok(Some(c)) if c.account == account => c,
+                Ok(None) => continue,
+                _ => {
+                    self.notice =
+                        text::tr("Saved sign-in is unreadable. Reconnect this service.").into();
+                    continue;
+                }
+            };
+            let epoch = self.bridge.tracking.login_generation[service_index(service)]
+                .load(Ordering::Acquire);
+            let client = match connection.restore(&KvStorage, self.transport.clone(), now) {
+                Ok(client) => client,
+                Err(CredentialError::Storage) => {
+                    // Keep rotated secrets in memory until they can be saved.
+                    self.pending_restore.push(connection);
+                    self.notice = storage_message();
+                    continue;
+                }
+                Err(CredentialError::Api(ApiError::Offline)) => continue,
+                Err(CredentialError::Api(ApiError::RateLimited { retry_at })) => {
+                    self.restore_after[index] = self.restore_after[index].max(retry_at);
+                    let _ = self.store.mutate(|s| {
+                        s.outbox.defer_service(service, retry_at);
+                        Ok(())
+                    });
+                    continue;
+                }
+                Err(_) => {
+                    self.notice =
+                        text::tr("Saved sign-in needs attention. Reconnect this service.").into();
+                    continue;
+                }
+            };
+            if self.bridge.tracking.login_generation[service_index(service)].load(Ordering::Acquire)
+                != epoch
+            {
+                continue;
+            }
+            let Some(generation) = self
+                .store
+                .state()
+                .accounts
+                .iter()
+                .find(|a| a.key == account)
+                .map(|a| a.generation)
+            else {
+                continue;
+            };
+            if self.store.resume_account(&account, generation).is_err() {
+                self.notice = storage_message();
+                continue;
+            }
+            self.sessions.retain(|s| s.service != service);
+            self.sessions.push(Session {
+                service,
+                epoch,
+                generation,
+                tokens: connection.tokens,
+                client,
+                registration: connection.registration,
+                paused: false,
+                refresh_after: 0,
+            });
+        }
+    }
     fn current(&self, generation: u64) -> bool {
         self.generation == generation
             && self
@@ -336,6 +448,7 @@ impl Coordinator {
                 self.cancel(Service::AniList);
                 let replacement = reset_store().map_err(|_| storage_message())?;
                 self.sessions.clear();
+                self.pending_restore.clear();
                 self.store = replacement;
                 self.choice = None;
                 self.candidates.clear();
@@ -385,6 +498,13 @@ impl Coordinator {
                 }
                 self.cancel(service);
                 self.sessions.retain(|s| s.service != service);
+                self.pending_restore
+                    .retain(|c| c.account.service != service);
+                let mut state = self.store.state().clone();
+                state.active_accounts.retain(|a| a.service != service);
+                self.store
+                    .save_with_connection(state, service, None)
+                    .map_err(|_| storage_message())?;
                 self.notice =
                     text::tr("Disconnected. Links and queued updates are retained.").into();
                 Ok(())
@@ -670,7 +790,17 @@ impl Coordinator {
             };
         state.active_accounts.retain(|key| key.service != service);
         state.active_accounts.push(viewer.account.clone());
-        self.store.save(state).map_err(|_| storage_message())?;
+        let connection = SavedConnection {
+            account: viewer.account.clone(),
+            registration: registration.clone(),
+            tokens,
+        };
+        self.store
+            .save_with_connection(state, service, Some(&connection))
+            .map_err(|_| storage_message())?;
+        let tokens = connection.tokens;
+        self.pending_restore
+            .retain(|c| c.account.service != service);
         self.store
             .resume_account(&viewer.account, generation)
             .map_err(|_| storage_message())?;
@@ -687,9 +817,7 @@ impl Coordinator {
             paused: false,
             refresh_after: 0,
         });
-        self.notice =
-            text::tr("Connected for this session. Retained updates for this account can resume.")
-                .into();
+        self.notice = text::tr("Connected. Sign-in is saved on this device.").into();
         Ok(())
     }
     fn suggest(&mut self, service: Service, generation: u64) -> Result<(), String> {
@@ -1621,6 +1749,27 @@ impl Coordinator {
                     );
                     match refreshed {
                         Ok(tokens) => {
+                            let connection = SavedConnection {
+                                account: self.sessions[index]
+                                    .client
+                                    .viewer()
+                                    .unwrap()
+                                    .account
+                                    .clone(),
+                                registration: self.sessions[index].registration.clone(),
+                                tokens,
+                            };
+                            let saved = connection.save(&KvStorage);
+                            if saved.is_err() {
+                                self.pending_restore
+                                    .retain(|c| c.account.service != service);
+                                self.pending_restore.push(connection);
+                                self.sessions[index].paused = true;
+                                self.notice = storage_message();
+                                continue;
+                            }
+                            self.sessions[index].tokens = connection.tokens;
+                            let tokens = &self.sessions[index].tokens;
                             let mut client = Client::new(
                                 service,
                                 tokens.access.duplicate(),
@@ -1633,7 +1782,6 @@ impl Coordinator {
                                         .viewer()
                                         .is_ok_and(|old| old.account == viewer.account) =>
                                 {
-                                    self.sessions[index].tokens = tokens;
                                     self.sessions[index].client = client;
                                 }
                                 _ => {
@@ -1899,7 +2047,7 @@ impl Coordinator {
                         .unwrap_or_default()
                         .into(),
                     state: text::tr(if connected {
-                        "Connected for this session"
+                        "Connected"
                     } else {
                         "Reconnect to send retained updates"
                     })

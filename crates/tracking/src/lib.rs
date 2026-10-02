@@ -3,6 +3,7 @@ pub mod api;
 pub mod auth;
 mod cache;
 pub mod callback;
+pub mod credentials;
 mod edits;
 mod journal;
 mod mapping;

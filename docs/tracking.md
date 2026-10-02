@@ -6,9 +6,10 @@ choose its **Tracking** action. Connection alone does not link any titles.
 
 ## Connecting
 
-Connections currently last for the app session. Access and refresh tokens stay
-in memory and never enter addons, peer sync, ordinary settings, or the local
-tracking database. Reconnect after restarting Nova; links and queued edits remain.
+Sign-in is saved on this device and restored after restarting Nova. Saved tokens
+are verified against the stored account before retained updates can resume.
+Expired MAL access tokens refresh automatically; renewed access and refresh tokens
+are saved immediately. Offline restoration retries without deleting saved sign-in.
 Only one account is active per service. Switching accounts retains the previous
 account's links but does not send its work as the new account.
 
@@ -26,8 +27,41 @@ The automatic-tracking checkbox applies to the service's linked releases.
 Pausing it holds queued automatic work and checkpoints new history without
 uploading it. Manual tracker edits remain available. Resuming allows retained
 automatic work to continue; it does not replay history from the paused period.
-Disconnect stops future requests and discards in-memory credentials. An already
-sent request may finish.
+Disconnect stops future requests and removes saved and in-memory credentials.
+Links and queued edits remain. An already sent request may finish.
+
+## Credential storage and future protection
+
+**Current storage is plaintext**, by explicit product choice. Versioned JSON lives
+in the local `nova.redb` database under `tracking:credentials:mal:v1` and
+`tracking:credentials:anilist:v1`, separate from public client registrations and
+the tracking-state envelope. Each record contains the verified account, public
+client registration used for refresh, access token, optional refresh token, and
+access-token expiry. Client secrets are not required or stored.
+
+`crates/tracking/src/credentials.rs` owns bounded decoding, temporary secret
+zeroization, identity verification, and refresh rotation. `Store::save_with_connection`
+commits account selection and the credential record atomically. The application
+actor restores only the saved active account for each service, obeys service
+cooldowns, and checks sign-in generations before activating a restored session.
+Disconnect deletes that service's record and active choice in one transaction;
+Reset local tracking deletes both credential records without copying them into
+recovery backups. Unreadable credential records remain available for deliberate
+reconnection and are never printed in errors.
+
+These records remain device-local: they are excluded from peer sync and never
+sent to addons. Bearer credentials are sent only to the official tracker endpoints.
+This is not encrypted-at-rest storage; a copy of the database can expose tokens.
+
+**Future addition:** replace plaintext token persistence with the desktop OS
+credential store and Android Keystore-backed encryption. Preserve account/client
+binding, immediate refresh-token rotation, atomic activation, disconnect/reset
+cleanup, and offline retry behavior. Migrate existing plaintext records only after
+protected storage confirms a successful write, then delete the old token values.
+Keep tokens out of ordinary settings, sync records, logs, and recovery backups;
+report protected-store failures rather than silently falling back to plaintext.
+Restart, refresh-rotation, wrong-account, deletion, and failed-save regressions
+must continue to pass with an injected credential backend.
 
 ## Linking and alignment
 

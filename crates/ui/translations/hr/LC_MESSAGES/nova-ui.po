@@ -1329,3 +1329,6 @@ msgstr "Epizode se još učitavaju. Ponovno učitajte prijedloge kada budu sprem
 
 msgid "Ongoing release; only aired episodes are linked."
 msgstr "Izdanje još izlazi; povezane su samo emitirane epizode."
+
+msgid "Sign-in is saved on this device and restored after restarting Nova. Disconnect removes saved sign-in."
+msgstr "Prijava je spremljena na ovom uređaju i obnavlja se nakon ponovnog pokretanja Nove. Prekid veze uklanja spremljenu prijavu."

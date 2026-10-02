@@ -164,11 +164,17 @@ pub fn tr(english: &'static str) -> &'static str {
         "Connect this service in Settings → Tracking first." => {
             "Prvo povežite ovu uslugu u Postavke → Praćenje."
         }
-        "Connected for this session. Retained updates for this account can resume." => {
-            "Povezano za ovu sesiju. Spremljena ažuriranja ovog računa mogu se nastaviti."
+        "Connected. Sign-in is saved on this device." => {
+            "Povezano. Prijava je spremljena na ovom uređaju."
         }
-        "Connections last for this session. Tokens are kept in memory; reconnect after restarting Nova. Links and queued updates stay on this device." => {
-            "Veze vrijede za ovu sesiju. Tokeni se čuvaju u memoriji; ponovno se povežite nakon pokretanja Nove. Veze i ažuriranja u redu ostaju na ovom uređaju."
+        "Sign-in is saved on this device and restored after restarting Nova. Disconnect removes saved sign-in." => {
+            "Prijava je spremljena na ovom uređaju i obnavlja se nakon ponovnog pokretanja Nove. Prekid veze uklanja spremljenu prijavu."
+        }
+        "Saved sign-in is unreadable. Reconnect this service." => {
+            "Spremljena prijava nije čitljiva. Ponovno povežite ovu uslugu."
+        }
+        "Saved sign-in needs attention. Reconnect this service." => {
+            "Spremljena prijava zahtijeva provjeru. Ponovno povežite ovu uslugu."
         }
         "Could not open the sign-in browser. Check your browser settings and reconnect." => {
             "Preglednik za prijavu nije otvoren. Provjerite postavke preglednika i ponovno se povežite."
@@ -276,7 +282,7 @@ pub fn tr(english: &'static str) -> &'static str {
             "GGGG-MM-DD, djelomičan datum ili prazno za brisanje"
         }
         "Anime progress on MyAnimeList and AniList" => "Napredak animea na MyAnimeListu i AniListu",
-        "Connected for this session" => "Povezano za ovu sesiju",
+        "Connected" => "Povezano",
         "Reconnect to send retained updates" => {
             "Ponovno se povežite za slanje spremljenih ažuriranja"
         }

@@ -22,8 +22,8 @@ only the linked account's entry, and write only supplied fields. MAL uses its
 verified official PATCH contract, public-client plain PKCE and refresh rotation;
 its dates remain read-only. AniList uses GraphQL, format-dependent scoring, fuzzy
 dates, implicit authorization and its documented PIN fallback. Tokens are
-zeroized session-only secrets; no persistent credential-store integration is
-claimed. Loopback capture and a password-field manual return are implemented.
+zeroized in memory and stored in device-local plaintext records; protected
+platform credential-store integration remains a future addition. Loopback capture and a password-field manual return are implemented.
 
 Settings → Tracking and the detail tracking sheet are wired through AppWindow
 and the app actor. They support both services, explicit range/individual coverage,
@@ -45,6 +45,13 @@ Existing links use a compact overview with More actions; Adjust reveals prefille
 range controls and optional individual assignments. Episode-zero specials bridge
 TV release relationships without consuming normal episodes, and partial official
 release dates are supported. Unknown-count ongoing coverage excludes forecasts.
+
+Sign-in now persists across restarts using device-local plaintext credential
+records, as explicitly requested. Account activation and token saving commit
+together; MAL refresh rotation is saved before subsequent verification, and
+Disconnect/reset remove saved tokens. The actor verifies the stored account
+before resuming delivery. Protected desktop/Android credential storage and the
+migration requirements are recorded in docs/tracking.md for future additions.
 
 Curated mappings remain optional: the reviewed Fribb and Anime-Lists repositories
 had no explicit redistribution license, so no dataset is bundled or downloaded.

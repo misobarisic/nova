@@ -109,6 +109,11 @@ impl<S: StateStorage> Store<S> {
             (crate::EVENT_COUNTER_KEY.into(), Some("0".into())),
         ];
         entries.extend(rows.iter().map(|(key, _)| (key.clone(), None)));
+        entries.extend(
+            crate::credentials::CREDENTIAL_KEYS
+                .iter()
+                .map(|key| ((*key).into(), None)),
+        );
         storage.write(&entries)?;
         Ok(Self { storage, state })
     }
@@ -239,6 +244,30 @@ impl<S: StateStorage> Store<S> {
         self.save_with_events(state, &[])
     }
 
+    /// Account selection and credentials must survive or fail together.
+    pub fn save_with_connection(
+        &mut self,
+        state: TrackingState,
+        service: crate::Service,
+        connection: Option<&crate::credentials::SavedConnection>,
+    ) -> Result<(), LoadError> {
+        if connection.is_some_and(|c| {
+            c.account.service != service || !state.active_accounts.contains(&c.account)
+        }) {
+            return Err(LoadError::InvalidState(
+                "invalid saved connection account".into(),
+            ));
+        }
+        let raw = connection
+            .map(|c| c.encode())
+            .transpose()
+            .map_err(|_| LoadError::InvalidState("invalid saved connection".into()))?;
+        self.save_entries(
+            state,
+            vec![(crate::credentials::credential_key(service).into(), raw)],
+        )
+    }
+
     /// Consumed journal keys are deleted in the same transaction as their
     /// observations/intents. Neither side may succeed independently.
     pub fn save_with_events(
@@ -252,6 +281,16 @@ impl<S: StateStorage> Store<S> {
         {
             return Err(LoadError::InvalidState("invalid tracking event key".into()));
         }
+        self.save_entries(
+            state,
+            consumed.iter().map(|key| (key.clone(), None)).collect(),
+        )
+    }
+    fn save_entries(
+        &mut self,
+        state: TrackingState,
+        mut extras: Vec<(String, Option<String>)>,
+    ) -> Result<(), LoadError> {
         state.validate()?;
         let raw = serde_json::to_string(&Envelope {
             version: SCHEMA_VERSION,
@@ -259,8 +298,13 @@ impl<S: StateStorage> Store<S> {
         })
         .map_err(|error| LoadError::InvalidState(error.to_string()))?;
         let mut entries = vec![(TRACKING_STATE_KEY.into(), Some(raw))];
-        entries.extend(consumed.iter().map(|key| (key.clone(), None)));
-        self.storage.write(&entries)?;
+        entries.append(&mut extras);
+        let result = self.storage.write(&entries);
+        // Values can include credentials. Keep temporary serialized copies short-lived.
+        for (_, value) in &mut entries {
+            zeroize::Zeroize::zeroize(value);
+        }
+        result?;
         self.state = state;
         Ok(())
     }
