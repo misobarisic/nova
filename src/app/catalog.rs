@@ -795,10 +795,151 @@ impl Bridge {
         }
     }
 
+    pub(super) fn activate_search_filters(&self) {
+        let Some(app) = self.app() else { return };
+        if !app.get_discover_search_filters_open() {
+            self.apply_search_filters_to_ui();
+            app.set_discover_search_filters_open(true);
+        }
+    }
+
+    /// Picker indices belong to the temporary search models, never to the
+    /// browse selectors. Catalogs retain their addon/type/ID identity even
+    /// when display prefixes are hidden or two sources have the same name.
+    pub(super) fn pick_search_filter(&self, kind: i32, index: i32) {
+        let Ok(index) = usize::try_from(index) else {
+            return;
+        };
+        self.activate_search_filters();
+        let changed = {
+            let mut state = self.shared.lock().unwrap();
+            let previous = state.search_filters.clone();
+            let options = current_search_filter_options(&mut state);
+            let filters = &mut state.search_filters;
+            match kind {
+                0 if index <= options.addons.len() => {
+                    let value = index
+                        .checked_sub(1)
+                        .map_or_else(String::new, |i| options.addons[i].0.clone());
+                    if filters.addon_url != value {
+                        filters.addon_url = value;
+                        filters.catalog = None;
+                        filters.genre.clear();
+                    }
+                }
+                1 if index <= options.types.len() => {
+                    let value = index
+                        .checked_sub(1)
+                        .map_or_else(String::new, |i| options.types[i].clone());
+                    if filters.type_ != value {
+                        filters.type_ = value;
+                        filters.catalog = None;
+                        filters.genre.clear();
+                    }
+                }
+                2 if index <= options.catalogs.len() => {
+                    let value = index
+                        .checked_sub(1)
+                        .map(|i| options.catalogs[i].source.clone());
+                    if filters.catalog != value {
+                        filters.catalog = value;
+                        filters.genre.clear();
+                    }
+                }
+                3 if index <= options.genres.len() => {
+                    filters.genre = index
+                        .checked_sub(1)
+                        .map_or_else(String::new, |i| options.genres[i].clone());
+                }
+                _ => return,
+            }
+            *filters != previous
+        };
+        self.apply_search_filters_to_ui();
+        if changed && let Some(app) = self.app() {
+            self.start_search(&app.get_search_text(), false);
+        }
+    }
+
+    fn apply_search_filters_to_ui(&self) {
+        let Some(app) = self.app() else { return };
+        let (options, indices) = {
+            let mut state = self.shared.lock().unwrap();
+            let options = current_search_filter_options(&mut state);
+            let filters = &state.search_filters;
+            let indices = [
+                options
+                    .addons
+                    .iter()
+                    .position(|(url, _)| url == &filters.addon_url),
+                options
+                    .types
+                    .iter()
+                    .position(|type_| type_ == &filters.type_),
+                options
+                    .catalogs
+                    .iter()
+                    .position(|catalog| Some(&catalog.source) == filters.catalog.as_ref()),
+                options
+                    .genres
+                    .iter()
+                    .position(|genre| genre == &filters.genre),
+            ]
+            .map(|index| index.map_or(0, |index| (index + 1) as i32));
+            (options, indices)
+        };
+        app.set_search_addon_names(search_filter_model(
+            "All addons",
+            options.addons.into_iter().map(|(_, label)| label),
+        ));
+        app.set_search_type_names(search_filter_model("All types", options.types));
+        app.set_search_catalog_names(search_filter_model(
+            "All catalogs",
+            options.catalogs.iter().map(|catalog| catalog.name.clone()),
+        ));
+        app.set_search_catalog_labels(search_filter_model(
+            "All catalogs",
+            options.catalogs.into_iter().map(|catalog| catalog.label),
+        ));
+        app.set_search_genre_names(search_filter_model("All genres", options.genres));
+        app.set_search_addon_combo_idx(indices[0]);
+        app.set_search_type_combo_idx(indices[1]);
+        app.set_search_catalog_combo_idx(indices[2]);
+        app.set_search_genre_combo_idx(indices[3]);
+    }
+
+    /// Addon changes can remove a selected source or introduce new search
+    /// catalogs. Rebuild this session's choices and reject old replies before
+    /// querying the revised set; unrelated browse changes keep search intact.
+    pub(super) fn refresh_search_filters(&self) {
+        self.apply_search_filters_to_ui();
+        let Some(app) = self.app() else { return };
+        if !app.get_discover_search_filters_open() {
+            return;
+        }
+        let changed = {
+            let state = self.shared.lock().unwrap();
+            let targets = filtered_search_targets(&state.installed, &state.search_filters);
+            targets.len() != state.search_targets.len()
+                || !targets
+                    .iter()
+                    .zip(&state.search_targets)
+                    .all(|(next, old)| {
+                        next.source() == old.source()
+                            && next.genre == old.genre
+                            && next.supports_skip == old.supports_skip
+                    })
+        };
+        if changed && app.get_search_text().trim().chars().count() >= 2 {
+            self.start_search(&app.get_search_text(), false);
+        }
+    }
+
     /// Invalidate the previous query as soon as the user edits the field.
     /// Schedule the next request after a short quiet period; a late response
     /// from the old query must not repopulate results while the user types.
     pub(super) fn search_edited(&self, text: &str) {
+        self.activate_search_filters();
         let has_query = text.trim().chars().count() >= 2;
         let app = self.app();
         let results_open = app
@@ -850,6 +991,11 @@ impl Bridge {
     }
 
     pub(super) fn submit_search(&self, text: &str) {
+        self.start_search(text, true);
+    }
+
+    fn start_search(&self, text: &str, focus_search: bool) {
+        self.activate_search_filters();
         let trimmed = text.trim().to_string();
         if trimmed.chars().count() < 2 {
             self.search_edited(&trimmed);
@@ -862,7 +1008,7 @@ impl Bridge {
             let generation = state.search_generation;
             state.search = trimmed.clone();
             state.search_previews.clear();
-            state.search_targets = build_search_targets(&state.installed);
+            state.search_targets = filtered_search_targets(&state.installed, &state.search_filters);
             state.search_loading_more = false;
             state.search_poster_inflight.clear();
             (generation, state.search_targets.len())
@@ -873,8 +1019,12 @@ impl Bridge {
             app.set_discover_search_animate_results(true);
             app.set_search_results(Rc::new(VecModel::<MediaCard>::from(vec![])).into());
             app.set_discover_search_open(true);
-            app.set_discover_kb_zone(2);
-            app.set_discover_kb_ctl(3);
+            app.set_discover_search_scroll_y(0.0);
+            app.set_discover_kb_idx(0);
+            if focus_search {
+                app.set_discover_kb_zone(2);
+                app.set_discover_kb_ctl(3);
+            }
             app.set_search_loading(true);
             app.set_search_loading_more(false);
             app.set_search_can_load_more(false);
@@ -885,7 +1035,7 @@ impl Bridge {
         self.fetch_search_pages(generation, trimmed, targets, false);
     }
 
-    /// Search every enabled addon catalog whose manifest advertises `search`.
+    /// Search the session's enabled catalogs whose manifests declare `search`.
     /// Browse selection is intentionally not modified by a query.
     fn fetch_search_pages(
         &self,
@@ -905,6 +1055,9 @@ impl Bridge {
                     let target = state.search_targets.get(index)?;
                     let addon = Addon::new(&target.addon_url).ok()?;
                     let mut extras = vec![("search", query.clone())];
+                    if !target.genre.is_empty() {
+                        extras.push(("genre", target.genre.clone()));
+                    }
                     if append && target.supports_skip && target.next_skip > 0 {
                         extras.push(("skip", target.next_skip.to_string()));
                     }
@@ -1092,6 +1245,7 @@ impl Bridge {
             let mut state = self.shared.lock().unwrap();
             state.search_generation = state.search_generation.wrapping_add(1);
             state.search.clear();
+            state.search_filters = SearchFilters::default();
             state.search_targets.clear();
             state.search_poster_inflight.clear();
             state.search_loading_more = false;
@@ -1102,7 +1256,10 @@ impl Bridge {
             app.set_search_loading_more(false);
             app.set_search_can_load_more(false);
             app.set_discover_search_open(false);
+            app.set_discover_search_focused(false);
+            app.set_discover_search_filters_open(false);
         }
+        self.apply_search_filters_to_ui();
     }
 
     // Search history is deliberately local: it never enters the sync domains.
@@ -1205,14 +1362,7 @@ impl Bridge {
                 .unwrap_or_default();
             // Search is global across all enabled addons, while pagination
             // for the browse grid still belongs to the selected catalog.
-            let supports_search = state.installed.iter().any(|addon| {
-                addon.enabled
-                    && addon
-                        .manifest
-                        .catalogs
-                        .iter()
-                        .any(|c| c.supports_extra("search"))
-            });
+            let supports_search = !build_search_targets(&state.installed).is_empty();
             let hint = if supports_search {
                 text::tr("Search movies, shows…").to_string()
             } else {
@@ -1314,6 +1464,7 @@ impl Bridge {
                 .unwrap_or_default()
         };
         app.set_catalog_labels(Rc::new(VecModel::from(labels)).into());
+        self.apply_search_filters_to_ui();
     }
 
     /// Refresh global-search availability without rebuilding picker models —
@@ -1324,14 +1475,7 @@ impl Bridge {
         };
         let (hint, searchable) = {
             let state = self.shared.lock().unwrap();
-            let searchable = state.installed.iter().any(|addon| {
-                addon.enabled
-                    && addon
-                        .manifest
-                        .catalogs
-                        .iter()
-                        .any(|c| c.supports_extra("search"))
-            });
+            let searchable = !build_search_targets(&state.installed).is_empty();
             let hint = if searchable {
                 text::tr("Search movies, shows…").to_string()
             } else {
@@ -1349,14 +1493,7 @@ impl Bridge {
         let Some(app) = self.app() else { return };
         let (has_grid, searchable) = {
             let state = self.shared.lock().unwrap();
-            let searchable = state.installed.iter().any(|addon| {
-                addon.enabled
-                    && addon
-                        .manifest
-                        .catalogs
-                        .iter()
-                        .any(|catalog| catalog.supports_extra("search"))
-            });
+            let searchable = !build_search_targets(&state.installed).is_empty();
             (!state.type_defs.is_empty(), searchable)
         };
         app.set_searchable(searchable && has_grid);
@@ -1382,10 +1519,182 @@ impl Bridge {
     }
 }
 
+struct SearchCatalogOption {
+    source: SearchCatalogSource,
+    name: String,
+    label: String,
+}
+
+struct SearchFilterOptions {
+    addons: Vec<(String, String)>,
+    types: Vec<String>,
+    catalogs: Vec<SearchCatalogOption>,
+    genres: Vec<String>,
+}
+
+fn current_search_filter_options(state: &mut Shared) -> SearchFilterOptions {
+    search_filter_options(
+        &state.installed,
+        &mut state.search_filters,
+        state.cache_settings.discover_catalog_addon_names,
+    )
+}
+
+fn search_filter_options(
+    installed: &[Installed],
+    filters: &mut SearchFilters,
+    show_addon_names: bool,
+) -> SearchFilterOptions {
+    let targets = build_search_targets(installed);
+    let addons: Vec<(String, String)> = installed
+        .iter()
+        .filter(|addon| targets.iter().any(|target| target.addon_url == addon.url))
+        .map(|addon| (addon.url.clone(), addon.label.clone()))
+        .collect();
+    if !filters.addon_url.is_empty() && !addons.iter().any(|(url, _)| url == &filters.addon_url) {
+        *filters = SearchFilters::default();
+    }
+
+    let mut types = Vec::new();
+    for target in &targets {
+        if (filters.addon_url.is_empty() || target.addon_url == filters.addon_url)
+            && !types.contains(&target.type_)
+        {
+            types.push(target.type_.clone());
+        }
+    }
+    if !filters.type_.is_empty() && !types.contains(&filters.type_) {
+        filters.type_.clear();
+        filters.catalog = None;
+    }
+
+    let scoped: Vec<&SearchTarget> = targets
+        .iter()
+        .filter(|target| {
+            (filters.addon_url.is_empty() || target.addon_url == filters.addon_url)
+                && (filters.type_.is_empty() || target.type_ == filters.type_)
+        })
+        .collect();
+    let catalogs: Vec<SearchCatalogOption> = scoped
+        .iter()
+        .filter_map(|target| {
+            let addon = installed
+                .iter()
+                .find(|addon| addon.url == target.addon_url)?;
+            let catalog = addon.manifest.catalogs.iter().find(|catalog| {
+                catalog.supports_extra("search")
+                    && catalog.type_ == target.type_
+                    && catalog.id == target.catalog_id
+            })?;
+            let mut label = if catalog.name.is_empty() {
+                catalog.id.clone()
+            } else {
+                catalog.name.clone()
+            };
+            if addon
+                .manifest
+                .catalogs
+                .iter()
+                .filter(|other| {
+                    other.type_ == catalog.type_
+                        && other.name == catalog.name
+                        && other.supports_extra("search")
+                })
+                .count()
+                > 1
+            {
+                label = format!("{label} ({})", catalog.id);
+            }
+            if filters.type_.is_empty() {
+                label = format!("{label} ({})", catalog.type_);
+            }
+            let name = if filters.addon_url.is_empty() {
+                format!("{} — {label}", addon.label)
+            } else {
+                label.clone()
+            };
+            if show_addon_names {
+                label = name.clone();
+            }
+            Some(SearchCatalogOption {
+                source: target.source(),
+                name,
+                label,
+            })
+        })
+        .collect();
+    if filters
+        .catalog
+        .as_ref()
+        .is_some_and(|source| !catalogs.iter().any(|catalog| &catalog.source == source))
+    {
+        filters.catalog = None;
+    }
+
+    let mut genres = Vec::new();
+    for target in scoped {
+        if filters
+            .catalog
+            .as_ref()
+            .is_none_or(|source| *source == target.source())
+        {
+            for genre in &target.genre_options {
+                if !genres.contains(genre) {
+                    genres.push(genre.clone());
+                }
+            }
+        }
+    }
+    if !filters.genre.is_empty() && !genres.contains(&filters.genre) {
+        filters.genre.clear();
+    }
+    SearchFilterOptions {
+        addons,
+        types,
+        catalogs,
+        genres,
+    }
+}
+
+fn search_filter_model(
+    all_label: &'static str,
+    choices: impl IntoIterator<Item = String>,
+) -> slint::ModelRc<SharedString> {
+    Rc::new(VecModel::from(
+        std::iter::once(SharedString::from(text::tr(all_label)))
+            .chain(choices.into_iter().map(SharedString::from))
+            .collect::<Vec<_>>(),
+    ))
+    .into()
+}
+
+fn filtered_search_targets(installed: &[Installed], filters: &SearchFilters) -> Vec<SearchTarget> {
+    build_search_targets(installed)
+        .into_iter()
+        .filter_map(|mut target| {
+            if (!filters.addon_url.is_empty() && filters.addon_url != target.addon_url)
+                || (!filters.type_.is_empty() && filters.type_ != target.type_)
+                || filters
+                    .catalog
+                    .as_ref()
+                    .is_some_and(|source| *source != target.source())
+                || (!filters.genre.is_empty() && !target.genre_options.contains(&filters.genre))
+            {
+                return None;
+            }
+            target.genre = filters.genre.clone();
+            Some(target)
+        })
+        .collect()
+}
+
 fn build_search_targets(installed: &[Installed]) -> Vec<SearchTarget> {
     let mut seen = HashSet::new();
     let mut targets = Vec::new();
-    for addon in installed.iter().filter(|addon| addon.enabled) {
+    for addon in installed
+        .iter()
+        .filter(|addon| addon.enabled && addon.available)
+    {
         if Addon::new(&addon.url).is_err() {
             continue;
         }
@@ -1399,6 +1708,8 @@ fn build_search_targets(installed: &[Installed]) -> Vec<SearchTarget> {
                 addon_url: addon.url.clone(),
                 type_: catalog.type_.clone(),
                 catalog_id: catalog.id.clone(),
+                genre_options: catalog_genres(catalog),
+                genre: String::new(),
                 supports_skip: catalog.supports_extra("skip"),
                 next_skip: 0,
                 exhausted: false,

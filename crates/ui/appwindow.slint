@@ -65,6 +65,18 @@ export component AppWindow inherits Window {
     in-out property <string> search_text: "";
     in-out property <bool> discover_search_open: false;
     in-out property <bool> discover_search_focused: false;
+    // Search controls survive result-detail navigation, but Back clears this
+    // temporary scope without changing the selectors for the browse catalog.
+    in-out property <bool> discover_search_filters_open: false;
+    in-out property <[string]> search_addon_names: [];
+    in-out property <[string]> search_type_names: [];
+    in-out property <[string]> search_catalog_names: [];
+    in-out property <[string]> search_catalog_labels: [];
+    in-out property <[string]> search_genre_names: [];
+    in-out property <int> search_addon_combo_idx: 0;
+    in-out property <int> search_type_combo_idx: 0;
+    in-out property <int> search_catalog_combo_idx: 0;
+    in-out property <int> search_genre_combo_idx: 0;
     // Survives page recreation while opening a result's detail view.
     in-out property <bool> discover_search_animate_results: true;
     changed modal_visible => {
@@ -363,6 +375,8 @@ export component AppWindow inherits Window {
     callback type_picked(string);
     callback catalog_picked(string);
     callback genre_picked(string);
+    callback search_activated();
+    callback search_filter_picked(int, int);
     callback search_edited(string);
     callback search_submitted(string);
     callback search_back_picked();
@@ -618,6 +632,16 @@ export component AppWindow inherits Window {
         search_history: root.discover_search_history;
         search_results_open <=> root.discover_search_open;
         search_focused <=> root.discover_search_focused;
+        search_filters_open: root.discover_search_filters_open;
+        search_addon_names: root.search_addon_names;
+        search_type_names: root.search_type_names;
+        search_catalog_names: root.search_catalog_names;
+        search_catalog_labels: root.search_catalog_labels;
+        search_genre_names: root.search_genre_names;
+        search_addon_combo_idx <=> root.search_addon_combo_idx;
+        search_type_combo_idx <=> root.search_type_combo_idx;
+        search_catalog_combo_idx <=> root.search_catalog_combo_idx;
+        search_genre_combo_idx <=> root.search_genre_combo_idx;
         system_back_request: root.system_back_request;
         animate_search_results: root.discover_search_animate_results;
         search_loading <=> root.search_loading;
@@ -647,6 +671,8 @@ export component AppWindow inherits Window {
         type_picked(v) => { root.type_picked(v); }
         catalog_picked(v) => { root.catalog_picked(v); }
         genre_picked(v) => { root.genre_picked(v); }
+        search_activated => { root.search_activated(); }
+        search_filter_picked(kind, index) => { root.search_filter_picked(kind, index); }
         search_edited(v) => { root.search_edited(v); }
         search_submitted(v) => { root.search_submitted(v); }
         search_back_picked => { root.search_back_picked(); }

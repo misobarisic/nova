@@ -291,6 +291,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_genre_picked(move |label| b.pick_genre(&label));
 
     let b = bridge.clone();
+    app.on_search_activated(move || b.activate_search_filters());
+
+    let b = bridge.clone();
+    app.on_search_filter_picked(move |kind, index| b.pick_search_filter(kind, index));
+
+    let b = bridge.clone();
     app.on_search_edited(move |text| b.search_edited(&text));
 
     let b = bridge.clone();

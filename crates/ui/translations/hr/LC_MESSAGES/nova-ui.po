@@ -220,6 +220,21 @@ msgstr "Katalog"
 msgid "Genre"
 msgstr "Žanr"
 
+msgid "Search filters"
+msgstr "Filtri pretrage"
+
+msgid "Search addon"
+msgstr "Dodatak za pretragu"
+
+msgid "Search type"
+msgstr "Vrsta za pretragu"
+
+msgid "Search catalog"
+msgstr "Katalog za pretragu"
+
+msgid "Search genre"
+msgstr "Žanr za pretragu"
+
 msgid "All genres"
 msgstr "Svi žanrovi"
 

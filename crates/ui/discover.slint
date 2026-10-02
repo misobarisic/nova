@@ -8,6 +8,125 @@ import { SearchField } from "searchfield.slint";
 import { Anim } from "anim.slint";
 import { IcChevronLeft, IcChevronRight, IcDelete, IcSearch } from "icons.slint";
 
+// Browse and temporary search filters share the same dropdown rail. It keeps
+// readable widths on phones and leaves vertical drags to the enclosing page.
+component DiscoverFilters inherits Flickable {
+    in property <[string]> addon_names;
+    in property <[string]> type_names;
+    in property <[string]> catalog_names;
+    in property <[string]> catalog_labels;
+    in property <[string]> genre_names;
+    in-out property <int> addon_combo_idx: 0;
+    in-out property <int> type_combo_idx: 0;
+    in-out property <int> catalog_combo_idx: 0;
+    in-out property <int> genre_combo_idx: 0;
+    in property <bool> narrow;
+    in property <bool> search_controls: false;
+    in property <bool> kb_enabled: true;
+    in property <int> kb_zone;
+    in property <int> kb_ctl;
+    in property <bool> kb_active;
+    callback picked(int, int);
+    callback filters_panned();
+    callback filters_pan_released();
+
+    width: 100%;
+    vertical-stretch: 0;
+    height: root.narrow ? 44px : 32px;
+    interactive: true;
+    content-width: filter_row.width;
+    content-height: self.height;
+    changed content-x => { root.filters_panned(); }
+    function reveal_control(left: length, control_width: length) {
+        if (left + self.content-x < 0px) {
+            self.content-x = -left;
+        } else if (left + control_width + self.content-x > self.width) {
+            self.content-x = self.width - left - control_width;
+        }
+    }
+
+    filter_row := HorizontalLayout {
+        width: self.preferred-width;
+        height: parent.height;
+        spacing: 8px;
+        alignment: start;
+
+        if root.addon_names.length > 0: KbMark { on: root.kb_enabled && root.kb_zone == 1; active: root.kb_active; }
+        if root.addon_names.length > 0: Dropdown {
+            width: 180px;
+            roomy: root.narrow;
+            pill: true;
+            rail-gesture: true;
+            accessible-role: button;
+            accessible-label: root.search_controls ? @tr("Search addon") : @tr("Addon");
+            property <bool> kb_focused: root.kb_enabled && root.kb_active && root.kb_zone == 1;
+            changed kb_focused => {
+                if (self.kb_focused) { root.reveal_control(self.x, self.width); }
+            }
+            model: root.addon_names;
+            current-index <=> root.addon_combo_idx;
+            selected(v) => { root.picked(0, root.addon_combo_idx); }
+            pan_hint => { root.filters_panned(); }
+            pan_release => { root.filters_pan_released(); }
+        }
+        KbMark { on: root.kb_enabled && root.kb_zone == 2 && root.kb_ctl == 0; active: root.kb_active; }
+        Dropdown {
+            width: 110px;
+            roomy: root.narrow;
+            pill: true;
+            rail-gesture: true;
+            accessible-role: button;
+            accessible-label: root.search_controls ? @tr("Search type") : @tr("Type");
+            property <bool> kb_focused: root.kb_enabled && root.kb_active && root.kb_zone == 2 && root.kb_ctl == 0;
+            changed kb_focused => {
+                if (self.kb_focused) { root.reveal_control(self.x, self.width); }
+            }
+            model: root.type_names;
+            current-index <=> root.type_combo_idx;
+            selected(v) => { root.picked(1, root.type_combo_idx); }
+            pan_hint => { root.filters_panned(); }
+            pan_release => { root.filters_pan_released(); }
+        }
+        KbMark { on: root.kb_enabled && root.kb_zone == 2 && root.kb_ctl == 1; active: root.kb_active; }
+        Dropdown {
+            width: 220px;
+            roomy: root.narrow;
+            pill: true;
+            rail-gesture: true;
+            accessible-role: button;
+            accessible-label: root.search_controls ? @tr("Search catalog") : @tr("Catalog");
+            property <bool> kb_focused: root.kb_enabled && root.kb_active && root.kb_zone == 2 && root.kb_ctl == 1;
+            changed kb_focused => {
+                if (self.kb_focused) { root.reveal_control(self.x, self.width); }
+            }
+            model: root.catalog_names;
+            labels: root.catalog_labels;
+            current-index <=> root.catalog_combo_idx;
+            selected(v) => { root.picked(2, root.catalog_combo_idx); }
+            pan_hint => { root.filters_panned(); }
+            pan_release => { root.filters_pan_released(); }
+        }
+        if root.genre_names.length > 1: KbMark { on: root.kb_enabled && root.kb_zone == 2 && root.kb_ctl == 2; active: root.kb_active; }
+        if root.genre_names.length > 1: Dropdown {
+            width: 140px;
+            roomy: root.narrow;
+            pill: true;
+            rail-gesture: true;
+            accessible-role: button;
+            accessible-label: root.search_controls ? @tr("Search genre") : @tr("Genre");
+            property <bool> kb_focused: root.kb_enabled && root.kb_active && root.kb_zone == 2 && root.kb_ctl == 2;
+            changed kb_focused => {
+                if (self.kb_focused) { root.reveal_control(self.x, self.width); }
+            }
+            model: root.genre_names;
+            current-index <=> root.genre_combo_idx;
+            selected(v) => { root.picked(3, root.genre_combo_idx); }
+            pan_hint => { root.filters_panned(); }
+            pan_release => { root.filters_pan_released(); }
+        }
+    }
+}
+
 // Filter header (nav buttons, title, addon/type/catalog/search pickers).
 // Instantiated twice by DiscoverPage — once pinned above the grid
 // (desktop) and once scrolling with the page (Android, `scroll_page`)
@@ -22,15 +141,27 @@ component DiscoverHeader {
     in property <[string]> genre_names;
     in property <[string]> search_history;
     in-out property <bool> search_focused: false;
-    property <bool> show_history: root.search_focused && root.search_text == "" && root.search_history.length > 0;
+    in property <bool> search_filters_open: false;
+    in property <[string]> search_addon_names: [];
+    in property <[string]> search_type_names: [];
+    in property <[string]> search_catalog_names: [];
+    in property <[string]> search_catalog_labels: [];
+    in property <[string]> search_genre_names: [];
+    in-out property <int> search_addon_combo_idx: 0;
+    in-out property <int> search_type_combo_idx: 0;
+    in-out property <int> search_catalog_combo_idx: 0;
+    in-out property <int> search_genre_combo_idx: 0;
+    // Dropdowns take focus from the input; recent searches belong to the whole
+    // search session and must stay available while its filters are being used.
+    property <bool> show_history: (root.search_focused || root.search_filters_open)
+        && root.search_text == "" && root.search_history.length > 0;
     in-out property <int> addon_combo_idx: -1;
     in-out property <int> type_combo_idx: -1;
     in-out property <int> catalog_combo_idx: -1;
     in-out property <int> genre_combo_idx: 0;
     in-out property <string> search_text;
     in property <string> searchable_hint;
-    // False when the chosen catalog declares no search extra: the search
-    // field is disabled instead of silently re-fetching.
+    // Disabled only when no enabled source accepts a search query.
     in property <bool> searchable: true;
     in property <bool> results_open: false;
     in property <bool> narrow;
@@ -51,6 +182,8 @@ component DiscoverHeader {
     callback type_picked(string);
     callback catalog_picked(string);
     callback genre_picked(string);
+    callback search_activated();
+    callback search_filter_picked(int, int);
     callback search_edited(string);
     callback search_submitted(string);
     callback back_picked();
@@ -64,10 +197,8 @@ component DiscoverHeader {
         width: 100%;
         spacing: 12px;
 
-        // Global Search is independent of the browse selectors below. Typing
-        // starts a debounced query across enabled catalogs that advertise the
-        // `search` extra.
-        if root.results_open: results_heading := HorizontalLayout {
+        // Search has its own temporary selectors; browse keeps its selection.
+        if root.results_open || root.search_filters_open: results_heading := HorizontalLayout {
             vertical-stretch: 0;
             height: Math.max(root.narrow ? 44px : 36px, results_title.preferred-height);
             spacing: 12px;
@@ -95,8 +226,8 @@ component DiscoverHeader {
                 }
             }
             results_title := Text {
-                text: @tr("Search results");
-                font-size: root.narrow ? 27px : 24px;
+                text: root.results_open ? @tr("Search results") : @tr("Search");
+                font-size: root.results_open ? (root.narrow ? 27px : 24px) : (root.narrow ? 32px : 26px);
                 font-weight: 700;
                 color: #ffffff;
                 vertical-alignment: center;
@@ -106,7 +237,7 @@ component DiscoverHeader {
             }
         }
 
-        if !root.results_open: HorizontalLayout {
+        if !root.results_open && !root.search_filters_open: HorizontalLayout {
             vertical-stretch: 0;
             min-height: 38px;
             alignment: start;
@@ -134,7 +265,10 @@ component DiscoverHeader {
                 prominent: true;
                 enabled: root.searchable;
                 text <=> root.search_text;
-                focus_changed(focused) => { root.search_focused = focused; }
+                focus_changed(focused) => {
+                    root.search_focused = focused;
+                    if (focused) { root.search_activated(); }
+                }
                 placeholder-text: root.searchable ? @tr("Search movies, shows…") : root.searchable_hint;
                 accepted(t) => {
                     root.kb_edit = false;
@@ -167,7 +301,10 @@ component DiscoverHeader {
                 prominent: true;
                 enabled: root.searchable;
                 text <=> root.search_text;
-                focus_changed(focused) => { root.search_focused = focused; }
+                focus_changed(focused) => {
+                    root.search_focused = focused;
+                    if (focused) { root.search_activated(); }
+                }
                 placeholder-text: root.searchable ? @tr("Search movies, shows…") : root.searchable_hint;
                 accepted(t) => {
                     root.kb_edit = false;
@@ -186,6 +323,36 @@ component DiscoverHeader {
                 triggered => { search_line_narrow.focus(); }
             }
 
+        }
+
+        if root.search_filters_open: VerticalLayout {
+            vertical-stretch: 0;
+            spacing: 6px;
+            Text {
+                text: @tr("Search filters");
+                color: #a9a9b7;
+                font-size: 13px;
+                height: self.preferred-height;
+            }
+            search_filters := DiscoverFilters {
+                addon_names: root.search_addon_names;
+                type_names: root.search_type_names;
+                catalog_names: root.search_catalog_names;
+                catalog_labels: root.search_catalog_labels;
+                genre_names: root.search_genre_names;
+                addon_combo_idx <=> root.search_addon_combo_idx;
+                type_combo_idx <=> root.search_type_combo_idx;
+                catalog_combo_idx <=> root.search_catalog_combo_idx;
+                genre_combo_idx <=> root.search_genre_combo_idx;
+                search_controls: true;
+                narrow: root.narrow;
+                kb_zone: root.kb_zone;
+                kb_ctl: root.kb_ctl;
+                kb_active: root.kb_active;
+                picked(kind, index) => { root.search_filter_picked(kind, index); }
+                filters_panned => { root.filters_panned(); }
+                filters_pan_released => { root.filters_pan_released(); }
+            }
         }
 
         history_panel := Rectangle {
@@ -338,105 +505,29 @@ component DiscoverHeader {
 
         }
 
-        // The browse selectors keep readable widths rather than squeezing
-        // their labels on phones. Like stream filters/Home rails, this row
-        // owns a horizontal Flickable and leaves vertical drags to the page.
-        if !root.results_open: filter_flick := Flickable {
-            width: 100%;
-            vertical-stretch: 0;
-            height: root.narrow ? 44px : 32px;
-            interactive: true;
-            content-width: filter_row.width;
-            content-height: self.height;
-            changed content-x => { root.filters_panned(); }
-            function reveal_control(left: length, control_width: length) {
-                if (left + self.content-x < 0px) {
-                    self.content-x = -left;
-                } else if (left + control_width + self.content-x > self.width) {
-                    self.content-x = self.width - left - control_width;
-                }
+        if !root.results_open: filter_flick := DiscoverFilters {
+            addon_names: root.addon_names;
+            type_names: root.type_names;
+            catalog_names: root.catalog_names;
+            catalog_labels: root.catalog_labels;
+            genre_names: root.genre_names;
+            addon_combo_idx <=> root.addon_combo_idx;
+            type_combo_idx <=> root.type_combo_idx;
+            catalog_combo_idx <=> root.catalog_combo_idx;
+            genre_combo_idx <=> root.genre_combo_idx;
+            narrow: root.narrow;
+            kb_zone: root.kb_zone;
+            kb_ctl: root.kb_ctl;
+            kb_active: root.kb_active;
+            kb_enabled: !root.search_filters_open;
+            picked(kind, index) => {
+                if (kind == 0) { root.addon_picked(root.addon_names[index]); }
+                else if (kind == 1) { root.type_picked(root.type_names[index]); }
+                else if (kind == 2) { root.catalog_picked(root.catalog_names[index]); }
+                else { root.genre_picked(root.genre_names[index]); }
             }
-
-            filter_row := HorizontalLayout {
-                width: self.preferred-width;
-                height: parent.height;
-                spacing: 8px;
-                alignment: start;
-
-                if root.addon_names.length > 0: KbMark { on: root.kb_zone == 1; active: root.kb_active; }
-                if root.addon_names.length > 0: Dropdown {
-                    width: 180px;
-                    roomy: root.narrow;
-                    pill: true;
-                    rail-gesture: true;
-                    accessible-role: button;
-                    accessible-label: @tr("Addon");
-                    property <bool> kb_focused: root.kb_active && root.kb_zone == 1;
-                    changed kb_focused => {
-                        if (self.kb_focused) { filter_flick.reveal_control(self.x, self.width); }
-                    }
-                    model: root.addon_names;
-                    current-index <=> root.addon_combo_idx;
-                    selected(v) => { root.addon_picked(v); }
-                    pan_hint => { root.filters_panned(); }
-                    pan_release => { root.filters_pan_released(); }
-                }
-                KbMark { on: root.kb_zone == 2 && root.kb_ctl == 0; active: root.kb_active; }
-                Dropdown {
-                    width: 110px;
-                    roomy: root.narrow;
-                    pill: true;
-                    rail-gesture: true;
-                    accessible-role: button;
-                    accessible-label: @tr("Type");
-                    property <bool> kb_focused: root.kb_active && root.kb_zone == 2 && root.kb_ctl == 0;
-                    changed kb_focused => {
-                        if (self.kb_focused) { filter_flick.reveal_control(self.x, self.width); }
-                    }
-                    model: root.type_names;
-                    current-index <=> root.type_combo_idx;
-                    selected(v) => { root.type_picked(v); }
-                    pan_hint => { root.filters_panned(); }
-                    pan_release => { root.filters_pan_released(); }
-                }
-                KbMark { on: root.kb_zone == 2 && root.kb_ctl == 1; active: root.kb_active; }
-                Dropdown {
-                    width: 220px;
-                    roomy: root.narrow;
-                    pill: true;
-                    rail-gesture: true;
-                    accessible-role: button;
-                    accessible-label: @tr("Catalog");
-                    property <bool> kb_focused: root.kb_active && root.kb_zone == 2 && root.kb_ctl == 1;
-                    changed kb_focused => {
-                        if (self.kb_focused) { filter_flick.reveal_control(self.x, self.width); }
-                    }
-                    model: root.catalog_names;
-                    labels: root.catalog_labels;
-                    current-index <=> root.catalog_combo_idx;
-                    selected(v) => { root.catalog_picked(v); }
-                    pan_hint => { root.filters_panned(); }
-                    pan_release => { root.filters_pan_released(); }
-                }
-                if root.genre_names.length > 1: KbMark { on: root.kb_zone == 2 && root.kb_ctl == 2; active: root.kb_active; }
-                if root.genre_names.length > 1: Dropdown {
-                    width: 140px;
-                    roomy: root.narrow;
-                    pill: true;
-                    rail-gesture: true;
-                    accessible-role: button;
-                    accessible-label: @tr("Genre");
-                    property <bool> kb_focused: root.kb_active && root.kb_zone == 2 && root.kb_ctl == 2;
-                    changed kb_focused => {
-                        if (self.kb_focused) { filter_flick.reveal_control(self.x, self.width); }
-                    }
-                    model: root.genre_names;
-                    current-index <=> root.genre_combo_idx;
-                    selected(v) => { root.genre_picked(v); }
-                    pan_hint => { root.filters_panned(); }
-                    pan_release => { root.filters_pan_released(); }
-                }
-            }
+            filters_panned => { root.filters_panned(); }
+            filters_pan_released => { root.filters_pan_released(); }
         }
 
         if !root.results_open: Rectangle { height: 1px; background: #23232b; }
@@ -654,6 +745,16 @@ export component DiscoverPage {
     in-out property <int> genre_combo_idx: 0;
     in-out property <string> search_text: "";
     in-out property <bool> search_focused: false;
+    in property <bool> search_filters_open: false;
+    in property <[string]> search_addon_names: [];
+    in property <[string]> search_type_names: [];
+    in property <[string]> search_catalog_names: [];
+    in property <[string]> search_catalog_labels: [];
+    in property <[string]> search_genre_names: [];
+    in-out property <int> search_addon_combo_idx: 0;
+    in-out property <int> search_type_combo_idx: 0;
+    in-out property <int> search_catalog_combo_idx: 0;
+    in-out property <int> search_genre_combo_idx: 0;
     in property <int> system_back_request: 0;
     property <int> last_system_back_request: -1;
     in-out property <bool> search_results_open: false;
@@ -687,6 +788,8 @@ export component DiscoverPage {
     callback type_picked(string);
     callback catalog_picked(string);
     callback genre_picked(string);
+    callback search_activated();
+    callback search_filter_picked(int, int);
     callback search_edited(string);
     callback search_submitted(string);
     callback search_back_picked();
@@ -784,7 +887,7 @@ export component DiscoverPage {
         }
     }
 
-    function kb_addon_on() -> bool { return root.addon_names.length > 0; }
+    function kb_addon_on() -> bool { return root.search_filters_open ? root.search_addon_names.length > 0 : root.addon_names.length > 0; }
     function leave_search() {
         root.kb_edit = false;
         nav_scope.focus();
@@ -794,7 +897,7 @@ export component DiscoverPage {
 
     function system_back() {
         root.kb_active = true;
-        if (root.search_results_open) {
+        if (root.search_results_open || root.search_filters_open) {
             root.leave_search();
         } else if (root.search_focused) {
             root.kb_edit = false;
@@ -833,53 +936,45 @@ export component DiscoverPage {
         return Math.max(0, Math.min(n - 1, cur + d));
     }
 
-    function kb_cycle_addon(d: int) {
-        let n = root.addon_names.length;
-        if (n == 0) {
-            return;
-        }
-        let v = root.kb_cycle(root.addon_combo_idx, d, n);
-        if (v != root.addon_combo_idx) {
-            root.addon_combo_idx = v;
-            root.addon_picked(root.addon_names[v]);
-        }
-    }
-
-    function kb_cycle_type(d: int) {
-        let n = root.type_names.length;
-        if (n == 0) {
-            return;
-        }
-        let v = root.kb_cycle(root.type_combo_idx, d, n);
-        if (v != root.type_combo_idx) {
-            root.type_combo_idx = v;
-            root.type_picked(root.type_names[v]);
-        }
-    }
-
-    function kb_cycle_catalog(d: int) {
-        let n = root.catalog_names.length;
-        if (n == 0) {
-            return;
-        }
-        let v = root.kb_cycle(root.catalog_combo_idx, d, n);
-        if (v != root.catalog_combo_idx) {
-            root.catalog_combo_idx = v;
-            root.catalog_picked(root.catalog_names[v]);
-        }
-    }
-
-    function kb_cycle_genre(d: int) {
-        let n = root.genre_names.length;
-        if (n <= 1) {
-            return;
-        }
-        let v = root.kb_cycle(root.genre_combo_idx, d, n);
-        if (v != root.genre_combo_idx) {
-            root.genre_combo_idx = v;
-            root.genre_picked(root.genre_names[v]);
+    // The same keyboard zones operate on the search rail while it is open.
+    function kb_cycle_filter(kind: int, d: int) {
+        let names = kind == 0 ? (root.search_filters_open ? root.search_addon_names : root.addon_names)
+            : kind == 1 ? (root.search_filters_open ? root.search_type_names : root.type_names)
+            : kind == 2 ? (root.search_filters_open ? root.search_catalog_names : root.catalog_names)
+            : (root.search_filters_open ? root.search_genre_names : root.genre_names);
+        let current = kind == 0 ? (root.search_filters_open ? root.search_addon_combo_idx : root.addon_combo_idx)
+            : kind == 1 ? (root.search_filters_open ? root.search_type_combo_idx : root.type_combo_idx)
+            : kind == 2 ? (root.search_filters_open ? root.search_catalog_combo_idx : root.catalog_combo_idx)
+            : (root.search_filters_open ? root.search_genre_combo_idx : root.genre_combo_idx);
+        if (names.length == 0 || (kind == 3 && names.length <= 1)) { return; }
+        let v = root.kb_cycle(current, d, names.length);
+        if (v == current) { return; }
+        if (root.search_filters_open) {
+            if (kind == 0) { root.search_addon_combo_idx = v; }
+            else if (kind == 1) { root.search_type_combo_idx = v; }
+            else if (kind == 2) { root.search_catalog_combo_idx = v; }
+            else { root.search_genre_combo_idx = v; }
+            root.search_filter_picked(kind, v);
+        } else {
+            if (kind == 0) {
+                root.addon_combo_idx = v;
+                root.addon_picked(names[v]);
+            } else if (kind == 1) {
+                root.type_combo_idx = v;
+                root.type_picked(names[v]);
+            } else if (kind == 2) {
+                root.catalog_combo_idx = v;
+                root.catalog_picked(names[v]);
+            } else {
+                root.genre_combo_idx = v;
+                root.genre_picked(names[v]);
+            }
         }
     }
+    function kb_cycle_addon(d: int) { root.kb_cycle_filter(0, d); }
+    function kb_cycle_type(d: int) { root.kb_cycle_filter(1, d); }
+    function kb_cycle_catalog(d: int) { root.kb_cycle_filter(2, d); }
+    function kb_cycle_genre(d: int) { root.kb_cycle_filter(3, d); }
 
     function kb_up() {
         if (root.kb_zone == 3) {
@@ -1098,7 +1193,7 @@ export component DiscoverPage {
                 accept
             } else if (e.text == Key.Backspace || e.text == Key.Back || e.text == Key.Escape) {
                 root.kb_active = true;
-                if (root.search_results_open) {
+                if (root.search_results_open || root.search_filters_open) {
                     root.leave_search();
                 } else {
                     root.home_picked();
@@ -1137,6 +1232,16 @@ export component DiscoverPage {
             genre_combo_idx <=> root.genre_combo_idx;
             search_text <=> root.search_text;
             search_focused <=> root.search_focused;
+            search_filters_open: root.search_filters_open;
+            search_addon_names: root.search_addon_names;
+            search_addon_combo_idx <=> root.search_addon_combo_idx;
+            search_type_names: root.search_type_names;
+            search_type_combo_idx <=> root.search_type_combo_idx;
+            search_catalog_names: root.search_catalog_names;
+            search_catalog_combo_idx <=> root.search_catalog_combo_idx;
+            search_genre_names: root.search_genre_names;
+            search_genre_combo_idx <=> root.search_genre_combo_idx;
+            search_catalog_labels: root.search_catalog_labels;
             searchable_hint: root.searchable_hint;
             narrow: root.narrow;
             kb_zone: root.kb_zone;
@@ -1149,6 +1254,8 @@ export component DiscoverPage {
             type_picked(v) => { root.type_picked(v); }
             catalog_picked(v) => { root.catalog_picked(v); }
             genre_picked(v) => { root.genre_picked(v); }
+            search_activated => { root.search_activated(); }
+            search_filter_picked(kind, index) => { root.search_filter_picked(kind, index); }
             search_edited(v) => {
                 root.search_scroll_y = 0px;
                 root.search_edited(v);
@@ -1442,18 +1549,30 @@ export component DiscoverPage {
                 genre_combo_idx <=> root.genre_combo_idx;
                 search_text <=> root.search_text;
                 search_focused <=> root.search_focused;
+                search_filters_open: root.search_filters_open;
+                search_addon_names: root.search_addon_names;
+                search_addon_combo_idx <=> root.search_addon_combo_idx;
+                search_type_names: root.search_type_names;
+                search_type_combo_idx <=> root.search_type_combo_idx;
+                search_catalog_names: root.search_catalog_names;
+                search_catalog_combo_idx <=> root.search_catalog_combo_idx;
+                search_genre_names: root.search_genre_names;
+                search_genre_combo_idx <=> root.search_genre_combo_idx;
+                search_catalog_labels: root.search_catalog_labels;
                 searchable_hint: root.searchable_hint;
                 narrow: root.narrow;
                 kb_zone: root.kb_zone;
                 kb_nav: root.kb_nav;
                 kb_ctl: root.kb_ctl;
                 kb_active <=> root.kb_active;
-            kb_edit <=> root.kb_edit;
+                kb_edit <=> root.kb_edit;
 
                 addon_picked(v) => { root.addon_picked(v); }
                 type_picked(v) => { root.type_picked(v); }
                 catalog_picked(v) => { root.catalog_picked(v); }
                 genre_picked(v) => { root.genre_picked(v); }
+                search_activated => { root.search_activated(); }
+                search_filter_picked(kind, index) => { root.search_filter_picked(kind, index); }
                 search_edited(v) => {
                     root.search_scroll_y = 0px;
                     root.search_edited(v);

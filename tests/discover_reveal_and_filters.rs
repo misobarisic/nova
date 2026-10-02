@@ -91,7 +91,7 @@ fn poster_updates_cannot_strand_reveals_and_filters_are_draggable() {
         let rail = ElementHandle::find_by_element_id(&app, "DiscoverHeader::filter_flick")
             .next()
             .expect("Discover filter Flickable");
-        let filter_row = ElementHandle::find_by_element_id(&app, "DiscoverHeader::filter_row")
+        let filter_row = ElementHandle::find_by_element_id(&app, "DiscoverFilters::filter_row")
             .next()
             .expect("filter row");
         let before_x = filter_row.absolute_position().x;

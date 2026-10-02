@@ -127,6 +127,8 @@ pub fn tr(english: &'static str) -> &'static str {
         "Search (e.g. a movie title)" => "Pretražite (npr. naslov filma)",
         "This catalog has no search" => "Ovaj katalog ne podržava pretraživanje",
         "All addons" => "Svi dodaci",
+        "All types" => "Sve vrste",
+        "All catalogs" => "Svi katalozi",
         "All genres" => "Svi žanrovi",
         "This catalog and genre are already added." => "Ovaj katalog i žanr već su dodani.",
         "No addons installed yet — add one in Settings → Addons." => {

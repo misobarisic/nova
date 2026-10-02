@@ -127,9 +127,38 @@ struct SearchTarget {
     addon_url: String,
     type_: String,
     catalog_id: String,
+    genre_options: Vec<String>,
+    genre: String,
     supports_skip: bool,
     next_skip: usize,
     exhausted: bool,
+}
+
+/// Search selections use stable source identities rather than browse indices.
+/// They last until Back closes the search and never enter persisted settings.
+#[derive(Clone, Default, PartialEq, Eq)]
+struct SearchFilters {
+    addon_url: String,
+    type_: String,
+    catalog: Option<SearchCatalogSource>,
+    genre: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct SearchCatalogSource {
+    addon_url: String,
+    type_: String,
+    catalog_id: String,
+}
+
+impl SearchTarget {
+    fn source(&self) -> SearchCatalogSource {
+        SearchCatalogSource {
+            addon_url: self.addon_url.clone(),
+            type_: self.type_.clone(),
+            catalog_id: self.catalog_id.clone(),
+        }
+    }
 }
 
 pub(crate) struct TypeDef {
@@ -217,6 +246,7 @@ struct Shared {
     /// Search result set, kept separate so returning from Search restores the
     /// selected browse catalog without another request.
     search_previews: Vec<MetaPreview>,
+    search_filters: SearchFilters,
     search_targets: Vec<SearchTarget>,
     search_generation: u64,
     search_loading_more: bool,

@@ -1,4 +1,4 @@
-//! Discover history appears on focus, replays queries, and can be cleared.
+//! Discover history survives filter focus changes, replays queries, and clears.
 use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle, Model, SharedString, VecModel};
 use std::cell::{Cell, RefCell};
@@ -8,12 +8,55 @@ fn after(ms: u64, body: impl FnOnce() + 'static) {
     slint::Timer::single_shot(std::time::Duration::from_millis(ms), body);
 }
 
+async fn settle(ms: u64) {
+    let completed = Rc::new(Cell::new(false));
+    let mut scheduled = false;
+    std::future::poll_fn(move |context| {
+        if completed.get() {
+            return std::task::Poll::Ready(());
+        }
+        if !scheduled {
+            scheduled = true;
+            let completed = completed.clone();
+            let waker = context.waker().clone();
+            after(ms, move || {
+                completed.set(true);
+                waker.wake();
+            });
+        }
+        std::task::Poll::Pending
+    })
+    .await;
+}
+
 #[test]
 fn history_focus_replay_back_and_clear() {
     i_slint_backend_testing::init_integration_test_with_system_time();
     let app = nova::AppWindow::new().unwrap();
     app.window().set_size(slint::PhysicalSize::new(320, 800));
     app.set_show_home(false);
+    let names = |values: &[&str]| {
+        Rc::new(VecModel::from(
+            values
+                .iter()
+                .map(|value| SharedString::from(*value))
+                .collect::<Vec<_>>(),
+        ))
+        .into()
+    };
+    app.set_search_addon_names(names(&["All addons", "AniKoto"]));
+    app.set_search_type_names(names(&["All types", "series"]));
+    app.set_search_catalog_names(names(&["All catalogs", "Search"]));
+    app.set_search_genre_names(names(&["All genres", "Action"]));
+    let weak = app.as_weak();
+    app.on_search_activated(move || {
+        weak.upgrade()
+            .unwrap()
+            .set_discover_search_filters_open(true);
+    });
+    let filter_picks = Rc::new(RefCell::new(Vec::new()));
+    let recorded = filter_picks.clone();
+    app.on_search_filter_picked(move |kind, index| recorded.borrow_mut().push((kind, index)));
     app.set_discover_search_history(
         Rc::new(VecModel::from(vec![
             SharedString::from("Dune"),
@@ -29,7 +72,12 @@ fn history_focus_replay_back_and_clear() {
         weak.upgrade().unwrap().set_discover_search_open(true);
     });
     let weak = app.as_weak();
-    app.on_search_back_picked(move || weak.upgrade().unwrap().set_discover_search_open(false));
+    app.on_search_back_picked(move || {
+        let app = weak.upgrade().unwrap();
+        app.set_discover_search_open(false);
+        app.set_discover_search_filters_open(false);
+        app.set_discover_search_focused(false);
+    });
     let weak = app.as_weak();
     app.on_search_history_cleared(move || {
         weak.upgrade()
@@ -95,11 +143,45 @@ fn history_focus_replay_back_and_clear() {
                         .next()
                         .is_some()
                 );
-                let query = ElementHandle::find_by_accessible_label(&app, "Dune")
+                let filter = ElementHandle::find_by_accessible_label(&app, "Search addon")
                     .next()
                     .unwrap();
                 let weak = app.as_weak();
                 let _ = slint::spawn_local(async move {
+                    filter
+                        .single_click(slint::platform::PointerEventButton::Left)
+                        .await;
+                    settle(100).await;
+                    let app = weak.upgrade().unwrap();
+                    assert!(
+                        !app.get_discover_search_focused(),
+                        "the dropdown must take focus"
+                    );
+                    assert!(
+                        ElementHandle::find_by_accessible_label(&app, "Recent searches")
+                            .next()
+                            .is_some(),
+                        "opening a search filter must keep recent searches visible"
+                    );
+                    let choice = ElementHandle::find_by_accessible_label(&app, "AniKoto")
+                        .next()
+                        .expect("search addon option");
+                    choice
+                        .single_click(slint::platform::PointerEventButton::Left)
+                        .await;
+                    settle(100).await;
+                    let app = weak.upgrade().unwrap();
+                    assert_eq!(app.get_search_addon_combo_idx(), 1);
+                    assert_eq!(filter_picks.borrow().as_slice(), [(0, 1)]);
+                    assert!(
+                        ElementHandle::find_by_accessible_label(&app, "Recent searches")
+                            .next()
+                            .is_some(),
+                        "selecting a search filter must keep recent searches visible"
+                    );
+                    let query = ElementHandle::find_by_accessible_label(&app, "Dune")
+                        .next()
+                        .expect("recent query after changing a filter");
                     query
                         .single_click(slint::platform::PointerEventButton::Left)
                         .await;
@@ -123,6 +205,7 @@ fn history_focus_replay_back_and_clear() {
                                 let app = weak.upgrade().unwrap();
                                 if !app.get_search_text().is_empty()
                                     || app.get_discover_search_open()
+                                    || app.get_discover_search_filters_open()
                                 {
                                     failures1.borrow_mut().push(
                                         "Back must clear the query and restore browse".into(),
