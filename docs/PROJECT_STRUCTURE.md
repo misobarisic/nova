@@ -20,7 +20,7 @@ client. A recent feature adds **cross-device sync** over
 ## 1. Quick start
 
 ```sh
-# Dev shell (Nix) — provides Rust, Slint, mpv, and native dependencies
+# Dev shell (Nix) — provides Rust, Slint, mpv, native dependencies, and Linux cargo-sweep
 nix develop              # Linux desktop toolchain
 nix develop .#android    # + NDK/SDK/JDK/cargo-apk2
 nix develop .#windows    # MinGW cross-build tools + pinned libmpv
