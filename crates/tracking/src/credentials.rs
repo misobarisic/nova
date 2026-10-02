@@ -1,6 +1,7 @@
-//! Device-local plaintext credentials, separate from public registrations/state.
+//! Saved plaintext credentials, separate from public registrations/state.
 //! Replace this backend with protected platform storage without changing the
-//! account verification and refresh lifecycle. Never include these keys in sync.
+//! account verification and refresh lifecycle. The tracking peer domain shares
+//! these records explicitly; no other domain or addon receives them.
 use crate::{
     AccountKey, ApiError, Secret, Service, StateStorage,
     api::{Client, Transport},
@@ -72,11 +73,13 @@ impl SavedConnection {
             return Ok(None);
         };
         let raw = Zeroizing::new(raw);
+        Self::decode(&raw, service).map(Some)
+    }
+    pub(crate) fn decode(raw: &str, service: Service) -> Result<Self, CredentialError> {
         if raw.len() > 65536 {
             return Err(CredentialError::Invalid);
         }
-        let mut record: Record =
-            serde_json::from_str(&raw).map_err(|_| CredentialError::Invalid)?;
+        let mut record: Record = serde_json::from_str(raw).map_err(|_| CredentialError::Invalid)?;
         if record.version != 1 || record.account.service != service {
             return Err(CredentialError::Invalid);
         }
@@ -84,7 +87,7 @@ impl SavedConnection {
             .registration
             .validate(service)
             .map_err(|_| CredentialError::Invalid)?;
-        Ok(Some(Self {
+        Ok(Self {
             account: record.account.clone(),
             registration: record.registration.clone(),
             tokens: Tokens {
@@ -98,7 +101,7 @@ impl SavedConnection {
                     .map_err(|_| CredentialError::Invalid)?,
                 expires_at: record.expires_at,
             },
-        }))
+        })
     }
     pub fn save(&self, storage: &impl StateStorage) -> Result<(), CredentialError> {
         let mut entries = [(

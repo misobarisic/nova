@@ -164,11 +164,17 @@ pub fn tr(english: &'static str) -> &'static str {
         "Connect this service in Settings → Tracking first." => {
             "Prvo povežite ovu uslugu u Postavke → Praćenje."
         }
-        "Connected. Sign-in is saved on this device." => {
-            "Povezano. Prijava je spremljena na ovom uređaju."
+        "Shared tracking data needs alignment or a newer Nova version." => {
+            "Dijeljeni podaci praćenja zahtijevaju usklađivanje ili noviju verziju Nove."
         }
-        "Sign-in is saved on this device and restored after restarting Nova. Disconnect removes saved sign-in." => {
-            "Prijava je spremljena na ovom uređaju i obnavlja se nakon ponovnog pokretanja Nove. Prekid veze uklanja spremljenu prijavu."
+        "Tracking links and sign-in received from a paired device." => {
+            "Veze praćenja i prijava primljeni su s uparenog uređaja."
+        }
+        "Connected. Sign-in will sync with paired devices." => {
+            "Povezano. Prijava će se sinkronizirati s uparenim uređajima."
+        }
+        "Sign-in is saved and shared with paired devices. Disconnect removes shared sign-in." => {
+            "Prijava je spremljena i dijeli se s uparenim uređajima. Prekid veze uklanja dijeljenu prijavu."
         }
         "Saved sign-in is unreadable. Reconnect this service." => {
             "Spremljena prijava nije čitljiva. Ponovno povežite ovu uslugu."

@@ -1,6 +1,8 @@
 //! One owner for local state, authenticated sessions and per-target delivery.
 //! UI callbacks only enqueue commands; no network call runs on the UI thread.
 use super::*;
+#[path = "peer.rs"]
+mod peer;
 #[path = "setup.rs"]
 mod setup;
 use nova_tracking::{
@@ -57,6 +59,7 @@ impl Registrations {
     }
 }
 pub(super) enum Command {
+    Sync,
     Reset,
     Automatic {
         service: Service,
@@ -264,6 +267,12 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
             .flatten()
             .unwrap_or_default(),
     };
+    if let Err(error) = coordinator
+        .publish_shared(true)
+        .and_then(|_| coordinator.apply_shared(true))
+    {
+        coordinator.notice = error;
+    }
     coordinator.restore_connections();
     coordinator.publish();
     loop {
@@ -296,8 +305,16 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
             coordinator.publish();
             continue;
         }
+        if let Err(error) = coordinator.apply_shared(false) {
+            coordinator.notice = error;
+            coordinator.publish();
+            continue;
+        }
         coordinator.restore_connections();
         coordinator.deliver();
+        if let Err(error) = coordinator.publish_shared(false) {
+            coordinator.notice = error;
+        }
         coordinator.publish();
     }
     for login in coordinator.logins {
@@ -393,6 +410,36 @@ impl Coordinator {
             else {
                 continue;
             };
+            let viewer = client.viewer().unwrap();
+            let name = viewer.name.clone();
+            let score_format = viewer.score_format;
+            if self
+                .store
+                .mutate(|state| {
+                    if let Some(a) = state.accounts.iter_mut().find(|a| a.key == account) {
+                        a.display_name = name;
+                    }
+                    for snapshot in state
+                        .snapshots
+                        .iter_mut()
+                        .filter(|s| s.target.account == account)
+                    {
+                        if snapshot
+                            .remote
+                            .as_ref()
+                            .is_some_and(|r| !score_format.valid(r.score_tenths))
+                        {
+                            snapshot.remote = None;
+                        }
+                        snapshot.score_format = score_format;
+                    }
+                    Ok(())
+                })
+                .is_err()
+            {
+                self.notice = storage_message();
+                continue;
+            }
             if self.store.resume_account(&account, generation).is_err() {
                 self.notice = storage_message();
                 continue;
@@ -433,6 +480,7 @@ impl Coordinator {
     }
     fn command(&mut self, command: Command) -> Result<(), String> {
         match command {
+            Command::Sync => self.apply_shared(true),
             Command::Automatic { service, enabled } => {
                 self.consume_events()?;
                 let mut state = self.store.state().clone();
@@ -817,7 +865,7 @@ impl Coordinator {
             paused: false,
             refresh_after: 0,
         });
-        self.notice = text::tr("Connected. Sign-in is saved on this device.").into();
+        self.notice = text::tr("Connected. Sign-in will sync with paired devices.").into();
         Ok(())
     }
     fn suggest(&mut self, service: Service, generation: u64) -> Result<(), String> {

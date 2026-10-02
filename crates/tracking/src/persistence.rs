@@ -251,21 +251,30 @@ impl<S: StateStorage> Store<S> {
         service: crate::Service,
         connection: Option<&crate::credentials::SavedConnection>,
     ) -> Result<(), LoadError> {
-        if connection.is_some_and(|c| {
-            c.account.service != service || !state.active_accounts.contains(&c.account)
-        }) {
-            return Err(LoadError::InvalidState(
-                "invalid saved connection account".into(),
-            ));
+        self.save_with_connections(state, &[(service, connection)])
+    }
+    /// Shared credentials for both services commit with the projected links.
+    pub fn save_with_connections(
+        &mut self,
+        state: TrackingState,
+        connections: &[(crate::Service, Option<&crate::credentials::SavedConnection>)],
+    ) -> Result<(), LoadError> {
+        let mut extras = vec![];
+        for (service, connection) in connections {
+            if connection.is_some_and(|c| {
+                c.account.service != *service || !state.active_accounts.contains(&c.account)
+            }) {
+                return Err(LoadError::InvalidState(
+                    "invalid saved connection account".into(),
+                ));
+            }
+            let raw = connection
+                .map(|c| c.encode())
+                .transpose()
+                .map_err(|_| LoadError::InvalidState("invalid saved connection".into()))?;
+            extras.push((crate::credentials::credential_key(*service).into(), raw));
         }
-        let raw = connection
-            .map(|c| c.encode())
-            .transpose()
-            .map_err(|_| LoadError::InvalidState("invalid saved connection".into()))?;
-        self.save_entries(
-            state,
-            vec![(crate::credentials::credential_key(service).into(), raw)],
-        )
+        self.save_entries(state, extras)
     }
 
     /// Consumed journal keys are deleted in the same transaction as their

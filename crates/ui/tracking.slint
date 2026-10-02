@@ -59,7 +59,7 @@ export component TrackingSettings inherits Rectangle {
     VerticalLayout {
         spacing: 14px;
         Text { text: @tr("Tracking"); color: #f2f2f4; font-size: 18px; font-weight: 700; }
-        Text { text: @tr("Sign-in is saved on this device and restored after restarting Nova. Disconnect removes saved sign-in."); color: #c9c9d4; wrap: word-wrap; min-width: 0; }
+        Text { text: @tr("Sign-in is saved and shared with paired devices. Disconnect removes shared sign-in."); color: #c9c9d4; wrap: word-wrap; min-width: 0; }
         Text { text: root.notice; color: #d7cfff; wrap: word-wrap; min-width: 0; }
         for row in root.accounts: AccountEditor {
             entry: row;

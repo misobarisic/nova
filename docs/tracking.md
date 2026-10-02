@@ -6,7 +6,8 @@ choose its **Tracking** action. Connection alone does not link any titles.
 
 ## Connecting
 
-Sign-in is saved on this device and restored after restarting Nova. Saved tokens
+Sign-in is saved, shared with paired devices through Nova sync, and restored
+after restarting Nova. Saved tokens
 are verified against the stored account before retained updates can resume.
 Expired MAL access tokens refresh automatically; renewed access and refresh tokens
 are saved immediately. Offline restoration retries without deleting saved sign-in.
@@ -27,7 +28,8 @@ The automatic-tracking checkbox applies to the service's linked releases.
 Pausing it holds queued automatic work and checkpoints new history without
 uploading it. Manual tracker edits remain available. Resuming allows retained
 automatic work to continue; it does not replay history from the paused period.
-Disconnect stops future requests and removes saved and in-memory credentials.
+Disconnect stops future requests and removes shared saved sign-in and in-memory
+credentials. The removal propagates to paired devices on their next sync.
 Links and queued edits remain. An already sent request may finish.
 
 ## Credential storage and future protection
@@ -49,8 +51,10 @@ Reset local tracking deletes both credential records without copying them into
 recovery backups. Unreadable credential records remain available for deliberate
 reconnection and are never printed in errors.
 
-These records remain device-local: they are excluded from peer sync and never
-sent to addons. Bearer credentials are sent only to the official tracker endpoints.
+The `tracking` peer domain shares these records with explicitly paired Nova
+devices, including public refresh registration, tokens, expiry and account choice.
+They never enter addon configuration or the ordinary settings domain. Tracker
+API requests send bearer credentials only to the official tracker endpoints.
 This is not encrypted-at-rest storage; a copy of the database can expose tokens.
 
 **Future addition:** replace plaintext token persistence with the desktop OS
@@ -58,10 +62,43 @@ credential store and Android Keystore-backed encryption. Preserve account/client
 binding, immediate refresh-token rotation, atomic activation, disconnect/reset
 cleanup, and offline retry behavior. Migrate existing plaintext records only after
 protected storage confirms a successful write, then delete the old token values.
-Keep tokens out of ordinary settings, sync records, logs, and recovery backups;
+Protect both credential rows and credential-bearing sync rows/baselines at rest.
+Keep tokens out of ordinary settings, logs, and recovery backups;
 report protected-store failures rather than silently falling back to plaintext.
-Restart, refresh-rotation, wrong-account, deletion, and failed-save regressions
+Restart, refresh-rotation, paired-device propagation, wrong-account, deletion, and failed-save regressions
 must continue to pass with an injected credential backend.
+
+## Paired-device tracking sync
+
+With Nova sync enabled and devices paired, the `tracking` domain carries version-1
+JSON records: one link per typed source/account/release identity, one paused
+preference per service, and `credentials:mal` / `credentials:anilist` sign-in
+records. Start tracking, alignment repair, unlink, pause/resume, refresh-token
+rotation and Disconnect all propagate. Local-only tracking state remains a
+schema-3 envelope; the generic sync wire structure and ALPN do not change.
+
+Receiving a link preserves stable episode IDs but uses the receiving device's
+account generation, mapping revision and current history checkpoint. Tokens are
+verified against their stored account before requests can resume. Received
+credentials and links commit together. Existing watched flags are checkpointed;
+receipt does not queue a history upload. Pending API operations are never copied
+between devices. Ordinary remote apply uses `ApplyingGuard` and does not echo.
+Concurrent conflicting links are disabled across the mesh for explicit alignment
+repair; invalid or unsupported records remain pending instead of being erased.
+
+Unlinks and shared sign-in removals use sync tombstones, so offline peers cannot
+restore an old link merely by returning. Projection acknowledges the captured
+domain digest after the local commit; a newer concurrent merge remains pending.
+Durable local changes that have not reached the sync store are retried before
+applying remote records and after restart. Reset local tracking also publishes
+removals for the shared configuration; recovery backups retain local state and
+journal records, rather than live tokens.
+
+Android can receive an existing desktop sign-in through pairing without repeating
+the browser flow. Direct Android browser sign-in still uses the loopback receiver;
+its pending OAuth session is in memory and cannot survive process death. The
+reported Android callback problem still needs device reproduction; peer sign-in
+sharing does not establish that the browser callback itself is fixed.
 
 ## Linking and alignment
 
@@ -164,7 +201,9 @@ Unreadable tracking records retain their original data and a deterministic
 and atomically resets local links/queues while holding the history writer lock.
 It does not reset Nova history or remote tracker lists.
 
-Tracking records, credentials, cached metadata, and pending work are device-local.
+Tracking links, account choice, access/refresh tokens and automatic-tracking
+preferences are shared through the `tracking` sync domain. Resolver caches,
+progress projections, checkpoints, pending requests and attempt leases stay local.
 Paired-device watched changes update checkpoints but do not authorize uploads.
 Remote tracker values never import library membership or mark Nova episodes watched.
 Live sign-in and real account mutations still require interactive verification

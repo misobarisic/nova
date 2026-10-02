@@ -1,4 +1,4 @@
-//! Local-only tracking coordinator and semantic playback journal.
+//! Tracking coordinator, peer projection and local semantic playback journal.
 use super::*;
 use crate::providers;
 mod ui;
@@ -76,6 +76,9 @@ fn service_index(service: Service) -> usize {
     }
 }
 impl Bridge {
+    pub(in crate::app) fn tracking_sync_apply(&self) {
+        self.tracking.send(worker::Command::Sync);
+    }
     pub(super) fn shutdown_tracking(&self) {
         self.tracking.alive.store(false, Ordering::Release);
         for epoch in &self.tracking.login_generation {

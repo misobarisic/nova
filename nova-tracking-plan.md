@@ -22,7 +22,7 @@ only the linked account's entry, and write only supplied fields. MAL uses its
 verified official PATCH contract, public-client plain PKCE and refresh rotation;
 its dates remain read-only. AniList uses GraphQL, format-dependent scoring, fuzzy
 dates, implicit authorization and its documented PIN fallback. Tokens are
-zeroized in memory and stored in device-local plaintext records; protected
+zeroized in memory and stored in shared plaintext records; protected
 platform credential-store integration remains a future addition. Loopback capture and a password-field manual return are implemented.
 
 Settings → Tracking and the detail tracking sheet are wired through AppWindow
@@ -46,7 +46,7 @@ range controls and optional individual assignments. Episode-zero specials bridge
 TV release relationships without consuming normal episodes, and partial official
 release dates are supported. Unknown-count ongoing coverage excludes forecasts.
 
-Sign-in now persists across restarts using device-local plaintext credential
+Sign-in now persists across restarts using plaintext credential
 records, as explicitly requested. Account activation and token saving commit
 together; MAL refresh rotation is saved before subsequent verification, and
 Disconnect/reset remove saved tokens. The actor verifies the stored account
@@ -60,8 +60,9 @@ had no explicit redistribution license, so no dataset is bundled or downloaded.
 IMDb/TMDB/provider-only identities use official title/alias and year evidence
 for setup proposals; ambiguous matches require release selection. External
 cross-catalog dataset automation remains deferred with that dataset dependency.
-Optional Phase 7 peer mapping sync is outside the initial feature; tracking
-records, pending work and secrets remain local, with no wire schema change.
+Phase 7 now shares links, automatic pauses, account choice and sign-in tokens
+through the tracking domain, as explicitly requested. Delivery work and history
+checkpoints remain local. Generic wire structs and ALPNs are unchanged.
 
 Tracker fixture/domain tests and the headless phone UI regression cover auth,
 field omission, wrong-account rejection, restart recovery, decreases, cooldowns,
@@ -83,6 +84,11 @@ For persistent sign-in and first-result setup, `cargo test --workspace --locked`
 passed with default parallelism: 455 tests, including 155 app unit tests, 80
 tracking tests and the phone UI alternate-selection regression. Formatting and
 whitespace checks passed; Android and Windows checks were not run.
+For paired-device links and shared sign-in, `cargo test --workspace --locked`
+passed with default parallelism: 461 tests, including 85 tracking unit tests
+and a real sync-merge integration test covering received credentials, refresh
+rotation, disconnect and unlink. Formatting and whitespace checks passed.
+Android and Windows checks were not run.
 See [implemented tracking behavior](docs/tracking.md).
 
 ## 1. Goal and agreed scope
@@ -153,7 +159,7 @@ The reviewed repository already provides the following useful pieces.
 | `crates/providers/src/stremio.rs` | Adaptation of addon metadata and extraction of IMDb/TMDB/MAL fields | Add AniList and typed TMDB handling; retain supplied IDs |
 | `crates/providers/src/anikoto.rs` and its plugin | Confirmed Cinemeta episode mappings and `novaStreamIds` aliases while native IDs remain stable | Reuse evidence and tested mapping rules where applicable |
 | `crates/storage` and `src/app/io.rs` | Existing durable storage and persistence paths | Persist links, projections, and pending delivery work |
-| `src/app/sync.rs` and `crates/sync` | Existing Nova-to-Nova sync and progress merges | Keep credential state local; assess non-secret mapping sync separately |
+| `src/app/sync.rs` and `crates/sync` | Existing Nova-to-Nova sync and progress merges | Share tracking configuration/sign-in through its own domain; keep delivery and checkpoints local |
 | `crates/ui/*.slint`, `types.slint`, `appwindow.slint`, and `src/app/run.rs` | UI components, exposed properties/callbacks, and application wiring | Add settings and a detail-page tracking sheet using the established pattern |
 
 ### Important current limitations
@@ -496,11 +502,11 @@ Bind authorization to a pending session and validate state where supported. Prev
 
 ### 10.3 Secret persistence
 
-Use an OS credential store or platform-backed encryption with a non-exportable/platform-protected key, as appropriate for the supported targets. Assess Android Keystore and desktop credential-store availability during the first implementation phase.
+The current implementation uses explicitly accepted plaintext credential records in Nova storage and shares them through the dedicated tracking sync domain. See `docs/tracking.md` for the persistence contract and future protected-storage work; platform protection must cover both local credentials and credential-bearing sync records and baselines.
 
 - Do not place plaintext tokens in library records, addon settings, the ordinary synchronized settings map, diagnostics, or backup exports.
-- Keep the ordinary tracking database's credential reference separate from the secret value.
-- If persistent secure storage is unavailable, provide an honest session-only connection rather than an undocumented plaintext fallback.
+- Keep credential records separate from ordinary library metadata and tracking state.
+- Persist credentials across restarts using the documented plaintext storage policy until protected storage is implemented.
 - Disconnect removes credentials and pauses/cancels outgoing work for that account.
 - Reconnecting the same verified account can resume its retained links after explicit activation.
 - Connecting a different account never adopts the old account's pending patches.
@@ -745,7 +751,7 @@ Use a short path for direct one-to-one links. Keep ranges and manual alignment i
 | Mark mapped episode watched | Queues accepted progress according to the mapping |
 | Mark local episode unwatched | Changes local history; remote decrease requires an explicit tracker edit |
 | Unlink tracking | Stops future automatic updates for that binding; keeps remote history |
-| Disconnect service | Removes local credentials and stops outgoing work for that account |
+| Disconnect service | Removes shared credentials on paired devices and stops outgoing work for that account |
 | Refresh tracker row | Reads remote values; does not import watched history |
 
 If several bindings share a target, unlinking one leaves the others active. Cancel unsent work that depends only on the removed binding and reproject remaining contributions.
@@ -782,11 +788,11 @@ Use defaults for genuinely optional new fields and explicit schema versions wher
 
 The initial reliable single-installation feature must not depend on another Nova device being online. Each installation can connect directly to the tracker service.
 
-Confirmed non-secret identity/alignment data may later use Nova's existing paired-device sync, which is separate from direct tracker-library integration. If included during implementation, treat it as its own phase with the following rules:
+Tracking configuration and credentials use Nova's existing paired-device sync, separately from direct tracker-library integration. The user explicitly requested shared plaintext sign-in; platform-protected persistence remains future work. Keep the following boundaries:
 
-- Never sync account access/refresh tokens.
+- Share account access/refresh tokens only through the explicitly paired tracking domain.
 - Sync source identity and mapping evidence, not a command to write someone else's account.
-- Activate an account-specific binding on another device only after it connects the same verified remote account and explicitly enables tracking.
+- Verify received credentials against the same stored remote account before activating requests; imported links checkpoint local history without authorizing a historical upload.
 - Keep the outbox and acknowledgment state device-local.
 - Apply merged progress with a known origin and a projection checkpoint so it cannot recursively echo or replay history.
 - Decide whether paired progress is eligible to produce tracker work on that device; it must not happen accidentally through a generic persistence hook.
@@ -841,7 +847,7 @@ Do not label every failure “sync failed” when an alignment correction or acc
 - [x] Verify current AniList and MAL search, per-entry read, write, authentication, score, and date contracts.
 - [x] Register Nova application/client identifiers and choose supported callback flows (MAL loopback / AniList PIN; public IDs supplied by the user).
 - [ ] Validate desktop and Android callback handling with minimal prototypes.
-- [ ] Validate persistent secret storage on supported targets, with a session-only fallback if needed.
+- [ ] Add and validate protected credential storage on supported targets, including credential-bearing sync records and baselines.
 - [x] Inventory every local progress mutation path and storage transaction boundary.
 - [x] Confirm the addon ID normalization forms that need compatibility support.
 - [x] Document the chosen sparse-progress policy and initial-history defaults.
@@ -917,18 +923,18 @@ Gate: one accepted Nova watch event can update both linked services correctly ev
 
 Gate: common IDs can enter the same workflow, ambiguity has a useful manual path, and playback remains responsive during lookup and delivery.
 
-### Phase 7 — Optional non-secret mapping sync between Nova devices
+### Phase 7 — Shared tracking configuration and sign-in between Nova devices
 
 Implement only after the local tracking path is stable; this does not include tracker-list import.
 
-- [ ] Specify which non-secret link/mapping records may sync and how their revisions merge.
-- [ ] Require local verified account connection/activation before sending.
-- [ ] Keep secret references, credentials, pending work, and acknowledgments out of peer snapshots.
-- [ ] Define paired-progress origins and deduplication explicitly.
-- [ ] Verify mixed-version behavior and any necessary protocol updates.
-- [ ] Document the limits of simultaneous independent tracker writers.
+- [x] Share typed links, service pauses, account choice and credentials in the tracking domain; use local revisions when projecting.
+- [x] Verify the received token against its stored account before sending.
+- [x] Share credentials only with paired devices; keep pending work, attempt leases and acknowledgments local.
+- [x] Keep paired watched changes as checkpoints rather than upload authorization.
+- [x] Use versioned JSON records in the existing string domain; do not change postcard structs or ALPNs.
+- [x] Document the limits of simultaneous independent tracker writers.
 
-Gate: pairing does not leak credentials, create unsolicited remote tracking, or replay old history.
+Gate: only explicitly paired peers receive shared credentials; identity verification precedes requests, and receiving links never replays old history.
 
 ## 21. Behavior-focused verification matrix
 
@@ -998,7 +1004,7 @@ Use deterministic fixtures and mock service responses for most tests. Live tests
 | Unlink or mapping edit during delivery | Stale response cannot re-enable binding or redirect old work |
 | MAL unavailable while AniList works | AniList continues independently |
 | Corrupt tracking state | Quarantined with visible recovery, not silently wiped/replayed |
-| Unsupported secure credential persistence | Explicit session-only behavior; no hidden plaintext storage |
+| Unsupported secure credential persistence | Documented plaintext persistence for now; protected storage remains future work |
 
 ### UI and platform checks
 
@@ -1051,7 +1057,7 @@ The plan chooses defaults where possible. Resolve these implementation details t
 | Sparse progress | Highest accepted target episode | Product explanation and behavior tests |
 | Applying saved history on link | Explicit option; default preserve existing remote values | Link-preview usability |
 | Automatic decreases | Disabled; explicit tracker edits only | Ordered replacement/retry tests |
-| Credential persistence | Platform-protected store; session-only fallback | Supported platform behavior |
+| Credential persistence | Documented plaintext storage; protected storage is future work | Restart, refresh rotation, disconnect, and peer-sync tests |
 | MAL API operation details | Current official anime contract | Official reference access before implementation |
 | AniList native authorization | Documented public-client flow without embedded secret | Actual callback/PIN support on desktop and Android |
 | Source mapping distribution | Optional curated evidence provider | License, size, coverage, and update behavior |

@@ -9,6 +9,7 @@ mod journal;
 mod mapping;
 mod models;
 mod outbox;
+pub mod peer;
 mod persistence;
 mod projection;
 mod proposal;

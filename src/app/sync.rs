@@ -623,6 +623,12 @@ impl Bridge {
                 DOMAIN_ADDONS => self.sync_apply_addons(),
                 DOMAIN_SETTINGS | DOMAIN_CATEGORY => self.sync_apply_settings(),
                 DOMAIN_CONTINUE_HIDDEN => self.sync_apply_continue_hidden(),
+                nova_tracking::peer::TRACKING_DOMAIN => {
+                    // The actor commits tracking state/credentials and acknowledges
+                    // the captured digest only after its asynchronous apply succeeds.
+                    self.tracking_sync_apply();
+                    continue;
+                }
                 _ => {}
             }
             if let (Ok(owner), Some(basis)) = (

@@ -1335,3 +1335,6 @@ msgstr "Prijava je spremljena na ovom uređaju i obnavlja se nakon ponovnog pokr
 
 msgid "Choose another release"
 msgstr "Odaberite drugo izdanje"
+
+msgid "Sign-in is saved and shared with paired devices. Disconnect removes shared sign-in."
+msgstr "Prijava je spremljena i dijeli se s uparenim uređajima. Prekid veze uklanja dijeljenu prijavu."
