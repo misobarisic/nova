@@ -211,6 +211,13 @@
             # lives in the nix store, so this cannot be checked into
             # .cargo/config.toml — it is exported here instead.
             ndk_bin="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+            # Bindgen loads host libclang directly, bypassing the NDK compiler
+            # wrappers. Point each Android target at the NDK sysroot so QuickJS
+            # bindings use Android headers instead of the host glibc headers.
+            # API 26 matches Cargo.toml's min_sdk_version and cargo-apk2.
+            ndk_sysroot="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+            export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--sysroot=$ndk_sysroot --target=aarch64-linux-android26"
+            export BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android="--sysroot=$ndk_sysroot --target=x86_64-linux-android26"
             export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ndk_bin/aarch64-linux-android34-clang"
             export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$ndk_bin/armv7a-linux-androideabi34-clang"
             export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$ndk_bin/x86_64-linux-android34-clang"
