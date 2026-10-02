@@ -3,7 +3,7 @@
 Date: 2026-10-02\
 Target repository: [misobarisic/nova](https://github.com/misobarisic/nova)\
 Reviewed snapshot: [b014b98c233f29814ced15401ca0a00cff052918](https://github.com/misobarisic/nova/tree/b014b98c233f29814ced15401ca0a00cff052918)\
-Status: implementation started; identity, mapping/projection domain, and local persistence implemented; account connection and tracking delivery remain pending.
+Status: implementation started; identity, mapping/projection domain, local persistence, and progress outbox implemented; account connection and network delivery remain pending.
 
 ### Implementation progress (2026-10-02)
 
@@ -11,7 +11,9 @@ The first implementation slice adds `crates/providers/src/ids.rs` as a shared id
 
 The next slice adds `nova-tracking` with account-scoped targets, explicit stable-ID episode assignments, conflict/coverage validation, and a highest-accepted-ordinal progress projection. Link-time watched checkpoints suppress unapproved saved history; manual replacements establish a new revision and reject old acknowledgments. Versioned `tracking:state:v1` JSON stores accounts, targets, bindings, and projections locally; corrupt snapshots retain their primary record and receive a deterministic quarantine backup. The app loads this store on a startup worker and retains failures without blocking playback.
 
-This is part of Phase 1, not completion of its gate. Provenance timestamps, intent/outbox models, mapping edit/revision handling, and UI/event wiring remain pending. The Phase 0 authorization/client registration and platform credential-storage gates remain open. No tracker API calls or remote list mutations are implemented.
+The progress outbox now persists set-style automatic/replacement intents, mapping snapshots, revision-scoped attempt leases, retries, authentication pauses, and service-wide cooldowns in the same local record. Checkpoints and their intents commit together through fallible Store APIs. Saves use envelope schema 2 under the existing storage key; schema 1 remains readable, while older binaries reject schema 2 instead of dropping pending work. An interrupted attempt is recovered as uncertain; a remote read is required before retrying. Mapping revision or assignment changes pause projection/queued delivery. A newer manual decrease supersedes unsent progress and rejects acknowledgments from the older projection run.
+
+This is part of Phase 1 and the Phase 3 delivery foundation, not completion of either gate. Provenance timestamps, non-progress field patches, mapping repair UI, and playback-history transaction/event wiring remain pending. The Phase 0 authorization/client registration and platform credential-storage gates remain open. No tracker API calls or remote list mutations are implemented.
 
 ## 1. Goal and agreed scope
 
@@ -783,7 +785,7 @@ Gate: the plan for authentication requires no embedded confidential secret, both
 - [ ] Implement typed IDs, source references, target/account keys, bindings, assignments, and intent models.
 - [ ] Extend provider/addon normalization to retain AniList IDs and typed TMDB evidence.
 - [ ] Preserve all existing library/progress/source IDs.
-- [x] Add versioned local persistence for tracking records (accounts, targets, bindings, projections; outbox comes with delivery).
+- [x] Add versioned local persistence for tracking records (accounts, targets, bindings, projections, and progress outbox).
 - [ ] Implement mapping validation and direct-ID resolution without requiring IMDb.
 
 Gate: MAL-only and AniList-only fixtures resolve through their native service paths, old metadata still parses, and no source identity is rewritten.

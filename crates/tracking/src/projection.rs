@@ -19,6 +19,8 @@ pub struct Projection {
     acknowledged_progress: u32,
     accepted_progress: u32,
     observations: Vec<Observation>,
+    #[serde(default)]
+    mappings: Vec<crate::MappingStamp>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +36,7 @@ pub enum ProjectionError {
     DisabledBinding,
     UnmappedEpisode,
     RevisionOverflow,
+    StaleMapping,
 }
 
 impl Projection {
@@ -71,6 +74,7 @@ impl Projection {
             acknowledged_progress: remote_progress,
             accepted_progress: 0,
             observations,
+            mappings: vec![],
         }
     }
 
@@ -98,6 +102,18 @@ impl Projection {
                 binding.source == episode.source && assignment.episode_id == episode.episode_id
             })
             .ok_or(ProjectionError::UnmappedEpisode)?;
+        if let Some(stamp) = self
+            .mappings
+            .iter()
+            .find(|stamp| stamp.binding_id == binding.id)
+        {
+            if !stamp.matches(binding) {
+                return Err(ProjectionError::StaleMapping);
+            }
+        } else {
+            self.mappings
+                .push(crate::MappingStamp::from_binding(binding));
+        }
         let previous = if let Some(observation) =
             self.observations.iter_mut().find(|o| o.episode == *episode)
         {
@@ -116,6 +132,10 @@ impl Projection {
             return Ok(true);
         }
         Ok(false)
+    }
+
+    pub(crate) fn remote_baseline(&self) -> u32 {
+        self.remote_progress.max(self.acknowledged_progress)
     }
 
     pub fn proposal(&self, target: &Target) -> Result<ProgressProposal, ProjectionError> {

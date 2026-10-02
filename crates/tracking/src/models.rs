@@ -86,4 +86,6 @@ pub struct TrackingState {
     pub bindings: Vec<Binding>,
     #[serde(default)]
     pub projections: Vec<crate::Projection>,
+    #[serde(default)]
+    pub outbox: crate::Outbox,
 }

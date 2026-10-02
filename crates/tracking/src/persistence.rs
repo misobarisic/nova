@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use crate::{TrackingState, ValidationError};
 
 pub const TRACKING_STATE_KEY: &str = "tracking:state:v1";
-const SCHEMA_VERSION: u32 = 1;
+// Keep the storage key stable so an older binary encounters the newer
+// envelope and refuses to overwrite durable intents it cannot understand.
+const SCHEMA_VERSION: u32 = 2;
 
 /// Injection keeps recovery tests independent of the process-global database.
 pub trait StateStorage {
@@ -78,21 +80,100 @@ impl<S: StateStorage> Store<S> {
                 .get("version")
                 .and_then(serde_json::Value::as_u64)
                 .ok_or_else(|| "missing schema version".to_owned())?;
-            if version != u64::from(SCHEMA_VERSION) {
+            if version != 1 && version != u64::from(SCHEMA_VERSION) {
                 return Ok(Err(version));
+            }
+            if version == u64::from(SCHEMA_VERSION)
+                && value
+                    .get("state")
+                    .and_then(|state| state.get("outbox"))
+                    .is_none()
+            {
+                return Err("missing outbox in tracking schema 2".to_owned());
             }
             let envelope: Envelope = serde_json::from_value(value).map_err(|e| e.to_string())?;
             envelope.state.validate().map_err(|e| e.to_string())?;
             Ok::<_, String>(Ok(envelope.state))
         })();
         match decoded {
-            Ok(Ok(state)) => Ok(Self { storage, state }),
+            Ok(Ok(mut state)) => {
+                state.outbox.recover_interrupted();
+                Ok(Self { storage, state })
+            }
             Ok(Err(version)) => Err(LoadError::UnsupportedVersion(version)),
             Err(reason) => {
                 quarantine(&storage, &raw)?;
                 Err(LoadError::InvalidState(reason))
             }
         }
+    }
+
+    /// Tracking checkpoints and their pending intent commit together. The app's
+    /// playback-history transaction must be integrated separately before hooks
+    /// can call this from local progress persistence.
+    pub fn observe_episode(
+        &mut self,
+        binding_id: &str,
+        episode: &crate::SourceEpisode,
+        watched: bool,
+    ) -> Result<Option<std::num::NonZeroU64>, crate::TrackingError> {
+        self.mutate(|state| state.observe_episode(binding_id, episode, watched))
+    }
+
+    pub fn replace_progress(
+        &mut self,
+        target: &crate::TargetKey,
+        progress: u32,
+        observations: Vec<crate::Observation>,
+    ) -> Result<std::num::NonZeroU64, crate::TrackingError> {
+        self.mutate(|state| state.replace_progress(target, progress, observations))
+    }
+
+    pub fn begin_delivery(
+        &mut self,
+        target: &crate::TargetKey,
+        now: u64,
+    ) -> Result<Option<crate::DeliveryAttempt>, crate::TrackingError> {
+        self.mutate(|state| state.begin_delivery(target, now))
+    }
+
+    pub fn finish_delivery(
+        &mut self,
+        attempt: &crate::DeliveryAttempt,
+        outcome: crate::DeliveryOutcome,
+        now: u64,
+    ) -> Result<(), crate::TrackingError> {
+        self.mutate(|state| state.finish_delivery(attempt, outcome, now))
+    }
+
+    pub fn retry_target(
+        &mut self,
+        target: &crate::TargetKey,
+        now: u64,
+    ) -> Result<bool, crate::TrackingError> {
+        self.mutate(|state| Ok(state.retry_target(target, now)))
+    }
+
+    /// Call only after the adapter has verified refreshed authentication for
+    /// this exact account/generation. Replaced accounts require new bindings.
+    pub fn resume_account(
+        &mut self,
+        account: &crate::AccountKey,
+        generation: std::num::NonZeroU64,
+    ) -> Result<(), crate::TrackingError> {
+        self.mutate(|state| state.resume_account(account, generation))
+    }
+
+    fn mutate<T>(
+        &mut self,
+        apply: impl FnOnce(&mut TrackingState) -> Result<T, crate::TrackingError>,
+    ) -> Result<T, crate::TrackingError> {
+        let mut state = self.state.clone();
+        let result = apply(&mut state)?;
+        if state != self.state {
+            self.save(state)?;
+        }
+        Ok(result)
     }
 
     pub fn state(&self) -> &TrackingState {

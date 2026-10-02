@@ -127,6 +127,12 @@ impl TrackingState {
                 return Err(invalid("projection belongs to a stale account generation"));
             }
         }
+        self.outbox.validate()?;
+        for patch in self.outbox.pending() {
+            if !self.targets.iter().any(|target| target.key == patch.target) {
+                return Err(invalid("outbox patch has no target"));
+            }
+        }
         Ok(())
     }
 }
