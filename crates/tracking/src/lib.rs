@@ -11,7 +11,7 @@ mod outbox;
 mod persistence;
 mod projection;
 mod resolution;
-pub use resolution::rank_candidates;
+pub use resolution::{TitleMatch, filter_linked_candidates, rank_candidates, title_match};
 mod service;
 
 pub use mapping::{ValidationError, validate_bindings};

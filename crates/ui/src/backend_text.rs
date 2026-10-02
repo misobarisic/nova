@@ -82,6 +82,31 @@ pub fn tr(english: &'static str) -> &'static str {
         "Check episode alignment, progress, score, and date values." => {
             "Provjerite dodjelu epizoda, napredak, ocjenu i datume."
         }
+        "Connect a service in Settings → Tracking to see suggestions." => {
+            "Povežite uslugu u Postavkama → Praćenje za prikaz prijedloga."
+        }
+        "No new suggestions. Search a title or enter a tracker ID to link another release." => {
+            "Nema novih prijedloga. Pretražite naslov ili unesite ID na usluzi za povezivanje drugog izdanja."
+        }
+        "Suggested releases. Check the match and confirm episode alignment before linking." => {
+            "Predložena izdanja. Provjerite podudaranje i potvrdite dodjelu epizoda prije povezivanja."
+        }
+        "Source tracker ID matches; confirm episode coverage." => {
+            "ID usluge iz izvora podudara se; potvrdite obuhvat epizoda."
+        }
+        "Official MAL cross-reference matches; confirm episode coverage." => {
+            "Službena poveznica na MAL podudara se; potvrdite obuhvat epizoda."
+        }
+        "Title and year match; confirm release and episode coverage." => {
+            "Naslov i godina podudaraju se; potvrdite izdanje i obuhvat epizoda."
+        }
+        "Title or alias matches; check year, format, and episode coverage." => {
+            "Naslov ili alternativni naziv podudaraju se; provjerite godinu, format i obuhvat epizoda."
+        }
+        "Search result; verify the release and episode coverage." => {
+            "Rezultat pretraživanja; provjerite izdanje i obuhvat epizoda."
+        }
+        "Suggest releases" => "Predloži izdanja",
         "Choose a service and search or enter an anime ID." => {
             "Odaberite uslugu pa pretražite ili unesite ID animea."
         }

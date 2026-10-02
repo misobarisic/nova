@@ -617,6 +617,7 @@ component StreamList {
 export component DetailPage {
     in property <[TrackingLinkRow]> tracking_links;
     in property <[TrackingCandidateRow]> tracking_candidates;
+    in-out property <int> tracking_service;
     in property <[string]> tracking_source_rows;
     in property <[string]> tracking_preview_rows;
     in property <[TrackingMappingRow]> tracking_mapping_rows;
@@ -2502,6 +2503,7 @@ export component DetailPage {
             safe-bottom:root.safe-bottom; safe-left:root.safe-left; safe-right:root.safe-right;
             links:root.tracking_links;
             candidates:root.tracking_candidates;
+            selected_service <=> root.tracking_service;
             source_rows:root.tracking_source_rows;
             preview_rows:root.tracking_preview_rows;
             mapping_rows:root.tracking_mapping_rows;

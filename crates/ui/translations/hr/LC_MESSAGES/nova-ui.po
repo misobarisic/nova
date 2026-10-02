@@ -1239,3 +1239,30 @@ msgstr "Otvori na servisu"
 
 msgid "Restore automatic status and dates"
 msgstr "Vrati automatski status i datume"
+
+msgid "Connect a service in Settings → Tracking to see suggestions."
+msgstr "Povežite uslugu u Postavkama → Praćenje za prikaz prijedloga."
+
+msgid "No new suggestions. Search a title or enter a tracker ID to link another release."
+msgstr "Nema novih prijedloga. Pretražite naslov ili unesite ID na usluzi za povezivanje drugog izdanja."
+
+msgid "Suggested releases. Check the match and confirm episode alignment before linking."
+msgstr "Predložena izdanja. Provjerite podudaranje i potvrdite dodjelu epizoda prije povezivanja."
+
+msgid "Source tracker ID matches; confirm episode coverage."
+msgstr "ID usluge iz izvora podudara se; potvrdite obuhvat epizoda."
+
+msgid "Official MAL cross-reference matches; confirm episode coverage."
+msgstr "Službena poveznica na MAL podudara se; potvrdite obuhvat epizoda."
+
+msgid "Title and year match; confirm release and episode coverage."
+msgstr "Naslov i godina podudaraju se; potvrdite izdanje i obuhvat epizoda."
+
+msgid "Title or alias matches; check year, format, and episode coverage."
+msgstr "Naslov ili alternativni naziv podudaraju se; provjerite godinu, format i obuhvat epizoda."
+
+msgid "Search result; verify the release and episode coverage."
+msgstr "Rezultat pretraživanja; provjerite izdanje i obuhvat epizoda."
+
+msgid "Suggest releases"
+msgstr "Predloži izdanja"

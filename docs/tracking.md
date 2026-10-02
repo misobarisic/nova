@@ -31,6 +31,15 @@ sent request may finish.
 
 ## Linking and alignment
 
+Opening Tracking automatically suggests releases for a connected service (MAL
+first when both are connected). Switching the service reloads suggestions;
+**Suggest releases** reloads them without a typed query, reusing unexpired
+metadata from the bounded cache. Already linked active
+releases are omitted from suggestions, while explicit manual searches can still
+find them for repair. Each candidate explains its source ID, cross-reference, or
+title/year evidence. Suggestions do not select a release, create a link, or upload
+history; selection and confirmed alignment are still required.
+
 Search suggestions prefer an explicitly supplied ID for the selected service,
 then an official MAL/AniList cross-reference. Otherwise Nova searches the source
 title and bounded aliases, ranking release format, year, and episode-count hints.

@@ -134,6 +134,7 @@ export component TrackingSheet inherits Rectangle {
     in property <bool> open;
     in property <[TrackingLinkRow]> links;
     in property <[TrackingCandidateRow]> candidates;
+    in-out property <int> selected_service;
     in property <[string]> source_rows;
     in property <[string]> preview_rows;
     in property <[TrackingMappingRow]> mapping_rows;
@@ -181,13 +182,15 @@ export component TrackingSheet inherits Rectangle {
                         action(id,action) => {root.action(id,action);}
                     }
                     Text { text:@tr("Add tracking or align another release"); color:#f2f2f4; font-weight:700; vertical-stretch:0; }
-                    service := ComboBox { model:["MyAnimeList","AniList"]; accessible-label:@tr("Tracking service"); vertical-stretch:0; }
+                    service := ComboBox { model:["MyAnimeList","AniList"]; current-index <=> root.selected_service; accessible-label:@tr("Tracking service"); vertical-stretch:0; selected(_) => {query.text="";root.search(self.current-index,"");} }
                     query := LineEdit { placeholder-text:@tr("Title, ID, or official anime URL"); accessible-label:@tr("Tracker search"); vertical-stretch:0; }
+                    Button {text:@tr("Suggest releases");enabled:!root.busy;vertical-stretch:0;clicked => {query.text="";root.search(service.current-index,"");}}
                     Button { text:@tr("Search tracker"); enabled:!root.busy; vertical-stretch:0; clicked => {root.search(service.current-index,query.text);} }
                     for candidate[index] in root.candidates: VerticalLayout {
                         vertical-stretch:0; spacing:4px;
                         Text {text:candidate.title;color:#f2f2f4;wrap:word-wrap;min-width:0;}
                         Button { text:@tr("Select release"); accessible-label:candidate.title; enabled:!root.busy; clicked => {root.pick(index);} }
+                        Text {text:candidate.reason;color:#d7cfff;wrap:word-wrap;min-width:0;}
                         Text { text:candidate.detail; color:#c9c9d4; wrap:word-wrap; min-width:0; }
                     }
                     if root.candidate_title != "": VerticalLayout {

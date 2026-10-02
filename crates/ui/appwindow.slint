@@ -25,6 +25,7 @@ export component AppWindow inherits Window {
     in-out property <[TrackingAccountRow]> tracking_accounts;
     in-out property <[TrackingLinkRow]> tracking_links;
     in-out property <[TrackingCandidateRow]> tracking_candidates;
+    in-out property <int> tracking_service:0;
     in-out property <[string]> tracking_source_rows;
     in-out property <[string]> tracking_preview_rows;
     in-out property <[TrackingMappingRow]> tracking_mapping_rows;
@@ -776,6 +777,7 @@ export component AppWindow inherits Window {
     if root.modal_visible && !root.player_open: DetailPage {
         tracking_links: root.tracking_links;
         tracking_candidates: root.tracking_candidates;
+        tracking_service <=> root.tracking_service;
         tracking_source_rows: root.tracking_source_rows;
         tracking_preview_rows: root.tracking_preview_rows;
         tracking_mapping_rows: root.tracking_mapping_rows;

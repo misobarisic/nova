@@ -32,6 +32,10 @@ unlink/reset confirmation, service-page links, automatic-tracking pause, and
 English/Croatian text. Fresh remote reads protect existing progress and fields.
 A bounded cache retains official API metadata/provenance; source title aliases,
 year, format and count rank suggestions without auto-confirming coverage.
+Opening the detail tracking sheet now loads suggestions for a connected service;
+switching services reloads them. Candidate evidence explains the match, and active
+links for the same source/account are omitted until a manual search requests them.
+Suggestions still require release selection and confirmed episode alignment.
 
 Curated mappings remain optional: the reviewed Fribb and Anime-Lists repositories
 had no explicit redistribution license, so no dataset is bundled or downloaded.
@@ -42,10 +46,16 @@ records, pending work and secrets remain local, with no wire schema change.
 
 Tracker fixture/domain tests and the headless phone UI regression cover auth,
 field omission, wrong-account rejection, restart recovery, decreases, cooldowns,
-coverage, explicit history confirmation and sheet-first Back. `cargo test --workspace --locked -j 1` passed: 423 tests, including 147 app
+coverage, explicit history confirmation and sheet-first Back. At the initial
+implementation checkpoint, `cargo test --workspace --locked -j 1` passed: 423 tests, including 147 app
 unit tests, 56 tracking tests and the tracking/settings headless regressions. Android and Windows build
 checks are excluded from this validation run at the user's request. Public client IDs and the recommended redirects are now bundled defaults; live
 browser return and account mutations remain the final interactive validation gate.
+For the automatic-suggestion update, focused app and UI tests passed (148 app
+unit tests plus the phone UI regression). The user independently confirmed all
+tests pass after manual testing; the subsequent agent workspace run was interrupted
+during compilation. Suggestion evidence and account/source filtering have dedicated
+domain regressions.
 See [implemented tracking behavior](docs/tracking.md).
 
 ## 1. Goal and agreed scope

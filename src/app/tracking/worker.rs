@@ -411,14 +411,25 @@ impl Coordinator {
                 generation,
             } => {
                 self.context = Some(context);
+                self.busy = false;
                 self.generation = generation;
                 self.choice = None;
                 self.candidates.clear();
-                self.notice = text::tr("Choose a service and search or enter an anime ID.").into();
-                Ok(())
+                let preferred = [Service::MyAnimeList, Service::AniList]
+                    .into_iter()
+                    .find(|service| self.session(*service).is_ok());
+                if let Some(service) = preferred {
+                    self.suggest(service, generation)
+                } else {
+                    self.notice =
+                        text::tr("Connect a service in Settings → Tracking to see suggestions.")
+                            .into();
+                    Ok(())
+                }
             }
             Command::Close => {
                 self.context = None;
+                self.busy = false;
                 self.choice = None;
                 self.candidates.clear();
                 Ok(())
@@ -427,7 +438,13 @@ impl Coordinator {
                 service,
                 query,
                 generation,
-            } => self.search(service, query, generation),
+            } => {
+                if query.trim().is_empty() {
+                    self.suggest(service, generation)
+                } else {
+                    self.search(service, query, generation)
+                }
+            }
             Command::Pick { index, generation } => self.pick(index, generation),
             Command::Preview {
                 first,
@@ -592,6 +609,34 @@ impl Coordinator {
                 .into();
         Ok(())
     }
+    fn suggest(&mut self, service: Service, generation: u64) -> Result<(), String> {
+        self.search(service, String::new(), generation)?;
+        if !self.current(generation) {
+            return Ok(());
+        }
+        let account = self
+            .session(service)?
+            .client
+            .viewer()
+            .map_err(api_message)?
+            .account
+            .clone();
+        if let Some(context) = self.context.as_ref() {
+            filter_linked_candidates(
+                self.store.state(),
+                &context.source,
+                &account,
+                &mut self.candidates,
+            );
+        }
+        self.notice = text::tr(if self.candidates.is_empty() {
+            "No new suggestions. Search a title or enter a tracker ID to link another release."
+        } else {
+            "Suggested releases. Check the match and confirm episode alignment before linking."
+        })
+        .into();
+        Ok(())
+    }
     fn search(&mut self, service: Service, query: String, generation: u64) -> Result<(), String> {
         if self
             .bridge
@@ -603,6 +648,7 @@ impl Coordinator {
             return Ok(());
         }
         self.generation = generation;
+        self.candidate_service = service;
         self.choice = None;
         self.candidates.clear();
         self.busy = true;
@@ -619,9 +665,10 @@ impl Coordinator {
         self.session(service)?;
         let cache_key = if input.is_empty() {
             format!(
-                "source:{}:{}",
-                context.source.source_id,
+                "source:{}",
                 serde_json::to_string(&(
+                    &context.source,
+                    &context.title,
                     &context.ids,
                     &context.aliases,
                     context.year,
@@ -1919,6 +1966,12 @@ impl Coordinator {
             .iter()
             .map(|media| TrackingCandidateRow {
                 title: media.title.clone().into(),
+                reason: self
+                    .context
+                    .as_ref()
+                    .map(|context| candidate_reason(context, self.candidate_service, media))
+                    .unwrap_or_default()
+                    .into(),
                 detail: text::tracking_candidate(
                     &media.format,
                     media.year,
@@ -2000,6 +2053,7 @@ impl Coordinator {
             .is_some_and(|c| c.validated && !c.assignments.is_empty());
         let notice = self.notice.clone();
         let busy = self.busy;
+        let selected_service = service_index(self.candidate_service) as i32;
         let bridge = self.bridge.clone();
         let generation = self.generation;
         let _ = slint::invoke_from_event_loop(move || {
@@ -2012,6 +2066,7 @@ impl Coordinator {
                 {
                     app.set_tracking_notice(notice.into());
                     app.set_tracking_busy(busy);
+                    app.set_tracking_service(selected_service);
                     if let Some(model) = update_rows(app.get_tracking_links(), links) {
                         app.set_tracking_links(model);
                     }
@@ -2286,4 +2341,86 @@ fn reset_store() -> Result<Store<KvStorage>, nova_tracking::LoadError> {
         .map_err(|error| nova_tracking::LoadError::InvalidState(error.to_string()))?;
     let rows = storage::try_scan_prefix(EVENT_PREFIX)?;
     Store::reset_with_journal_backup(KvStorage, &rows)
+}
+
+fn candidate_reason(context: &SourceContext, service: Service, media: &Media) -> String {
+    let namespace = match service {
+        Service::MyAnimeList => providers::IdNamespace::MalAnime,
+        Service::AniList => providers::IdNamespace::AnilistAnime,
+    };
+    let direct = match context.ids.resolve_id(namespace) {
+        providers::IdResolution::Unique(id) => numeric(id) == Some(media.id),
+        _ => false,
+    };
+    let cross = service == Service::AniList
+        && matches!(context.ids.resolve_id(providers::IdNamespace::MalAnime),providers::IdResolution::Unique(providers::ExternalId::MalAnime(id)) if media.mal_id==Some(id));
+    let mut titles = vec![context.title.clone()];
+    titles.extend(context.aliases.iter().cloned());
+    let label = if direct {
+        "Source tracker ID matches; confirm episode coverage."
+    } else if cross {
+        "Official MAL cross-reference matches; confirm episode coverage."
+    } else {
+        match title_match(
+            media,
+            &titles,
+            context.year,
+            context.source.media_type == "movie",
+        ) {
+            TitleMatch::TitleAndYear => {
+                "Title and year match; confirm release and episode coverage."
+            }
+            TitleMatch::Title => {
+                "Title or alias matches; check year, format, and episode coverage."
+            }
+            TitleMatch::SearchResult => "Search result; verify the release and episode coverage.",
+        }
+    };
+    text::tr(label).into()
+}
+
+#[cfg(test)]
+mod suggestion_tests {
+    use super::*;
+    #[test]
+    fn candidate_evidence_requires_the_correct_namespace_and_exact_id() {
+        let mut context = SourceContext {
+            source: SourceRef {
+                provider_id: "nova".into(),
+                source_id: "original-id".into(),
+                media_type: "series".into(),
+            },
+            title: "Source title".into(),
+            aliases: vec![],
+            year: None,
+            episodes: vec![],
+            ids: providers::ExternalIds::default(),
+        };
+        let id = NonZeroU32::new(12).unwrap();
+        let media = Media {
+            id,
+            mal_id: Some(id),
+            title: "Different title".into(),
+            format: "TV".into(),
+            episodes: None,
+            finished: false,
+            year: None,
+        };
+        context.ids.typed.push(providers::ExternalId::MalAnime(id));
+        assert_eq!(
+            candidate_reason(&context, Service::MyAnimeList, &media),
+            text::tr("Source tracker ID matches; confirm episode coverage.")
+        );
+        assert_eq!(
+            candidate_reason(&context, Service::AniList, &media),
+            text::tr("Official MAL cross-reference matches; confirm episode coverage.")
+        );
+        context.ids.typed.push(providers::ExternalId::MalAnime(
+            NonZeroU32::new(99).unwrap(),
+        ));
+        assert_eq!(
+            candidate_reason(&context, Service::MyAnimeList, &media),
+            text::tr("Search result; verify the release and episode coverage.")
+        );
+    }
 }

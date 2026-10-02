@@ -131,6 +131,8 @@ impl Bridge {
                 Rc::new(VecModel::<crate::TrackingCandidateRow>::default()).into(),
             );
             app.set_tracking_notice(text::tr("Loading tracking…").into());
+            app.set_tracking_busy(true);
+            app.set_tracking_can_confirm(false);
         }
         self.tracking.send(Command::Show {
             context,
@@ -157,7 +159,11 @@ impl Bridge {
             + 1;
         if let Some(app) = self.app() {
             app.set_tracking_busy(true);
+            app.set_tracking_service(index);
             app.set_tracking_can_confirm(false);
+            app.set_tracking_candidates(
+                Rc::new(VecModel::<crate::TrackingCandidateRow>::default()).into(),
+            );
         }
         self.tracking.send(Command::Search {
             service,
