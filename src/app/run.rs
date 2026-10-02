@@ -398,6 +398,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_tracking_confirm(move || b.tracking_confirm());
     let b = bridge.clone();
+    app.on_tracking_accept_setup(move |revision, history| {
+        b.tracking_accept_setup(revision.to_string(), history)
+    });
+    let b = bridge.clone();
+    app.on_tracking_adjust_setup(move |index| b.tracking_adjust_setup(index));
+    let b = bridge.clone();
+    app.on_tracking_cancel_adjust(move || b.tracking_cancel_adjust());
+    let b = bridge.clone();
     app.on_tracking_assign(move |row, value| b.tracking_assign(row, value.to_string()));
     let b = bridge.clone();
     app.on_tracking_edit(move |a0, a1, a2, a3, a4, a5, a6, a7| {

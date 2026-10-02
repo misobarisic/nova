@@ -377,3 +377,94 @@ fn mal_refresh_rotates_both_credentials_and_uses_the_returned_expiry() {
     assert!(form.contains(&("refresh_token".into(), "old-refresh".into())));
     assert!(!form.iter().any(|(key, _)| key == "client_secret"));
 }
+
+#[test]
+fn official_mal_release_details_keep_tv_movie_alternatives_and_partial_dates() {
+    let f = Fixture::new(vec![
+        json!({"id":49926,"title":"Kimetsu no Yaiba: Mugen Ressha-hen","media_type":"tv","num_episodes":7,"status":"finished_airing","start_date":"2021-10-10","end_date":"2021-11-28","alternative_titles":{"en":"Demon Slayer: Mugen Train Arc","synonyms":["Mugen Train"]},"related_anime":[{"node":{"id":40456},"relation_type":"alternative_version"},{"node":{"id":47778},"relation_type":"sequel"}]}),
+    ]);
+    let c = Client::new(
+        Service::MyAnimeList,
+        Secret::new("test-token".into()).unwrap(),
+        &f,
+    );
+    let d = c.release_details(49926.try_into().unwrap(), 0).unwrap();
+    assert_eq!(d.media.episodes.unwrap().get(), 7);
+    assert_eq!(d.aliases[0], "Demon Slayer: Mugen Train Arc");
+    assert_eq!(d.relations[0].relation, ReleaseRelation::Alternative);
+    assert_eq!(d.relations[1].relation, ReleaseRelation::Sequel);
+    let requests = f.requests.lock().unwrap();
+    assert!(requests[0].url.contains("related_anime"));
+}
+#[test]
+fn anilist_release_details_exclude_manga_relations_and_preserve_aliases() {
+    let f = Fixture::new(vec![
+        json!({"data":{"Media":{"id":12,"idMal":49926,"type":"ANIME","title":{"english":"Mugen Train","romaji":"Mugen Ressha-hen"},"format":"TV","episodes":7,"status":"FINISHED","seasonYear":2021,"startDate":{"year":2021,"month":10,"day":null},"endDate":null,"relations":{"edges":[{"relationType":"SEQUEL","node":{"id":13,"type":"ANIME"}},{"relationType":"ADAPTATION","node":{"id":14,"type":"MANGA"}}]}}}}),
+    ]);
+    let d = client(&f)
+        .release_details(12.try_into().unwrap(), 0)
+        .unwrap();
+    assert_eq!(d.relations.len(), 1);
+    assert_eq!(d.relations[0].id.get(), 13);
+    assert_eq!(d.start.month, Some(10));
+    assert!(d.aliases.contains(&"Mugen Ressha-hen".to_string()));
+}
+
+#[test]
+fn release_dates_may_be_partial_and_wrong_release_ids_are_rejected() {
+    let f = Fixture::new(vec![
+        json!({"id":12,"title":"Partial dates","media_type":"tv","num_episodes":12,"status":"currently_airing","start_date":"2026-10","end_date":null}),
+        json!({"id":13,"title":"Wrong id","media_type":"tv","num_episodes":12,"status":"currently_airing"}),
+    ]);
+    let c = Client::new(
+        Service::MyAnimeList,
+        Secret::new("test-token".into()).unwrap(),
+        &f,
+    );
+    let details = c.release_details(12.try_into().unwrap(), 0).unwrap();
+    assert_eq!(
+        details.start,
+        ListDate {
+            year: Some(2026),
+            month: Some(10),
+            day: None
+        }
+    );
+    assert_eq!(
+        c.release_details(12.try_into().unwrap(), 0),
+        Err(ApiError::InvalidResponse)
+    );
+}
+
+#[test]
+fn upcoming_mushoku_and_apothecary_releases_accept_year_and_month_dates() {
+    let f = Fixture::new(vec![
+        json!({"id":65077,"title":"Mushoku Tensei III Part 2","media_type":"tv","num_episodes":0,"status":"not_yet_aired","start_date":"2027","end_date":null}),
+        json!({"id":62841,"title":"Kusuriya no Hitorigoto 3rd Season Part 2","media_type":"tv","num_episodes":0,"status":"not_yet_aired","start_date":"2027-04","end_date":null}),
+    ]);
+    let c = Client::new(
+        Service::MyAnimeList,
+        Secret::new("test-token".into()).unwrap(),
+        &f,
+    );
+    let mushoku = c.release_details(65077.try_into().unwrap(), 0).unwrap();
+    assert_eq!(
+        mushoku.start,
+        ListDate {
+            year: Some(2027),
+            month: None,
+            day: None
+        }
+    );
+    assert_eq!(mushoku.media.episodes, None);
+    let kusuriya = c.release_details(62841.try_into().unwrap(), 0).unwrap();
+    assert_eq!(
+        kusuriya.start,
+        ListDate {
+            year: Some(2027),
+            month: Some(4),
+            day: None
+        }
+    );
+    assert_eq!(kusuriya.media.episodes, None);
+}

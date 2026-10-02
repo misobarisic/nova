@@ -82,6 +82,45 @@ pub fn tr(english: &'static str) -> &'static str {
         "Check episode alignment, progress, score, and date values." => {
             "Provjerite dodjelu epizoda, napredak, ocjenu i datume."
         }
+        "Edit individual episodes" => "Uredi pojedinačne epizode",
+        "Check the episode range. Use individual assignments only when the numbering differs." => {
+            "Provjerite raspon epizoda. Pojedinačne dodjele koristite samo kada se numeriranje razlikuje."
+        }
+        "Episodes are still loading. Reload suggestions when they are ready." => {
+            "Epizode se još učitavaju. Ponovno učitajte prijedloge kada budu spremne."
+        }
+        "Ongoing release; only aired episodes are linked." => {
+            "Izdanje još izlazi; povezane su samo emitirane epizode."
+        }
+        "Tracking is ready. Add any missing releases below." => {
+            "Praćenje je spremno. U nastavku dodajte izdanja koja nedostaju."
+        }
+        "Review the suggested releases, then start tracking." => {
+            "Pregledajte predložena izdanja pa pokrenite praćenje."
+        }
+        "Adjust this release, then save the change to your review." => {
+            "Prilagodite ovo izdanje pa spremite promjenu za pregled."
+        }
+        "Release metadata changed. Reload suggestions before linking." => {
+            "Podaci o izdanju promijenili su se. Ponovno učitajte prijedloge prije povezivanja."
+        }
+        "Linked. Saved watched progress is queued." => {
+            "Povezano. Spremljeni napredak gledanja čeka slanje."
+        }
+        "Linked. New watched episodes will update the matching release." => {
+            "Povezano. Nove pogledane epizode ažurirat će odgovarajuće izdanje."
+        }
+        "Check this split" => "Provjerite ovu podjelu",
+        "More" => "Više",
+        "Review setup" => "Pregled povezivanja",
+        "Include watched episodes" => "Uključi pogledane epizode",
+        "Start tracking" => "Pokreni praćenje",
+        "Adjust" => "Prilagodi",
+        "Add missing releases" => "Dodaj izdanja koja nedostaju",
+        "Reload suggestions" => "Ponovno učitaj prijedloge",
+        "Choose a different release" => "Odaberi drugo izdanje",
+        "Save adjustment" => "Spremi prilagodbu",
+        "Back to review" => "Natrag na pregled",
         "Connect a service in Settings → Tracking to see suggestions." => {
             "Povežite uslugu u Postavkama → Praćenje za prikaz prijedloga."
         }
@@ -830,6 +869,61 @@ pub fn cal_month_title(month: u32, year: i64) -> String {
     format!("{} {year}", month_name(month))
 }
 
+pub fn tracking_setup_summary(releases: usize, episodes: usize, unresolved: usize) -> String {
+    if croatian() {
+        format!(
+            "Izdanja: {releases} · Epizode za povezivanje: {episodes} · Nepovezane epizode: {unresolved}"
+        )
+    } else {
+        format!(
+            "Releases: {releases} · Episodes to link: {episodes} · Unmapped episodes: {unresolved}"
+        )
+    }
+}
+pub fn tracking_setup_history(progress: u32) -> String {
+    if croatian() {
+        format!("Spremljeni napredak gledanja: najmanje {progress}")
+    } else {
+        format!("Saved watched progress: at least {progress}")
+    }
+}
+pub fn tracking_setup_coverage(source: &[u32], target: &[u32]) -> String {
+    fn ranges(numbers: &[u32]) -> String {
+        let mut numbers = numbers.to_vec();
+        numbers.sort_unstable();
+        numbers.dedup();
+        let mut ranges = vec![];
+        let mut i = 0;
+        while i < numbers.len() {
+            let first = numbers[i];
+            let mut last = first;
+            while i + 1 < numbers.len() && numbers[i + 1] == last.saturating_add(1) {
+                i += 1;
+                last = numbers[i];
+            }
+            ranges.push(if first == last {
+                first.to_string()
+            } else {
+                format!("{first}–{last}")
+            });
+            i += 1;
+        }
+        ranges.join(", ")
+    }
+    if croatian() {
+        format!(
+            "Epizode {} → epizode {} na usluzi",
+            ranges(source),
+            ranges(target)
+        )
+    } else {
+        format!(
+            "Episodes {} → tracker episodes {}",
+            ranges(source),
+            ranges(target)
+        )
+    }
+}
 pub fn tracking_score_hint(maximum: u32, decimal: bool) -> String {
     if croatian() {
         format!(

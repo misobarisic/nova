@@ -31,39 +31,56 @@ sent request may finish.
 
 ## Linking and alignment
 
-Opening Tracking automatically suggests releases for a connected service (MAL
-first when both are connected). Switching the service reloads suggestions;
-**Suggest releases** reloads them without a typed query, reusing unexpired
-metadata from the bounded cache. Already linked active
-releases are omitted from suggestions, while explicit manual searches can still
-find them for repair. Each candidate explains its source ID, cross-reference, or
-title/year evidence. Suggestions do not select a release, create a link, or upload
-history; selection and confirmed alignment are still required.
+Unlinked titles open a **Review setup** for the whole library title. Nova finds a
+starting release from a unique service ID/cross-reference or a matching official
+title/alias and year, then explores official prequel/sequel relationships. If the
+starting match is ambiguous, choose a release or search by title, ID or official URL.
+Switching the service rebuilds that service's independent proposal.
 
-Search suggestions prefer an explicitly supplied ID for the selected service,
-then an official MAL/AniList cross-reference. Otherwise Nova searches the source
-title and bounded aliases, ranking release format, year, and episode-count hints.
-IMDb/TMDB and provider-only sources use this same title/manual path. No third-party
-mapping database is downloaded: the reviewed mapping projects did not provide a
-clear redistribution license. A title or cross-reference identifies a candidate;
-it never proves episode numbering or activates tracking by itself.
+The review groups releases by library season and shows readable episode ranges.
+For example, Demon Slayer's merged second season maps episodes 1–7 to the Mugen
+Train TV entry and 8–18 to Entertainment District episodes 1–11. Mushoku Tensei's
+23-episode first season maps to 11- and 12-episode parts; its episode-zero TV
+special can connect related main releases without consuming a regular episode.
+MAL's partial release dates (year or year/month) are supported, including upcoming
+Mushoku Tensei and The Apothecary Diaries entries.
 
-You can enter a title, a numeric ID for the selected service, an explicit
-`mal:anime:123` / `anilist:anime:123` reference, or an official anime page URL.
-Choose a release, select the first/last source row and target starting episode,
-then preview. Rows use stable addon episode IDs; displayed canonical season and
-episode labels help you review them without changing playback identity. Edit
-individual target ordinals or leave a row empty to exclude it. Confirm the preview
-to save the link. Conflicting active coverage and out-of-range ordinals are rejected.
+Known episode totals, structured numbering and air dates guide the proposed
+splits. An exact count fit without full dates is marked **Check this split** for
+your review. Unknown-count ongoing releases only propose identifiable aired
+episodes; forecast episodes remain unassigned. Numbering gaps, ambiguous branches,
+conflicting existing links and unknown boundaries are left unresolved. Specials
+and episode zero are excluded from automatic coverage. Discovery stops once the
+regular episodes are covered, with a maximum of 32 release-detail lookups per
+proposal; metadata is reused from the bounded local cache. There is no external
+mapping dataset or silent linking.
 
-A combined source can link different ranges to several tracker releases. Several
-sources can also contribute to the same release without counting an ordinal twice.
-MAL and AniList mappings are independent. Films use one source row. Unknown final
-counts and ongoing releases do not automatically complete from the source count.
+Use **Adjust** to review or change an individual range. The range fields are
+prefilled from the proposal; **Edit individual episodes** reveals stable-ID
+assignments when numbering needs correction. Unmapped episodes never update a
+tracker. Back from an adjustment returns to the review.
 
-Linking preserves the remote entry and checkpoints existing Nova history; it does
-not upload that history. **Apply Nova history** first shows the proposed value and
-requires a separate confirmation. It only considers confirmed assignments.
+**Start tracking** confirms all proposed links in one local transaction. The
+**Include watched episodes** checkbox is unchecked by default; selecting it shows
+per-release progress previews and queues existing watched progress together with
+the links. Leaving it unchecked checkpoints history and tracks future watched
+events only. Fresh metadata/list reads and account checks precede the commit; a
+failure cannot leave half a merged season linked. Remote delivery starts afterward
+and preserves higher remote progress and unrelated fields.
+
+Linked titles open a compact overview of coverage, progress and delivery state.
+Use **Add missing releases** to propose additional coverage without silently
+replacing existing assignments. Existing authorized queued work is preserved when
+coverage is extended. **More** reveals entry edits, alignment repair, history
+upload, retry, service links, automatic-status restoration and unlinking. Repair
+and unlink still require confirmation; remaps discard old unsent work.
+
+Several sources can contribute to the same release without counting an ordinal
+twice. Films use one source row. Existing links, pending work and tracker account
+separation retain the previous local schema. Newly discovered episodes and changed
+coverage require another review; reloading suggestions captures fresh source
+metadata. Source changes invalidate an open review even if the episode IDs stay
+the same.
 
 ## Progress and edits
 

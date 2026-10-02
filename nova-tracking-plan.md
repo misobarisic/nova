@@ -35,12 +35,22 @@ year, format and count rank suggestions without auto-confirming coverage.
 Opening the detail tracking sheet now loads suggestions for a connected service;
 switching services reloads them. Candidate evidence explains the match, and active
 links for the same source/account are omitted until a manual search requests them.
-Suggestions still require release selection and confirmed episode alignment.
+Suggestions require explicit review and confirmation before enabling tracking.
+
+The automatic setup refinement now retains structured season/episode/date evidence,
+discovers official related releases, and proposes whole-title split coverage in a
+compact review. Start tracking accepts the batch atomically; Include watched
+episodes defaults off and can queue per-release history in the same commit.
+Existing links use a compact overview with More actions; Adjust reveals prefilled
+range controls and optional individual assignments. Episode-zero specials bridge
+TV release relationships without consuming normal episodes, and partial official
+release dates are supported. Unknown-count ongoing coverage excludes forecasts.
 
 Curated mappings remain optional: the reviewed Fribb and Anime-Lists repositories
 had no explicit redistribution license, so no dataset is bundled or downloaded.
-IMDb/TMDB/provider-only identities use title/alias search and manual linking;
-contextual cross-catalog automation is deferred with that dataset dependency.
+IMDb/TMDB/provider-only identities use official title/alias and year evidence
+for setup proposals; ambiguous matches require release selection. External
+cross-catalog dataset automation remains deferred with that dataset dependency.
 Optional Phase 7 peer mapping sync is outside the initial feature; tracking
 records, pending work and secrets remain local, with no wire schema change.
 
@@ -56,6 +66,10 @@ unit tests plus the phone UI regression). The user independently confirmed all
 tests pass after manual testing; the subsequent agent workspace run was interrupted
 during compilation. Suggestion evidence and account/source filtering have dedicated
 domain regressions.
+For the split-release review update, `cargo test --workspace --locked` passed
+with default parallelism: 449 tests, including 155 app unit tests, 74 tracking
+tests, the phone tracking UI regression and the home-catalog regression. Formatting
+and whitespace checks also passed. No Android or Windows checks were run.
 See [implemented tracking behavior](docs/tracking.md).
 
 ## 1. Goal and agreed scope

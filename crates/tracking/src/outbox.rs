@@ -649,6 +649,12 @@ impl Outbox {
 }
 
 impl Outbox {
+    pub fn service_retry_at(&self, service: Service, now: u64) -> Option<u64> {
+        self.cooldowns
+            .iter()
+            .find(|c| c.service == service && c.until > now)
+            .map(|c| c.until)
+    }
     pub fn defer_service(&mut self, service: Service, retry_at: u64) {
         if let Some(cooldown) = self.cooldowns.iter_mut().find(|c| c.service == service) {
             cooldown.until = cooldown.until.max(retry_at);
@@ -658,5 +664,61 @@ impl Outbox {
                 until: retry_at,
             });
         }
+    }
+}
+
+impl TrackingState {
+    /// Revisions change even for an extension. Preserve authorized work only
+    /// when every old assignment remains identical; remaps discard stale work.
+    pub fn rebase_confirmed_mapping(
+        &mut self,
+        key: &TargetKey,
+        baseline: u32,
+        observations: Vec<crate::Observation>,
+        preserve_pending: bool,
+    ) -> Result<(), TrackingError> {
+        let pending = if preserve_pending {
+            self.outbox
+                .pending
+                .iter()
+                .rfind(|p| p.target == *key)
+                .cloned()
+        } else {
+            None
+        };
+        let projection = self
+            .projections
+            .iter_mut()
+            .find(|p| p.target == *key)
+            .ok_or(TrackingError::MissingProjection)?;
+        let progress = pending
+            .as_ref()
+            .map(|p| {
+                if p.intent == ProgressIntent::ExplicitReplacement {
+                    p.progress
+                } else {
+                    p.progress.max(baseline)
+                }
+            })
+            .unwrap_or_else(|| projection.remote_baseline().max(baseline));
+        projection.repair(progress, observations)?;
+        if preserve_pending {
+            self.outbox
+                .pending
+                .retain(|p| p.target != *key || p.state == DeliveryState::InFlight);
+        } else {
+            self.outbox.cancel_unsent(key);
+        }
+        if let Some(old) = pending {
+            self.enqueue_progress(key, old.intent)?;
+            if let Some(new) = self.outbox.pending.iter_mut().rfind(|p| p.target == *key) {
+                new.attempts = old.attempts;
+                new.next_attempt_at = old.next_attempt_at;
+                new.observed_date = old.observed_date;
+                new.playback_start = old.playback_start;
+                new.first_date = old.first_date;
+            }
+        }
+        Ok(())
     }
 }

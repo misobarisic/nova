@@ -1,6 +1,8 @@
 //! One owner for local state, authenticated sessions and per-target delivery.
 //! UI callbacks only enqueue commands; no network call runs on the UI thread.
 use super::*;
+#[path = "setup.rs"]
+mod setup;
 use nova_tracking::{
     api::{Client, HttpsTransport},
     auth::{AuthReturn, Authorization, ClientRegistration, Tokens},
@@ -79,6 +81,7 @@ pub(super) enum Command {
     },
     Metadata {
         source: SourceRef,
+        generation: Option<u64>,
         episode_ids: Vec<String>,
     },
     Show {
@@ -87,6 +90,7 @@ pub(super) enum Command {
     },
     Close,
     Search {
+        context: SourceContext,
         service: Service,
         query: String,
         generation: u64,
@@ -107,6 +111,18 @@ pub(super) enum Command {
         generation: u64,
     },
     Confirm {
+        generation: u64,
+    },
+    CancelAdjust {
+        generation: u64,
+    },
+    AcceptSetup {
+        revision: String,
+        include_history: bool,
+        generation: u64,
+    },
+    AdjustSetup {
+        index: usize,
         generation: u64,
     },
     Edit {
@@ -139,6 +155,7 @@ struct Session {
     paused: bool,
     refresh_after: u64,
 }
+#[derive(Clone)]
 struct Choice {
     service: Service,
     media: Media,
@@ -146,6 +163,15 @@ struct Choice {
     assignments: Vec<Assignment>,
     repair_id: Option<String>,
     validated: bool,
+    proposal_index: Option<usize>,
+}
+#[derive(Clone)]
+struct SetupDraft {
+    service: Service,
+    account: AccountKey,
+    epoch: u64,
+    proposal: MappingProposal,
+    revision: u64,
 }
 struct Coordinator {
     bridge: Bridge,
@@ -159,6 +185,8 @@ struct Coordinator {
     candidates: Vec<Media>,
     candidate_service: Service,
     choice: Option<Choice>,
+    setup: Option<SetupDraft>,
+    setup_revision: u64,
     notice: String,
     busy: bool,
     completion: Option<Completion>,
@@ -221,6 +249,8 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
         candidates: vec![],
         candidate_service: Service::AniList,
         choice: None,
+        setup: None,
+        setup_revision: 0,
         notice: String::new(),
         busy: false,
         completion: None,
@@ -361,8 +391,19 @@ impl Coordinator {
             }
             Command::Metadata {
                 source,
+                generation,
                 episode_ids,
             } => {
+                if let Some(generation) = generation {
+                    self.generation = generation;
+                    self.choice = None;
+                    self.setup = None;
+                    self.candidates.clear();
+                    self.busy = false;
+                    self.notice =
+                        text::tr("Source episodes changed. Reopen Tracking to review alignment.")
+                            .into();
+                }
                 if episode_ids.is_empty() {
                     return Ok(());
                 }
@@ -411,6 +452,7 @@ impl Coordinator {
                 generation,
             } => {
                 self.context = Some(context);
+                self.setup = None;
                 self.busy = false;
                 self.generation = generation;
                 self.choice = None;
@@ -418,8 +460,33 @@ impl Coordinator {
                 let preferred = [Service::MyAnimeList, Service::AniList]
                     .into_iter()
                     .find(|service| self.session(*service).is_ok());
+                if self.context.as_ref().is_some_and(|c| c.episodes.is_empty()) {
+                    self.notice = text::tr(
+                        "Episodes are still loading. Reload suggestions when they are ready.",
+                    )
+                    .into();
+                    return Ok(());
+                }
                 if let Some(service) = preferred {
-                    self.suggest(service, generation)
+                    self.candidate_service = service;
+                    let account = &self
+                        .session(service)?
+                        .client
+                        .viewer()
+                        .map_err(api_message)?
+                        .account;
+                    let linked = self.store.state().bindings.iter().any(|b| {
+                        b.enabled
+                            && b.source == self.context.as_ref().unwrap().source
+                            && &b.target.account == account
+                    });
+                    if linked {
+                        self.notice =
+                            text::tr("Tracking is ready. Add any missing releases below.").into();
+                        Ok(())
+                    } else {
+                        self.suggest(service, generation)
+                    }
                 } else {
                     self.notice =
                         text::tr("Connect a service in Settings → Tracking to see suggestions.")
@@ -429,22 +496,38 @@ impl Coordinator {
             }
             Command::Close => {
                 self.context = None;
+                self.setup = None;
                 self.busy = false;
                 self.choice = None;
                 self.candidates.clear();
                 Ok(())
             }
             Command::Search {
+                context,
                 service,
                 query,
                 generation,
             } => {
+                self.context = Some(context);
                 if query.trim().is_empty() {
                     self.suggest(service, generation)
                 } else {
                     self.search(service, query, generation)
                 }
             }
+            Command::CancelAdjust { generation } => {
+                if self.current(generation) {
+                    self.choice = None;
+                    self.busy = false;
+                }
+                Ok(())
+            }
+            Command::AcceptSetup {
+                revision,
+                include_history,
+                generation,
+            } => self.accept_setup(revision, include_history, generation),
+            Command::AdjustSetup { index, generation } => self.adjust_setup(index, generation),
             Command::Pick { index, generation } => self.pick(index, generation),
             Command::Preview {
                 first,
@@ -614,6 +697,10 @@ impl Coordinator {
         if !self.current(generation) {
             return Ok(());
         }
+        self.suggest_seed(service, generation)?;
+        if !self.current(generation) {
+            return Ok(());
+        }
         let account = self
             .session(service)?
             .client
@@ -628,6 +715,13 @@ impl Coordinator {
                 &account,
                 &mut self.candidates,
             );
+        }
+        if self
+            .setup
+            .as_ref()
+            .is_some_and(|s| !s.proposal.releases.is_empty())
+        {
+            return Ok(());
         }
         self.notice = text::tr(if self.candidates.is_empty() {
             "No new suggestions. Search a title or enter a tracker ID to link another release."
@@ -649,13 +743,14 @@ impl Coordinator {
         }
         self.generation = generation;
         self.candidate_service = service;
+        self.setup = None;
         self.choice = None;
         self.candidates.clear();
         self.busy = true;
         self.publish();
         let context = self
             .context
-            .as_ref()
+            .clone()
             .ok_or_else(|| text::tr("Open a title first.").to_string())?;
         let namespace = match service {
             Service::MyAnimeList => providers::IdNamespace::MalAnime,
@@ -663,6 +758,14 @@ impl Coordinator {
         };
         let input = query.trim();
         self.session(service)?;
+        if let Some(retry_at) = self
+            .store
+            .state()
+            .outbox
+            .service_retry_at(service, now_secs())
+        {
+            return Err(api_message(ApiError::RateLimited { retry_at }));
+        }
         let cache_key = if input.is_empty() {
             format!(
                 "source:{}",
@@ -775,11 +878,8 @@ impl Coordinator {
                 if !self.current(generation) {
                     return Ok(());
                 }
-                let results = self
-                    .session(service)?
-                    .client
-                    .search(&title, now_secs())
-                    .map_err(api_message)?;
+                let reply = self.session(service)?.client.search(&title, now_secs());
+                let results = self.service_result(service, reply)?;
                 for media in results {
                     if !found.iter().any(|m: &Media| m.id == media.id) && found.len() < 20 {
                         found.push(media);
@@ -820,6 +920,16 @@ impl Coordinator {
             .get(index)
             .cloned()
             .ok_or_else(input_message)?;
+        self.busy = true;
+        self.publish();
+        self.build_setup(self.candidate_service, media.id, generation, 32)?;
+        if self
+            .setup
+            .as_ref()
+            .is_some_and(|s| !s.proposal.releases.is_empty())
+        {
+            return Ok(());
+        }
         let remote = self
             .session(self.candidate_service)?
             .client
@@ -854,6 +964,7 @@ impl Coordinator {
             assignments: vec![],
             repair_id,
             validated: false,
+            proposal_index: None,
         });
         self.notice =
             text::tr("Review the source rows and preview the alignment before confirming.").into();
@@ -1021,23 +1132,70 @@ impl Coordinator {
         if !self.current(generation) {
             return Ok(());
         }
-        let choice = self.choice.as_ref().ok_or_else(input_message)?;
+        let choice = self.choice.clone().ok_or_else(input_message)?;
         if !choice.validated || choice.assignments.is_empty() {
             return Err(input_message());
         }
-        let context = self.context.as_ref().ok_or_else(input_message)?;
+        if let Some(index) = choice.proposal_index {
+            let mut draft = self.setup.clone().ok_or_else(input_message)?;
+            let release = draft
+                .proposal
+                .releases
+                .get_mut(index)
+                .ok_or_else(input_message)?;
+            release.assignments = choice.assignments;
+            let context = self.context.as_ref().ok_or_else(input_message)?;
+            let numbers: Vec<_> = release
+                .assignments
+                .iter()
+                .filter_map(|a| {
+                    context
+                        .episode_info
+                        .iter()
+                        .find(|e| e.id == a.episode_id)
+                        .and_then(|e| e.number)
+                })
+                .collect();
+            release.first = numbers.iter().copied().min().unwrap_or(release.first);
+            release.last = numbers.iter().copied().max().unwrap_or(release.last);
+            release.check_split = true;
+            self.setup_revision = self
+                .setup_revision
+                .checked_add(1)
+                .ok_or_else(input_message)?;
+            draft.revision = self.setup_revision;
+            self.refresh_setup_coverage(&mut draft);
+            self.validate_setup(&draft)?;
+            self.setup = Some(draft);
+            self.choice = None;
+            self.notice = text::tr("Review the suggested releases, then start tracking.").into();
+            return Ok(());
+        }
+        self.commit_links(vec![choice], false, generation)
+    }
+    fn commit_links(
+        &mut self,
+        choices: Vec<Choice>,
+        include_history: bool,
+        generation: u64,
+    ) -> Result<(), String> {
+        if !self.current(generation) {
+            return Ok(());
+        }
+        let context = self.context.clone().ok_or_else(input_message)?;
         let source_still_current = {
             let shared = self.bridge.shared.lock().unwrap();
             shared.modal_item.as_ref().is_some_and(|m| {
                 m.id == context.source.source_id
                     && m.type_ == context.source.media_type
                     && (m.type_ == "movie"
-                        || m.videos.iter().map(|v| &v.id).collect::<Vec<_>>()
-                            == context
-                                .episodes
-                                .iter()
-                                .map(|(id, _)| id)
-                                .collect::<Vec<_>>())
+                        || tracking_episode_info(&m.videos) == context.episode_info
+                            && m.videos.iter().map(|v| &v.id).collect::<Vec<_>>()
+                                == context
+                                    .episodes
+                                    .iter()
+                                    .map(|(id, _)| id)
+                                    .collect::<Vec<_>>())
             })
         };
         if !source_still_current {
@@ -1045,32 +1203,40 @@ impl Coordinator {
                 text::tr("Source episodes changed. Reopen Tracking to review alignment.").into(),
             );
         }
-        // Fetch again: search/preview time is not an authoritative baseline.
-        let session = self.session(choice.service)?;
+        let service = choices.first().ok_or_else(input_message)?.service;
+        let session = self.session(service)?;
         let viewer = session.client.viewer().map_err(api_message)?.clone();
         let account_generation = session.generation;
-        let remote = session
-            .client
-            .read(choice.media.id, now_secs())
-            .map_err(api_message)?;
-        let fresh_media = session
-            .client
-            .media(choice.media.id, now_secs())
-            .map_err(api_message)?;
-        if fresh_media
-            .episodes
-            .is_some_and(|total| choice.assignments.iter().any(|a| a.target_episode > total))
-        {
-            return Err(text::tr("Alignment exceeds this release’s episode total.").into());
+        let epoch = session.epoch;
+        let mut fresh = vec![];
+        for choice in choices {
+            if choice.service != service || !choice.validated || choice.assignments.is_empty() {
+                return Err(input_message());
+            }
+            let reply = self
+                .session(service)?
+                .client
+                .read(choice.media.id, now_secs());
+            let remote = self.service_result(service, reply)?;
+            let reply = self
+                .session(service)?
+                .client
+                .media(choice.media.id, now_secs());
+            let fresh_media = self.service_result(service, reply)?;
+            if fresh_media
+                .episodes
+                .is_some_and(|total| choice.assignments.iter().any(|a| a.target_episode > total))
+            {
+                return Err(text::tr("Alignment exceeds this release’s episode total.").into());
+            }
+            if !self.current(generation) {
+                return Ok(());
+            }
+            fresh.push((choice, remote, fresh_media));
         }
-        if !self.current(generation) {
-            return Ok(());
+        if self.session(service)?.epoch != epoch {
+            return Err(input_message());
         }
-        let key = TargetKey {
-            account: viewer.account.clone(),
-            media_kind: MediaKind::Anime,
-            remote_media_id: choice.media.id,
-        };
         let owner = nova_sync::local_store().map_err(|_| storage_message())?;
         let mut history = owner.lock().unwrap();
         history.save().map_err(|_| storage_message())?;
@@ -1088,108 +1254,29 @@ impl Coordinator {
             .transpose()
             .map_err(|_| storage_message())?
             .unwrap_or_default();
-        let mut state = self.store.state().clone();
-        if let Some(target) = state.targets.iter_mut().find(|t| t.key == key) {
-            target.remote_entry_id = remote.as_ref().and_then(|r| r.entry_id);
-            target.final_episode_total = fresh_media.episodes;
-            target.release_finished = fresh_media.finished;
-        } else {
-            state.targets.push(Target {
-                key: key.clone(),
-                remote_entry_id: remote.as_ref().and_then(|r| r.entry_id),
-                final_episode_total: fresh_media.episodes,
-                release_finished: fresh_media.finished,
-            });
-        }
-        let binding_id = if let Some(id) = choice.repair_id.clone() {
-            id
-        } else {
-            let mut number = state.bindings.len() + 1;
-            while state
-                .bindings
-                .iter()
-                .any(|b| b.id == format!("binding-{number}"))
-            {
-                number += 1;
-            }
-            format!("binding-{number}")
-        };
-        let revision = if let Some(binding) = state.bindings.iter().find(|b| b.id == binding_id) {
-            binding
-                .mapping_revision
-                .get()
-                .checked_add(1)
-                .and_then(NonZeroU64::new)
-                .ok_or_else(input_message)?
-        } else {
-            NonZeroU64::MIN
-        };
-        state.bindings.retain(|b| b.id != binding_id);
-        let binding = Binding {
-            id: binding_id.clone(),
-            source: context.source.clone(),
-            target: key.clone(),
+        let state = prepare_link_state(
+            self.store.state(),
+            &context.source,
+            &viewer,
             account_generation,
-            mapping_revision: revision,
-            enabled: true,
-            assignments: choice.assignments.clone(),
-        };
-        state.bindings.push(binding.clone());
-        state
-            .link_checkpoints
-            .retain(|c| c.binding_id != binding_id);
-        state.link_checkpoints.push(LinkCheckpoint {
-            binding_id: binding_id.clone(),
             sequence,
-        });
-        let observations = checkpoint(&state, &key, &map);
-        let baseline = remote.as_ref().map(|r| r.progress).unwrap_or(0);
-        if let Some(projection) = state.projections.iter_mut().find(|p| p.target == key) {
-            if choice.repair_id.is_some() {
-                let old = projection.remote_baseline();
-                projection
-                    .repair(old.max(baseline), observations)
-                    .map_err(|_| input_message())?;
-                state.outbox.cancel_unsent(&key);
-            } else {
-                projection.refresh_remote(account_generation, projection.revision, baseline);
-                for observation in observations
-                    .iter()
-                    .filter(|o| o.episode.source == binding.source)
-                {
-                    projection
-                        .checkpoint(&binding, &observation.episode, observation.watched)
-                        .map_err(|_| input_message())?;
-                }
-            }
-        } else {
-            state.projections.push(Projection::new(
-                key.clone(),
-                account_generation,
-                baseline,
-                observations,
-            ));
-        }
-        if let Some(snapshot) = state.snapshots.iter_mut().find(|s| s.target == key) {
-            snapshot.media = fresh_media.clone();
-            snapshot.remote = remote;
-        } else {
-            state.snapshots.push(TargetSnapshot {
-                target: key,
-                media: fresh_media.clone(),
-                remote,
-                score_format: viewer.score_format,
-                status_pinned: false,
-                dates_pinned: false,
-            });
+            &map,
+            fresh,
+            include_history,
+        )?;
+        if !self.current(generation) || self.session(service)?.epoch != epoch {
+            return Err(input_message());
         }
         self.store.save(state).map_err(|_| storage_message())?;
         self.choice = None;
         self.candidates.clear();
-        self.notice = text::tr(
-            "Linked. New watched events will update this release; saved history was not uploaded.",
-        )
+        self.notice = text::tr(if include_history {
+            "Linked. Saved watched progress is queued."
+        } else {
+            "Linked. New watched episodes will update the matching release."
+        })
         .into();
+        self.busy = false;
         Ok(())
     }
     #[allow(clippy::too_many_arguments)]
@@ -1378,9 +1465,10 @@ impl Coordinator {
                     service: binding.target.account.service,
                     media: snapshot.media.clone(),
                     remote,
-                    assignments: vec![],
+                    assignments: binding.assignments.clone(),
                     repair_id: Some(binding.id),
-                    validated: false,
+                    validated: true,
+                    proposal_index: None,
                 });
                 self.notice=text::tr("Preview and confirm replacement coverage. Previous unsent updates will be discarded.").into();
             }
@@ -2051,6 +2139,147 @@ impl Coordinator {
             .choice
             .as_ref()
             .is_some_and(|c| c.validated && !c.assignments.is_empty());
+        let setup_rows = self
+            .setup
+            .as_ref()
+            .map(|draft| {
+                draft
+                    .proposal
+                    .releases
+                    .iter()
+                    .map(|release| {
+                        let watched = release
+                            .assignments
+                            .iter()
+                            .filter(|a| {
+                                history
+                                    .get(&progress_map_key(
+                                        &self.context.as_ref().unwrap().source.source_id,
+                                        &a.episode_id,
+                                    ))
+                                    .is_some_and(|p| p.watched)
+                            })
+                            .map(|a| a.target_episode.get())
+                            .max()
+                            .unwrap_or(0);
+                        let key = TargetKey {
+                            account: draft.account.clone(),
+                            media_kind: MediaKind::Anime,
+                            remote_media_id: release.details.media.id,
+                        };
+                        let numbers: Vec<_> = release
+                            .assignments
+                            .iter()
+                            .filter_map(|a| {
+                                self.context
+                                    .as_ref()
+                                    .unwrap()
+                                    .episode_info
+                                    .iter()
+                                    .find(|e| e.id == a.episode_id)
+                                    .and_then(|e| e.number)
+                            })
+                            .collect();
+                        let targets: Vec<_> = release
+                            .assignments
+                            .iter()
+                            .map(|a| a.target_episode.get())
+                            .collect();
+                        crate::TrackingSetupRow {
+                            title: release.details.media.title.clone().into(),
+                            season: text::season_label(release.season).into(),
+                            coverage: text::tracking_setup_coverage(&numbers, &targets).into(),
+                            reason: if release.details.media.episodes.is_none() {
+                                text::tr("Ongoing release; only aired episodes are linked.").into()
+                            } else if release.check_split {
+                                text::tr("Check this split").into()
+                            } else {
+                                "".into()
+                            },
+                            history: text::tracking_setup_history(
+                                watched.max(display_progress(state, &key)),
+                            )
+                            .into(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let setup_active = self.setup.is_some();
+        let setup_revision = self
+            .setup
+            .as_ref()
+            .map(|s| s.revision.to_string())
+            .unwrap_or_default();
+        let setup_summary = self
+            .setup
+            .as_ref()
+            .map(|s| {
+                text::tracking_setup_summary(
+                    s.proposal.releases.len(),
+                    s.proposal
+                        .releases
+                        .iter()
+                        .map(|r| r.assignments.len())
+                        .sum(),
+                    s.proposal
+                        .unresolved
+                        .iter()
+                        .filter(|id| {
+                            self.context.as_ref().is_some_and(|c| {
+                                c.episode_info.iter().any(|e| {
+                                    &e.id == *id
+                                        && e.season.is_some_and(|season| season > 0)
+                                        && e.number.is_some_and(|number| number > 0)
+                                })
+                            })
+                        })
+                        .count(),
+                )
+            })
+            .unwrap_or_default();
+        let range_positions = self
+            .choice
+            .as_ref()
+            .zip(self.context.as_ref())
+            .map(|(choice, context)| {
+                choice
+                    .assignments
+                    .iter()
+                    .filter_map(|a| {
+                        context
+                            .episodes
+                            .iter()
+                            .position(|(id, _)| id == &a.episode_id)
+                            .map(|i| i + 1)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let range_first = range_positions
+            .iter()
+            .min()
+            .copied()
+            .unwrap_or(1)
+            .to_string();
+        let range_last = range_positions
+            .iter()
+            .max()
+            .copied()
+            .unwrap_or_else(|| {
+                self.choice
+                    .as_ref()
+                    .and_then(|c| c.media.episodes.map(|n| n.get() as usize))
+                    .unwrap_or(source_rows.len())
+                    .min(source_rows.len())
+            })
+            .to_string();
+        let range_start = self
+            .choice
+            .as_ref()
+            .and_then(|c| c.assignments.iter().map(|a| a.target_episode.get()).min())
+            .unwrap_or(1)
+            .to_string();
         let notice = self.notice.clone();
         let busy = self.busy;
         let selected_service = service_index(self.candidate_service) as i32;
@@ -2084,8 +2313,17 @@ impl Coordinator {
                     {
                         app.set_tracking_mapping_rows(model);
                     }
+                    app.set_tracking_range_first(range_first.into());
+                    app.set_tracking_range_last(range_last.into());
+                    app.set_tracking_range_start(range_start.into());
                     app.set_tracking_candidate_title(candidate_title.into());
                     app.set_tracking_can_confirm(can_confirm);
+                    if let Some(model) = update_rows(app.get_tracking_setup(), setup_rows) {
+                        app.set_tracking_setup(model);
+                    }
+                    app.set_tracking_setup_active(setup_active);
+                    app.set_tracking_setup_revision(setup_revision.into());
+                    app.set_tracking_setup_summary(setup_summary.into());
                 }
             }
         });
@@ -2394,6 +2632,7 @@ mod suggestion_tests {
             aliases: vec![],
             year: None,
             episodes: vec![],
+            episode_info: vec![],
             ids: providers::ExternalIds::default(),
         };
         let id = NonZeroU32::new(12).unwrap();
@@ -2422,5 +2661,462 @@ mod suggestion_tests {
             candidate_reason(&context, Service::MyAnimeList, &media),
             text::tr("Search result; verify the release and episode coverage.")
         );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_link_state(
+    original: &TrackingState,
+    source: &SourceRef,
+    viewer: &Viewer,
+    account_generation: NonZeroU64,
+    sequence: u64,
+    map: &HashMap<String, EpisodeProgress>,
+    fresh: Vec<(Choice, Option<RemoteEntry>, Media)>,
+    include_history: bool,
+) -> Result<TrackingState, String> {
+    let mut state = original.clone();
+    let mut affected = vec![];
+    for (choice, remote, fresh_media) in fresh {
+        let key = TargetKey {
+            account: viewer.account.clone(),
+            media_kind: MediaKind::Anime,
+            remote_media_id: choice.media.id,
+        };
+        affected.push(key.clone());
+        if let Some(target) = state.targets.iter_mut().find(|t| t.key == key) {
+            target.remote_entry_id = remote.as_ref().and_then(|r| r.entry_id);
+            target.final_episode_total = fresh_media.episodes;
+            target.release_finished = fresh_media.finished;
+        } else {
+            state.targets.push(Target {
+                key: key.clone(),
+                remote_entry_id: remote.as_ref().and_then(|r| r.entry_id),
+                final_episode_total: fresh_media.episodes,
+                release_finished: fresh_media.finished,
+            });
+        }
+        let binding_id = if let Some(id) = choice.repair_id.clone() {
+            id
+        } else {
+            let mut number = state.bindings.len() + 1;
+            while state
+                .bindings
+                .iter()
+                .any(|b| b.id == format!("binding-{number}"))
+            {
+                number += 1;
+            }
+            format!("binding-{number}")
+        };
+        let extension = choice
+            .repair_id
+            .as_ref()
+            .and_then(|id| state.bindings.iter().find(|b| b.id == *id))
+            .is_some_and(|old| {
+                old.target == key
+                    && old.source == *source
+                    && old
+                        .assignments
+                        .iter()
+                        .all(|a| choice.assignments.contains(a))
+            });
+        let revision = if let Some(binding) = state.bindings.iter().find(|b| b.id == binding_id) {
+            binding
+                .mapping_revision
+                .get()
+                .checked_add(1)
+                .and_then(NonZeroU64::new)
+                .ok_or_else(input_message)?
+        } else {
+            NonZeroU64::MIN
+        };
+        state.bindings.retain(|b| b.id != binding_id);
+        let binding = Binding {
+            id: binding_id.clone(),
+            source: source.clone(),
+            target: key.clone(),
+            account_generation,
+            mapping_revision: revision,
+            enabled: true,
+            assignments: choice.assignments.clone(),
+        };
+        state.bindings.push(binding.clone());
+        state
+            .link_checkpoints
+            .retain(|c| c.binding_id != binding_id);
+        state.link_checkpoints.push(LinkCheckpoint {
+            binding_id: binding_id.clone(),
+            sequence,
+        });
+        let observations = checkpoint(&state, &key, map);
+        let baseline = remote.as_ref().map(|r| r.progress).unwrap_or(0);
+        if choice.repair_id.is_some() && state.projections.iter().any(|p| p.target == key) {
+            state
+                .rebase_confirmed_mapping(&key, baseline, observations, extension)
+                .map_err(|_| input_message())?;
+        } else if let Some(projection) = state.projections.iter_mut().find(|p| p.target == key) {
+            projection.refresh_remote(account_generation, projection.revision, baseline);
+            for observation in observations
+                .iter()
+                .filter(|o| o.episode.source == binding.source)
+            {
+                projection
+                    .checkpoint(&binding, &observation.episode, observation.watched)
+                    .map_err(|_| input_message())?;
+            }
+        } else {
+            state.projections.push(Projection::new(
+                key.clone(),
+                account_generation,
+                baseline,
+                observations,
+            ));
+        }
+        if let Some(snapshot) = state.snapshots.iter_mut().find(|s| s.target == key) {
+            snapshot.media = fresh_media.clone();
+            snapshot.remote = remote;
+            snapshot.score_format = viewer.score_format;
+        } else {
+            state.snapshots.push(TargetSnapshot {
+                target: key,
+                media: fresh_media.clone(),
+                remote,
+                score_format: viewer.score_format,
+                status_pinned: false,
+                dates_pinned: false,
+            });
+        }
+    }
+    // Binding/checkpoint changes and optional history intents are one local
+    // transaction. A failure cannot leave half a split season linked.
+    state.validate().map_err(|_| input_message())?;
+    if include_history {
+        for key in &affected {
+            let progress = history_progress(&state, key, map).max(display_progress(&state, key));
+            let observations = checkpoint(&state, key, map);
+            if progress > display_progress(&state, key) {
+                state
+                    .replace_progress(key, progress, observations)
+                    .map_err(|_| input_message())?;
+            }
+        }
+    }
+    state.validate().map_err(|_| input_message())?;
+    Ok(state)
+}
+
+#[cfg(test)]
+mod batch_link_tests {
+    use super::*;
+    fn n(value: u32) -> NonZeroU32 {
+        NonZeroU32::new(value).unwrap()
+    }
+    fn fixture() -> (
+        TrackingState,
+        SourceRef,
+        Viewer,
+        HashMap<String, EpisodeProgress>,
+        Vec<(Choice, Option<RemoteEntry>, Media)>,
+    ) {
+        let source = SourceRef {
+            provider_id: "nova".into(),
+            source_id: "merged".into(),
+            media_type: "series".into(),
+        };
+        let viewer = Viewer {
+            account: AccountKey {
+                service: Service::MyAnimeList,
+                remote_user_id: n(7),
+            },
+            name: "test".into(),
+            score_format: ScoreFormat::Point10,
+        };
+        let state = TrackingState {
+            accounts: vec![Account {
+                key: viewer.account.clone(),
+                generation: NonZeroU64::MIN,
+                display_name: "test".into(),
+            }],
+            active_accounts: vec![viewer.account.clone()],
+            ..Default::default()
+        };
+        let history = (1..=10)
+            .map(|episode| {
+                let id = format!("s2e{episode}");
+                (
+                    progress_map_key("merged", &id),
+                    EpisodeProgress {
+                        series_id: "merged".into(),
+                        episode_id: id,
+                        watched: true,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let links = [(49926, 1, 7), (47778, 8, 11)]
+            .into_iter()
+            .map(|(id, first, count)| {
+                let media = Media {
+                    id: n(id),
+                    mal_id: Some(n(id)),
+                    title: format!("Release {id}"),
+                    format: "tv".into(),
+                    episodes: Some(n(count)),
+                    finished: true,
+                    year: Some(2021),
+                };
+                let choice = Choice {
+                    service: Service::MyAnimeList,
+                    media: media.clone(),
+                    remote: None,
+                    assignments: (0..count)
+                        .map(|offset| Assignment {
+                            episode_id: format!("s2e{}", first + offset),
+                            target_episode: n(offset + 1),
+                        })
+                        .collect(),
+                    repair_id: None,
+                    validated: true,
+                    proposal_index: None,
+                };
+                (choice, None, media)
+            })
+            .collect();
+        (state, source, viewer, history, links)
+    }
+    #[test]
+    fn batch_links_checkpoint_history_and_route_future_watching_to_the_correct_part() {
+        let (original, source, viewer, history, links) = fixture();
+        let mut state = prepare_link_state(
+            &original,
+            &source,
+            &viewer,
+            NonZeroU64::MIN,
+            20,
+            &history,
+            links,
+            false,
+        )
+        .unwrap();
+        assert_eq!(state.bindings.len(), 2);
+        assert!(state.outbox.pending().is_empty());
+        assert!(state.link_checkpoints.iter().all(|c| c.sequence == 20));
+        let second = state.bindings[1].clone();
+        let key = second.target.clone();
+        let projection = state
+            .projections
+            .iter_mut()
+            .find(|p| p.target == key)
+            .unwrap();
+        projection
+            .observe(
+                &second,
+                &SourceEpisode {
+                    source,
+                    episode_id: "s2e11".into(),
+                },
+                true,
+            )
+            .unwrap();
+        let target = state.targets.iter().find(|t| t.key == key).unwrap();
+        assert_eq!(projection.proposal(target).unwrap().progress, 4);
+        assert_eq!(
+            state.projections[0]
+                .proposal(&state.targets[0])
+                .unwrap()
+                .progress,
+            0,
+            "old watched history stays excluded"
+        );
+        assert!(original.bindings.is_empty());
+    }
+    #[test]
+    fn optional_history_is_queued_for_each_release_in_the_same_state() {
+        let (original, source, viewer, history, links) = fixture();
+        let state = prepare_link_state(
+            &original,
+            &source,
+            &viewer,
+            NonZeroU64::MIN,
+            20,
+            &history,
+            links,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            state
+                .outbox
+                .pending()
+                .iter()
+                .map(|p| (p.target.remote_media_id.get(), p.progress))
+                .collect::<Vec<_>>(),
+            vec![(49926, 7), (47778, 3)]
+        );
+        state.validate().unwrap();
+    }
+    #[test]
+    fn higher_remote_progress_and_unrelated_fields_are_preserved() {
+        let (original, source, viewer, history, mut links) = fixture();
+        links[1].1 = Some(RemoteEntry {
+            account: viewer.account.clone(),
+            media_id: n(47778),
+            entry_id: None,
+            progress: 9,
+            status: ListStatus::OnHold,
+            score_tenths: 80,
+            started: ListDate::default(),
+            completed: ListDate::default(),
+            repeating: false,
+        });
+        let state = prepare_link_state(
+            &original,
+            &source,
+            &viewer,
+            NonZeroU64::MIN,
+            20,
+            &history,
+            links,
+            true,
+        )
+        .unwrap();
+        assert_eq!(state.outbox.pending().len(), 1);
+        let remote = state.snapshots[1].remote.as_ref().unwrap();
+        assert_eq!(remote.progress, 9);
+        assert_eq!(remote.score_tenths, 80);
+        assert_eq!(remote.status, ListStatus::OnHold);
+    }
+    #[test]
+    fn conflicting_batch_never_mutates_the_original_state() {
+        let (original, source, viewer, history, mut links) = fixture();
+        links[1].0.assignments[0].episode_id = "s2e1".into();
+        assert!(
+            prepare_link_state(
+                &original,
+                &source,
+                &viewer,
+                NonZeroU64::MIN,
+                20,
+                &history,
+                links,
+                true
+            )
+            .is_err()
+        );
+        assert!(original.bindings.is_empty());
+        assert!(original.outbox.pending().is_empty());
+    }
+    #[test]
+    fn adding_missing_coverage_preserves_authorized_progress_and_manual_edits() {
+        let (original, source, viewer, history, mut initial) = fixture();
+        initial[1].0.assignments.truncate(3);
+        let mut state = prepare_link_state(
+            &original,
+            &source,
+            &viewer,
+            NonZeroU64::MIN,
+            20,
+            &history,
+            initial,
+            true,
+        )
+        .unwrap();
+        let key = state.bindings[1].target.clone();
+        state
+            .enqueue_edit(
+                &key,
+                EntryPatch {
+                    score_tenths: Some(80),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let (_, _, _, _, mut complete) = fixture();
+        let mut second = complete.pop().unwrap();
+        second.0.repair_id = Some(state.bindings[1].id.clone());
+        let extended = prepare_link_state(
+            &state,
+            &source,
+            &viewer,
+            NonZeroU64::MIN,
+            21,
+            &history,
+            vec![second],
+            false,
+        )
+        .unwrap();
+        assert_eq!(extended.bindings[1].assignments.len(), 11);
+        assert_eq!(
+            extended
+                .outbox
+                .pending()
+                .iter()
+                .find(|p| p.target == key)
+                .unwrap()
+                .progress,
+            3
+        );
+        assert_eq!(extended.outbox.edits().len(), 1);
+        assert_eq!(extended.outbox.edits()[0].patch.score_tenths, Some(80));
+        assert_eq!(
+            extended
+                .link_checkpoints
+                .iter()
+                .find(|c| c.binding_id == state.bindings[1].id)
+                .unwrap()
+                .sequence,
+            21
+        );
+    }
+    #[derive(Clone, Default)]
+    struct Memory {
+        raw: Arc<Mutex<Option<String>>>,
+        fail: Arc<AtomicBool>,
+    }
+    impl StateStorage for Memory {
+        fn read(&self, _: &str) -> Result<Option<String>, storage::Error> {
+            Ok(self.raw.lock().unwrap().clone())
+        }
+        fn write(&self, entries: &[(String, Option<String>)]) -> Result<(), storage::Error> {
+            if self.fail.load(Ordering::Acquire) {
+                return Err(storage::Error::new(
+                    storage::ErrorKind::Transaction,
+                    "fixture failed write",
+                ));
+            }
+            for (key, value) in entries {
+                if key == TRACKING_STATE_KEY {
+                    *self.raw.lock().unwrap() = value.clone();
+                }
+            }
+            Ok(())
+        }
+    }
+    #[test]
+    fn failed_storage_keeps_the_whole_batch_unlinked_and_restart_recovers_complete_success() {
+        let (original, source, viewer, history, links) = fixture();
+        let candidate = prepare_link_state(
+            &original,
+            &source,
+            &viewer,
+            NonZeroU64::MIN,
+            20,
+            &history,
+            links,
+            true,
+        )
+        .unwrap();
+        let db = Memory::default();
+        let mut store = Store::load(db.clone()).unwrap();
+        store.save(original.clone()).unwrap();
+        db.fail.store(true, Ordering::Release);
+        assert!(store.save(candidate.clone()).is_err());
+        assert_eq!(store.state(), &original);
+        assert_eq!(Store::load(db.clone()).unwrap().state(), &original);
+        db.fail.store(false, Ordering::Release);
+        store.save(candidate.clone()).unwrap();
+        assert_eq!(Store::load(db).unwrap().state(), &candidate);
     }
 }

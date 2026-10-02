@@ -1266,3 +1266,66 @@ msgstr "Rezultat pretraživanja; provjerite izdanje i obuhvat epizoda."
 
 msgid "Suggest releases"
 msgstr "Predloži izdanja"
+
+msgid "Tracking is ready. Add any missing releases below."
+msgstr "Praćenje je spremno. U nastavku dodajte izdanja koja nedostaju."
+
+msgid "Review the suggested releases, then start tracking."
+msgstr "Pregledajte predložena izdanja pa pokrenite praćenje."
+
+msgid "Adjust this release, then save the change to your review."
+msgstr "Prilagodite ovo izdanje pa spremite promjenu za pregled."
+
+msgid "Release metadata changed. Reload suggestions before linking."
+msgstr "Podaci o izdanju promijenili su se. Ponovno učitajte prijedloge prije povezivanja."
+
+msgid "Linked. Saved watched progress is queued."
+msgstr "Povezano. Spremljeni napredak gledanja čeka slanje."
+
+msgid "Linked. New watched episodes will update the matching release."
+msgstr "Povezano. Nove pogledane epizode ažurirat će odgovarajuće izdanje."
+
+msgid "Check this split"
+msgstr "Provjerite ovu podjelu"
+
+msgid "More"
+msgstr "Više"
+
+msgid "Review setup"
+msgstr "Pregled povezivanja"
+
+msgid "Include watched episodes"
+msgstr "Uključi pogledane epizode"
+
+msgid "Start tracking"
+msgstr "Pokreni praćenje"
+
+msgid "Adjust"
+msgstr "Prilagodi"
+
+msgid "Add missing releases"
+msgstr "Dodaj izdanja koja nedostaju"
+
+msgid "Reload suggestions"
+msgstr "Ponovno učitaj prijedloge"
+
+msgid "Choose a different release"
+msgstr "Odaberi drugo izdanje"
+
+msgid "Save adjustment"
+msgstr "Spremi prilagodbu"
+
+msgid "Back to review"
+msgstr "Natrag na pregled"
+
+msgid "Edit individual episodes"
+msgstr "Uredi pojedinačne epizode"
+
+msgid "Check the episode range. Use individual assignments only when the numbering differs."
+msgstr "Provjerite raspon epizoda. Pojedinačne dodjele koristite samo kada se numeriranje razlikuje."
+
+msgid "Episodes are still loading. Reload suggestions when they are ready."
+msgstr "Epizode se još učitavaju. Ponovno učitajte prijedloge kada budu spremne."
+
+msgid "Ongoing release; only aired episodes are linked."
+msgstr "Izdanje još izlazi; povezane su samo emitirane epizode."

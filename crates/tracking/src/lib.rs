@@ -10,7 +10,9 @@ mod models;
 mod outbox;
 mod persistence;
 mod projection;
+mod proposal;
 mod resolution;
+pub use proposal::*;
 pub use resolution::{TitleMatch, filter_linked_candidates, rank_candidates, title_match};
 mod service;
 

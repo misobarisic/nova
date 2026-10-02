@@ -1,5 +1,5 @@
 import { TrackingSheet } from "tracking.slint";
-import { TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow } from "types.slint";
+import { TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow } from "types.slint";
 import { ScrollView, Spinner } from "std-widgets.slint";
 import { SearchField } from "searchfield.slint";
 import { CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem } from "types.slint";
@@ -618,6 +618,14 @@ export component DetailPage {
     in property <[TrackingLinkRow]> tracking_links;
     in property <[TrackingCandidateRow]> tracking_candidates;
     in-out property <int> tracking_service;
+    in property <[TrackingSetupRow]> tracking_setup;
+    in property <string> tracking_setup_revision;
+    in property <string> tracking_setup_summary;
+    in property <bool> tracking_setup_active;
+    in property <string> tracking_range_first;
+    in property <string> tracking_range_last;
+    in property <string> tracking_range_start;
+
     in property <[string]> tracking_source_rows;
     in property <[string]> tracking_preview_rows;
     in property <[TrackingMappingRow]> tracking_mapping_rows;
@@ -632,6 +640,9 @@ export component DetailPage {
     callback tracking_pick(int);
     callback tracking_preview(string,string,string);
     callback tracking_confirm();
+    callback tracking_accept_setup(string,bool);
+    callback tracking_adjust_setup(int);
+    callback tracking_cancel_adjust();
     callback tracking_assign(int,string);
     callback tracking_edit(string,string,int,string,bool,string,bool,string);
     callback tracking_action(string,int);
@@ -957,7 +968,7 @@ export component DetailPage {
     function system_back() {
         root.kb_active = true;
         if (root.tracking_open) {
-            root.tracking_close();
+            if root.tracking_candidate_title != "" {root.tracking_cancel_adjust();} else {root.tracking_close();}
         } else if (root.stream_action_open) {
             root.stream_action_open = false;
         } else if (root.menu_kind >= 0) {
@@ -1165,7 +1176,7 @@ export component DetailPage {
             }
             key-pressed(e) => {
                 if (root.tracking_open) {
-                    if (e.text == Key.Escape || e.text == Key.Back) {root.tracking_close();accept} else {reject}
+                    if (e.text == Key.Escape || e.text == Key.Back) {if root.tracking_candidate_title != "" {root.tracking_cancel_adjust();} else {root.tracking_close();}accept} else {reject}
                 } else if (root.stream_action_open) {
                     root.stream_action_open = false;
                     accept
@@ -2504,6 +2515,14 @@ export component DetailPage {
             links:root.tracking_links;
             candidates:root.tracking_candidates;
             selected_service <=> root.tracking_service;
+            setup:root.tracking_setup;
+            setup_revision:root.tracking_setup_revision;
+            setup_summary:root.tracking_setup_summary;
+            setup_active:root.tracking_setup_active;
+            range_first:root.tracking_range_first;
+            range_last:root.tracking_range_last;
+            range_start:root.tracking_range_start;
+
             source_rows:root.tracking_source_rows;
             preview_rows:root.tracking_preview_rows;
             mapping_rows:root.tracking_mapping_rows;
@@ -2516,6 +2535,9 @@ export component DetailPage {
             pick(a0) => {root.tracking_pick(a0);}
             preview(a0,a1,a2) => {root.tracking_preview(a0,a1,a2);}
             confirm() => {root.tracking_confirm();}
+            accept_setup(revision,history) => {root.tracking_accept_setup(revision,history);}
+            adjust_setup(index) => {root.tracking_adjust_setup(index);}
+            cancel_adjust() => {root.tracking_cancel_adjust();}
             assign(row,value) => {root.tracking_assign(row,value);}
             edit(a0,a1,a2,a3,a4,a5,a6,a7) => {root.tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7);}
             action(a0,a1) => {root.tracking_action(a0,a1);}

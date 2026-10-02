@@ -111,6 +111,22 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
     let confirms = Rc::new(Cell::new(0));
     let recorded_confirms = confirms.clone();
     app.on_tracking_confirm(move || recorded_confirms.set(recorded_confirms.get() + 1));
+    let accepts = Rc::new(RefCell::new(Vec::new()));
+    let recorded_accepts = accepts.clone();
+    app.on_tracking_accept_setup(move |revision, history| {
+        recorded_accepts
+            .borrow_mut()
+            .push((revision.to_string(), history))
+    });
+    let adjusts = Rc::new(RefCell::new(Vec::new()));
+    let recorded_adjusts = adjusts.clone();
+    app.on_tracking_adjust_setup(move |index| recorded_adjusts.borrow_mut().push(index));
+    let weak = app.as_weak();
+    app.on_tracking_cancel_adjust(move || {
+        weak.upgrade()
+            .unwrap()
+            .set_tracking_candidate_title("".into());
+    });
     let weak = app.as_weak();
     let f = failures.clone();
     let a = actions.clone();
@@ -158,6 +174,7 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
         click(&app, "Tracking").await;
         assert!(app.get_tracking_open());
         check_width(&app, &f);
+        click(&app, "More").await;
         click(&app, "Apply Nova history").await;
         assert_eq!(a.get(), 0, "preview must not send history");
         click(&app, "Confirm history update").await;
@@ -184,7 +201,7 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
         );
         assert_eq!(confirms.get(), 0, "suggestions must not create links");
         assert_eq!(app.get_tracking_service(), 1);
-        click(&app, "Suggest releases").await;
+        click(&app, "Reload suggestions").await;
         assert_eq!(
             *searches.borrow(),
             vec![(1, String::new())],
@@ -210,6 +227,64 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
             0,
             "selecting a release must still require alignment confirmation"
         );
+        app.set_tracking_setup_revision(s("proposal-2"));
+        app.set_tracking_setup_active(true);
+        app.set_tracking_setup_summary(s("2 releases · 18 episodes · 0 unmapped"));
+        app.set_tracking_setup(
+            Rc::new(VecModel::from(vec![
+                nova::TrackingSetupRow {
+                    title: s("Mugen Train TV"),
+                    season: s("Season 2"),
+                    coverage: s("Episodes 1–7 → tracker episodes 1–7"),
+                    reason: s("Check this split"),
+                    history: s("Saved watched progress: at least 7"),
+                },
+                nova::TrackingSetupRow {
+                    title: s("Entertainment District"),
+                    season: s("Season 2"),
+                    coverage: s("Episodes 8–18 → tracker episodes 1–11"),
+                    reason: s("Check this split"),
+                    history: s("Saved watched progress: at least 3"),
+                },
+            ]))
+            .into(),
+        );
+        settle().await;
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "First source row")
+                .next()
+                .is_none(),
+            "advanced fields stay out of the initial review"
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Tracker search")
+                .next()
+                .is_none(),
+            "manual search starts collapsed"
+        );
+        assert!(
+            accepts.borrow().is_empty(),
+            "a proposed split cannot link itself"
+        );
+        click(&app, "Start tracking").await;
+        assert_eq!(*accepts.borrow(), vec![("proposal-2".to_string(), false)]);
+        click(&app, "Include watched episodes").await;
+        click(&app, "Start tracking").await;
+        assert_eq!(
+            accepts.borrow().last().unwrap(),
+            &("proposal-2".to_string(), true)
+        );
+        click(&app, "Adjust").await;
+        assert_eq!(*adjusts.borrow(), vec![0]);
+        app.set_tracking_candidate_title(s("Mugen Train TV"));
+        settle().await;
+        app.set_system_back_request(app.get_system_back_request() + 1);
+        settle().await;
+        assert!(
+            app.get_tracking_open(),
+            "Back from adjustment returns to review"
+        );
+        assert!(app.get_tracking_candidate_title().is_empty());
         check_width(&app, &f);
         slint::quit_event_loop().unwrap();
     })

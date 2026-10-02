@@ -397,6 +397,95 @@ impl<T: Transport> Client<T> {
         }
         Ok(media)
     }
+    /// Official release relationships are discovery hints, not episode mappings.
+    pub fn release_details(
+        &self,
+        media_id: NonZeroU32,
+        now: u64,
+    ) -> Result<ReleaseDetails, ApiError> {
+        let value = match self.service {
+            Service::MyAnimeList => self.request("GET", format!("https://api.myanimelist.net/v2/anime/{media_id}?fields=id,title,alternative_titles,media_type,num_episodes,status,start_date,end_date,related_anime"), Body::Empty, now)?,
+            Service::AniList => self.graphql(format!("query($id:Int){{Media(id:$id,type:ANIME){{{MEDIA_FIELDS} synonyms startDate{{year month day}} endDate{{year month day}} relations{{edges{{relationType node{{id type}}}}}}}}}}"), json!({"id":media_id}), now)?["Media"].clone(),
+        };
+        let media = parse_media(self.service, &value)?;
+        if media.id != media_id {
+            return Err(ApiError::InvalidResponse);
+        }
+        let mut aliases = vec![];
+        let mut add = |value: &Value| {
+            if let Some(title) = value.as_str().filter(|s| !s.is_empty() && s.len() <= 512) {
+                if aliases.len() < 16 && !aliases.iter().any(|s| s == title) {
+                    aliases.push(title.to_owned());
+                }
+            }
+        };
+        let (start, end, relations) = match self.service {
+            Service::MyAnimeList => {
+                for key in ["en", "ja"] {
+                    add(&value["alternative_titles"][key]);
+                }
+                if let Some(titles) = value["alternative_titles"]["synonyms"].as_array() {
+                    for title in titles.iter().take(16) {
+                        add(title);
+                    }
+                }
+                let mut relations = vec![];
+                if let Some(edges) = value["related_anime"].as_array() {
+                    if edges.len() > 64 {
+                        return Err(ApiError::InvalidResponse);
+                    }
+                    for edge in edges {
+                        relations.push(RelatedRelease {
+                            id: id(&edge["node"]["id"])?,
+                            relation: parse_relation(edge["relation_type"].as_str()),
+                        });
+                    }
+                }
+                (
+                    metadata_date(&value["start_date"])?,
+                    metadata_date(&value["end_date"])?,
+                    relations,
+                )
+            }
+            Service::AniList => {
+                for key in ["english", "romaji", "native"] {
+                    add(&value["title"][key]);
+                }
+                if let Some(titles) = value["synonyms"].as_array() {
+                    for title in titles.iter().take(16) {
+                        add(title);
+                    }
+                }
+                let mut relations = vec![];
+                if let Some(edges) = value["relations"]["edges"].as_array() {
+                    if edges.len() > 64 {
+                        return Err(ApiError::InvalidResponse);
+                    }
+                    for edge in edges
+                        .iter()
+                        .filter(|e| e["node"]["type"].as_str() == Some("ANIME"))
+                    {
+                        relations.push(RelatedRelease {
+                            id: id(&edge["node"]["id"])?,
+                            relation: parse_relation(edge["relationType"].as_str()),
+                        });
+                    }
+                }
+                (
+                    date(&value["startDate"])?,
+                    date(&value["endDate"])?,
+                    relations,
+                )
+            }
+        };
+        Ok(ReleaseDetails {
+            media,
+            aliases,
+            start,
+            end,
+            relations,
+        })
+    }
     pub fn read(&self, media_id: NonZeroU32, now: u64) -> Result<Option<RemoteEntry>, ApiError> {
         let viewer = self.viewer()?;
         let value = match self.service {
@@ -521,6 +610,39 @@ impl<T: Transport> Client<T> {
             return Err(ApiError::InvalidResponse);
         }
         Ok(result)
+    }
+}
+fn metadata_date(value: &Value) -> Result<ListDate, ApiError> {
+    if let Some(value) = value.as_str() {
+        let parts: Vec<_> = value.split('-').collect();
+        if parts.is_empty() || parts.len() > 3 {
+            return Err(ApiError::InvalidResponse);
+        }
+        let date = ListDate {
+            year: Some(parts[0].parse().map_err(|_| ApiError::InvalidResponse)?),
+            month: parts
+                .get(1)
+                .map(|v| v.parse().map_err(|_| ApiError::InvalidResponse))
+                .transpose()?,
+            day: parts
+                .get(2)
+                .map(|v| v.parse().map_err(|_| ApiError::InvalidResponse))
+                .transpose()?,
+        };
+        return if date.valid() {
+            Ok(date)
+        } else {
+            Err(ApiError::InvalidResponse)
+        };
+    }
+    date(value)
+}
+fn parse_relation(value: Option<&str>) -> ReleaseRelation {
+    match value.unwrap_or_default().to_ascii_lowercase().as_str() {
+        "prequel" => ReleaseRelation::Prequel,
+        "sequel" => ReleaseRelation::Sequel,
+        "alternative" | "alternative_version" => ReleaseRelation::Alternative,
+        _ => ReleaseRelation::Other,
     }
 }
 fn parse_media(service: Service, value: &Value) -> Result<Media, ApiError> {

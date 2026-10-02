@@ -15,7 +15,7 @@ export { NavState } from "sidenav.slint";
 // Shared structs used by the property declarations below; they are exported
 // from types.slint, so the generated Rust module (`slint::include_modules!`)
 // exposes them to the backend.
-import { TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, MediaCard, StreamRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, TrackRow, SeasonCard, ContinueRow, UpcomingRow, CalCell, SheetItem, DownloadRow, LicenseSource } from "types.slint";
+import { TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, MediaCard, StreamRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, TrackRow, SeasonCard, ContinueRow, UpcomingRow, CalCell, SheetItem, DownloadRow, LicenseSource } from "types.slint";
 
 // AppWindow owns every property / callback the backend drives (all the
 // `set_*`, `get_*`, `on_*` and `invoke_*` calls in desktop.rs / web.rs) and
@@ -26,6 +26,14 @@ export component AppWindow inherits Window {
     in-out property <[TrackingLinkRow]> tracking_links;
     in-out property <[TrackingCandidateRow]> tracking_candidates;
     in-out property <int> tracking_service:0;
+    in-out property <[TrackingSetupRow]> tracking_setup;
+    in-out property <string> tracking_setup_revision;
+    in-out property <string> tracking_setup_summary;
+    in-out property <bool> tracking_setup_active;
+    in-out property <string> tracking_range_first;
+    in-out property <string> tracking_range_last;
+    in-out property <string> tracking_range_start;
+
     in-out property <[string]> tracking_source_rows;
     in-out property <[string]> tracking_preview_rows;
     in-out property <[TrackingMappingRow]> tracking_mapping_rows;
@@ -46,6 +54,9 @@ export component AppWindow inherits Window {
     callback tracking_pick(int);
     callback tracking_preview(string,string,string);
     callback tracking_confirm();
+    callback tracking_accept_setup(string,bool);
+    callback tracking_adjust_setup(int);
+    callback tracking_cancel_adjust();
     callback tracking_assign(int,string);
     callback tracking_edit(string,string,int,string,bool,string,bool,string);
     callback tracking_action(string,int);
@@ -778,6 +789,14 @@ export component AppWindow inherits Window {
         tracking_links: root.tracking_links;
         tracking_candidates: root.tracking_candidates;
         tracking_service <=> root.tracking_service;
+        tracking_setup:root.tracking_setup;
+        tracking_setup_revision:root.tracking_setup_revision;
+        tracking_setup_summary:root.tracking_setup_summary;
+        tracking_setup_active:root.tracking_setup_active;
+        tracking_range_first:root.tracking_range_first;
+        tracking_range_last:root.tracking_range_last;
+        tracking_range_start:root.tracking_range_start;
+
         tracking_source_rows: root.tracking_source_rows;
         tracking_preview_rows: root.tracking_preview_rows;
         tracking_mapping_rows: root.tracking_mapping_rows;
@@ -792,6 +811,9 @@ export component AppWindow inherits Window {
         tracking_pick(a0) => {root.tracking_pick(a0);}
         tracking_preview(a0,a1,a2) => {root.tracking_preview(a0,a1,a2);}
         tracking_confirm() => {root.tracking_confirm();}
+        tracking_accept_setup(revision,history) => {root.tracking_accept_setup(revision,history);}
+        tracking_adjust_setup(index) => {root.tracking_adjust_setup(index);}
+        tracking_cancel_adjust() => {root.tracking_cancel_adjust();}
         tracking_assign(row,value) => {root.tracking_assign(row,value);}
         tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7) => {root.tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7);}
         tracking_action(a0,a1) => {root.tracking_action(a0,a1);}

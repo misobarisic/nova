@@ -4,12 +4,16 @@ use nova_tracking::auth::{AuthReturn, ClientRegistration};
 use worker::Command;
 impl Bridge {
     pub(in crate::app) fn tracking_metadata(&self, id: String, type_: String, videos: &[Video]) {
+        let source = SourceRef {
+            provider_id: "nova".into(),
+            source_id: id,
+            media_type: type_,
+        };
+        let info = tracking_episode_info(videos);
+        let generation = self.tracking.metadata_generation(&source, &info);
         self.tracking.send(Command::Metadata {
-            source: SourceRef {
-                provider_id: "nova".into(),
-                source_id: id,
-                media_type: type_,
-            },
+            source,
+            generation,
             episode_ids: videos
                 .iter()
                 .filter(|v| v.season.is_some())
@@ -76,49 +80,65 @@ impl Bridge {
             + 1;
         self.tracking.send(Command::Disconnect { service, epoch });
     }
-    pub(in crate::app) fn tracking_show(&self) {
-        let context = {
-            let state = self.shared.lock().unwrap();
-            let Some(modal) = state.modal_item.as_ref() else {
-                return;
-            };
-            let episodes = if modal.type_ == "movie" {
-                vec![(modal.id.clone(), modal.name.clone())]
-            } else {
-                modal
-                    .videos
-                    .iter()
-                    .map(|v| {
-                        (
-                            v.id.clone(),
-                            format!("{} · {}", episode_context_label(v), v.label()),
-                        )
-                    })
-                    .collect()
-            };
-            let evidence =
-                read_json_result::<SourceEvidence>(&evidence_key(&modal.type_, &modal.id))
-                    .ok()
-                    .flatten();
-            let ids = evidence.as_ref().map(|e| e.ids.clone()).unwrap_or_default();
-            let aliases = evidence
-                .as_ref()
-                .map(|e| e.aliases.clone())
-                .unwrap_or_default();
-            let year = evidence.as_ref().and_then(|e| e.year);
-            SourceContext {
-                source: SourceRef {
-                    provider_id: "nova".into(),
-                    source_id: modal.id.clone(),
-                    media_type: modal.type_.clone(),
-                },
-                title: modal.name.clone(),
-                ids,
-                aliases,
-                year,
-                episodes,
-            }
+    fn tracking_context(&self) -> Option<SourceContext> {
+        let state = self.shared.lock().unwrap();
+        let Some(modal) = state.modal_item.as_ref() else {
+            return None;
         };
+        let episodes = if modal.type_ == "movie" {
+            vec![(modal.id.clone(), modal.name.clone())]
+        } else {
+            modal
+                .videos
+                .iter()
+                .map(|v| {
+                    (
+                        v.id.clone(),
+                        format!("{} · {}", episode_se_label(v), v.label()),
+                    )
+                })
+                .collect()
+        };
+        let evidence = read_json_result::<SourceEvidence>(&evidence_key(&modal.type_, &modal.id))
+            .ok()
+            .flatten();
+        let ids = evidence.as_ref().map(|e| e.ids.clone()).unwrap_or_default();
+        let aliases = evidence
+            .as_ref()
+            .map(|e| e.aliases.clone())
+            .unwrap_or_default();
+        let year = evidence.as_ref().and_then(|e| e.year);
+        let episode_info = if modal.type_ == "movie" {
+            vec![nova_tracking::EpisodeInfo {
+                id: modal.id.clone(),
+                season: Some(1),
+                number: Some(1),
+                title: modal.name.clone(),
+                released: nova_tracking::ListDate::default(),
+            }]
+        } else {
+            tracking_episode_info(&modal.videos)
+        };
+        Some(SourceContext {
+            source: SourceRef {
+                provider_id: "nova".into(),
+                source_id: modal.id.clone(),
+                media_type: modal.type_.clone(),
+            },
+            title: modal.name.clone(),
+            ids,
+            aliases,
+            year,
+            episodes,
+            episode_info,
+        })
+    }
+    pub(in crate::app) fn tracking_show(&self) {
+        let Some(context) = self.tracking_context() else {
+            return;
+        };
+        *self.tracking.context_evidence.lock().unwrap() =
+            Some((context.source.clone(), context.episode_info.clone()));
         let generation = self
             .tracking
             .context_generation
@@ -140,6 +160,7 @@ impl Bridge {
         });
     }
     pub(in crate::app) fn tracking_close(&self) {
+        *self.tracking.context_evidence.lock().unwrap() = None;
         self.tracking
             .context_generation
             .fetch_add(1, Ordering::AcqRel);
@@ -152,6 +173,11 @@ impl Bridge {
         let Some(service) = service(index) else {
             return;
         };
+        let Some(context) = self.tracking_context() else {
+            return;
+        };
+        *self.tracking.context_evidence.lock().unwrap() =
+            Some((context.source.clone(), context.episode_info.clone()));
         let generation = self
             .tracking
             .context_generation
@@ -166,6 +192,7 @@ impl Bridge {
             );
         }
         self.tracking.send(Command::Search {
+            context,
             service,
             query,
             generation,
@@ -204,6 +231,29 @@ impl Bridge {
         self.tracking.send(Command::Confirm {
             generation: self.tracking.context_generation.load(Ordering::Acquire),
         });
+    }
+    pub(in crate::app) fn tracking_cancel_adjust(&self) {
+        self.tracking.send(Command::CancelAdjust {
+            generation: self.tracking.context_generation.load(Ordering::Acquire),
+        });
+    }
+    pub(in crate::app) fn tracking_accept_setup(&self, revision: String, include_history: bool) {
+        if let Some(app) = self.app() {
+            app.set_tracking_busy(true);
+        }
+        self.tracking.send(Command::AcceptSetup {
+            revision,
+            include_history,
+            generation: self.tracking.context_generation.load(Ordering::Acquire),
+        });
+    }
+    pub(in crate::app) fn tracking_adjust_setup(&self, index: i32) {
+        if let Ok(index) = usize::try_from(index) {
+            self.tracking.send(Command::AdjustSetup {
+                index,
+                generation: self.tracking.context_generation.load(Ordering::Acquire),
+            });
+        }
     }
     #[allow(clippy::too_many_arguments)]
     pub(in crate::app) fn tracking_edit(

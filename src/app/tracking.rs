@@ -12,6 +12,7 @@ pub(super) struct TrackingHandle {
     alive: AtomicBool,
     rx: Mutex<Option<Receiver<worker::Command>>>,
     context_generation: AtomicU64,
+    context_evidence: Mutex<Option<(SourceRef, Vec<nova_tracking::EpisodeInfo>)>>,
     login_generation: [AtomicU64; 2],
 }
 impl TrackingHandle {
@@ -22,6 +23,7 @@ impl TrackingHandle {
             alive: AtomicBool::new(true),
             rx: Mutex::new(Some(rx)),
             context_generation: AtomicU64::new(0),
+            context_evidence: Mutex::new(None),
             login_generation: [AtomicU64::new(0), AtomicU64::new(0)],
         }
     }
@@ -31,6 +33,25 @@ impl TrackingHandle {
         }
     }
 }
+impl TrackingHandle {
+    fn metadata_generation(
+        &self,
+        source: &SourceRef,
+        info: &[nova_tracking::EpisodeInfo],
+    ) -> Option<u64> {
+        let mut evidence = self.context_evidence.lock().unwrap();
+        let changed = evidence
+            .as_ref()
+            .is_some_and(|(current, old)| current == source && old != info);
+        if changed {
+            *evidence = None;
+            Some(self.context_generation.fetch_add(1, Ordering::AcqRel) + 1)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Clone)]
 struct SourceContext {
     source: SourceRef,
@@ -39,6 +60,7 @@ struct SourceContext {
     aliases: Vec<String>,
     year: Option<u16>,
     episodes: Vec<(String, String)>,
+    episode_info: Vec<nova_tracking::EpisodeInfo>,
 }
 fn service(index: i32) -> Option<Service> {
     match index {
@@ -311,5 +333,68 @@ mod tests {
             Some("corrupt".into())
         );
         assert!(store.extra_value(JOURNAL_ERROR_KEY).unwrap().is_some());
+    }
+}
+
+fn tracking_episode_info(videos: &[Video]) -> Vec<nova_tracking::EpisodeInfo> {
+    videos
+        .iter()
+        .map(|v| nova_tracking::EpisodeInfo {
+            id: v.id.clone(),
+            season: v.season,
+            number: v.episode_number(),
+            title: v.label(),
+            released: tracking_source_date(v.released.as_deref()),
+        })
+        .collect()
+}
+fn tracking_source_date(value: Option<&str>) -> nova_tracking::ListDate {
+    let mut parts = value.unwrap_or_default().split(['-', 'T']);
+    let date = nova_tracking::ListDate {
+        year: parts.next().and_then(|v| v.parse().ok()),
+        month: parts.next().and_then(|v| v.parse().ok()),
+        day: parts.next().and_then(|v| v.parse().ok()),
+    };
+    if date.valid() {
+        date
+    } else {
+        nova_tracking::ListDate::default()
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+    #[test]
+    fn episode_number_or_date_changes_invalidate_the_active_review_but_unrelated_metadata_does_not()
+    {
+        let handle = TrackingHandle::new();
+        let source = SourceRef {
+            provider_id: "nova".into(),
+            source_id: "merged".into(),
+            media_type: "series".into(),
+        };
+        let episode = nova_tracking::EpisodeInfo {
+            id: "stable-id".into(),
+            season: Some(2),
+            number: Some(8),
+            title: "Episode".into(),
+            released: nova_tracking::ListDate::default(),
+        };
+        *handle.context_evidence.lock().unwrap() = Some((source.clone(), vec![episode.clone()]));
+        assert_eq!(
+            handle.metadata_generation(&source, std::slice::from_ref(&episode)),
+            None
+        );
+        let mut unrelated = source.clone();
+        unrelated.source_id = "other".into();
+        assert_eq!(handle.metadata_generation(&unrelated, &[]), None);
+        let mut changed = episode.clone();
+        changed.number = Some(1);
+        assert_eq!(handle.metadata_generation(&source, &[changed]), Some(1));
+        *handle.context_evidence.lock().unwrap() = Some((source.clone(), vec![episode.clone()]));
+        let mut dated = episode;
+        dated.released.year = Some(2021);
+        assert_eq!(handle.metadata_generation(&source, &[dated]), Some(2));
     }
 }

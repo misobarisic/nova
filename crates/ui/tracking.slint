@@ -1,5 +1,5 @@
 import { Button, LineEdit, ComboBox, CheckBox, ScrollView } from "std-widgets.slint";
-import { TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow } from "types.slint";
+import { TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow } from "types.slint";
 
 component AccountEditor inherits Rectangle {
     in property <TrackingAccountRow> entry;
@@ -85,6 +85,7 @@ component EntryEditor inherits Rectangle {
     callback action(string,int);
     background: #19191f; border-radius: 8px; vertical-stretch: 0; min-width: 0;
     property <bool> editing: false;
+    property <bool> more: false;
     property <bool> history_confirm: false;
     property <bool> unlink_confirm: false;
     VerticalLayout {
@@ -93,7 +94,8 @@ component EntryEditor inherits Rectangle {
         Text { text: root.entry.coverage; color: #c9c9d4; wrap: word-wrap; min-width: 0; }
         Text { text: root.entry.state; color: #d7cfff; wrap: word-wrap; min-width: 0; }
         Text { text: @tr("Progress") + ": " + root.entry.progress; color: #c9c9d4; }
-        if !root.editing: VerticalLayout {
+        if !root.editing: Button {text:@tr("More");clicked => {root.more=!root.more;}}
+        if !root.editing && root.more: VerticalLayout {
             spacing: 6px;
             Button { text: @tr("Edit tracker entry"); clicked => {root.editing=true;} }
             Button {text:@tr("Open on service");clicked => {root.action(root.entry.id,4);}}
@@ -135,6 +137,26 @@ export component TrackingSheet inherits Rectangle {
     in property <[TrackingLinkRow]> links;
     in property <[TrackingCandidateRow]> candidates;
     in-out property <int> selected_service;
+    in property <[TrackingSetupRow]> setup;
+    in property <string> setup_revision;
+    in property <string> setup_summary;
+    in property <bool> setup_active;
+    in property <string> range_first;
+    in property <string> range_last;
+    in property <string> range_start;
+    property <string> edit_first;
+    property <string> edit_last;
+    property <string> edit_start;
+    property <bool> individual_mode:false;
+    changed candidate_title => {root.edit_first=root.range_first;root.edit_last=root.range_last;root.edit_start=root.range_start;root.individual_mode=false;}
+    property <bool> manual_search:false;
+    property <string> query_text:"";
+    property <bool> include_history:false;
+    changed setup_revision => {root.include_history=false;root.manual_search=false;}
+    changed open => {if root.open {root.include_history=false;root.manual_search=false;close_button.focus();}}
+    callback accept_setup(string,bool);
+    callback adjust_setup(int);
+    callback cancel_adjust();
     in property <[string]> source_rows;
     in property <[string]> preview_rows;
     in property <[TrackingMappingRow]> mapping_rows;
@@ -163,11 +185,12 @@ export component TrackingSheet inherits Rectangle {
         TouchArea { }
         FocusScope {
             width:100%;height:100%;
-            key-pressed(e) => {if e.text==Key.Escape || e.text==Key.Back {root.close();accept} else {reject}}
+            key-pressed(e) => {if e.text==Key.Escape || e.text==Key.Back {if root.candidate_title != "" {root.cancel_adjust();} else {root.close();}accept} else {reject}}
         VerticalLayout {
             padding:12px; spacing:8px;
             HorizontalLayout {
                 Text { text:@tr("Tracking"); color:#f2f2f4; font-weight:700; font-size:18px; }
+                if root.candidate_title != "": Button {text:@tr("Back to review");clicked => {root.cancel_adjust();}}
                 close_button := Button { text:@tr("Close"); clicked => {root.close();} }
             }
             scroll := ScrollView {
@@ -176,16 +199,37 @@ export component TrackingSheet inherits Rectangle {
                     width:100%; spacing:12px;
                     Text { text:root.notice; color:#d7cfff; wrap:word-wrap; min-width:0; vertical-stretch:0; }
                     if root.busy: Text { text:@tr("Loading tracker…"); color:#c9c9d4; vertical-stretch:0; }
+                    if !root.setup_active && root.candidate_title == "": VerticalLayout {
                     for row in root.links: EntryEditor {
                         entry:row;
                         edit(id,progress,status,score,set_started,started,set_completed,completed) => {root.edit(id,progress,status,score,set_started,started,set_completed,completed);}
                         action(id,action) => {root.action(id,action);}
                     }
-                    Text { text:@tr("Add tracking or align another release"); color:#f2f2f4; font-weight:700; vertical-stretch:0; }
-                    service := ComboBox { model:["MyAnimeList","AniList"]; current-index <=> root.selected_service; accessible-label:@tr("Tracking service"); vertical-stretch:0; selected(_) => {query.text="";root.search(self.current-index,"");} }
-                    query := LineEdit { placeholder-text:@tr("Title, ID, or official anime URL"); accessible-label:@tr("Tracker search"); vertical-stretch:0; }
-                    Button {text:@tr("Suggest releases");enabled:!root.busy;vertical-stretch:0;clicked => {query.text="";root.search(service.current-index,"");}}
-                    Button { text:@tr("Search tracker"); enabled:!root.busy; vertical-stretch:0; clicked => {root.search(service.current-index,query.text);} }
+                    }
+                    Text { text:root.setup_active ? @tr("Review setup") : @tr("Tracking service"); color:#f2f2f4; font-weight:700; vertical-stretch:0; }
+                    service := ComboBox { model:["MyAnimeList","AniList"]; current-index <=> root.selected_service; accessible-label:@tr("Tracking service"); vertical-stretch:0; selected(_) => {root.query_text="";root.search(self.current-index,"");} }
+                    if root.setup_active && root.candidate_title == "": VerticalLayout {
+                        spacing:10px; vertical-stretch:0;
+                        Text {text:root.setup_summary;color:#c9c9d4;wrap:word-wrap;min-width:0;}
+                        for release[index] in root.setup: Rectangle {
+                            background:#19191f;border-radius:8px;vertical-stretch:0;min-width:0;
+                            VerticalLayout {padding:10px;spacing:6px;
+                                if index == 0 || root.setup[index - 1].season != release.season: Text {text:release.season;color:#c9c9d4;font-weight:700;wrap:word-wrap;min-width:0;}
+                                Text {text:release.title;color:#f2f2f4;wrap:word-wrap;min-width:0;}
+                                Text {text:release.coverage;color:#c9c9d4;wrap:word-wrap;min-width:0;}
+                                if release.reason!="": Text {text:release.reason;color:#d7cfff;wrap:word-wrap;min-width:0;}
+                                if root.include_history: Text {text:release.history;color:#c9c9d4;wrap:word-wrap;min-width:0;}
+                                Button {text:@tr("Adjust");enabled:!root.busy;clicked => {root.adjust_setup(index);}}
+                            }
+                        }
+                        if root.setup.length > 0: CheckBox {text:@tr("Include watched episodes");checked <=> root.include_history;enabled:!root.busy;}
+                        if root.setup.length > 0: Button {text:@tr("Start tracking");enabled:!root.busy;clicked => {root.accept_setup(root.setup_revision,root.include_history);}}
+                    }
+                    if root.manual_search: LineEdit {text <=> root.query_text; placeholder-text:@tr("Title, ID, or official anime URL"); accessible-label:@tr("Tracker search"); vertical-stretch:0; }
+                    Button {text:root.links.length > 0 ? @tr("Add missing releases") : @tr("Reload suggestions");enabled:!root.busy;vertical-stretch:0;clicked => {root.query_text="";root.search(service.current-index,"");}}
+                    Button {text:@tr("Choose a different release");enabled:!root.busy;vertical-stretch:0;clicked => {root.manual_search=!root.manual_search;}}
+                    if root.manual_search: Button { text:@tr("Search tracker"); enabled:!root.busy; vertical-stretch:0; clicked => {root.search(service.current-index,root.query_text);} }
+                    if root.manual_search || (!root.setup_active && root.links.length == 0): VerticalLayout {
                     for candidate[index] in root.candidates: VerticalLayout {
                         vertical-stretch:0; spacing:4px;
                         Text {text:candidate.title;color:#f2f2f4;wrap:word-wrap;min-width:0;}
@@ -193,18 +237,20 @@ export component TrackingSheet inherits Rectangle {
                         Text {text:candidate.reason;color:#d7cfff;wrap:word-wrap;min-width:0;}
                         Text { text:candidate.detail; color:#c9c9d4; wrap:word-wrap; min-width:0; }
                     }
+                    }
                     if root.candidate_title != "": VerticalLayout {
                         spacing:6px; vertical-stretch:0;
                         Text { text:root.candidate_title; color:#f2f2f4; wrap:word-wrap; min-width:0; font-weight:700; }
-                        Text { text:@tr("Confirm exactly which source rows belong to this release. Saved history is excluded until you choose Apply Nova history."); color:#c9c9d4; wrap:word-wrap; min-width:0; }
-                        for label in root.source_rows: Text { text:label; color:#c9c9d4; wrap:word-wrap; min-width:0; vertical-stretch:0; }
+                        Text { text:@tr("Check the episode range. Use individual assignments only when the numbering differs."); color:#c9c9d4; wrap:word-wrap; min-width:0; }
                         Text { text:@tr("First source row"); color:#c9c9d4; }
-                        first := LineEdit { text:"1"; accessible-label:@tr("First source row"); }
+                        first := LineEdit { text <=> root.edit_first; accessible-label:@tr("First source row"); }
                         Text { text:@tr("Last source row"); color:#c9c9d4; }
-                        last := LineEdit { text:root.source_rows.length; accessible-label:@tr("Last source row"); }
+                        last := LineEdit { text <=> root.edit_last; accessible-label:@tr("Last source row"); }
                         Text { text:@tr("First tracker episode"); color:#c9c9d4; }
-                        offset := LineEdit { text:"1"; accessible-label:@tr("First tracker episode"); }
+                        offset := LineEdit { text <=> root.edit_start; accessible-label:@tr("First tracker episode"); }
                         Button { text:@tr("Preview alignment"); clicked => {root.preview(first.text,last.text,offset.text);} }
+                        CheckBox {text:@tr("Edit individual episodes");checked <=> root.individual_mode;}
+                        if root.individual_mode: VerticalLayout {
                         Text {text:@tr("Adjust individual assignments below. Leave empty to exclude a source episode.");color:#c9c9d4;wrap:word-wrap;min-width:0;}
                         for mapping in root.mapping_rows: VerticalLayout {
                             spacing:4px;vertical-stretch:0;
@@ -212,7 +258,8 @@ export component TrackingSheet inherits Rectangle {
                             LineEdit {text:mapping.target_episode;placeholder-text:@tr("Tracker episode or empty");accessible-label:mapping.label;edited(value) => {root.assign(mapping.source_row,value);}}
                         }
                         for label in root.preview_rows: Text { text:label; color:#d7cfff; wrap:word-wrap; min-width:0; vertical-stretch:0; }
-                        Button { text:@tr("Confirm alignment"); enabled:root.can_confirm && !root.busy; clicked => {root.confirm();} }
+                        }
+                        Button { text:root.setup_active ? @tr("Save adjustment") : @tr("Confirm alignment"); enabled:root.can_confirm && !root.busy; clicked => {root.confirm();} }
                     }
                     Rectangle { vertical-stretch:1; }
                 }
@@ -220,5 +267,4 @@ export component TrackingSheet inherits Rectangle {
         }
         }
     }
-    changed open => {if root.open {close_button.focus();}}
 }
