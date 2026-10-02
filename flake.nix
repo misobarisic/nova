@@ -86,7 +86,10 @@
             hostToolchain
             cargo-bloat
             cargo-about
-          ] ++ (lib.optional pkgs.stdenv.hostPlatform.isLinux perf);
+          ] ++ (lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+            perf
+            cargo-sweep
+          ]);
           hardeningDisable = ["fortify"];
           # ffmpeg-sys-next regenerates its FFI bindings with bindgen at build
           # time: it needs libclang and, inside a nix shell, the libc/kernel
