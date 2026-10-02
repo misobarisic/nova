@@ -33,6 +33,7 @@ pub struct Response {
 pub trait Transport: Send + Sync {
     fn send(&self, request: Request) -> Result<Response, ApiError>;
 }
+#[derive(Clone)]
 pub struct HttpsTransport {
     client: reqwest::blocking::Client,
 }
@@ -205,7 +206,7 @@ const MEDIA_FIELDS: &str =
 /// An adapter is scoped to one verified account and one in-memory token.
 pub struct Client<T: Transport = HttpsTransport> {
     service: Service,
-    token: Secret,
+    token: Option<Secret>,
     transport: T,
     viewer: Option<Viewer>,
 }
@@ -213,7 +214,7 @@ impl<T: Transport> Client<T> {
     pub fn new(service: Service, token: Secret, transport: T) -> Self {
         Self {
             service,
-            token,
+            token: Some(token),
             transport,
             viewer: None,
         }
@@ -229,7 +230,7 @@ impl<T: Transport> Client<T> {
             self.transport.send(Request {
                 method,
                 url,
-                bearer: Some(Secret::new(self.token.expose().to_owned())?),
+                bearer: self.token.as_ref().map(Secret::duplicate),
                 body,
             })?,
             now,
@@ -267,6 +268,9 @@ impl<T: Transport> Client<T> {
             .ok_or(ApiError::InvalidResponse)
     }
     pub fn verify(&mut self, now: u64) -> Result<Viewer, ApiError> {
+        if self.token.is_none() {
+            return Err(ApiError::Authentication);
+        }
         let (value, score_format) = match self.service {
             Service::MyAnimeList => (
                 self.request(
@@ -312,6 +316,36 @@ impl<T: Transport> Client<T> {
         }
         self.viewer = Some(viewer.clone());
         Ok(viewer)
+    }
+    /// Public AniList metadata can resolve cross-references without connecting
+    /// the unrelated service. It can never verify or mutate a user list.
+    pub fn public_anilist(transport: T) -> Self {
+        Self {
+            service: Service::AniList,
+            token: None,
+            transport,
+            viewer: None,
+        }
+    }
+    pub fn media_by_mal(&self, mal_id: NonZeroU32, now: u64) -> Result<Option<Media>, ApiError> {
+        if self.service != Service::AniList {
+            return Err(ApiError::UnsupportedField);
+        }
+        let data=self.graphql(format!("query($idMal:Int){{Page(page:1,perPage:2){{media(idMal:$idMal,type:ANIME){{{MEDIA_FIELDS}}}}}}}"),json!({"idMal":mal_id}),now)?;
+        let entries = data["Page"]["media"]
+            .as_array()
+            .ok_or(ApiError::InvalidResponse)?;
+        if entries.len() > 1 {
+            return Err(ApiError::InvalidResponse);
+        }
+        let media = entries
+            .first()
+            .map(|value| parse_media(Service::AniList, value))
+            .transpose()?;
+        if media.as_ref().is_some_and(|m| m.mal_id != Some(mal_id)) {
+            return Err(ApiError::InvalidResponse);
+        }
+        Ok(media)
     }
     pub fn viewer(&self) -> Result<&Viewer, ApiError> {
         self.viewer.as_ref().ok_or(ApiError::Authentication)
@@ -387,7 +421,10 @@ impl<T: Transport> Client<T> {
                 if id(&data["Media"]["id"])? != media_id {
                     return Err(ApiError::InvalidResponse);
                 }
-                data["Media"]["mediaListEntry"].clone()
+                data["Media"]
+                    .get("mediaListEntry")
+                    .cloned()
+                    .ok_or(ApiError::InvalidResponse)?
             }
         };
         if value.is_null() {

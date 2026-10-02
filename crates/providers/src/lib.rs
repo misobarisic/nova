@@ -24,4 +24,4 @@ pub use models::{
     ProviderSubtitle, SearchRequest, StreamLookupRequest, StreamRequest,
 };
 pub use runtime::{PluginLimits, PluginManifest, PluginPermissions, PluginRuntime};
-pub use stremio::StremioProvider;
+pub use stremio::{StremioProvider, normalize_external_ids};

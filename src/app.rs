@@ -690,8 +690,8 @@ struct Bridge {
     /// In-app player overlay (same window; mpv on desktop, HTML5 video on web).
     player: crate::player::Player,
     downloads: DownloadCoordinator,
-    /// None while loading; failures retain an unavailable subsystem rather than
-    /// replacing durable tracking records with an empty writable state.
+    /// Bounded tracker actor; unavailable stores retain their originals and
+    /// require explicit recovery without blocking playback.
     tracking: tracking::StateHandle,
     downloads_seen: Arc<AtomicU64>,
     stream_seq: Arc<AtomicU64>,

@@ -1,0 +1,221 @@
+import { Button, LineEdit, ComboBox, CheckBox, ScrollView } from "std-widgets.slint";
+import { TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow } from "types.slint";
+
+component AccountEditor inherits Rectangle {
+    in property <TrackingAccountRow> entry;
+    callback connect(int, string, string);
+    callback complete(int, string);
+    callback disconnect(int);
+    callback cancel(int);
+    callback input_focus(bool);
+    callback automatic(int,bool);
+    min-width: 0px;
+    background: #19191f;
+    border-radius: 8px;
+    vertical-stretch: 0;
+    property <string> client: root.entry.client_id;
+    property <string> redirect: root.entry.redirect_uri;
+    VerticalLayout {
+        padding: 12px; spacing: 8px;
+        Text { text: root.entry.service == 0 ? "MyAnimeList" : "AniList"; color: #f2f2f4; font-weight: 700; }
+        Text { text: root.entry.name; color: #c9c9d4; wrap: word-wrap; min-width: 0; }
+        Text { text: root.entry.state; color: #c9c9d4; wrap: word-wrap; min-width: 0; }
+        CheckBox {text:@tr("Automatic tracking for linked releases");checked:root.entry.automatic;toggled => {root.automatic(root.entry.service,self.checked);}}
+        Text { text: @tr("Public client ID"); color: #c9c9d4; }
+        LineEdit { changed has-focus => {root.input_focus(self.has-focus);} text <=> root.client; placeholder-text: @tr("Public client ID"); accessible-label: @tr("Public client ID"); }
+        Text { text: @tr("Registered redirect URL"); color: #c9c9d4; }
+        LineEdit { changed has-focus => {root.input_focus(self.has-focus);} text <=> root.redirect; placeholder-text: @tr("Registered redirect URL"); accessible-label: @tr("Registered redirect URL"); }
+        if !root.entry.signing_in: Button {
+            text: root.entry.connected ? @tr("Reconnect") : @tr("Connect");
+            clicked => {root.connect(root.entry.service,root.client,root.redirect);}
+        }
+        if root.entry.signing_in: VerticalLayout {
+            spacing: 8px;
+            Text { text: @tr("Finish in your browser. For the PIN fallback, paste the AniList token here; otherwise paste the full return URL if automatic return fails."); color: #c9c9d4; wrap: word-wrap; min-width: 0; }
+            returned := LineEdit { changed has-focus => {root.input_focus(self.has-focus);} placeholder-text: @tr("PIN token or full return URL"); accessible-label: @tr("PIN token or full return URL"); input-type: password; }
+            Button { text: @tr("Finish sign-in"); clicked => {root.complete(root.entry.service,returned.text);returned.text="";} }
+            Button { text: @tr("Cancel sign-in"); clicked => {returned.text="";root.cancel(root.entry.service);} }
+        }
+        if root.entry.connected: Button { text: @tr("Disconnect"); clicked => {root.disconnect(root.entry.service);} }
+    }
+}
+export component TrackingSettings inherits Rectangle {
+    in property <[TrackingAccountRow]> accounts;
+    in property <string> notice;
+    callback connect(int,string,string);
+    callback complete(int,string);
+    callback disconnect(int);
+    callback cancel(int);
+    callback reset();
+    callback automatic(int,bool);
+    property <bool> reset_confirm:false;
+    property <int> focus_count:0;
+    out property <bool> input_focused:root.focus_count>0;
+    in property <bool> blur;
+    changed blur => {blur_scope.focus();}
+    blur_scope := FocusScope {width:1px;height:1px;}
+    vertical-stretch: 0;
+    min-width: 0px;
+    VerticalLayout {
+        spacing: 14px;
+        Text { text: @tr("Tracking"); color: #f2f2f4; font-size: 18px; font-weight: 700; }
+        Text { text: @tr("Connections last for this session. Tokens are kept in memory; reconnect after restarting Nova. Links and queued updates stay on this device."); color: #c9c9d4; wrap: word-wrap; min-width: 0; }
+        Text { text: root.notice; color: #d7cfff; wrap: word-wrap; min-width: 0; }
+        for row in root.accounts: AccountEditor {
+            entry: row;
+            connect(service,client,redirect) => {root.connect(service,client,redirect);}
+            complete(service,value) => {root.complete(service,value);}
+            disconnect(service) => {root.disconnect(service);}
+            cancel(service) => {root.cancel(service);}
+            automatic(service,enabled) => {root.automatic(service,enabled);}
+            input_focus(focused) => {root.focus_count=Math.max(0,root.focus_count+(focused ? 1 : -1));}
+        }
+        Button {text:@tr("Reset local tracking");clicked => {root.reset_confirm=true;}}
+        if root.reset_confirm: VerticalLayout {
+            Text {text:@tr("Reset all local links and queued updates? A recovery backup is retained. Nova history and remote tracker lists stay unchanged.");color:#c9c9d4;wrap:word-wrap;min-width:0;}
+            Button {text:@tr("Confirm tracking reset");clicked => {root.reset_confirm=false;root.reset();}}
+            Button {text:@tr("Cancel");clicked => {root.reset_confirm=false;}}
+        }
+
+    }
+}
+component EntryEditor inherits Rectangle {
+    in property <TrackingLinkRow> entry;
+    callback edit(string,string,int,string,bool,string,bool,string);
+    callback action(string,int);
+    background: #19191f; border-radius: 8px; vertical-stretch: 0; min-width: 0;
+    property <bool> editing: false;
+    property <bool> history_confirm: false;
+    property <bool> unlink_confirm: false;
+    VerticalLayout {
+        padding: 12px; spacing: 8px;
+        Text { text: root.entry.title; color: #f2f2f4; wrap: word-wrap; min-width: 0; font-weight: 700; }
+        Text { text: root.entry.coverage; color: #c9c9d4; wrap: word-wrap; min-width: 0; }
+        Text { text: root.entry.state; color: #d7cfff; wrap: word-wrap; min-width: 0; }
+        Text { text: @tr("Progress") + ": " + root.entry.progress; color: #c9c9d4; }
+        if !root.editing: VerticalLayout {
+            spacing: 6px;
+            Button { text: @tr("Edit tracker entry"); clicked => {root.editing=true;} }
+            Button {text:@tr("Open on service");clicked => {root.action(root.entry.id,4);}}
+            Button {text:@tr("Restore automatic status and dates");clicked => {root.action(root.entry.id,5);}}
+            Button { text: @tr("Refresh / retry"); clicked => {root.action(root.entry.id,0);} }
+            Button { text: @tr("Edit alignment"); clicked => {root.action(root.entry.id,1);} }
+            Button { text: @tr("Apply Nova history"); clicked => {root.history_confirm=true;root.unlink_confirm=false;} }
+            if root.history_confirm: VerticalLayout {
+                Text {text:root.entry.history_preview; color:#c9c9d4; wrap:word-wrap; min-width:0;}
+                Button {text:@tr("Confirm history update"); clicked => {root.action(root.entry.id,2);root.history_confirm=false;}}
+                Button {text:@tr("Cancel"); clicked => {root.history_confirm=false;}}
+            }
+            Button { text: @tr("Unlink"); clicked => {root.unlink_confirm=true;root.history_confirm=false;} }
+            if root.unlink_confirm: VerticalLayout {
+                Text {text:@tr("Unlink this release? Unsent updates will be discarded when no other source uses it. An update already sent may finish.");color:#c9c9d4;wrap:word-wrap;min-width:0;}
+                Button {text:@tr("Confirm unlink");clicked => {root.action(root.entry.id,3);root.unlink_confirm=false;}}
+                Button {text:@tr("Cancel");clicked => {root.unlink_confirm=false;}}
+            }
+        }
+        if root.editing: VerticalLayout {
+            spacing: 6px;
+            Text { text: @tr("Progress (explicit decreases are allowed)"); color: #c9c9d4; wrap: word-wrap; min-width: 0; }
+            progress := LineEdit { text:root.entry.progress; accessible-label:@tr("Tracker progress"); }
+            status := ComboBox { model:root.entry.dates_writable ? [@tr("Planning"),@tr("Watching"),@tr("Completed"),@tr("On hold"),@tr("Dropped"),@tr("Repeating")] : [@tr("Planning"),@tr("Watching"),@tr("Completed"),@tr("On hold"),@tr("Dropped")]; current-index:root.entry.status; accessible-label:@tr("Tracker status"); }
+            Text { text:root.entry.score_hint; color:#c9c9d4; wrap:word-wrap; min-width:0; }
+            score := LineEdit { text:root.entry.score; accessible-label:@tr("Tracker score"); }
+            started_check := CheckBox { text:@tr("Change start date"); enabled:root.entry.dates_writable; }
+            started := LineEdit { text:root.entry.started; placeholder-text:@tr("YYYY-MM-DD, partial date, or empty to clear"); enabled:root.entry.dates_writable; accessible-label:@tr("Start date"); }
+            completed_check := CheckBox { text:@tr("Change finish date"); enabled:root.entry.dates_writable; }
+            completed := LineEdit { text:root.entry.completed; placeholder-text:@tr("YYYY-MM-DD, partial date, or empty to clear"); enabled:root.entry.dates_writable; accessible-label:@tr("Finish date"); }
+            if !root.entry.dates_writable: Text { text:@tr("MyAnimeList dates are read-only through its API."); color:#c9c9d4; wrap:word-wrap; min-width:0; }
+            Button { text:@tr("Save tracker edits"); clicked => {root.edit(root.entry.id,progress.text,status.current-index,score.text,started_check.checked,started.text,completed_check.checked,completed.text);root.editing=false;} }
+            Button { text:@tr("Cancel"); clicked => {root.editing=false;} }
+        }
+    }
+}
+export component TrackingSheet inherits Rectangle {
+    in property <bool> open;
+    in property <[TrackingLinkRow]> links;
+    in property <[TrackingCandidateRow]> candidates;
+    in property <[string]> source_rows;
+    in property <[string]> preview_rows;
+    in property <[TrackingMappingRow]> mapping_rows;
+    in property <string> notice;
+    in property <string> candidate_title;
+    in property <bool> busy;
+    in property <bool> can_confirm;
+    in property <length> safe-bottom;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    callback close();
+    callback search(int,string);
+    callback pick(int);
+    callback preview(string,string,string);
+    callback confirm();
+    callback assign(int,string);
+    callback edit(string,string,int,string,bool,string,bool,string);
+    callback action(string,int);
+    visible:root.open; width:100%; height:100%; background:#000b;
+    TouchArea { clicked => {root.close();} }
+    Rectangle {
+        x:root.safe-left + 12px; y:12px;
+        width:parent.width - root.safe-left - root.safe-right - 24px;
+        height:parent.height - root.safe-bottom - 24px;
+        background:#111116; border-radius:12px;
+        TouchArea { }
+        FocusScope {
+            width:100%;height:100%;
+            key-pressed(e) => {if e.text==Key.Escape || e.text==Key.Back {root.close();accept} else {reject}}
+        VerticalLayout {
+            padding:12px; spacing:8px;
+            HorizontalLayout {
+                Text { text:@tr("Tracking"); color:#f2f2f4; font-weight:700; font-size:18px; }
+                close_button := Button { text:@tr("Close"); clicked => {root.close();} }
+            }
+            scroll := ScrollView {
+                horizontal-scrollbar-policy:always-off;
+                VerticalLayout {
+                    width:100%; spacing:12px;
+                    Text { text:root.notice; color:#d7cfff; wrap:word-wrap; min-width:0; vertical-stretch:0; }
+                    if root.busy: Text { text:@tr("Loading tracker…"); color:#c9c9d4; vertical-stretch:0; }
+                    for row in root.links: EntryEditor {
+                        entry:row;
+                        edit(id,progress,status,score,set_started,started,set_completed,completed) => {root.edit(id,progress,status,score,set_started,started,set_completed,completed);}
+                        action(id,action) => {root.action(id,action);}
+                    }
+                    Text { text:@tr("Add tracking or align another release"); color:#f2f2f4; font-weight:700; vertical-stretch:0; }
+                    service := ComboBox { model:["MyAnimeList","AniList"]; accessible-label:@tr("Tracking service"); vertical-stretch:0; }
+                    query := LineEdit { placeholder-text:@tr("Title, ID, or official anime URL"); accessible-label:@tr("Tracker search"); vertical-stretch:0; }
+                    Button { text:@tr("Search tracker"); enabled:!root.busy; vertical-stretch:0; clicked => {root.search(service.current-index,query.text);} }
+                    for candidate[index] in root.candidates: VerticalLayout {
+                        vertical-stretch:0; spacing:4px;
+                        Text {text:candidate.title;color:#f2f2f4;wrap:word-wrap;min-width:0;}
+                        Button { text:@tr("Select release"); accessible-label:candidate.title; enabled:!root.busy; clicked => {root.pick(index);} }
+                        Text { text:candidate.detail; color:#c9c9d4; wrap:word-wrap; min-width:0; }
+                    }
+                    if root.candidate_title != "": VerticalLayout {
+                        spacing:6px; vertical-stretch:0;
+                        Text { text:root.candidate_title; color:#f2f2f4; wrap:word-wrap; min-width:0; font-weight:700; }
+                        Text { text:@tr("Confirm exactly which source rows belong to this release. Saved history is excluded until you choose Apply Nova history."); color:#c9c9d4; wrap:word-wrap; min-width:0; }
+                        for label in root.source_rows: Text { text:label; color:#c9c9d4; wrap:word-wrap; min-width:0; vertical-stretch:0; }
+                        Text { text:@tr("First source row"); color:#c9c9d4; }
+                        first := LineEdit { text:"1"; accessible-label:@tr("First source row"); }
+                        Text { text:@tr("Last source row"); color:#c9c9d4; }
+                        last := LineEdit { text:root.source_rows.length; accessible-label:@tr("Last source row"); }
+                        Text { text:@tr("First tracker episode"); color:#c9c9d4; }
+                        offset := LineEdit { text:"1"; accessible-label:@tr("First tracker episode"); }
+                        Button { text:@tr("Preview alignment"); clicked => {root.preview(first.text,last.text,offset.text);} }
+                        Text {text:@tr("Adjust individual assignments below. Leave empty to exclude a source episode.");color:#c9c9d4;wrap:word-wrap;min-width:0;}
+                        for mapping in root.mapping_rows: VerticalLayout {
+                            spacing:4px;vertical-stretch:0;
+                            Text {text:mapping.label;color:#c9c9d4;wrap:word-wrap;min-width:0;}
+                            LineEdit {text:mapping.target_episode;placeholder-text:@tr("Tracker episode or empty");accessible-label:mapping.label;edited(value) => {root.assign(mapping.source_row,value);}}
+                        }
+                        for label in root.preview_rows: Text { text:label; color:#d7cfff; wrap:word-wrap; min-width:0; vertical-stretch:0; }
+                        Button { text:@tr("Confirm alignment"); enabled:root.can_confirm && !root.busy; clicked => {root.confirm();} }
+                    }
+                    Rectangle { vertical-stretch:1; }
+                }
+            }
+        }
+        }
+    }
+    changed open => {if root.open {close_button.focus();}}
+}

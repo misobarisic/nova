@@ -63,6 +63,187 @@ pub fn tr(english: &'static str) -> &'static str {
         return english;
     }
     match english {
+        // ---- Anime tracking -------------------------------------------
+        "Add tracking or align another release" => "Dodajte praćenje ili uskladite drugo izdanje",
+        "Adjust individual assignments below. Leave empty to exclude a source episode." => {
+            "Prilagodite pojedinačne dodjele u nastavku. Ostavite prazno za izuzimanje izvorne epizode."
+        }
+        "Alignment exceeds this release’s episode total." => {
+            "Dodjela premašuje broj epizoda ovog izdanja."
+        }
+        "Alignment preview ready. Unmapped source rows will not update this release." => {
+            "Pregled dodjele je spreman. Nedodijeljeni izvorni redci neće ažurirati ovo izdanje."
+        }
+        "Apply Nova history" => "Primijenite povijest Nove",
+        "Cancel" => "Odustani",
+        "Cancel sign-in" => "Odustanite od prijave",
+        "Change finish date" => "Promijenite datum završetka",
+        "Change start date" => "Promijenite datum početka",
+        "Check episode alignment, progress, score, and date values." => {
+            "Provjerite dodjelu epizoda, napredak, ocjenu i datume."
+        }
+        "Choose a service and search or enter an anime ID." => {
+            "Odaberite uslugu pa pretražite ili unesite ID animea."
+        }
+        "Close" => "Zatvori",
+        "Confirm alignment" => "Potvrdite dodjelu",
+        "Confirm exactly which source rows belong to this release. Saved history is excluded until you choose Apply Nova history." => {
+            "Potvrdite koji izvorni redci pripadaju ovom izdanju. Spremljena povijest isključena je dok ne odaberete Primijenite povijest Nove."
+        }
+        "Confirm history update" => "Potvrdite slanje povijesti",
+        "Confirm tracking reset" => "Potvrdite poništavanje praćenja",
+        "Confirm unlink" => "Potvrdite uklanjanje veze",
+        "Conflicting source IDs. Enter a tracker ID or search manually." => {
+            "Izvorni ID-ovi nisu usklađeni. Unesite ID usluge praćenja ili pretražite ručno."
+        }
+        "Connect" => "Povežite",
+        "Connect this service in Settings → Tracking first." => {
+            "Prvo povežite ovu uslugu u Postavke → Praćenje."
+        }
+        "Connected for this session. Retained updates for this account can resume." => {
+            "Povezano za ovu sesiju. Spremljena ažuriranja ovog računa mogu se nastaviti."
+        }
+        "Connections last for this session. Tokens are kept in memory; reconnect after restarting Nova. Links and queued updates stay on this device." => {
+            "Veze vrijede za ovu sesiju. Tokeni se čuvaju u memoriji; ponovno se povežite nakon pokretanja Nove. Veze i ažuriranja u redu ostaju na ovom uređaju."
+        }
+        "Could not open the sign-in browser. Check your browser settings and reconnect." => {
+            "Preglednik za prijavu nije otvoren. Provjerite postavke preglednika i ponovno se povežite."
+        }
+        "Disconnect" => "Prekinite vezu",
+        "Disconnected. Links and queued updates are retained." => {
+            "Veza je prekinuta. Veze naslova i ažuriranja u redu su sačuvana."
+        }
+        "Edit alignment" => "Uredite dodjelu",
+        "Edit tracker entry" => "Uredite zapis praćenja",
+        "Episode alignment needs review. Queued work is paused." => {
+            "Dodjelu epizoda treba pregledati. Ažuriranja u redu su pauzirana."
+        }
+        "Finish date" => "Datum završetka",
+        "Finish in your browser. For the PIN fallback, paste the AniList token here; otherwise paste the full return URL if automatic return fails." => {
+            "Dovršite u pregledniku. Za prijavu putem PIN-a ovdje zalijepite AniList token; inače zalijepite cijeli povratni URL ako automatski povratak ne uspije."
+        }
+        "Finish sign-in" => "Dovršite prijavu",
+        "Finish sign-in in your browser." => "Dovršite prijavu u pregledniku.",
+        "First source row" => "Prvi izvorni redak",
+        "First tracker episode" => "Prva epizoda na usluzi",
+        "Last source row" => "Posljednji izvorni redak",
+        "Linked. New watched events will update this release; saved history was not uploaded." => {
+            "Povezano. Nova gledanja ažurirat će ovo izdanje; spremljena povijest nije poslana."
+        }
+        "Loading tracker…" => "Učitavanje usluge praćenja…",
+        "Loading tracking…" => "Učitavanje praćenja…",
+        "MyAnimeList dates are read-only through its API." => {
+            "MyAnimeList datumi putem API-ja mogu se samo čitati."
+        }
+        "Nova history explicitly queued for this release." => {
+            "Povijest Nove izričito je dodana u red za ovo izdanje."
+        }
+        "On hold" => "Na čekanju",
+        "Open a title first." => "Prvo otvorite naslov.",
+        "PIN token or full return URL" => "PIN token ili cijeli povratni URL",
+        "Planning" => "Planirano",
+        "Preview alignment" => "Pregledajte dodjelu",
+        "Preview and confirm replacement coverage. Previous unsent updates will be discarded." => {
+            "Pregledajte i potvrdite zamjensku dodjelu. Prethodna neposlana ažuriranja bit će odbačena."
+        }
+        "Progress" => "Napredak",
+        "Progress (explicit decreases are allowed)" => "Napredak (dopušteno je izričito smanjenje)",
+        "Public client ID" => "Javni ID klijenta",
+        "Reconnect" => "Ponovno povežite",
+        "Refresh / retry" => "Osvježite / pokušajte ponovno",
+        "Registered redirect URL" => "Registrirani povratni URL",
+        "Repeating" => "Ponovno gledanje",
+        "Reset all local links and queued updates? A recovery backup is retained. Nova history and remote tracker lists stay unchanged." => {
+            "Poništiti sve lokalne veze i ažuriranja u redu? Sigurnosna kopija za oporavak ostaje sačuvana. Povijest Nove i udaljeni popisi ostaju nepromijenjeni."
+        }
+        "Reset local tracking" => "Poništite lokalno praćenje",
+        "Review the source rows and preview the alignment before confirming." => {
+            "Pregledajte izvorne retke i dodjelu prije potvrde."
+        }
+        "Save tracker edits" => "Spremite izmjene praćenja",
+        "Search tracker" => "Pretražite uslugu",
+        "Select a release, then confirm its episode alignment." => {
+            "Odaberite izdanje pa potvrdite dodjelu epizoda."
+        }
+        "Select release" => "Odaberite izdanje",
+        "Sign-in canceled." => "Prijava je otkazana.",
+        "Source episodes changed. Reopen Tracking to review alignment." => {
+            "Izvorne epizode su promijenjene. Ponovno otvorite Praćenje za pregled dodjele."
+        }
+        "Source episodes changed. Review the paused alignment." => {
+            "Izvorne epizode su promijenjene. Pregledajte pauziranu dodjelu."
+        }
+        "Start date" => "Datum početka",
+        "This alignment overlaps another active release. Edit that link first." => {
+            "Dodjela se preklapa s drugim aktivnim izdanjem. Prvo uredite tu vezu."
+        }
+        "Title, ID, or official anime URL" => "Naslov, ID ili službeni URL animea",
+        "Tracker edits queued. Nova watched history is unchanged." => {
+            "Izmjene praćenja dodane su u red. Povijest gledanja Nove nije promijenjena."
+        }
+        "Tracker entry refreshed. Retry respects service cooldowns." => {
+            "Zapis praćenja je osvježen. Ponovni pokušaj poštuje ograničenja usluge."
+        }
+        "Tracker episode or empty" => "Epizoda na usluzi ili prazno",
+        "Tracker progress" => "Napredak na usluzi",
+        "Tracker score" => "Ocjena na usluzi",
+        "Tracker search" => "Pretraga usluge praćenja",
+        "Tracker status" => "Status na usluzi",
+        "Tracking" => "Praćenje",
+        "Tracking changes could not be saved. Check storage and retry." => {
+            "Izmjene praćenja nisu spremljene. Provjerite pohranu i pokušajte ponovno."
+        }
+        "Tracking data needs recovery. Playback remains available." => {
+            "Podatke praćenja treba oporaviti. Reprodukcija je i dalje dostupna."
+        }
+        "Tracking event data needs recovery." => "Zapise događaja praćenja treba oporaviti.",
+        "Tracking reset. The previous local state is retained in a recovery backup." => {
+            "Praćenje je poništeno. Prethodno lokalno stanje sačuvano je u sigurnosnoj kopiji za oporavak."
+        }
+        "Tracking service" => "Usluga praćenja",
+        "Unlink" => "Uklonite vezu",
+        "Unlink this release? Unsent updates will be discarded when no other source uses it. An update already sent may finish." => {
+            "Ukloniti vezu ovog izdanja? Neposlana ažuriranja bit će odbačena kad nijedan drugi izvor ne koristi izdanje. Već poslano ažuriranje može završiti."
+        }
+        "Unlinked. Local history and remote tracker values are unchanged." => {
+            "Veza je uklonjena. Lokalna povijest i udaljene vrijednosti nisu promijenjene."
+        }
+        "YYYY-MM-DD, partial date, or empty to clear" => {
+            "GGGG-MM-DD, djelomičan datum ili prazno za brisanje"
+        }
+        "Anime progress on MyAnimeList and AniList" => "Napredak animea na MyAnimeListu i AniListu",
+        "Connected for this session" => "Povezano za ovu sesiju",
+        "Reconnect to send retained updates" => {
+            "Ponovno se povežite za slanje spremljenih ažuriranja"
+        }
+        "Needs alignment" => "Potrebna je dodjela epizoda",
+        "Inactive account" => "Neaktivan račun",
+        "Up to date" => "Ažurno",
+        "Update queued" => "Ažuriranje je u redu",
+        "Sending update" => "Slanje ažuriranja",
+        "Waiting to retry" => "Čeka se ponovni pokušaj",
+        "Tracker rejected the update; edit the values" => {
+            "Usluga je odbila ažuriranje; uredite vrijednosti"
+        }
+        "Tracker sign-in required. Reconnect this account." => {
+            "Potrebna je prijava na uslugu. Ponovno povežite ovaj račun."
+        }
+        "Tracker unavailable. Queued updates are retained." => {
+            "Usluga nije dostupna. Ažuriranja u redu su sačuvana."
+        }
+        "Tracker rate limit. Updates will retry after the cooldown." => {
+            "Ograničenje broja zahtjeva. Ažuriranja će se pokušati poslati nakon čekanja."
+        }
+        "Tracker rejected the request. Check the entry and values." => {
+            "Usluga je odbila zahtjev. Provjerite zapis i vrijednosti."
+        }
+        "Invalid tracker response. The update remains unconfirmed." => {
+            "Nevaljan odgovor usluge. Ažuriranje nije potvrđeno."
+        }
+        "Check the client registration, tracker ID, or values." => {
+            "Provjerite registraciju klijenta, ID na usluzi ili vrijednosti."
+        }
+        "This tracker does not support that field." => "Ova usluga ne podržava to polje.",
         // ---- Downloads -------------------------------------------------
         "Queued" => "Čeka",
         "Preparing…" => "Priprema…",
@@ -622,6 +803,72 @@ pub fn month_name(month: u32) -> &'static str {
 /// Upcoming calendar month title: `"February 2026"` / `"veljača 2026"`.
 pub fn cal_month_title(month: u32, year: i64) -> String {
     format!("{} {year}", month_name(month))
+}
+
+pub fn tracking_score_hint(maximum: u32, decimal: bool) -> String {
+    if croatian() {
+        format!(
+            "Ocjena 0–{maximum}{}",
+            if decimal {
+                " (dopuštena jedna decimala)"
+            } else {
+                " (cijeli brojevi)"
+            }
+        )
+    } else {
+        format!(
+            "Score 0–{maximum}{}",
+            if decimal {
+                " (one decimal allowed)"
+            } else {
+                " (whole numbers)"
+            }
+        )
+    }
+}
+pub fn tracking_coverage(count: usize, first: u32, last: u32) -> String {
+    if croatian() {
+        format!("{count} potvrđenih izvornih redaka → epizode {first}–{last}")
+    } else {
+        format!("{count} confirmed source rows → episodes {first}–{last}")
+    }
+}
+pub fn tracking_candidate(
+    format: &str,
+    year: Option<u16>,
+    episodes: Option<u32>,
+    id: u32,
+) -> String {
+    let year = year
+        .map(|y| y.to_string())
+        .unwrap_or_else(|| tr("Unknown").into());
+    let episodes = episodes
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| tr("Unknown").into());
+    if croatian() {
+        std::format!("{format} · {year} · epizode: {episodes} · ID {id}")
+    } else {
+        std::format!("{format} · {year} · episodes: {episodes} · ID {id}")
+    }
+}
+pub fn tracking_assignment(source: &str, ordinal: u32) -> String {
+    if croatian() {
+        format!("{source} → epizoda {ordinal}")
+    } else {
+        format!("{source} → episode {ordinal}")
+    }
+}
+
+pub fn tracking_history_preview(progress: u32) -> String {
+    if croatian() {
+        format!(
+            "Spremljena povijest postavit će napredak najmanje na {progress}. Potvrdite slanje ovog ažuriranja."
+        )
+    } else {
+        format!(
+            "Saved history will set progress to at least {progress}. Confirm to send this update."
+        )
+    }
 }
 
 #[cfg(test)]

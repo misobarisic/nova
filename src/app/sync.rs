@@ -194,6 +194,9 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
         )?;
     }
     let old = store.extra_value(key)?;
+    if key == EPISODE_PROGRESS_KEY {
+        tracking::journal_progress(&mut store, old.as_deref(), raw, applying(), seed)?;
+    }
     let raw = if key == "settings" {
         preserve_unsupported_settings(old.as_deref(), raw)
     } else {

@@ -1,7 +1,8 @@
+import { TrackingSettings } from "tracking.slint";
 import { ScrollView, Button } from "std-widgets.slint";
 import { Dropdown } from "dropdown.slint";
 import { SearchField } from "searchfield.slint";
-import { AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, LicenseSource } from "types.slint";
+import { TrackingAccountRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, LicenseSource } from "types.slint";
 import { IcExtension, IcTag, IcImage, IcDisplay, IcPlay, IcChevronLeft, IcChevronRight, IcSettingsGear, IcSync, IcDelete } from "icons.slint";
 import { KbMark } from "kbnav.slint";
 import { SideNav, NavMetrics } from "sidenav.slint";
@@ -735,6 +736,15 @@ component SettingsLink inherits Rectangle {
 }
 
 export component SettingsPage {
+    in property <[TrackingAccountRow]> tracking_accounts;
+    in property <string> tracking_notice;
+    callback tracking_connect(int,string,string);
+    callback tracking_complete(int,string);
+    callback tracking_disconnect(int);
+    callback tracking_cancel(int);
+    callback tracking_reset();
+    callback tracking_automatic(int,bool);
+
     // Custom components placed in a Window are sized by their preferred size;
     // make this page fill the window (its parent).
     preferred-width: 100%;
@@ -756,6 +766,8 @@ export component SettingsPage {
     in property <int> system_back_request: 0;
     property <int> last_system_back_request: -1;
     property <bool> input_focused: false;
+    property <bool> tracking_input_focused: false;
+    property <bool> tracking_blur: false;
     in-out property <string> home_catalog_add_error: "";
     in-out property <string> category_input: "";
     in-out property <bool> cache_images: true;
@@ -1037,7 +1049,7 @@ export component SettingsPage {
         if (id == 4) { return root.show_torrents; }
         if (id == 5) { return true; }
         if (id == 7) { return true; }
-        if (id == 8 || id == 10 || id == 13) { return true; }
+        if (id == 8 || id == 10 || id == 12 || id == 13) { return true; }
         return (id >= 0 && id <= 3) || id == 6;
     }
 
@@ -1058,6 +1070,8 @@ export component SettingsPage {
 
     // Next/previous available section id, clamped at the ends.
     function land_next(id: int) -> int {
+        if (id == 12) { return 13; }
+        if (id == 8) { return 12; }
         if (id == 13 && root.land_avail(10)) { return 10; }
         if (id < 1 && root.land_avail(1)) { return 1; }
         if (id < 2 && root.land_avail(2)) { return 2; }
@@ -1073,6 +1087,8 @@ export component SettingsPage {
     }
 
     function land_prev(id: int) -> int {
+        if (id == 13) { return 12; }
+        if (id == 12) { return 8; }
         if (id == 10 && root.land_avail(13)) { return 13; }
         if (id > 8 && root.land_avail(8)) { return 8; }
         if (id > 7 && root.land_avail(7)) { return 7; }
@@ -1094,6 +1110,7 @@ export component SettingsPage {
         if (id == 5) { return @tr("Player"); }
         if (id == 6) { return @tr("Look and feel"); }
         if (id == 7) { return @tr("Sync"); }
+        if (id == 12) { return @tr("Tracking"); }
         if (id == 13) { return @tr("Home"); }
         if (id == 9) { return @tr("Downloaded episodes"); }
         if (id == 10) { return @tr("About"); }
@@ -1110,6 +1127,7 @@ export component SettingsPage {
         if (id == 5) { return @tr("Built-in or external player"); }
         if (id == 6) { return @tr("Motion, transitions and hover effects"); }
         if (id == 7) { return @tr("Sync library and watch history between devices"); }
+        if (id == 12) { return @tr("Anime progress on MyAnimeList and AniList"); }
         if (id == 13) { return @tr("Featured titles and catalog sources"); }
         if (id == 9) { return @tr("Episode files stored on this device"); }
         if (id == 10) { return @tr("Information about Nova"); }
@@ -1178,6 +1196,8 @@ export component SettingsPage {
             root.home_catalog_add_open = false;
         } else if (root.sync_remove_prompt_visible) {
             root.sync_remove_prompt_visible = false;
+        } else if (root.sel==12 && root.tracking_input_focused){
+            root.tracking_blur=!root.tracking_blur;
         } else if (root.input_focused || root.kb_edit != 0) {
             root.kb_edit = 0;
             root.input_focused = false;
@@ -1933,6 +1953,8 @@ export component SettingsPage {
                     accept
                 } else if (root.home_catalog_add_open) {
                     reject
+                } else if (root.sel == 12 && e.text != Key.Back && e.text != Key.Escape) {
+                    reject
                 } else if (root.kb_edit != 0) {
                     root.kb_edit = 0;
                     self.focus();
@@ -2144,6 +2166,14 @@ export component SettingsPage {
                                               interactive: !root.sub_open;
                                               picked => { root.open_page(8); }
                                           }
+                                        SettingsLink {
+                                            icon-kind: 7;
+                                            title: root.land_title(12);
+                                            subtitle: root.land_desc(12);
+                                            focused: root.kb_zone == 8 && root.kb_land == 12 && root.kb_active;
+                                            interactive: !root.sub_open;
+                                            picked => {root.open_page(12);}
+                                        }
                                         if root.land_avail(13): SettingsLink {
                                             icon-kind: 4;
                                             title: root.land_title(13);
@@ -2264,6 +2294,18 @@ export component SettingsPage {
                                 // horizontally on narrow phone screens.
                                 width: 100%;
 
+                        if root.sel == 12: tracking_settings := TrackingSettings {
+                            accounts: root.tracking_accounts;
+                            changed input_focused => {root.tracking_input_focused=self.input_focused;}
+                            blur: root.tracking_blur;
+                            notice: root.tracking_notice;
+                            connect(service,client,redirect) => {root.tracking_connect(service,client,redirect);}
+                            complete(service,value) => {root.tracking_complete(service,value);}
+                            disconnect(service) => {root.tracking_disconnect(service);}
+                            cancel(service) => {root.tracking_cancel(service);}
+                            reset => {root.tracking_reset();}
+                            automatic(service,enabled) => {root.tracking_automatic(service,enabled);}
+                        }
                         if root.sel == 0: VerticalLayout {
                         vertical-stretch: 0;
                         spacing: 18px;

@@ -189,3 +189,31 @@ export struct CalCell {
     selected: bool,
     today: bool,
 }
+
+export struct TrackingAccountRow {
+    service: int,
+    automatic: bool,
+    name: string,
+    state: string,
+    connected: bool,
+    signing_in: bool,
+    client_id: string,
+    redirect_uri: string,
+}
+export struct TrackingLinkRow {
+    id: string,
+    title: string,
+    state: string,
+    progress: string,
+    status: int,
+    score: string,
+    score_hint: string,
+    started: string,
+    completed: string,
+    dates_writable: bool,
+    coverage: string,
+    history_preview: string,
+}
+export struct TrackingCandidateRow { title: string, detail: string }
+
+export struct TrackingMappingRow { source_row: int, label: string, target_episode: string }

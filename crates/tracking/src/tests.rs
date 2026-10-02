@@ -75,6 +75,13 @@ fn state() -> TrackingState {
         bindings: vec![binding],
         projections: vec![],
         outbox: Outbox::default(),
+        link_checkpoints: vec![],
+        snapshots: vec![],
+        automatic_paused: vec![],
+        active_accounts: vec![AccountKey {
+            service: Service::AniList,
+            remote_user_id: n(7),
+        }],
     }
 }
 
@@ -292,13 +299,13 @@ fn corrupt_records_are_quarantined_once_without_wiping_primary() {
 #[test]
 fn newer_schemas_and_semantically_invalid_records_are_preserved() {
     let storage = MemoryStorage::default();
-    let raw = r#"{"version":3,"state":"new schema"}"#;
+    let raw = r#"{"version":99,"state":"new schema"}"#;
     storage
         .write(&[(TRACKING_STATE_KEY.into(), Some(raw.into()))])
         .unwrap();
     assert!(matches!(
         Store::load(storage.clone()),
-        Err(LoadError::UnsupportedVersion(3))
+        Err(LoadError::UnsupportedVersion(99))
     ));
     assert_eq!(
         storage.read(TRACKING_STATE_KEY).unwrap().as_deref(),
@@ -604,6 +611,9 @@ fn add_delivery_target(state: &mut TrackingState, service: Service, id: u32) -> 
             display_name: "Other user".into(),
         });
     }
+    if !state.active_accounts.contains(&target.key.account) {
+        state.active_accounts.push(target.key.account.clone());
+    }
     state.bindings.push(binding(
         &target,
         "other-source",
@@ -810,7 +820,7 @@ fn schema_one_upgrades_on_save_and_schema_two_requires_an_outbox() {
     watch(&mut store, 1);
     let current: serde_json::Value =
         serde_json::from_str(&storage.read(TRACKING_STATE_KEY).unwrap().unwrap()).unwrap();
-    assert_eq!(current["version"], 2);
+    assert_eq!(current["version"], 3);
     legacy["version"] = serde_json::json!(2);
     storage
         .write(&[(TRACKING_STATE_KEY.into(), Some(legacy.to_string()))])
@@ -819,4 +829,442 @@ fn schema_one_upgrades_on_save_and_schema_two_requires_an_outbox() {
         Store::load(storage),
         Err(LoadError::InvalidState(_))
     ));
+}
+
+#[test]
+fn link_cursor_suppresses_old_events_and_paired_progress_is_ineligible() {
+    let mut state = delivery_state();
+    state.link_checkpoints.push(LinkCheckpoint {
+        binding_id: state.bindings[0].id.clone(),
+        sequence: 10,
+    });
+    let event = |sequence, origin, watched| WatchEvent {
+        sequence,
+        origin,
+        date: None,
+        changes: vec![WatchChange {
+            series_id: state.bindings[0].source.source_id.clone(),
+            episode_id: state.bindings[0].assignments[0].episode_id.clone(),
+            watched,
+            started: false,
+        }],
+    };
+    let old = event(9, EventOrigin::Local, true);
+    let paired = event(11, EventOrigin::PairedDevice, true);
+    let same = event(12, EventOrigin::Local, true);
+    let unwatch = event(13, EventOrigin::Local, false);
+    let rewatch = event(14, EventOrigin::Local, true);
+    state.consume_event(&old).unwrap();
+    assert!(state.outbox.pending().is_empty());
+    state.consume_event(&paired).unwrap();
+    assert!(state.outbox.pending().is_empty());
+    state.consume_event(&same).unwrap();
+    assert!(state.outbox.pending().is_empty());
+    state.consume_event(&unwatch).unwrap();
+    state.consume_event(&rewatch).unwrap();
+    assert_eq!(state.outbox.pending().len(), 1);
+}
+
+#[test]
+fn event_consumption_and_queue_commit_or_fail_together() {
+    let storage = MemoryStorage::default();
+    let mut store = Store::load(storage.clone()).unwrap();
+    let mut state = delivery_state();
+    state.link_checkpoints.push(LinkCheckpoint {
+        binding_id: state.bindings[0].id.clone(),
+        sequence: 0,
+    });
+    store.save(state.clone()).unwrap();
+    let event = WatchEvent {
+        sequence: 1,
+        origin: EventOrigin::Local,
+        date: None,
+        changes: vec![WatchChange {
+            series_id: state.bindings[0].source.source_id.clone(),
+            episode_id: state.bindings[0].assignments[0].episode_id.clone(),
+            watched: true,
+            started: false,
+        }],
+    };
+    let key = format!("{EVENT_PREFIX}{:020}", 1);
+    storage
+        .write(&[(key.clone(), Some(serde_json::to_string(&event).unwrap()))])
+        .unwrap();
+    state.consume_event(&event).unwrap();
+    storage.0.lock().unwrap().fail = true;
+    assert!(
+        store
+            .save_with_events(state.clone(), std::slice::from_ref(&key))
+            .is_err()
+    );
+    assert!(store.state().outbox.pending().is_empty());
+    assert!(storage.read(&key).unwrap().is_some());
+    storage.0.lock().unwrap().fail = false;
+    store
+        .save_with_events(state, std::slice::from_ref(&key))
+        .unwrap();
+    assert!(storage.read(&key).unwrap().is_none());
+    assert_eq!(
+        Store::load(storage).unwrap().state().outbox.pending().len(),
+        1
+    );
+}
+
+fn snapshot(state: &TrackingState) -> TargetSnapshot {
+    let target = state.targets[0].key.clone();
+    TargetSnapshot {
+        media: Media {
+            id: target.remote_media_id,
+            mal_id: None,
+            title: "Anime".into(),
+            format: "TV".into(),
+            episodes: Some(n(12)),
+            finished: true,
+            year: Some(2026),
+        },
+        target,
+        remote: None,
+        score_format: ScoreFormat::Point10Decimal,
+        status_pinned: false,
+        dates_pinned: false,
+    }
+}
+#[test]
+fn field_edits_preserve_independent_fields_and_serialize_with_progress() {
+    let mut state = delivery_state();
+    state.snapshots.push(snapshot(&state));
+    let key = state.targets[0].key.clone();
+    state
+        .enqueue_edit(
+            &key,
+            EntryPatch {
+                status: Some(ListStatus::OnHold),
+                score_tenths: Some(85),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    state
+        .enqueue_edit(
+            &key,
+            EntryPatch {
+                status: Some(ListStatus::Dropped),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(state.outbox.edits().len(), 2);
+    assert_eq!(state.outbox.edits()[0].patch.status, None);
+    assert_eq!(state.outbox.edits()[0].patch.score_tenths, Some(85));
+    let attempt = state.begin_edit(&key, 0).unwrap().unwrap();
+    state
+        .observe_episode(
+            &state.bindings[0].id.clone(),
+            &episode(&state.bindings[0], "episode-1"),
+            true,
+        )
+        .unwrap();
+    assert!(state.begin_delivery(&key, 0).unwrap().is_none());
+    state
+        .finish_edit(&attempt, Err(DeliveryFailure::Transient), 0)
+        .unwrap();
+    assert!(state.snapshots[0].status_pinned);
+    state.validate().unwrap();
+}
+#[test]
+fn newer_field_edit_survives_failed_old_request_and_account_auth_pause() {
+    let mut state = delivery_state();
+    state.snapshots.push(snapshot(&state));
+    let key = state.targets[0].key.clone();
+    state
+        .enqueue_edit(
+            &key,
+            EntryPatch {
+                score_tenths: Some(80),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let old = state.begin_edit(&key, 0).unwrap().unwrap();
+    state
+        .enqueue_edit(
+            &key,
+            EntryPatch {
+                score_tenths: Some(90),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    state
+        .finish_edit(&old, Err(DeliveryFailure::Transient), 0)
+        .unwrap();
+    assert_eq!(state.outbox.edits().len(), 1);
+    assert_eq!(state.outbox.edits()[0].patch.score_tenths, Some(90));
+    let current = state.begin_edit(&key, 0).unwrap().unwrap();
+    state
+        .finish_edit(&current, Err(DeliveryFailure::AuthenticationRequired), 0)
+        .unwrap();
+    assert!(state.begin_edit(&key, 100).unwrap().is_none());
+    state.resume_account(&key.account, rev(1)).unwrap();
+    assert!(state.begin_edit(&key, 100).unwrap().is_some());
+    state.validate().unwrap();
+}
+
+#[test]
+fn automatic_fields_preserve_pins_and_unknown_release_completion() {
+    let state = delivery_state();
+    let mut snapshot = snapshot(&state);
+    let mut target = state.targets[0].clone();
+    let date = ListDate {
+        year: Some(2026),
+        month: Some(10),
+        day: Some(2),
+    };
+    let patch = EntryPatch::automatic(&target, &snapshot, None, 12, Some(date), true);
+    assert_eq!(patch.status, Some(ListStatus::Completed));
+    assert_eq!(patch.started, Some(date));
+    assert_eq!(patch.completed, Some(date));
+    assert_eq!(patch.score_tenths, None);
+    target.release_finished = false;
+    assert_eq!(
+        EntryPatch::automatic(&target, &snapshot, None, 12, Some(date), true).status,
+        Some(ListStatus::Watching)
+    );
+    target.release_finished = true;
+    snapshot.status_pinned = true;
+    snapshot.dates_pinned = true;
+    let pinned = EntryPatch::automatic(&target, &snapshot, None, 12, Some(date), true);
+    assert_eq!(pinned.status, None);
+    assert_eq!(pinned.started, None);
+    assert_eq!(pinned.completed, None);
+    snapshot.status_pinned = false;
+    snapshot.dates_pinned = false;
+    let held = RemoteEntry {
+        account: target.key.account.clone(),
+        media_id: target.key.remote_media_id,
+        entry_id: Some(n(99)),
+        progress: 5,
+        status: ListStatus::OnHold,
+        score_tenths: 85,
+        started: date,
+        completed: ListDate::default(),
+        repeating: false,
+    };
+    let patch = EntryPatch::automatic(&target, &snapshot, Some(&held), 12, Some(date), true);
+    assert_eq!(patch.status, None);
+    assert_eq!(patch.started, None);
+    assert_eq!(patch.completed, None);
+    assert_eq!(
+        EntryPatch::automatic(&target, &snapshot, None, 12, Some(date), false).status,
+        Some(ListStatus::Watching)
+    );
+}
+
+#[test]
+fn explicit_recovery_retains_corrupt_state_before_reset() {
+    let storage = MemoryStorage::default();
+    storage
+        .write(&[(TRACKING_STATE_KEY.into(), Some("broken-json".into()))])
+        .unwrap();
+    assert!(Store::load(storage.clone()).is_err());
+    let store = Store::reset_retaining_backup(storage.clone()).unwrap();
+    assert!(store.state().bindings.is_empty());
+    let memory = storage.0.lock().unwrap();
+    assert!(
+        memory
+            .rows
+            .iter()
+            .any(|(key, value)| key.starts_with("tracking:quarantine:") && value == "broken-json")
+    );
+}
+
+#[test]
+fn inactive_account_events_checkpoint_without_upload() {
+    let mut state = delivery_state();
+    state.link_checkpoints.push(LinkCheckpoint {
+        binding_id: state.bindings[0].id.clone(),
+        sequence: 0,
+    });
+    state.active_accounts.clear();
+    let event = WatchEvent {
+        sequence: 1,
+        origin: EventOrigin::Local,
+        date: None,
+        changes: vec![WatchChange {
+            series_id: state.bindings[0].source.source_id.clone(),
+            episode_id: "episode-1".into(),
+            watched: true,
+            started: false,
+        }],
+    };
+    state.consume_event(&event).unwrap();
+    assert!(state.outbox.pending().is_empty());
+}
+
+#[test]
+fn inactive_account_cannot_send_retained_work_until_verified_resume() {
+    let mut state = state();
+    let key = state.targets[0].key.clone();
+    state
+        .projections
+        .push(Projection::new(key.clone(), rev(1), 0, vec![]));
+    state.replace_progress(&key, 3, vec![]).unwrap();
+    state.active_accounts.clear();
+    assert!(state.begin_delivery(&key, 0).unwrap().is_none());
+    assert_eq!(state.outbox.pending()[0].state, DeliveryState::StaleAccount);
+    state.active_accounts.push(key.account.clone());
+    state.resume_account(&key.account, rev(1)).unwrap();
+    assert!(state.begin_delivery(&key, 0).unwrap().is_some());
+}
+
+#[test]
+fn explicit_reset_retains_journal_and_removes_it_in_the_reset_transaction() {
+    let storage = MemoryStorage::default();
+    let key = format!("{EVENT_PREFIX}00000000000000000001");
+    storage
+        .write(&[(key.clone(), Some("original event".into()))])
+        .unwrap();
+    let store = Store::reset_with_journal_backup(
+        storage.clone(),
+        &[(key.clone(), "original event".into())],
+    )
+    .unwrap();
+    assert!(store.state().bindings.is_empty());
+    assert!(storage.read(&key).unwrap().is_none());
+    assert_eq!(
+        storage.read(EVENT_COUNTER_KEY).unwrap().as_deref(),
+        Some("0")
+    );
+    assert!(
+        storage
+            .0
+            .lock()
+            .unwrap()
+            .rows
+            .values()
+            .any(|value| value.contains("original event"))
+    );
+}
+
+#[test]
+fn automatic_pause_holds_queue_and_checkpoints_new_history() {
+    let mut state = delivery_state();
+    let key = state.targets[0].key.clone();
+    state.link_checkpoints.push(LinkCheckpoint {
+        binding_id: state.bindings[0].id.clone(),
+        sequence: 0,
+    });
+    state
+        .observe_episode("binding", &episode(&state.bindings[0], "episode-1"), true)
+        .unwrap();
+    state.automatic_paused.push(Service::AniList);
+    assert!(state.begin_delivery(&key, 0).unwrap().is_none());
+    state
+        .consume_event(&WatchEvent {
+            sequence: 1,
+            origin: EventOrigin::Local,
+            date: None,
+            changes: vec![WatchChange {
+                series_id: "opaque-source".into(),
+                episode_id: "episode-8".into(),
+                watched: true,
+                started: false,
+            }],
+        })
+        .unwrap();
+    assert_eq!(state.outbox.pending()[0].progress, 1);
+    state.automatic_paused.clear();
+    assert_eq!(
+        state
+            .begin_delivery(&key, 0)
+            .unwrap()
+            .unwrap()
+            .patch()
+            .progress,
+        1
+    );
+}
+
+#[test]
+fn large_offline_backlog_coalesces_and_round_trips_without_losing_targets() {
+    let started = std::time::Instant::now();
+    let mut state = state();
+    state.targets.clear();
+    state.bindings.clear();
+    for id in 1..=500 {
+        let target = target(Service::AniList, id);
+        state.bindings.push(binding(
+            &target,
+            &format!("source-{id}"),
+            &format!("binding-{id}"),
+            &[("episode", 1)],
+        ));
+        state
+            .projections
+            .push(Projection::new(target.key.clone(), rev(1), 0, vec![]));
+        state.link_checkpoints.push(LinkCheckpoint {
+            binding_id: format!("binding-{id}"),
+            sequence: 0,
+        });
+        state.targets.push(target);
+    }
+    let event = WatchEvent {
+        sequence: 1,
+        origin: EventOrigin::Local,
+        date: None,
+        changes: (1..=500)
+            .map(|id| WatchChange {
+                series_id: format!("source-{id}"),
+                episode_id: "episode".into(),
+                watched: true,
+                started: false,
+            })
+            .collect(),
+    };
+    state.consume_event(&event).unwrap();
+    state.consume_event(&event).unwrap();
+    assert_eq!(state.outbox.pending().len(), 500);
+    let storage = MemoryStorage::default();
+    let mut store = Store::load(storage.clone()).unwrap();
+    store.save(state).unwrap();
+    let restored = Store::load(storage).unwrap();
+    assert_eq!(restored.state().outbox.pending().len(), 500);
+    assert!(
+        restored
+            .state()
+            .outbox
+            .pending()
+            .iter()
+            .all(|p| p.progress == 1 && p.state == DeliveryState::Queued)
+    );
+    eprintln!(
+        "500 links and coalesced offline intents: {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn journal_replay_after_unwatch_cannot_restore_a_watched_transition() {
+    let mut state = delivery_state();
+    state.link_checkpoints.push(LinkCheckpoint {
+        binding_id: "binding".into(),
+        sequence: 0,
+    });
+    let change = |sequence, watched| WatchEvent {
+        sequence,
+        origin: EventOrigin::Local,
+        date: None,
+        changes: vec![WatchChange {
+            series_id: "opaque-source".into(),
+            episode_id: "episode-1".into(),
+            watched,
+            started: false,
+        }],
+    };
+    state.consume_event(&change(1, true)).unwrap();
+    state.consume_event(&change(2, false)).unwrap();
+    state.outbox.cancel_unsent(&state.targets[0].key);
+    state.consume_event(&change(1, true)).unwrap();
+    assert!(state.outbox.pending().is_empty());
+    assert_eq!(state.link_checkpoints[0].sequence, 2);
 }

@@ -162,3 +162,18 @@ request routing, stale replies after alias refresh,
 continuous episode numbering, metadata ambiguity, and sandbox
 limits. Download tests use local HTTP servers. These checks do not
 establish availability of the live site or individual video hosts.
+
+## Tracker identity evidence
+
+`ExternalIds` retains typed MAL/AniList anime and manga, IMDb, and TMDB movie/TV
+claims alongside legacy fields. Stremio normalization accepts explicit prefixes,
+official catalog URLs and known field aliases, retains conflicting claims, and
+never interprets an undeclared bare number as an anime tracker ID. Addons keep
+their original source and episode IDs. Tracking uses anime namespaces only;
+confirmed canonical episode labels/aliases are context, not writable coverage.
+
+The app retains typed identity evidence from preview/detail metadata for tracking.
+It resolves the selected tracker directly or via AniList's official MAL
+cross-reference, then offers bounded alias search and explicit manual alignment.
+IMDb/TMDB sources remain supported by this manual path; no curated mapping dataset
+is bundled. See [anime tracking behavior](../../docs/tracking.md).

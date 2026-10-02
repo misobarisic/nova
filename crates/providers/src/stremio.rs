@@ -47,7 +47,7 @@ impl StremioProvider {
     }
 
     pub(crate) fn convert_preview(&self, preview: MetaPreview) -> MediaItem {
-        let external_ids = external_ids(&preview.extra, &preview.id, &preview.type_);
+        let external_ids = normalize_external_ids(&preview.extra, &preview.id, &preview.type_);
         let title = preview.title();
         let year = preview.year_str();
         MediaItem {
@@ -74,8 +74,10 @@ impl StremioProvider {
         for (key, value) in &detail.extra {
             fields.entry(key.clone()).or_insert_with(|| value.clone());
         }
-        item.external_ids = external_ids(&fields, &detail.preview.id, &detail.preview.type_);
-        let detail_ids = external_ids(&detail.extra, &detail.preview.id, &detail.preview.type_);
+        item.external_ids =
+            normalize_external_ids(&fields, &detail.preview.id, &detail.preview.type_);
+        let detail_ids =
+            normalize_external_ids(&detail.extra, &detail.preview.id, &detail.preview.type_);
         for id in detail_ids.typed {
             if !item.external_ids.typed.contains(&id) {
                 item.external_ids.typed.push(id);
@@ -307,7 +309,7 @@ fn convert_stream(index: usize, stream: Stream) -> Option<ProviderStream> {
     })
 }
 
-fn external_ids(
+pub fn normalize_external_ids(
     fields: &std::collections::HashMap<String, Value>,
     source_id: &str,
     media_type: &str,
@@ -433,7 +435,7 @@ mod identity_tests {
 
     #[test]
     fn native_tracker_ids_do_not_require_imdb() {
-        let ids = external_ids(
+        let ids = normalize_external_ids(
             &fields(json!({"mal_id":123,"anilistId":"https://anilist.co/anime/456/title"})),
             "source-slug",
             "series",
@@ -449,7 +451,7 @@ mod identity_tests {
 
     #[test]
     fn conflicting_aliases_suspend_selection() {
-        let ids = external_ids(
+        let ids = normalize_external_ids(
             &fields(json!({"mal_id":123,"malId":456})),
             "mal:789",
             "series",
@@ -458,7 +460,7 @@ mod identity_tests {
         assert!(
             matches!(ids.resolve_id(IdNamespace::MalAnime), IdResolution::Conflict(values) if values.len() == 3)
         );
-        let ids = external_ids(
+        let ids = normalize_external_ids(
             &fields(json!({"mal_id":123,"malId":"00123"})),
             "123",
             "series",
@@ -468,14 +470,14 @@ mod identity_tests {
 
     #[test]
     fn tmdb_requires_kind_and_bad_values_are_not_accepted() {
-        let ids = external_ids(
+        let ids = normalize_external_ids(
             &fields(json!({"tmdb_id":123,"mal_id":-1,"anilist_id":0})),
             "123",
             "anime",
         );
         assert!(ids.typed.is_empty());
         assert_eq!(ids.tmdb.as_deref(), Some("123"));
-        let ids = external_ids(&fields(json!({"tmdb_id":123})), "123", "series");
+        let ids = normalize_external_ids(&fields(json!({"tmdb_id":123})), "123", "series");
         assert_eq!(
             ids.resolve_id(IdNamespace::TmdbTv),
             IdResolution::Unique(ExternalId::parse("tmdb:tv:123").unwrap())

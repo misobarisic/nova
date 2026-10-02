@@ -93,9 +93,10 @@ fn home_catalogs_are_added_with_a_genre_and_removed_individually() {
     let app_weak = app.as_weak();
     after(100, move || {
         let app = app_weak.upgrade().unwrap();
-        let home_link = ElementHandle::find_by_element_type_name(&app, "SettingsLink")
-            .nth(9)
-            .expect("Home settings link");
+        let home_link =
+            ElementHandle::find_by_accessible_label(&app, "Featured titles and catalog sources")
+                .next()
+                .expect("Home settings link");
         tap(&app, center(&home_link));
 
         let app_weak = app.as_weak();

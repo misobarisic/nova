@@ -5368,6 +5368,7 @@ dependencies = [
 name = "nova-tracking"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "getrandom 0.3.4",
  "nova-storage",
  "reqwest",

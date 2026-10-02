@@ -5,7 +5,7 @@ use crate::{TrackingState, ValidationError};
 pub const TRACKING_STATE_KEY: &str = "tracking:state:v1";
 // Keep the storage key stable so an older binary encounters the newer
 // envelope and refuses to overwrite durable intents it cannot understand.
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 /// Injection keeps recovery tests independent of the process-global database.
 pub trait StateStorage {
@@ -65,6 +65,53 @@ pub struct Store<S: StateStorage = KvStorage> {
     state: TrackingState,
 }
 impl<S: StateStorage> Store<S> {
+    /// Explicit user recovery only: retain the original record before creating
+    /// a fresh local state. Never call this as an automatic load fallback.
+    pub fn reset_retaining_backup(storage: S) -> Result<Self, LoadError> {
+        Self::reset_with_journal_backup(storage, &[])
+    }
+    /// The app supplies journal rows while holding its history writer lock.
+    /// Retain them before atomically deleting the old journal and resetting its
+    /// sequence, so a failed reset leaves the original state usable.
+    pub fn reset_with_journal_backup(
+        storage: S,
+        rows: &[(String, String)],
+    ) -> Result<Self, LoadError> {
+        if rows
+            .iter()
+            .any(|(key, _)| !key.starts_with(crate::EVENT_PREFIX))
+        {
+            return Err(LoadError::InvalidState("invalid journal key".into()));
+        }
+        if !rows.is_empty() {
+            let raw = serde_json::to_string(rows)
+                .map_err(|error| LoadError::InvalidState(error.to_string()))?;
+            quarantine(&storage, &raw)?;
+        }
+        if let Some(raw) = storage.read(TRACKING_STATE_KEY)? {
+            quarantine(&storage, &raw)?;
+        }
+        if let Some(counter) = storage.read(crate::EVENT_COUNTER_KEY)? {
+            quarantine(&storage, &counter)?;
+        }
+        if let Some(marker) = storage.read(crate::JOURNAL_ERROR_KEY)? {
+            quarantine(&storage, &marker)?;
+        }
+        let state = TrackingState::default();
+        let raw = serde_json::to_string(&Envelope {
+            version: SCHEMA_VERSION,
+            state: state.clone(),
+        })
+        .map_err(|error| LoadError::InvalidState(error.to_string()))?;
+        let mut entries = vec![
+            (TRACKING_STATE_KEY.into(), Some(raw)),
+            (crate::JOURNAL_ERROR_KEY.into(), None),
+            (crate::EVENT_COUNTER_KEY.into(), Some("0".into())),
+        ];
+        entries.extend(rows.iter().map(|(key, _)| (key.clone(), None)));
+        storage.write(&entries)?;
+        Ok(Self { storage, state })
+    }
     pub fn load(storage: S) -> Result<Self, LoadError> {
         let Some(raw) = storage.read(TRACKING_STATE_KEY)? else {
             return Ok(Self {
@@ -80,16 +127,23 @@ impl<S: StateStorage> Store<S> {
                 .get("version")
                 .and_then(serde_json::Value::as_u64)
                 .ok_or_else(|| "missing schema version".to_owned())?;
-            if version != 1 && version != u64::from(SCHEMA_VERSION) {
+            if !(1..=u64::from(SCHEMA_VERSION)).contains(&version) {
                 return Ok(Err(version));
             }
-            if version == u64::from(SCHEMA_VERSION)
+            if version >= 2
                 && value
                     .get("state")
                     .and_then(|state| state.get("outbox"))
                     .is_none()
             {
                 return Err("missing outbox in tracking schema 2".to_owned());
+            }
+            if version >= 3
+                && (value["state"].get("link_checkpoints").is_none()
+                    || value["state"].get("snapshots").is_none()
+                    || value["state"]["outbox"].get("edits").is_none())
+            {
+                return Err("missing tracking journal or manual-edit fields in schema 3".into());
             }
             let envelope: Envelope = serde_json::from_value(value).map_err(|e| e.to_string())?;
             envelope.state.validate().map_err(|e| e.to_string())?;
@@ -164,7 +218,7 @@ impl<S: StateStorage> Store<S> {
         self.mutate(|state| state.resume_account(account, generation))
     }
 
-    fn mutate<T>(
+    pub fn mutate<T>(
         &mut self,
         apply: impl FnOnce(&mut TrackingState) -> Result<T, crate::TrackingError>,
     ) -> Result<T, crate::TrackingError> {
@@ -182,14 +236,31 @@ impl<S: StateStorage> Store<S> {
 
     /// Publish in-memory state only after durable commit.
     pub fn save(&mut self, state: TrackingState) -> Result<(), LoadError> {
+        self.save_with_events(state, &[])
+    }
+
+    /// Consumed journal keys are deleted in the same transaction as their
+    /// observations/intents. Neither side may succeed independently.
+    pub fn save_with_events(
+        &mut self,
+        state: TrackingState,
+        consumed: &[String],
+    ) -> Result<(), LoadError> {
+        if consumed
+            .iter()
+            .any(|key| !key.starts_with(crate::EVENT_PREFIX))
+        {
+            return Err(LoadError::InvalidState("invalid tracking event key".into()));
+        }
         state.validate()?;
         let raw = serde_json::to_string(&Envelope {
             version: SCHEMA_VERSION,
             state: state.clone(),
         })
         .map_err(|error| LoadError::InvalidState(error.to_string()))?;
-        self.storage
-            .write(&[(TRACKING_STATE_KEY.into(), Some(raw))])?;
+        let mut entries = vec![(TRACKING_STATE_KEY.into(), Some(raw))];
+        entries.extend(consumed.iter().map(|key| (key.clone(), None)));
+        self.storage.write(&entries)?;
         self.state = state;
         Ok(())
     }

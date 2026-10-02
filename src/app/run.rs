@@ -370,6 +370,52 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_watch_now(move || b.watch_now());
 
     let b = bridge.clone();
+    app.on_tracking_connect(move |a0, a1, a2| {
+        b.tracking_connect(a0, a1.to_string(), a2.to_string())
+    });
+    let b = bridge.clone();
+    app.on_tracking_complete(move |a0, a1| b.tracking_complete(a0, a1.to_string()));
+    let b = bridge.clone();
+    app.on_tracking_disconnect(move |a0| b.tracking_disconnect(a0));
+    let b = bridge.clone();
+    app.on_tracking_cancel(move |a0| b.tracking_cancel(a0));
+    let b = bridge.clone();
+    app.on_tracking_reset(move || b.tracking_reset());
+    let b = bridge.clone();
+    app.on_tracking_automatic(move |service, enabled| b.tracking_automatic(service, enabled));
+    let b = bridge.clone();
+    app.on_tracking_show(move || b.tracking_show());
+    let b = bridge.clone();
+    app.on_tracking_close(move || b.tracking_close());
+    let b = bridge.clone();
+    app.on_tracking_search(move |a0, a1| b.tracking_search(a0, a1.to_string()));
+    let b = bridge.clone();
+    app.on_tracking_pick(move |a0| b.tracking_pick(a0));
+    let b = bridge.clone();
+    app.on_tracking_preview(move |a0, a1, a2| {
+        b.tracking_preview(a0.to_string(), a1.to_string(), a2.to_string())
+    });
+    let b = bridge.clone();
+    app.on_tracking_confirm(move || b.tracking_confirm());
+    let b = bridge.clone();
+    app.on_tracking_assign(move |row, value| b.tracking_assign(row, value.to_string()));
+    let b = bridge.clone();
+    app.on_tracking_edit(move |a0, a1, a2, a3, a4, a5, a6, a7| {
+        b.tracking_edit(
+            a0.to_string(),
+            a1.to_string(),
+            a2,
+            a3.to_string(),
+            a4,
+            a5.to_string(),
+            a6,
+            a7.to_string(),
+        )
+    });
+    let b = bridge.clone();
+    app.on_tracking_action(move |a0, a1| b.tracking_action(a0.to_string(), a1));
+
+    let b = bridge.clone();
     app.on_modal_closed(move || b.modal_closed());
 
     // Library callbacks.
@@ -912,6 +958,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     crate::web_log("nova: startup complete, entering event loop");
-    app.run()?;
+    let result = app.run();
+    bridge.shutdown_tracking();
+    result?;
     Ok(())
 }

@@ -3,17 +3,51 @@
 Date: 2026-10-02\
 Target repository: [misobarisic/nova](https://github.com/misobarisic/nova)\
 Reviewed snapshot: [b014b98c233f29814ced15401ca0a00cff052918](https://github.com/misobarisic/nova/tree/b014b98c233f29814ced15401ca0a00cff052918)\
-Status: implementation started; identity, mapping/projection domain, local persistence, and progress outbox implemented; account connection and network delivery remain pending.
+Status: both service adapters, native authorization, application delivery, settings/detail UI, explicit alignment/repair, manual edits and local recovery implemented. Public client registration and live platform/account validation remain pending at the user's request.
 
 ### Implementation progress (2026-10-02)
 
-The first implementation slice adds `crates/providers/src/ids.rs` as a shared identity layer. It models MAL/AniList anime and manga, IMDb, and TMDB movie/TV references, parses explicit prefixes and catalog URLs, and exposes missing/unique/conflicting destination lookup without requiring IMDb. Stremio normalization retains AniList and conflicting claims alongside backward-compatible fields; source IDs are unchanged. Provider matching rejects conflicting identity evidence, and the AniKoto bridge forwards AniList metadata.
+The implemented feature uses typed source IDs without renaming existing addon,
+library or episode identities. `nova-tracking` owns independent account/release
+bindings, stable-ID assignments, highest-accepted-ordinal projection, schema-3
+local persistence, semantic journal consumption, manual field intents, serialized
+attempt leases, retries, authentication pauses and service-wide cooldowns. History
+and events commit together; consuming events and creating intents also commit
+together. Paired-device and inactive-account changes checkpoint without uploading.
+Explicit decreases invalidate old revisions; mapping repair checkpoints history
+again and discards old unsent work. Corrupt records retain recovery backups.
 
-The next slice adds `nova-tracking` with account-scoped targets, explicit stable-ID episode assignments, conflict/coverage validation, and a highest-accepted-ordinal progress projection. Link-time watched checkpoints suppress unapproved saved history; manual replacements establish a new revision and reject old acknowledgments. Versioned `tracking:state:v1` JSON stores accounts, targets, bindings, and projections locally; corrupt snapshots retain their primary record and receive a deterministic quarantine backup. The app loads this store on a startup worker and retains failures without blocking playback.
+Both API adapters verify account identity, perform bounded metadata search, read
+only the linked account's entry, and write only supplied fields. MAL uses its
+verified official PATCH contract, public-client plain PKCE and refresh rotation;
+its dates remain read-only. AniList uses GraphQL, format-dependent scoring, fuzzy
+dates, implicit authorization and its documented PIN fallback. Tokens are
+zeroized session-only secrets; no persistent credential-store integration is
+claimed. Loopback capture and a password-field manual return are implemented.
 
-The progress outbox now persists set-style automatic/replacement intents, mapping snapshots, revision-scoped attempt leases, retries, authentication pauses, and service-wide cooldowns in the same local record. Checkpoints and their intents commit together through fallible Store APIs. Saves use envelope schema 2 under the existing storage key; schema 1 remains readable, while older binaries reject schema 2 instead of dropping pending work. An interrupted attempt is recovered as uncertain; a remote read is required before retrying. Mapping revision or assignment changes pause projection/queued delivery. A newer manual decrease supersedes unsent progress and rejects acknowledgments from the older projection run.
+Settings → Tracking and the detail tracking sheet are wired through AppWindow
+and the app actor. They support both services, explicit range/individual coverage,
+history preview/confirmation, independent manual fields, alignment repair,
+unlink/reset confirmation, service-page links, automatic-tracking pause, and
+English/Croatian text. Fresh remote reads protect existing progress and fields.
+A bounded cache retains official API metadata/provenance; source title aliases,
+year, format and count rank suggestions without auto-confirming coverage.
 
-This is part of Phase 1 and the Phase 3 delivery foundation, not completion of either gate. Provenance timestamps, non-progress field patches, mapping repair UI, and playback-history transaction/event wiring remain pending. The Phase 0 authorization/client registration and platform credential-storage gates remain open. The service adapters now implement verified Viewer/current-user identity, bounded search/media reads, account-scoped list reads and field-specific mutations. Native public-client authorization includes MAL plain PKCE and refresh rotation, AniList implicit callbacks and its documented PIN fallback; tokens are zeroized session-only secrets. Fixture tests cover omitted-field preservation, HTTP 200 GraphQL errors, wrong-account results, absent-list reads, capability validation, rate limits and OAuth state. Application connection/delivery and UI wiring remain pending; no live account mutations have been performed. Public client registration and live desktop/Android sign-in validation will follow implementation. MAL dates remain read-only because its official PATCH schema does not document date writes.
+Curated mappings remain optional: the reviewed Fribb and Anime-Lists repositories
+had no explicit redistribution license, so no dataset is bundled or downloaded.
+IMDb/TMDB/provider-only identities use title/alias search and manual linking;
+contextual cross-catalog automation is deferred with that dataset dependency.
+Optional Phase 7 peer mapping sync is outside the initial feature; tracking
+records, pending work and secrets remain local, with no wire schema change.
+
+Tracker fixture/domain tests and the headless phone UI regression cover auth,
+field omission, wrong-account rejection, restart recovery, decreases, cooldowns,
+coverage, explicit history confirmation and sheet-first Back. `cargo test --workspace --locked -j 1` passed: 423 tests, including 147 app
+unit tests, 56 tracking tests and the tracking/settings headless regressions. Android and Windows build
+checks are excluded from this validation run at the user's request. Public client IDs/redirects
+and live desktop/Android browser return/account mutations are the final external
+validation gate, to be completed after implementation as requested by the user.
+See [implemented tracking behavior](docs/tracking.md).
 
 ## 1. Goal and agreed scope
 
@@ -768,25 +802,25 @@ Do not label every failure “sync failed” when an alignment correction or acc
 
 ### Phase 0 — Contracts and platform feasibility
 
-- [ ] Verify current AniList and MAL search, per-entry read, write, authentication, score, and date contracts.
+- [x] Verify current AniList and MAL search, per-entry read, write, authentication, score, and date contracts.
 - [ ] Register Nova application/client identifiers and choose supported callback flows.
 - [ ] Validate desktop and Android callback handling with minimal prototypes.
 - [ ] Validate persistent secret storage on supported targets, with a session-only fallback if needed.
-- [ ] Inventory every local progress mutation path and storage transaction boundary.
-- [ ] Confirm the addon ID normalization forms that need compatibility support.
-- [ ] Document the chosen sparse-progress policy and initial-history defaults.
-- [ ] Review the services' published API usage terms for the intended companion integration.
+- [x] Inventory every local progress mutation path and storage transaction boundary.
+- [x] Confirm the addon ID normalization forms that need compatibility support.
+- [x] Document the chosen sparse-progress policy and initial-history defaults.
+- [x] Review the services' published API usage terms for the intended companion integration.
 
 Gate: the plan for authentication requires no embedded confidential secret, both adapters have verified contracts, and persistence/recovery has a concrete implementation route.
 
 ### Phase 1 — Typed IDs and tracking domain
 
 - [x] Add the tracking crate and application module.
-- [ ] Implement typed IDs, source references, target/account keys, bindings, assignments, and intent models.
-- [ ] Extend provider/addon normalization to retain AniList IDs and typed TMDB evidence.
-- [ ] Preserve all existing library/progress/source IDs.
+- [x] Implement typed IDs, source references, target/account keys, bindings, assignments, and intent models.
+- [x] Extend provider/addon normalization to retain AniList IDs and typed TMDB evidence.
+- [x] Preserve all existing library/progress/source IDs.
 - [x] Add versioned local persistence for tracking records (accounts, targets, bindings, projections, and progress outbox).
-- [ ] Implement mapping validation and direct-ID resolution without requiring IMDb.
+- [x] Implement mapping validation and direct-ID resolution without requiring IMDb.
 
 Gate: MAL-only and AniList-only fixtures resolve through their native service paths, old metadata still parses, and no source identity is rewritten.
 
@@ -794,45 +828,45 @@ Gate: MAL-only and AniList-only fixtures resolve through their native service pa
 
 Recommended sequence: AniList first, then MAL, with both supported by the completed feature. Reorder if platform authorization testing makes MAL the simpler first implementation.
 
-- [ ] Implement connection, verified account identity, metadata search/fetch, per-entry reads, and field-specific writes.
-- [ ] Implement one-to-one manual linking and exact ID/URL entry.
-- [ ] Add Settings → Tracking and the detail tracking sheet.
-- [ ] Preserve existing remote values and expose explicit initial-history application.
-- [ ] Implement manual status/progress/score/date edits supported by the adapter.
+- [x] Implement connection, verified account identity, metadata search/fetch, per-entry reads, and field-specific writes.
+- [x] Implement one-to-one manual linking and exact ID/URL entry.
+- [x] Add Settings → Tracking and the detail tracking sheet.
+- [x] Preserve existing remote values and expose explicit initial-history application.
+- [x] Implement manual status/progress/score/date edits supported by the adapter.
 
 Gate: a user can connect, search, link, inspect an existing entry, and apply an explicit edit without modifying My Library or local history.
 
 ### Phase 3 — Automatic progress and durable delivery
 
-- [ ] Integrate meaningful playback-start and watched events.
-- [ ] Cover manual episode, season, range, and library bulk-watch actions.
-- [ ] Persist semantic checkpoints and pending patches reliably.
-- [ ] Implement target serialization, coalescing, retries, and startup recovery.
-- [ ] Protect initial remote baselines and unrelated remote fields.
-- [ ] Implement explicit decreases as ordered replacement intents.
-- [ ] Add user-visible pending/authentication/error states.
+- [x] Integrate meaningful playback-start and watched events.
+- [x] Cover manual episode, season, range, and library bulk-watch actions.
+- [x] Persist semantic checkpoints and pending patches reliably.
+- [x] Implement target serialization, coalescing, retries, and startup recovery.
+- [x] Protect initial remote baselines and unrelated remote fields.
+- [x] Implement explicit decreases as ordered replacement intents.
+- [x] Add user-visible pending/authentication/error states.
 
 Gate: an offline watched event survives restart and updates the correct entry later; position-only changes do not flood the service; older work cannot undo a newer explicit tracker edit.
 
 ### Phase 4 — Split/merged coverage and manual repair
 
-- [ ] Implement explicit episode assignments and proven range/offset rules.
-- [ ] Support several tracker releases for one source title.
-- [ ] Support several source contributions to one tracker release.
-- [ ] Add the alignment preview/editor with overlap and gap validation.
-- [ ] Reuse confirmed AniKoto canonical evidence without changing native IDs.
-- [ ] Implement mapping revision checks and metadata-change repair behavior.
-- [ ] Test completion for parts, ongoing releases, specials, and anime films.
+- [x] Implement explicit episode assignments and proven range/offset rules.
+- [x] Support several tracker releases for one source title.
+- [x] Support several source contributions to one tracker release.
+- [x] Add the alignment preview/editor with overlap and gap validation.
+- [x] Reuse confirmed AniKoto canonical evidence without changing native IDs.
+- [x] Implement mapping revision checks and metadata-change repair behavior.
+- [x] Test completion for parts, ongoing releases, specials, and anime films.
 
 Gate: all synthetic merged/split mapping cases in section 21 project correctly and unresolved episodes cannot update a guessed release.
 
 ### Phase 5 — Second service and independent dual tracking
 
-- [ ] Implement the second adapter against its verified contract.
-- [ ] Map statuses, scoring, and dates with service capability handling.
-- [ ] Allow MAL and AniList to use different coverage boundaries.
-- [ ] Isolate delivery failures and authentication per service/account.
-- [ ] Keep unrelated edits independent; do not create a general tracker-to-tracker mirror.
+- [x] Implement the second adapter against its verified contract.
+- [x] Map statuses, scoring, and dates with service capability handling.
+- [x] Allow MAL and AniList to use different coverage boundaries.
+- [x] Isolate delivery failures and authentication per service/account.
+- [x] Keep unrelated edits independent; do not create a general tracker-to-tracker mirror.
 
 Gate: one accepted Nova watch event can update both linked services correctly even when their release splits differ, and a failure on one does not block the other.
 
@@ -840,10 +874,10 @@ Gate: one accepted Nova watch event can update both linked services correctly ev
 
 - [ ] Add a selected curated mapping source after coverage/licensing review.
 - [ ] Add contextual IMDb/TMDB resolution and alias search ranking.
-- [ ] Add bounded positive/negative caching with provenance.
-- [ ] Finish localization, keyboard/touch flows, long-title layouts, and repair messages.
-- [ ] Verify performance under many links and offline backlog.
-- [ ] Update provider documentation and `docs/PROJECT_STRUCTURE.md` for implemented behavior.
+- [x] Add bounded positive/negative caching with provenance.
+- [x] Finish localization, keyboard/touch flows, long-title layouts, and repair messages.
+- [x] Verify performance under many links and offline backlog (500 links/intents, replay/coalescing and persistence regression).
+- [x] Update provider documentation and `docs/PROJECT_STRUCTURE.md` for implemented behavior.
 
 Gate: common IDs can enter the same workflow, ambiguity has a useful manual path, and playback remains responsive during lookup and delivery.
 
@@ -1024,4 +1058,4 @@ None of these require direct tracker-library integration to deliver useful Mihon
 
 AniList's published terms restrict competing, non-complementary tracking services and use of its API as generic storage. The intended feature is a playback companion that maintains explicitly linked AniList entries; verify the intended use against current terms before distribution rather than treating this document as authorization from AniList.
 
-The Nova findings refer to the reviewed commit, not a promise about future repository changes. AniList documentation was read from its official source repository where rendered pages were unavailable. MAL's official references were unavailable in this environment, so unverified anime API details are deliberately implementation gates. Proposed models, policies, module paths, and phase ordering are design recommendations, not descriptions of features already present in Nova.
+The Nova findings refer to the reviewed commit, not a promise about future repository changes. AniList documentation was read from its official source repository where rendered pages were unavailable. MAL's official authorization page and embedded API v2 OpenAPI schema were subsequently retrieved during implementation; PATCH semantics, expiry/refresh, plain PKCE and read-only date capabilities are now verified against those sources. Proposed models, policies, module paths, and phase ordering are design recommendations, not descriptions of features already present in Nova.

@@ -55,6 +55,10 @@ impl Bridge {
             None => return,
         };
 
+        tracking::remember_source(&preview);
+        if let Some(app) = self.app() {
+            app.set_tracking_open(false);
+        }
         {
             let mut state = self.shared.lock().unwrap();
             state.modal_item = Some(ModalItem {
@@ -661,6 +665,9 @@ impl Bridge {
         };
         if !still_open {
             return;
+        }
+        if let Some(item) = found.as_ref() {
+            self.tracking_metadata(id.clone(), modal_type.clone(), &item.videos);
         }
         // Unfinished shows may have new or changed episodes and descriptions
         // since the cache was written: their header text is overwritten (not
@@ -2932,6 +2939,9 @@ pub(crate) fn write_meta_header_for(type_: &str, id: &str, header: &MetaHeader) 
 /// Build a header snapshot from a fetched meta item (empty when the addon
 /// sent nothing usable).
 pub(crate) fn meta_header_from_item(item: &MetaItem) -> MetaHeader {
+    let mut preview = item.preview.clone();
+    preview.extra.extend(item.extra.clone());
+    tracking::remember_source(&preview);
     MetaHeader {
         background_url: item.preview.background.clone().unwrap_or_default(),
         description: item.preview.description.clone().unwrap_or_default(),

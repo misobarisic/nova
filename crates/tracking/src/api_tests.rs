@@ -273,3 +273,107 @@ fn pin_fallback_requires_pin_registration() {
             .is_err()
     );
 }
+
+#[test]
+fn cross_reference_uses_public_metadata_and_never_an_unrelated_list() {
+    let f = Fixture::new(vec![
+        json!({"data":{"Page":{"media":[{"id":12,"idMal":42,"type":"ANIME","title":{"english":"Anime"},"format":"TV","episodes":12,"status":"FINISHED","seasonYear":2026}]}}}),
+    ]);
+    let c = Client::public_anilist(&f);
+    let media = c.media_by_mal(42.try_into().unwrap(), 0).unwrap().unwrap();
+    assert_eq!(media.id.get(), 12);
+    assert_eq!(c.viewer(), Err(ApiError::Authentication));
+    assert!(f.requests.lock().unwrap()[0].bearer.is_none());
+}
+#[test]
+fn omitted_anilist_entry_field_is_not_proof_of_absence() {
+    let f = Fixture::new(vec![viewer(), json!({"data":{"Media":{"id":12}}})]);
+    let mut c = client(&f);
+    c.verify(0).unwrap();
+    assert_eq!(
+        c.read(12.try_into().unwrap(), 0),
+        Err(ApiError::InvalidResponse)
+    );
+}
+#[test]
+fn anilist_date_clear_omits_progress_and_other_fields() {
+    let mut cleared = entry(4);
+    cleared["startedAt"] = json!({"year":null,"month":null,"day":null});
+    let f = Fixture::new(vec![
+        viewer(),
+        json!({"data":{"SaveMediaListEntry":cleared}}),
+    ]);
+    let mut c = client(&f);
+    c.verify(0).unwrap();
+    c.update(
+        12.try_into().unwrap(),
+        None,
+        &EntryPatch {
+            started: Some(ListDate::default()),
+            ..Default::default()
+        },
+        0,
+    )
+    .unwrap();
+    let req = f.requests.lock().unwrap();
+    let Body::Json(body) = &req[1].body else {
+        panic!()
+    };
+    let query = body["query"].as_str().unwrap();
+    assert!(query.contains("startedAt:$startedAt"));
+    assert!(!query.contains("progress:$progress"));
+    assert!(!query.contains("completedAt:$completedAt"));
+}
+#[test]
+fn anilist_callback_requires_registered_route_and_current_state() {
+    let reg = ClientRegistration {
+        client_id: "123".into(),
+        redirect_uri: "http://127.0.0.1:53926/callback".into(),
+    };
+    let auth = Authorization::begin(Service::AniList, reg).unwrap();
+    let url = url::Url::parse(&auth.url().unwrap()).unwrap();
+    let state = url
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let f = Fixture::new(vec![]);
+    let token = auth
+        .finish(
+            &format!(
+                "http://127.0.0.1:53926/callback#access_token=token&state={state}&expires_in=60"
+            ),
+            &&f,
+            100,
+        )
+        .unwrap();
+    assert_eq!(token.expires_at, Some(160));
+    assert!(f.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn mal_refresh_rotates_both_credentials_and_uses_the_returned_expiry() {
+    let f = Fixture::new(vec![
+        json!({"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer","expires_in":123}),
+    ]);
+    let old = Tokens {
+        access: Secret::new("old-access".into()).unwrap(),
+        refresh: Some(Secret::new("old-refresh".into()).unwrap()),
+        expires_at: Some(1),
+    };
+    let registration = ClientRegistration {
+        client_id: "public-id".into(),
+        redirect_uri: "http://127.0.0.1:53926/callback".into(),
+    };
+    let tokens = old.refresh(&registration, &&f, 100).unwrap();
+    assert_eq!(tokens.expires_at, Some(223));
+    assert_eq!(tokens.access.expose(), "new-access");
+    assert_eq!(tokens.refresh.unwrap().expose(), "new-refresh");
+    let requests = f.requests.lock().unwrap();
+    let Body::Form(form) = &requests[0].body else {
+        panic!("refresh form")
+    };
+    assert!(form.contains(&("refresh_token".into(), "old-refresh".into())));
+    assert!(!form.iter().any(|(key, _)| key == "client_secret"));
+}

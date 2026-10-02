@@ -73,27 +73,35 @@ pub struct PendingProgress {
     pub attempts: u32,
     pub next_attempt_at: u64,
     pub last_failure: Option<DeliveryFailure>,
+    #[serde(default)]
+    pub observed_date: Option<crate::ListDate>,
+    #[serde(default)]
+    pub playback_start: bool,
+    #[serde(default)]
+    pub first_date: Option<crate::ListDate>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct ServiceCooldown {
-    service: Service,
-    until: u64,
+pub(crate) struct ServiceCooldown {
+    pub(crate) service: Service,
+    pub(crate) until: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct AccountPause {
-    account: AccountKey,
-    generation: NonZeroU64,
+pub(crate) struct AccountPause {
+    pub(crate) account: AccountKey,
+    pub(crate) generation: NonZeroU64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Outbox {
-    next_revision: u64,
-    pending: Vec<PendingProgress>,
-    cooldowns: Vec<ServiceCooldown>,
+    pub(crate) next_revision: u64,
+    pub(crate) pending: Vec<PendingProgress>,
+    pub(crate) cooldowns: Vec<ServiceCooldown>,
     #[serde(default)]
-    authentication_pauses: Vec<AccountPause>,
+    pub(crate) authentication_pauses: Vec<AccountPause>,
+    #[serde(default)]
+    pub(crate) edits: Vec<crate::PendingEdit>,
 }
 impl Default for Outbox {
     fn default() -> Self {
@@ -102,6 +110,7 @@ impl Default for Outbox {
             pending: vec![],
             cooldowns: vec![],
             authentication_pauses: vec![],
+            edits: vec![],
         }
     }
 }
@@ -218,6 +227,11 @@ impl Outbox {
                 patch.state = DeliveryState::Uncertain;
             }
         }
+        for edit in &mut self.edits {
+            if edit.state == DeliveryState::InFlight {
+                edit.state = DeliveryState::Uncertain;
+            }
+        }
     }
 
     fn enqueue(&mut self, mut patch: PendingProgress) -> Result<NonZeroU64, TrackingError> {
@@ -257,7 +271,7 @@ impl Outbox {
 }
 
 impl TrackingState {
-    fn enqueue_progress(
+    pub(crate) fn enqueue_progress(
         &mut self,
         target_key: &TargetKey,
         intent: ProgressIntent,
@@ -304,6 +318,9 @@ impl TrackingState {
             attempts: 0,
             next_attempt_at: 0,
             last_failure: None,
+            observed_date: None,
+            playback_start: false,
+            first_date: None,
         })
     }
 
@@ -333,7 +350,7 @@ impl TrackingState {
         Ok(None)
     }
 
-    pub(crate) fn replace_progress(
+    pub fn replace_progress(
         &mut self,
         target_key: &TargetKey,
         progress: u32,
@@ -344,9 +361,10 @@ impl TrackingState {
             .iter()
             .find(|target| target.key == *target_key)
             .ok_or(TrackingError::MissingTarget)?;
-        if target
-            .final_episode_total
-            .is_some_and(|total| progress > total.get())
+        if progress > i32::MAX as u32
+            || target
+                .final_episode_total
+                .is_some_and(|total| progress > total.get())
         {
             return Err(TrackingError::InvalidProgress);
         }
@@ -366,9 +384,14 @@ impl TrackingState {
     ) -> Result<Option<DeliveryAttempt>, TrackingError> {
         if self
             .outbox
-            .pending
+            .edits
             .iter()
-            .any(|patch| patch.target == *target && patch.state == DeliveryState::InFlight)
+            .any(|edit| edit.target == *target && edit.state == DeliveryState::InFlight)
+            || self
+                .outbox
+                .pending
+                .iter()
+                .any(|patch| patch.target == *target && patch.state == DeliveryState::InFlight)
         {
             return Ok(None);
         }
@@ -381,9 +404,15 @@ impl TrackingState {
             return Ok(None);
         };
         let patch = &self.outbox.pending[index];
-        let account_current = self.accounts.iter().any(|account| {
-            account.key == target.account && account.generation == patch.account_generation
-        });
+        if patch.intent == ProgressIntent::AutomaticForward
+            && self.automatic_paused.contains(&target.account.service)
+        {
+            return Ok(None);
+        }
+        let account_current = self.active_accounts.contains(&target.account)
+            && self.accounts.iter().any(|account| {
+                account.key == target.account && account.generation == patch.account_generation
+            });
         let mapping_current = patch.mappings.iter().all(|stamp| {
             self.bindings.iter().any(|binding| {
                 binding.enabled
@@ -434,7 +463,7 @@ impl TrackingState {
         }))
     }
 
-    pub(crate) fn finish_delivery(
+    pub fn finish_delivery(
         &mut self,
         attempt: &DeliveryAttempt,
         outcome: DeliveryOutcome,
@@ -568,11 +597,66 @@ impl TrackingState {
         for patch in &mut self.outbox.pending {
             if patch.target.account == *account
                 && patch.account_generation == generation
-                && patch.state == DeliveryState::AuthenticationRequired
+                && matches!(
+                    patch.state,
+                    DeliveryState::AuthenticationRequired | DeliveryState::StaleAccount
+                )
             {
                 patch.state = DeliveryState::Uncertain;
             }
         }
+        for edit in &mut self.outbox.edits {
+            if edit.target.account == *account
+                && edit.account_generation == generation
+                && matches!(
+                    edit.state,
+                    DeliveryState::AuthenticationRequired | DeliveryState::StaleAccount
+                )
+            {
+                edit.state = DeliveryState::Uncertain;
+            }
+        }
         Ok(())
+    }
+}
+
+impl Outbox {
+    pub fn cancel_unsent(&mut self, target: &TargetKey) {
+        self.pending
+            .retain(|p| p.target != *target || p.state == DeliveryState::InFlight);
+        self.edits
+            .retain(|e| e.target != *target || e.state == DeliveryState::InFlight);
+    }
+}
+
+impl Outbox {
+    pub fn pause_alignment(&mut self, target: &TargetKey) {
+        for pending in self
+            .pending
+            .iter_mut()
+            .filter(|p| p.target == *target && p.state != DeliveryState::InFlight)
+        {
+            pending.state = DeliveryState::NeedsAlignment;
+        }
+        for edit in self
+            .edits
+            .iter_mut()
+            .filter(|e| e.target == *target && e.state != DeliveryState::InFlight)
+        {
+            edit.state = DeliveryState::NeedsAlignment;
+        }
+    }
+}
+
+impl Outbox {
+    pub fn defer_service(&mut self, service: Service, retry_at: u64) {
+        if let Some(cooldown) = self.cooldowns.iter_mut().find(|c| c.service == service) {
+            cooldown.until = cooldown.until.max(retry_at);
+        } else {
+            self.cooldowns.push(ServiceCooldown {
+                service,
+                until: retry_at,
+            });
+        }
     }
 }

@@ -15,13 +15,39 @@ export { NavState } from "sidenav.slint";
 // Shared structs used by the property declarations below; they are exported
 // from types.slint, so the generated Rust module (`slint::include_modules!`)
 // exposes them to the backend.
-import { MediaCard, StreamRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, TrackRow, SeasonCard, ContinueRow, UpcomingRow, CalCell, SheetItem, DownloadRow, LicenseSource } from "types.slint";
+import { TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, MediaCard, StreamRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, TrackRow, SeasonCard, ContinueRow, UpcomingRow, CalCell, SheetItem, DownloadRow, LicenseSource } from "types.slint";
 
 // AppWindow owns every property / callback the backend drives (all the
 // `set_*`, `get_*`, `on_*` and `invoke_*` calls in desktop.rs / web.rs) and
 // forwards them into the per-screen components below. The screen switching
 // guards live here so each page component stays self-contained.
 export component AppWindow inherits Window {
+    in-out property <[TrackingAccountRow]> tracking_accounts;
+    in-out property <[TrackingLinkRow]> tracking_links;
+    in-out property <[TrackingCandidateRow]> tracking_candidates;
+    in-out property <[string]> tracking_source_rows;
+    in-out property <[string]> tracking_preview_rows;
+    in-out property <[TrackingMappingRow]> tracking_mapping_rows;
+    in-out property <string> tracking_notice;
+    in-out property <string> tracking_candidate_title;
+    in-out property <bool> tracking_busy;
+    in-out property <bool> tracking_can_confirm;
+    in-out property <bool> tracking_open: false;
+    callback tracking_connect(int,string,string);
+    callback tracking_complete(int,string);
+    callback tracking_disconnect(int);
+    callback tracking_cancel(int);
+    callback tracking_reset();
+    callback tracking_automatic(int,bool);
+    callback tracking_show();
+    callback tracking_close();
+    callback tracking_search(int,string);
+    callback tracking_pick(int);
+    callback tracking_preview(string,string,string);
+    callback tracking_confirm();
+    callback tracking_assign(int,string);
+    callback tracking_edit(string,string,int,string,bool,string,bool,string);
+    callback tracking_action(string,int);
     icon: @image-url("../../assets/logo.png");
     preferred-width: 1100px;
     preferred-height: 750px;
@@ -748,6 +774,26 @@ export component AppWindow inherits Window {
 
     // ---- Detail page ---------------------------------------------------
     if root.modal_visible && !root.player_open: DetailPage {
+        tracking_links: root.tracking_links;
+        tracking_candidates: root.tracking_candidates;
+        tracking_source_rows: root.tracking_source_rows;
+        tracking_preview_rows: root.tracking_preview_rows;
+        tracking_mapping_rows: root.tracking_mapping_rows;
+        tracking_notice: root.tracking_notice;
+        tracking_candidate_title: root.tracking_candidate_title;
+        tracking_busy: root.tracking_busy;
+        tracking_can_confirm: root.tracking_can_confirm;
+        tracking_open <=> root.tracking_open;
+        tracking_show() => {root.tracking_show();}
+        tracking_close() => {root.tracking_close();}
+        tracking_search(a0,a1) => {root.tracking_search(a0,a1);}
+        tracking_pick(a0) => {root.tracking_pick(a0);}
+        tracking_preview(a0,a1,a2) => {root.tracking_preview(a0,a1,a2);}
+        tracking_confirm() => {root.tracking_confirm();}
+        tracking_assign(row,value) => {root.tracking_assign(row,value);}
+        tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7) => {root.tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7);}
+        tracking_action(a0,a1) => {root.tracking_action(a0,a1);}
+
         selected_poster <=> root.selected_poster;
         selected_backdrop <=> root.selected_backdrop;
         selected_title <=> root.selected_title;
@@ -875,6 +921,15 @@ export component AppWindow inherits Window {
 
     // ---- Settings page --------------------------------------------------
     if root.show_settings && !root.player_open && !root.modal_visible && !root.show_home: SettingsPage {
+        tracking_accounts: root.tracking_accounts;
+        tracking_notice: root.tracking_notice;
+        tracking_connect(a0,a1,a2) => {root.tracking_connect(a0,a1,a2);}
+        tracking_complete(a0,a1) => {root.tracking_complete(a0,a1);}
+        tracking_disconnect(a0) => {root.tracking_disconnect(a0);}
+        tracking_cancel(a0) => {root.tracking_cancel(a0);}
+        tracking_reset => {root.tracking_reset();}
+        tracking_automatic(service,enabled) => {root.tracking_automatic(service,enabled);}
+
         persistence_failed: root.persistence_failed;
         addon_rows <=> root.addon_rows;
         addon_url <=> root.addon_url;

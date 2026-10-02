@@ -36,9 +36,10 @@ pub fn validate_bindings(bindings: &[Binding], targets: &[Target]) -> Result<(),
             if assignment.episode_id.trim().is_empty() || !episodes.insert(&assignment.episode_id) {
                 return Err(invalid("empty or duplicate source episode assignment"));
             }
-            if target
-                .final_episode_total
-                .is_some_and(|total| assignment.target_episode > total)
+            if assignment.target_episode.get() > i32::MAX as u32
+                || target
+                    .final_episode_total
+                    .is_some_and(|total| assignment.target_episode > total)
             {
                 return Err(invalid("assignment exceeds target episode total"));
             }
@@ -71,7 +72,19 @@ pub fn validate_bindings(bindings: &[Binding], targets: &[Target]) -> Result<(),
 
 impl TrackingState {
     pub fn validate(&self) -> Result<(), ValidationError> {
+        for (index, active) in self.active_accounts.iter().enumerate() {
+            if !self.accounts.iter().any(|a| a.key == *active)
+                || self.active_accounts[index + 1..]
+                    .iter()
+                    .any(|a| a.service == active.service)
+            {
+                return Err(invalid("invalid active tracking account"));
+            }
+        }
         for (index, account) in self.accounts.iter().enumerate() {
+            if account.key.remote_user_id.get() > i32::MAX as u32 {
+                return Err(invalid("account ID exceeds tracker limit"));
+            }
             if self.accounts[index + 1..]
                 .iter()
                 .any(|other| other.key == account.key)
@@ -80,6 +93,16 @@ impl TrackingState {
             }
         }
         for (index, target) in self.targets.iter().enumerate() {
+            if target.key.remote_media_id.get() > i32::MAX as u32
+                || target
+                    .remote_entry_id
+                    .is_some_and(|id| id.get() > i32::MAX as u32)
+                || target
+                    .final_episode_total
+                    .is_some_and(|total| total.get() > i32::MAX as u32)
+            {
+                return Err(invalid("target exceeds tracker limits"));
+            }
             if self.targets[index + 1..]
                 .iter()
                 .any(|other| other.key == target.key)
@@ -125,6 +148,57 @@ impl TrackingState {
                     && account.generation == projection.account_generation
             }) {
                 return Err(invalid("projection belongs to a stale account generation"));
+            }
+        }
+        for (index, checkpoint) in self.link_checkpoints.iter().enumerate() {
+            if !self.bindings.iter().any(|b| b.id == checkpoint.binding_id)
+                || self.link_checkpoints[index + 1..]
+                    .iter()
+                    .any(|c| c.binding_id == checkpoint.binding_id)
+            {
+                return Err(invalid("invalid link journal checkpoint"));
+            }
+        }
+        for (index, snapshot) in self.snapshots.iter().enumerate() {
+            if snapshot.media.id != snapshot.target.remote_media_id
+                || !self.targets.iter().any(|t| t.key == snapshot.target)
+                || self.snapshots[index + 1..]
+                    .iter()
+                    .any(|s| s.target == snapshot.target)
+                || snapshot.remote.as_ref().is_some_and(|r| {
+                    r.account != snapshot.target.account
+                        || r.media_id != snapshot.target.remote_media_id
+                        || !snapshot.score_format.valid(r.score_tenths)
+                        || !r.started.valid()
+                        || !r.completed.valid()
+                })
+            {
+                return Err(invalid("invalid target snapshot"));
+            }
+        }
+        for (index, edit) in self.outbox.edits().iter().enumerate() {
+            let snapshot = self
+                .snapshots
+                .iter()
+                .find(|s| s.target == edit.target)
+                .ok_or_else(|| invalid("edit has no target snapshot"))?;
+            if edit.patch.progress.is_some()
+                || edit
+                    .patch
+                    .validate(
+                        edit.target.account.service,
+                        edit.score_format.unwrap_or(snapshot.score_format),
+                    )
+                    .is_err()
+                || edit.revision.get() >= self.outbox.next_revision
+                || self.outbox.edits()[index + 1..].iter().any(|e| {
+                    e.revision == edit.revision
+                        || (e.target == edit.target
+                            && e.state == crate::DeliveryState::InFlight
+                            && edit.state == crate::DeliveryState::InFlight)
+                })
+            {
+                return Err(invalid("invalid manual field edit"));
             }
         }
         self.outbox.validate()?;

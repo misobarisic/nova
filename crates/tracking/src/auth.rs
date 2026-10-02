@@ -24,8 +24,9 @@ impl ClientRegistration {
         let url = url::Url::parse(&self.redirect_uri).map_err(|_| ApiError::InvalidInput)?;
         let pin = service == Service::AniList
             && self.redirect_uri == "https://anilist.co/api/v2/oauth/pin";
-        let loopback =
-            url.scheme() == "http" && url.host_str() == Some("127.0.0.1") && url.port().is_some();
+        let loopback = url.scheme() == "http"
+            && url.host_str() == Some("127.0.0.1")
+            && url.port().is_some_and(|port| port != 0);
         if (!pin && !loopback)
             || !url.username().is_empty()
             || url.password().is_some()
@@ -263,4 +264,29 @@ fn constant_time_equal(a: &[u8], b: &[u8]) -> bool {
         .zip(b)
         .fold(0, |difference, (a, b)| difference | (a ^ b))
         == 0
+}
+
+/// A return URL or PIN pasted by the user. Redacted and zeroized on drop.
+pub struct AuthReturn(zeroize::Zeroizing<String>);
+impl AuthReturn {
+    pub fn new(value: String) -> Result<Self, ApiError> {
+        if value.len() > 32768 || value.trim().is_empty() {
+            return Err(ApiError::InvalidInput);
+        }
+        Ok(Self(zeroize::Zeroizing::new(value)))
+    }
+}
+impl Authorization {
+    pub fn finish_return<T: Transport>(
+        self,
+        value: AuthReturn,
+        transport: &T,
+        now: u64,
+    ) -> Result<Tokens, ApiError> {
+        if self.registration.redirect_uri == "https://anilist.co/api/v2/oauth/pin" {
+            self.finish_pin(value.0.trim().to_owned())
+        } else {
+            self.finish(value.0.trim(), transport, now)
+        }
+    }
 }

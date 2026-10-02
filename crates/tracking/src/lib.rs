@@ -1,11 +1,17 @@
 //! Account-scoped anime tracking domain and native service clients.
 pub mod api;
 pub mod auth;
+mod cache;
+pub mod callback;
+mod edits;
+mod journal;
 mod mapping;
 mod models;
 mod outbox;
 mod persistence;
 mod projection;
+mod resolution;
+pub use resolution::rank_candidates;
 mod service;
 
 pub use mapping::{ValidationError, validate_bindings};
@@ -23,3 +29,9 @@ mod tests;
 pub use service::*;
 #[cfg(test)]
 mod api_tests;
+
+pub use journal::*;
+
+pub use edits::*;
+
+pub use cache::*;

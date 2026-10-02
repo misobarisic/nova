@@ -923,3 +923,319 @@ msgstr "Otvori izvorni kod"
 
 msgid "LICENSE TEXTS"
 msgstr "TEKSTOVI LICENCI"
+
+# Anime tracking
+msgid "Add tracking or align another release"
+msgstr "Dodajte praćenje ili uskladite drugo izdanje"
+
+msgid "Adjust individual assignments below. Leave empty to exclude a source episode."
+msgstr "Prilagodite pojedinačne dodjele u nastavku. Ostavite prazno za izuzimanje izvorne epizode."
+
+msgid "Alignment exceeds this release’s episode total."
+msgstr "Dodjela premašuje broj epizoda ovog izdanja."
+
+msgid "Alignment preview ready. Unmapped source rows will not update this release."
+msgstr "Pregled dodjele je spreman. Nedodijeljeni izvorni redci neće ažurirati ovo izdanje."
+
+msgid "Apply Nova history"
+msgstr "Primijenite povijest Nove"
+
+msgid "Cancel sign-in"
+msgstr "Odustanite od prijave"
+
+msgid "Change finish date"
+msgstr "Promijenite datum završetka"
+
+msgid "Change start date"
+msgstr "Promijenite datum početka"
+
+msgid "Check episode alignment, progress, score, and date values."
+msgstr "Provjerite dodjelu epizoda, napredak, ocjenu i datume."
+
+msgid "Choose a service and search or enter an anime ID."
+msgstr "Odaberite uslugu pa pretražite ili unesite ID animea."
+
+msgid "Close"
+msgstr "Zatvori"
+
+msgid "Completed"
+msgstr "Završeno"
+
+msgid "Confirm alignment"
+msgstr "Potvrdite dodjelu"
+
+msgid "Confirm exactly which source rows belong to this release. Saved history is excluded until you choose Apply Nova history."
+msgstr "Potvrdite koji izvorni redci pripadaju ovom izdanju. Spremljena povijest isključena je dok ne odaberete Primijenite povijest Nove."
+
+msgid "Confirm history update"
+msgstr "Potvrdite slanje povijesti"
+
+msgid "Confirm tracking reset"
+msgstr "Potvrdite poništavanje praćenja"
+
+msgid "Confirm unlink"
+msgstr "Potvrdite uklanjanje veze"
+
+msgid "Conflicting source IDs. Enter a tracker ID or search manually."
+msgstr "Izvorni ID-ovi nisu usklađeni. Unesite ID usluge praćenja ili pretražite ručno."
+
+msgid "Connect"
+msgstr "Povežite"
+
+msgid "Connect this service in Settings → Tracking first."
+msgstr "Prvo povežite ovu uslugu u Postavke → Praćenje."
+
+msgid "Connected for this session. Retained updates for this account can resume."
+msgstr "Povezano za ovu sesiju. Spremljena ažuriranja ovog računa mogu se nastaviti."
+
+msgid "Connections last for this session. Tokens are kept in memory; reconnect after restarting Nova. Links and queued updates stay on this device."
+msgstr "Veze vrijede za ovu sesiju. Tokeni se čuvaju u memoriji; ponovno se povežite nakon pokretanja Nove. Veze i ažuriranja u redu ostaju na ovom uređaju."
+
+msgid "Could not open the sign-in browser. Check your browser settings and reconnect."
+msgstr "Preglednik za prijavu nije otvoren. Provjerite postavke preglednika i ponovno se povežite."
+
+msgid "Disconnect"
+msgstr "Prekinite vezu"
+
+msgid "Disconnected. Links and queued updates are retained."
+msgstr "Veza je prekinuta. Veze naslova i ažuriranja u redu su sačuvana."
+
+msgid "Dropped"
+msgstr "Odustalo se"
+
+msgid "Edit alignment"
+msgstr "Uredite dodjelu"
+
+msgid "Edit tracker entry"
+msgstr "Uredite zapis praćenja"
+
+msgid "Episode alignment needs review. Queued work is paused."
+msgstr "Dodjelu epizoda treba pregledati. Ažuriranja u redu su pauzirana."
+
+msgid "Finish date"
+msgstr "Datum završetka"
+
+msgid "Finish in your browser. For the PIN fallback, paste the AniList token here; otherwise paste the full return URL if automatic return fails."
+msgstr "Dovršite u pregledniku. Za prijavu putem PIN-a ovdje zalijepite AniList token; inače zalijepite cijeli povratni URL ako automatski povratak ne uspije."
+
+msgid "Finish sign-in"
+msgstr "Dovršite prijavu"
+
+msgid "Finish sign-in in your browser."
+msgstr "Dovršite prijavu u pregledniku."
+
+msgid "First source row"
+msgstr "Prvi izvorni redak"
+
+msgid "First tracker episode"
+msgstr "Prva epizoda na usluzi"
+
+msgid "Last source row"
+msgstr "Posljednji izvorni redak"
+
+msgid "Linked. New watched events will update this release; saved history was not uploaded."
+msgstr "Povezano. Nova gledanja ažurirat će ovo izdanje; spremljena povijest nije poslana."
+
+msgid "Loading tracker…"
+msgstr "Učitavanje usluge praćenja…"
+
+msgid "Loading tracking…"
+msgstr "Učitavanje praćenja…"
+
+msgid "MyAnimeList dates are read-only through its API."
+msgstr "MyAnimeList datumi putem API-ja mogu se samo čitati."
+
+msgid "Nova history explicitly queued for this release."
+msgstr "Povijest Nove izričito je dodana u red za ovo izdanje."
+
+msgid "On hold"
+msgstr "Na čekanju"
+
+msgid "Open a title first."
+msgstr "Prvo otvorite naslov."
+
+msgid "PIN token or full return URL"
+msgstr "PIN token ili cijeli povratni URL"
+
+msgid "Planning"
+msgstr "Planirano"
+
+msgid "Preview alignment"
+msgstr "Pregledajte dodjelu"
+
+msgid "Preview and confirm replacement coverage. Previous unsent updates will be discarded."
+msgstr "Pregledajte i potvrdite zamjensku dodjelu. Prethodna neposlana ažuriranja bit će odbačena."
+
+msgid "Progress"
+msgstr "Napredak"
+
+msgid "Progress (explicit decreases are allowed)"
+msgstr "Napredak (dopušteno je izričito smanjenje)"
+
+msgid "Public client ID"
+msgstr "Javni ID klijenta"
+
+msgid "Reconnect"
+msgstr "Ponovno povežite"
+
+msgid "Refresh / retry"
+msgstr "Osvježite / pokušajte ponovno"
+
+msgid "Registered redirect URL"
+msgstr "Registrirani povratni URL"
+
+msgid "Repeating"
+msgstr "Ponovno gledanje"
+
+msgid "Reset all local links and queued updates? A recovery backup is retained. Nova history and remote tracker lists stay unchanged."
+msgstr "Poništiti sve lokalne veze i ažuriranja u redu? Sigurnosna kopija za oporavak ostaje sačuvana. Povijest Nove i udaljeni popisi ostaju nepromijenjeni."
+
+msgid "Reset local tracking"
+msgstr "Poništite lokalno praćenje"
+
+msgid "Review the source rows and preview the alignment before confirming."
+msgstr "Pregledajte izvorne retke i dodjelu prije potvrde."
+
+msgid "Save tracker edits"
+msgstr "Spremite izmjene praćenja"
+
+msgid "Search tracker"
+msgstr "Pretražite uslugu"
+
+msgid "Select a release, then confirm its episode alignment."
+msgstr "Odaberite izdanje pa potvrdite dodjelu epizoda."
+
+msgid "Select release"
+msgstr "Odaberite izdanje"
+
+msgid "Sign-in canceled."
+msgstr "Prijava je otkazana."
+
+msgid "Source episodes changed. Reopen Tracking to review alignment."
+msgstr "Izvorne epizode su promijenjene. Ponovno otvorite Praćenje za pregled dodjele."
+
+msgid "Source episodes changed. Review the paused alignment."
+msgstr "Izvorne epizode su promijenjene. Pregledajte pauziranu dodjelu."
+
+msgid "Start date"
+msgstr "Datum početka"
+
+msgid "This alignment overlaps another active release. Edit that link first."
+msgstr "Dodjela se preklapa s drugim aktivnim izdanjem. Prvo uredite tu vezu."
+
+msgid "Title, ID, or official anime URL"
+msgstr "Naslov, ID ili službeni URL animea"
+
+msgid "Tracker edits queued. Nova watched history is unchanged."
+msgstr "Izmjene praćenja dodane su u red. Povijest gledanja Nove nije promijenjena."
+
+msgid "Tracker entry refreshed. Retry respects service cooldowns."
+msgstr "Zapis praćenja je osvježen. Ponovni pokušaj poštuje ograničenja usluge."
+
+msgid "Tracker episode or empty"
+msgstr "Epizoda na usluzi ili prazno"
+
+msgid "Tracker progress"
+msgstr "Napredak na usluzi"
+
+msgid "Tracker score"
+msgstr "Ocjena na usluzi"
+
+msgid "Tracker search"
+msgstr "Pretraga usluge praćenja"
+
+msgid "Tracker status"
+msgstr "Status na usluzi"
+
+msgid "Tracking"
+msgstr "Praćenje"
+
+msgid "Tracking changes could not be saved. Check storage and retry."
+msgstr "Izmjene praćenja nisu spremljene. Provjerite pohranu i pokušajte ponovno."
+
+msgid "Tracking data needs recovery. Playback remains available."
+msgstr "Podatke praćenja treba oporaviti. Reprodukcija je i dalje dostupna."
+
+msgid "Tracking event data needs recovery."
+msgstr "Zapise događaja praćenja treba oporaviti."
+
+msgid "Tracking reset. The previous local state is retained in a recovery backup."
+msgstr "Praćenje je poništeno. Prethodno lokalno stanje sačuvano je u sigurnosnoj kopiji za oporavak."
+
+msgid "Tracking service"
+msgstr "Usluga praćenja"
+
+msgid "Unlink"
+msgstr "Uklonite vezu"
+
+msgid "Unlink this release? Unsent updates will be discarded when no other source uses it. An update already sent may finish."
+msgstr "Ukloniti vezu ovog izdanja? Neposlana ažuriranja bit će odbačena kad nijedan drugi izvor ne koristi izdanje. Već poslano ažuriranje može završiti."
+
+msgid "Unlinked. Local history and remote tracker values are unchanged."
+msgstr "Veza je uklonjena. Lokalna povijest i udaljene vrijednosti nisu promijenjene."
+
+msgid "Watching"
+msgstr "Gledanje"
+
+msgid "YYYY-MM-DD, partial date, or empty to clear"
+msgstr "GGGG-MM-DD, djelomičan datum ili prazno za brisanje"
+
+msgid "Anime progress on MyAnimeList and AniList"
+msgstr "Napredak animea na MyAnimeListu i AniListu"
+
+msgid "Connected for this session"
+msgstr "Povezano za ovu sesiju"
+
+msgid "Reconnect to send retained updates"
+msgstr "Ponovno se povežite za slanje spremljenih ažuriranja"
+
+msgid "Needs alignment"
+msgstr "Potrebna je dodjela epizoda"
+
+msgid "Inactive account"
+msgstr "Neaktivan račun"
+
+msgid "Up to date"
+msgstr "Ažurno"
+
+msgid "Update queued"
+msgstr "Ažuriranje je u redu"
+
+msgid "Sending update"
+msgstr "Slanje ažuriranja"
+
+msgid "Waiting to retry"
+msgstr "Čeka se ponovni pokušaj"
+
+msgid "Tracker rejected the update; edit the values"
+msgstr "Usluga je odbila ažuriranje; uredite vrijednosti"
+
+msgid "Tracker sign-in required. Reconnect this account."
+msgstr "Potrebna je prijava na uslugu. Ponovno povežite ovaj račun."
+
+msgid "Tracker unavailable. Queued updates are retained."
+msgstr "Usluga nije dostupna. Ažuriranja u redu su sačuvana."
+
+msgid "Tracker rate limit. Updates will retry after the cooldown."
+msgstr "Ograničenje broja zahtjeva. Ažuriranja će se pokušati poslati nakon čekanja."
+
+msgid "Tracker rejected the request. Check the entry and values."
+msgstr "Usluga je odbila zahtjev. Provjerite zapis i vrijednosti."
+
+msgid "Invalid tracker response. The update remains unconfirmed."
+msgstr "Nevaljan odgovor usluge. Ažuriranje nije potvrđeno."
+
+msgid "Check the client registration, tracker ID, or values."
+msgstr "Provjerite registraciju klijenta, ID na usluzi ili vrijednosti."
+
+msgid "This tracker does not support that field."
+msgstr "Ova usluga ne podržava to polje."
+
+msgid "Automatic tracking for linked releases"
+msgstr "Automatsko praćenje povezanih izdanja"
+
+msgid "Open on service"
+msgstr "Otvori na servisu"
+
+msgid "Restore automatic status and dates"
+msgstr "Vrati automatski status i datume"

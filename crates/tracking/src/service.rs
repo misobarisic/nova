@@ -1,6 +1,6 @@
 //! Tracker contracts shared by the adapters and delivery coordinator.
 //! Credentials are deliberately absent from every serializable model.
-use crate::{AccountKey, Service};
+use crate::{AccountKey, Service, Target};
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
 
@@ -174,6 +174,9 @@ impl Secret {
         }
         Ok(Self(zeroize::Zeroizing::new(value)))
     }
+    pub fn duplicate(&self) -> Self {
+        Self(zeroize::Zeroizing::new(self.0.to_string()))
+    }
     pub(crate) fn expose(&self) -> &str {
         &self.0
     }
@@ -181,5 +184,65 @@ impl Secret {
 impl std::fmt::Debug for Secret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Secret([redacted])")
+    }
+}
+
+impl EntryPatch {
+    /// Derive only authorized automatic fields from a fresh remote read.
+    /// A sparse watched event raises the highest ordinal, rather than claiming
+    /// a count of contiguous locally watched episodes.
+    pub fn automatic(
+        target: &Target,
+        snapshot: &crate::TargetSnapshot,
+        remote: Option<&RemoteEntry>,
+        progress: u32,
+        date: Option<ListDate>,
+        watched_event: bool,
+    ) -> Self {
+        let mut patch = Self {
+            progress: Some(progress),
+            ..Default::default()
+        };
+        let status = remote.map(|r| r.status).unwrap_or(ListStatus::Planning);
+        let mutable_status = !snapshot.status_pinned
+            && matches!(status, ListStatus::Planning | ListStatus::Watching);
+        if mutable_status && status == ListStatus::Planning {
+            patch.status = Some(ListStatus::Watching);
+        }
+        let completing = watched_event
+            && target.release_finished
+            && target
+                .final_episode_total
+                .is_some_and(|total| progress >= total.get());
+        if mutable_status && completing {
+            patch.status = Some(ListStatus::Completed);
+        }
+        if target.key.account.service == Service::AniList
+            && !snapshot.dates_pinned
+            && mutable_status
+        {
+            if remote.is_none_or(|r| r.started == ListDate::default()) {
+                patch.started = date;
+            }
+            if completing
+                && mutable_status
+                && remote.is_none_or(|r| r.completed == ListDate::default())
+            {
+                patch.completed = date;
+            }
+        }
+        patch
+    }
+}
+
+impl ListDate {
+    pub fn today() -> Self {
+        use chrono::Datelike;
+        let date = chrono::Local::now().date_naive();
+        Self {
+            year: u16::try_from(date.year()).ok(),
+            month: u8::try_from(date.month()).ok(),
+            day: u8::try_from(date.day()).ok(),
+        }
     }
 }

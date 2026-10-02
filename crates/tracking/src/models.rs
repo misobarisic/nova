@@ -88,4 +88,12 @@ pub struct TrackingState {
     pub projections: Vec<crate::Projection>,
     #[serde(default)]
     pub outbox: crate::Outbox,
+    #[serde(default)]
+    pub link_checkpoints: Vec<crate::LinkCheckpoint>,
+    #[serde(default)]
+    pub snapshots: Vec<crate::TargetSnapshot>,
+    #[serde(default)]
+    pub active_accounts: Vec<AccountKey>,
+    #[serde(default)]
+    pub automatic_paused: Vec<Service>,
 }

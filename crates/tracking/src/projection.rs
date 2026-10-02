@@ -134,7 +134,7 @@ impl Projection {
         Ok(false)
     }
 
-    pub(crate) fn remote_baseline(&self) -> u32 {
+    pub fn remote_baseline(&self) -> u32 {
         self.remote_progress.max(self.acknowledged_progress)
     }
 
@@ -153,6 +153,19 @@ impl Projection {
                     .final_episode_total
                     .is_some_and(|total| progress >= total.get()),
         })
+    }
+
+    /// Record an ineligible origin without accepting progress from it.
+    pub fn checkpoint(
+        &mut self,
+        binding: &Binding,
+        episode: &SourceEpisode,
+        watched: bool,
+    ) -> Result<(), ProjectionError> {
+        let accepted = self.accepted_progress;
+        let result = self.observe(binding, episode, watched);
+        self.accepted_progress = accepted;
+        result.map(|_| ())
     }
 
     /// A late response to an earlier explicit edit cannot restore old progress.
@@ -200,6 +213,20 @@ impl Projection {
         self.acknowledged_progress = progress;
         self.accepted_progress = 0;
         self.observations = observations;
+        Ok(())
+    }
+}
+
+impl Projection {
+    /// A confirmed mapping repair starts a revision without claiming old
+    /// history. Outstanding attempts from the previous coverage stay stale.
+    pub fn repair(
+        &mut self,
+        progress: u32,
+        observations: Vec<Observation>,
+    ) -> Result<(), ProjectionError> {
+        self.replace(progress, observations)?;
+        self.mappings.clear();
         Ok(())
     }
 }

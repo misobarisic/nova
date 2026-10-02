@@ -1,3 +1,5 @@
+import { TrackingSheet } from "tracking.slint";
+import { TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow } from "types.slint";
 import { ScrollView, Spinner } from "std-widgets.slint";
 import { SearchField } from "searchfield.slint";
 import { CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem } from "types.slint";
@@ -613,6 +615,26 @@ component StreamList {
 }
 
 export component DetailPage {
+    in property <[TrackingLinkRow]> tracking_links;
+    in property <[TrackingCandidateRow]> tracking_candidates;
+    in property <[string]> tracking_source_rows;
+    in property <[string]> tracking_preview_rows;
+    in property <[TrackingMappingRow]> tracking_mapping_rows;
+    in property <string> tracking_notice;
+    in property <string> tracking_candidate_title;
+    in property <bool> tracking_busy;
+    in property <bool> tracking_can_confirm;
+    in-out property <bool> tracking_open: false;
+    callback tracking_show();
+    callback tracking_close();
+    callback tracking_search(int,string);
+    callback tracking_pick(int);
+    callback tracking_preview(string,string,string);
+    callback tracking_confirm();
+    callback tracking_assign(int,string);
+    callback tracking_edit(string,string,int,string,bool,string,bool,string);
+    callback tracking_action(string,int);
+
     // Custom components placed in a Window are sized by their preferred size;
     // make this page fill the window (its parent).
     preferred-width: 100%;
@@ -745,7 +767,7 @@ export component DetailPage {
     }
 
     function det_top_visible(i: int) -> bool {
-        if (i == 0 || i == 1) {
+        if (i == 0 || i == 1 || i == 3) {
             return true;
         }
         return root.in_library && root.category_rows.length > 0;
@@ -760,13 +782,14 @@ export component DetailPage {
     function det_top_right() {
         if (root.kb_top == 0) {
             root.kb_top = 1;
-        } else if (root.kb_top == 1 && root.det_top_visible(2)) {
-            root.kb_top = 2;
-        }
+        } else if (root.kb_top == 1) {
+            root.kb_top = root.det_top_visible(2) ? 2 : 3;
+        } else if (root.kb_top == 2) {root.kb_top=3;}
     }
 
     function det_top_left() {
-        if (root.kb_top == 2) {
+        if (root.kb_top == 3) {root.kb_top=root.det_top_visible(2) ? 2 : 1;
+        } else if (root.kb_top == 2) {
             root.kb_top = 1;
         } else if (root.kb_top == 1) {
             root.kb_top = 0;
@@ -893,6 +916,7 @@ export component DetailPage {
                 root.back();
             } else if (root.kb_top == 1) {
                 root.add_to_library();
+            } else if (root.kb_top == 3) {root.tracking_show();
             } else {
                 root.open_categories();
             }
@@ -931,7 +955,9 @@ export component DetailPage {
 
     function system_back() {
         root.kb_active = true;
-        if (root.stream_action_open) {
+        if (root.tracking_open) {
+            root.tracking_close();
+        } else if (root.stream_action_open) {
             root.stream_action_open = false;
         } else if (root.menu_kind >= 0) {
             root.close_menu();
@@ -1137,7 +1163,9 @@ export component DetailPage {
                 root.last_system_back_request = root.system_back_request;
             }
             key-pressed(e) => {
-                if (root.stream_action_open) {
+                if (root.tracking_open) {
+                    if (e.text == Key.Escape || e.text == Key.Back) {root.tracking_close();accept} else {reject}
+                } else if (root.stream_action_open) {
                     root.stream_action_open = false;
                     accept
                 } else if (root.menu_kind >= 0) {
@@ -1241,6 +1269,14 @@ export component DetailPage {
                     alignment: end;
 
                     // Add / remove from library: bookmark outline vs filled.
+                    TopIconButton {
+                        narrow: root.narrow;
+                        accessible-role: button;
+                        accessible-label: @tr("Tracking");
+                        focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 3;
+                        clicked => {root.kb_active=false;root.kb_top=3;root.tracking_show();}
+                        Text {text: "✓"; color:#c9c9d4; horizontal-alignment:center; vertical-alignment:center; width:100%; height:100%;}
+                    }
                     TopIconButton {
                         narrow: root.narrow;
                         focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 1;
@@ -2461,5 +2497,27 @@ export component DetailPage {
             }
             closed => { root.close_menu(); }
         }
+        TrackingSheet {
+            open:root.tracking_open;
+            safe-bottom:root.safe-bottom; safe-left:root.safe-left; safe-right:root.safe-right;
+            links:root.tracking_links;
+            candidates:root.tracking_candidates;
+            source_rows:root.tracking_source_rows;
+            preview_rows:root.tracking_preview_rows;
+            mapping_rows:root.tracking_mapping_rows;
+            notice:root.tracking_notice;
+            candidate_title:root.tracking_candidate_title;
+            busy:root.tracking_busy;
+            can_confirm:root.tracking_can_confirm;
+            close() => {root.tracking_close();}
+            search(a0,a1) => {root.tracking_search(a0,a1);}
+            pick(a0) => {root.tracking_pick(a0);}
+            preview(a0,a1,a2) => {root.tracking_preview(a0,a1,a2);}
+            confirm() => {root.tracking_confirm();}
+            assign(row,value) => {root.tracking_assign(row,value);}
+            edit(a0,a1,a2,a3,a4,a5,a6,a7) => {root.tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7);}
+            action(a0,a1) => {root.tracking_action(a0,a1);}
+        }
+
     }
 }
