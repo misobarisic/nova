@@ -38,6 +38,12 @@ pub struct ExternalIds {
     pub tmdb: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anilist: Option<String>,
+    /// All normalized claims, including contradictory values. Legacy fields
+    /// remain for provider compatibility; tracker resolution uses these IDs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub typed: Vec<crate::ExternalId>,
     #[serde(default)]
     pub other: BTreeMap<String, String>,
 }

@@ -45,6 +45,7 @@ impl Bridge {
             poster_cache,
             player,
             downloads,
+            tracking: Arc::new(Mutex::new(None)),
             downloads_seen: Arc::new(AtomicU64::new(0)),
             stream_seq: Arc::new(AtomicU64::new(1)),
         }

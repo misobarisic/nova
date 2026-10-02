@@ -229,6 +229,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         downloads,
     );
 
+    bridge.initialize_tracking();
+
     // Publish the bridge for the Android camera scanner's JNI entry point
     // (android_qr.rs), which runs off the UI thread.
     crate::app::bridge::install_global_bridge(&bridge);

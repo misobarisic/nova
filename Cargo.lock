@@ -5244,6 +5244,7 @@ dependencies = [
  "nova-storage",
  "nova-sync",
  "nova-torrent",
+ "nova-tracking",
  "nova-ui",
  "qrcode",
  "rqrr",
@@ -5361,6 +5362,15 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "nova-tracking"
+version = "0.1.0"
+dependencies = [
+ "nova-storage",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

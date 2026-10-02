@@ -6,6 +6,7 @@
 
 mod anikoto;
 mod host;
+mod ids;
 mod matching;
 mod models;
 mod runtime;
@@ -15,6 +16,7 @@ pub use anikoto::{
     ANIKOTO_PROVIDER_URL, builtin_manifest, builtin_stream_lookup_url, fetch_builtin_addon,
 };
 pub use host::{HttpResponse, MemoryProviderHost, ProviderHost, ProviderHostError, ScopedHttpHost};
+pub use ids::{ExternalId, IdNamespace, IdResolution};
 pub use matching::{MetadataMatch, match_metadata};
 pub use models::{
     CatalogRequest, ContentProvider, Episode, ExternalIds, MediaItem, MediaRequest,

@@ -486,6 +486,9 @@ fn media_preview(media: MediaItem) -> Value {
     if let Some(id) = media.external_ids.mal {
         extra.insert("mal_id".into(), Value::String(id));
     }
+    if let Some(id) = media.external_ids.anilist {
+        extra.insert("anilist_id".into(), Value::String(id));
+    }
     for (key, value) in media.external_ids.other {
         extra.insert(key, Value::String(value));
     }

@@ -47,14 +47,7 @@ impl StremioProvider {
     }
 
     pub(crate) fn convert_preview(&self, preview: MetaPreview) -> MediaItem {
-        let mut external_ids = external_ids(&preview.extra);
-        if external_ids.imdb.is_none()
-            && preview.id.len() > 2
-            && preview.id.starts_with("tt")
-            && preview.id[2..].bytes().all(|byte| byte.is_ascii_digit())
-        {
-            external_ids.imdb = Some(preview.id.clone());
-        }
+        let external_ids = external_ids(&preview.extra, &preview.id, &preview.type_);
         let title = preview.title();
         let year = preview.year_str();
         MediaItem {
@@ -75,7 +68,36 @@ impl StremioProvider {
     fn convert_detail(&self, detail: MetaItem) -> (MediaItem, Vec<Episode>) {
         let mut item = self.convert_preview(detail.preview.clone());
         item.aliases = string_values(&detail.extra, &["aliases", "aka", "akaNames"]);
-        item.external_ids = external_ids(&detail.extra);
+        // Detail and preview fields can carry different claims. Preserve both,
+        // including conflicts, instead of replacing the preview's evidence.
+        let mut fields = detail.preview.extra.clone();
+        for (key, value) in &detail.extra {
+            fields.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+        item.external_ids = external_ids(&fields, &detail.preview.id, &detail.preview.type_);
+        let detail_ids = external_ids(&detail.extra, &detail.preview.id, &detail.preview.type_);
+        for id in detail_ids.typed {
+            if !item.external_ids.typed.contains(&id) {
+                item.external_ids.typed.push(id);
+            }
+        }
+
+        for namespace in [
+            crate::IdNamespace::Imdb,
+            crate::IdNamespace::MalAnime,
+            crate::IdNamespace::AnilistAnime,
+        ] {
+            if matches!(
+                item.external_ids.resolve_id(namespace),
+                crate::IdResolution::Conflict(_)
+            ) {
+                match namespace {
+                    crate::IdNamespace::Imdb => item.external_ids.imdb = None,
+                    crate::IdNamespace::MalAnime => item.external_ids.mal = None,
+                    _ => item.external_ids.anilist = None,
+                }
+            }
+        }
         let episodes = detail
             .videos
             .into_iter()
@@ -285,18 +307,91 @@ fn convert_stream(index: usize, stream: Stream) -> Option<ProviderStream> {
     })
 }
 
-fn external_ids(fields: &std::collections::HashMap<String, Value>) -> ExternalIds {
-    let get = |names: &[&str]| {
-        names
-            .iter()
-            .find_map(|name| fields.get(*name).and_then(value_string))
-    };
-    ExternalIds {
-        imdb: get(&["imdb_id", "imdbId", "imdb"]),
-        tmdb: get(&["tmdb_id", "tmdbId", "tmdb"]),
-        mal: get(&["mal_id", "malId", "mal"]),
-        other: BTreeMap::new(),
+fn external_ids(
+    fields: &std::collections::HashMap<String, Value>,
+    source_id: &str,
+    media_type: &str,
+) -> ExternalIds {
+    use crate::{ExternalId, IdNamespace, IdResolution};
+    let mut ids = ExternalIds::default();
+    let namespaces = [
+        (IdNamespace::Imdb, &["imdb_id", "imdbId", "imdb"][..]),
+        (
+            IdNamespace::MalAnime,
+            &["mal_id", "malId", "mal", "myanimelist_id"][..],
+        ),
+        (
+            IdNamespace::AnilistAnime,
+            &["anilist_id", "anilistId", "anilist", "aniListId"][..],
+        ),
+        (IdNamespace::TmdbTv, &["tmdb_tv_id", "tmdbTvId"][..]),
+        (
+            IdNamespace::TmdbMovie,
+            &["tmdb_movie_id", "tmdbMovieId"][..],
+        ),
+    ];
+    for (namespace, names) in namespaces {
+        for name in names {
+            if let Some(value) = fields.get(*name).and_then(value_string)
+                && let Some(id) = ExternalId::from_field(namespace, &value)
+                && !ids.typed.contains(&id)
+            {
+                ids.typed.push(id);
+            }
+        }
     }
+    if let Some(id) = ExternalId::parse(source_id)
+        && !ids.typed.contains(&id)
+    {
+        ids.typed.push(id);
+    }
+    // Stremio movie/series is explicit type evidence for legacy TMDB fields.
+    // Other media types retain untyped values without guessing a catalog kind.
+    let tmdb_kind = match media_type {
+        "series" => Some(IdNamespace::TmdbTv),
+        "movie" => Some(IdNamespace::TmdbMovie),
+        _ => None,
+    };
+    for name in ["tmdb_id", "tmdbId", "tmdb"] {
+        if let Some(value) = fields.get(name).and_then(value_string)
+            && value.len() <= 512
+        {
+            if ids.tmdb.is_none() {
+                ids.tmdb = Some(value.clone());
+            }
+            if let Some(id) = tmdb_kind.and_then(|kind| ExternalId::from_field(kind, &value))
+                && !ids.typed.contains(&id)
+            {
+                ids.typed.push(id);
+            }
+        }
+    }
+    for namespace in [
+        IdNamespace::Imdb,
+        IdNamespace::MalAnime,
+        IdNamespace::AnilistAnime,
+    ] {
+        if let IdResolution::Unique(id) = ids.resolve_id(namespace) {
+            let field = match namespace {
+                IdNamespace::Imdb => &mut ids.imdb,
+                IdNamespace::MalAnime => &mut ids.mal,
+                _ => &mut ids.anilist,
+            };
+            *field = Some(id.value());
+        }
+    }
+    // Retain bounded opaque IDs from an explicitly declared extension map.
+    if let Some(other) = fields.get("externalIds").and_then(Value::as_object) {
+        for (key, value) in other.iter().take(32) {
+            if key.len() <= 64
+                && let Some(value) = value_string(value)
+                && value.len() <= 512
+            {
+                ids.other.insert(key.clone(), value);
+            }
+        }
+    }
+    ids
 }
 
 fn string_values(fields: &std::collections::HashMap<String, Value>, names: &[&str]) -> Vec<String> {
@@ -323,5 +418,92 @@ fn value_string(value: &Value) -> Option<String> {
         Value::String(value) => Some(value.clone()),
         Value::Number(value) => Some(value.to_string()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+    use crate::{ExternalId, IdNamespace, IdResolution};
+    use serde_json::json;
+
+    fn fields(value: Value) -> std::collections::HashMap<String, Value> {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn native_tracker_ids_do_not_require_imdb() {
+        let ids = external_ids(
+            &fields(json!({"mal_id":123,"anilistId":"https://anilist.co/anime/456/title"})),
+            "source-slug",
+            "series",
+        );
+        assert_eq!(ids.mal.as_deref(), Some("123"));
+        assert_eq!(ids.anilist.as_deref(), Some("456"));
+        assert_eq!(ids.imdb, None);
+        assert_eq!(
+            ids.resolve_id(IdNamespace::AnilistAnime),
+            IdResolution::Unique(ExternalId::parse("anilist:456").unwrap())
+        );
+    }
+
+    #[test]
+    fn conflicting_aliases_suspend_selection() {
+        let ids = external_ids(
+            &fields(json!({"mal_id":123,"malId":456})),
+            "mal:789",
+            "series",
+        );
+        assert_eq!(ids.mal, None);
+        assert!(
+            matches!(ids.resolve_id(IdNamespace::MalAnime), IdResolution::Conflict(values) if values.len() == 3)
+        );
+        let ids = external_ids(
+            &fields(json!({"mal_id":123,"malId":"00123"})),
+            "123",
+            "series",
+        );
+        assert_eq!(ids.mal.as_deref(), Some("123"));
+    }
+
+    #[test]
+    fn tmdb_requires_kind_and_bad_values_are_not_accepted() {
+        let ids = external_ids(
+            &fields(json!({"tmdb_id":123,"mal_id":-1,"anilist_id":0})),
+            "123",
+            "anime",
+        );
+        assert!(ids.typed.is_empty());
+        assert_eq!(ids.tmdb.as_deref(), Some("123"));
+        let ids = external_ids(&fields(json!({"tmdb_id":123})), "123", "series");
+        assert_eq!(
+            ids.resolve_id(IdNamespace::TmdbTv),
+            IdResolution::Unique(ExternalId::parse("tmdb:tv:123").unwrap())
+        );
+    }
+    #[test]
+    fn detail_keeps_source_identity_and_all_preview_claims() {
+        let manifest =
+            serde_json::from_value(json!({"id":"test","name":"Test","version":"1"})).unwrap();
+        let provider = StremioProvider::new(Addon::new("https://example.com").unwrap(), manifest);
+        let preview = MetaPreview {
+            id: "tt123".into(),
+            type_: "series".into(),
+            extra: fields(json!({"mal_id":123})),
+            ..Default::default()
+        };
+        let (item, _) = provider.convert_detail(MetaItem {
+            preview,
+            extra: fields(json!({"mal_id":456,"anilistId":789})),
+            ..Default::default()
+        });
+        assert_eq!(item.source_id, "tt123");
+        assert_eq!(item.external_ids.imdb.as_deref(), Some("tt123"));
+        assert_eq!(item.external_ids.anilist.as_deref(), Some("789"));
+        assert_eq!(item.external_ids.mal, None);
+        assert!(matches!(
+            item.external_ids.resolve_id(IdNamespace::MalAnime),
+            IdResolution::Conflict(_)
+        ));
     }
 }

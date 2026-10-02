@@ -1,4 +1,4 @@
-use crate::MediaItem;
+use crate::{IdNamespace, IdResolution, MediaItem};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MetadataMatch {
@@ -14,16 +14,30 @@ pub fn match_metadata(source: &MediaItem, candidates: &[MediaItem]) -> MetadataM
     let titles = normalized_titles(source);
     let matches = candidates.iter().enumerate().filter_map(|(index, candidate)| {
         if source.media_type != candidate.media_type { return None; }
+        let mut typed_match = false;
+        for namespace in [IdNamespace::Imdb, IdNamespace::MalAnime, IdNamespace::MalManga,
+            IdNamespace::AnilistAnime, IdNamespace::AnilistManga, IdNamespace::TmdbTv,
+            IdNamespace::TmdbMovie] {
+            match (source.external_ids.resolve_id(namespace), candidate.external_ids.resolve_id(namespace)) {
+                (IdResolution::Conflict(_), _) | (_, IdResolution::Conflict(_)) => return None,
+                (IdResolution::Unique(a), IdResolution::Unique(b)) => {
+                    if a != b { return None; }
+                    typed_match = true;
+                }
+                _ => {}
+            }
+        }
         let ids = [
             (&source.external_ids.imdb, &candidate.external_ids.imdb),
             (&source.external_ids.tmdb, &candidate.external_ids.tmdb),
             (&source.external_ids.mal, &candidate.external_ids.mal),
+            (&source.external_ids.anilist, &candidate.external_ids.anilist),
         ];
         if ids.iter().any(|(a, b)| matches!((a.as_deref(), b.as_deref()), (Some(a), Some(b)) if a != b)) {
             return None;
         }
         let id_match = ids.iter().any(|(a, b)| matches!((a.as_deref(), b.as_deref()), (Some(a), Some(b)) if !a.is_empty() && a == b));
-        if id_match { return Some(index); }
+        if typed_match || id_match { return Some(index); }
         if let Some(year) = source.year.as_deref().and_then(start_year)
             && candidate.year.as_deref().and_then(start_year) != Some(year) {
             return None;
@@ -118,6 +132,25 @@ mod tests {
         assert_eq!(
             match_metadata(&source, &[candidate]),
             MetadataMatch::Missing
+        );
+    }
+    #[test]
+    fn tracker_conflicts_cannot_fall_back_to_title_matching() {
+        let mut source = item("Monster", None);
+        source.external_ids.typed = vec![
+            crate::ExternalId::parse("mal:1").unwrap(),
+            crate::ExternalId::parse("mal:2").unwrap(),
+        ];
+        assert_eq!(
+            match_metadata(&source, &[item("Monster", None)]),
+            MetadataMatch::Missing
+        );
+        source.external_ids.typed = vec![crate::ExternalId::parse("anilist:1").unwrap()];
+        let mut candidate = item("Translated title", None);
+        candidate.external_ids.anilist = Some("1".into());
+        assert_eq!(
+            match_metadata(&source, &[candidate]),
+            MetadataMatch::Exact(0)
         );
     }
 }

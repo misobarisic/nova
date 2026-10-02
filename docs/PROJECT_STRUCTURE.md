@@ -117,7 +117,8 @@ nova/
 │   ├── ui/src/backend_text.rs # Rust-side UI text formatting/translations, owned by nova-ui
 │   ├── ui/translations/      # Slint translation catalogs: <code>/LC_MESSAGES/nova-ui.po (build-time bundled)
 │   ├── providers/            # Normalized provider contract, QuickJS host, bundled AniKoto source
-│   └── download/             # durable stream jobs + progressive HTTP transfer
+│   ├── download/             # durable stream jobs + progressive HTTP transfer
+│   └── tracking/             # local anime tracker mappings, progress projection, persistence
 ├── tests/                    # headless Slint UI integration tests
 └── docs/
     ├── PROJECT_STRUCTURE.md  # this file
@@ -150,6 +151,8 @@ nova/
 `nova` and `nova-media` also depend on `nova-providers`, which depends on
 `addons`, `reqwest` (blocking HTTPS), `scraper`, and `rquickjs`/QuickJS. Android
 enables QuickJS's `bindgen` feature; the Android Nix shell supplies libclang.
+`nova` also depends on `nova-tracking`, which depends on `nova-storage` and Serde;
+tracking startup reads local state on a worker without enabling remote writes.
 
 | Crate | Path | Role |
 |---|---|---|
@@ -158,7 +161,8 @@ enables QuickJS's `bindgen` feature; the Android Nix shell supplies libclang.
 | `nova-config` | `crates/config` | Shared settings types, runtime cache settings, platform app paths, playback-rate bounds/helpers (`clamp_playback_speed` / `quantize_playback_speed`), `fnv1a`, `now_secs`/`now_ms`. Leaf. |
 | `nova-storage` | `crates/storage` | Platform-agnostic persistent KV store (redb) at `<data>/nova.redb`. Leaf. |
 | `nova-media` | `crates/media` | HTTP transport (`net`) + decoded/poster image cache (`cache`); dispatches bundled provider endpoints; artwork decoding is limited to JPEG, PNG, and WebP. |
-| `nova-providers` | `crates/providers` | Normalized provider models, Stremio adapter, and sandboxed QuickJS source runtime with bounded crypto helpers (`aws-lc-rs`). Bundles the AniKoto JavaScript plugin, MegaPlay/Mewcdn resolvers, and host permission manifest. |
+| `nova-providers` | `crates/providers` | Normalized provider models and typed external catalog IDs (`ids.rs`), Stremio adapter, and sandboxed QuickJS source runtime with bounded crypto helpers (`aws-lc-rs`). Bundles the AniKoto JavaScript plugin, MegaPlay/Mewcdn resolvers, and host permission manifest. |
+| `nova-tracking` | `crates/tracking` | Local anime tracking domain: account-scoped targets, explicit episode assignments, mapping validation, watched checkpoints and forward progress projection. Versioned JSON persistence through `nova-storage`; no credentials or network delivery yet. |
 | `nova-download` | `crates/download` | Durable stream-job model, manifest helpers, cancellation, and progressive/resumable HTTP file transfers. |
 | `nova-player` | `crates/player` | In-window mpv player (desktop + Android), per-stream HTTP header and external subtitle arrays through `libmpv2-sys`, and external launch: the *video* app (`open_external` — desktop target app, Android video-MIME `ACTION_VIEW` for stream fallback) and the system *browser* (`open_browser` — `xdg-open`, or on Android `ACTION_VIEW` marked `BROWSABLE` + `FLAG_ACTIVITY_NEW_TASK` so only web-link handlers can claim it, for links like addon config pages); Android JNI glue. |
 | `nova-torrent` | `crates/torrent` | Embedded BitTorrent (librqbit); resolves `infoHash` → loopback HTTP URL for mpv. |
@@ -199,6 +203,7 @@ Defines the shared state and the UI bridge:
 | `posters.rs` | Poster / backdrop / episode-thumbnail image pipeline (desktop worker pool + Android fetch path). |
 | `settings.rs` | Settings page: cache + torrent settings, episode resume behavior, maintenance, `read/write_settings`. `wire_settings_autosave` captures edits immediately and owns the application-lifetime 600 ms persistence debounce, shared with playback-rate controls. |
 | `streams.rs` | Stream-row mapping (`StreamSource`), bounded Stremio request-header/subtitle extraction, and display-text helpers. |
+| `tracking.rs` | Background startup load of the local `nova-tracking` store into a separate Bridge handle. Retains load errors; no playback event hooks or remote delivery yet. |
 | `sync.rs` | Cross-device sync integration: decompose app state into records, apply remote records, Settings → Sync UI, pairing events. |
 | `qr.rs` | QR encoding of the sync invite ticket: renders the `NV1` ticket to a Slint image (`image-rendering: pixelated`) for desktop and Android. The Android scanner decodes the same payload, so display and scan agree by construction. |
 | `android_bg.rs` | Android-only JNI glue (`#[cfg(target_os = "android")]`): starts/stops/updates the download foreground service and schedules the periodic sync `JobScheduler` job; hosts the headless sync JNI entry. Android API calls live in `android/java/`, so Rust only loads a class through the Context class loader and calls a static method. |
@@ -356,6 +361,7 @@ and Settings displays a persistence warning. Keys used by the app:
 | `continue_hidden` | `HashMap<String, u64>` JSON — Continue Watching items the user removed, `id -> removal unix secs`. Local mirror of the synced `continue_hidden` domain (so the choice survives with sync off); read at startup in `run.rs`, cleared for an item when playback of it is armed. |
 | `torrent_settings` | `TorrentSettings` JSON (runtime mirror). |
 | `torrent_cache` | Tracked torrents (`infohash → dir/len/file/last-used`) so restarts adopt downloads instead of orphaning them from trim/clear accounting. Retained offline transfers are protected separately by `nova-torrent`. |
+| `tracking:state:v1` | Versioned local-only tracking accounts (no tokens), targets, explicit episode bindings, and projection checkpoints. `nova-tracking::Store` validates before committing and publishes memory only after a successful write. Unreadable snapshots retain their primary value plus a deterministic `tracking:quarantine:*` backup; unsupported schema versions remain unavailable for writes. |
 | `downloads:v1` | Local-only `DownloadManifest`: queued/downloading/paused/completed/failed stream jobs, source identity (including required HTTP headers), progress, validators, and artifact paths. Missing headers in older jobs deserialize as empty. Corrupt manifests are quarantined as `downloads:v1.corrupt.<ts>`. On load, interrupted transfers return to `Queued`; completed jobs are validated against disk with **canonicalized** paths (Android reports the same dir as `/data/user/0/...` and `/data/data/...`), and completed HTTP artifacts found under `<data>/downloads/http/` that the manifest no longer references are re-adopted as best-effort entries (torrent artifacts are not, since a sparse partial file is indistinguishable from a complete one). |
 | `meta_header:{type}\x01{id}` | Cached detail-header snapshot. |
 | `sync:identity` | Ed25519 secret key hex (stable endpoint id). |
@@ -609,6 +615,8 @@ the app ignores unknown domains, so old peers stay compatible.
 | Add a content provider / JavaScript source | `crates/providers/README.md`, `crates/providers/src/{models,runtime,host,anikoto,matching,stremio}.rs`, `crates/providers/plugins/anikoto/`, `crates/media/src/net.rs`, `src/app/run.rs` |
 | AniKoto stream extraction / subtitle forwarding | `crates/providers/plugins/anikoto/index.js`, `crates/providers/src/runtime.rs`, `src/app/{streams,detail,playback}.rs`, `crates/player/src/lib.rs` |
 | Cross-addon episode mapping / external AniKoto metadata / split anime seasons | `src/app/detail.rs::{source_stream_lookup,episode_stream_ids,stream_endpoint,stream_response_is_current,update_episode_videos}`, `crates/providers/src/anikoto.rs::{lookup_canonical_metadata,cached_canonical_metadata}`, `crates/providers/plugins/anikoto/index.js::{loadLookupCandidates,resolveEpisode,episodeSequence,mapEpisodes}`, `crates/addons/src/types.rs` |
+| Tracker domain / split release coverage / progress checkpoints | `crates/tracking/src/{models,mapping,projection,persistence}.rs`, `src/app/tracking.rs` (background startup load). Local `tracking:state:v1` stores accounts, targets, bindings and projections; unreadable snapshots are retained with `tracking:quarantine:*` backups. Neither namespace is synced. |
+| Tracker identity normalization / conflicting MAL or AniList IDs | `crates/providers/src/ids.rs` (`ExternalId`, `IdNamespace`, `ExternalIds::resolve_id`), `crates/providers/src/stremio.rs` (bounded addon fields, typed TMDB movie/TV evidence). Source/playback IDs stay opaque; this layer resolves identity only, not episode coverage. |
 | Addon resource routing / ID namespaces | `crates/addons/src/types.rs` (`Manifest::accepts`), `src/app/{detail,catalog}.rs` |
 | Review UI consistency / plan visual unification | `docs/ui-design-audit.md` (source-backed findings and visual review checklist), `crates/ui/*.slint` |
 | Home featured banner layout / touch paging / crossfade | `crates/ui/home.slint` (`FeaturedShowcase`, `FeaturedCaption`, and badge/action/pager components), `assets/featured-backdrop-scrim.svg`; catalog metadata, artwork and revision publication in `src/app/home.rs` |

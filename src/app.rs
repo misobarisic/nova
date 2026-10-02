@@ -24,7 +24,7 @@ pub(crate) const OPEN_SOURCE_LICENSE_CATALOG: &str =
     include_str!(concat!(env!("OUT_DIR"), "/nova_license_catalog.txt"));
 
 pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
-    const WORKSPACE_CRATES: [&str; 11] = [
+    const WORKSPACE_CRATES: [&str; 12] = [
         "nova",
         "addons",
         "nova-providers",
@@ -36,6 +36,7 @@ pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
         "nova-media",
         "nova-player",
         "nova-sync",
+        "nova-tracking",
     ];
 
     let mut sources = include_str!(concat!(env!("OUT_DIR"), "/nova_license_sources.tsv"))
@@ -689,6 +690,9 @@ struct Bridge {
     /// In-app player overlay (same window; mpv on desktop, HTML5 video on web).
     player: crate::player::Player,
     downloads: DownloadCoordinator,
+    /// None while loading; failures retain an unavailable subsystem rather than
+    /// replacing durable tracking records with an empty writable state.
+    tracking: tracking::StateHandle,
     downloads_seen: Arc<AtomicU64>,
     stream_seq: Arc<AtomicU64>,
 }
@@ -714,6 +718,7 @@ mod i18n;
 mod io;
 mod streams;
 mod sync;
+mod tracking;
 pub(crate) use nova_ui::backend_text as text;
 
 // Android background execution glue (foreground service + JobScheduler sync).
