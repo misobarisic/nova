@@ -1234,6 +1234,7 @@ export component HomePage {
     in property <int> featured_index;
     in property <int> featured_count;
     in property <int> featured_revision;
+    in property <bool> featured_refresh_pending;
     // 0 = landing carousels, 1 = all Continue, 2 = all Upcoming.
     in-out property <int> view: 0;
     in property <int> system_back_request: 0;
@@ -1289,7 +1290,7 @@ export component HomePage {
     }
 
     function restart_showcase_rotation() {
-        if (root.view == 0 && root.featured_count > 1) {
+        if (root.view == 0 && (root.featured_count > 1 || root.featured_refresh_pending)) {
             showcase_rotation_t.restart();
         }
     }
@@ -1312,7 +1313,9 @@ export component HomePage {
 
     showcase_rotation_t := Timer {
         interval: 9s;
-        running: root.view == 0 && root.featured_count > 1;
+        // A cached single-slide list also needs a rotation boundary at
+        // which the backend can publish a refreshed list without jumping.
+        running: root.view == 0 && (root.featured_count > 1 || root.featured_refresh_pending);
         triggered => { root.step_featured(1); }
     }
 

@@ -267,6 +267,12 @@ struct Shared {
     upcoming_list: Vec<UpcomingEntry>,
     /// Selected catalog previews for Home's independent featured showcase.
     home_showcase: Vec<MetaPreview>,
+    home_showcase_sources: Vec<HomeCatalogSource>,
+    /// Successful refreshes wait here until the carousel advances. The
+    /// displayed preview remains the action target while new art is loading.
+    home_showcase_refresh: Option<Vec<MetaPreview>>,
+    home_showcase_displayed: Option<MetaPreview>,
+    home_showcase_list_generation: u64,
     home_showcase_index: usize,
     home_showcase_pending_index: Option<usize>,
     home_showcase_artwork: HashMap<usize, HomeShowcaseArtwork>,

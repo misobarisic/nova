@@ -120,6 +120,7 @@ export component AppWindow inherits Window {
     in-out property <int> home_featured_index: 0;
     in-out property <int> home_featured_count: 0;
     in-out property <int> home_featured_revision: 0;
+    in-out property <bool> home_featured_refresh_pending: false;
     // Home → Upcoming calendar (the "see all" subpage's month view): the 42
     // grid cells, the month title, the selected day's episode rows, the
     // selected epoch day (-1 = none) and the list/calendar switch. The
@@ -679,6 +680,7 @@ export component AppWindow inherits Window {
         featured_index <=> root.home_featured_index;
         featured_count <=> root.home_featured_count;
         featured_revision <=> root.home_featured_revision;
+        featured_refresh_pending: root.home_featured_refresh_pending;
         min_cols: root.library_min_cols;
         kb_zone <=> root.home_kb_zone;
         kb_nav <=> root.home_kb_nav;

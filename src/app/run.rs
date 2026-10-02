@@ -664,9 +664,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         set_active_cache_settings(state.cache_settings.clone());
     }
     bridge.settings_to_ui();
-    // Addon manifests may still be loading asynchronously; this first fetch
-    // uses every currently available selected catalog, and each later
-    // manifest completion invalidates/rebuilds it as needed.
+    // Restore selected featured catalogs from local storage before the first
+    // frame, then refresh in the background. Pending manifests do not block
+    // cached titles; their completion retries the corresponding live fetch.
     bridge.refresh_home_showcase();
 
     // Torrent settings: restore + mirror into the runtime cache read by the

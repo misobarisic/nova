@@ -212,11 +212,20 @@ The Home landing also has an independent featured-showcase fetch: Settings →
 Home stores selected addon URL/type/catalog-ID/genre entries. Its Add catalog
 dialog offers enabled catalogs and only the genre options declared by each
 catalog; the configured list contains only the user's selections. `home.rs`
-fetches at most five titles per selected catalog/genre, rotates them above the
-existing rails, and opens a picked title through the shared detail flow. This
-selection syncs with Settings; each device can fetch it only when the matching
-addon is available and enabled there. It does not alter Continue Watching or
-Discover's catalog state.
+restores device-local catalog batches (`home:showcase:v1`) before the first
+frame, including while an enabled addon's manifest is loading. Live fetching
+requires the matching addon to be available. Each selected catalog contributes
+at most five distinct displayed titles; the cache keeps enough extra candidates
+to deduplicate overlapping catalogs. Failed requests retain that catalog's last
+successful result. Refreshed batches are persisted immediately but wait in
+`Shared::home_showcase_refresh` until the next automatic/manual carousel step.
+Navigation anchors to the current item's identity in the new order; artwork
+uses the existing memory/disk image cache and the next target is prefetched.
+Separate metadata/list generations reject stale catalog and artwork replies.
+Details/Watch now keep the displayed preview as their target while replacement
+art loads. Catalog/genre selection syncs with Settings; result caches stay local
+and never display disabled/removed addons or another genre's results. The
+featured row does not alter Continue Watching or Discover's catalog state.
 
 ### Threading model (important)
 - **All Slint property/callback access is main-thread only.** `Bridge` methods are called from UI callbacks on the main thread.
@@ -306,6 +315,9 @@ lock, just like Continue Watching and Upcoming: horizontal drags block vertical
 scrolling; vertical drags, release and cancellation return control to the page.
 Settings → Home also independently toggles the Continue Watching and Upcoming
 rows; both default on and sync with other general settings.
+`AppWindow.home_featured_refresh_pending` forwards to Home's
+`featured_refresh_pending`: a cached single-title list also gets a rotation
+boundary for a pending refresh, without changing its visible title/count early.
 
 **Animated feedback:** `menusheet.slint` stays mounted in Home, Library and
 Detail: callers bind its `open` property instead of conditionally creating it.
@@ -338,6 +350,7 @@ and Settings displays a persistence warning. Keys used by the app:
 | `addons` | `Vec<AddonStore>` JSON (desired addons, including entries with unavailable manifests). Configure-page reachability is device-local. |
 | `providers:bundled:v1` | Local-only registration marker for the first bundled-source generation (`run.rs`). AniKoto is added once; its enabled state/removal then follows ordinary addon persistence and sync. |
 | `manifest:{url}` | Cached addon `Manifest` JSON (one per addon). |
+| `home:showcase:v1` | Device-local featured catalog results keyed by the full addon URL/type/catalog-ID/genre selection. Restored before startup network work; successful refreshes persist immediately and replace the visible list on its next carousel step. Failed requests keep cached batches. Images use the ordinary poster cache. Not synced. |
 | `discover:search_history` | Local-only JSON list of the 20 most recent unique completed Discover queries (2–256 characters). Loaded at startup, displayed on focusing the empty Discover input, and erased by Clear history. Never synced. |
 | `episode_progress` | `HashMap<String, EpisodeProgress>` JSON (watch history). Tracking = 250 ms tick mirroring mpv props (`playback.rs::note_player_progress_from_ui`): saves throttled to 30 s / 5 s delta (time-based saves skipped while paused), finalize-on-close, external player untracked. Series and movies both tracked: a movie's record is keyed `id\x01id`. |
 | `continue_hidden` | `HashMap<String, u64>` JSON — Continue Watching items the user removed, `id -> removal unix secs`. Local mirror of the synced `continue_hidden` domain (so the choice survives with sync off); read at startup in `run.rs`, cleared for an item when playback of it is armed. |
@@ -600,6 +613,7 @@ the app ignores unknown domains, so old peers stay compatible.
 | Home featured banner layout / touch paging / crossfade | `crates/ui/home.slint` (`FeaturedShowcase`, `FeaturedCaption`, and badge/action/pager components), `assets/featured-backdrop-scrim.svg`; catalog metadata, artwork and revision publication in `src/app/home.rs` |
 | Discover reveal / filter-drag regressions | `tests/discover_reveal_and_filters.rs` (animated opacity during poster updates, same-length result replacement, animation-off behavior, horizontal filter drags), `tests/discover_search_ui.rs` (browse/results navigation) |
 | Home / Discover / Library clipping and responsive grids | `crates/ui/{home,discover,library}.slint` (measured headings, viewport widths, pointer-only hover and grid origins), `tests/page_layout_fit.rs` |
+| Home featured startup cache / deferred list refresh | `src/app/home.rs::{HomeShowcaseCache,refresh_home_showcase,finish_home_showcase_refresh,home_showcase_step,replace_home_showcase_list}`, `src/app.rs` (`home_showcase_*` state), `src/app/run.rs` (startup), `crates/ui/{home,appwindow}.slint` (`featured_refresh_pending`), `home.rs::tests::featured_*` |
 | Text-input overflow / clear controls | `crates/ui/searchfield.slint` (shared by all inputs; follows the caret on edits and viewport resize), `tests/searchfield_overflow.rs` (compact, touch and prominent fields: long text, End/Home, window shrink, clear buttons) |
 | Discover local search history | `src/app/catalog.rs` (local KV + bounded MRU list), `crates/ui/discover.slint` (scrollable recent-search panel shows up to five rows, supports individual removal, and expands/collapses on empty-input focus), `tests/discover_search_history_ui.rs` (expansion, focus, replay, Back, individual removal, clear) |
 | Discover catalog labels / return animation | `src/app/catalog.rs` (`apply_catalog_labels_to_ui`, separate labels and identity values), Settings → Display's `discover_catalog_addon_names`; `crates/ui/appwindow.slint` (`discover_search_animate_results` survives detail-page recreation, resets for a fresh search), `tests/discover_reveal_and_filters.rs` |
