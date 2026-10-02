@@ -169,6 +169,12 @@ orientation = "portrait"
 name = ".NovaBackgroundService"
 foreground_service_type = "dataSync"
 
+# Keep browser OAuth callbacks and account verification alive independently of
+# downloads; Rust releases this service when the last pending login finishes.
+[[package.metadata.android.application.service]]
+name = ".NovaAuthService"
+foreground_service_type = "dataSync"
+
 # Periodic background sync, driven by JobScheduler (min 15 min). Runs a
 # bounded sync pass with no Activity present; see android_bg.rs / sync_headless.
 [[package.metadata.android.application.service]]

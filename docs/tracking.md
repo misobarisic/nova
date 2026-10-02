@@ -94,11 +94,29 @@ applying remote records and after restart. Reset local tracking also publishes
 removals for the shared configuration; recovery backups retain local state and
 journal records, rather than live tokens.
 
-Android can receive an existing desktop sign-in through pairing without repeating
-the browser flow. Direct Android browser sign-in still uses the loopback receiver;
-its pending OAuth session is in memory and cannot survive process death. The
-reported Android callback problem still needs device reproduction; peer sign-in
-sharing does not establish that the browser callback itself is fixed.
+Android browser sign-in starts a separate `NovaAuthService` foreground service
+before opening the browser and waits for foreground promotion. Its notification
+returns to Nova; a bounded wake lock protects callback reception, token exchange,
+account verification and credential persistence while the Activity is backgrounded.
+The service uses Android's `dataSync` type for account data exchange, independently
+of download service ownership. Each pending login owns a lease; finishing,
+cancelling, failing, expiring, disconnecting or shutting down releases that lease.
+Overlapping MAL/AniList logins keep the service until the last lease ends.
+
+Approval expires after five minutes. Callback failures and expiry report a
+reconnect message; stale callbacks cannot cancel a newer login. Replacement
+logins briefly wait for a cancelled receiver to release the registered port. A renewed
+370-second service watchdog also bounds a stalled actor, allowing the approval
+window plus two 30-second API calls. Android's `onTimeout` stops the service.
+Pending OAuth state remains in memory: force-stopping or killing the process
+requires a fresh login. Saved completed sign-in survives restarts and syncs with
+paired devices. Device validation should approve MAL in the external browser,
+return to Nova, verify Connected, then restart Nova and verify restoration; also
+check cancellation and concurrent downloads. Only Cargo tests were run locally.
+
+Android can also receive an existing desktop sign-in through pairing without
+repeating browser approval. See [Android foreground-service types](https://developer.android.com/develop/background-work/services/fgs/service-types)
+for the platform service contract.
 
 ## Linking and alignment
 

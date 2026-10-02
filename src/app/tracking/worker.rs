@@ -1,6 +1,9 @@
 //! One owner for local state, authenticated sessions and per-target delivery.
 //! UI callbacks only enqueue commands; no network call runs on the UI thread.
 use super::*;
+#[cfg(any(target_os = "android", test))]
+#[path = "background.rs"]
+mod background;
 #[path = "peer.rs"]
 mod peer;
 #[path = "setup.rs"]
@@ -13,6 +16,9 @@ use nova_tracking::{
 };
 use std::num::{NonZeroU32, NonZeroU64};
 const CLIENTS_KEY: &str = "tracking:clients:v1";
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
+#[cfg(target_os = "android")]
+static LOGIN_BACKGROUND: background::Leases = background::Leases::new();
 #[derive(Clone, Serialize, Deserialize)]
 struct Registrations {
     mal: ClientRegistration,
@@ -74,6 +80,11 @@ pub(super) enum Command {
         service: Service,
         value: AuthReturn,
         epoch: u64,
+    },
+    CallbackFailed {
+        service: Service,
+        epoch: u64,
+        error: ApiError,
     },
     Cancel {
         service: Service,
@@ -148,6 +159,8 @@ struct Login {
     auth: Authorization,
     cancel: Arc<AtomicBool>,
     expires_at: u64,
+    #[cfg(target_os = "android")]
+    _background: background::Lease<'static>,
 }
 struct Session {
     service: Service,
@@ -290,6 +303,7 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
         if !coordinator.bridge.tracking.alive.load(Ordering::Acquire) {
             break;
         }
+        let mut expired = vec![];
         coordinator.logins.retain(|login| {
             let live = now_secs() < login.expires_at
                 && coordinator.bridge.tracking.login_generation[service_index(login.service)]
@@ -297,9 +311,19 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
                     == login.epoch;
             if !live {
                 login.cancel.store(true, Ordering::Release);
+                if coordinator.bridge.tracking.login_generation[service_index(login.service)]
+                    .load(Ordering::Acquire)
+                    == login.epoch
+                {
+                    expired.push((login.service, login.epoch));
+                    coordinator.notice = text::tr("Sign-in expired. Please connect again.").into();
+                }
             }
             live
         });
+        for (service, epoch) in expired {
+            coordinator.restore_session_epoch(service, epoch);
+        }
         if let Err(error) = coordinator.consume_events() {
             coordinator.notice = error;
             coordinator.publish();
@@ -480,6 +504,30 @@ impl Coordinator {
     }
     fn command(&mut self, command: Command) -> Result<(), String> {
         match command {
+            Command::CallbackFailed {
+                service,
+                epoch,
+                error,
+            } => {
+                if self
+                    .logins
+                    .iter()
+                    .any(|l| l.service == service && l.epoch == epoch)
+                    && self.bridge.tracking.login_generation[service_index(service)]
+                        .load(Ordering::Acquire)
+                        == epoch
+                {
+                    self.cancel(service);
+                    self.restore_session_epoch(service, epoch);
+                    return Err(if error == ApiError::Authentication {
+                        text::tr("Sign-in expired. Please connect again.").into()
+                    } else {
+                        text::tr("Could not receive the browser sign-in. Please connect again.")
+                            .into()
+                    });
+                }
+                Ok(())
+            }
             Command::Sync => self.apply_shared(true),
             Command::Automatic { service, enabled } => {
                 self.consume_events()?;
@@ -763,24 +811,48 @@ impl Coordinator {
         self.registrations = registrations;
         let cancel = Arc::new(AtomicBool::new(false));
         let url = auth.url().map_err(api_message)?;
+        #[cfg(target_os = "android")]
+        let background = LOGIN_BACKGROUND.acquire(
+            || {
+                crate::app::android_bg::start_auth_service(
+                    text::tr("Tracker sign-in"),
+                    text::tr("Finish sign-in in your browser."),
+                )
+                .ok_or_else(|| {
+                    text::tr("Could not keep sign-in active. Please connect again.").to_string()
+                })
+            },
+            crate::app::android_bg::stop_auth_service,
+        )?;
         self.logins.push(Login {
             service,
             epoch,
             auth,
             cancel: cancel.clone(),
-            expires_at: now_secs().saturating_add(300),
+            expires_at: now_secs().saturating_add(LOGIN_TIMEOUT.as_secs()),
+            #[cfg(target_os = "android")]
+            _background: background,
         });
         if let Some(receiver) = receiver {
             let tx = self.bridge.tracking.tx.clone();
             thread::spawn(move || {
-                if let Ok(callback) = receiver.receive(cancel, Duration::from_secs(300))
-                    && let Ok(value) = AuthReturn::new(callback.to_string())
-                {
-                    let _ = tx.send(Command::Complete {
-                        service,
-                        value,
-                        epoch,
-                    });
+                let result = receiver
+                    .receive(cancel.clone(), LOGIN_TIMEOUT)
+                    .and_then(|callback| AuthReturn::new(callback.to_string()));
+                if !cancel.load(Ordering::Acquire) {
+                    let command = match result {
+                        Ok(value) => Command::Complete {
+                            service,
+                            value,
+                            epoch,
+                        },
+                        Err(error) => Command::CallbackFailed {
+                            service,
+                            epoch,
+                            error,
+                        },
+                    };
+                    let _ = tx.send(command);
                 }
             });
         }

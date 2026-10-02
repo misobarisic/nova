@@ -24,9 +24,22 @@ impl CallbackReceiver {
         if redirect.scheme() != "http" {
             return Err(ApiError::InvalidInput);
         }
-        let listener =
-            TcpListener::bind(("127.0.0.1", redirect.port().ok_or(ApiError::InvalidInput)?))
-                .map_err(|_| ApiError::Offline)?;
+        let port = redirect.port().ok_or(ApiError::InvalidInput)?;
+        // Cancellation is observed on the receiver thread. A replacement login
+        // may arrive before that thread has dropped the old listening socket.
+        let deadline = Instant::now() + Duration::from_millis(250);
+        let listener = loop {
+            match TcpListener::bind(("127.0.0.1", port)) {
+                Ok(listener) => break listener,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::AddrInUse
+                        && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => return Err(ApiError::Offline),
+            }
+        };
         listener
             .set_nonblocking(true)
             .map_err(|_| ApiError::Offline)?;
@@ -242,5 +255,56 @@ mod tests {
             Err(ApiError::Authentication)
         ));
         TcpListener::bind(("127.0.0.1", port)).unwrap();
+    }
+
+    #[test]
+    fn expired_receiver_releases_the_port_for_a_new_login() {
+        let receiver = receiver(Service::MyAnimeList);
+        let port = receiver.redirect.port().unwrap();
+        assert!(matches!(
+            receiver.receive(Arc::new(AtomicBool::new(false)), Duration::ZERO),
+            Err(ApiError::Authentication)
+        ));
+        TcpListener::bind(("127.0.0.1", port)).unwrap();
+    }
+
+    #[test]
+    fn completed_login_can_immediately_reuse_its_registered_port() {
+        let allocation = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = allocation.local_addr().unwrap().port();
+        drop(allocation);
+        let registration = ClientRegistration {
+            client_id: "fixture".into(),
+            redirect_uri: format!("http://127.0.0.1:{port}/callback"),
+        };
+        let receiver = CallbackReceiver::bind(Service::MyAnimeList, &registration).unwrap();
+        let task = std::thread::spawn(move || {
+            receiver
+                .receive(Arc::new(AtomicBool::new(false)), Duration::from_secs(5))
+                .unwrap()
+        });
+        assert!(send(port, &format!("GET /callback?code=sample&state=sample HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")).starts_with("HTTP/1.1 200"));
+        task.join().unwrap();
+        CallbackReceiver::bind(Service::MyAnimeList, &registration).unwrap();
+    }
+
+    #[test]
+    fn replacement_login_waits_for_cancelled_receiver_cleanup() {
+        let old = receiver(Service::MyAnimeList);
+        let registration = ClientRegistration {
+            client_id: "fixture".into(),
+            redirect_uri: old.redirect.to_string(),
+        };
+        let task = std::thread::spawn(move || {
+            // Emulate a receiver thread that has not yet observed cancellation.
+            std::thread::sleep(Duration::from_millis(30));
+            old.receive(Arc::new(AtomicBool::new(true)), Duration::from_secs(5))
+        });
+        let replacement = CallbackReceiver::bind(Service::MyAnimeList, &registration).unwrap();
+        assert!(matches!(
+            task.join().unwrap(),
+            Err(ApiError::Authentication)
+        ));
+        drop(replacement);
     }
 }

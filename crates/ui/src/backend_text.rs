@@ -173,6 +173,14 @@ pub fn tr(english: &'static str) -> &'static str {
         "Connected. Sign-in will sync with paired devices." => {
             "Povezano. Prijava će se sinkronizirati s uparenim uređajima."
         }
+        "Tracker sign-in" => "Prijava na servis praćenja",
+        "Sign-in expired. Please connect again." => "Prijava je istekla. Ponovno se povežite.",
+        "Could not receive the browser sign-in. Please connect again." => {
+            "Nije moguće primiti prijavu iz preglednika. Ponovno se povežite."
+        }
+        "Could not keep sign-in active. Please connect again." => {
+            "Nije moguće održati prijavu aktivnom. Ponovno se povežite."
+        }
         "Sign-in is saved and shared with paired devices. Disconnect removes shared sign-in." => {
             "Prijava je spremljena i dijeli se s uparenim uređajima. Prekid veze uklanja dijeljenu prijavu."
         }

@@ -1,12 +1,14 @@
 //! Android background execution glue.
 //!
-//! Two Java components live under `android/java/dev/misob/nova/` and are driven
+//! Three Java components live under `android/java/dev/misob/nova/` and are driven
 //! from here over JNI:
 //!
 //! * [`NovaBackgroundService`] — a `dataSync` foreground service that keeps the
 //!   process (and its transfer threads) alive while a download is active,
 //!   including with the screen off. The download work stays in Rust; Java only
 //!   holds the wake lock and shows the notification Android requires.
+//! * [`NovaAuthService`] — an independent, bounded foreground service protecting
+//!   browser OAuth reception and token exchange while Nova is in the background.
 //! * [`NovaSyncJobService`] — a `JobScheduler` job that wakes the process roughly
 //!   every 15 minutes to run one bounded sync pass (the app projects the merged
 //!   records into its local state the next time it opens).
@@ -27,6 +29,7 @@ use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
 use jni::sys::jobject;
 
 const SERVICE_CLASS: &str = "dev.misob.nova.NovaBackgroundService";
+const AUTH_CLASS: &str = "dev.misob.nova.NovaAuthService";
 const JOB_CLASS: &str = "dev.misob.nova.NovaSyncJobService";
 
 /// How often the notification text is refreshed while a download runs. The
@@ -40,6 +43,7 @@ static LAST_NOTIFICATION: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 /// Cached global ref to the service class (loaded once through the app class
 /// loader; avoids a loader round-trip on every notification refresh).
 static SERVICE_CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
+static AUTH_CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
 /// Cached global ref to the sync-job class.
 static JOB_CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
 static JOB_CANCEL: AtomicBool = AtomicBool::new(false);
@@ -170,6 +174,44 @@ pub(crate) fn set_download_service(busy: bool, title: &str, text: &str) {
                 JValue::Object(&title),
                 JValue::Object(&text),
             ],
+        )?;
+        Ok(())
+    });
+}
+
+/// Wait for foreground promotion before opening the browser. The tracker actor
+/// invokes this off the UI thread; failed JNI/platform starts fail sign-in.
+pub(crate) fn start_auth_service(title: &str, text: &str) -> Option<()> {
+    with_app_context(|env, raw| {
+        let context = unsafe { JObject::from_raw(raw) };
+        let class = app_class(env, &context, AUTH_CLASS, &AUTH_CLASS_REF)?;
+        let title = env.new_string(title)?;
+        let text = env.new_string(text)?;
+        env.call_static_method(
+            &class,
+            "start",
+            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)Z",
+            &[
+                JValue::Object(&context),
+                JValue::Object(&title),
+                JValue::Object(&text),
+            ],
+        )?
+        .z()
+    })
+    .filter(|ready| *ready)
+    .map(|_| ())
+}
+
+pub(crate) fn stop_auth_service() {
+    with_app_context(|env, raw| {
+        let context = unsafe { JObject::from_raw(raw) };
+        let class = app_class(env, &context, AUTH_CLASS, &AUTH_CLASS_REF)?;
+        env.call_static_method(
+            &class,
+            "stop",
+            "(Landroid/content/Context;)V",
+            &[JValue::Object(&context)],
         )?;
         Ok(())
     });

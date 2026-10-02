@@ -89,6 +89,12 @@ passed with default parallelism: 461 tests, including 85 tracking unit tests
 and a real sync-merge integration test covering received credentials, refresh
 rotation, disconnect and unlink. Formatting and whitespace checks passed.
 Android and Windows checks were not run.
+Android browser login now owns an independent, bounded foreground service through
+callback reception and credential persistence. Expiry and callback errors release
+login ownership and show reconnect messages. `cargo test --workspace --locked`
+passed with default parallelism: 466 tests, including 157 app unit tests and 88
+tracking unit tests. Formatting and whitespace checks passed. Android builds,
+emulator tests and device tests were not run; Android verification is manual.
 See [implemented tracking behavior](docs/tracking.md).
 
 ## 1. Goal and agreed scope
