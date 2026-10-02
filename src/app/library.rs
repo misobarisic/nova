@@ -271,6 +271,7 @@ impl Bridge {
                 type_: e.type_.clone(),
                 request_id: e.id.clone(),
                 videos: Vec::new(),
+                season_backdrops: HashMap::new(),
                 seasons: Vec::new(),
                 season_index: 0,
                 episode_page: 0,

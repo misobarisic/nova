@@ -282,6 +282,54 @@ pub struct MetaItem {
     pub extra: HashMap<String, Value>,
 }
 
+impl MetaItem {
+    /// Season artwork is an optional addon extension, not the series-wide
+    /// `background`. Read it tolerantly so absent/malformed season details
+    /// never prevent an otherwise valid episode list from loading.
+    pub fn season_backdrops(&self) -> HashMap<u32, String> {
+        fn image(value: &Value) -> Option<&str> {
+            value
+                .as_str()
+                .or_else(|| {
+                    ["background", "backdrop"]
+                        .iter()
+                        .filter_map(|key| value.get(key).and_then(Value::as_str))
+                        .find(|url| !url.trim().is_empty())
+                })
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
+        }
+        fn season(value: &Value) -> Option<u32> {
+            value
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .or_else(|| value.as_str()?.parse().ok())
+        }
+        let mut backdrops = HashMap::new();
+        // Flattened extension fields can be held by either metadata layer.
+        for extra in [&self.extra, &self.preview.extra] {
+            if let Some(Value::Object(seasons)) = extra.get("seasonBackdrops") {
+                for (number, value) in seasons {
+                    if let (Ok(number), Some(url)) = (number.parse::<u32>(), image(value)) {
+                        backdrops.entry(number).or_insert_with(|| url.to_owned());
+                    }
+                }
+            }
+            if let Some(Value::Array(seasons)) = extra.get("seasons") {
+                for value in seasons {
+                    let number = ["season", "seasonNumber", "season_number", "number"]
+                        .iter()
+                        .find_map(|key| value.get(key).and_then(season));
+                    if let (Some(number), Some(url)) = (number, image(value)) {
+                        backdrops.entry(number).or_insert_with(|| url.to_owned());
+                    }
+                }
+            }
+        }
+        backdrops
+    }
+}
+
 /// An episode/entry inside `meta.videos`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -413,6 +461,47 @@ fn stringify(value: &Value) -> Option<String> {
 #[cfg(test)]
 mod resource_tests {
     use super::*;
+
+    #[test]
+    fn season_backdrops_read_addon_extensions_without_using_series_art() {
+        let meta = crate::Addon::parse_meta(
+            br#"{"meta":{
+            "id":"series", "type":"series", "background":"https://img/series",
+            "seasonBackdrops":{"2":"https://img/season-two", "bad":"ignored", "3":" "},
+            "seasons":[
+                {"season":1,"background":" https://img/season-one "},
+                {"seasonNumber":"2","backdrop":"https://img/other-two"},
+                {"season_number":0,"background":"", "backdrop":"https://img/specials"},
+                {"number":3,"background":null},
+                {"season":-1,"background":"ignored"},
+                {"season":4294967296,"background":"ignored"}
+            ],
+            "videos":[{"id":"s1e1", "season":1, "episode":1}]
+        }}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            meta.season_backdrops(),
+            HashMap::from([
+                (0, "https://img/specials".into()),
+                (1, "https://img/season-one".into()),
+                (2, "https://img/season-two".into()),
+            ])
+        );
+        assert_eq!(meta.videos.len(), 1);
+
+        for seasons in [
+            Value::Null,
+            Value::String("invalid".into()),
+            Value::Number(2.into()),
+        ] {
+            let meta = crate::Addon::parse_meta(&serde_json::to_vec(&serde_json::json!({
+                "meta":{"id":"series", "type":"series", "background":"https://img/series", "seasons":seasons}
+            })).unwrap()).unwrap().unwrap();
+            assert!(meta.season_backdrops().is_empty());
+        }
+    }
 
     #[test]
     fn nullable_optional_metadata_does_not_discard_valid_episodes() {

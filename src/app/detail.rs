@@ -78,6 +78,7 @@ impl Bridge {
                 },
                 request_id: preview.id.clone(),
                 videos: Vec::new(),
+                season_backdrops: HashMap::new(),
                 seasons: Vec::new(),
                 season_index: 0,
                 episode_page: 0,
@@ -458,6 +459,7 @@ impl Bridge {
                 && !m.description.is_empty()
                 && !m.genres.is_empty()
                 && !m.year.is_empty()
+                && !m.season_backdrops.is_empty()
             {
                 return false;
             }
@@ -472,6 +474,14 @@ impl Bridge {
             _ => return false,
         };
         let mut touched = false;
+        for (season, url) in cached.season_backdrops {
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                m.season_backdrops.entry(season)
+            {
+                entry.insert(url);
+                touched = true;
+            }
+        }
         if m.background_url.is_empty() && !cached.background_url.is_empty() {
             m.background_url = cached.background_url.clone();
             touched = true;
@@ -515,6 +525,9 @@ impl Bridge {
             };
             let mut backdrop_to_load: Option<String> = None;
             let mut poster_to_load: Option<String> = None;
+            // Art upgrades also apply to finished shows and deeper episode
+            // views: season cards must not stay on their cached fallback.
+            m.season_backdrops.extend(item.season_backdrops());
             if let Some(bg) = &item.preview.background
                 && !bg.is_empty()
                 && (m.background_url.is_empty() || overwrite)
@@ -563,6 +576,7 @@ impl Bridge {
                 description: m.description.clone(),
                 genres: m.genres.clone(),
                 year: m.year.clone(),
+                season_backdrops: m.season_backdrops.clone(),
             };
             let modal_type = m.type_.clone();
             (
@@ -585,6 +599,8 @@ impl Bridge {
         } else {
             merge_meta_header_for(&modal_type, id, &header_cache);
         }
+        self.apply_season_cards();
+        self.dispatch_season_thumbs();
         if let Some(app) = self.app() {
             let state = self.shared.lock().unwrap();
             if let Some(m) = state.modal_item.as_ref()
@@ -1354,13 +1370,14 @@ impl Bridge {
         m.seasons
             .iter()
             .map(|&s| {
-                let (thumb, has_thumb) =
-                    match season_thumb_url(&m.videos, s).as_deref().and_then(|url| {
+                let (thumb, has_thumb) = match season_thumb_url(&m.videos, &m.season_backdrops, s)
+                    .as_deref()
+                    .and_then(|url| {
                         decoded_cache_get(&sized_cache_key(url, Some(EPISODE_THUMB_SIDE)))
                     }) {
-                        Some(buf) => (Image::from_rgba8(buf), true),
-                        None => (Image::default(), false),
-                    };
+                    Some(buf) => (Image::from_rgba8(buf), true),
+                    None => (Image::default(), false),
+                };
                 // Watched fraction from the progress map (manual toggles and
                 // playback both land here). Every known episode counts,
                 // including unaired ones: a season with episodes still to
@@ -2611,6 +2628,7 @@ mod source_lookup_tests {
             type_: "series".into(),
             request_id: "foreign-opaque-episode".into(),
             videos,
+            season_backdrops: HashMap::new(),
             seasons: vec![1, 2],
             season_index: 1,
             episode_page: 0,
@@ -2947,6 +2965,7 @@ pub(crate) fn meta_header_from_item(item: &MetaItem) -> MetaHeader {
         description: item.preview.description.clone().unwrap_or_default(),
         genres: item.preview.genres.clone(),
         year: item.preview.year_str().unwrap_or_default(),
+        season_backdrops: item.season_backdrops(),
     }
 }
 /// Whether the header cache holds usable text (description or genres) for
@@ -2958,18 +2977,27 @@ pub(crate) fn header_text_cached(type_: &str, id: &str) -> bool {
         .unwrap_or(false)
 }
 /// Merge `fresh` into the cached header for `(type_, id)`, filling empty
-/// slots only. Returns true when the stored value changed (or was created
-/// with non-empty content).
+/// text slots and updating supplied season-art URLs. Returns true when the
+/// stored value changed (or was created with non-empty content).
 pub(crate) fn merge_meta_header_for(type_: &str, id: &str, fresh: &MetaHeader) -> bool {
     if fresh.background_url.is_empty()
         && fresh.description.is_empty()
         && fresh.genres.is_empty()
         && fresh.year.is_empty()
+        && fresh.season_backdrops.is_empty()
     {
         return false;
     }
     let mut cached = read_meta_header_for(type_, id).unwrap_or_default();
     let mut touched = false;
+    for (&season, url) in &fresh.season_backdrops {
+        // A newer season image replaces an older cached URL even when text
+        // stays gap-filled for a finished show.
+        if cached.season_backdrops.get(&season) != Some(url) {
+            cached.season_backdrops.insert(season, url.clone());
+            touched = true;
+        }
+    }
     if cached.background_url.is_empty() && !fresh.background_url.is_empty() {
         cached.background_url = fresh.background_url.clone();
         touched = true;

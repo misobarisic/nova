@@ -1353,3 +1353,15 @@ msgstr "Odaberite drugo izdanje"
 
 msgid "Sign-in is saved and shared with paired devices. Disconnect removes shared sign-in."
 msgstr "Prijava je spremljena i dijeli se s uparenim uređajima. Prekid veze uklanja dijeljenu prijavu."
+
+msgid "Synopsis"
+msgstr "Sinopsis"
+
+msgid "Show less"
+msgstr "Prikaži manje"
+
+msgid "Read more"
+msgstr "Pročitaj više"
+
+msgid "▶  Watch Now"
+msgstr "▶  Gledaj sada"

@@ -395,6 +395,8 @@ struct ModalItem {
     /// Episodic metadata (series only): the videos the meta provider
     /// returned. Empty for movies / when no provider exists.
     videos: Vec<Video>,
+    /// Season-specific backdrops from addon metadata, keyed by season number.
+    season_backdrops: HashMap<u32, String>,
     /// Distinct seasons in display order (numbered first, extras last).
     seasons: Vec<u32>,
     /// Index into `seasons` currently shown in the episode picker.
@@ -881,7 +883,7 @@ static CURRENT_TORRENT_SETTINGS: LazyLock<Mutex<TorrentSettings>> =
 /// full `MetaItem`s but used to discard the header and keep only `videos`,
 /// so descriptions + genre pills still needed a network round-trip on open.
 /// Stored under `meta_header:{type}\x01{id}`; empty slots mean "unknown",
-/// never "known empty", and merges only fill empties.
+/// never "known empty". Text merges fill gaps; season artwork accepts fresh URLs.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub(crate) struct MetaHeader {
     #[serde(default)]
@@ -892,6 +894,8 @@ pub(crate) struct MetaHeader {
     genres: Vec<String>,
     #[serde(default)]
     year: String,
+    #[serde(default)]
+    season_backdrops: HashMap<u32, String>,
 }
 
 // ---------------------------------------------------------------------------

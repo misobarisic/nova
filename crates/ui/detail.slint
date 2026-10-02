@@ -204,7 +204,7 @@ component EpisodePager inherits HorizontalLayout {
     }
 }
 
-// Square, text-free icon button for the detail top bar (back, library,
+// Circular, text-free icon button for the detail top bar (back, library,
 // categories). The caller drops the icon (and any badge) in as a child; the
 // hover background and keyboard focus ring live here.
 component TopIconButton inherits Rectangle {
@@ -212,12 +212,12 @@ component TopIconButton inherits Rectangle {
     in property <bool> focused: false;
     callback clicked();
 
-    width: narrow ? 44px : 36px;
-    height: narrow ? 44px : 36px;
-    border-radius: 8px;
-    background: touch.has-hover ? #2b2b35 : #1f1f27;
-    border-width: focused ? 2px : 0px;
-    border-color: #8b5cf6;
+    width: narrow ? 44px : 48px;
+    height: narrow ? 44px : 48px;
+    border-radius: self.width / 2;
+    background: touch.has-hover ? #303442e0 : #101622b8;
+    border-width: focused ? 2px : 1px;
+    border-color: focused ? #a477ff : #ffffff28;
 
     @children
 
@@ -657,6 +657,9 @@ export component DetailPage {
     in-out property <string> selected_title: "";
     in-out property <string> selected_year: "";
     in-out property <string> selected_description: "";
+    property <bool> synopsis_expanded: false;
+    property <length> overview_width: root.width - (root.narrow ? 40px : 128px) - root.safe-left - root.safe-right;
+    property <length> synopsis_width: root.narrow ? root.overview_width : (root.overview_width - 24px) * 0.56;
     in-out property <[string]> selected_genre_list: [];
     // Tab bar: 0 = Overview, 3 = Episodes (1/2 are stubs — Stremio addons
     // provide no Characters/Artwork data).
@@ -722,24 +725,24 @@ export component DetailPage {
 
     // Episode grid columns: 1 in narrow windows, otherwise scaled to the
     // available width (content ≈ page − sidebar − padding), capped at 4.
-    property <int> ep_cols: root.narrow ? 1 : Math.min(4, Math.max(2, Math.floor((root.width - 260px) / 320px)));
+    property <int> ep_cols: root.narrow ? 1 : Math.min(4, Math.max(2, Math.floor((root.width - 356px) / 320px)));
     // Equal-width episode cards: grid columns start at each cell's
     // preferred width (full unwrapped text even when wrapped — see Text
     // docs), so without an explicit cell width columns track content
     // length. Derive one shared width top-down from the page width
-    // (content = page − 16px scroll padding each side − 200px sidebar
+    // (content = page − 64px scroll padding each side − 200px sidebar
     // and 16px body spacing on wide; sidebar hidden on narrow).
     // Must use root.width here: referencing the content layout's own
     // width feeds back through the ScrollView and binding-loops.
-    property <length> ep_card_w: (root.width - (root.narrow ? 32px : 248px) - (root.ep_cols - 1) * 12px) / root.ep_cols;
-    // Season picker grid: 2 fluid columns on narrow windows; on wide
-    // windows the column count grows from a 180px minimum card but cards
-    // are capped (same centered-cap scheme as the Discover grid), so the
+    property <length> ep_card_w: (root.width - (root.narrow ? 40px + root.safe-left + root.safe-right : 344px + root.safe-left + root.safe-right) - (root.ep_cols - 1) * 12px) / root.ep_cols;
+    // Phones keep seasons in one horizontal rail with the next card
+    // peeking in. On wide windows the grid grows from a 180px minimum card;
+    // cards are capped (same centered-cap scheme as the Discover grid), so the
     // wall never turns into a few giant banners on desktop.
     property <length> min-season: 180px;
     property <length> max-season: 240px;
-    property <int> season_cols: root.narrow ? 2 : Math.min(5, Math.max(3, Math.floor((root.width - 248px + 12px) / (root.min-season + 12px))));
-    property <length> season_card_w: Math.min(root.max-season, (root.width - (root.narrow ? 32px : 248px) - (root.season_cols - 1) * 12px) / root.season_cols);
+    property <int> season_cols: root.narrow ? 2 : Math.min(5, Math.max(3, Math.floor((root.width - 344px - root.safe-left - root.safe-right + 12px) / (root.min-season + 12px))));
+    property <length> season_card_w: root.narrow ? Math.min(180px, Math.max(120px, (root.width - 40px - root.safe-left - root.safe-right) / 2.2)) : Math.min(root.max-season, (root.width - 344px - root.safe-left - root.safe-right - (root.season_cols - 1) * 12px) / root.season_cols);
     // Columns actually used (partial last row still packs left).
     property <int> season_grid_cols: Math.min(root.season_cols, root.season_cards.length);
     // Series flow when an addon listed seasons; movies have none.
@@ -990,7 +993,7 @@ export component DetailPage {
         }
     }
 
-    // ---- Page pan lock (pill-bar axis lock) ----------------------------
+    // ---- Page pan lock (horizontal rails) ----------------------------
     // Nested Flickables have no axis locking in Slint: whichever one crosses
     // the 8px grab threshold first owns the whole gesture, and a Flickable
     // that captured the pointer never gives it back. A finger on the 30px
@@ -1011,6 +1014,8 @@ export component DetailPage {
     //
     // The whole page is instantiated per modal open (see `page` below), so
     // this can never stay stuck across opens.
+    // Narrow season cards reuse these pointer hints; automatic season
+    // reveal deliberately does not lock the page.
     property <bool> page_pan_enabled: true;
 
     function filters_panned() {
@@ -1143,7 +1148,48 @@ export component DetailPage {
     page := Rectangle {
         width: 100%;
         height: 100%;
-        background: #0f0f12;
+        background: #080f19;
+
+        // Fade the image itself to a black canvas. Stopping at a lightly
+        // tinted overlay left bright artwork behind deep episode lists.
+        property <float> backdrop_fade: Math.min(1, Math.max(0, -det_scroll.content-y / (root.narrow ? 360px : 520px)));
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: 100%;
+            height: root.narrow ? 560px + root.safe-top : 740px;
+            background: #000000;
+        }
+
+        // Keep the artwork edge-to-edge behind the floating controls. The
+        // scrims protect text while preserving the bright upper-right artwork.
+        backdrop_art := Image {
+            x: 0px;
+            // A small parallax lift, capped so the backdrop cannot slide
+            // away while the user browses long episode or stream lists.
+            y: Math.max(root.narrow ? -56px : -80px, Math.min(0px, det_scroll.content-y * 0.12));
+            source: root.selected_backdrop.width > 0 ? root.selected_backdrop : root.selected_poster;
+            image-fit: cover;
+            width: 100%;
+            height: root.narrow ? 560px + root.safe-top : 740px;
+            opacity: 1 - page.backdrop_fade;
+        }
+        Image {
+            x: 0px;
+            y: 0px;
+            width: 100%;
+            height: root.narrow ? 620px + root.safe-top : 800px;
+            source: @image-url("../../assets/detail-bottom-scrim.svg");
+            image-fit: fill;
+        }
+        if !root.narrow: Image {
+            x: 0px;
+            y: 0px;
+            width: 100%;
+            height: 800px;
+            source: @image-url("../../assets/detail-side-scrim.svg");
+            image-fit: fill;
+        }
 
         // Entrance fade: the page is instantiated fresh per open (`if
         // modal_visible` in AppWindow), so the fade replays every time.
@@ -1362,8 +1408,8 @@ export component DetailPage {
 
                 VerticalLayout {
                     width: 100%;
-                    padding-left: 16px + safe-left;
-                    padding-right: 16px + safe-right;
+                    padding-left: (root.narrow ? 20px : 64px) + safe-left;
+                    padding-right: (root.narrow ? 20px : 64px) + safe-right;
                     padding-bottom: 16px;
                     spacing: 12px;
                     // Never distribute leftover viewport height here: with
@@ -1373,183 +1419,157 @@ export component DetailPage {
                     // stays below the content instead.
                     alignment: start;
 
-                    // ---- Banner header --------------------------------
-                    // Wide backdrop (addon `background`, if any) with a
-                    // dimming overlay; poster + title row sits at the bottom.
-                    // Explicit width: without it the banner stretches to the
-                    // scroll content width, so an overflowing child (e.g.
-                    // episode streams) drags the backdrop right too.
-                    Rectangle {
+                    // Hero text stays below the artwork on phones and occupies
+                    // the shaded left half on desktop. Height follows wrapped
+                    // content so long titles and translations remain readable.
+                    VerticalLayout {
                         width: 100%;
-                        border-radius: 10px;
-                        clip: true;
-                        background: #1a1a20;
-                        height: 260px;
-
-                        Image {
-                            source: root.selected_backdrop;
-                            image-fit: cover;
-                            width: 100%;
-                            height: 100%;
-                        }
-
-                        Rectangle {
-                            width: 100%;
-                            height: 100%;
-                            background: #00000099;
-                        }
+                        spacing: root.narrow ? 14px : 18px;
+                        padding-top: root.narrow ? 250px : 50px;
+                        padding-bottom: 16px;
+                        alignment: start;
 
                         HorizontalLayout {
-                            padding: 16px;
-                            spacing: 18px;
-                            alignment: start;
-                            width: 100%;
-                            height: 100%;
-
                             VerticalLayout {
-                                vertical-stretch: 1;
-                                horizontal-stretch: 1;
-                                Rectangle { vertical-stretch: 1; }
-
-                                HorizontalLayout {
-                                    spacing: 18px;
-
-                                    Rectangle {
-                                        width: 120px;
-                                        height: 172px;
-                                        border-radius: 8px;
-                                        clip: true;
-                                        background: #222228;
-
-                                        Image {
-                                            source: root.selected_poster;
-                                            image-fit: cover;
-                                            width: 100%;
-                                            height: 100%;
-                                        }
-                                    }
-
-                                    VerticalLayout {
-                                        spacing: 8px;
-                                        alignment: end;
-                                        horizontal-stretch: 1;
-
-                                        Text {
-                                            text: root.selected_title;
-                                            font-size: root.narrow ? 20px : 24px;
-                                            font-weight: 700;
-                                            color: #ffffff;
-                                            wrap: word-wrap;
-                                            // A single unbroken word must not
-                                            // widen the banner past the viewport.
-                                            min-width: 0px;
-                                        }
-
-                                        // Badge pills from real addon data only
-                                        // (year + genres). Scores, airing state and
-                                        // season labels are not in the protocol.
-                                        // Narrow: 2-column flow so the row never
-                                        // overflows the text column.
-                                        property <int> pill_cols: root.narrow ? 2 : 99;
-                                        property <int> pill_off: root.selected_year != "" ? 1 : 0;
-                                        GridLayout {
-                                            width: 100%;
-                                            // Squeezable (same min-width pattern as
-                                            // the stream rows): on narrow screens
-                                            // the text column is ~160px and two
-                                            // wide pills would otherwise push the
-                                            // page sideways.
-                                            min-width: 0px;
-                                            spacing: 6px;
-
-                                            if root.selected_year != "": Rectangle {
-                                                row: 0;
-                                                col: 0;
-                                                height: 22px;
+                                width: root.narrow ? root.overview_width : Math.min(650px, root.overview_width * 0.55);
+                                spacing: root.narrow ? 14px : 18px;
+                                alignment: start;
+                                Text {
+                                    text: root.selected_title;
+                                    font-size: root.narrow ? 34px : (root.width >= 1200px ? 64px : 44px);
+                                    font-weight: 800;
+                                    color: #ffffff;
+                                    wrap: word-wrap;
+                                    min-width: 0px;
+                                }
+                                if root.selected_year != "": Text {
+                                    text: root.selected_year;
+                                    color: #c3c7d7;
+                                    font-size: root.narrow ? 16px : 21px;
+                                    min-width: 0px;
+                                    overflow: elide;
+                                }
+                                GridLayout {
+                                    min-width: 0px;
+                                    spacing: 8px;
+                                    for g[i] in root.selected_genre_list: Rectangle {
+                                        row: Math.floor(i / 4);
+                                        col: Math.mod(i, 4);
+                                        height: root.narrow ? 34px : 42px;
+                                        min-width: 0px;
+                                        border-radius: self.height / 2;
+                                        background: #252b38b0;
+                                        border-width: 1px;
+                                        border-color: #ffffff20;
+                                        HorizontalLayout {
+                                            padding-left: root.narrow ? 10px : 18px;
+                                            padding-right: root.narrow ? 10px : 18px;
+                                            Text {
+                                                text: g;
+                                                color: #ced1df;
+                                                font-size: root.narrow ? 12px : 16px;
+                                                vertical-alignment: center;
                                                 min-width: 0px;
-                                                border-radius: 11px;
-                                                background: #232330;
-                                                clip: true;
-
-                                                HorizontalLayout {
-                                                    padding-left: 10px;
-                                                    padding-right: 10px;
-
-                                                    Text {
-                                                        text: root.selected_year;
-                                                        color: #e6e6ea;
-                                                        font-size: 12px;
-                                                        font-weight: 600;
-                                                        vertical-alignment: center;
-                                                        horizontal-stretch: 1;
-                                                        overflow: elide;
-                                                    }
-                                                }
-                                            }
-
-                                            // Narrow: 2-column flow; squeezed
-                                            // pills elide instead of pushing the
-                                            // page sideways (see grid note above).
-                                            for g[i] in root.selected_genre_list: Rectangle {
-                                                // Offset past the year pill above.
-                                                row: Math.floor((i + pill_off) / pill_cols);
-                                                col: Math.mod(i + pill_off, pill_cols);
-                                                height: 22px;
-                                                min-width: 0px;
-                                                border-radius: 11px;
-                                                background: #232330;
-                                                clip: true;
-
-                                                HorizontalLayout {
-                                                    padding-left: 10px;
-                                                    padding-right: 10px;
-
-                                                    Text {
-                                                        text: g;
-                                                        color: #e6e6ea;
-                                                        font-size: 12px;
-                                                        font-weight: 600;
-                                                        vertical-alignment: center;
-                                                        horizontal-stretch: 1;
-                                                        overflow: elide;
-                                                    }
-                                                }
+                                                overflow: elide;
                                             }
                                         }
                                     }
                                 }
+                                if root.selected_description != "": Rectangle {
+                                    height: root.narrow ? 66px : 84px;
+                                    clip: true;
+                                    Text {
+                                        width: 100%;
+                                        height: 100%;
+                                        overflow: elide;
+                                        text: root.selected_description;
+                                        color: #bec3d2;
+                                        font-size: root.narrow ? 15px : 19px;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                                if root.has_episodes: HorizontalLayout {
+                                    spacing: 12px;
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                        min-width: 0px;
+                                        height: root.narrow ? 56px : 62px;
+                                        border-radius: root.narrow ? 22px : 26px;
+                                        background: watch_hero.has-hover ? @linear-gradient(110deg, #b079ff, #5657ef) : @linear-gradient(110deg, #a15bff, #644bff, #443dcc);
+                                        border-width: 1px;
+                                        border-color: root.kb_active && root.kb_zone == 2 ? #ffffff : #b4a1ff70;
+                                        Text {
+                                            text: @tr("▶  Watch Now");
+                                            color: #ffffff;
+                                            font-size: root.narrow ? 17px : 21px;
+                                            font-weight: 600;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                        watch_hero := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.kb_active = false; root.watch_now(); }
+                                        }
+                                    }
+                                    Rectangle {
+                                        width: root.narrow ? 56px : 62px;
+                                        height: self.width;
+                                        border-radius: self.width / 2;
+                                        background: library_hero.has-hover ? #343b4d : #252c3bcc;
+                                        border-width: 1px;
+                                        border-color: #ffffff20;
+                                        accessible-role: button;
+                                        accessible-label: root.in_library ? @tr("Remove from library") : @tr("Add to library");
+                                        Text {
+                                            text: root.in_library ? "✓" : "+";
+                                            color: #e2e5ef;
+                                            font-size: 32px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                        library_hero := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.kb_active = false; root.add_to_library(); }
+                                        }
+                                    }
+                                }
                             }
+                            if !root.narrow: Rectangle { horizontal-stretch: 1; }
                         }
                     }
 
                     // ---- Tab bar --------------------------------------
                     Rectangle {
                         width: 100%;
-                        background: #141419;
-                        border-radius: 8px;
+                        background: transparent;
 
+                        Rectangle { y: parent.height - 1px; height: 1px; width: 100%; background: #ffffff20; }
                         HorizontalLayout {
-                            spacing: 8px;
-                            padding: 4px;
+                            spacing: root.narrow ? 4px : 24px;
+                            padding: 0px;
+                            alignment: start;
 
                         for t[i] in [@tr("Overview"), @tr("Characters"), @tr("Artwork"), @tr("Episodes")]: Rectangle {
-                            horizontal-stretch: 1;
-                            // Squeezable (same min-width pattern as the rows
-                            // below): four fixed labels must share narrow
-                            // phone widths, so they elide instead of pushing
-                            // the page sideways on wider font metrics.
-                            min-width: 0px;
-                            height: root.narrow ? 44px : 30px;
-                            border-radius: 6px;
-                            background: root.detail_tab == i ? #4c4c8a : transparent;
+                            // Equal phone slots; compact, left-aligned tabs on desktop.
+                            width: root.narrow ? (root.overview_width - 12px) / 4 : Math.min(140px, (root.overview_width - 72px) / 4);
+                            height: 48px;
+                            background: transparent;
+                            Rectangle {
+                                y: parent.height - 4px;
+                                height: 4px;
+                                width: 100%;
+                                border-radius: 2px;
+                                background: root.detail_tab == i ? #a477ff : transparent;
+                            }
                             border-width: (i == 0 || i == 3) && root.kb_zone == 1 && root.kb_tab == i ? 2px : 0px;
                             border-color: #8b5cf6;
                             clip: true;
 
                             Text {
                                 text: t;
-                                color: (i == 1 || i == 2) ? #5c5c6e : #e6e6ea;
-                                font-size: 13px;
+                                color: root.detail_tab == i ? #ffffff : #a6adc5;
+                                font-weight: root.detail_tab == i ? 600 : 400;
+                                font-size: root.narrow ? 13px : 18px;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                                 width: 100%;
@@ -1585,32 +1605,10 @@ export component DetailPage {
 
                         // Sidebar (series meta + actions): packed to content
                         // height so tall episode grids can't spread it out.
-                        if !root.narrow: VerticalLayout {
+                        if !root.narrow && root.detail_tab != 0: VerticalLayout {
                             width: 200px;
                             spacing: 10px;
                             alignment: start;
-
-                            if root.has_episodes: Rectangle {
-                                height: root.narrow ? 48px : 38px;
-                                border-radius: 8px;
-                                background: watch_touch.has-hover ? #7c3aed : #8b5cf6;
-                                border-width: root.kb_active && root.kb_zone == 2 ? 2px : 0px;
-                                border-color: #ffffff;
-
-                                Text {
-                                    text: @tr("▶  WATCH NOW");
-                                    color: #ffffff;
-                                    font-size: 14px;
-                                    font-weight: 700;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-
-                                watch_touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.kb_active = false; root.watch_now(); }
-                                }
-                            }
 
                             Rectangle {
                                 background: #141419;
@@ -1674,29 +1672,6 @@ export component DetailPage {
                             spacing: 10px;
                             alignment: start;
 
-                            // Narrow windows: inline WATCH NOW above content.
-                            if root.narrow && root.has_episodes: Rectangle {
-                                height: 48px;
-                                border-radius: 8px;
-                                background: watch_touch_n.has-hover ? #7c3aed : #8b5cf6;
-                                border-width: root.kb_active && root.kb_zone == 2 ? 2px : 0px;
-                                border-color: #ffffff;
-
-                                Text {
-                                    text: @tr("▶  WATCH NOW");
-                                    color: #ffffff;
-                                    font-size: 14px;
-                                    font-weight: 700;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-
-                                watch_touch_n := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.kb_active = false; root.watch_now(); }
-                                }
-                            }
-
                             // ---- Overview tab -------------------------
                             // start-aligned: never share leftover height
                             // between children (see scroll content note).
@@ -1704,20 +1679,102 @@ export component DetailPage {
                                 spacing: 10px;
                                 alignment: start;
 
-                                if root.selected_description != "": Text {
-                                    text: root.selected_description;
-                                    color: #cccccc;
-                                    font-size: 14px;
-                                    wrap: word-wrap;
-                                    // Same longest-word containment as the
-                                    // banner title above.
-                                    min-width: 0px;
+                                GridLayout {
+                                    spacing: root.narrow ? 16px : 24px;
+                                    Rectangle {
+                                        row: 0;
+                                        col: 0;
+                                        width: root.narrow ? root.width - 40px - root.safe-left - root.safe-right : (root.width - 128px - root.safe-left - root.safe-right - 24px) * 0.44;
+                                        height: root.narrow ? 120px : 190px;
+                                        border-radius: 18px;
+                                        clip: true;
+                                        background: #151d2b;
+                                        Image {
+                                            source: root.selected_backdrop.width > 0 ? root.selected_backdrop : root.selected_poster;
+                                            image-fit: cover;
+                                            width: 100%;
+                                            height: 100%;
+                                        }
+                                        Rectangle {
+                                            width: 100%; height: 100%;
+                                            background: @linear-gradient(180deg, transparent, #080f19c0);
+                                        }
+                                        Text {
+                                            x: 20px; y: parent.height - 42px;
+                                            text: @tr("Artwork");
+                                            color: #ffffff;
+                                            font-size: 18px;
+                                            font-weight: 600;
+                                        }
+                                    }
+                                Rectangle {
+                                    row: root.narrow ? 1 : 0;
+                                    col: root.narrow ? 0 : 1;
+                                    width: root.synopsis_width;
+                                    background: #151d2bb8;
+                                    border-radius: 18px;
+                                    border-width: 1px;
+                                    border-color: #ffffff18;
+                                    VerticalLayout {
+                                        padding: root.narrow ? 16px : 24px;
+                                        spacing: 12px;
+                                        alignment: start;
+                                        Text {
+                                            text: @tr("Synopsis");
+                                            color: #ffffff;
+                                            font-size: root.narrow ? 20px : 24px;
+                                            font-weight: 700;
+                                        }
+                                        synopsis_view := Rectangle {
+                                            // Measure the complete paragraph separately so
+                                            // the displayed text can fit the animated viewport
+                                            // and elide whole lines instead of clipping glyphs.
+                                            height: root.synopsis_expanded ? synopsis_measure.preferred-height + 1px : Math.min(synopsis_measure.preferred-height + 1px, root.narrow ? 80px : 84px);
+                                            animate height {
+                                                duration: Anim.transition_slide;
+                                                easing: ease-in-out;
+                                            }
+                                            clip: true;
+                                            synopsis_measure := Text {
+                                                x: 0px;
+                                                y: 0px;
+                                                width: root.synopsis_width - (root.narrow ? 32px : 48px);
+                                                text: root.selected_description != "" ? root.selected_description : @tr("No description provided by the addon.");
+                                                font-size: root.narrow ? 15px : 18px;
+                                                wrap: word-wrap;
+                                                visible: false;
+                                            }
+                                            synopsis_text := Text {
+                                                x: 0px;
+                                                y: 0px;
+                                                width: root.synopsis_width - (root.narrow ? 32px : 48px);
+                                                height: 100%;
+                                                text: synopsis_measure.text;
+                                                color: #b9c0d2;
+                                                font-size: root.narrow ? 15px : 18px;
+                                                wrap: word-wrap;
+                                                overflow: elide;
+                                                vertical-alignment: top;
+                                            }
+                                        }
+                                        if synopsis_measure.preferred-height > (root.narrow ? 80px : 84px): Rectangle {
+                                            height: 28px;
+                                            Text {
+                                                text: root.synopsis_expanded ? @tr("Show less") : @tr("Read more");
+                                                color: #a477ff;
+                                                font-size: 16px;
+                                                vertical-alignment: center;
+                                            }
+                                            TouchArea {
+                                                accessible-role: button;
+                                                accessible-label: root.synopsis_expanded ? @tr("Show less") : @tr("Read more");
+                                                mouse-cursor: pointer;
+                                                clicked => { root.synopsis_expanded = !root.synopsis_expanded; }
+                                            }
+                                        }
+                                    }
                                 }
 
-                                if root.selected_description == "": Text {
-                                    text: @tr("No description provided by the addon.");
-                                    color: #5c5c6e;
-                                    font-size: 13px;
                                 }
 
                                 // Movies list their streams here (series
@@ -1800,155 +1857,223 @@ export component DetailPage {
                                     // No label row above the wall: its emoji
                                     // measured narrower than it painted on
                                     // Android and let the page wiggle sideways.
-                                    HorizontalLayout {
+                                    season_picker := Rectangle {
                                         width: 100%;
-                                        alignment: center;
+                                        height: root.season_cards.length == 0 ? 0px : (root.narrow ? root.season_card_w * 9 / 16 : Math.ceil(root.season_cards.length / root.season_cols) * (root.season_card_w * 9 / 16 + 12px) - 12px);
+                                        property <int> selected_index: root.season_combo_idx;
+                                        changed selected_index => { season_flick.reveal_selected(); }
 
-                                        GridLayout {
-                                            // Exact content width so the
-                                            // wall centers like the Discover
-                                            // grid when cards hit their cap.
-                                            width: Math.max(0px, root.season_grid_cols * (root.season_card_w + 12px) - 12px);
-                                            spacing: 12px;
-
-                                            for s[i] in root.season_cards: Rectangle {
-                                                row: Math.floor(i / root.season_cols);
-                                                col: Math.mod(i, root.season_cols);
-                                                // Fixed shared width (see
-                                                // season_card_w): keeps every
-                                                // column equal.
-                                                width: root.season_card_w;
-                                                // Cinematic 16:9 cards.
-                                                height: root.season_card_w * 9 / 16;
-                                                border-radius: 8px;
-                                                clip: true;
-                                                background: #1c1c23;
-                                                border-width: root.season_combo_idx == i ? 2px : 0px;
-                                                border-color: root.kb_active && root.kb_zone == 3 && root.kb_ci == 0 && root.season_combo_idx == i ? #ffffff : #8b5cf6;
-
-                                                if s.has_thumb: Image {
-                                                    source: s.thumb;
-                                                    image-fit: cover;
-                                                    width: 100%;
-                                                    height: 100%;
+                                        season_flick := Flickable {
+                                            x: root.narrow ? 0px : (parent.width - self.width) / 2;
+                                            width: root.narrow ? parent.width : season_grid.width;
+                                            height: parent.height;
+                                            interactive: root.narrow;
+                                            content-width: Math.max(self.width, season_grid.width);
+                                            content-height: self.height;
+                                            // Only pointer hints lock the page: revealing a
+                                            // selected card must not block the next vertical drag.
+                                            changed width => { self.reveal_selected(); }
+                                            init => { self.reveal_selected(); }
+                                            function reveal_selected() {
+                                                if (!root.narrow) { self.content-x = 0px; return; }
+                                                let left = Math.max(0, root.season_combo_idx) * (root.season_card_w + 12px);
+                                                let right = left + root.season_card_w;
+                                                if (left + self.content-x < 0px) {
+                                                    self.content-x = -left;
+                                                } else if (right + self.content-x > self.width) {
+                                                    self.content-x = self.width - right;
                                                 }
+                                                self.content-x = Math.max(self.width - self.content-width, Math.min(0px, self.content-x));
+                                            }
 
-                                                if !s.has_thumb: Text {
-                                                    text: "🎬";
-                                                    font-size: 22px;
-                                                    horizontal-alignment: center;
-                                                    vertical-alignment: center;
-                                                }
+                                            season_grid := GridLayout {
+                                                // The narrow row has its own scrollable width;
+                                                // desktop keeps the centered capped grid.
+                                                width: Math.max(0px, (root.narrow ? root.season_cards.length : root.season_grid_cols) * (root.season_card_w + 12px) - 12px);
+                                                height: season_picker.height;
+                                                spacing: 12px;
 
-                                                // Dim the art so the label
-                                                // stays legible.
-                                                Rectangle {
-                                                    width: 100%;
-                                                    height: 100%;
-                                                    background: #00000066;
-                                                }
+                                                for s[i] in root.season_cards: Rectangle {
+                                                    row: root.narrow ? 0 : Math.floor(i / root.season_cols);
+                                                    col: root.narrow ? i : Math.mod(i, root.season_cols);
+                                                    // Fixed shared width (see
+                                                    // season_card_w): keeps every
+                                                    // column equal.
+                                                    width: root.season_card_w;
+                                                    // Cinematic 16:9 cards.
+                                                    height: root.season_card_w * 9 / 16;
+                                                    border-radius: 8px;
+                                                    clip: true;
+                                                    background: #1c1c23;
+                                                    border-width: root.season_combo_idx == i ? 2px : 0px;
+                                                    border-color: root.kb_active && root.kb_zone == 3 && root.kb_ci == 0 && root.season_combo_idx == i ? #ffffff : #8b5cf6;
 
-                                                Text {
-                                                    text: s.name;
-                                                    color: #ffffff;
-                                                    font-size: 17px;
-                                                    font-weight: 700;
-                                                    horizontal-alignment: center;
-                                                    vertical-alignment: center;
-                                                }
-
-                                                // Watched check (top-right) for fully-seen seasons:
-                                                // same small white disc + black check as the
-                                                // episode cards.
-                                                if s.watched: Rectangle {
-                                                    x: parent.width - 28px;
-                                                    y: 4px;
-                                                    width: 22px;
-                                                    height: 22px;
-                                                    border-radius: 11px;
-                                                    background: #ffffff;
-
-                                                    IcCheck {
-                                                        x: (parent.width - self.width) / 2;
-                                                        y: (parent.height - self.height) / 2;
-                                                        width: 13px;
-                                                        height: 13px;
-                                                        fill: #000000;
+                                                    if s.has_thumb: Image {
+                                                        source: s.thumb;
+                                                        image-fit: cover;
+                                                        width: 100%;
+                                                        height: 100%;
                                                     }
-                                                }
 
-                                                // Card menu: desktop right-click opens the
-                                                // native popup at the cursor; touch hold
-                                                // opens the bottom sheet (see below).
-                                                season_ctx := ContextMenuArea {
-                                                    width: 100%;
-                                                    height: 100%;
+                                                    if !s.has_thumb: Text {
+                                                        text: "🎬";
+                                                        font-size: 22px;
+                                                        horizontal-alignment: center;
+                                                        vertical-alignment: center;
+                                                    }
 
-                                                    Menu {
-                                                        MenuItem {
-                                                            title: s.watched ? @tr("Mark season as unwatched") : @tr("Mark season as watched");
-                                                            activated => { root.season_watch_action(i, 0); }
+                                                    // Dim the art so the label
+                                                    // stays legible.
+                                                    Rectangle {
+                                                        width: 100%;
+                                                        height: 100%;
+                                                        background: #00000066;
+                                                    }
+
+                                                    Text {
+                                                        text: s.name;
+                                                        color: #ffffff;
+                                                        font-size: 17px;
+                                                        font-weight: 700;
+                                                        horizontal-alignment: center;
+                                                        vertical-alignment: center;
+                                                    }
+
+                                                    // Watched check (top-right) for fully-seen seasons:
+                                                    // same small white disc + black check as the
+                                                    // episode cards.
+                                                    if s.watched: Rectangle {
+                                                        x: parent.width - 28px;
+                                                        y: 4px;
+                                                        width: 22px;
+                                                        height: 22px;
+                                                        border-radius: 11px;
+                                                        background: #ffffff;
+
+                                                        IcCheck {
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: (parent.height - self.height) / 2;
+                                                            width: 13px;
+                                                            height: 13px;
+                                                            fill: #000000;
                                                         }
-                                                        MenuSeparator {}
-                                                        MenuItem {
-                                                            title: @tr("Select season");
-                                                            activated => {
+                                                    }
+
+                                                    // Card menu: desktop right-click opens the
+                                                    // native popup at the cursor; touch hold
+                                                    // opens the bottom sheet (see below).
+                                                    season_ctx := ContextMenuArea {
+                                                        width: 100%;
+                                                        height: 100%;
+
+                                                        Menu {
+                                                            MenuItem {
+                                                                title: s.watched ? @tr("Mark season as unwatched") : @tr("Mark season as watched");
+                                                                activated => { root.season_watch_action(i, 0); }
+                                                            }
+                                                            MenuSeparator {}
+                                                            MenuItem {
+                                                                title: @tr("Select season");
+                                                                activated => {
+                                                                    root.kb_active = false;
+                                                                    root.kb_zone = 3;
+                                                                    root.kb_ci = 0;
+                                                                    root.season_picked(i);
+                                                                }
+                                                            }
+                                                        }
+
+                                                    touch_season := TouchArea {
+                                                        property <bool> lp_suppress: false;
+                                                        property <bool> dragged: false;
+                                                        property <length> hint_x: 0px;
+                                                        property <length> hint_y: 0px;
+                                                        property <bool> hint_live: false;
+                                                        property <bool> hint_held: false;
+                                                        function hint_stop() {
+                                                            self.hint_live = false;
+                                                            if (self.hint_held) {
+                                                                self.hint_held = false;
+                                                                root.filters_pan_released();
+                                                            }
+                                                        }
+                                                        changed pressed => { if (!self.pressed) { self.hint_stop(); } }
+                                                        accessible-role: button;
+                                                        accessible-label: s.name;
+                                                        mouse-cursor: pointer;
+                                                        clicked => {
+                                                            if (touch_season.lp_suppress || touch_season.dragged) {
+                                                                touch_season.lp_suppress = false;
+                                                                touch_season.dragged = false;
+                                                            } else {
                                                                 root.kb_active = false;
                                                                 root.kb_zone = 3;
                                                                 root.kb_ci = 0;
                                                                 root.season_picked(i);
                                                             }
                                                         }
-                                                    }
-
-                                                touch_season := TouchArea {
-                                                    property <bool> lp_suppress: false;
-                                                    mouse-cursor: pointer;
-                                                    clicked => {
-                                                        if (touch_season.lp_suppress) {
-                                                            touch_season.lp_suppress = false;
-                                                        } else {
-                                                            root.kb_active = false;
-                                                            root.kb_zone = 3;
-                                                            root.kb_ci = 0;
-                                                            root.season_picked(i);
-                                                        }
-                                                    }
-                                                    pointer-event(ev) => {
-                                                        if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
-                                                            season_lp_timer.stop();
-                                                            if (root.touch_menus) {
-                                                                root.open_season_menu(i, s.watched);
-                                                            } else {
-                                                                season_ctx.show({ x: touch_season.mouse-x, y: touch_season.mouse-y });
-                                                            }
-                                                        } else if (ev.kind == PointerEventKind.down) {
-                                                            touch_season.lp_suppress = false;
-                                                            if (root.touch_menus) {
+                                                        pointer-event(ev) => {
+                                                            if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
                                                                 season_lp_timer.stop();
-                                                                season_lp_timer.start();
+                                                                if (root.touch_menus) {
+                                                                    root.open_season_menu(i, s.watched);
+                                                                } else {
+                                                                    season_ctx.show({ x: touch_season.mouse-x, y: touch_season.mouse-y });
+                                                                }
+                                                            } else if (ev.kind == PointerEventKind.down) {
+                                                                touch_season.lp_suppress = false;
+                                                                touch_season.dragged = false;
+                                                                self.hint_x = self.mouse-x;
+                                                                self.hint_y = self.mouse-y;
+                                                                self.hint_live = true;
+                                                                if (root.touch_menus) {
+                                                                    season_lp_timer.stop();
+                                                                    season_lp_timer.start();
+                                                                }
+                                                            } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                                                                season_lp_timer.stop();
+                                                                self.hint_stop();
+                                                            } else if (ev.kind == PointerEventKind.move && root.narrow) {
+                                                                // Decide the axis before the page captures a
+                                                                // slightly diagonal horizontal season swipe.
+                                                                if (!(self.pressed || ev.touch-finger-id != 0)) {
+                                                                    self.hint_stop();
+                                                                    return;
+                                                                }
+                                                                if (!self.hint_live) {
+                                                                    self.hint_x = self.mouse-x;
+                                                                    self.hint_y = self.mouse-y;
+                                                                    self.hint_live = true;
+                                                                }
+                                                                let dx = self.mouse-x - self.hint_x;
+                                                                let dy = self.mouse-y - self.hint_y;
+                                                                if (Math.abs(dy) > 8px && Math.abs(dy) > Math.abs(dx)) {
+                                                                    self.hint_stop();
+                                                                } else {
+                                                                    self.hint_held = true;
+                                                                    root.filters_panned();
+                                                                }
                                                             }
-                                                        } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
-                                                            season_lp_timer.stop();
+                                                        }
+                                                        moved => {
+                                                            if (Math.abs(touch_season.mouse-x - touch_season.pressed-x) + Math.abs(touch_season.mouse-y - touch_season.pressed-y) > 12px) {
+                                                                touch_season.dragged = true;
+                                                                season_lp_timer.stop();
+                                                            }
                                                         }
                                                     }
-                                                    moved => {
-                                                        if (Math.abs(touch_season.mouse-x - touch_season.pressed-x) + Math.abs(touch_season.mouse-y - touch_season.pressed-y) > 24px) {
-                                                            season_lp_timer.stop();
-                                                        }
                                                     }
-                                                }
-                                                }
 
-                                                // Hold-to-open timer (pinned off until a
-                                                // press arms it; see ep_lp_timer).
-                                                season_lp_timer := Timer {
-                                                    interval: 600ms;
-                                                    running: false;
-                                                    triggered => {
-                                                        self.stop();
-                                                        touch_season.lp_suppress = true;
-                                                        root.open_season_menu(i, s.watched);
+                                                    // Hold-to-open timer (pinned off until a
+                                                    // press arms it; see ep_lp_timer).
+                                                    season_lp_timer := Timer {
+                                                        interval: 600ms;
+                                                        running: false;
+                                                        triggered => {
+                                                            self.stop();
+                                                            touch_season.lp_suppress = true;
+                                                            root.open_season_menu(i, s.watched);
+                                                        }
                                                     }
                                                 }
                                             }

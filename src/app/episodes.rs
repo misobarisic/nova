@@ -366,12 +366,23 @@ pub(crate) fn episode_matches_filter(v: &Video, filter: &str) -> bool {
 pub(crate) fn season_label(season: u32) -> String {
     text::season_label(season)
 }
-/// Representative artwork for a season: the thumbnail of its first episode
-/// carrying one (episode order). Used for the season picker cards.
-pub(crate) fn season_thumb_url(videos: &[Video], season: u32) -> Option<String> {
-    season_episodes(videos, season)
-        .into_iter()
-        .find_map(|v| v.thumbnail.clone())
+/// Prefer the season's own backdrop; otherwise use its first episode's
+/// thumbnail (episode order, independent of the active episode/filter).
+pub(crate) fn season_thumb_url(
+    videos: &[Video],
+    backdrops: &HashMap<u32, String>,
+    season: u32,
+) -> Option<String> {
+    backdrops
+        .get(&season)
+        .filter(|url| !url.trim().is_empty())
+        .cloned()
+        .or_else(|| {
+            season_episodes(videos, season)
+                .first()
+                .and_then(|v| v.thumbnail.clone())
+                .filter(|url| !url.trim().is_empty())
+        })
 }
 /// Short badge for an episode card (e.g. "S1 E3"); falls back gracefully
 /// when the addon omits season or episode numbers.

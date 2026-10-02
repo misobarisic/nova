@@ -271,7 +271,7 @@ impl Bridge {
             };
             let mut urls = Vec::new();
             for &s in &m.seasons {
-                if let Some(url) = season_thumb_url(&m.videos, s)
+                if let Some(url) = season_thumb_url(&m.videos, &m.season_backdrops, s)
                     && !decoded_cache_contains(&sized_cache_key(&url, Some(EPISODE_THUMB_SIDE)))
                     && !urls.contains(&url)
                 {

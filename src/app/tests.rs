@@ -49,6 +49,41 @@ mod episode_helpers_tests {
     }
 
     #[test]
+    fn season_art_prefers_own_backdrop_then_first_episode_in_number_order() {
+        let mut videos = vec![
+            video("s1e2", Some(1), Some(2), "Two"),
+            video("s2e1", Some(2), Some(1), "Other season"),
+            video("s1e1", Some(1), Some(1), "One"),
+        ];
+        for v in &mut videos {
+            v.thumbnail = Some(format!("https://img/{}", v.id));
+        }
+        let backdrops = HashMap::from([(1, "https://img/season-one".into())]);
+        assert_eq!(
+            season_thumb_url(&videos, &backdrops, 1).as_deref(),
+            Some("https://img/season-one")
+        );
+        assert_eq!(
+            season_thumb_url(&videos, &backdrops, 2).as_deref(),
+            Some("https://img/s2e1")
+        );
+        assert_eq!(
+            season_thumb_url(&videos, &HashMap::new(), 1).as_deref(),
+            Some("https://img/s1e1")
+        );
+        assert_eq!(season_thumb_url(&videos, &backdrops, 3), None);
+
+        // Missing art on the first episode should not choose a later scene.
+        videos[2].thumbnail = Some(" ".into());
+        let blank = HashMap::from([(1, " ".into())]);
+        assert_eq!(season_thumb_url(&videos, &blank, 1), None);
+        assert_eq!(
+            season_thumb_url(&videos, &backdrops, 1).as_deref(),
+            Some("https://img/season-one")
+        );
+    }
+
+    #[test]
     fn row_label_collapses_interior_whitespace() {
         // Addon titles with line breaks would reserve multi-line card
         // height while painting one elided line (uneven grid rows).
@@ -883,6 +918,12 @@ mod meta_header_tests {
                 release_info: Some(serde_json::Value::String("2020".to_string())),
                 ..Default::default()
             },
+            extra: HashMap::from([(
+                "seasons".into(),
+                serde_json::json!([
+                    {"season":1, "background":"https://img/season-one"}
+                ]),
+            )]),
             ..Default::default()
         }
     }
@@ -894,6 +935,10 @@ mod meta_header_tests {
         assert_eq!(header.description, "A synopsis.");
         assert_eq!(header.genres, vec!["Drama".to_string()]);
         assert_eq!(header.year, "2020");
+        assert_eq!(
+            header.season_backdrops.get(&1).map(String::as_str),
+            Some("https://img/season-one")
+        );
     }
 
     #[test]

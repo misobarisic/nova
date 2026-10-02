@@ -23,6 +23,17 @@ fn after(ms: u64, body: impl FnOnce() + 'static) {
 /// the worst offenders for diagnostics.
 fn max_right_edge(app: &nova::AppWindow) -> (f32, Vec<String>) {
     use i_slint_backend_testing::{ElementHandle, ElementQuery};
+    // Season content deliberately extends inside its clipped horizontal
+    // viewport. Its offscreen cards must not count as whole-page overflow.
+    let rail = ElementHandle::find_by_element_id(app, "DetailPage::season_flick").next();
+    let rail_children = rail
+        .as_ref()
+        .map(|rail| {
+            rail.query_descendants()
+                .match_predicate(|_: &ElementHandle| true)
+                .find_all()
+        })
+        .unwrap_or_default();
     let mut all: Vec<(f32, f32, f32, String)> = ElementQuery::from_root(app)
         .match_predicate(|_: &ElementHandle| true)
         .find_all()
@@ -34,7 +45,15 @@ fn max_right_edge(app: &nova::AppWindow) -> (f32, Vec<String>) {
                 .type_name()
                 .map(|x| x.to_string())
                 .unwrap_or_else(|| "?".to_string());
-            (p.x + sz.width, p.x, sz.width, t)
+            let mut right = p.x + sz.width;
+            if let Some(rail) = rail.as_ref()
+                && rail_children.iter().any(|child| {
+                    child.id() == e.id() && child.absolute_position() == p && child.size() == sz
+                })
+            {
+                right = right.min(rail.absolute_position().x + rail.size().width);
+            }
+            (right, p.x, sz.width, t)
         })
         .collect();
     all.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
