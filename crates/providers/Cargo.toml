@@ -1,0 +1,26 @@
+[package]
+name = "nova-providers"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Normalized media providers and the bundled JavaScript source runtime"
+
+[dependencies]
+addons = { path = "../addons", default-features = false }
+aws-lc-rs = "1.18"
+base64 = "0.22"
+percent-encoding = "2"
+rquickjs = { version = "0.14.0", default-features = false, features = ["std"] }
+scraper = "0.24"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+url = "2"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+rquickjs = { version = "0.14.0", default-features = false, features = ["std", "bindgen"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws-lc-rs"] }
+webpki-roots = "1"

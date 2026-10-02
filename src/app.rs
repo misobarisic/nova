@@ -24,9 +24,10 @@ pub(crate) const OPEN_SOURCE_LICENSE_CATALOG: &str =
     include_str!(concat!(env!("OUT_DIR"), "/nova_license_catalog.txt"));
 
 pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
-    const WORKSPACE_CRATES: [&str; 10] = [
+    const WORKSPACE_CRATES: [&str; 11] = [
         "nova",
         "addons",
+        "nova-providers",
         "nova-ui",
         "nova-storage",
         "nova-config",
@@ -142,6 +143,12 @@ pub(crate) struct TypeDef {
 pub(crate) enum StreamSource {
     /// A direct URL (HLS/MP4/…) playable by mpv as-is.
     Url(String),
+    /// A direct URL with addon-supplied headers or external subtitles.
+    UrlWithOptions {
+        url: String,
+        headers: Vec<(String, String)>,
+        subtitles: Vec<String>,
+    },
     /// A torrent row (`infoHash` + optional `fileIdx`) that the embedded
     /// BitTorrent engine resolves to a loopback URL.
     #[allow(dead_code)]
@@ -153,6 +160,14 @@ pub(crate) enum StreamSource {
     Unsupported,
     /// A completed local download represented in the stream list.
     Downloaded { job_id: String, path: PathBuf },
+}
+
+/// Resolved playback target held while the user chooses whether to resume.
+#[derive(Clone)]
+pub(crate) struct PendingStream {
+    pub(crate) url: String,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) subtitles: Vec<String>,
 }
 
 /// One row shown in the modal's stream list.
@@ -217,6 +232,9 @@ struct Shared {
     streams: Vec<StreamUi>,
     /// Every stream returned for the current request, before filtering.
     stream_all: Vec<StreamUi>,
+    /// A metadata refresh can rerun the same episode with new stream aliases.
+    /// Older addon replies must not modify the new search's rows or pills.
+    stream_generation: u64,
     /// Labels of the addons shown as filter pills, in installed-addon order.
     /// Pending addons are included until they answer (then dropped if they
     /// returned nothing).
@@ -258,7 +276,7 @@ struct Shared {
     /// Episode currently playing (series flow); `None` for movies / idle.
     playback: Option<PlaybackTarget>,
     /// Resolved stream held while the user chooses whether to resume.
-    pending_resume_url: Option<String>,
+    pending_resume_stream: Option<PendingStream>,
     resume_prompt_choice: Option<bool>,
     /// Info hash of the torrent currently being streamed, if any. Set when a
     /// torrent resolves and opens the player; cleared when the player closes.

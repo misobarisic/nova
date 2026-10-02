@@ -223,19 +223,21 @@ impl Bridge {
         // carries its addon label so results can be grouped into pills.
         let stream_urls: Vec<(String, String)> = {
             let state = self.shared.lock().unwrap();
+            let lookup = state
+                .modal_item
+                .as_ref()
+                .and_then(|modal| source_stream_lookup(modal, &request_id));
+            let stream_ids = state
+                .modal_item
+                .as_ref()
+                .map(|modal| episode_stream_ids(modal, &request_id))
+                .unwrap_or_default();
             state
                 .installed
                 .iter()
-                .filter(|a| {
-                    a.enabled
-                        && a.manifest.has_streams()
-                        && (a.manifest.types.is_empty()
-                            || a.manifest.types.iter().any(|t| t == &modal_type))
-                })
                 .filter_map(|a| {
-                    Addon::new(&a.url)
-                        .ok()
-                        .map(|ad| (a.label.clone(), ad.stream_url(&modal_type, &request_id)))
+                    stream_endpoint(a, &modal_type, &request_id, lookup.as_ref(), &stream_ids)
+                        .map(|url| (a.label.clone(), url))
                 })
                 .collect()
         };
@@ -244,17 +246,19 @@ impl Bridge {
         let addon_count = requested.len();
         // Show one pill per addon being queried right away (spinner), then
         // drop each one that answers with no streams.
-        {
+        let generation = {
             let mut state = self.shared.lock().unwrap();
             if let Some(m) = state.modal_item.as_mut() {
                 m.request_id = request_id.clone();
             }
+            state.stream_generation = state.stream_generation.wrapping_add(1);
             state.streams.clear();
             state.stream_all.clear();
             state.stream_addons = requested.clone();
             state.stream_pending = requested.clone();
             state.stream_filter = 0;
-        }
+            state.stream_generation
+        };
         if let Some(app) = self.app() {
             app.set_stream_addons(
                 Rc::new(VecModel::from(
@@ -316,7 +320,7 @@ impl Bridge {
                 let addon2 = addon.clone();
                 let request_id2 = request_id.clone();
                 let _ = slint::invoke_from_event_loop(move || {
-                    bridge2.stream_addon_loaded(request_id2, addon2, new_rows);
+                    bridge2.stream_addon_loaded(request_id2, generation, addon2, new_rows);
                 });
             });
         }
@@ -358,12 +362,7 @@ impl Bridge {
             state
                 .installed
                 .iter()
-                .filter(|a| {
-                    a.enabled
-                        && a.manifest.has_meta()
-                        && (a.manifest.types.is_empty()
-                            || a.manifest.types.iter().any(|t| t == &modal_type))
-                })
+                .filter(|a| a.enabled && a.manifest.accepts("meta", &modal_type, &id))
                 .cloned()
                 .collect()
         };
@@ -677,6 +676,26 @@ impl Bridge {
         // Header upgrade applies regardless of the picker refresh guards.
         if let Some(item) = found.as_ref() {
             self.upgrade_detail_meta(&id, item, unfinished, refresh_images);
+            // Fresh stream aliases must reach an already-selected cached
+            // episode too, even when the picker itself stays in place.
+            let retry = {
+                let mut state = self.shared.lock().unwrap();
+                state.modal_item.as_mut().and_then(|modal| {
+                    let request_id = modal.request_id.clone();
+                    let before = episode_stream_ids(modal, &request_id);
+                    merge_episode_stream_ids(&mut modal.videos, &item.videos);
+                    (before != episode_stream_ids(modal, &request_id)).then_some(request_id)
+                })
+            };
+            if let Some(request_id) = retry
+                && self.app().is_some_and(|app| {
+                    app.get_modal_visible()
+                        && !app.get_player_open()
+                        && !app.get_episode_context().is_empty()
+                })
+            {
+                self.start_stream_search(request_id);
+            }
         }
         match found {
             Some(item) => {
@@ -771,20 +790,26 @@ impl Bridge {
     /// Main thread: swap fresh episode metadata into the open modal without
     /// moving the user. The selected season is kept (clamped when the fresh
     /// list no longer contains it), season names are repainted, and rows are
-    /// rebuilt in place — unlike `show_episode_picker`, the tab, the stream
-    /// list and the episode context are left alone. Thumbnail downloads for
-    /// the current season are re-queued by `refresh_episode_rows`.
+    /// rebuilt in place — unlike `show_episode_picker`, the tab and stream
+    /// list stay open. An already-picked episode receives its fresh caption
+    /// and thumbnail too, including corrected canonical season numbering.
+    /// Current-season thumbnails are re-queued by `refresh_episode_rows`.
     pub(super) fn update_episode_videos(&self, id: String, videos: Vec<Video>) {
         let seasons = ordered_seasons(&videos);
         if seasons.is_empty() {
             return; // never blank an open picker on a bad refresh
         }
-        let (season_names, season_idx) = {
+        let (season_names, season_idx, selected, thumbnail_changed) = {
             let mut state = self.shared.lock().unwrap();
             let m = match state.modal_item.as_mut() {
                 Some(m) if m.id == id => m,
                 _ => return,
             };
+            let old_thumbnail = m
+                .videos
+                .iter()
+                .find(|video| video.id == m.request_id)
+                .and_then(|video| video.thumbnail.clone());
             m.videos = videos;
             m.seasons = seasons;
             m.season_index = m.season_index.min(m.seasons.len() - 1);
@@ -794,11 +819,48 @@ impl Bridge {
                 .iter()
                 .map(|&s| SharedString::from(season_label(s)))
                 .collect::<Vec<_>>();
-            (names, idx)
+            let selected = m
+                .videos
+                .iter()
+                .find(|video| video.id == m.request_id)
+                .cloned();
+            let thumbnail_changed = selected.as_ref().and_then(|video| video.thumbnail.as_ref())
+                != old_thumbnail.as_ref();
+            (names, idx, selected, thumbnail_changed)
         };
         if let Some(app) = self.app() {
             app.set_season_names(Rc::new(VecModel::from(season_names)).into());
             app.set_season_combo_idx(season_idx as i32);
+            if !app.get_episode_context().is_empty()
+                && let Some(video) = selected
+            {
+                app.set_episode_context(SharedString::from(episode_context_label(&video)));
+                if thumbnail_changed
+                    && !app.get_player_open()
+                    && let Some(url) = video.thumbnail.filter(|url| !url.is_empty())
+                {
+                    let bridge = self.clone();
+                    net::fetch_image(url, None, move |pixels| {
+                        let Some(pixels) = pixels else {
+                            return;
+                        };
+                        let _ = slint::invoke_from_event_loop(move || {
+                            let current = bridge
+                                .shared
+                                .lock()
+                                .unwrap()
+                                .modal_item
+                                .as_ref()
+                                .is_some_and(|modal| {
+                                    modal.id == id && modal.request_id == video.id
+                                });
+                            if current && let Some(app) = bridge.app() {
+                                app.set_player_poster(Image::from_rgba8(pixels));
+                            }
+                        });
+                    });
+                }
+            }
         }
         self.apply_season_cards();
         self.dispatch_season_thumbs();
@@ -1907,17 +1969,13 @@ impl Bridge {
     pub(super) fn stream_addon_loaded(
         &self,
         request_id: String,
+        generation: u64,
         addon: String,
         new_rows: Vec<StreamUi>,
     ) {
         let (was_empty, addons, loading, searching, filter) = {
             let mut state = self.shared.lock().unwrap();
-            let matches = state
-                .modal_item
-                .as_ref()
-                .map(|m| m.request_id == request_id)
-                .unwrap_or(false);
-            if !matches {
+            if !stream_response_is_current(&state, &request_id, generation) {
                 return;
             }
             let was_empty = state.stream_all.is_empty();
@@ -2161,6 +2219,7 @@ impl Bridge {
     pub(super) fn clear_streams(&self) {
         {
             let mut state = self.shared.lock().unwrap();
+            state.stream_generation = state.stream_generation.wrapping_add(1);
             state.streams.clear();
             state.stream_all.clear();
             state.stream_addons.clear();
@@ -2216,6 +2275,22 @@ impl Bridge {
                 } else if !self.open_player(url.clone()) {
                     // Detached launch; the external app manages its own process.
                     let _ = crate::player::open_external(&url);
+                }
+            }
+            StreamSource::UrlWithOptions {
+                url,
+                headers,
+                subtitles,
+            } => {
+                if let Some(engine) = crate::torrent::engine() {
+                    engine.on_playback_stopped(&active_torrent_settings());
+                }
+                self.shared.lock().unwrap().active_torrent = None;
+                // Keep source headers and subtitle tracks together in mpv.
+                if !self.open_player_with_options(url, headers, subtitles) {
+                    self.set_stream_hint(Some(StreamHint::Fixed(
+                        "This stream requires the in-app player, which is unavailable.",
+                    )));
                 }
             }
             StreamSource::Torrent {
@@ -2341,6 +2416,430 @@ impl Bridge {
         if app.get_stream_action_open() {
             self.open_stream_action(app.get_stream_action_id().as_str());
         }
+    }
+}
+
+fn stream_response_is_current(state: &Shared, request_id: &str, generation: u64) -> bool {
+    state.stream_generation == generation
+        && state
+            .modal_item
+            .as_ref()
+            .is_some_and(|modal| modal.request_id == request_id)
+}
+
+fn stream_endpoint(
+    addon: &Installed,
+    media_type: &str,
+    request_id: &str,
+    lookup: Option<&nova_providers::StreamLookupRequest>,
+    stream_ids: &[String],
+) -> Option<String> {
+    if !addon.enabled || !addon.manifest.has_streams() {
+        return None;
+    }
+    // Contextual resolution is explicit for the bundled source. Its own
+    // manifest restrictions continue to protect normal meta/stream routing.
+    if addon.url == nova_providers::ANIKOTO_PROVIDER_URL && !request_id.starts_with("anikoto:") {
+        return nova_providers::builtin_stream_lookup_url(lookup?).ok();
+    }
+    let target_id = if addon.url != nova_providers::ANIKOTO_PROVIDER_URL
+        && request_id.starts_with("anikoto:")
+    {
+        // A source episode keeps its own library identity. Only the outbound
+        // addon request uses a canonical episode ID confirmed by the mapper.
+        stream_ids
+            .iter()
+            .find(|id| addon.manifest.accepts("stream", media_type, id))
+            .map(String::as_str)?
+    } else {
+        request_id
+    };
+    if !addon.manifest.accepts("stream", media_type, target_id) {
+        return None;
+    }
+    Some(
+        Addon::new(&addon.url)
+            .ok()?
+            .stream_url(media_type, target_id),
+    )
+}
+
+fn episode_stream_ids(modal: &ModalItem, request_id: &str) -> Vec<String> {
+    if !modal.id.starts_with("anikoto:") || !request_id.starts_with("anikoto:") {
+        return Vec::new();
+    }
+    modal
+        .videos
+        .iter()
+        .find(|video| video.id == request_id)
+        .and_then(|video| video.extra.get("novaStreamIds"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(16)
+        .filter_map(serde_json::Value::as_str)
+        .filter(|id| {
+            !id.is_empty()
+                && id.len() <= 1024
+                && !id.starts_with("anikoto:")
+                && !id.chars().any(char::is_control)
+        })
+        .map(String::from)
+        .collect()
+}
+
+fn merge_episode_stream_ids(existing: &mut [Video], fresh: &[Video]) {
+    let fresh = fresh
+        .iter()
+        .map(|video| (video.id.as_str(), video))
+        .collect::<std::collections::HashMap<_, _>>();
+    for video in existing
+        .iter_mut()
+        .filter(|video| video.id.starts_with("anikoto:"))
+    {
+        let Some(updated) = fresh.get(video.id.as_str()) else {
+            continue;
+        };
+        if let Some(ids) = updated.extra.get("novaStreamIds") {
+            video.extra.insert("novaStreamIds".into(), ids.clone());
+        } else {
+            video.extra.remove("novaStreamIds");
+        }
+    }
+}
+
+fn source_stream_lookup(
+    modal: &ModalItem,
+    request_id: &str,
+) -> Option<nova_providers::StreamLookupRequest> {
+    if modal.type_ != "series" || modal.id.starts_with("anikoto:") {
+        return None;
+    }
+    let video = modal.videos.iter().find(|video| video.id == request_id)?;
+    let season = video.season.filter(|season| (1..=100).contains(season))?;
+    let episode = video
+        .episode
+        .or(video.number)
+        .filter(|number| *number > 0)?;
+    // Addons disagree about season boundaries. Supply the verified metadata
+    // sequence as well as the local number so sources can align split cours.
+    // A missing season/episode must not silently shift every later episode.
+    let mut season_numbers =
+        std::collections::BTreeMap::<u32, std::collections::BTreeSet<u32>>::new();
+    let mut invalid_seasons = std::collections::BTreeSet::new();
+    for video in &modal.videos {
+        let Some(season) = video.season.filter(|season| *season > 0) else {
+            continue;
+        };
+        let numbers = season_numbers.entry(season).or_default();
+        if let Some(number) = video.episode_number().filter(|number| *number > 0) {
+            numbers.insert(number);
+        } else {
+            invalid_seasons.insert(season);
+        }
+    }
+    let season_counts = season_numbers
+        .iter()
+        .filter_map(|(&season, numbers)| {
+            let maximum = numbers.last().copied()?;
+            (maximum <= 10_000
+                && numbers.len() == maximum as usize
+                && !invalid_seasons.contains(&season))
+            .then_some((season, maximum))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let absolute_episode = (1..season).try_fold(episode, |total, previous| {
+        total.checked_add(*season_counts.get(&previous)?)
+    });
+    let last_season = season_numbers.keys().next_back().copied()?;
+    let series_episode_count =
+        if last_season <= 100 && modal.videos.iter().all(|video| video.season.is_some()) {
+            (1..=last_season).try_fold(0_u32, |total, season| {
+                total.checked_add(*season_counts.get(&season)?)
+            })
+        } else {
+            None
+        };
+    Some(nova_providers::StreamLookupRequest {
+        media_id: modal.id.clone(),
+        media_type: modal.type_.clone(),
+        title: modal.name.clone(),
+        year: (!modal.year.is_empty()).then(|| modal.year.clone()),
+        season,
+        episode,
+        absolute_episode,
+        season_episode_count: season_counts.get(&season).copied(),
+        series_episode_count,
+        episode_title: (!video.label().is_empty()).then(|| video.label()),
+        released: video.released.clone(),
+    })
+}
+
+#[cfg(test)]
+mod source_lookup_tests {
+    use super::*;
+
+    fn modal() -> ModalItem {
+        let mut videos = (1..=25)
+            .map(|number| Video {
+                id: format!("tt0994314:1:{number}"),
+                season: Some(1),
+                episode: Some(number),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        videos.push(Video {
+            id: "foreign-opaque-episode".into(),
+            name: "The Day a Demon Awakens".into(),
+            season: Some(2),
+            episode: Some(1),
+            released: Some("2008-04-06".into()),
+            ..Default::default()
+        });
+        ModalItem {
+            open_token: Arc::new(()),
+            pending_watch_now: None,
+            episodes_loading: false,
+            id: "tt0994314".into(),
+            type_: "series".into(),
+            request_id: "foreign-opaque-episode".into(),
+            videos,
+            seasons: vec![1, 2],
+            season_index: 1,
+            episode_page: 0,
+            name: "Code Geass".into(),
+            year: "2006–2008".into(),
+            poster_url: String::new(),
+            background_url: String::new(),
+            description: String::new(),
+            genres: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn foreign_library_episode_uses_contextual_source_route_and_keeps_original_ids() {
+        let modal = modal();
+        let lookup = source_stream_lookup(&modal, &modal.request_id).unwrap();
+        assert_eq!(lookup.media_id, "tt0994314");
+        assert_eq!(lookup.season, 2);
+        assert_eq!(lookup.episode, 1);
+        assert_eq!(lookup.absolute_episode, Some(26));
+        assert_eq!(lookup.season_episode_count, Some(1));
+        assert_eq!(lookup.series_episode_count, Some(26));
+        let mut addon = Installed {
+            url: nova_providers::ANIKOTO_PROVIDER_URL.into(),
+            label: "AniKoto".into(),
+            enabled: true,
+            configure_ok: Some(false),
+            manifest: nova_providers::builtin_manifest(),
+            available: true,
+            generation: 1,
+        };
+        assert!(
+            !addon
+                .manifest
+                .accepts("stream", "series", &modal.request_id)
+        );
+        let url = stream_endpoint(&addon, "series", &modal.request_id, Some(&lookup), &[]).unwrap();
+        assert!(url.starts_with("nova-provider://anikoto/resolve/series/"));
+        assert_eq!(modal.id, "tt0994314");
+        assert_eq!(modal.request_id, "foreign-opaque-episode");
+        assert!(stream_endpoint(&addon, "series", &modal.request_id, None, &[]).is_none());
+        addon.enabled = false;
+        assert!(stream_endpoint(&addon, "series", &modal.request_id, Some(&lookup), &[]).is_none());
+        addon.enabled = true;
+        addon.url = "https://example.com".into();
+        addon.manifest.id_prefixes.clear();
+        let url = stream_endpoint(&addon, "series", &modal.request_id, Some(&lookup), &[]).unwrap();
+        assert!(url.ends_with("/stream/series/foreign-opaque-episode.json"));
+    }
+
+    #[test]
+    fn native_source_episodes_use_confirmed_aliases_for_compatible_addons() {
+        let mut modal = modal();
+        modal.id = "anikoto:asterisk-season-2".into();
+        modal.request_id = "anikoto:ep:native-episode-1".into();
+        modal.videos = vec![Video {
+            id: modal.request_id.clone(),
+            season: Some(1),
+            episode: Some(1),
+            extra: std::collections::HashMap::from([(
+                "novaStreamIds".into(),
+                serde_json::json!(["kitsu:unsupported", "tt5095466:1:13"]),
+            )]),
+            ..Default::default()
+        }];
+        let ids = episode_stream_ids(&modal, &modal.request_id);
+        let mut addon = Installed {
+            url: "https://example.com/configured-addon".into(), label: "Streams".into(),
+            enabled: true, configure_ok: Some(false), available: true, generation: 1,
+            manifest: serde_json::from_value(serde_json::json!({"id":"streams", "name":"Streams", "version":"1", "types":["series"], "resources":["stream"], "idPrefixes":["tt"]})).unwrap(),
+        };
+        let url = stream_endpoint(&addon, "series", &modal.request_id, None, &ids).unwrap();
+        assert!(url.ends_with("/stream/series/tt5095466:1:13.json"));
+        assert!(stream_endpoint(&addon, "series", &modal.request_id, None, &[]).is_none());
+        addon.enabled = false;
+        assert!(stream_endpoint(&addon, "series", &modal.request_id, None, &ids).is_none());
+        addon.enabled = true;
+        addon.url = nova_providers::ANIKOTO_PROVIDER_URL.into();
+        addon.manifest = nova_providers::builtin_manifest();
+        let url = stream_endpoint(&addon, "series", &modal.request_id, None, &ids).unwrap();
+        assert!(url.ends_with("/stream/series/anikoto:ep:native-episode-1.json"));
+        assert_eq!(modal.videos[0].id, modal.request_id);
+        let round_trip: Video =
+            serde_json::from_slice(&serde_json::to_vec(&modal.videos[0]).unwrap()).unwrap();
+        assert_eq!(
+            round_trip.extra["novaStreamIds"],
+            modal.videos[0].extra["novaStreamIds"]
+        );
+    }
+
+    #[test]
+    fn aiostreams_and_torrentio_receive_slime_season_four_ids_from_native_episode_one() {
+        let mut modal = modal();
+        modal.id = "anikoto:slime-s4".into();
+        modal.request_id = "anikoto:ep:source-episode-one".into();
+        modal.videos = vec![Video {
+            id: modal.request_id.clone(),
+            season: Some(1),
+            episode: Some(1),
+            extra: std::collections::HashMap::from([(
+                "novaStreamIds".into(),
+                serde_json::json!(["tt9054364:4:1"]),
+            )]),
+            ..Default::default()
+        }];
+        let ids = episode_stream_ids(&modal, &modal.request_id);
+        for (name, url, prefixes) in [
+            (
+                "Torrentio",
+                "https://torrentio.strem.fun/providers=nyaasi",
+                vec!["tt", "kitsu"],
+            ),
+            (
+                "AIOStreams",
+                "https://aiostreams.example/configured-user/configured-addon",
+                vec!["tt", "kitsu:", "tmdb:"],
+            ),
+        ] {
+            let addon = Installed { url: url.into(), label: name.into(), enabled: true,
+                configure_ok: Some(false), available: true, generation: 1,
+                manifest: serde_json::from_value(serde_json::json!({"id":name, "name":name, "version":"1", "types":["movie","series","anime"],
+                    "resources":[{"name":"stream","types":["movie","series","anime"],"idPrefixes":prefixes}]})).unwrap() };
+            assert_eq!(
+                stream_endpoint(&addon, "series", &modal.request_id, None, &ids),
+                Some(format!("{url}/stream/series/tt9054364:4:1.json"))
+            );
+            assert!(stream_endpoint(&addon, "series", &modal.request_id, None, &[]).is_none());
+            let mut unrestricted = addon;
+            unrestricted.manifest.resources = vec![addons::Resource::Plain("stream".into())];
+            unrestricted.manifest.id_prefixes.clear();
+            assert!(
+                stream_endpoint(&unrestricted, "series", &modal.request_id, None, &[]).is_none(),
+                "unrestricted manifests must not get an unresolved private source ID"
+            );
+        }
+        assert_eq!(modal.request_id, "anikoto:ep:source-episode-one");
+        assert_eq!(modal.videos[0].season, Some(1));
+    }
+
+    #[test]
+    fn old_replies_cannot_remove_addon_pills_after_aliases_restart_the_same_episode() {
+        let mut modal = modal();
+        modal.id = "anikoto:slime-s4".into();
+        modal.request_id = "anikoto:ep:episode-one".into();
+        let state = Shared {
+            modal_item: Some(modal),
+            stream_generation: 3,
+            ..Default::default()
+        };
+        assert!(stream_response_is_current(
+            &state,
+            "anikoto:ep:episode-one",
+            3
+        ));
+        assert!(!stream_response_is_current(
+            &state,
+            "anikoto:ep:episode-one",
+            2
+        ));
+        assert!(!stream_response_is_current(
+            &state,
+            "anikoto:ep:episode-two",
+            3
+        ));
+    }
+
+    #[test]
+    fn fresh_aliases_update_cached_episodes_without_changing_picker_identity() {
+        let mut video = Video {
+            id: "anikoto:ep:source".into(),
+            season: Some(1),
+            episode: Some(1),
+            ..Default::default()
+        };
+        let mut fresh = video.clone();
+        fresh.extra.insert(
+            "novaStreamIds".into(),
+            serde_json::json!(["tt5095466:1:13"]),
+        );
+        merge_episode_stream_ids(
+            std::slice::from_mut(&mut video),
+            std::slice::from_ref(&fresh),
+        );
+        assert_eq!(video.extra["novaStreamIds"], fresh.extra["novaStreamIds"]);
+        assert_eq!(video.id, "anikoto:ep:source");
+        assert_eq!(video.episode, Some(1));
+        fresh.extra.clear();
+        merge_episode_stream_ids(std::slice::from_mut(&mut video), &[fresh]);
+        assert!(!video.extra.contains_key("novaStreamIds"));
+    }
+
+    #[test]
+    fn incomplete_seasons_do_not_guess_absolute_numbers_or_specials() {
+        let mut modal = modal();
+        modal.videos.remove(0);
+        assert_eq!(
+            source_stream_lookup(&modal, &modal.request_id)
+                .unwrap()
+                .absolute_episode,
+            None
+        );
+        assert!(source_stream_lookup(&modal, "missing").is_none());
+        modal.videos.last_mut().unwrap().season = Some(0);
+        assert!(source_stream_lookup(&modal, &modal.request_id).is_none());
+        modal.id = "anikoto:source".into();
+        assert!(source_stream_lookup(&modal, &modal.request_id).is_none());
+    }
+
+    #[test]
+    fn source_lookup_supplies_merged_season_counts_and_excludes_specials() {
+        let mut modal = modal();
+        modal.name = "The Asterisk War".into();
+        modal.videos.truncate(24);
+        modal.request_id = modal.videos[12].id.clone();
+        modal.videos.push(Video {
+            id: "special".into(),
+            season: Some(0),
+            episode: Some(1),
+            ..Default::default()
+        });
+        let lookup = source_stream_lookup(&modal, &modal.request_id).unwrap();
+        assert_eq!(lookup.absolute_episode, Some(13));
+        assert_eq!(lookup.season_episode_count, Some(24));
+        assert_eq!(lookup.series_episode_count, Some(24));
+        // Missing numbering or seasons cannot establish a series total.
+        modal.videos[3].episode = None;
+        let lookup = source_stream_lookup(&modal, &modal.request_id).unwrap();
+        assert_eq!(lookup.season_episode_count, None);
+        assert_eq!(lookup.series_episode_count, None);
+        modal.videos[3].season = Some(u32::MAX);
+        assert_eq!(
+            source_stream_lookup(&modal, &modal.request_id)
+                .unwrap()
+                .series_episode_count,
+            None
+        );
     }
 }
 

@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use reqwest::header::{ACCEPT_ENCODING, ETAG, HeaderMap, IF_RANGE, LAST_MODIFIED, RANGE};
+use reqwest::header::{
+    ACCEPT_ENCODING, ETAG, HeaderMap, HeaderName, HeaderValue, IF_RANGE, LAST_MODIFIED, RANGE,
+};
 use reqwest::{Client, Response, StatusCode, Url};
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
@@ -179,6 +181,7 @@ where
         return Err(DownloadError::Cancelled);
     }
     let url = validate_download_url(&request.url)?;
+    let headers = request.headers;
     let destination = request.destination;
     if destination.as_os_str().is_empty() {
         return Err(DownloadError::InvalidResponse(
@@ -208,7 +211,7 @@ where
         }
         let response = tokio::time::timeout(
             request_timeout,
-            send_request(client, &url, offset, &resume, &cancellation),
+            send_request(client, &url, offset, &resume, &headers, &cancellation),
         )
         .await
         .map_err(|_| {
@@ -502,9 +505,36 @@ async fn send_request(
     url: &Url,
     offset: u64,
     resume: &DownloadResume,
+    headers: &[(String, String)],
     cancellation: &CancellationToken,
 ) -> Result<Response, DownloadError> {
     let mut request = client.get(url.clone()).header(ACCEPT_ENCODING, "identity");
+    for (name, value) in headers.iter().take(16) {
+        let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
+            continue;
+        };
+        let lower_name = name.as_str();
+        if matches!(
+            lower_name,
+            "host"
+                | "content-length"
+                | "connection"
+                | "proxy-authorization"
+                | "accept-encoding"
+                | "range"
+                | "if-range"
+                | "transfer-encoding"
+                | "upgrade"
+                | "te"
+                | "trailer"
+        ) {
+            continue;
+        }
+        let Ok(value) = HeaderValue::from_str(value) else {
+            continue;
+        };
+        request = request.header(name, value);
+    }
     if offset > 0 {
         request = request.header(RANGE, format!("bytes={offset}-"));
         if let Some(validator) = resume
@@ -851,6 +881,51 @@ mod tests {
             socket.flush().await.unwrap();
         });
         (format!("http://{address}/file.mp4"), task)
+    }
+
+    #[tokio::test]
+    async fn forwards_provider_headers_and_keeps_transfer_headers_owned_by_downloader() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/file.mp4", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await.to_ascii_lowercase();
+            assert!(request.contains("referer: https://example.com/watch\r\n"));
+            assert!(request.contains("origin: https://example.com\r\n"));
+            assert!(request.contains("accept: video/mp4, application/octet-stream\r\n"));
+            assert!(request.contains("accept-encoding: identity\r\n"));
+            assert!(!request.contains("range: bytes=999-\r\n"));
+            assert!(!request.contains("injected:"));
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: 3\r\n\r\nabc",
+                )
+                .await
+                .unwrap();
+        });
+        let path = test_path("provider-headers");
+        let request = HttpDownloadRequest::new(url, &path).with_headers(vec![
+            ("Referer".into(), "https://example.com/watch".into()),
+            ("Origin".into(), "https://example.com".into()),
+            (
+                "Accept".into(),
+                "video/mp4, application/octet-stream".into(),
+            ),
+            ("Accept-Encoding".into(), "gzip".into()),
+            ("Range".into(), "bytes=999-".into()),
+            ("Bad".into(), "unsafe\r\nInjected: yes".into()),
+        ]);
+        download_http_with_request(
+            &new_http_client().unwrap(),
+            request,
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        server.await.unwrap();
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"abc");
+        tokio::fs::remove_file(path).await.unwrap();
     }
 
     #[tokio::test]

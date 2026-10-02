@@ -1318,6 +1318,65 @@ mod stream_source_tests {
     }
 
     #[test]
+    fn provider_headers_survive_stream_classification_and_reject_injection() {
+        let mut stream = stream(None, Some("https://example.com/video.mp4"), None, None);
+        stream.extra.insert(
+            "behaviorHints".into(),
+            serde_json::json!({"proxyHeaders":{"request":{
+                "Referer":"https://example.com/watch", "Accept":"video/mp4, */*",
+                "Host":"evil.test", "Bad":"injected\r\nHeader: value"
+            }}}),
+        );
+        let StreamSource::UrlWithOptions {
+            url,
+            headers,
+            subtitles,
+        } = stream_source(&stream)
+        else {
+            panic!("expected URL with headers")
+        };
+        assert_eq!(url, "https://example.com/video.mp4");
+        assert!(subtitles.is_empty());
+        assert_eq!(
+            headers,
+            vec![
+                ("Accept".into(), "video/mp4, */*".into()),
+                ("Referer".into(), "https://example.com/watch".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn external_subtitles_use_in_app_playback_and_reject_native_paths() {
+        let mut stream = stream(None, Some("https://example.com/master.m3u8"), None, None);
+        stream.subtitles = vec![
+            addons::Subtitle {
+                id: "eng".into(),
+                url: "https://example.com/sub,one.vtt".into(),
+                ..Default::default()
+            },
+            addons::Subtitle {
+                id: "file".into(),
+                url: "file:///tmp/native.vtt".into(),
+                ..Default::default()
+            },
+            addons::Subtitle {
+                id: "invalid".into(),
+                url: "https://example.com/sub\0.vtt".into(),
+                ..Default::default()
+            },
+        ];
+        let StreamSource::UrlWithOptions {
+            headers, subtitles, ..
+        } = stream_source(&stream)
+        else {
+            panic!("expected URL with subtitles")
+        };
+        assert!(headers.is_empty());
+        assert_eq!(subtitles, vec!["https://example.com/sub,one.vtt"]);
+    }
+
+    #[test]
     fn youtube_maps_to_watch_url() {
         match stream_source(&stream(None, None, Some("abc"), None)) {
             StreamSource::Url(u) => assert_eq!(u, "https://www.youtube.com/watch?v=abc"),

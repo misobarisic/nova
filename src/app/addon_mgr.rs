@@ -277,6 +277,10 @@ impl Bridge {
     /// page. A 404 (or any failure) simply leaves the Configure button
     /// hidden; the body is discarded.
     pub(super) fn probe_configure_page(&self, base: String) {
+        if base == nova_providers::ANIKOTO_PROVIDER_URL {
+            self.set_configure_state(&base, false);
+            return;
+        }
         let Some(generation) = self
             .shared
             .lock()

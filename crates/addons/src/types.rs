@@ -7,11 +7,22 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 fn default_false() -> bool {
     false
+}
+
+/// Optional metadata collections are sometimes explicitly null (Cinemeta's
+/// `director`, for example). Treat that as absent without relaxing IDs or
+/// accepting malformed non-null values.
+fn null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// The `manifest.json` document describing an addon.
@@ -60,6 +71,40 @@ impl Manifest {
 
     pub fn has_streams(&self) -> bool {
         self.has_resource("stream")
+    }
+
+    /// Match the resource's media types and opaque ID prefixes. Detailed
+    /// resource declarations have their own restrictions; plain declarations
+    /// inherit the manifest's restrictions, as specified by Stremio.
+    pub fn accepts(&self, resource: &str, type_: &str, id: &str) -> bool {
+        self.resources.iter().any(|entry| {
+            let name = entry.name();
+            if name != resource && !name.starts_with(&format!("{resource}/")) {
+                return false;
+            }
+            let (types, prefixes) = match entry {
+                Resource::Plain(_) => (self.types.clone(), &self.id_prefixes),
+                Resource::Detailed(detail) => (
+                    detail
+                        .extra
+                        .get("types")
+                        .and_then(Value::as_array)
+                        .map(|types| {
+                            types
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    &detail.id_prefixes,
+                ),
+            };
+            (types.is_empty() || types.iter().any(|kind| kind == type_))
+                && (resource == "catalog"
+                    || prefixes.is_empty()
+                    || prefixes.iter().any(|prefix| id.starts_with(prefix)))
+        })
     }
 
     /// The catalogs this addon declares for `type_` (e.g. `"movie"`).
@@ -146,7 +191,7 @@ pub struct CatalogExtra {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct MetaDetail {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub metas: Vec<MetaPreview>,
 }
 
@@ -172,7 +217,7 @@ pub struct MetaPreview {
     pub logo: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub genres: Vec<String>,
     /// Human-readable release info such as `"1994"` or `"2017-2018"`.
     /// Some addons send a number, so keep the raw value. (Some addons, e.g.
@@ -221,17 +266,17 @@ impl MetaPreview {
 pub struct MetaItem {
     #[serde(flatten)]
     pub preview: MetaPreview,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub videos: Vec<Video>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub cast: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub director: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub writer: Vec<String>,
     #[serde(default)]
     pub status: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub trailer_streams: Vec<Stream>,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -362,5 +407,64 @@ fn stringify(value: &Value) -> Option<String> {
         Value::String(s) => Some(s.clone()),
         Value::Number(n) => Some(n.to_string()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+
+    #[test]
+    fn nullable_optional_metadata_does_not_discard_valid_episodes() {
+        let meta = crate::Addon::parse_meta(br#"{"meta":{
+            "id":"tt0994314", "type":"series", "name":"Code Geass",
+            "genres":null, "cast":null, "director":null, "writer":null,
+            "trailerStreams":null,
+            "videos":[{"id":"tt0994314:1:1", "name":"The Day a New Demon Was Born", "season":1, "episode":1}]
+        }}"#).unwrap().unwrap();
+        assert!(meta.director.is_empty());
+        assert!(meta.preview.genres.is_empty());
+        assert_eq!(meta.videos[0].id, "tt0994314:1:1");
+        let catalog = crate::Addon::parse_catalog(
+            br#"{"metas":[{
+            "id":"tt0994314", "type":"series", "name":"Code Geass", "genres":null
+        }]}"#,
+        )
+        .unwrap();
+        assert_eq!(catalog[0].title(), "Code Geass");
+        assert!(
+            crate::Addon::parse_catalog(br#"{"metas":null}"#)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            crate::Addon::parse_meta(br#"{"meta":{"id":"tt1", "type":"series", "videos":null}}"#)
+                .unwrap()
+                .unwrap()
+                .videos
+                .is_empty()
+        );
+        assert!(
+            crate::Addon::parse_meta(
+                br#"{"meta":{"id":"tt1", "type":"series", "director":"invalid"}}"#
+            )
+            .is_err()
+        );
+        assert!(crate::Addon::parse_meta(br#"{"meta":{"id":null, "type":"series"}}"#).is_err());
+    }
+
+    #[test]
+    fn plain_resources_inherit_prefixes_and_detailed_resources_have_their_own() {
+        let manifest: Manifest = serde_json::from_value(serde_json::json!({
+            "id":"fixture", "name":"Fixture", "version":"1", "types":["series"], "idPrefixes":["anikoto:"],
+            "resources":["catalog", "meta", {"name":"stream", "types":["movie"], "idPrefixes":["tt"]}]
+        })).unwrap();
+        assert!(manifest.accepts("catalog", "series", "popular"));
+        assert!(manifest.accepts("meta", "series", "anikoto:opaque"));
+        assert!(!manifest.accepts("meta", "series", "tt123"));
+        assert!(!manifest.accepts("meta", "movie", "anikoto:opaque"));
+        assert!(manifest.accepts("stream", "movie", "tt123"));
+        assert!(!manifest.accepts("stream", "series", "tt123"));
+        assert!(!manifest.accepts("stream", "movie", "anikoto:opaque"));
     }
 }

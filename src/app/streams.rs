@@ -9,6 +9,15 @@ use super::*;
 /// and reports it as unsupported.
 pub(crate) fn stream_source(s: &addons::Stream) -> StreamSource {
     if let Some(url) = s.web_url() {
+        let headers = stream_request_headers(s);
+        let subtitles = stream_subtitle_files(s);
+        if !headers.is_empty() || !subtitles.is_empty() {
+            return StreamSource::UrlWithOptions {
+                url,
+                headers,
+                subtitles,
+            };
+        }
         return StreamSource::Url(url);
     }
     if let Some(info_hash) = s.info_hash.as_deref().filter(|h| !h.trim().is_empty()) {
@@ -18,6 +27,85 @@ pub(crate) fn stream_source(s: &addons::Stream) -> StreamSource {
         };
     }
     StreamSource::Unsupported
+}
+
+fn stream_subtitle_files(stream: &addons::Stream) -> Vec<String> {
+    let mut total_bytes = 0usize;
+    stream
+        .subtitles
+        .iter()
+        .take(20)
+        .filter_map(|subtitle| {
+            let url = &subtitle.url;
+            if !(url.starts_with("https://") || url.starts_with("http://"))
+                || url.len() > 4096
+                || url.bytes().any(|byte| byte < b' ' || byte == 127)
+            {
+                return None;
+            }
+            total_bytes += url.len();
+            (total_bytes <= 32 * 1024).then(|| url.clone())
+        })
+        .collect()
+}
+
+fn stream_request_headers(stream: &addons::Stream) -> Vec<(String, String)> {
+    let Some(request_headers) = stream
+        .extra
+        .get("behaviorHints")
+        .and_then(|hints| hints.get("proxyHeaders"))
+        .and_then(|proxy| proxy.get("request"))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+
+    let mut headers = Vec::new();
+    let mut total_bytes = 0usize;
+    for (name, value) in request_headers {
+        let Some(value) = value.as_str() else {
+            continue;
+        };
+        if !valid_request_header(name, value) {
+            continue;
+        }
+        total_bytes = total_bytes.saturating_add(name.len() + value.len());
+        if headers.len() >= 16 || total_bytes > 8 * 1024 {
+            break;
+        }
+        headers.push((name.clone(), value.to_owned()));
+    }
+    headers
+}
+
+fn valid_request_header(name: &str, value: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+        && value.len() <= 4096
+        && !value.bytes().any(|byte| byte < b' ' || byte == 127)
+        && !matches!(
+            name.to_ascii_lowercase().as_str(),
+            "host" | "content-length" | "connection" | "proxy-authorization"
+        )
 }
 /// Normalise an addon-supplied label/description: keep newlines (rows render
 /// multi-line) but collapse CRLF/CR and runs of blank lines, and trim the

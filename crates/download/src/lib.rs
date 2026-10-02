@@ -20,7 +20,11 @@ pub use http::{
 #[serde(rename_all = "lowercase")]
 pub enum DownloadSource {
     #[serde(alias = "Http")]
-    Http { url: String },
+    Http {
+        url: String,
+        #[serde(default)]
+        headers: Vec<(String, String)>,
+    },
     #[serde(alias = "Torrent")]
     Torrent {
         info_hash: String,
@@ -31,13 +35,26 @@ pub enum DownloadSource {
 
 impl Default for DownloadSource {
     fn default() -> Self {
-        Self::Http { url: String::new() }
+        Self::Http {
+            url: String::new(),
+            headers: Vec::new(),
+        }
     }
 }
 
 impl DownloadSource {
     pub fn http(url: impl Into<String>) -> Self {
-        Self::Http { url: url.into() }
+        Self::Http {
+            url: url.into(),
+            headers: Vec::new(),
+        }
+    }
+
+    pub fn http_with_headers(url: impl Into<String>, headers: Vec<(String, String)>) -> Self {
+        Self::Http {
+            url: url.into(),
+            headers,
+        }
     }
 
     pub fn torrent(info_hash: impl Into<String>, file_idx: Option<u32>) -> Self {
@@ -49,7 +66,14 @@ impl DownloadSource {
 
     pub fn url(&self) -> Option<&str> {
         match self {
-            Self::Http { url } => Some(url),
+            Self::Http { url, .. } => Some(url),
+            Self::Torrent { .. } => None,
+        }
+    }
+
+    pub fn headers(&self) -> Option<&[(String, String)]> {
+        match self {
+            Self::Http { headers, .. } => Some(headers),
             Self::Torrent { .. } => None,
         }
     }
@@ -163,6 +187,7 @@ impl DownloadJob {
             url: url.to_string(),
             destination: destination.into(),
             resume: (!resume.is_empty()).then_some(resume),
+            headers: self.source.headers().unwrap_or_default().to_vec(),
         })
     }
 
@@ -270,6 +295,7 @@ pub struct HttpDownloadRequest {
     pub url: String,
     pub destination: PathBuf,
     pub resume: Option<DownloadResume>,
+    pub headers: Vec<(String, String)>,
 }
 
 impl Default for HttpDownloadRequest {
@@ -278,6 +304,7 @@ impl Default for HttpDownloadRequest {
             url: String::new(),
             destination: PathBuf::new(),
             resume: None,
+            headers: Vec::new(),
         }
     }
 }
@@ -288,11 +315,17 @@ impl HttpDownloadRequest {
             url: url.into(),
             destination: destination.into(),
             resume: None,
+            headers: Vec::new(),
         }
     }
 
     pub fn with_resume(mut self, resume: DownloadResume) -> Self {
         self.resume = Some(resume);
+        self
+    }
+
+    pub fn with_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.headers = headers;
         self
     }
 
@@ -658,6 +691,24 @@ pub fn part_path(destination: impl AsRef<Path>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_http_jobs_default_headers_and_new_jobs_preserve_them() {
+        let source: DownloadSource =
+            serde_json::from_str(r#"{"http":{"url":"https://example.com/video.mp4"}}"#).unwrap();
+        assert_eq!(source.headers(), Some(&[][..]));
+        let headers = vec![("Referer".into(), "https://example.com/watch".into())];
+        let job = DownloadJob::new(
+            "headers",
+            DownloadSource::http_with_headers("https://example.com/video.mp4", headers.clone()),
+        );
+        let saved: DownloadJob =
+            serde_json::from_str(&serde_json::to_string(&job).unwrap()).unwrap();
+        assert_eq!(
+            saved.http_request("/tmp/video.mp4").unwrap().headers,
+            headers
+        );
+    }
 
     #[test]
     fn models_round_trip_and_defaults_are_stable() {

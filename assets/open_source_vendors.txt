@@ -7,7 +7,7 @@ terms. The following inventory covers native and asset components that are not
 represented by Cargo metadata.
 
 NOVA WORKSPACE CRATES
-All ten workspace packages share GPL-3.0-or-later and have clickable source
+All eleven workspace packages share GPL-3.0-or-later and have clickable source
 entries in Settings → About:
 - nova (root package, src/)
 - addons (crates/addons/)
@@ -17,6 +17,7 @@ entries in Settings → About:
 - nova-download (crates/download/)
 - nova-torrent (crates/torrent/)
 - nova-media (crates/media/)
+- nova-providers (crates/providers/)
 - nova-player (crates/player/)
 - nova-sync (crates/sync/)
 

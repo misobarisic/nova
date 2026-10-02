@@ -616,6 +616,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     for url in &extra {
         bridge.install_persisted(url, true, None, None);
     }
+    // Register this bundled-source generation once. Its ordinary addon row
+    // preserves disable/remove choices on subsequent launches.
+    if nova_storage::get_str("providers:bundled:v1").is_none() {
+        bridge.install_persisted(
+            nova_providers::ANIKOTO_PROVIDER_URL,
+            true,
+            Some(false),
+            Some("AniKoto".into()),
+        );
+        nova_storage::set_str("providers:bundled:v1", "1");
+    }
     bridge.shared.lock().unwrap().loading_addons = false;
     bridge.persist_installed();
 

@@ -168,6 +168,15 @@ impl Bridge {
     /// external player (ACTION_VIEW on Android, xdg-open elsewhere). Only ever
     /// runs on the main/UI thread.
     pub(super) fn open_player(&self, url: String) -> bool {
+        self.open_player_with_options(url, Vec::new(), Vec::new())
+    }
+
+    pub(super) fn open_player_with_options(
+        &self,
+        url: String,
+        headers: Vec<(String, String)>,
+        subtitles: Vec<String>,
+    ) -> bool {
         let resume_choice = self.shared.lock().unwrap().resume_prompt_choice.take();
         // Set the player title from the modal item before opening.
         let (title, series_id, request_id, is_episode, is_movie) = {
@@ -232,7 +241,11 @@ impl Bridge {
                 ..Default::default()
             });
             if ask && history_pos.is_some() && resume_choice.is_none() {
-                state.pending_resume_url = Some(url);
+                state.pending_resume_stream = Some(PendingStream {
+                    url,
+                    headers,
+                    subtitles,
+                });
                 if let Some(app) = self.app() {
                     app.set_resume_prompt_visible(true);
                 }
@@ -333,7 +346,10 @@ impl Bridge {
             }
         }
 
-        match self.player.play(&url, start_at) {
+        match self
+            .player
+            .play_with_options(&url, start_at, &headers, &subtitles)
+        {
             Ok(()) => true,
             Err(e) => {
                 eprintln!("nova: player unavailable: {e}");
@@ -343,21 +359,21 @@ impl Bridge {
     }
 
     pub(super) fn resume_prompt_choice(&self, resume: bool) {
-        let url = {
+        let pending_stream = {
             let mut state = self.shared.lock().unwrap();
-            state.pending_resume_url.take()
+            state.pending_resume_stream.take()
         };
         if let Some(app) = self.app() {
             app.set_resume_prompt_visible(false);
         }
-        if let Some(url) = url {
+        if let Some(stream) = pending_stream {
             self.shared.lock().unwrap().resume_prompt_choice = Some(resume);
-            let _ = self.open_player(url);
+            let _ = self.open_player_with_options(stream.url, stream.headers, stream.subtitles);
         }
     }
 
     pub(super) fn cancel_resume_prompt(&self) {
-        self.shared.lock().unwrap().pending_resume_url = None;
+        self.shared.lock().unwrap().pending_resume_stream = None;
         if let Some(app) = self.app() {
             app.set_resume_prompt_visible(false);
         }

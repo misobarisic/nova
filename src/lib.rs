@@ -24,6 +24,9 @@ pub use nova_player as player;
 // Durable stream download subsystem, its own leaf crate.
 pub use nova_download as download;
 
+// Normalized provider API and the bundled JavaScript source runtime.
+pub use nova_providers as providers;
+
 // Embedded BitTorrent streaming (librqbit), its own crate; re-exported so
 // `crate::torrent::…` keeps working unchanged.
 pub use nova_torrent as torrent;

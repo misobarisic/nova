@@ -50,7 +50,14 @@ mod imp {
     ) {
         std::thread::Builder::new()
             .name(format!("fetch {}", short_url(&url)))
-            .spawn(move || then(get_blocking(&url).map_err(|e| to_fetch_error(&url, e))))
+            .spawn(move || {
+                let result = if let Some(result) = nova_providers::fetch_builtin_addon(&url) {
+                    result.map_err(|error| FetchError::new(None, error.to_string()))
+                } else {
+                    get_blocking(&url).map_err(|error| to_fetch_error(&url, error))
+                };
+                then(result);
+            })
             .expect("spawn fetch thread");
     }
 
@@ -340,6 +347,9 @@ mod imp {
     }
 
     fn get_with_retries(url: &str) -> Result<Vec<u8>, FetchError> {
+        if let Some(result) = nova_providers::fetch_builtin_addon(url) {
+            return result.map_err(|error| FetchError::new(None, error.to_string()));
+        }
         let mut retries = 0usize;
         loop {
             match get_once(url) {

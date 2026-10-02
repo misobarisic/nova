@@ -1,0 +1,26 @@
+{
+  "formatVersion": 1,
+  "id": "anikoto",
+  "name": "AniKoto",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "permissions": {
+    "domains": [
+      "anikototv.to",
+      "anikoto.bz",
+      "anikoto.cz",
+      "anikoto.me",
+      "anikoto.net",
+      "anikototv.se",
+      "mapper.nekostream.site",
+      "megaplay.buzz",
+      "mewcdn.online"
+    ]
+  },
+  "limits": {
+    "requestTimeoutMs": 30000,
+    "responseBytes": 2097152,
+    "redirects": 5,
+    "requestsPerOperation": 32
+  }
+}

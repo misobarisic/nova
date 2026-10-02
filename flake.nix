@@ -193,6 +193,7 @@
             # artifacts to fetch.
             cargo-apk2
             pkgsAndroid.cargo-about
+            pkgs.llvmPackages.libclang
             toolchain
           ];
           # cargo-apk2 does not use Gradle, so no aapt2 override is needed.
@@ -204,6 +205,7 @@
             # First (only) pinned NDK, robust to version drift.
             export ANDROID_NDK_ROOT="$(echo "$ANDROID_HOME"/ndk/* | cut -d' ' -f1)"
             export JAVA_HOME="${pkgsAndroid.jdk17}"
+            export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
             export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
             # NDK clang as the cargo linker for Android targets. The NDK
             # lives in the nix store, so this cannot be checked into

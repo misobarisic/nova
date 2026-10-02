@@ -1143,6 +1143,9 @@ impl Bridge {
             None => {
                 let downloadable = match &stream.source {
                     StreamSource::Url(url) => !crate::download::is_manifest_url(url),
+                    StreamSource::UrlWithOptions { url, .. } => {
+                        !crate::download::is_manifest_url(url)
+                    }
                     StreamSource::Torrent { .. } => true,
                     StreamSource::Unsupported | StreamSource::Downloaded { .. } => false,
                 };
@@ -1215,9 +1218,11 @@ impl Bridge {
             )));
             return;
         }
-        if let StreamSource::Url(url) = &stream.source
-            && crate::download::is_manifest_url(url)
-        {
+        let url = match &stream.source {
+            StreamSource::Url(url) | StreamSource::UrlWithOptions { url, .. } => Some(url),
+            _ => None,
+        };
+        if url.is_some_and(|url| crate::download::is_manifest_url(url)) {
             self.set_stream_hint(Some(StreamHint::Fixed(
                 "HLS, DASH, and YouTube streams cannot be downloaded here.",
             )));
@@ -1244,6 +1249,9 @@ impl Bridge {
         };
         let source = match &stream.source {
             StreamSource::Url(url) => JobSource::http(url.clone()),
+            StreamSource::UrlWithOptions { url, headers, .. } => {
+                JobSource::http_with_headers(url.clone(), headers.clone())
+            }
             StreamSource::Torrent {
                 info_hash,
                 file_idx,

@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 nova-config = { path = "../config" }
+nova-providers = { path = "../providers" }
 slint = { workspace = true }
 # Image decode: desktop cache pipeline and Android fetch path; keep only artwork
 # formats used by the app.

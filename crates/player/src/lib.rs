@@ -36,6 +36,100 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+fn mpv_http_header_fields(headers: &[(String, String)]) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut total_bytes = 0usize;
+    for (name, value) in headers.iter().take(16) {
+        let valid_name = !name.is_empty()
+            && name.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(
+                        byte,
+                        b'!' | b'#'
+                            | b'$'
+                            | b'%'
+                            | b'&'
+                            | b'\''
+                            | b'*'
+                            | b'+'
+                            | b'-'
+                            | b'.'
+                            | b'^'
+                            | b'_'
+                            | b'`'
+                            | b'|'
+                            | b'~'
+                    )
+            });
+        if !valid_name
+            || value.bytes().any(|byte| byte < b' ' || byte == 127)
+            || matches!(
+                name.to_ascii_lowercase().as_str(),
+                "host" | "content-length" | "connection" | "proxy-authorization"
+            )
+        {
+            continue;
+        }
+        let size = name.len().saturating_add(value.len()).saturating_add(2);
+        if total_bytes.saturating_add(size) > 8 * 1024 {
+            break;
+        }
+        total_bytes += size;
+        fields.push(format!("{name}: {value}"));
+    }
+    fields
+}
+
+fn set_http_header_fields(mpv: &Mpv, headers: &[(String, String)]) -> libmpv2::Result<()> {
+    set_string_list(mpv, c"http-header-fields", mpv_http_header_fields(headers))
+}
+
+fn set_string_list(
+    mpv: &Mpv,
+    property: &std::ffi::CStr,
+    fields: Vec<String>,
+) -> libmpv2::Result<()> {
+    use libmpv2_sys::{mpv_node, mpv_node__bindgen_ty_1, mpv_node_list};
+    let fields = fields
+        .into_iter()
+        .map(std::ffi::CString::new)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut values = fields
+        .iter()
+        .map(|field| mpv_node {
+            format: libmpv2::mpv_format::String,
+            u: mpv_node__bindgen_ty_1 {
+                string: field.as_ptr().cast_mut(),
+            },
+        })
+        .collect::<Vec<_>>();
+    let mut list = mpv_node_list {
+        num: values.len() as c_int,
+        values: values.as_mut_ptr(),
+        keys: std::ptr::null_mut(),
+    };
+    let mut node = mpv_node {
+        format: libmpv2::mpv_format::Array,
+        u: mpv_node__bindgen_ty_1 { list: &mut list },
+    };
+    // A node array preserves commas and backslashes inside list values.
+    // The synchronous API copies the strings; all pointers remain valid for
+    // this call, and mpv must not free the memory owned by these Rust values.
+    let status = unsafe {
+        libmpv2_sys::mpv_set_property(
+            mpv.ctx.as_ptr(),
+            property.as_ptr(),
+            libmpv2::mpv_format::Node,
+            (&mut node as *mut mpv_node).cast(),
+        )
+    };
+    if status < 0 {
+        Err(libmpv2::Error::Raw(status))
+    } else {
+        Ok(())
+    }
+}
+
 // Android-only helpers that live outside mpv (JNI glue).
 #[cfg(target_os = "android")]
 mod external;
@@ -827,6 +921,10 @@ struct State {
     /// must have its render context attached before the file is loaded, or
     /// early frames would be dropped).
     pending: Mutex<Option<String>>,
+    /// Request headers paired with the queued URL. Consumed with `pending`.
+    pending_headers: Mutex<Vec<(String, String)>>,
+    /// External subtitle files to load with the next stream.
+    pending_subtitles: Mutex<Vec<String>>,
     /// Playback of the current session actually produced frames.
     started: AtomicBool,
     /// The OSD thumb (or a programmatic seek) moved ahead of mpv and a seek is
@@ -843,6 +941,11 @@ struct State {
     /// produced frames can be reloaded with the next decoder in the chain.
     #[cfg(target_os = "android")]
     last_url: Mutex<Option<String>>,
+    /// Android decoder and surface reloads need the same source headers.
+    #[cfg(target_os = "android")]
+    last_headers: Mutex<Vec<(String, String)>>,
+    #[cfg(target_os = "android")]
+    last_subtitles: Mutex<Vec<String>>,
     /// Android: start position to apply to the next queued `loadfile`. mpv's
     /// global `start` option is only honored for the first load, so a runtime
     /// decoder switch passes the resume point through the loadfile's own
@@ -1018,6 +1121,8 @@ impl Player {
             mpv_error: Mutex::new(mpv_error),
             underlay: Mutex::new(None),
             pending: Mutex::new(None),
+            pending_headers: Mutex::new(Vec::new()),
+            pending_subtitles: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),
             seek_pending: AtomicBool::new(false),
             reported: AtomicBool::new(false),
@@ -1025,6 +1130,10 @@ impl Player {
             app: app.as_weak(),
             #[cfg(target_os = "android")]
             last_url: Mutex::new(None),
+            #[cfg(target_os = "android")]
+            last_headers: Mutex::new(Vec::new()),
+            #[cfg(target_os = "android")]
+            last_subtitles: Mutex::new(Vec::new()),
             #[cfg(target_os = "android")]
             pending_start: Mutex::new(None),
             #[cfg(target_os = "android")]
@@ -1200,11 +1309,27 @@ impl Player {
 
                         // Start playback of a freshly picked stream.
                         if let Some(url) = notifier_state.pending.lock().unwrap().take() {
+                            let headers = notifier_state
+                                .pending_headers
+                                .lock()
+                                .unwrap()
+                                .drain(..)
+                                .collect::<Vec<_>>();
+                            let subtitles = notifier_state
+                                .pending_subtitles
+                                .lock()
+                                .unwrap()
+                                .drain(..)
+                                .collect::<Vec<_>>();
                             #[cfg(target_os = "android")]
                             let start = notifier_state.pending_start.lock().unwrap().take();
                             if let Ok(mpv) = notifier_state.mpv.lock()
                                 && let Some(mpv) = mpv.as_ref()
                             {
+                                // mpv reads this option when opening the URL;
+                                // set it before every initial or reloaded file.
+                                let _ = set_http_header_fields(mpv, &headers);
+                                let _ = set_string_list(mpv, c"sub-files", subtitles);
                                 // Android decoder reloads pass the resume
                                 // point as a per-file option: the global
                                 // `start` property is only honored for the
@@ -1321,6 +1446,27 @@ impl Player {
     /// backends). Returns `Err` when mpv isn't usable, so the caller can
     /// fall back to an external player.
     pub fn play(&self, url: &str, start_pos_secs: f64) -> Result<(), String> {
+        self.play_with_headers(url, start_pos_secs, &[])
+    }
+
+    /// Queue playback with request headers required by the stream source.
+    pub fn play_with_headers(
+        &self,
+        url: &str,
+        start_pos_secs: f64,
+        headers: &[(String, String)],
+    ) -> Result<(), String> {
+        self.play_with_options(url, start_pos_secs, headers, &[])
+    }
+
+    /// Queue source headers and subtitle files before loading a stream.
+    pub fn play_with_options(
+        &self,
+        url: &str,
+        start_pos_secs: f64,
+        headers: &[(String, String)],
+        subtitles: &[String],
+    ) -> Result<(), String> {
         if let Some(err) = self.state.mpv_error.lock().unwrap().as_ref() {
             return Err(err.clone());
         }
@@ -1329,12 +1475,29 @@ impl Player {
         };
 
         *self.state.pending.lock().unwrap() = Some(url.to_string());
+        *self.state.pending_headers.lock().unwrap() = headers.to_vec();
+        let mut subtitle_bytes = 0usize;
+        let subtitles = subtitles
+            .iter()
+            .take(20)
+            .filter(|url| {
+                subtitle_bytes += url.len();
+                subtitle_bytes <= 32 * 1024
+                    && url.len() <= 4096
+                    && (url.starts_with("https://") || url.starts_with("http://"))
+                    && !url.bytes().any(|byte| byte < b' ' || byte == 127)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        *self.state.pending_subtitles.lock().unwrap() = subtitles.clone();
         #[cfg(target_os = "android")]
         {
             // Keep the URL for a decoder fallback reload; then arm the chain
             // from the user's Settings → Player preference. A new stream drops
             // any runtime override the previous stream picked.
             *self.state.last_url.lock().unwrap() = Some(url.to_string());
+            *self.state.last_headers.lock().unwrap() = headers.to_vec();
+            *self.state.last_subtitles.lock().unwrap() = subtitles;
             *self.state.last_hwdec_log.lock().unwrap() = String::from("<unset>");
             *self.state.session_hwdec.lock().unwrap() = None;
             self.state.hwdec_checked.store(false, Ordering::SeqCst);
@@ -1670,9 +1833,13 @@ impl Player {
             let _ = mpv.command("stop", &[]);
         }
         *self.state.pending.lock().unwrap() = None;
+        self.state.pending_headers.lock().unwrap().clear();
+        self.state.pending_subtitles.lock().unwrap().clear();
         #[cfg(target_os = "android")]
         {
             *self.state.last_url.lock().unwrap() = None;
+            self.state.last_headers.lock().unwrap().clear();
+            self.state.last_subtitles.lock().unwrap().clear();
             *self.state.session_hwdec.lock().unwrap() = None;
         }
         self.state.started.store(false, Ordering::SeqCst);
@@ -1994,6 +2161,11 @@ impl Player {
     /// takes it).
     #[cfg(target_os = "android")]
     fn hand_off_to_external_player(&self) -> bool {
+        if !self.state.last_headers.lock().unwrap().is_empty()
+            || !self.state.last_subtitles.lock().unwrap().is_empty()
+        {
+            return false;
+        }
         let Some(url) = self.state.last_url.lock().unwrap().clone() else {
             return false;
         };
@@ -2265,6 +2437,10 @@ impl Player {
         let Some(url) = self.state.last_url.lock().unwrap().clone() else {
             return false;
         };
+        *self.state.pending_headers.lock().unwrap() =
+            self.state.last_headers.lock().unwrap().clone();
+        *self.state.pending_subtitles.lock().unwrap() =
+            self.state.last_subtitles.lock().unwrap().clone();
         *self.state.pending_start.lock().unwrap() = resume_at.map(|p| p.max(0.0));
         // Re-arm the load: the `BeforeRendering` handler picks `pending` up
         // and reloads at the queued start.
@@ -2304,6 +2480,46 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn header_fields_preserve_commas_backslashes_and_clear_between_streams() {
+        let fields = mpv_http_header_fields(&[
+            ("Accept".into(), "video/mp4, */*".into()),
+            ("Cookie".into(), "value=one\\two".into()),
+            ("Bad".into(), "value\r\nInjected: yes".into()),
+            ("Host".into(), "evil.test".into()),
+        ]);
+        assert_eq!(
+            fields,
+            vec!["Accept: video/mp4, */*", "Cookie: value=one\\two"]
+        );
+        assert!(mpv_http_header_fields(&[]).is_empty());
+        // Exercise mpv's node-array setter without creating a window/video.
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_property("config", false)?;
+            init.set_property("vo", "null")?;
+            init.set_property("ao", "null")
+        })
+        .unwrap();
+        set_http_header_fields(&mpv, &[("Accept".into(), "video/mp4, */*".into())]).unwrap();
+        assert_eq!(
+            mpv.get_property::<String>("http-header-fields").unwrap(),
+            "Accept: video/mp4, */*"
+        );
+        set_http_header_fields(&mpv, &[]).unwrap();
+        assert_eq!(
+            mpv.get_property::<String>("http-header-fields").unwrap(),
+            ""
+        );
+        let subtitles = vec!["https://example.com/sub,one.vtt".to_owned()];
+        set_string_list(&mpv, c"sub-files", subtitles).unwrap();
+        assert_eq!(
+            mpv.get_property::<String>("sub-files").unwrap(),
+            "https://example.com/sub,one.vtt"
+        );
+        set_string_list(&mpv, c"sub-files", Vec::new()).unwrap();
+        assert_eq!(mpv.get_property::<String>("sub-files").unwrap(), "");
+    }
 
     /// The bundled-font unpack must not rewrite a file of the same size (so a
     /// normal start reuses it) but must rewrite on a size change (app update).

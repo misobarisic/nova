@@ -112,6 +112,9 @@ pub fn tr(english: &'static str) -> &'static str {
         "Loading streams…" => "Učitavanje zapisa…",
         "No streams found." => "Nema pronađenih zapisa.",
         "This stream cannot be played here." => "Ovaj se zapis ovdje ne može reproducirati.",
+        "This stream requires the in-app player, which is unavailable." => {
+            "Za ovaj zapis potreban je ugrađeni reproduktor, koji nije dostupan."
+        }
         "This download is not complete yet." => "Preuzimanje još nije dovršeno.",
         // ---- Catalog / addons ------------------------------------------
         "No results for this selection." => "Nema rezultata za ovaj odabir.",

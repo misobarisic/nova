@@ -552,6 +552,7 @@ impl Bridge {
             .map(|(type_, id)| {
                 let urls: Vec<String> = installed
                     .iter()
+                    .filter(|cand| cand.manifest.accepts("meta", type_, id))
                     .filter_map(|cand| Addon::new(&cand.url).ok())
                     .map(|a| a.meta_url(type_, id))
                     .collect();

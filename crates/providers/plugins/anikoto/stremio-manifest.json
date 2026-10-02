@@ -1,0 +1,32 @@
+{
+  "id": "nova.anikoto",
+  "version": "1.0.0",
+  "name": "AniKoto",
+  "description": "AniKoto anime catalogs, search, and video streams",
+  "resources": ["catalog", "meta", "stream"],
+  "types": ["series"],
+  "idPrefixes": ["anikoto:"],
+  "catalogs": [
+    {
+      "type": "series",
+      "id": "anikoto.popular",
+      "name": "AniKoto Popular",
+      "extra": [{"name": "skip"}]
+    },
+    {
+      "type": "series",
+      "id": "anikoto.latest",
+      "name": "AniKoto Latest",
+      "extra": [{"name": "skip"}]
+    },
+    {
+      "type": "series",
+      "id": "anikoto.search",
+      "name": "AniKoto Search",
+      "extra": [
+        {"name": "search", "isRequired": true},
+        {"name": "skip"}
+      ]
+    }
+  ]
+}
