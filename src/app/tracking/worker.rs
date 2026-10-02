@@ -8,12 +8,38 @@ use nova_tracking::{
 };
 use std::num::{NonZeroU32, NonZeroU64};
 const CLIENTS_KEY: &str = "tracking:clients:v1";
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Registrations {
     mal: ClientRegistration,
     anilist: ClientRegistration,
 }
+impl Default for Registrations {
+    fn default() -> Self {
+        Self {
+            mal: ClientRegistration {
+                client_id: "16888e1f2e47945363e81e7a19d16cc8".into(),
+                redirect_uri: "http://127.0.0.1:53926/callback".into(),
+            },
+            anilist: ClientRegistration {
+                client_id: "52547".into(),
+                redirect_uri: "https://anilist.co/api/v2/oauth/pin".into(),
+            },
+        }
+    }
+}
 impl Registrations {
+    // Older settings may contain an empty card for the service that was never
+    // configured. Fill only those cards; keep explicit registrations intact.
+    fn fill_defaults(mut self) -> Self {
+        let defaults = Self::default();
+        if self.mal.client_id.is_empty() {
+            self.mal = defaults.mal;
+        }
+        if self.anilist.client_id.is_empty() {
+            self.anilist = defaults.anilist;
+        }
+        self
+    }
     fn get(&self, s: Service) -> &ClientRegistration {
         match s {
             Service::MyAnimeList => &self.mal,
@@ -171,7 +197,7 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
         Err(_) => return,
     };
     let registrations = match read_json_result::<Registrations>(CLIENTS_KEY) {
-        Ok(Some(r)) => r,
+        Ok(Some(r)) => r.fill_defaults(),
         Ok(None) => Registrations::default(),
         Err(_) => {
             if let Ok(Some(raw)) = storage::try_get_str(CLIENTS_KEY) {

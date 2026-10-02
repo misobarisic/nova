@@ -12,10 +12,10 @@ tracking database. Reconnect after restarting Nova; links and queued edits remai
 Only one account is active per service. Switching accounts retains the previous
 account's links but does not send its work as the new account.
 
-Until Nova has public application registrations, the connection form accepts a
-public client ID and its exact registered redirect URL. Never enter a client
-secret. MAL uses a public/native application, plain PKCE, and a loopback redirect
-such as `http://127.0.0.1:53926/callback`. The port must be available locally.
+Nova includes its public application IDs and redirect URLs as defaults.
+Existing custom registrations remain available in the connection form. Never
+enter a client secret. MAL uses a public/native application, plain PKCE, and a
+loopback redirect such as `http://127.0.0.1:53926/callback`. The port must be available locally.
 AniList supports a loopback implicit callback or its documented PIN redirect
 `https://anilist.co/api/v2/oauth/pin`. For PIN sign-in, paste the browser's token
 into the password field and finish sign-in. A loopback return can also be pasted
@@ -105,6 +105,6 @@ It does not reset Nova history or remote tracker lists.
 Tracking records, credentials, cached metadata, and pending work are device-local.
 Paired-device watched changes update checkpoints but do not authorize uploads.
 Remote tracker values never import library membership or mark Nova episodes watched.
-Live desktop/Android sign-in and real account mutations still need registered
-public client IDs and interactive verification; fixture and headless UI tests do
-not substitute for that final validation.
+Live sign-in and real account mutations still require interactive verification
+with the registered applications; fixture and headless UI tests do not substitute
+for that final validation.

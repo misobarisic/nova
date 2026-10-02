@@ -3,7 +3,7 @@
 Date: 2026-10-02\
 Target repository: [misobarisic/nova](https://github.com/misobarisic/nova)\
 Reviewed snapshot: [b014b98c233f29814ced15401ca0a00cff052918](https://github.com/misobarisic/nova/tree/b014b98c233f29814ced15401ca0a00cff052918)\
-Status: both service adapters, native authorization, application delivery, settings/detail UI, explicit alignment/repair, manual edits and local recovery implemented. Public client registration and live platform/account validation remain pending at the user's request.
+Status: both service adapters, native authorization, application delivery, settings/detail UI, explicit alignment/repair, manual edits and local recovery implemented. Public MAL/AniList client registrations are configured; live platform/account validation remains pending.
 
 ### Implementation progress (2026-10-02)
 
@@ -44,9 +44,8 @@ Tracker fixture/domain tests and the headless phone UI regression cover auth,
 field omission, wrong-account rejection, restart recovery, decreases, cooldowns,
 coverage, explicit history confirmation and sheet-first Back. `cargo test --workspace --locked -j 1` passed: 423 tests, including 147 app
 unit tests, 56 tracking tests and the tracking/settings headless regressions. Android and Windows build
-checks are excluded from this validation run at the user's request. Public client IDs/redirects
-and live desktop/Android browser return/account mutations are the final external
-validation gate, to be completed after implementation as requested by the user.
+checks are excluded from this validation run at the user's request. Public client IDs and the recommended redirects are now bundled defaults; live
+browser return and account mutations remain the final interactive validation gate.
 See [implemented tracking behavior](docs/tracking.md).
 
 ## 1. Goal and agreed scope
@@ -803,7 +802,7 @@ Do not label every failure “sync failed” when an alignment correction or acc
 ### Phase 0 — Contracts and platform feasibility
 
 - [x] Verify current AniList and MAL search, per-entry read, write, authentication, score, and date contracts.
-- [ ] Register Nova application/client identifiers and choose supported callback flows.
+- [x] Register Nova application/client identifiers and choose supported callback flows (MAL loopback / AniList PIN; public IDs supplied by the user).
 - [ ] Validate desktop and Android callback handling with minimal prototypes.
 - [ ] Validate persistent secret storage on supported targets, with a session-only fallback if needed.
 - [x] Inventory every local progress mutation path and storage transaction boundary.
