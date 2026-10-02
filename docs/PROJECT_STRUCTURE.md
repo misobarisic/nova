@@ -80,6 +80,8 @@ Cargo aliases live in `.cargo/config.toml`. Android linkers come from the
 `.#android` dev shell env vars (see `.cargo/config.toml` comments); that shell
 also provides `cargo-apk2` (packaged by the flake) and unsets `CPATH` (the
 stdenv's host include path, which the NDK clang would otherwise pick up).
+Target-specific `BINDGEN_EXTRA_CLANG_ARGS_*` also pass the NDK sysroot and API
+26 target to host libclang when generating Android bindings.
 
 **Features** (root `Cargo.toml`):
 - `desktop` (default): enables Slint's Winit/FemtoVG backend.
@@ -150,7 +152,8 @@ nova/
 
 `nova` and `nova-media` also depend on `nova-providers`, which depends on
 `addons`, `reqwest` (blocking HTTPS), `scraper`, and `rquickjs`/QuickJS. Android
-enables QuickJS's `bindgen` feature; the Android Nix shell supplies libclang.
+enables QuickJS's `bindgen` feature; the Android Nix shell supplies libclang
+and target-specific NDK sysroot arguments.
 `nova` also depends on `nova-tracking`, which depends on `nova-storage`, Serde, reqwest, URL parsing and zeroized session secrets;
 the tracking actor owns local state, session-only credentials and authenticated delivery. Chrono supplies local calendar dates; `getrandom` supplies OAuth state/PKCE entropy.
 
@@ -650,4 +653,5 @@ the app ignores unknown domains, so old peers stay compatible.
 | Persistence backend | `crates/storage/src/lib.rs` |
 | Sync diagnostic events / log filtering | `src/diagnostics.rs`, `crates/sync/src/{lib,protocol,pair,store}.rs`, `src/app/sync.rs`; `RUST_LOG=nova_sync=debug` (no `NOVA_SYNC_DEBUG`) |
 | Android glue / external player | `src/lib.rs` (`android_main`), `crates/player/src/external.rs` (Android), `crates/player/src/lib.rs::open_external` (desktop) |
+| Android QuickJS bindings / NDK headers | `flake.nix` (Android shell's `BINDGEN_EXTRA_CLANG_ARGS_*`), `crates/providers/Cargo.toml` (`bindgen` feature) |
 | Build/packaging | `Cargo.toml` (`[package.metadata.android]`), `build.rs`, `flake.nix`, `Makefile` |
