@@ -118,7 +118,7 @@ pub fn tr(english: &'static str) -> &'static str {
         "Adjust" => "Prilagodi",
         "Add missing releases" => "Dodaj izdanja koja nedostaju",
         "Reload suggestions" => "Ponovno učitaj prijedloge",
-        "Choose a different release" => "Odaberi drugo izdanje",
+        "Choose another release" => "Odaberi drugo izdanje",
         "Save adjustment" => "Spremi prilagodbu",
         "Back to review" => "Natrag na pregled",
         "Connect a service in Settings → Tracking to see suggestions." => {

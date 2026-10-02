@@ -197,7 +197,7 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
         click(&app, "Tracking").await;
         assert!(
             picks.borrow().is_empty(),
-            "opening suggestions must not select a release"
+            "opening the sheet must not invoke a selection callback"
         );
         assert_eq!(confirms.get(), 0, "suggestions must not create links");
         assert_eq!(app.get_tracking_service(), 1);
@@ -266,6 +266,33 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
             accepts.borrow().is_empty(),
             "a proposed split cannot link itself"
         );
+        // The automatically prepared review keeps alternatives one button away.
+        app.set_tracking_candidates(
+            Rc::new(VecModel::from(vec![
+                nova::TrackingCandidateRow {
+                    title: s("Default release"),
+                    ..Default::default()
+                },
+                nova::TrackingCandidateRow {
+                    title: s("Alternative release"),
+                    ..Default::default()
+                },
+            ]))
+            .into(),
+        );
+        click(&app, "Choose another release").await;
+        ElementHandle::find_by_accessible_label(&app, "Alternative release")
+            .last()
+            .expect("alternate selection button")
+            .single_click(slint::platform::PointerEventButton::Left)
+            .await;
+        settle().await;
+        assert_eq!(*picks.borrow(), vec![0, 1]);
+        assert!(
+            accepts.borrow().is_empty(),
+            "choosing an alternative never activates tracking"
+        );
+        click(&app, "Choose another release").await;
         click(&app, "Start tracking").await;
         assert_eq!(*accepts.borrow(), vec![("proposal-2".to_string(), false)]);
         click(&app, "Include watched episodes").await;

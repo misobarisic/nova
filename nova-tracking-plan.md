@@ -52,6 +52,8 @@ together; MAL refresh rotation is saved before subsequent verification, and
 Disconnect/reset remove saved tokens. The actor verifies the stored account
 before resuming delivery. Protected desktop/Android credential storage and the
 migration requirements are recorded in docs/tracking.md for future additions.
+Automatic setup now defaults to the first ranked result; Choose another release
+exposes alternatives, while Start tracking remains the activation step.
 
 Curated mappings remain optional: the reviewed Fribb and Anime-Lists repositories
 had no explicit redistribution license, so no dataset is bundled or downloaded.
@@ -77,6 +79,10 @@ For the split-release review update, `cargo test --workspace --locked` passed
 with default parallelism: 449 tests, including 155 app unit tests, 74 tracking
 tests, the phone tracking UI regression and the home-catalog regression. Formatting
 and whitespace checks also passed. No Android or Windows checks were run.
+For persistent sign-in and first-result setup, `cargo test --workspace --locked`
+passed with default parallelism: 455 tests, including 155 app unit tests, 80
+tracking tests and the phone UI alternate-selection regression. Formatting and
+whitespace checks passed; Android and Windows checks were not run.
 See [implemented tracking behavior](docs/tracking.md).
 
 ## 1. Goal and agreed scope

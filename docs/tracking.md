@@ -65,11 +65,13 @@ must continue to pass with an injected credential backend.
 
 ## Linking and alignment
 
-Unlinked titles open a **Review setup** for the whole library title. Nova finds a
-starting release from a unique service ID/cross-reference or a matching official
-title/alias and year, then explores official prequel/sequel relationships. If the
-starting match is ambiguous, choose a release or search by title, ID or official URL.
-Switching the service rebuilds that service's independent proposal.
+Unlinked titles open a **Review setup** for the whole library title. Nova selects
+the first ranked tracker search result by default and explores its official
+prequel/sequel relationships. Existing confirmed links remain the anchor when
+adding coverage. This selection prepares a draft; only **Start tracking** enables
+it. Use **Choose another release** to see alternatives and search by title, ID or
+official URL if the default does not match. Switching the service rebuilds that
+service's independent proposal.
 
 The review groups releases by library season and shows readable episode ranges.
 For example, Demon Slayer's merged second season maps episodes 1–7 to the Mugen

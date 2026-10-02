@@ -73,67 +73,11 @@ impl Coordinator {
                     .min()
             })
             .map(|b| b.target.remote_media_id);
-        let mut seed = existing;
-        if seed.is_none() && self.candidates.len() == 1 {
-            let namespace = if service == Service::MyAnimeList {
-                providers::IdNamespace::MalAnime
-            } else {
-                providers::IdNamespace::AnilistAnime
-            };
-            let other = if service == Service::MyAnimeList {
-                providers::IdNamespace::AnilistAnime
-            } else {
-                providers::IdNamespace::MalAnime
-            };
-            if matches!(
-                context.ids.resolve_id(namespace),
-                providers::IdResolution::Unique(_)
-            ) || matches!(
-                context.ids.resolve_id(other),
-                providers::IdResolution::Unique(_)
-            ) {
-                seed = Some(self.candidates[0].id);
-            }
-        }
-        let mut checked = 0;
-        if seed.is_none() {
-            let mut titles = vec![context.title.clone()];
-            titles.extend(context.aliases.clone());
-            let candidates: Vec<_> = self.candidates.iter().take(5).map(|m| m.id).collect();
-            let mut matches = vec![];
-            for id in candidates {
-                if !self.current(generation) {
-                    return Ok(());
-                }
-                let details = self.setup_details(service, id, false)?;
-                checked += 1;
-                let mut aliases = details.aliases.clone();
-                aliases.push(details.media.title.clone());
-                let format_matches = if context.source.media_type == "movie" {
-                    details.media.format.eq_ignore_ascii_case("movie")
-                } else {
-                    episodic_format(&details.media.format)
-                };
-                if format_matches
-                    && context.year.is_some()
-                    && context.year == details.media.year
-                    && aliases.iter().any(|alias| {
-                        let normalized = setup_normalized(alias);
-                        !normalized.is_empty()
-                            && titles
-                                .iter()
-                                .any(|source| setup_normalized(source) == normalized)
-                    })
-                {
-                    matches.push(id);
-                }
-            }
-            if matches.len() == 1 {
-                seed = Some(matches[0]);
-            }
-        }
+        // The first ranked result is the default draft. Acceptance remains
+        // explicit, and the review exposes alternatives for a wrong match.
+        let seed = existing.or_else(|| self.candidates.first().map(|m| m.id));
         if let Some(seed) = seed {
-            self.build_setup(service, seed, generation, 32 - checked)?;
+            self.build_setup(service, seed, generation, 32)?;
         }
         Ok(())
     }
@@ -498,11 +442,4 @@ impl Coordinator {
         self.busy = false;
         Ok(())
     }
-}
-fn setup_normalized(title: &str) -> String {
-    title
-        .chars()
-        .filter(|c| c.is_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
 }

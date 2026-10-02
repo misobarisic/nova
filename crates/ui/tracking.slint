@@ -208,7 +208,8 @@ export component TrackingSheet inherits Rectangle {
                     }
                     Text { text:root.setup_active ? @tr("Review setup") : @tr("Tracking service"); color:#f2f2f4; font-weight:700; vertical-stretch:0; }
                     service := ComboBox { model:["MyAnimeList","AniList"]; current-index <=> root.selected_service; accessible-label:@tr("Tracking service"); vertical-stretch:0; selected(_) => {root.query_text="";root.search(self.current-index,"");} }
-                    if root.setup_active && root.candidate_title == "": VerticalLayout {
+                    Button {text:@tr("Choose another release");enabled:!root.busy;vertical-stretch:0;clicked => {root.manual_search=!root.manual_search;}}
+                    if root.setup_active && root.candidate_title == "" && !root.manual_search: VerticalLayout {
                         spacing:10px; vertical-stretch:0;
                         Text {text:root.setup_summary;color:#c9c9d4;wrap:word-wrap;min-width:0;}
                         for release[index] in root.setup: Rectangle {
@@ -227,7 +228,6 @@ export component TrackingSheet inherits Rectangle {
                     }
                     if root.manual_search: LineEdit {text <=> root.query_text; placeholder-text:@tr("Title, ID, or official anime URL"); accessible-label:@tr("Tracker search"); vertical-stretch:0; }
                     Button {text:root.links.length > 0 ? @tr("Add missing releases") : @tr("Reload suggestions");enabled:!root.busy;vertical-stretch:0;clicked => {root.query_text="";root.search(service.current-index,"");}}
-                    Button {text:@tr("Choose a different release");enabled:!root.busy;vertical-stretch:0;clicked => {root.manual_search=!root.manual_search;}}
                     if root.manual_search: Button { text:@tr("Search tracker"); enabled:!root.busy; vertical-stretch:0; clicked => {root.search(service.current-index,root.query_text);} }
                     if root.manual_search || (!root.setup_active && root.links.length == 0): VerticalLayout {
                     for candidate[index] in root.candidates: VerticalLayout {
