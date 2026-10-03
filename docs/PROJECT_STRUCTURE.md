@@ -543,6 +543,16 @@ when no compatible copy decoder is available. Other desktop targets retain
 `hwdec=auto`, and Android retains its MediaCodec preference/fallback chain.
 Copying frames can cost additional memory bandwidth, especially at 4K.
 
+`crates/player/src/gl_state.rs` isolates the shared GL context. On Windows,
+mpv context creation and each video draw save the host state, disable incoming
+blend/clip/depth/cull tests, reset color masks and pixel-transfer state/buffers,
+then restore the host state. The guard also owns Android's existing Skia state
+restore; external GLES texture queries are Android-only, and sampler bindings
+use texture-unit indices. Its Linux regression test uses a Mesa surfaceless
+EGL 3.3 context (`libEGL.so.1`): it injects clip/mask/PBO/row-stride state,
+checks a real framebuffer readback, and verifies the host state round trip.
+Run `cargo test -p nova-player --lib clean_draw_and_host_state_round_trip`.
+
 ---
 
 ## 8. Testing
@@ -688,7 +698,7 @@ Copying frames can cost additional memory bandwidth, especially at 4K.
 | Detail hero / tap-to-expand description / scroll fade / responsive overview / full-width episode and stream layouts / Watch Now selection | `src/app/detail.rs`, `src/app/streams.rs`, `crates/ui/detail.slint` |
 | Add a persisted app field | `src/app.rs` (struct), `src/app/io.rs` + relevant module's `read/write_persisted_*`, then `src/app/sync.rs` if it should sync |
 | Touch playback | `crates/player/src/lib.rs`, `src/app/playback.rs`, `crates/ui/player.slint` |
-| Windows decoder artifacts / hardware decode policy | `crates/player/src/lib.rs` (`configure_desktop_decoder`, `tests::desktop_decoder_policy_is_accepted_by_mpv`); [mpv render API requirements](https://github.com/mpv-player/mpv/blob/master/include/mpv/render_gl.h) |
+| Windows decoder artifacts / hardware decode policy | `crates/player/src/lib.rs` (`configure_desktop_decoder`, `tests::desktop_decoder_policy_is_accepted_by_mpv`), `crates/player/src/gl_state.rs` (shared-context preparation/restore and real EGL regression test); [mpv render API requirements](https://github.com/mpv-player/mpv/blob/master/include/mpv/render_gl.h) |
 | Bottom-sheet / player feedback motion | `crates/ui/menusheet.slint` (`open` + retained exit), `crates/ui/player.slint` (`flash_pill`), `crates/ui/anim.slint` (category durations), `tests/animation_feedback.rs` |
 | Responsive navigation / compact icon-only left rail / phone bar / icon feedback | `crates/ui/sidenav.slint` (`SideNav`, `NavMetrics`, `NavFeedback`, `NavState`), `crates/ui/bottomnav.slint`, `crates/ui/icons.slint` (`IcExplore`), `src/app/run.rs` (`note_nav_switch`), `tests/navbar_motion.rs`, `tests/nav_marker_glide.rs` |
 | Android player gestures (swipe volume/brightness) | `src/app/android_player.rs` (volume via any `Context`, brightness via the stashed `NativeActivity` — the `ndk-context` `Context` is not necessarily an `Activity`), `android/java/dev/misob/nova/PlayerFx.java`, `crates/ui/player.slint` (backdrop state machine) |

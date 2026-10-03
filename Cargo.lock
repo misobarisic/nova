@@ -5298,6 +5298,7 @@ dependencies = [
  "glow 0.17.0",
  "jni 0.22.4",
  "libc",
+ "libloading",
  "libmpv2",
  "libmpv2-sys",
  "nova-config",

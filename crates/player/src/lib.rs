@@ -391,10 +391,8 @@ unsafe extern "C" {
 struct MpvGlUnderlay {
     render_ctx: *mut mpv_render_context,
     app_weak_ptr: *mut c_void,
-    /// Android: GL entry points for the state guard around mpv's render (see
-    /// [`gl_state`]). Created from the notifier's `get_proc_address` with the
-    /// `libGLESv2` dlsym fallback for extension functions.
-    #[cfg(target_os = "android")]
+    /// GL entry points for the Android/Windows shared-context state guard.
+    #[cfg(any(target_os = "android", target_os = "windows"))]
     gl: glow::Context,
 }
 
@@ -589,303 +587,13 @@ mod android_gl {
     }
 }
 
-/// Save/restore the GL state around mpv's render.
-///
-/// mpv restores the context to *OpenGL defaults* when it is done, but Skia
-/// caches the state it last set — which, right after it has cleared the window
-/// and drawn, is generally not the default. On the next frame Skia therefore
-/// skips "redundant" state changes and ends up drawing the OSD's opacity layer
-/// (a `saveLayer`) with mpv's program, VAO, buffers or textures still bound.
-/// Some drivers (Mali) happen to tolerate the mismatch; stricter ones (Adreno,
-/// Xclipse on the S25 FE) corrupt the frame instead of showing the OSD.
-///
-/// Slint documents exactly this for `set_rendering_notifier`: "make sure to
-/// save and restore state such as `TEXTURE_BINDING_2D` or
-/// `ARRAY_BUFFER_BINDING` perfectly". This guard brackets
-/// `mpv_render_context_render` with a snapshot/restore of every piece of state
-/// Skia tracks.
-#[cfg(target_os = "android")]
-mod gl_state {
-    // Thin FFI wrapper: every `glow::HasContext` call is unsafe by contract
-    // (the GL context must be current), so the whole module opts out of the
-    // per-call `unsafe {}` requirement rather than nesting blocks around each.
-    #![allow(unsafe_op_in_unsafe_fn)]
-
-    use glow::HasContext;
-    use std::num::NonZeroU32;
-
-    // `GL_TEXTURE_EXTERNAL_OES` (bind target) and `GL_TEXTURE_BINDING_EXTERNAL_OES`
-    // (query name) share this enum value; glow exports neither.
-    const TEXTURE_EXTERNAL_OES: u32 = 0x8D65;
-
-    // Covers what Skia/mpv use on GLES3; bounds the per-frame query cost.
-    const MAX_UNITS_SAVED: i32 = 16;
-
-    struct Unit {
-        tex_2d: i32,
-        tex_cube: i32,
-        tex_2d_array: i32,
-        tex_external: i32,
-        sampler: i32,
-    }
-
-    pub struct Saved {
-        viewport: [i32; 4],
-        scissor_box: [i32; 4],
-        scissor_test: bool,
-        clear_color: [f32; 4],
-        color_mask: [i32; 4],
-        program: i32,
-        active_texture: i32,
-        array_buffer: i32,
-        element_buffer: i32,
-        vertex_array: i32,
-        draw_fbo: i32,
-        read_fbo: i32,
-        renderbuffer: i32,
-        blend: bool,
-        blend_src_rgb: i32,
-        blend_dst_rgb: i32,
-        blend_src_alpha: i32,
-        blend_dst_alpha: i32,
-        blend_eq_rgb: i32,
-        blend_eq_alpha: i32,
-        depth_test: bool,
-        depth_func: i32,
-        depth_mask: i32,
-        cull_face: bool,
-        cull_mode: i32,
-        front_face: i32,
-        stencil_test: bool,
-        stencil_front: [i32; 3],
-        stencil_front_op: [i32; 3],
-        stencil_front_mask: i32,
-        stencil_back: [i32; 3],
-        stencil_back_op: [i32; 3],
-        stencil_back_mask: i32,
-        dither: bool,
-        unpack_alignment: i32,
-        pack_alignment: i32,
-        units: Vec<Unit>,
-    }
-
-    /// Zero is "unbound" for every GL object, so map 0 to `None`.
-    fn id<T>(value: i32, wrap: impl FnOnce(NonZeroU32) -> T) -> Option<T> {
-        NonZeroU32::new(value as u32).map(wrap)
-    }
-
-    unsafe fn set_cap(gl: &glow::Context, cap: u32, on: bool) {
-        if on {
-            gl.enable(cap);
-        } else {
-            gl.disable(cap);
-        }
-    }
-
-    /// Snapshot the state Skia tracks, before mpv is allowed to touch it.
-    pub unsafe fn save(gl: &glow::Context) -> Saved {
-        let max_units = gl
-            .get_parameter_i32(glow::MAX_COMBINED_TEXTURE_IMAGE_UNITS)
-            .clamp(1, MAX_UNITS_SAVED);
-        let active_texture = gl.get_parameter_i32(glow::ACTIVE_TEXTURE);
-
-        let mut viewport = [0i32; 4];
-        gl.get_parameter_i32_slice(glow::VIEWPORT, &mut viewport);
-        let mut scissor_box = [0i32; 4];
-        gl.get_parameter_i32_slice(glow::SCISSOR_BOX, &mut scissor_box);
-        let mut clear_color = [0.0f32; 4];
-        gl.get_parameter_f32_slice(glow::COLOR_CLEAR_VALUE, &mut clear_color);
-        let mut color_mask = [0i32; 4];
-        gl.get_parameter_i32_slice(glow::COLOR_WRITEMASK, &mut color_mask);
-
-        // Texture-unit bindings are per unit, so walk them from a known unit and
-        // restore the original active unit afterwards.
-        let mut units = Vec::with_capacity(max_units as usize);
-        for unit in 0..max_units {
-            gl.active_texture(glow::TEXTURE0 + unit as u32);
-            units.push(Unit {
-                tex_2d: gl.get_parameter_i32(glow::TEXTURE_BINDING_2D),
-                tex_cube: gl.get_parameter_i32(glow::TEXTURE_BINDING_CUBE_MAP),
-                tex_2d_array: gl.get_parameter_i32(glow::TEXTURE_BINDING_2D_ARRAY),
-                tex_external: gl.get_parameter_i32(TEXTURE_EXTERNAL_OES),
-                sampler: gl.get_parameter_i32(glow::SAMPLER_BINDING),
-            });
-        }
-        gl.active_texture(active_texture as u32);
-
-        Saved {
-            viewport,
-            scissor_box,
-            scissor_test: gl.is_enabled(glow::SCISSOR_TEST),
-            clear_color,
-            color_mask,
-            program: gl.get_parameter_i32(glow::CURRENT_PROGRAM),
-            active_texture,
-            array_buffer: gl.get_parameter_i32(glow::ARRAY_BUFFER_BINDING),
-            element_buffer: gl.get_parameter_i32(glow::ELEMENT_ARRAY_BUFFER_BINDING),
-            vertex_array: gl.get_parameter_i32(glow::VERTEX_ARRAY_BINDING),
-            draw_fbo: gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING),
-            read_fbo: gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING),
-            renderbuffer: gl.get_parameter_i32(glow::RENDERBUFFER_BINDING),
-            blend: gl.is_enabled(glow::BLEND),
-            blend_src_rgb: gl.get_parameter_i32(glow::BLEND_SRC_RGB),
-            blend_dst_rgb: gl.get_parameter_i32(glow::BLEND_DST_RGB),
-            blend_src_alpha: gl.get_parameter_i32(glow::BLEND_SRC_ALPHA),
-            blend_dst_alpha: gl.get_parameter_i32(glow::BLEND_DST_ALPHA),
-            blend_eq_rgb: gl.get_parameter_i32(glow::BLEND_EQUATION_RGB),
-            blend_eq_alpha: gl.get_parameter_i32(glow::BLEND_EQUATION_ALPHA),
-            depth_test: gl.is_enabled(glow::DEPTH_TEST),
-            depth_func: gl.get_parameter_i32(glow::DEPTH_FUNC),
-            depth_mask: gl.get_parameter_i32(glow::DEPTH_WRITEMASK),
-            cull_face: gl.is_enabled(glow::CULL_FACE),
-            cull_mode: gl.get_parameter_i32(glow::CULL_FACE_MODE),
-            front_face: gl.get_parameter_i32(glow::FRONT_FACE),
-            stencil_test: gl.is_enabled(glow::STENCIL_TEST),
-            stencil_front: [
-                gl.get_parameter_i32(glow::STENCIL_FUNC),
-                gl.get_parameter_i32(glow::STENCIL_REF),
-                gl.get_parameter_i32(glow::STENCIL_VALUE_MASK),
-            ],
-            stencil_front_op: [
-                gl.get_parameter_i32(glow::STENCIL_FAIL),
-                gl.get_parameter_i32(glow::STENCIL_PASS_DEPTH_FAIL),
-                gl.get_parameter_i32(glow::STENCIL_PASS_DEPTH_PASS),
-            ],
-            stencil_front_mask: gl.get_parameter_i32(glow::STENCIL_WRITEMASK),
-            stencil_back: [
-                gl.get_parameter_i32(glow::STENCIL_BACK_FUNC),
-                gl.get_parameter_i32(glow::STENCIL_BACK_REF),
-                gl.get_parameter_i32(glow::STENCIL_BACK_VALUE_MASK),
-            ],
-            stencil_back_op: [
-                gl.get_parameter_i32(glow::STENCIL_BACK_FAIL),
-                gl.get_parameter_i32(glow::STENCIL_BACK_PASS_DEPTH_FAIL),
-                gl.get_parameter_i32(glow::STENCIL_BACK_PASS_DEPTH_PASS),
-            ],
-            stencil_back_mask: gl.get_parameter_i32(glow::STENCIL_BACK_WRITEMASK),
-            dither: gl.is_enabled(glow::DITHER),
-            unpack_alignment: gl.get_parameter_i32(glow::UNPACK_ALIGNMENT),
-            pack_alignment: gl.get_parameter_i32(glow::PACK_ALIGNMENT),
-            units,
-        }
-    }
-
-    /// Put the context back exactly as Skia left it.
-    pub unsafe fn restore(gl: &glow::Context, s: &Saved) {
-        gl.use_program(id(s.program, glow::NativeProgram));
-
-        gl.bind_vertex_array(id(s.vertex_array, glow::NativeVertexArray));
-        gl.bind_buffer(glow::ARRAY_BUFFER, id(s.array_buffer, glow::NativeBuffer));
-        gl.bind_buffer(
-            glow::ELEMENT_ARRAY_BUFFER,
-            id(s.element_buffer, glow::NativeBuffer),
-        );
-
-        for (unit, state) in s.units.iter().enumerate() {
-            let slot = glow::TEXTURE0 + unit as u32;
-            gl.active_texture(slot);
-            gl.bind_texture(glow::TEXTURE_2D, id(state.tex_2d, glow::NativeTexture));
-            gl.bind_texture(
-                glow::TEXTURE_CUBE_MAP,
-                id(state.tex_cube, glow::NativeTexture),
-            );
-            gl.bind_texture(
-                glow::TEXTURE_2D_ARRAY,
-                id(state.tex_2d_array, glow::NativeTexture),
-            );
-            gl.bind_texture(
-                TEXTURE_EXTERNAL_OES,
-                id(state.tex_external, glow::NativeTexture),
-            );
-            gl.bind_sampler(slot, id(state.sampler, glow::NativeSampler));
-        }
-        gl.active_texture(s.active_texture as u32);
-
-        gl.bind_framebuffer(
-            glow::DRAW_FRAMEBUFFER,
-            id(s.draw_fbo, glow::NativeFramebuffer),
-        );
-        gl.bind_framebuffer(
-            glow::READ_FRAMEBUFFER,
-            id(s.read_fbo, glow::NativeFramebuffer),
-        );
-        gl.bind_renderbuffer(
-            glow::RENDERBUFFER,
-            id(s.renderbuffer, glow::NativeRenderbuffer),
-        );
-
-        gl.viewport(s.viewport[0], s.viewport[1], s.viewport[2], s.viewport[3]);
-        gl.scissor(
-            s.scissor_box[0],
-            s.scissor_box[1],
-            s.scissor_box[2],
-            s.scissor_box[3],
-        );
-        set_cap(gl, glow::SCISSOR_TEST, s.scissor_test);
-
-        gl.clear_color(
-            s.clear_color[0],
-            s.clear_color[1],
-            s.clear_color[2],
-            s.clear_color[3],
-        );
-        gl.color_mask(
-            s.color_mask[0] != 0,
-            s.color_mask[1] != 0,
-            s.color_mask[2] != 0,
-            s.color_mask[3] != 0,
-        );
-
-        set_cap(gl, glow::BLEND, s.blend);
-        gl.blend_func_separate(
-            s.blend_src_rgb as u32,
-            s.blend_dst_rgb as u32,
-            s.blend_src_alpha as u32,
-            s.blend_dst_alpha as u32,
-        );
-        gl.blend_equation_separate(s.blend_eq_rgb as u32, s.blend_eq_alpha as u32);
-
-        set_cap(gl, glow::DEPTH_TEST, s.depth_test);
-        gl.depth_func(s.depth_func as u32);
-        gl.depth_mask(s.depth_mask != 0);
-
-        set_cap(gl, glow::CULL_FACE, s.cull_face);
-        gl.cull_face(s.cull_mode as u32);
-        gl.front_face(s.front_face as u32);
-
-        set_cap(gl, glow::STENCIL_TEST, s.stencil_test);
-        gl.stencil_func_separate(
-            glow::FRONT,
-            s.stencil_front[0] as u32,
-            s.stencil_front[1],
-            s.stencil_front[2] as u32,
-        );
-        gl.stencil_op_separate(
-            glow::FRONT,
-            s.stencil_front_op[0] as u32,
-            s.stencil_front_op[1] as u32,
-            s.stencil_front_op[2] as u32,
-        );
-        gl.stencil_mask_separate(glow::FRONT, s.stencil_front_mask as u32);
-        gl.stencil_func_separate(
-            glow::BACK,
-            s.stencil_back[0] as u32,
-            s.stencil_back[1],
-            s.stencil_back[2] as u32,
-        );
-        gl.stencil_op_separate(
-            glow::BACK,
-            s.stencil_back_op[0] as u32,
-            s.stencil_back_op[1] as u32,
-            s.stencil_back_op[2] as u32,
-        );
-        gl.stencil_mask_separate(glow::BACK, s.stencil_back_mask as u32);
-
-        set_cap(gl, glow::DITHER, s.dither);
-        gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, s.unpack_alignment);
-        gl.pixel_store_i32(glow::PACK_ALIGNMENT, s.pack_alignment);
-    }
-}
+// Android restores Skia state; Windows also supplies clean incoming state.
+#[cfg(any(
+    target_os = "android",
+    target_os = "windows",
+    all(test, target_os = "linux")
+))]
+mod gl_state;
 
 /// Trampoline that turns mpv's C `get_proc_address` callback into a call of
 /// the Rust closure Slint handed us for its OpenGL context.
@@ -1236,11 +944,20 @@ impl Player {
                             ];
 
                             let raw_ctx = mpv.ctx.as_ptr() as *mut mpv_handle;
-                            if mpv_render_context_create(
+                            #[cfg(target_os = "windows")]
+                            let gl = glow::Context::from_loader_function_cstr(get_proc_fn);
+                            #[cfg(target_os = "windows")]
+                            let saved = gl_state::save(&gl);
+                            #[cfg(target_os = "windows")]
+                            gl_state::prepare(&gl);
+                            let status = mpv_render_context_create(
                                 &mut render_ctx,
                                 raw_ctx,
                                 params.as_mut_ptr(),
-                            ) < 0
+                            );
+                            #[cfg(target_os = "windows")]
+                            gl_state::restore(&gl, &saved);
+                            if status < 0
                             {
                                 let msg = "cannot play in-app: mpv render context creation failed";
                                 *notifier_state.mpv_error.lock().unwrap() = Some(msg.to_string());
@@ -1276,7 +993,7 @@ impl Player {
                             *notifier_state.underlay.lock().unwrap() = Some(MpvGlUnderlay {
                                 render_ctx,
                                 app_weak_ptr,
-                                #[cfg(target_os = "android")]
+                                #[cfg(any(target_os = "android", target_os = "windows"))]
                                 gl,
                             });
 
@@ -1423,18 +1140,17 @@ impl Player {
                                 },
                             ];
 
-                            // Android: Skia tracks the GL state it has set, and
-                            // mpv leaves the context changed behind Skia's back.
-                            // Without this bracket, the OSD's opacity layer is
-                            // drawn with mpv's program/VAO/textures still bound
-                            // and corrupts the frame on stricter drivers. Save
-                            // before, restore after (see [`gl_state`]).
-                            #[cfg(target_os = "android")]
+                            // Slint and mpv share this context. Preserve the
+                            // host state, and on Windows neutralize incoming
+                            // blend/clip/upload state before mpv uses it.
+                            #[cfg(any(target_os = "android", target_os = "windows"))]
                             let saved = gl_state::save(&underlay.gl);
+                            #[cfg(target_os = "windows")]
+                            gl_state::prepare(&underlay.gl);
 
                             mpv_render_context_render(underlay.render_ctx, params.as_mut_ptr());
 
-                            #[cfg(target_os = "android")]
+                            #[cfg(any(target_os = "android", target_os = "windows"))]
                             gl_state::restore(&underlay.gl, &saved);
                         }
                     }
