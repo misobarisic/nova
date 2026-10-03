@@ -45,6 +45,17 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
     app.set_selected_title("Search episodes".into());
     app.set_season_names(Rc::new(VecModel::from(vec!["Season 1".into()])).into());
     app.set_season_combo_idx(0);
+    app.set_season_cards(
+        Rc::new(VecModel::from(
+            (1..=5)
+                .map(|season| nova::SeasonCard {
+                    name: format!("Season {season}").into(),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
     let rows: slint::ModelRc<nova::EpisodeRow> = Rc::new(VecModel::from(vec![
         nova::EpisodeRow {
             text: "Pilot".into(),
@@ -147,12 +158,16 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
     app.window().set_size(slint::PhysicalSize::new(390, 1600));
     settle();
     click(&app, &element(&app, "SearchField::search_touch"));
-    app.window()
-        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "z".into() });
-    app.window()
-        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: "z".into() });
+    let populated_width = element(&app, "DetailPage::episode_toolbar").size().width;
+    let populated_season_width = element(&app, "DetailPage::season_picker").size().width;
+    for _ in 0..3 {
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "f".into() });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: "f".into() });
+    }
     settle();
-    assert_eq!(queries.borrow().last().map(|q| q.as_str()), Some("z"));
+    assert_eq!(queries.borrow().last().map(|q| q.as_str()), Some("fff"));
     assert_eq!(app.get_episode_page(), 0);
     assert_eq!(app.get_episode_page_count(), 1);
     assert_eq!(
@@ -170,6 +185,48 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
         ElementHandle::find_by_element_type_name(&app, "EpisodePager").count(),
         0
     );
+    assert!(
+        (element(&app, "DetailPage::episode_toolbar").size().width - populated_width).abs() < 0.5,
+        "an empty result must not collapse the toolbar"
+    );
+    assert!(
+        (element(&app, "DetailPage::season_picker").size().width - populated_season_width).abs()
+            < 0.5,
+        "an empty result must not collapse the season rail"
+    );
+    for width in [320, 390, 620, 900, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 1600));
+        settle();
+        let expected = width as f32 - if width < 700 { 40.0 } else { 344.0 };
+        let toolbar = element(&app, "DetailPage::episode_toolbar");
+        let empty = element(&app, "DetailPage::episode_empty");
+        assert!((toolbar.size().width - expected).abs() < 0.5);
+        assert!((empty.size().width - toolbar.size().width).abs() < 0.5);
+        assert!(element(&app, "SearchField::input_viewport").size().width > 100.0);
+        for item in [&toolbar, &empty] {
+            assert!(item.absolute_position().x >= 0.0);
+            assert!(item.absolute_position().x + item.size().width <= width as f32 + 0.5);
+        }
+        for id in [
+            "DetailPage::episode_empty_title",
+            "DetailPage::episode_empty_hint",
+        ] {
+            let copy = element(&app, id);
+            assert!(copy.absolute_position().x >= empty.absolute_position().x);
+            assert!(
+                copy.absolute_position().x + copy.size().width
+                    <= empty.absolute_position().x + empty.size().width + 0.5
+            );
+            assert!(copy.absolute_position().y >= empty.absolute_position().y);
+            assert!(
+                copy.absolute_position().y + copy.size().height
+                    <= empty.absolute_position().y + empty.size().height + 0.5
+            );
+        }
+        assert_eq!(app.get_episode_filter(), "fff");
+    }
+    app.window().set_size(slint::PhysicalSize::new(390, 1600));
+    settle();
 
     // Hiding the field preserves an active query, and reopening restores it.
     click(&app, &element(&app, "DetailPage::episode_search_toggle"));
@@ -177,9 +234,9 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
         element(&app, "DetailPage::episode_toolbar").size().height,
         64.0
     );
-    assert_eq!(app.get_episode_filter(), "z");
+    assert_eq!(app.get_episode_filter(), "fff");
     click(&app, &element(&app, "DetailPage::episode_search_toggle"));
-    assert_eq!(app.get_episode_filter(), "z");
+    assert_eq!(app.get_episode_filter(), "fff");
     click(&app, &element(&app, "SearchField::clear_button"));
     assert!(app.get_episode_filter().is_empty());
     assert_eq!(queries.borrow().last().map(|q| q.as_str()), Some(""));

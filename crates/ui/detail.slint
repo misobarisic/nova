@@ -778,7 +778,8 @@ export component DetailPage {
     // and 16px body spacing on wide; sidebar hidden on narrow).
     // Must use root.width here: referencing the content layout's own
     // width feeds back through the ScrollView and binding-loops.
-    property <length> ep_card_w: (root.width - (root.narrow ? 40px + root.safe-left + root.safe-right : 344px + root.safe-left + root.safe-right) - (root.ep_cols - 1) * 12px) / root.ep_cols;
+    property <length> episode_content_w: root.width - (root.narrow ? 40px + root.safe-left + root.safe-right : 344px + root.safe-left + root.safe-right);
+    property <length> ep_card_w: (root.episode_content_w - (root.ep_cols - 1) * 12px) / root.ep_cols;
     // Phones keep seasons in one horizontal rail with the next card
     // peeking in. On wide windows the grid grows from a 180px minimum card;
     // cards are capped (same centered-cap scheme as the Discover grid), so the
@@ -1875,6 +1876,10 @@ export component DetailPage {
                             // start-aligned: the grid must keep its natural
                             // height (see scroll content note).
                             if root.detail_tab == 3: VerticalLayout {
+                                // Percent-sized controls alone have no intrinsic width.
+                                // Keep this column anchored when filtering removes the
+                                // fixed-width episode cards (including all results).
+                                width: root.episode_content_w;
                                 spacing: 10px;
                                 alignment: start;
 
@@ -1883,6 +1888,7 @@ export component DetailPage {
                                 // filter via edit_watcher below (page scope
                                 // cannot see ids inside `if`).
                                 if root.modal_episodes: VerticalLayout {
+                                    width: 100%;
                                     spacing: 8px;
                                     alignment: start;
 
@@ -2242,14 +2248,15 @@ export component DetailPage {
                                     }
 
                                     if root.episode_rows.length == 0 && root.episode_filter != "": episode_empty := Rectangle {
-                                        height: 96px;
+                                        width: 100%;
+                                        height: Math.max(96px, empty_copy.preferred-height);
                                         border-radius: 16px;
                                         background: #0b1221;
-                                        VerticalLayout {
+                                        empty_copy := VerticalLayout {
                                             padding: 16px;
                                             spacing: 6px;
                                             alignment: center;
-                                            Text {
+                                            episode_empty_title := Text {
                                                 text: @tr("No matching episodes");
                                                 color: #e6e6ea;
                                                 font-size: 15px;
@@ -2257,7 +2264,7 @@ export component DetailPage {
                                                 horizontal-alignment: center;
                                                 wrap: word-wrap;
                                             }
-                                            Text {
+                                            episode_empty_hint := Text {
                                                 text: @tr("Try a different title or episode number.");
                                                 color: #929caf;
                                                 font-size: 13px;
