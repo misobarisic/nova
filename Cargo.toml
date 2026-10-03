@@ -128,6 +128,7 @@ java_sources = "android/java"
 # builds set this false.
 [package.metadata.android.application]
 has_code = true
+extract_native_libs = false
 # Launcher / task-switcher name. cargo-apk2 falls back to the artifact name
 # (`nova`) when this is empty; the label is what the user reads, so it carries
 # the display capitalisation.
