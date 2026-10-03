@@ -252,6 +252,8 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
                     title: s("Mugen Train TV"),
                     season: s("Season 2"),
                     coverage: s("Episodes 1–7 → tracker episodes 1–7"),
+                    source_range: s("1–7"),
+                    target_range: s("1–7"),
                     reason: s("Check this split"),
                     history: s("Saved watched progress: at least 7"),
                 },
@@ -259,6 +261,8 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
                     title: s("Entertainment District"),
                     season: s("Season 2"),
                     coverage: s("Episodes 8–18 → tracker episodes 1–11"),
+                    source_range: s("8–18"),
+                    target_range: s("1–11"),
                     reason: s("Check this split"),
                     history: s("Saved watched progress: at least 3"),
                 },
@@ -282,6 +286,21 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
             accepts.borrow().is_empty(),
             "a proposed split cannot link itself"
         );
+        app.set_tracking_setup_unmapped(s("Unmapped episodes: 11"));
+        // Check real phone widths before exercising the review actions.
+        for width in [320, 390, 360] {
+            app.window().set_size(slint::PhysicalSize::new(width, 800));
+            settle().await;
+            check_width(&app, &f);
+            assert!(
+                ElementHandle::find_by_accessible_label(&app, "Start tracking").any(|e| {
+                    let p = e.absolute_position();
+                    let size = e.size();
+                    p.y >= 0.0 && p.y + size.height <= 800.0
+                }),
+                "confirmation stays onscreen at {width}px"
+            );
+        }
         // The automatically prepared review keeps alternatives one button away.
         app.set_tracking_candidates(
             Rc::new(VecModel::from(vec![
@@ -309,6 +328,7 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
             "choosing an alternative never activates tracking"
         );
         click(&app, "Choose another release").await;
+        scroll_down(&app).await;
         click(&app, "Start tracking").await;
         assert_eq!(*accepts.borrow(), vec![("proposal-2".to_string(), false)]);
         click(&app, "Include watched episodes").await;
@@ -317,6 +337,22 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
             accepts.borrow().last().unwrap(),
             &("proposal-2".to_string(), true)
         );
+        // Reveal the first release again after checking the footer controls.
+        let from = slint::LogicalPosition::new(220.0, 200.0);
+        let to = slint::LogicalPosition::new(220.0, 680.0);
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                position: from,
+                button: slint::platform::PointerEventButton::Left,
+            });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: to });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                position: to,
+                button: slint::platform::PointerEventButton::Left,
+            });
+        settle().await;
         click(&app, "Adjust").await;
         assert_eq!(*adjusts.borrow(), vec![0]);
         app.set_tracking_candidate_title(s("Mugen Train TV"));

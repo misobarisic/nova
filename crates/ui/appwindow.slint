@@ -33,6 +33,7 @@ export component AppWindow inherits Window {
     in-out property <[TrackingSetupRow]> tracking_setup;
     in-out property <string> tracking_setup_revision;
     in-out property <string> tracking_setup_summary;
+    in-out property <string> tracking_setup_unmapped;
     in-out property <bool> tracking_setup_active;
     in-out property <string> tracking_range_first;
     in-out property <string> tracking_range_last;
@@ -804,6 +805,7 @@ export component AppWindow inherits Window {
         tracking_setup:root.tracking_setup;
         tracking_setup_revision:root.tracking_setup_revision;
         tracking_setup_summary:root.tracking_setup_summary;
+        tracking_setup_unmapped:root.tracking_setup_unmapped;
         tracking_setup_active:root.tracking_setup_active;
         tracking_range_first:root.tracking_range_first;
         tracking_range_last:root.tracking_range_last;

@@ -1,5 +1,112 @@
 import { Button, LineEdit, ComboBox, CheckBox, ScrollView } from "std-widgets.slint";
+import { Dropdown } from "dropdown.slint";
+import { IcClose, IcChevronRight, IcSync } from "icons.slint";
+import { Anim } from "anim.slint";
 import { TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow } from "types.slint";
+
+// Sheet controls share the detail screen palette and keep full touch/keyboard targets.
+component TrackingButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> primary: false;
+    in property <bool> quiet: false;
+    in property <int> icon: 0; // 1 close, 2 reload, 3 forward.
+    callback clicked();
+    height: root.primary ? 52px : 44px;
+    min-width: 0px;
+    vertical-stretch: 0;
+    border-radius: root.icon == 1 ? 22px : 12px;
+    background: root.primary ? @linear-gradient(110deg, #a15bff, #644bff, #443dcc) : (root.quiet ? transparent : (touch.has-hover ? #293346 : #1b2435));
+    opacity: root.enabled ? 1 : 0.45;
+    border-width: focus.has-focus ? 2px : (root.quiet ? 0px : 1px);
+    border-color: focus.has-focus ? #a477ff : #ffffff20;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    forward-focus: focus;
+    HorizontalLayout {
+        padding-left: root.icon == 1 ? 10px : 12px;
+        padding-right: root.icon == 1 ? 10px : 12px;
+        spacing: 8px;
+        alignment: center;
+        if root.icon == 1: Rectangle { width:24px; background:transparent; IcClose { y:(parent.height - self.height)/2; width:24px; height:24px; fill:#e2e5ef; } }
+        if root.icon == 2: Rectangle { width:20px; background:transparent; IcSync { y:(parent.height - self.height)/2; width:20px; height:20px; fill:#a477ff; } }
+        if root.icon != 1: Text {
+            text: root.text; color: root.primary ? #ffffff : #a477ff;
+            font-size: root.primary ? 16px : 14px; font-weight: root.primary ? 600 : 500;
+            vertical-alignment: center; overflow: elide; min-width: 0px;
+        }
+        if root.icon == 3: Rectangle { width:18px; background:transparent; IcChevronRight { y:(parent.height - self.height)/2; width:18px; height:18px; fill:#a477ff; } }
+    }
+    focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if e.text == Key.Return || e.text == " " { root.clicked(); accept } else { reject }
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled; mouse-cursor: pointer;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+}
+component MappingChip inherits Rectangle {
+    in property <string> numbers;
+    in property <string> caption;
+    min-width: 0px;
+    height: Math.max(56px, chip.preferred-height + 22px);
+    vertical-stretch: 0;
+    VerticalLayout {
+        spacing: 5px;
+        chip := Rectangle {
+            background: #1d2638; border-radius: 10px; border-width: 1px; border-color: #ffffff16;
+            VerticalLayout {
+                padding: 8px;
+                Text { text: root.numbers; color: #f2f2f4; font-weight: 600; font-size: 14px; wrap: word-wrap; min-width: 0px; horizontal-alignment: center; }
+            }
+        }
+        Text { text: root.caption; color: #9ca6b8; font-size: 12px; horizontal-alignment: center; }
+    }
+}
+component HistoryToggle inherits Rectangle {
+    in-out property <bool> checked;
+    in property <bool> enabled: true;
+    callback toggled();
+    height: Math.max(56px, labels.preferred-height + 12px);
+    min-width: 0px; vertical-stretch: 0;
+    accessible-role: checkbox;
+    accessible-label: @tr("Include watched episodes");
+    accessible-checkable: true;
+    accessible-checked <=> root.checked;
+    accessible-enabled: root.enabled;
+    forward-focus: focus;
+    border-width: focus.has-focus ? 1px : 0px; border-color: #a477ff; border-radius: 10px;
+    opacity: root.enabled ? 1 : 0.45;
+    HorizontalLayout {
+        spacing: 12px;
+        labels := VerticalLayout {
+            alignment: center; spacing: 4px;
+            Text { text: @tr("Include watched episodes"); font-size: 14px; color: #f2f2f4; wrap: word-wrap; min-width: 0px; }
+            Text { text: @tr("Apply saved watch history"); font-size: 12px; color: #9ca6b8; wrap: word-wrap; min-width: 0px; }
+        }
+        Rectangle {
+            width: 48px; background: transparent;
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 48px; height: 28px; border-radius: 14px; background: root.checked ? #8b5cf6 : #252c3b;
+                Rectangle {
+                    x: root.checked ? 24px : 4px; y: 4px; width: 20px; height: 20px;
+                    border-radius: 10px; background: #f2f2f4;
+                    animate x { duration: Anim.enabled ? 140ms : 0ms; easing: ease-out; }
+                }
+            }
+        }
+    }
+    focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => { if e.text == Key.Return || e.text == " " { root.checked = !root.checked; root.toggled(); accept } else { reject } }
+    }
+    TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { focus.focus(); root.checked = !root.checked; root.toggled(); } }
+}
 
 component AccountEditor inherits Rectangle {
     in property <TrackingAccountRow> entry;
@@ -141,6 +248,7 @@ export component TrackingSheet inherits Rectangle {
     in property <[TrackingSetupRow]> setup;
     in property <string> setup_revision;
     in property <string> setup_summary;
+    in property <string> setup_unmapped;
     in property <bool> setup_active;
     in property <string> range_first;
     in property <string> range_last;
@@ -153,6 +261,7 @@ export component TrackingSheet inherits Rectangle {
     property <bool> manual_search:false;
     property <string> query_text:"";
     property <bool> include_history:false;
+    property <bool> setup_review: root.setup_active && root.candidate_title == "" && !root.manual_search && root.setup.length > 0;
     changed setup_revision => {root.include_history=false;root.manual_search=false;}
     changed open => {if root.open {root.include_history=false;root.manual_search=false;close_button.focus();}}
     callback accept_setup(string,bool);
@@ -165,6 +274,7 @@ export component TrackingSheet inherits Rectangle {
     in property <string> candidate_title;
     in property <bool> busy;
     in property <bool> can_confirm;
+    in property <length> safe-top;
     in property <length> safe-bottom;
     in property <length> safe-left;
     in property <length> safe-right;
@@ -179,26 +289,32 @@ export component TrackingSheet inherits Rectangle {
     visible:root.open; width:100%; height:100%; background:#000b;
     TouchArea { clicked => {root.close();} }
     Rectangle {
-        x:root.safe-left + 12px; y:12px;
-        width:parent.width - root.safe-left - root.safe-right - 24px;
-        height:parent.height - root.safe-bottom - 24px;
-        background:#111116; border-radius:12px;
+        // Center on desktop; anchor above system insets on phones. Only the
+        // body scrolls so Close stays reachable with long release lists.
+        property <length> available-h: Math.max(0px, root.height - root.safe-top - root.safe-bottom - 24px);
+        width: Math.min(600px, root.width - root.safe-left - root.safe-right - 16px);
+        height: Math.min(820px, self.available-h);
+        x: root.safe-left + (root.width - root.safe-left - root.safe-right - self.width) / 2;
+        y: root.width < 700px ? root.height - root.safe-bottom - self.height : root.safe-top + (self.available-h - self.height) / 2 + 12px;
+        background:#0d1522; border-radius:20px;
         TouchArea { }
         FocusScope {
             width:100%;height:100%;
             key-pressed(e) => {if e.text==Key.Escape || e.text==Key.Back {if root.candidate_title != "" {root.cancel_adjust();} else {root.close();}accept} else {reject}}
         VerticalLayout {
-            padding:12px; spacing:8px;
+            padding:16px; spacing:8px;
+            HorizontalLayout { alignment: center; Rectangle { width: 36px; height: 4px; border-radius: 2px; background: #3b4456; } }
             HorizontalLayout {
-                Text { text:@tr("Tracking"); color:#f2f2f4; font-weight:700; font-size:18px; }
-                if root.candidate_title != "": Button {text:@tr("Back to review");clicked => {root.cancel_adjust();}}
-                close_button := Button { text:@tr("Close"); clicked => {root.close();} }
+                Text { text:@tr("Tracking"); color:#f2f2f4; font-weight:700; font-size:26px; vertical-alignment:center; }
+                if root.candidate_title != "": TrackingButton {text:@tr("Back to review");quiet:true;clicked => {root.cancel_adjust();}}
+                close_button := TrackingButton { width:44px; text:@tr("Close");icon:1;clicked => {root.close();} }
             }
             scroll := ScrollView {
                 horizontal-scrollbar-policy:always-off;
+                mouse-drag-pan-enabled:true;
                 VerticalLayout {
-                    width:100%; spacing:12px;
-                    Text { text:root.notice; color:#d7cfff; wrap:word-wrap; min-width:0; vertical-stretch:0; }
+                    width:100%; spacing:8px;
+                    if root.notice != "": Text { text:root.notice; color:#b9c0d2; font-size:14px; wrap:word-wrap; min-width:0; vertical-stretch:0; }
                     if root.busy: Text { text:@tr("Loading tracker…"); color:#c9c9d4; vertical-stretch:0; }
                     if !root.setup_active && root.candidate_title == "": VerticalLayout {
                     for row in root.links: EntryEditor {
@@ -207,28 +323,42 @@ export component TrackingSheet inherits Rectangle {
                         action(id,action) => {root.action(id,action);}
                     }
                     }
-                    Text { text:root.setup_active ? @tr("Review setup") : @tr("Tracking service"); color:#f2f2f4; font-weight:700; vertical-stretch:0; }
-                    service := ComboBox { model:["MyAnimeList","AniList"]; current-index <=> root.selected_service; accessible-label:@tr("Tracking service"); vertical-stretch:0; selected(_) => {root.query_text="";root.search(self.current-index,"");} }
-                    Button {text:@tr("Choose another release");enabled:!root.busy;vertical-stretch:0;clicked => {root.manual_search=!root.manual_search;}}
+                    if !root.setup_review: Text { text:root.setup_active ? @tr("Review setup") : @tr("Tracking service"); color:#f2f2f4; font-weight:700; vertical-stretch:0; }
+                    service := Dropdown { model:["MyAnimeList","AniList"]; roomy:true; current-index <=> root.selected_service; accessible-role:combobox; accessible-label:@tr("Tracking service"); enabled:!root.busy; border-radius:12px; background:#182131; border-color:#ffffff20; vertical-stretch:0; selected(_) => {root.query_text="";root.search(self.current-index,"");} }
+                    TrackingButton {text:@tr("Choose another release");icon:3;enabled:!root.busy;clicked => {root.manual_search=!root.manual_search;}}
                     if root.setup_active && root.candidate_title == "" && !root.manual_search: VerticalLayout {
-                        spacing:10px; vertical-stretch:0;
-                        Text {text:root.setup_summary;color:#c9c9d4;wrap:word-wrap;min-width:0;}
-                        for release[index] in root.setup: Rectangle {
-                            background:#19191f;border-radius:8px;vertical-stretch:0;min-width:0;
-                            VerticalLayout {padding:10px;spacing:6px;
-                                if index == 0 || root.setup[index - 1].season != release.season: Text {text:release.season;color:#c9c9d4;font-weight:700;wrap:word-wrap;min-width:0;}
-                                Text {text:release.title;color:#f2f2f4;wrap:word-wrap;min-width:0;}
-                                Text {text:release.coverage;color:#c9c9d4;wrap:word-wrap;min-width:0;}
-                                if release.reason!="": Text {text:release.reason;color:#d7cfff;wrap:word-wrap;min-width:0;}
-                                if root.include_history: Text {text:release.history;color:#c9c9d4;wrap:word-wrap;min-width:0;}
-                                Button {text:@tr("Adjust");enabled:!root.busy;clicked => {root.adjust_setup(index);}}
+                        spacing:6px; vertical-stretch:0;
+                        Text {text:root.setup_summary;color:#b9c0d2;font-size:14px;wrap:word-wrap;min-width:0;}
+                        if root.setup_unmapped != "": Text {text:root.setup_unmapped;color:#eab465;font-size:13px;wrap:word-wrap;min-width:0;}
+                        Rectangle {
+                            background:#111927;border-radius:16px;border-width:1px;border-color:#ffffff16;vertical-stretch:0;min-width:0;
+                            VerticalLayout {
+                                padding:12px;spacing:12px;
+                                for release[index] in root.setup: VerticalLayout {
+                                    spacing:6px;vertical-stretch:0;
+                                    if index > 0: Rectangle {height:1px;background:#ffffff16;}
+                                    HorizontalLayout {
+                                        Text {text:release.season;color:#a477ff;font-size:14px;font-weight:600;wrap:word-wrap;min-width:0;vertical-alignment:center;}
+                                        TrackingButton {width:76px;text:@tr("Adjust");quiet:true;enabled:!root.busy;clicked => {root.adjust_setup(index);}}
+                                    }
+                                    Text {text:release.title;color:#f2f2f4;font-size:15px;font-weight:600;wrap:word-wrap;min-width:0;}
+                                    if release.source_range != "" && release.target_range != "": HorizontalLayout {
+                                        spacing:12px;
+                                        MappingChip {numbers:release.source_range;caption:@tr("Episodes");}
+                                        Text {text:"→";color:#a6adc5;font-size:22px;vertical-alignment:center;horizontal-stretch:0;}
+                                        MappingChip {numbers:release.target_range;caption:@tr("Tracker");}
+                                    }
+                                    // Coverage remains a truthful fallback for unnumbered source rows.
+                                    if release.source_range == "" || release.target_range == "": Text {text:release.coverage;color:#b9c0d2;font-size:13px;wrap:word-wrap;min-width:0;}
+                                    if release.reason!="": Text {text:release.reason;color:#9ca6b8;font-size:12px;wrap:word-wrap;min-width:0;}
+                                    if root.include_history: Text {text:release.history;color:#b9c0d2;font-size:12px;wrap:word-wrap;min-width:0;}
+                                }
                             }
                         }
-                        if root.setup.length > 0: CheckBox {text:@tr("Include watched episodes");checked <=> root.include_history;enabled:!root.busy;}
-                        if root.setup.length > 0: Button {text:@tr("Start tracking");enabled:!root.busy;clicked => {root.accept_setup(root.setup_revision,root.include_history);}}
+
                     }
                     if root.manual_search: LineEdit {text <=> root.query_text; placeholder-text:@tr("Title, ID, or official anime URL"); accessible-label:@tr("Tracker search"); vertical-stretch:0; }
-                    Button {text:root.links.length > 0 ? @tr("Add missing releases") : @tr("Reload suggestions");enabled:!root.busy;vertical-stretch:0;clicked => {root.query_text="";root.search(service.current-index,"");}}
+                    if !root.setup_review: TrackingButton {text:root.links.length > 0 ? @tr("Add missing releases") : @tr("Reload suggestions");quiet:true;icon:2;enabled:!root.busy;clicked => {root.query_text="";root.search(service.current-index,"");}}
                     if root.manual_search: Button { text:@tr("Search tracker"); enabled:!root.busy; vertical-stretch:0; clicked => {root.search(service.current-index,root.query_text);} }
                     if root.manual_search || (!root.setup_active && root.links.length == 0): VerticalLayout {
                     for candidate[index] in root.candidates: VerticalLayout {
@@ -264,6 +394,13 @@ export component TrackingSheet inherits Rectangle {
                     }
                     Rectangle { vertical-stretch:1; }
                 }
+            }
+            // Confirmation stays reachable while long release lists scroll.
+            if root.setup_review: VerticalLayout {
+                vertical-stretch:0;spacing:6px;
+                HistoryToggle {checked <=> root.include_history;enabled:!root.busy;}
+                TrackingButton {text:@tr("Start tracking");primary:true;enabled:!root.busy;clicked => {root.accept_setup(root.setup_revision,root.include_history);}}
+                TrackingButton {text:root.links.length > 0 ? @tr("Add missing releases") : @tr("Reload suggestions");quiet:true;icon:2;enabled:!root.busy;clicked => {root.query_text="";root.search(root.selected_service,"");}}
             }
         }
         }

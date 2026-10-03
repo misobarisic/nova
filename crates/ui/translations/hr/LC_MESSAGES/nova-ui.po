@@ -1405,3 +1405,9 @@ msgstr "Pretražite epizode"
 
 msgid "Hide episode search"
 msgstr "Sakrijte pretraživanje epizoda"
+
+msgid "Tracker"
+msgstr "Usluga"
+
+msgid "Apply saved watch history"
+msgstr "Primijeni spremljenu povijest gledanja"

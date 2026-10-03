@@ -909,15 +909,21 @@ pub fn cal_month_title(month: u32, year: i64) -> String {
     format!("{} {year}", month_name(month))
 }
 
-pub fn tracking_setup_summary(releases: usize, episodes: usize, unresolved: usize) -> String {
+pub fn tracking_setup_summary(releases: usize, episodes: usize) -> String {
     if croatian() {
-        format!(
-            "Izdanja: {releases} · Epizode za povezivanje: {episodes} · Nepovezane epizode: {unresolved}"
-        )
+        format!("Izdanja: {releases} · Epizode za povezivanje: {episodes}")
     } else {
-        format!(
-            "Releases: {releases} · Episodes to link: {episodes} · Unmapped episodes: {unresolved}"
-        )
+        format!("Releases: {releases} · Episodes to link: {episodes}")
+    }
+}
+pub fn tracking_setup_unmapped(unresolved: usize) -> String {
+    if unresolved == 0 {
+        return String::new();
+    }
+    if croatian() {
+        format!("Nepovezane epizode: {unresolved}")
+    } else {
+        format!("Unmapped episodes: {unresolved}")
     }
 }
 pub fn tracking_setup_history(progress: u32) -> String {
@@ -927,40 +933,41 @@ pub fn tracking_setup_history(progress: u32) -> String {
         format!("Saved watched progress: at least {progress}")
     }
 }
-pub fn tracking_setup_coverage(source: &[u32], target: &[u32]) -> String {
-    fn ranges(numbers: &[u32]) -> String {
-        let mut numbers = numbers.to_vec();
-        numbers.sort_unstable();
-        numbers.dedup();
-        let mut ranges = vec![];
-        let mut i = 0;
-        while i < numbers.len() {
-            let first = numbers[i];
-            let mut last = first;
-            while i + 1 < numbers.len() && numbers[i + 1] == last.saturating_add(1) {
-                i += 1;
-                last = numbers[i];
-            }
-            ranges.push(if first == last {
-                first.to_string()
-            } else {
-                format!("{first}–{last}")
-            });
+pub fn tracking_episode_ranges(numbers: &[u32]) -> String {
+    let mut numbers = numbers.to_vec();
+    numbers.sort_unstable();
+    numbers.dedup();
+    let mut ranges = vec![];
+    let mut i = 0;
+    while i < numbers.len() {
+        let first = numbers[i];
+        let mut last = first;
+        while i + 1 < numbers.len() && numbers[i + 1] == last.saturating_add(1) {
             i += 1;
+            last = numbers[i];
         }
-        ranges.join(", ")
+        ranges.push(if first == last {
+            first.to_string()
+        } else {
+            format!("{first}–{last}")
+        });
+        i += 1;
     }
+    ranges.join(", ")
+}
+
+pub fn tracking_setup_coverage(source: &[u32], target: &[u32]) -> String {
     if croatian() {
         format!(
             "Epizode {} → epizode {} na usluzi",
-            ranges(source),
-            ranges(target)
+            tracking_episode_ranges(source),
+            tracking_episode_ranges(target)
         )
     } else {
         format!(
             "Episodes {} → tracker episodes {}",
-            ranges(source),
-            ranges(target)
+            tracking_episode_ranges(source),
+            tracking_episode_ranges(target)
         )
     }
 }
@@ -1033,6 +1040,27 @@ pub fn tracking_history_preview(progress: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tracking_ranges_preserve_gaps_and_summary_hides_zero_warning() {
+        assert_eq!(
+            tracking_episode_ranges(&[8, 1, 2, 2, 4, 9, 10]),
+            "1–2, 4, 8–10"
+        );
+        assert_eq!(tracking_episode_ranges(&[]), "");
+        assert_eq!(tracking_episode_ranges(&[u32::MAX]), u32::MAX.to_string());
+        with_language(Language::English, || {
+            assert_eq!(tracking_setup_unmapped(0), "");
+            assert_eq!(tracking_setup_unmapped(11), "Unmapped episodes: 11");
+            assert_eq!(
+                tracking_setup_summary(2, 13),
+                "Releases: 2 · Episodes to link: 13"
+            );
+        });
+        with_language(Language::Croatian, || {
+            assert_eq!(tracking_setup_unmapped(11), "Nepovezane epizode: 11");
+        });
+    }
 
     #[test]
     fn croatian_translates_and_english_is_the_source() {

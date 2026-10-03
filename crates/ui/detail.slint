@@ -659,6 +659,7 @@ export component DetailPage {
     in property <[TrackingSetupRow]> tracking_setup;
     in property <string> tracking_setup_revision;
     in property <string> tracking_setup_summary;
+    in property <string> tracking_setup_unmapped;
     in property <bool> tracking_setup_active;
     in property <string> tracking_range_first;
     in property <string> tracking_range_last;
@@ -2781,6 +2782,7 @@ export component DetailPage {
 
         TrackingSheet {
             open:root.tracking_open;
+            safe-top:root.safe-top;
             safe-bottom:root.safe-bottom; safe-left:root.safe-left; safe-right:root.safe-right;
             links:root.tracking_links;
             candidates:root.tracking_candidates;
@@ -2788,6 +2790,7 @@ export component DetailPage {
             setup:root.tracking_setup;
             setup_revision:root.tracking_setup_revision;
             setup_summary:root.tracking_setup_summary;
+            setup_unmapped:root.tracking_setup_unmapped;
             setup_active:root.tracking_setup_active;
             range_first:root.tracking_range_first;
             range_last:root.tracking_range_last;

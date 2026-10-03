@@ -2467,6 +2467,8 @@ impl Coordinator {
                             title: release.details.media.title.clone().into(),
                             season: text::season_label(release.season).into(),
                             coverage: text::tracking_setup_coverage(&numbers, &targets).into(),
+                            source_range: text::tracking_episode_ranges(&numbers).into(),
+                            target_range: text::tracking_episode_ranges(&targets).into(),
                             reason: if release.details.media.episodes.is_none() {
                                 text::tr("Ongoing release; only aired episodes are linked.").into()
                             } else if release.check_split {
@@ -2500,6 +2502,14 @@ impl Coordinator {
                         .iter()
                         .map(|r| r.assignments.len())
                         .sum(),
+                )
+            })
+            .unwrap_or_default();
+        let setup_unmapped = self
+            .setup
+            .as_ref()
+            .map(|s| {
+                text::tracking_setup_unmapped(
                     s.proposal
                         .unresolved
                         .iter()
@@ -2602,6 +2612,7 @@ impl Coordinator {
                     app.set_tracking_setup_active(setup_active);
                     app.set_tracking_setup_revision(setup_revision.into());
                     app.set_tracking_setup_summary(setup_summary.into());
+                    app.set_tracking_setup_unmapped(setup_unmapped.into());
                 }
             }
         });
