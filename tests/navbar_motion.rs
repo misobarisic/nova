@@ -259,9 +259,8 @@ fn nav_icons_pop_while_highlights_snap() {
             }
         }
     }
-    // Exercise both breakpoint boundaries in both directions, on every host.
-    // Wide labels are clickable, and selection stays aligned with the icons
-    // rather than moving to the middle of the expanded tile.
+    // Exercise the phone boundary and wide sizes in both directions on every
+    // host. The left rail stays compact and icon-only even on large windows.
     for width in [699, 700, 1199, 1200, 1600, 1199, 699] {
         app.window().set_size(slint::PhysicalSize::new(width, 900));
         for scroll_page in [false, true] {
@@ -294,12 +293,9 @@ fn nav_icons_pop_while_highlights_snap() {
                     .next()
                     .unwrap();
                 assert_eq!(panel.absolute_position(), LogicalPosition::new(12.0, 28.0));
-                assert_eq!(panel.size().width, if width >= 1200 { 228.0 } else { 64.0 });
+                assert_eq!(panel.size().width, 56.0);
                 let highlight = marker(&app, true);
-                assert_eq!(
-                    highlight.size(),
-                    slint::LogicalSize::new(if width >= 1200 { 204.0 } else { 48.0 }, 48.0)
-                );
+                assert_eq!(highlight.size(), slint::LogicalSize::new(48.0, 48.0));
                 assert!(highlight.absolute_position().x >= panel.absolute_position().x);
                 assert!(
                     highlight.absolute_position().x + highlight.size().width
@@ -308,24 +304,14 @@ fn nav_icons_pop_while_highlights_snap() {
                 assert!(
                     (center(&highlight).y - center(&icon(&app, true, page as usize)).y).abs() < 0.5
                 );
-                assert_eq!(labels.len(), if width >= 1200 { 4 } else { 0 });
-                for label in &labels {
-                    assert!(label.absolute_position().x > center(&icon(&app, true, 0)).x);
-                    assert!(
-                        label.absolute_position().x + label.size().width
-                            <= panel.absolute_position().x + panel.size().width
-                    );
-                }
+                assert!(labels.is_empty());
             }
         }
-        if width >= 1200 {
+        if width >= 700 {
             switch(&app, 0);
             i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
-            let label = ElementHandle::find_by_element_id(&app, "SideItem::label")
-                .nth(3)
-                .unwrap();
-            click_at(&app, center(&label));
-            assert!(app.get_show_settings(), "the text area navigates too");
+            click(&app, true, 3);
+            assert!(app.get_show_settings(), "the compact rail navigates too");
         }
     }
 }

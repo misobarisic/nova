@@ -197,7 +197,7 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
     for width in [320, 390, 620, 900, 1280] {
         app.window().set_size(slint::PhysicalSize::new(width, 1600));
         settle();
-        let expected = width as f32 - if width < 700 { 40.0 } else { 344.0 };
+        let expected = width as f32 - if width < 700 { 40.0 } else { 128.0 };
         let toolbar = element(&app, "DetailPage::episode_toolbar");
         let empty = element(&app, "DetailPage::episode_empty");
         assert!((toolbar.size().width - expected).abs() < 0.5);

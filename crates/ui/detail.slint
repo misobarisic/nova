@@ -768,17 +768,16 @@ export component DetailPage {
     in property <bool> touch_menus: false;
 
     // Episode grid columns: 1 in narrow windows, otherwise scaled to the
-    // available width (content ≈ page − sidebar − padding), capped at 4.
-    property <int> ep_cols: root.narrow ? 1 : Math.min(4, Math.max(2, Math.floor((root.width - 356px) / 320px)));
+    // available content width after page padding, capped at 4.
+    property <int> ep_cols: root.narrow ? 1 : Math.min(4, Math.max(2, Math.floor((root.episode_content_w - 12px) / 320px)));
     // Equal-width episode cards: grid columns start at each cell's
     // preferred width (full unwrapped text even when wrapped — see Text
     // docs), so without an explicit cell width columns track content
     // length. Derive one shared width top-down from the page width
-    // (content = page − 64px scroll padding each side − 200px sidebar
-    // and 16px body spacing on wide; sidebar hidden on narrow).
+    // (content = page − 64px scroll padding each side on wide layouts).
     // Must use root.width here: referencing the content layout's own
     // width feeds back through the ScrollView and binding-loops.
-    property <length> episode_content_w: root.width - (root.narrow ? 40px + root.safe-left + root.safe-right : 344px + root.safe-left + root.safe-right);
+    property <length> episode_content_w: root.width - (root.narrow ? 40px + root.safe-left + root.safe-right : 128px + root.safe-left + root.safe-right);
     property <length> ep_card_w: (root.episode_content_w - (root.ep_cols - 1) * 12px) / root.ep_cols;
     // Phones keep seasons in one horizontal rail with the next card
     // peeking in. On wide windows the grid grows from a 180px minimum card;
@@ -786,8 +785,8 @@ export component DetailPage {
     // wall never turns into a few giant banners on desktop.
     property <length> min-season: 180px;
     property <length> max-season: 240px;
-    property <int> season_cols: root.narrow ? 2 : Math.min(5, Math.max(3, Math.floor((root.width - 344px - root.safe-left - root.safe-right + 12px) / (root.min-season + 12px))));
-    property <length> season_card_w: root.narrow ? Math.min(180px, Math.max(120px, (root.width - 40px - root.safe-left - root.safe-right) / 2.2)) : Math.min(root.max-season, (root.width - 344px - root.safe-left - root.safe-right - (root.season_cols - 1) * 12px) / root.season_cols);
+    property <int> season_cols: root.narrow ? 2 : Math.min(5, Math.max(3, Math.floor((root.episode_content_w + 12px) / (root.min-season + 12px))));
+    property <length> season_card_w: root.narrow ? Math.min(180px, Math.max(120px, (root.width - 40px - root.safe-left - root.safe-right) / 2.2)) : Math.min(root.max-season, (root.episode_content_w - (root.season_cols - 1) * 12px) / root.season_cols);
     // Columns actually used (partial last row still packs left).
     property <int> season_grid_cols: Math.min(root.season_cols, root.season_cards.length);
     // Series flow when an addon listed seasons; movies have none.
@@ -1643,79 +1642,12 @@ export component DetailPage {
                         }
                     }
 
-                    // ---- Body: sidebar + content ----------------------
-                    // Default (stretch) alignment: the sidebar keeps its
-                    // explicit 200px and the content column fills the rest,
-                    // so the episode grid gets equal columns. (alignment:
-                    // start would pin content to its preferred width and
-                    // size grid columns to unwrapped text.)
+                    // ---- Body: full-width content ---------------------
                     HorizontalLayout {
                         width: 100%;
-                        spacing: 16px;
 
-                        // Sidebar (series meta + actions): packed to content
-                        // height so tall episode grids can't spread it out.
-                        if !root.narrow && root.detail_tab != 0: VerticalLayout {
-                            width: 200px;
-                            spacing: 10px;
-                            alignment: start;
-
-                            Rectangle {
-                                background: #141419;
-                                border-radius: 8px;
-
-                            VerticalLayout {
-                                spacing: 8px;
-                                padding: 12px;
-                                alignment: start;
-
-                                Text {
-                                    text: @tr("Episodes");
-                                    color: #8a8a9a;
-                                    font-size: 12px;
-                                }
-
-                                Text {
-                                    text: root.has_episodes ? @tr("{} in this season", root.episode_total) : "—";
-                                    color: #e6e6ea;
-                                    font-size: 13px;
-                                    wrap: word-wrap;
-                                }
-
-                                Text {
-                                    text: @tr("Released");
-                                    color: #8a8a9a;
-                                    font-size: 12px;
-                                }
-
-                                Text {
-                                    text: root.selected_year == "" ? "—" : root.selected_year;
-                                    color: #e6e6ea;
-                                    font-size: 13px;
-                                }
-
-                                Text {
-                                    text: @tr("Genres");
-                                    color: #8a8a9a;
-                                    font-size: 12px;
-                                }
-
-                                for g in root.selected_genre_list: Text {
-                                    text: g;
-                                    color: #e6e6ea;
-                                    font-size: 13px;
-                                    wrap: word-wrap;
-                                }
-                            }
-                            }
-                        }
-
-                        // Main content. Same as above: start alignment so a
-                        // content column shorter than the sidebar never has
-                        // its children spread apart by shared leftover space.
-                        // min-width 0 so wide stream text can't push this
-                        // column (and with it WATCH NOW + the filter row)
-                        // past the viewport.
+                        // Keep short content packed at the top. min-width 0
+                        // prevents long stream labels from widening the page.
                         VerticalLayout {
                             horizontal-stretch: 1;
                             min-width: 0px;

@@ -960,16 +960,16 @@ component FeaturedShowcase inherits Rectangle {
         height: 100%;
         opacity: root.fading ? 1.0 - root.mix : 0.0;
     }
-    // Reuse Detail's renderer-safe scrims, scaled to this smaller hero.
-    // Phones use the bottom fade; wide captions also get its left-side shade.
+    // These ramps reach the canvas colour before the artwork's edge, avoiding
+    // a raster-sampling seam at the rows and the desktop navigation rail.
     Image {
-        source: @image-url("../../assets/detail-bottom-scrim.svg");
+        source: @image-url("../../assets/home-bottom-scrim.svg");
         image-fit: fill;
         width: 100%;
         height: 100%;
     }
     if !root.narrow: Image {
-        source: @image-url("../../assets/detail-side-scrim.svg");
+        source: @image-url("../../assets/home-side-scrim.svg");
         image-fit: fill;
         width: 100%;
         height: 100%;
@@ -2322,6 +2322,7 @@ export component HomePage {
         // lands under it.
         if !root.narrow: rail := SideNav {
             viewport-width: root.nav-viewport-width;
+            panel-background: #080f19;
             active: 0;
             safe-top: root.safe-top;
             safe-left: root.safe-left;
