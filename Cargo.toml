@@ -5,6 +5,13 @@ resolver = "3"
 [workspace.package]
 license = "GPL-3.0-or-later"
 
+[patch.crates-io]
+# librqbit-utp 0.7.0 exits its dispatcher on Windows UDP datagram errors
+# (including WSAECONNRESET/10054), breaking every later uTP connection.
+# Pin the merged upstream fix until a release includes it; keep uTP enabled.
+# https://github.com/ikatson/librqbit-utp/pull/4
+librqbit-utp = { git = "https://github.com/ikatson/librqbit-utp", rev = "f19f77e38562e7e373bc58bbbb20b68e58c71fef" }
+
 [workspace.dependencies]
 # Slint GUI toolkit: single source of truth for the version. Crates opt into
 # backend/renderer features through the root package; avoid Slint's default
