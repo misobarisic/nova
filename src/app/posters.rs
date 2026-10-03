@@ -1,6 +1,23 @@
 //! Poster / backdrop / episode-thumbnail image pipeline.
 use super::*;
 
+/// Future episode thumbnails can be declared before their image exists.
+/// Keep the library poster as a fallback instead of a permanent placeholder.
+fn fetch_home_card_art(
+    url: String,
+    fallback: String,
+    then: impl FnOnce(Option<SharedPixelBuffer<Rgba8Pixel>>) + Send + 'static,
+) {
+    let has_fallback = !fallback.is_empty() && fallback != url;
+    net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
+        if pixels.is_some() || !has_fallback {
+            then(pixels);
+        } else {
+            net::fetch_image(fallback, Some(DISPLAY_POSTER_SIDE), then);
+        }
+    });
+}
+
 impl Bridge {
     /// Search results have their own generation and model, so their posters
     /// use the shared image decoder but never the browse-grid poster queue.
@@ -339,45 +356,48 @@ impl Bridge {
         }
     }
 
-    /// Fetch still-missing Continue Watching posters off the UI thread.
-    /// Completion is guarded on the row still showing this item unloaded.
+    /// Fetch the Home card's selected thumbnail/poster off the UI thread.
+    /// Guard both series and URL: the next episode can occupy the same slot.
     pub(super) fn dispatch_continue_posters(&self) {
-        let items: Vec<(usize, String, String)> = {
-            let state = self.shared.lock().unwrap();
-            state
-                .continue_list
-                .iter()
-                .enumerate()
-                .filter_map(|(i, c)| {
-                    state
-                        .entries
-                        .iter()
-                        .find(|e| e.id == c.series_id)
-                        .filter(|e| !e.poster_url.is_empty())
-                        .map(|e| (i, c.series_id.clone(), e.poster_url.clone()))
-                })
-                .collect()
-        };
+        let Some(app) = self.app() else { return };
+        let fallbacks: HashMap<_, _> = self
+            .shared
+            .lock()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|entry| (entry.id.clone(), entry.poster_url.clone()))
+            .collect();
+        let items: Vec<_> = app
+            .get_home_continue()
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| {
+                !row.art_url.is_empty()
+                    && decoded_cache_get(&sized_cache_key(&row.art_url, Some(DISPLAY_POSTER_SIDE)))
+                        .is_none()
+            })
+            .map(|(index, row)| {
+                let fallback = fallbacks.get(row.id.as_str()).cloned().unwrap_or_default();
+                (index, row.id, row.art_url, fallback)
+            })
+            .collect();
         let app_weak = self.app.clone();
-        for (index, id, url) in items {
+        for (index, id, url, fallback) in items {
             let weak = app_weak.clone();
-            net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
-                let Some(pixels) = pixels else {
-                    return; // keep the placeholder
-                };
+            fetch_home_card_art(url.to_string(), fallback, move |pixels| {
+                let Some(pixels) = pixels else { return };
                 let _ = slint::invoke_from_event_loop(move || {
-                    let Some(app) = weak.upgrade() else {
-                        return;
-                    };
+                    let Some(app) = weak.upgrade() else { return };
                     let model = app.get_home_continue();
-                    let matches = model
-                        .row_data(index)
-                        .map(|row: ContinueRow| !row.is_loaded && row.id == id.as_str());
-                    if matches == Some(true) {
-                        let Some(mut row) = model.row_data(index) else {
-                            return;
-                        };
-                        row.poster = Image::from_rgba8(pixels);
+                    if let Some(mut row) = model.row_data(index)
+                        && row.id == id
+                        && row.art_url == url
+                    {
+                        row.poster = Image::from_rgba8(
+                            decoded_cache_get(&sized_cache_key(&url, Some(DISPLAY_POSTER_SIDE)))
+                                .unwrap_or(pixels),
+                        );
                         row.is_loaded = true;
                         model.set_row_data(index, row);
                     }
@@ -386,47 +406,63 @@ impl Bridge {
         }
     }
 
-    /// Fetch still-missing Upcoming posters off the UI thread (same guard
-    /// pattern as [`Bridge::dispatch_continue_posters`]).
+    /// Upcoming and its selected calendar day share the same guarded image.
     pub(super) fn dispatch_upcoming_posters(&self) {
-        let items: Vec<(usize, String, String)> = {
-            let state = self.shared.lock().unwrap();
-            state
-                .upcoming_list
-                .iter()
-                .enumerate()
-                .filter_map(|(i, u)| {
-                    state
-                        .entries
-                        .iter()
-                        .find(|e| e.id == u.series_id)
-                        .filter(|e| !e.poster_url.is_empty())
-                        .map(|e| (i, u.series_id.clone(), e.poster_url.clone()))
-                })
-                .collect()
-        };
+        let Some(app) = self.app() else { return };
+        let fallbacks: HashMap<_, _> = self
+            .shared
+            .lock()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|entry| (entry.id.clone(), entry.poster_url.clone()))
+            .collect();
+        let items: Vec<_> = app
+            .get_home_upcoming()
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| {
+                !row.art_url.is_empty()
+                    && decoded_cache_get(&sized_cache_key(&row.art_url, Some(DISPLAY_POSTER_SIDE)))
+                        .is_none()
+            })
+            .map(|(index, row)| {
+                let fallback = fallbacks.get(row.id.as_str()).cloned().unwrap_or_default();
+                (index, row.id, row.art_url, fallback)
+            })
+            .collect();
         let app_weak = self.app.clone();
-        for (index, id, url) in items {
+        for (index, id, url, fallback) in items {
             let weak = app_weak.clone();
-            net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
-                let Some(pixels) = pixels else {
-                    return; // keep the placeholder
-                };
+            fetch_home_card_art(url.to_string(), fallback, move |pixels| {
+                let Some(pixels) = pixels else { return };
                 let _ = slint::invoke_from_event_loop(move || {
-                    let Some(app) = weak.upgrade() else {
-                        return;
-                    };
+                    let Some(app) = weak.upgrade() else { return };
                     let model = app.get_home_upcoming();
-                    let matches = model
-                        .row_data(index)
-                        .map(|row: UpcomingRow| !row.is_loaded && row.id == id.as_str());
-                    if matches == Some(true) {
-                        let Some(mut row) = model.row_data(index) else {
-                            return;
-                        };
-                        row.poster = Image::from_rgba8(pixels);
+                    if let Some(mut row) = model.row_data(index)
+                        && row.id == id
+                        && row.art_url == url
+                    {
+                        let image = Image::from_rgba8(
+                            decoded_cache_get(&sized_cache_key(&url, Some(DISPLAY_POSTER_SIDE)))
+                                .unwrap_or(pixels),
+                        );
+                        row.poster = image.clone();
                         row.is_loaded = true;
                         model.set_row_data(index, row);
+                        // A day can contain several episodes of the same series;
+                        // match its selected artwork rather than series alone.
+                        let day_model = app.get_home_cal_day();
+                        let matches: Vec<_> = day_model
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, row)| row.id == id && row.art_url == url)
+                            .collect();
+                        for (day_index, mut row) in matches {
+                            row.poster = image.clone();
+                            row.is_loaded = true;
+                            day_model.set_row_data(day_index, row);
+                        }
                     }
                 });
             });

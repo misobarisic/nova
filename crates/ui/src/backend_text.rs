@@ -485,6 +485,15 @@ pub fn left(remaining: usize) -> String {
     }
 }
 
+/// Compact remaining playback time on Home cards.
+pub fn minutes_left(minutes: u64) -> String {
+    if croatian() {
+        format!("još {minutes} min")
+    } else {
+        format!("{minutes} min left")
+    }
+}
+
 /// Torrent peer count for the player status line: `"12 peers"`.
 pub fn peers(count: usize) -> String {
     if croatian() {

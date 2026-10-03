@@ -82,6 +82,7 @@ fn carousels_render_headers_open_subpages_and_subpage_scrolls() {
             is_loaded: false,
             progress: 0.3,
             badge: 0,
+            ..Default::default()
         })
         .collect();
     let up: Vec<nova::UpcomingRow> = (0..10)
@@ -93,6 +94,7 @@ fn carousels_render_headers_open_subpages_and_subpage_scrolls() {
             poster: Default::default(),
             is_loaded: false,
             index: i,
+            ..Default::default()
         })
         .collect();
     app.set_home_continue(Rc::new(VecModel::from(cont)).into());

@@ -262,6 +262,10 @@ fn pages_fit_translations_cutouts_density_and_touch() {
     app.set_home_featured_type("movie".into());
     app.set_home_featured_rating("8.4".into());
     app.set_home_featured_runtime("142 min".into());
+    app.set_home_featured_release_info("2016–2024".into());
+    app.set_home_featured_tagline(
+        "A long optional tagline that wraps across multiple lines in the phone layout.".into(),
+    );
     app.set_home_featured_description("A long description that must wrap inside its column, stay clear of both actions, and remain readable at the desktop breakpoint.".into());
     app.set_home_featured_count(15);
     app.set_home_featured_revision(1);
@@ -395,6 +399,44 @@ fn pages_fit_translations_cutouts_density_and_touch() {
                         format!("{case}: featured action exceeds banner"),
                     );
                 }
+                // AOT can eliminate the inline HorizontalLayout; its actual
+                // buttons retain geometry in both compiled and preview builds.
+                // In a short landscape viewport, bring the bottom controls
+                // into view before querying the clipped descendants.
+                let extra = (Bounds::of(&banner).bottom - bounds.bottom).max(0.0);
+                if extra > 0.0 {
+                    app.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                            position: LogicalPosition::new(
+                                (bounds.left + bounds.right) / 2.0,
+                                (bounds.top + bounds.bottom) / 2.0,
+                            ),
+                            delta_x: 0.0,
+                            delta_y: -extra - 8.0,
+                        });
+                    settle(&app);
+                }
+                let pagers = ElementHandle::find_by_element_type_name(&app, "FeaturedPagerButton")
+                    .collect::<Vec<_>>();
+                assert_eq!(pagers.len(), 2, "{case}: featured paging buttons");
+                let action =
+                    ElementHandle::find_by_element_id(&app, "FeaturedShowcase::featured_actions")
+                        .next()
+                        .unwrap();
+                let p = Bounds::of(&pagers[0]);
+                let a = Bounds::of(&action);
+                record(
+                    &failures,
+                    pagers
+                        .iter()
+                        .all(|pager| Bounds::of(&banner).contains(pager)),
+                    format!("{case}: pager exceeds banner"),
+                );
+                record(
+                    &failures,
+                    a.right + 10.0 <= p.left || a.bottom + 2.0 <= p.top,
+                    format!("{case}: featured controls overlap"),
+                );
                 for heading in ElementHandle::find_by_element_type_name(&app, "SectionHeader") {
                     text_fits(&failures, &heading, &case);
                 }
@@ -668,7 +710,7 @@ fn pages_fit_translations_cutouts_density_and_touch() {
     }
 
     // A taller incoming caption must fit throughout a crossfade, while both
-    // action buttons stay below the outgoing and incoming text layers.
+    // playback and paging controls stay below the outgoing and incoming text layers.
     app.set_show_library(false);
     app.set_show_home(true);
     app.set_home_featured_title("Short title".into());
@@ -684,7 +726,7 @@ fn pages_fit_translations_cutouts_density_and_touch() {
             .next()
             .unwrap();
         text_fits(&failures, &banner, phase);
-        let actions = ElementHandle::find_by_element_id(&app, "FeaturedShowcase::narrow_actions")
+        let actions = ElementHandle::find_by_element_id(&app, "FeaturedShowcase::featured_actions")
             .next()
             .unwrap();
         for id in ["previous_caption", "current_caption"] {

@@ -81,6 +81,7 @@ fn setup() -> nova::AppWindow {
             is_loaded: false,
             progress: 0.3,
             badge: 0,
+            ..Default::default()
         })
         .collect();
     app.set_home_continue(Rc::new(VecModel::from(cont)).into());
@@ -93,6 +94,7 @@ fn setup() -> nova::AppWindow {
             poster: Default::default(),
             is_loaded: false,
             index: i,
+            ..Default::default()
         })
         .collect();
     app.set_home_upcoming(Rc::new(VecModel::from(up)).into());

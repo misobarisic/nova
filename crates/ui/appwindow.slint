@@ -169,6 +169,8 @@ export component AppWindow inherits Window {
     in-out property <string> home_featured_type: "";
     in-out property <string> home_featured_rating: "";
     in-out property <string> home_featured_runtime: "";
+    in-out property <string> home_featured_release_info: "";
+    in-out property <string> home_featured_tagline: "";
     in-out property <string> home_featured_description: "";
     in-out property <image> home_featured_backdrop;
     in-out property <int> home_featured_index: 0;
@@ -743,6 +745,8 @@ export component AppWindow inherits Window {
         featured_type <=> root.home_featured_type;
         featured_rating <=> root.home_featured_rating;
         featured_runtime <=> root.home_featured_runtime;
+        featured_release_info <=> root.home_featured_release_info;
+        featured_tagline <=> root.home_featured_tagline;
         featured_description <=> root.home_featured_description;
         featured_backdrop <=> root.home_featured_backdrop;
         featured_index <=> root.home_featured_index;

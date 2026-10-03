@@ -60,7 +60,7 @@ fn featured_rotation_restarts_on_selection_change_and_manual_step() {
     // The automatic step occurred at seventeen seconds. A manual step at
     // twenty-five seconds must postpone the next automatic step until thirty-four.
     idle(8_000);
-    // Paging arrows are desktop controls; the narrow showcase uses swipes.
+    // Paging arrows remain available alongside swipes on both layouts.
     app.window().set_size(slint::PhysicalSize::new(800, 800));
     let next = ElementHandle::find_by_accessible_label(&app, "Next featured title")
         .next()

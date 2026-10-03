@@ -148,6 +148,13 @@ export struct ContinueRow {
     title: string,
     /// Resume label (e.g. "S1 E3 · Episode name").
     subtitle: string,
+    /// Separate episode title and artwork badge for the Home card.
+    episode_title: string,
+    ep_no: string,
+    /// Localized playback time remaining; empty if duration is unknown.
+    remaining: string,
+    /// Thumbnail URL (poster fallback), also guards asynchronous image loads.
+    art_url: string,
     poster: image,
     is_loaded: bool,
     /// Fraction watched (0..1) of the resume episode for the rail.
@@ -170,6 +177,10 @@ export struct UpcomingRow {
     subtitle: string,
     /// Human air date (e.g. "in 3 days").
     date: string,
+    episode_title: string,
+    ep_no: string,
+    /// Thumbnail URL (poster fallback), also guards asynchronous image loads.
+    art_url: string,
     poster: image,
     is_loaded: bool,
     /// Position in the Upcoming list. Picks resolve through it, so a

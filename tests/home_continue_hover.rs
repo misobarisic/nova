@@ -120,6 +120,7 @@ fn continue_card_hover_lift_is_pointer_only() {
             is_loaded: false,
             progress: 0.3,
             badge: 0,
+            ..Default::default()
         })
         .collect();
     app.set_home_continue(Rc::new(VecModel::from(rows)).into());

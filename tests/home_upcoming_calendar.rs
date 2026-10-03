@@ -71,6 +71,7 @@ fn upcoming_calendar_toggles_picks_days_and_resolves_indices() {
             poster: Default::default(),
             is_loaded: false,
             index: i,
+            ..Default::default()
         })
         .collect();
     app.set_home_upcoming(Rc::new(VecModel::from(up)).into());
@@ -106,6 +107,7 @@ fn upcoming_calendar_toggles_picks_days_and_resolves_indices() {
             poster: Default::default(),
             is_loaded: false,
             index: *i,
+            ..Default::default()
         })
         .collect();
     app.set_home_cal_day(Rc::new(VecModel::from(day)).into());

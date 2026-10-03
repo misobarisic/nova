@@ -43,6 +43,7 @@ fn continue_badges_mark_next_up_and_new_episode() {
             is_loaded: false,
             progress: if *badge == 0 { 0.3 } else { 0.0 },
             badge: *badge,
+            ..Default::default()
         })
         .collect();
     app.set_home_continue(Rc::new(VecModel::from(cont)).into());

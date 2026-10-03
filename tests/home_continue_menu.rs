@@ -119,6 +119,7 @@ fn continue_menu_matches_the_library_card_menu() {
             is_loaded: false,
             progress: 0.3,
             badge: 0,
+            ..Default::default()
         })
         .collect();
     app.set_home_continue(Rc::new(VecModel::from(rows)).into());

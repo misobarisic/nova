@@ -4,7 +4,7 @@ import { MenuSheet } from "menusheet.slint";
 import { SideNav, NavMetrics } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
 import { Anim } from "anim.slint";
-import { IcChevronLeft, IcChevronRight, IcPlay, IcInfo, IcStarBorder, IcSchedule } from "icons.slint";
+import { IcChevronLeft, IcChevronRight, IcPlay, IcStarBorder, IcSchedule, IcDisplay } from "icons.slint";
 
 // Small "Next up" pill pinned to a Continue card's poster top-right. Shown
 // only when the card offers the next episode of a series still being
@@ -46,6 +46,71 @@ component NewEpisodeBadge inherits Rectangle {
         overflow: elide;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
+    }
+}
+
+// Episode numbering belongs on the artwork, leaving room for a wrapped title.
+component HomeEpisodeBadge inherits Rectangle {
+    in property <string> label;
+    in property <length> available-width;
+    width: Math.min(root.available-width, badge_label.preferred-width + 14px);
+    height: 20px;
+    border-radius: 8px;
+    background: #080d17dd;
+    badge_label := Text {
+        x: 7px; width: Math.max(0px, parent.width - 14px); height: 100%;
+        text: root.label; color: #ffffff; font-size: 10px; font-weight: 700;
+        vertical-alignment: center; overflow: elide;
+    }
+}
+
+// A visible menu affordance shares the card's existing early axis hints, so
+// starting a flick over its small hit area does not let the page steal it.
+component HomeCardMenuButton inherits Rectangle {
+    in property <bool> tappable: true;
+    in property <bool> rail-gesture: false;
+    callback picked();
+    callback pointer_pressed();
+    callback pan_hint();
+    callback pan_release();
+    width: 22px; height: 32px;
+    Text { text: "⋮"; color: #bbc1d0; font-size: 21px; horizontal-alignment: center; vertical-alignment: center; }
+    menu_touch := TouchArea {
+        enabled: root.tappable;
+        accessible-role: button;
+        accessible-label: @tr("More options");
+        mouse-cursor: pointer;
+        property <bool> dragged: false;
+        property <length> hint_x;
+        property <length> hint_y;
+        property <bool> hint_live: false;
+        property <bool> hint_held: false;
+        function hint_stop() {
+            self.hint_live = false;
+            if (self.hint_held) { self.hint_held = false; root.pan_release(); }
+        }
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.down) {
+                root.pointer_pressed(); self.dragged = false;
+                self.hint_x = self.mouse-x; self.hint_y = self.mouse-y; self.hint_live = true;
+            } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                self.hint_stop();
+            } else if (ev.kind == PointerEventKind.move && root.rail-gesture) {
+                if (!(self.pressed || ev.touch-finger-id != 0)) { self.hint_stop(); return; }
+                if (!self.hint_live) { self.hint_x = self.mouse-x; self.hint_y = self.mouse-y; self.hint_live = true; }
+                let dx = self.mouse-x - self.hint_x;
+                let dy = self.mouse-y - self.hint_y;
+                if (Math.abs(dy) > 8px && Math.abs(dy) > Math.abs(dx)) { self.hint_stop(); }
+                else { self.hint_held = true; root.pan_hint(); }
+            }
+        }
+        changed pressed => { if (!self.pressed) { self.hint_stop(); } }
+        moved => {
+            if ((self.pressed || self.hint_live) && Math.abs(self.mouse-x - self.pressed-x) + Math.abs(self.mouse-y - self.pressed-y) > 12px) {
+                self.dragged = true;
+            }
+        }
+        clicked => { if (!self.dragged) { root.picked(); } }
     }
 }
 
@@ -234,7 +299,7 @@ component ContinueCard inherits Rectangle {
         lift := Rectangle {
             width: 100%;
             height: 100%;
-            background: #18181c;
+            background: #111827;
             border-radius: 10px;
             border-width: root.focused ? 2px : 0px;
             border-color: #8b5cf6;
@@ -248,78 +313,69 @@ component ContinueCard inherits Rectangle {
 
             VerticalLayout {
                 spacing: 0px;
-
-                Rectangle {
+                continue_artwork := Rectangle {
                     height: root.card-width * 3 / 2;
                     border-radius: 10px;
                     clip: true;
-                    background: #222228;
-
-                    if root.entry.is_loaded: Image {
-                        source: root.entry.poster;
-                        image-fit: cover;
-                        width: 100%;
-                        height: 100%;
+                    background: #1b2231;
+                    if root.entry.is_loaded: Image { source: root.entry.poster; image-fit: cover; width: 100%; height: 100%; }
+                    if !root.entry.is_loaded: Text { text: "🎬"; font-size: 34px; horizontal-alignment: center; vertical-alignment: center; }
+                    if root.entry.ep_no != "": HomeEpisodeBadge {
+                        label: root.entry.ep_no;
+                        available-width: Math.max(0px, parent.width - 12px);
+                        x: 6px; y: parent.height - self.height - 6px;
                     }
-
-                    if !root.entry.is_loaded: Text {
-                        text: "🎬";
-                        font-size: 34px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    // Badges for offered episodes: "Next up" mid-series, "New
-                    // Episode" when everything else is already watched.
-                    // Resumes (badge 0) show the progress rail instead.
                     if root.entry.badge == 1: NextUpBadge {
                         available-width: Math.max(0px, parent.width - 12px);
-                        x: parent.width - self.width - 6px;
-                        y: 6px;
+                        x: parent.width - self.width - 6px; y: 6px;
                     }
                     if root.entry.badge == 2: NewEpisodeBadge {
                         available-width: Math.max(0px, parent.width - 12px);
-                        x: parent.width - self.width - 6px;
-                        y: 6px;
-                    }
-
-                    // Resume rail pinned to the poster's bottom edge.
-                    Rectangle {
-                        y: parent.height - 5px;
-                        height: 5px;
-                        border-radius: 2px;
-                        background: #2b2b35;
-
-                        Rectangle {
-                            x: 0;
-                            width: parent.width * root.entry.progress;
-                            height: 100%;
-                            border-radius: 2px;
-                            background: #8b5cf6;
-                        }
+                        x: parent.width - self.width - 6px; y: 6px;
                     }
                 }
-
-                VerticalLayout {
-                    padding-left: 8px;
-                    padding-right: 8px;
-                    padding-top: 6px;
-                    spacing: 2px;
-
-                    Text {
-                        text: root.entry.title;
-                        color: #eeeeee;
-                        font-size: 13px;
-                        font-weight: 600;
-                        overflow: elide;
+                continue_footer := Rectangle {
+                    height: 76px;
+                    if root.entry.progress > 0: continue_progress := HorizontalLayout {
+                        x: 8px; y: 7px; width: parent.width - 16px; height: 12px; spacing: 6px;
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            Rectangle {
+                                y: (parent.height - self.height) / 2; width: 100%; height: 5px;
+                                border-radius: 2.5px; background: #252b3a;
+                                Rectangle {
+                                    x: 0px; width: parent.width * Math.max(0, Math.min(1, root.entry.progress)); height: 100%;
+                                    border-radius: 2.5px; background: @linear-gradient(90deg, #a855f7, #7c3aed);
+                                }
+                            }
+                        }
+                        Text {
+                            text: @tr("{}%", Math.round(Math.max(0, Math.min(1, root.entry.progress)) * 100));
+                            color: #c4c9d5; font-size: 10px; vertical-alignment: center;
+                        }
                     }
-
-                    Text {
-                        text: root.entry.subtitle;
-                        color: #c4b5fd;
-                        font-size: 11px;
-                        font-weight: 600;
-                        overflow: elide;
+                    continue_title := Text {
+                        x: 8px; y: root.entry.progress > 0 ? 24px : 8px;
+                        width: parent.width - 38px; height: 34px;
+                        text: root.entry.episode_title != "" ? root.entry.episode_title : root.entry.title;
+                        color: #eeeeF4; font-size: 12px; font-weight: 600;
+                        vertical-alignment: top; wrap: word-wrap; overflow: elide;
+                    }
+                    continue_menu := HomeCardMenuButton {
+                        x: parent.width - self.width - 3px; y: continue_title.y;
+                        tappable: root.tappable; rail-gesture: root.rail-gesture;
+                        pointer_pressed => { root.pointer_pressed(); }
+                        pan_hint => { root.pan_hint(); } pan_release => { root.pan_release(); }
+                        picked => {
+                            if (root.touch_menus) { root.menu_requested(); }
+                            else { cont_ctx.show({x: root.width - 8px, y: root.height - 24px}); }
+                        }
+                    }
+                    continue_status := Text {
+                        x: 8px; y: parent.height - 17px; width: parent.width - 16px; height: 14px;
+                        text: root.entry.remaining != "" ? root.entry.remaining :
+                            root.entry.episode_title != "" ? root.entry.title : root.entry.subtitle;
+                        color: #858d9f; font-size: 10px; vertical-alignment: center; overflow: elide;
                     }
                 }
             }
@@ -344,11 +400,17 @@ component UpcomingCard inherits Rectangle {
     // there.
     in property <bool> touch_menus: false;
     callback picked();
+    callback menu_requested();
 
     width: card-width;
     // True 2:3 poster + 88px footer reserves title, episode label and the
     // air date.
     height: card-width * 3 / 2 + 88px;
+
+    up_ctx := ContextMenuArea {
+        width: 100%; height: 100%;
+        Menu { MenuItem { title: @tr("Enter series"); activated => { root.picked(); } } }
+    }
 
     reveal_layer := Rectangle {
         width: 100%;
@@ -426,7 +488,7 @@ component UpcomingCard inherits Rectangle {
         lift := Rectangle {
             width: 100%;
             height: 100%;
-            background: #18181c;
+            background: #111827;
             border-radius: 10px;
             border-width: root.focused ? 2px : 0px;
             border-color: #8b5cf6;
@@ -438,55 +500,45 @@ component UpcomingCard inherits Rectangle {
 
             VerticalLayout {
                 spacing: 0px;
-
-                Rectangle {
+                upcoming_artwork := Rectangle {
                     height: root.card-width * 3 / 2;
-                    border-radius: 10px;
-                    clip: true;
-                    background: #222228;
-
-                    if root.entry.is_loaded: Image {
-                        source: root.entry.poster;
-                        image-fit: cover;
-                        width: 100%;
-                        height: 100%;
-                    }
-
-                    if !root.entry.is_loaded: Text {
-                        text: "🎬";
-                        font-size: 34px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    border-radius: 10px; clip: true; background: #1b2231;
+                    if root.entry.is_loaded: Image { source: root.entry.poster; image-fit: cover; width: 100%; height: 100%; }
+                    if !root.entry.is_loaded: Text { text: "🎬"; font-size: 34px; horizontal-alignment: center; vertical-alignment: center; }
+                    if root.entry.ep_no != "": HomeEpisodeBadge {
+                        label: root.entry.ep_no;
+                        available-width: Math.max(0px, parent.width - 12px);
+                        x: 6px; y: parent.height - self.height - 6px;
                     }
                 }
-
-                VerticalLayout {
-                    padding-left: 8px;
-                    padding-right: 8px;
-                    padding-top: 6px;
-                    spacing: 2px;
-
-                    Text {
-                        text: root.entry.title;
-                        color: #eeeeee;
-                        font-size: 13px;
-                        font-weight: 600;
-                        overflow: elide;
+                upcoming_footer := Rectangle {
+                    height: 88px;
+                    upcoming_title := Text {
+                        x: 8px; y: 8px; width: parent.width - 38px; height: 34px;
+                        text: root.entry.episode_title != "" ? root.entry.episode_title : root.entry.title;
+                        color: #eeeef4; font-size: 12px; font-weight: 600;
+                        vertical-alignment: top; wrap: word-wrap; overflow: elide;
                     }
-
-                    Text {
-                        text: root.entry.subtitle;
-                        color: #c4b5fd;
-                        font-size: 11px;
-                        font-weight: 600;
-                        overflow: elide;
+                    upcoming_menu := HomeCardMenuButton {
+                        x: parent.width - self.width - 3px; y: 8px;
+                        tappable: root.tappable; rail-gesture: root.rail-gesture;
+                        pointer_pressed => { root.pointer_pressed(); }
+                        pan_hint => { root.pan_hint(); } pan_release => { root.pan_release(); }
+                        picked => {
+                            if (root.touch_menus) { root.menu_requested(); }
+                            else { up_ctx.show({x: root.width - 8px, y: root.height - 24px}); }
+                        }
                     }
-
+                    // Keep the series identifiable when several shows share a rail.
                     Text {
-                        text: root.entry.date;
-                        color: #7a7a8c;
-                        font-size: 11px;
-                        overflow: elide;
+                        x: 8px; y: 46px; width: parent.width - 16px; height: 14px;
+                        text: root.entry.episode_title != "" ? root.entry.title : root.entry.subtitle;
+                        color: #a7aec0; font-size: 10px; overflow: elide;
+                    }
+                    upcoming_date := Text {
+                        x: 8px; y: parent.height - 22px; width: parent.width - 16px; height: 14px;
+                        text: root.entry.date; color: #858d9f; font-size: 10px;
+                        vertical-alignment: center; overflow: elide;
                     }
                 }
             }
@@ -497,6 +549,7 @@ component UpcomingCard inherits Rectangle {
 // Landing section header: title + count, tappable to open the "see all"
 // subpage. Hover tints the row and a chevron signals the affordance.
 component SectionHeader inherits Rectangle {
+    width: 100%;
     in property <string> title;
     in property <int> count;
     callback open_all();
@@ -508,27 +561,28 @@ component SectionHeader inherits Rectangle {
     animate background { duration: Anim.hover_fast; }
 
     header_layout := HorizontalLayout {
+        width: 100%;
         padding-left: 4px;
         padding-right: 4px;
         spacing: 8px;
-        alignment: start;
 
         Text {
             text: root.title;
-            font-size: 26px;
+            font-size: 22px;
             font-weight: 700;
             color: #ffffff;
             min-width: 0px;
-            max-width: self.preferred-width;
             horizontal-stretch: 1;
             height: self.preferred-height;
             wrap: word-wrap;
         }
 
         Text {
-            text: "(" + root.count + ")";
-            font-size: 15px;
-            color: #6c6c7d;
+            text: @tr("See all");
+            horizontal-stretch: 0;
+            max-width: self.preferred-width;
+            font-size: 12px;
+            color: #c4c9d5;
             vertical-alignment: center;
         }
 
@@ -646,69 +700,41 @@ component CalToggle inherits Rectangle {
 
 component FeaturedActionButton inherits Rectangle {
     in property <string> label;
-    in property <bool> play;
     in property <bool> narrow;
     in property <bool> compact;
     out property <length> content_width: action_label.preferred-width + 28px;
     callback picked();
 
-    width: root.content_width + (root.compact ? 24px : (root.narrow ? 28px : 40px));
-    height: root.narrow ? 46px : 54px;
+    width: root.content_width + (root.compact ? 24px : 36px);
+    height: root.narrow ? 46px : 52px;
     border-radius: self.height / 2;
-    border-width: 1px;
-    border-color: #ffffff20;
-    background: action_touch.has-hover ? #ffffff20 : #00000099;
+    background: action_touch.has-hover
+        ? @linear-gradient(90deg, #b060ff, #9749f6)
+        : @linear-gradient(90deg, #a044ff, #8738ed);
     animate background { duration: Anim.hover_fast; }
 
     HorizontalLayout {
-        width: 100%;
-        height: 100%;
-        padding-left: root.compact ? 12px : (root.narrow ? 14px : 20px);
-        padding-right: root.compact ? 12px : (root.narrow ? 14px : 20px);
-        spacing: 8px;
-        alignment: center;
-
+        width: 100%; height: 100%;
+        padding-left: root.compact ? 12px : 18px;
+        padding-right: root.compact ? 12px : 18px;
+        spacing: 8px; alignment: center;
         Rectangle {
-            width: 20px;
-            height: 100%;
-
-            if root.play: Rectangle {
+            width: 20px; height: 100%;
+            IcPlay {
                 y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                border-radius: 10px;
-                background: #f4f4f5;
-                IcPlay {
-                    x: 3px;
-                    y: 3px;
-                    width: 14px;
-                    height: 14px;
-                    fill: #151517;
-                }
-            }
-            if !root.play: IcInfo {
-                y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                fill: #f4f4f5;
+                width: 20px; height: 20px; fill: #ffffff;
             }
         }
         action_label := Text {
             text: root.label;
             font-size: root.narrow ? (root.compact ? 13px : 14px) : 16px;
-            font-weight: 700;
-            color: #f4f4f5;
-            vertical-alignment: center;
-            min-width: 0px;
-            overflow: elide;
+            font-weight: 700; color: #ffffff; vertical-alignment: center;
+            min-width: 0px; overflow: elide;
         }
     }
     action_touch := TouchArea {
-        accessible-role: button;
-        accessible-label: root.label;
-        width: 100%;
-        height: 100%;
-        mouse-cursor: pointer;
+        accessible-role: button; accessible-label: root.label;
+        width: 100%; height: 100%; mouse-cursor: pointer;
         clicked => { root.picked(); }
     }
 }
@@ -717,88 +743,55 @@ component FeaturedActions inherits Rectangle {
     in property <bool> narrow;
     in property <bool> compact;
     in property <length> available-width: 100000px;
-    callback picked();
     callback watch_now();
-
-    // Equal pills match the centered narrow layout; compact type leaves room
-    // for the longer translated Details label on a portrait phone.
-    property <length> narrow_button_width: Math.max(details_button.content_width, watch_button.content_width)
-        + (root.compact ? 24px : 28px);
-    property <length> details_width: root.narrow ? root.narrow_button_width : details_button.content_width + (root.compact ? 24px : 40px);
-    property <length> watch_width: root.narrow ? root.narrow_button_width : watch_button.content_width + (root.compact ? 24px : 40px);
-    property <bool> stacked: root.narrow && root.details_width + root.watch_width + 12px > root.available-width;
-    width: Math.min(root.available-width, root.stacked ? root.narrow_button_width : root.details_width + root.watch_width + 12px);
-    height: root.stacked ? 104px : (root.narrow ? 46px : 54px);
-
-    details_button := FeaturedActionButton {
-        x: 0px;
-        y: 0px;
-        width: Math.min(root.width, root.details_width);
-        label: @tr("DETAILS");
-        narrow: root.narrow;
-        compact: root.compact;
-        picked => { root.picked(); }
-    }
+    width: Math.min(root.available-width, watch_button.content_width + (root.compact ? 24px : 36px));
+    height: root.narrow ? 46px : 52px;
     watch_button := FeaturedActionButton {
-        x: root.stacked ? 0px : details_button.width + 12px;
-        y: root.stacked ? 58px : 0px;
-        width: Math.min(root.width, root.watch_width);
-        label: @tr("WATCH NOW");
-        play: true;
-        narrow: root.narrow;
-        compact: root.compact;
+        x: 0px; y: 0px; width: 100%;
+        label: @tr("Watch Now"); narrow: root.narrow; compact: root.compact;
         picked => { root.watch_now(); }
     }
 }
 
+// Quiet inline metadata leaves the artwork visible, instead of separate pills.
 component FeaturedBadge inherits Rectangle {
     in property <string> label;
-    // 0 = plain media type, 1 = rating, 2 = runtime.
+    // 0 = media type, 1 = rating, 2 = runtime, 3 = release info.
     in property <int> icon;
     in property <bool> narrow;
-
-    // Let the metadata row shrink only when the combined natural widths do
-    // not fit. An equal per-badge cap needlessly elides longer runtime labels.
-    preferred-width: badge_label.preferred-width + 22px + (root.icon == 0 ? 0px : 21px);
-    min-width: 22px + (root.icon == 0 ? 0px : 21px);
+    preferred-width: badge_label.preferred-width + 23px;
+    min-width: 23px;
     max-width: self.preferred-width;
     horizontal-stretch: 1;
-    height: root.narrow ? 30px : 32px;
-    border-radius: self.height / 2;
-    background: #00000055;
+    height: root.narrow ? 26px : 30px;
 
     HorizontalLayout {
-        width: 100%;
-        height: 100%;
-        padding-left: 11px;
-        padding-right: 11px;
-        spacing: 5px;
-        alignment: center;
-
-        if root.icon != 0: Rectangle {
-            width: 16px;
-            height: 100%;
+        width: 100%; height: 100%; spacing: 5px; alignment: start;
+        Rectangle {
+            width: 18px; height: 100%;
+            if root.icon == 0: IcDisplay {
+                y: (parent.height - self.height) / 2;
+                width: 18px; height: 18px; fill: #a7aec0;
+            }
             if root.icon == 1: IcStarBorder {
                 y: (parent.height - self.height) / 2;
-                width: 16px;
-                height: 16px;
-                fill: #ededee;
+                width: 18px; height: 18px; fill: #a7aec0;
             }
             if root.icon == 2: IcSchedule {
                 y: (parent.height - self.height) / 2;
-                width: 16px;
-                height: 16px;
-                fill: #ededee;
+                width: 18px; height: 18px; fill: #a7aec0;
+            }
+            if root.icon == 3: Path {
+                y: (parent.height - self.height) / 2;
+                width: 18px; height: 18px; fill: #a7aec0;
+                viewbox-width: 24; viewbox-height: 24;
+                commands: "M19 4h-1V2h-2v2H8V2H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2zM7 12h4v4H7z";
             }
         }
         badge_label := Text {
-            text: root.label;
-            font-size: root.narrow ? 13px : 16px;
-            font-weight: 600;
-            color: #ededee;
-            vertical-alignment: center;
-            min-width: 0px;
-            overflow: elide;
+            text: root.label; font-size: root.narrow ? 12px : 15px;
+            color: #a7aec0; vertical-alignment: center;
+            min-width: 0px; overflow: elide;
         }
     }
 }
@@ -811,7 +804,7 @@ component FeaturedPagerButton inherits Rectangle {
     width: root.narrow ? 46px : 44px;
     height: self.width;
     border-radius: 9px;
-    background: pager_touch.has-hover ? #ffffff28 : #00000055;
+    background: pager_touch.has-hover ? #ffffff18 : transparent;
     animate background { duration: Anim.hover_fast; }
 
     if !root.next: IcChevronLeft {
@@ -844,6 +837,8 @@ struct FeaturedSlideData {
     media_type: string,
     rating: string,
     runtime: string,
+    release_info: string,
+    tagline: string,
     description: string,
     backdrop: image,
 }
@@ -854,7 +849,7 @@ component FeaturedCaption inherits VerticalLayout {
     in property <bool> narrow;
     in property <length> banner_width;
     height: self.preferred-height;
-    spacing: root.narrow ? 12px : 10px;
+    spacing: root.narrow ? 10px : 12px;
 
     function media_label() -> string {
         if (root.slide.media_type == "series") { return @tr("TV"); }
@@ -863,63 +858,41 @@ component FeaturedCaption inherits VerticalLayout {
         return root.slide.media_type;
     }
 
-    HorizontalLayout {
-        width: 100%;
-        height: root.narrow ? 30px : 32px;
-        spacing: 7px;
-        alignment: center;
-
-        if root.slide.media_type != "": FeaturedBadge {
-            label: root.media_label();
-            narrow: root.narrow;
-        }
-        if root.slide.rating != "": FeaturedBadge {
-            label: root.slide.rating;
-            icon: 1;
-            narrow: root.narrow;
-        }
-        if root.narrow && root.slide.runtime != "": FeaturedBadge {
-            label: root.slide.runtime;
-            icon: 2;
-            narrow: root.narrow;
-        }
+    caption_title := Text {
+        text: root.slide.title; width: 100%; height: self.preferred-height; max-lines: 2;
+        font-size: root.narrow ? (root.banner_width < 400px ? 30px : 36px)
+            : Math.min(52px, Math.max(34px, root.banner_width * 0.04));
+        font-weight: 700; color: #ffffff; horizontal-alignment: left;
+        wrap: word-wrap; overflow: elide; min-width: 0px;
     }
-    Text {
-        text: root.slide.title;
-        width: 100%;
-        height: self.preferred-height;
-        max-lines: 2;
-        font-size: root.narrow
-            ? (root.banner_width < 400px ? 24px : 28px)
-            : Math.min(48px, Math.max(32px, root.banner_width * 0.03));
-        font-weight: 700;
-        color: root.narrow ? #ffffff : #ededee;
-        horizontal-alignment: center;
-        wrap: word-wrap;
-        overflow: elide;
-        min-width: 0px;
+    if root.slide.tagline != "": caption_tagline := Text {
+        text: root.slide.tagline; width: 100%; height: self.preferred-height; max-lines: 2;
+        font-size: root.narrow ? 14px : 17px; color: #c4c9d5;
+        horizontal-alignment: left; wrap: word-wrap; overflow: elide; min-width: 0px;
     }
-    if !root.narrow && root.slide.description != "": Text {
-        text: root.slide.description;
-        width: 100%;
-        height: self.preferred-height;
-        max-lines: 3;
-        font-size: root.banner_width < 1200px ? 14px : 16px;
-        color: #b4b4b7;
-        horizontal-alignment: center;
-        wrap: word-wrap;
-        overflow: elide;
-        min-width: 0px;
+    caption_metadata := HorizontalLayout {
+        width: 100%; height: root.narrow ? 26px : 30px;
+        spacing: root.narrow ? 10px : 16px; alignment: start;
+        if root.slide.media_type != "": FeaturedBadge { label: root.media_label(); narrow: root.narrow; }
+        if root.slide.rating != "": FeaturedBadge { label: root.slide.rating; icon: 1; narrow: root.narrow; }
+        if root.slide.release_info != "": FeaturedBadge { label: root.slide.release_info; icon: 3; narrow: root.narrow; }
+        if root.slide.runtime != "": FeaturedBadge { label: root.slide.runtime; icon: 2; narrow: root.narrow; }
+    }
+    if root.slide.description != "": caption_description := Text {
+        text: root.slide.description; width: 100%; height: self.preferred-height; max-lines: 3;
+        font-size: root.narrow ? 14px : 16px; color: #b2b9c9;
+        horizontal-alignment: left; wrap: word-wrap; overflow: elide; min-width: 0px;
     }
 }
 
-// Catalog-driven backdrop at the top of Home. Text is centered within the
-// left column on wide screens; narrow screens stack the actions beneath it.
+// Catalog artwork with a left-aligned caption and a steady bottom control row.
 component FeaturedShowcase inherits Rectangle {
     in property <string> title;
     in property <string> media_type;
     in property <string> rating;
     in property <string> runtime;
+    in property <string> release_info;
+    in property <string> tagline;
     in property <string> description;
     in property <image> backdrop;
     in property <int> index;
@@ -959,6 +932,8 @@ component FeaturedShowcase inherits Rectangle {
             media_type: root.media_type,
             rating: root.rating,
             runtime: root.runtime,
+            release_info: root.release_info,
+            tagline: root.tagline,
             description: root.description,
             backdrop: root.backdrop,
         };
@@ -986,6 +961,8 @@ component FeaturedShowcase inherits Rectangle {
             || root.previous_slide.media_type != incoming.media_type
             || root.previous_slide.rating != incoming.rating
             || root.previous_slide.runtime != incoming.runtime
+            || root.previous_slide.release_info != incoming.release_info
+            || root.previous_slide.tagline != incoming.tagline
             || root.previous_slide.description != incoming.description;
         root.displayed_slide = incoming;
     }
@@ -1012,16 +989,20 @@ component FeaturedShowcase inherits Rectangle {
     }
 
     width: 100%;
-    // Stacked translated actions and wrapped captions need real room. Reserve
-    // the counter band above them, including the taller outgoing fade layer.
-    height: root.narrow
-        ? Math.max(Math.min(480px, Math.max(300px, root.width * 0.73)),
-            Math.max(current_caption.height, root.fading ? previous_caption.height : 0px)
-                + narrow_actions.height + 32px + (root.count > 1 ? 78px : 20px))
-        : Math.min(560px, Math.max(380px, root.width * 0.276));
-    border-radius: root.narrow ? 10px : 8px;
+    // Both caption layers reserve their measured height during a fade. Long
+    // translations can put the pager below the button instead of overlapping it.
+    property <length> inset: root.narrow ? 16px : 32px;
+    property <length> pager_width: root.count > 1 ? (root.narrow ? 134px : 152px) : 0px;
+    property <bool> controls_stacked: root.count > 1
+        && featured_actions.width + root.pager_width + 12px > root.width - root.inset * 2;
+    property <length> controls_height: featured_actions.height + (root.controls_stacked ? 50px : 0px);
+    height: Math.max(root.narrow ? Math.min(560px, Math.max(360px, root.width * 1.05))
+            : Math.min(640px, Math.max(420px, root.width * 0.42)),
+        Math.max(current_caption.height, root.fading ? previous_caption.height : 0px)
+            + root.controls_height + 110px);
+    border-radius: 0px;
     clip: true;
-    background: #08080a;
+    background: #080d17;
 
     Image {
         source: root.displayed_slide.backdrop;
@@ -1033,7 +1014,7 @@ component FeaturedShowcase inherits Rectangle {
     if root.fading && root.previous_slide.backdrop.width == 0: Rectangle {
         width: 100%;
         height: 100%;
-        background: #08080a;
+        background: #080d17;
         opacity: 1.0 - root.mix;
     }
     Image {
@@ -1061,12 +1042,14 @@ component FeaturedShowcase inherits Rectangle {
         property <length> start_x: 0px;
         property <length> start_y: 0px;
         property <bool> swiping: false;
+        property <bool> dragged: false;
         property <bool> hint_live: false;
         pointer-event(ev) => {
             if (ev.kind == PointerEventKind.down) {
                 swipe_area.start_x = swipe_area.mouse-x;
                 swipe_area.start_y = swipe_area.mouse-y;
                 swipe_area.swiping = false;
+                swipe_area.dragged = false;
                 swipe_area.hint_live = true;
             } else if (ev.kind == PointerEventKind.move) {
                 if (!(swipe_area.pressed || ev.touch-finger-id != 0)) {
@@ -1104,6 +1087,13 @@ component FeaturedShowcase inherits Rectangle {
                 root.pan_release();
             }
         }
+        moved => {
+            if ((self.pressed || swipe_area.hint_live)
+                && Math.abs(self.mouse-x - self.pressed-x) + Math.abs(self.mouse-y - self.pressed-y) > 12px) {
+                swipe_area.dragged = true;
+            }
+        }
+        clicked => { if (!swipe_area.dragged) { root.picked(); } }
         changed pressed => {
             if (!self.pressed && swipe_area.hint_live) {
                 swipe_area.swiping = false;
@@ -1113,96 +1103,42 @@ component FeaturedShowcase inherits Rectangle {
         }
     }
 
-    if root.count > 1: HorizontalLayout {
-        x: root.width - self.width - (root.narrow ? 20px : 18px);
-        y: root.narrow ? 20px : 18px;
-        width: root.narrow ? 86px : 188px;
-        height: root.narrow ? 46px : 44px;
-        spacing: 10px;
-
-        if !root.narrow: FeaturedPagerButton {
-            narrow: root.narrow;
-            stepped => { root.step(-1); }
+    if root.count > 1: featured_pager := HorizontalLayout {
+        x: root.width - self.width - root.inset;
+        y: root.height - self.height - 24px;
+        width: root.pager_width; height: 44px; spacing: 2px;
+        FeaturedPagerButton { narrow: root.narrow; stepped => { root.step(-1); } }
+        Text {
+            text: @tr("{} / {}", root.index + 1, root.count);
+            horizontal-stretch: 1; horizontal-alignment: center;
+            font-size: root.narrow ? 14px : 16px; font-weight: 600;
+            color: #e2e5ed; vertical-alignment: center;
         }
-        Rectangle {
-            width: root.narrow ? 86px : 80px;
-            height: root.narrow ? 46px : 44px;
-            border-radius: 9px;
-            background: #00000055;
-            HorizontalLayout {
-                width: 100%;
-                height: 100%;
-                spacing: 4px;
-                alignment: center;
-                Text {
-                    text: root.index + 1;
-                    font-size: 21px;
-                    font-weight: 700;
-                    color: #f4f4f5;
-                    vertical-alignment: center;
-                }
-                Text {
-                    text: "/";
-                    font-size: 21px;
-                    font-weight: 600;
-                    color: #f4f4f5;
-                    vertical-alignment: center;
-                }
-                Text {
-                    text: root.count;
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: #f4f4f5;
-                    vertical-alignment: center;
-                }
-            }
-        }
-        if !root.narrow: FeaturedPagerButton {
-            next: true;
-            narrow: root.narrow;
-            stepped => { root.step(1); }
-        }
+        FeaturedPagerButton { next: true; narrow: root.narrow; stepped => { root.step(1); } }
     }
 
-    // Each caption keeps its own wrapping/height while fading; the narrow
-    // action pills are anchored separately, below both caption layers.
+    // Text follows the same left edge and stays above the steady controls.
     previous_caption := FeaturedCaption {
-        slide: root.previous_slide;
-        narrow: root.narrow;
-        banner_width: root.width;
-        x: root.narrow ? 16px : 18px;
-        y: root.height - self.height - (root.narrow ? narrow_actions.height + 32px : 22px);
-        width: root.narrow ? root.width - 32px : Math.min(root.width * 0.51, wide_actions.x - 36px);
+        slide: root.previous_slide; narrow: root.narrow; banner_width: root.width;
+        x: root.inset;
+        y: root.height - self.height - root.controls_height - 40px;
+        width: root.narrow ? root.width - root.inset * 2 : Math.min(640px, root.width * 0.55);
         opacity: root.fading && root.fade_text ? 1.0 - root.mix : 0.0;
     }
     current_caption := FeaturedCaption {
-        slide: root.displayed_slide;
-        narrow: root.narrow;
-        banner_width: root.width;
-        x: root.narrow ? 16px : 18px;
-        y: root.height - self.height - (root.narrow ? narrow_actions.height + 32px : 22px);
-        width: root.narrow ? root.width - 32px : Math.min(root.width * 0.51, wide_actions.x - 36px);
+        slide: root.displayed_slide; narrow: root.narrow; banner_width: root.width;
+        x: root.inset;
+        y: root.height - self.height - root.controls_height - 40px;
+        width: root.narrow ? root.width - root.inset * 2 : Math.min(640px, root.width * 0.55);
         opacity: root.fading && root.fade_text ? root.mix : 1.0;
     }
-    narrow_actions := FeaturedActions {
-        visible: root.narrow;
-        narrow: true;
-        compact: root.width < 400px;
-        available-width: Math.max(0px, root.width - 32px);
-        x: (root.width - self.width) / 2;
-        y: root.height - self.height - 20px;
-        picked => { root.picked(); }
+    featured_actions := FeaturedActions {
+        narrow: root.narrow; compact: root.width < 400px;
+        available-width: Math.max(0px, root.width - root.inset * 2);
+        x: root.inset; y: root.height - root.controls_height - 24px;
         watch_now => { root.watch_now(); }
     }
 
-    wide_actions := FeaturedActions {
-        visible: !root.narrow;
-        x: root.width - self.width - 18px;
-        y: root.height - self.height - 18px;
-        compact: root.width < 1000px;
-        picked => { root.picked(); }
-        watch_now => { root.watch_now(); }
-    }
 }
 
 export component HomePage {
@@ -1229,6 +1165,8 @@ export component HomePage {
     in property <string> featured_type;
     in property <string> featured_rating;
     in property <string> featured_runtime;
+    in property <string> featured_release_info;
+    in property <string> featured_tagline;
     in property <string> featured_description;
     in property <image> featured_backdrop;
     in property <int> featured_index;
@@ -1255,7 +1193,7 @@ export component HomePage {
     property <length> grid_top: 8px;
     property <int> grid_cols: Math.max(root.min_cols, Math.floor((root.grid_width + root.item-gap) / (root.min-card + root.item-gap)));
     property <length> grid_item_width: Math.max(1px, Math.min(root.max-card, (root.grid_width - (root.grid_cols - 1) * root.item-gap) / root.grid_cols));
-    // Landing carousel card: ~2.5 cards across on narrow (Android), the
+    // Landing carousel card: ~2.45 cards visible on narrow (Android), the
     // grid card elsewhere.
     property <length> rail_item_width: root.narrow
         ? Math.max(96px, (land_scroll.width + root.item-gap) / 2.5 - root.item-gap)
@@ -1360,12 +1298,20 @@ export component HomePage {
     // Pure UI state: actions reuse the callbacks above.
     property <bool> menu_open: false;
     property <int> menu_idx: 0;
+    property <bool> menu_upcoming: false;
 
     function open_continue_menu(idx: int) {
         if (root.menu_open) {
             root.close_menu();
             return;
         }
+        root.menu_upcoming = false;
+        root.menu_idx = idx;
+        root.menu_open = true;
+    }
+
+    function open_upcoming_menu(idx: int) {
+        root.menu_upcoming = true;
         root.menu_idx = idx;
         root.menu_open = true;
     }
@@ -1724,7 +1670,7 @@ export component HomePage {
     Rectangle {
         width: 100%;
         height: 100%;
-        background: #0f0f12;
+        background: #080d17;
 
         // 6-button scope: overlays the page without intercepting the mouse.
         nav_scope := FocusScope {
@@ -1849,6 +1795,8 @@ export component HomePage {
                                 media_type: root.featured_type;
                                 rating: root.featured_rating;
                                 runtime: root.featured_runtime;
+                                release_info: root.featured_release_info;
+                                tagline: root.featured_tagline;
                                 description: root.featured_description;
                                 backdrop: root.featured_backdrop;
                                 index: root.featured_index;
@@ -1896,7 +1844,6 @@ export component HomePage {
                                 open_all => { root.open_subpage(1); }
                             }
 
-                            if root.continue_rows.length > 0: Rectangle { height: 1px; background: #23232b; }
 
                             // Horizontal carousel: the inner Flickable owns
                             // dragging and native momentum, like the stream
@@ -1957,13 +1904,12 @@ export component HomePage {
 
                             // ---- Upcoming (caught-up series, unaired) --
                             if root.upcoming_rows.length > 0: SectionHeader {
-                                title: @tr("Upcoming");
+                                title: @tr("Upcoming Episodes");
                                 count: root.upcoming_rows.length;
                                 changed y => { root.upcoming_top = self.y; }
                                 open_all => { root.open_subpage(2); }
                             }
 
-                            if root.upcoming_rows.length > 0: Rectangle { height: 1px; background: #23232b; }
 
                             upcoming_rail_host := Rectangle {
                                 visible: root.upcoming_rows.length > 0;
@@ -2003,6 +1949,7 @@ export component HomePage {
                                                 root.kb_up_idx = i;
                                                 root.upcoming_picked(i);
                                             }
+                                            menu_requested => { root.open_upcoming_menu(i); }
                                             pan_hint => {
                                                 root.kb_active = false;
                                                 root.rail_panned();
@@ -2020,7 +1967,7 @@ export component HomePage {
                 sub_layer := Rectangle {
                     width: 100%;
                     height: 100%;
-                    background: #0f0f12;
+                    background: #080d17;
                     x: root.view != 0 ? 0px : content_host.width;
                     opacity: root.view != 0 ? 1.0 : 0.0;
                     animate x { duration: Anim.transition_slide; easing: ease-out; }
@@ -2212,6 +2159,7 @@ export component HomePage {
                                                     reveal: root.sub_revealed;
                                                     reveal-delay: root.stagger ? i * 30ms : 0ms;
                                                     pointer_pressed => { root.kb_active = false; }
+                                                    menu_requested => { root.open_upcoming_menu(i); }
                                                     picked => {
                                                         root.kb_active = false;
                                                         root.kb_zone = 1;
@@ -2355,6 +2303,7 @@ export component HomePage {
                                                     touch_menus: root.touch_menus;
                                                     reveal: root.sub_revealed;
                                                     pointer_pressed => { root.kb_active = false; }
+                                                    menu_requested => { root.open_upcoming_menu(u.index); }
                                                     picked => {
                                                         root.kb_active = false;
                                                         root.upcoming_picked(u.index);
@@ -2430,16 +2379,21 @@ export component HomePage {
             safe-left: root.safe-left;
             safe-right: root.safe-right;
             max_h: root.height * 0.85;
-            sheet_title: root.menu_idx >= 0 && root.menu_idx < root.continue_rows.length
+            sheet_title: root.menu_upcoming && root.menu_idx >= 0 && root.menu_idx < root.upcoming_rows.length
+                ? root.upcoming_rows[root.menu_idx].title
+                : root.menu_idx >= 0 && root.menu_idx < root.continue_rows.length
                 ? root.continue_rows[root.menu_idx].title
                 : @tr("Continue Watching");
-            items: [
+            items: root.menu_upcoming ? [ { label: @tr("Enter series"), enabled: true } ] : [
                 { label: @tr("Play"), enabled: true },
                 { label: @tr("Enter series"), enabled: true },
                 { label: @tr("Remove from Continue Watching"), enabled: true },
             ];
             picked(a) => {
-                if (a == 0) {
+                if (root.menu_upcoming) {
+                    root.kb_active = false;
+                    root.upcoming_picked(root.menu_idx);
+                } else if (a == 0) {
                     root.kb_active = false;
                     root.kb_zone = 1;
                     root.kb_idx = root.menu_idx;

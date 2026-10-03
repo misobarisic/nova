@@ -277,6 +277,8 @@ impl Bridge {
                 app.set_home_featured_type(SharedString::default());
                 app.set_home_featured_rating(SharedString::default());
                 app.set_home_featured_runtime(SharedString::default());
+                app.set_home_featured_release_info(SharedString::default());
+                app.set_home_featured_tagline(SharedString::default());
                 app.set_home_featured_description(SharedString::default());
                 app.set_home_featured_backdrop(Image::default());
                 app.set_home_featured_index(0);
@@ -296,6 +298,16 @@ impl Bridge {
             app.set_home_featured_runtime(SharedString::from(
                 first.runtime.as_deref().unwrap_or_default(),
             ));
+            app.set_home_featured_release_info(first.year_str().unwrap_or_default().into());
+            app.set_home_featured_tagline(
+                first
+                    .extra
+                    .get("tagline")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .into(),
+            );
             app.set_home_featured_description(SharedString::from(
                 first.description.as_deref().unwrap_or_default(),
             ));
@@ -425,6 +437,16 @@ impl Bridge {
             app.set_home_featured_runtime(SharedString::from(
                 preview.runtime.as_deref().unwrap_or_default(),
             ));
+            app.set_home_featured_release_info(preview.year_str().unwrap_or_default().into());
+            app.set_home_featured_tagline(
+                preview
+                    .extra
+                    .get("tagline")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .into(),
+            );
             app.set_home_featured_description(SharedString::from(
                 preview.description.as_deref().unwrap_or_default(),
             ));
@@ -597,13 +619,14 @@ impl Bridge {
     /// entries for title/poster and the episode cache for the label).
     /// Posters paint instantly when already decoded, otherwise dispatch.
     pub(super) fn current_continue_rows(&self) -> Vec<ContinueRow> {
-        let (entries, progress, list, enabled) = {
+        let (entries, progress, list, enabled, show_unwatched_thumbs) = {
             let state = self.shared.lock().unwrap();
             (
                 state.entries.clone(),
                 state.progress.clone(),
                 state.continue_list.clone(),
                 state.cache_settings.home_continue_enabled,
+                state.cache_settings.show_unwatched_thumbs,
             )
         };
         if !enabled {
@@ -613,9 +636,8 @@ impl Bridge {
             .filter_map(|c| {
                 let e = entries.iter().find(|e| e.id == c.series_id)?;
                 let episodes = read_episodes_cache_for(&c.type_, &c.series_id).unwrap_or_default();
-                let subtitle = episodes
-                    .iter()
-                    .find(|v| v.id == c.episode_id)
+                let video = episodes.iter().find(|v| v.id == c.episode_id);
+                let subtitle = video
                     .map(|v| format!("{} · {}", episode_badge(v), episode_row_label(v)))
                     .unwrap_or_else(|| text::tr("Resume").to_string());
                 let record = progress.get(&progress_map_key(&c.series_id, &c.episode_id));
@@ -633,21 +655,20 @@ impl Bridge {
                     };
                     continue_badge(started, &c.episode_id, &episodes, is_watched)
                 };
-                let (poster, is_loaded) = if e.poster_url.is_empty() {
-                    (Image::default(), false)
-                } else {
-                    match decoded_cache_get(&sized_cache_key(
-                        &e.poster_url,
-                        Some(DISPLAY_POSTER_SIDE),
-                    )) {
-                        Some(buf) => (Image::from_rgba8(buf), true),
-                        None => (Image::default(), false),
-                    }
-                };
+                // Respect the unwatched-thumbnail preference while still
+                // allowing artwork for episodes the user has already started.
+                let show_thumbnail = show_unwatched_thumbs
+                    || record.is_some_and(|p| p.watched || p.position_secs > 0.0);
+                let art_url = home_card_art_url(&e.poster_url, video, show_thumbnail);
+                let (poster, is_loaded) = home_card_image(&art_url, &e.poster_url);
                 Some(ContinueRow {
                     id: SharedString::from(&c.series_id),
                     title: SharedString::from(&e.name),
                     subtitle: SharedString::from(&subtitle),
+                    episode_title: video.map(episode_row_label).unwrap_or_default().into(),
+                    ep_no: video.map(episode_badge).unwrap_or_default().into(),
+                    remaining: continue_remaining(record).into(),
+                    art_url: art_url.into(),
                     poster,
                     is_loaded,
                     progress: fraction,
@@ -678,9 +699,11 @@ impl Bridge {
         if continue_model.row_count() == continue_rows.len() {
             for (index, fresh) in continue_rows.into_iter().enumerate() {
                 if let Some(mut current) = continue_model.row_data(index)
-                    && current.subtitle != fresh.subtitle
+                    && (current.subtitle != fresh.subtitle || current.remaining != fresh.remaining)
                 {
                     current.subtitle = fresh.subtitle;
+                    current.episode_title = fresh.episode_title;
+                    current.remaining = fresh.remaining;
                     continue_model.set_row_data(index, current);
                 }
             }
@@ -697,6 +720,7 @@ impl Bridge {
                 {
                     current.subtitle = fresh.subtitle;
                     current.date = fresh.date;
+                    current.episode_title = fresh.episode_title;
                     upcoming_model.set_row_data(index, current);
                 }
             }
@@ -718,6 +742,7 @@ impl Bridge {
                 {
                     current.subtitle = fresh.subtitle;
                     current.date = fresh.date;
+                    current.episode_title = fresh.episode_title;
                     day_model.set_row_data(index, current);
                 }
             }
@@ -791,13 +816,14 @@ impl Bridge {
     /// Upcoming list, so filtered views (the calendar's selected day) still
     /// resolve picks.
     pub(super) fn current_upcoming_rows(&self) -> Vec<UpcomingRow> {
-        let (entries, list, date_relative, enabled) = {
+        let (entries, list, date_relative, enabled, show_unwatched_thumbs) = {
             let state = self.shared.lock().unwrap();
             (
                 state.entries.clone(),
                 state.upcoming_list.clone(),
                 state.cache_settings.date_relative,
                 state.cache_settings.home_upcoming_enabled,
+                state.cache_settings.show_unwatched_thumbs,
             )
         };
         if !enabled {
@@ -805,7 +831,7 @@ impl Bridge {
         }
         list.iter()
             .enumerate()
-            .filter_map(|(i, u)| upcoming_row(&entries, u, i, date_relative))
+            .filter_map(|(i, u)| upcoming_row(&entries, u, i, date_relative, show_unwatched_thumbs))
             .collect()
     }
 
@@ -813,13 +839,14 @@ impl Bridge {
     /// as [`Self::current_upcoming_rows`]; `index` still positions into the
     /// full Upcoming list, so card taps resolve through `upcoming_picked`.
     pub(super) fn current_upcoming_day_rows(&self, day: i64) -> Vec<UpcomingRow> {
-        let (entries, list, date_relative, enabled) = {
+        let (entries, list, date_relative, enabled, show_unwatched_thumbs) = {
             let state = self.shared.lock().unwrap();
             (
                 state.entries.clone(),
                 state.upcoming_list.clone(),
                 state.cache_settings.date_relative,
                 state.cache_settings.home_upcoming_enabled,
+                state.cache_settings.show_unwatched_thumbs,
             )
         };
         if !enabled {
@@ -828,7 +855,7 @@ impl Bridge {
         list.iter()
             .enumerate()
             .filter(|(_, u)| u.air_days == day)
-            .filter_map(|(i, u)| upcoming_row(&entries, u, i, date_relative))
+            .filter_map(|(i, u)| upcoming_row(&entries, u, i, date_relative, show_unwatched_thumbs))
             .collect()
     }
 
@@ -1202,6 +1229,45 @@ fn merge_home_showcase_results(mut batches: Vec<(usize, Vec<MetaPreview>)>) -> V
     merged
 }
 
+/// Use an episode thumbnail when allowed, otherwise the library poster.
+/// The selected URL travels with the model so late image loads cannot replace
+/// a card whose episode changed while the same series stayed in its slot.
+fn home_card_art_url(poster_url: &str, video: Option<&Video>, show_thumbnail: bool) -> String {
+    video
+        .filter(|_| show_thumbnail)
+        .and_then(|v| v.thumbnail.as_deref())
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .unwrap_or(poster_url.trim())
+        .to_string()
+}
+
+fn home_card_image(url: &str, fallback: &str) -> (Image, bool) {
+    decoded_cache_get(&sized_cache_key(url, Some(DISPLAY_POSTER_SIDE)))
+        .or_else(|| decoded_cache_get(&sized_cache_key(fallback, Some(DISPLAY_POSTER_SIDE))))
+        .map(|buf| (Image::from_rgba8(buf), true))
+        .unwrap_or_else(|| (Image::default(), false))
+}
+
+fn continue_remaining(record: Option<&EpisodeProgress>) -> String {
+    let Some(record) = record else {
+        return String::new();
+    };
+    if record.watched {
+        return text::tr("Completed").into();
+    }
+    if record.position_secs > 0.0
+        && record.duration_secs > record.position_secs
+        && record.position_secs.is_finite()
+        && record.duration_secs.is_finite()
+    {
+        return text::minutes_left(
+            ((record.duration_secs - record.position_secs) / 60.0).ceil() as u64,
+        );
+    }
+    String::new()
+}
+
 /// One Home → Upcoming display row: library + episode-cache joins for a
 /// single [`UpcomingEntry`]. `index` is the entry's position in the full
 /// Upcoming list, so picks from filtered views (the calendar's selected day)
@@ -1211,6 +1277,7 @@ fn upcoming_row(
     u: &UpcomingEntry,
     index: usize,
     date_relative: bool,
+    show_thumbnail: bool,
 ) -> Option<UpcomingRow> {
     let e = entries.iter().find(|e| e.id == u.series_id)?;
     let episodes = read_episodes_cache_for(&u.type_, &u.series_id).unwrap_or_default();
@@ -1221,19 +1288,16 @@ fn upcoming_row(
         .as_deref()
         .and_then(|d| Bridge::format_human_date(d, date_relative))
         .unwrap_or_default();
-    let (poster, is_loaded) = if e.poster_url.is_empty() {
-        (Image::default(), false)
-    } else {
-        match decoded_cache_get(&sized_cache_key(&e.poster_url, Some(DISPLAY_POSTER_SIDE))) {
-            Some(buf) => (Image::from_rgba8(buf), true),
-            None => (Image::default(), false),
-        }
-    };
+    let art_url = home_card_art_url(&e.poster_url, Some(v), show_thumbnail);
+    let (poster, is_loaded) = home_card_image(&art_url, &e.poster_url);
     Some(UpcomingRow {
         id: SharedString::from(&u.series_id),
         title: SharedString::from(&e.name),
         subtitle: SharedString::from(&subtitle),
         date: SharedString::from(&date),
+        episode_title: episode_row_label(v).into(),
+        ep_no: episode_badge(v).into(),
+        art_url: art_url.into(),
         poster,
         is_loaded,
         index: index as i32,
@@ -1406,6 +1470,80 @@ pub(crate) fn write_continue_hidden(map: &HashMap<String, u64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn home_card_artwork_respects_episode_availability_and_spoiler_preference() {
+        let mut episode = Video {
+            thumbnail: Some(" https://example.invalid/episode.jpg ".into()),
+            ..Default::default()
+        };
+        let poster = "https://example.invalid/poster.jpg";
+        assert_eq!(
+            home_card_art_url(poster, Some(&episode), true),
+            "https://example.invalid/episode.jpg"
+        );
+        assert_eq!(home_card_art_url(poster, Some(&episode), false), poster);
+        assert_eq!(home_card_art_url(poster, None, true), poster);
+        episode.thumbnail = Some("  ".into());
+        assert_eq!(home_card_art_url(poster, Some(&episode), true), poster);
+        episode.thumbnail = None;
+        assert_eq!(home_card_art_url(poster, Some(&episode), true), poster);
+    }
+
+    #[test]
+    fn home_card_keeps_cached_poster_until_episode_artwork_arrives() {
+        use nova_media::cache::decoded_cache_insert;
+        let primary = "https://example.invalid/home-card-cache-episode.jpg";
+        let fallback = "https://example.invalid/home-card-cache-poster.jpg";
+        decoded_cache_insert(
+            &sized_cache_key(fallback, Some(DISPLAY_POSTER_SIDE)),
+            SharedPixelBuffer::<Rgba8Pixel>::new(3, 2),
+        );
+        let (image, loaded) = home_card_image(primary, fallback);
+        assert!(loaded);
+        assert_eq!(image.size().width, 3);
+        decoded_cache_insert(
+            &sized_cache_key(primary, Some(DISPLAY_POSTER_SIDE)),
+            SharedPixelBuffer::<Rgba8Pixel>::new(4, 2),
+        );
+        let (image, loaded) = home_card_image(primary, fallback);
+        assert!(loaded);
+        assert_eq!(image.size().width, 4);
+    }
+
+    #[test]
+    fn home_remaining_time_requires_known_playback_and_rounds_up() {
+        text::with_language(nova_config::Language::English, || {
+            assert_eq!(continue_remaining(None), "");
+            let mut record = EpisodeProgress {
+                position_secs: 120.0,
+                duration_secs: 241.0,
+                ..Default::default()
+            };
+            assert_eq!(continue_remaining(Some(&record)), "3 min left");
+            record.duration_secs = 121.0;
+            assert_eq!(continue_remaining(Some(&record)), "1 min left");
+            for duration in [0.0, 110.0, f64::NAN, f64::INFINITY] {
+                record.duration_secs = duration;
+                assert_eq!(continue_remaining(Some(&record)), "");
+            }
+            record.duration_secs = 240.0;
+            record.position_secs = 0.0;
+            assert_eq!(continue_remaining(Some(&record)), "");
+            record.watched = true;
+            assert_eq!(continue_remaining(Some(&record)), "Completed");
+        });
+        text::with_language(nova_config::Language::Croatian, || {
+            assert_eq!(
+                continue_remaining(Some(&EpisodeProgress {
+                    position_secs: 120.0,
+                    duration_secs: 241.0,
+                    ..Default::default()
+                })),
+                "još 3 min"
+            );
+        });
+    }
 
     fn showcase_source(catalog: &str, genre: &str) -> HomeCatalogSource {
         HomeCatalogSource {
@@ -1635,19 +1773,23 @@ mod tests {
             assert_eq!(home_showcase_sources(&state), vec![source.clone()]);
         }
         let mut cached = HomeShowcaseCache::default();
+        let mut cached_first = showcase_preview("cached-a");
+        cached_first.release_info = Some(serde_json::json!(2016));
+        cached_first
+            .extra
+            .insert("tagline".into(), serde_json::json!("Cached tagline"));
         cached.update(
             std::slice::from_ref(&source),
             vec![(
                 source.clone(),
-                Some(vec![
-                    showcase_preview("cached-a"),
-                    showcase_preview("cached-b"),
-                ]),
+                Some(vec![cached_first, showcase_preview("cached-b")]),
             )],
         );
         write_json(HOME_SHOWCASE_CACHE_KEY, &cached);
         bridge.refresh_home_showcase();
         assert_eq!(app.get_home_featured_title(), "cached-a");
+        assert_eq!(app.get_home_featured_release_info(), "2016");
+        assert_eq!(app.get_home_featured_tagline(), "Cached tagline");
         assert_eq!(app.get_home_featured_count(), 2);
         let revision = app.get_home_featured_revision();
         let generation = bridge.home_showcase_gen.load(Ordering::Relaxed);
@@ -1677,6 +1819,8 @@ mod tests {
         );
         bridge.home_showcase_step(1);
         assert_eq!(app.get_home_featured_title(), "fresh-b");
+        assert_eq!(app.get_home_featured_release_info(), "");
+        assert_eq!(app.get_home_featured_tagline(), "");
         assert_eq!(app.get_home_featured_index(), 2);
         assert_eq!(app.get_home_featured_count(), 3);
         assert!(!app.get_home_featured_refresh_pending());
