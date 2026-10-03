@@ -535,6 +535,14 @@ the app ignores unknown domains, so old peers stay compatible.
 
 `nova-config` exposes `android_fonts_dir()` (libmpv subtitle fonts).
 
+Windows in-app playback uses `configure_desktop_decoder` in
+`crates/player/src/lib.rs` to request mpv's `hwdec=auto-copy`. Hardware-decoded
+frames return to system memory before upload into Slint's shared OpenGL
+context, avoiding direct decoder-surface interop; mpv falls back to software
+when no compatible copy decoder is available. Other desktop targets retain
+`hwdec=auto`, and Android retains its MediaCodec preference/fallback chain.
+Copying frames can cost additional memory bandwidth, especially at 4K.
+
 ---
 
 ## 8. Testing
@@ -680,6 +688,7 @@ the app ignores unknown domains, so old peers stay compatible.
 | Detail hero / tap-to-expand description / scroll fade / responsive overview / full-width episode and stream layouts / Watch Now selection | `src/app/detail.rs`, `src/app/streams.rs`, `crates/ui/detail.slint` |
 | Add a persisted app field | `src/app.rs` (struct), `src/app/io.rs` + relevant module's `read/write_persisted_*`, then `src/app/sync.rs` if it should sync |
 | Touch playback | `crates/player/src/lib.rs`, `src/app/playback.rs`, `crates/ui/player.slint` |
+| Windows decoder artifacts / hardware decode policy | `crates/player/src/lib.rs` (`configure_desktop_decoder`, `tests::desktop_decoder_policy_is_accepted_by_mpv`); [mpv render API requirements](https://github.com/mpv-player/mpv/blob/master/include/mpv/render_gl.h) |
 | Bottom-sheet / player feedback motion | `crates/ui/menusheet.slint` (`open` + retained exit), `crates/ui/player.slint` (`flash_pill`), `crates/ui/anim.slint` (category durations), `tests/animation_feedback.rs` |
 | Responsive navigation / compact icon-only left rail / phone bar / icon feedback | `crates/ui/sidenav.slint` (`SideNav`, `NavMetrics`, `NavFeedback`, `NavState`), `crates/ui/bottomnav.slint`, `crates/ui/icons.slint` (`IcExplore`), `src/app/run.rs` (`note_nav_switch`), `tests/navbar_motion.rs`, `tests/nav_marker_glide.rs` |
 | Android player gestures (swipe volume/brightness) | `src/app/android_player.rs` (volume via any `Context`, brightness via the stashed `NativeActivity` — the `ndk-context` `Context` is not necessarily an `Activity`), `android/java/dev/misob/nova/PlayerFx.java`, `crates/ui/player.slint` (backdrop state machine) |

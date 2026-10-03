@@ -36,6 +36,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(not(target_os = "android"))]
+fn configure_desktop_decoder(mpv: &Mpv) -> libmpv2::Result<()> {
+    // The embedded renderer uses Slint's OpenGL context, not an mpv-owned
+    // D3D11/ANGLE context. On Windows, copy decoded frames back before GL
+    // upload to avoid direct decoder-surface interop as a source of artifacts.
+    // auto-copy retains hardware decoding, with mpv's software fallback.
+    let mode = if cfg!(target_os = "windows") {
+        "auto-copy"
+    } else {
+        "auto"
+    };
+    mpv.set_property("hwdec", mode)
+}
+
 fn mpv_http_header_fields(headers: &[(String, String)]) -> Vec<String> {
     let mut fields = Vec::new();
     let mut total_bytes = 0usize;
@@ -1110,7 +1124,7 @@ impl Player {
                     alog("subtitles: PGS/bitmap decode requires the full-flavor libmpv");
                 }
                 #[cfg(not(target_os = "android"))]
-                let _ = mpv.set_property("hwdec", "auto");
+                let _ = configure_desktop_decoder(mpv);
                 None
             }
             Err(e) => Some(format!("failed to initialize mpv: {e}")),
@@ -2481,6 +2495,24 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn desktop_decoder_policy_is_accepted_by_mpv() {
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_property("config", false)?;
+            init.set_property("vo", "null")?;
+            init.set_property("ao", "null")
+        })
+        .unwrap();
+        configure_desktop_decoder(&mpv).unwrap();
+        let expected = if cfg!(target_os = "windows") {
+            "auto-copy"
+        } else {
+            "auto"
+        };
+        assert_eq!(mpv.get_property::<String>("hwdec").unwrap(), expected);
+    }
 
     #[test]
     fn header_fields_preserve_commas_backslashes_and_clear_between_streams() {
