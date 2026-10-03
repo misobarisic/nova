@@ -55,9 +55,10 @@ static BARS_WANT: AtomicI8 = AtomicI8::new(0);
 
 /// Last **confirmed applied** immersive state: `0` bars shown, `1` bars hidden.
 /// Stays put when a call fails or the insets controller is not attached yet, so
-/// the next re-assert retries instead of assuming success. Initialised to "bars
-/// shown" (true at process start) so startup does not fire a needless JNI call.
-static BARS_STATE: AtomicI8 = AtomicI8::new(0);
+/// the next re-assert retries instead of assuming success. Starts unknown so
+/// the first player tick establishes the catalog's edge-to-edge layout before
+/// any playback has opened.
+static BARS_STATE: AtomicI8 = AtomicI8::new(-1);
 
 /// Probe window focus at most once every this many [`reassert_system_bars`] calls
 /// (≈2 s at the player's 250 ms tick). The probe is a cheap `View.hasWindowFocus`
@@ -455,11 +456,12 @@ pub fn open_browser(url: &str) -> Result<(), String> {
 /// `View.SYSTEM_UI_FLAG_*` bits for immersive-sticky mode. Used on API 26–29
 /// (where `WindowInsetsController` does not exist); API 30+ hides the same two
 /// bars through the controller instead.
+// Keep catalog backgrounds under visible bars; Slint forwards their insets
+// so pages can protect text and controls independently from the artwork.
+const EDGE_TO_EDGE: jint = 0x0000_0100 | 0x0000_0200 | 0x0000_0400;
 const IMMERSIVE_STICKY: jint = 0x0000_0002 // SYSTEM_UI_FLAG_HIDE_NAVIGATION
     | 0x0000_0004 // SYSTEM_UI_FLAG_FULLSCREEN
-    | 0x0000_0100 // SYSTEM_UI_FLAG_LAYOUT_STABLE
-    | 0x0000_0200 // SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-    | 0x0000_0400 // SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+    | EDGE_TO_EDGE
     | 0x0000_1000; // SYSTEM_UI_FLAG_IMMERSIVE_STICKY
 
 /// `WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`: a swipe
@@ -614,6 +616,13 @@ fn apply_system_bars() -> Result<(), String> {
         // reveal is transient only while `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`
         // is in effect, and the framework can drop it across focus changes.
         let transition = BARS_STATE.load(Ordering::SeqCst) != desired;
+        if transition {
+            // A transparent status bar reveals Home's backdrop on API 26–34
+            // too; Android 15 enforces this for our target SDK already.
+            window.add_flags(env, 0x8000_0000_u32 as jint)?; // FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS
+            window.clear_flags(env, 0x0400_0000)?; // FLAG_TRANSLUCENT_STATUS
+            window.set_status_bar_color(env, 0)?;
+        }
 
         // API 30+: the supported path. On API 26–29 `getInsetsController` does
         // not exist, so the lookup errors and the legacy flags below do the
@@ -624,10 +633,9 @@ fn apply_system_bars() -> Result<(), String> {
             Ok(controller) if !controller.is_null() => {
                 let types = NovaWindowInsetsType::system_bars(env)?;
                 if transition {
-                    // Draw edge-to-edge while immersive (bars taken out of the
-                    // layout), and fit them again once restored. Needed on
-                    // API 30–34 for `hide()` to really drop the bars.
-                    if let Err(e) = window.set_decor_fits_system_windows(env, !hidden) {
+                    // Restoring visible bars must retain edge-to-edge drawing.
+                    // Safe-area insets still protect the catalog's controls.
+                    if let Err(e) = window.set_decor_fits_system_windows(env, false) {
                         alog(&format!(
                             "system UI: setDecorFitsSystemWindows failed: {e:?}"
                         ));
@@ -652,7 +660,11 @@ fn apply_system_bars() -> Result<(), String> {
             Err(_) => {
                 // API 26–29: the legacy immersive flags are the only mechanism.
                 let decor = window.get_decor_view(env)?;
-                let flags = if hidden { IMMERSIVE_STICKY } else { 0 };
+                let flags = if hidden {
+                    IMMERSIVE_STICKY
+                } else {
+                    EDGE_TO_EDGE
+                };
                 decor.set_system_ui_visibility(env, flags)?;
                 applied = true;
             }
@@ -703,6 +715,7 @@ bind_java_type! {
     methods {
         fn get_decor_view { name = "getDecorView", sig = () -> NovaView, },
         fn get_insets_controller { name = "getInsetsController", sig = () -> NovaWindowInsetsController, },
+        fn set_status_bar_color { name = "setStatusBarColor", sig = (color: jint), },
         fn set_decor_fits_system_windows { name = "setDecorFitsSystemWindows", sig = (decor_fits: jboolean), },
         fn add_flags { name = "addFlags", sig = (mask: jint), },
         fn clear_flags { name = "clearFlags", sig = (mask: jint), },

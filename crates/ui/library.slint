@@ -763,6 +763,10 @@ export component LibraryPage {
             if root.narrow: bottom := BottomNav {
                 active: 2;
                 safe-bottom: root.safe-bottom;
+                safe-left: root.safe-left;
+                safe-right: root.safe-right;
+                page-inset-left: 18px + root.safe-left;
+                page-inset-right: 18px + root.safe-right;
                 kb_zone: root.kb_zone;
                 kb_nav: root.kb_nav;
                 kb_active <=> root.kb_active;

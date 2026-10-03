@@ -64,56 +64,6 @@ component HomeEpisodeBadge inherits Rectangle {
     }
 }
 
-// A visible menu affordance shares the card's existing early axis hints, so
-// starting a flick over its small hit area does not let the page steal it.
-component HomeCardMenuButton inherits Rectangle {
-    in property <bool> tappable: true;
-    in property <bool> rail-gesture: false;
-    callback picked();
-    callback pointer_pressed();
-    callback pan_hint();
-    callback pan_release();
-    width: 22px; height: 32px;
-    Text { text: "⋮"; color: #bbc1d0; font-size: 21px; horizontal-alignment: center; vertical-alignment: center; }
-    menu_touch := TouchArea {
-        enabled: root.tappable;
-        accessible-role: button;
-        accessible-label: @tr("More options");
-        mouse-cursor: pointer;
-        property <bool> dragged: false;
-        property <length> hint_x;
-        property <length> hint_y;
-        property <bool> hint_live: false;
-        property <bool> hint_held: false;
-        function hint_stop() {
-            self.hint_live = false;
-            if (self.hint_held) { self.hint_held = false; root.pan_release(); }
-        }
-        pointer-event(ev) => {
-            if (ev.kind == PointerEventKind.down) {
-                root.pointer_pressed(); self.dragged = false;
-                self.hint_x = self.mouse-x; self.hint_y = self.mouse-y; self.hint_live = true;
-            } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
-                self.hint_stop();
-            } else if (ev.kind == PointerEventKind.move && root.rail-gesture) {
-                if (!(self.pressed || ev.touch-finger-id != 0)) { self.hint_stop(); return; }
-                if (!self.hint_live) { self.hint_x = self.mouse-x; self.hint_y = self.mouse-y; self.hint_live = true; }
-                let dx = self.mouse-x - self.hint_x;
-                let dy = self.mouse-y - self.hint_y;
-                if (Math.abs(dy) > 8px && Math.abs(dy) > Math.abs(dx)) { self.hint_stop(); }
-                else { self.hint_held = true; root.pan_hint(); }
-            }
-        }
-        changed pressed => { if (!self.pressed) { self.hint_stop(); } }
-        moved => {
-            if ((self.pressed || self.hint_live) && Math.abs(self.mouse-x - self.pressed-x) + Math.abs(self.mouse-y - self.pressed-y) > 12px) {
-                self.dragged = true;
-            }
-        }
-        clicked => { if (!self.dragged) { root.picked(); } }
-    }
-}
-
 // One Continue Watching card, shared by the landing carousel and the "see
 // all" subpage grid. The `reveal` layer runs the subpage entrance stagger;
 // on the landing (`reveal` stays true) only the hover lift animates.
@@ -356,20 +306,10 @@ component ContinueCard inherits Rectangle {
                     }
                     continue_title := Text {
                         x: 8px; y: root.entry.progress > 0 ? 24px : 8px;
-                        width: parent.width - 38px; height: 34px;
+                        width: parent.width - 16px; height: 34px;
                         text: root.entry.episode_title != "" ? root.entry.episode_title : root.entry.title;
                         color: #eeeeF4; font-size: 12px; font-weight: 600;
                         vertical-alignment: top; wrap: word-wrap; overflow: elide;
-                    }
-                    continue_menu := HomeCardMenuButton {
-                        x: parent.width - self.width - 3px; y: continue_title.y;
-                        tappable: root.tappable; rail-gesture: root.rail-gesture;
-                        pointer_pressed => { root.pointer_pressed(); }
-                        pan_hint => { root.pan_hint(); } pan_release => { root.pan_release(); }
-                        picked => {
-                            if (root.touch_menus) { root.menu_requested(); }
-                            else { cont_ctx.show({x: root.width - 8px, y: root.height - 24px}); }
-                        }
                     }
                     continue_status := Text {
                         x: 8px; y: parent.height - 17px; width: parent.width - 16px; height: 14px;
@@ -514,20 +454,10 @@ component UpcomingCard inherits Rectangle {
                 upcoming_footer := Rectangle {
                     height: 88px;
                     upcoming_title := Text {
-                        x: 8px; y: 8px; width: parent.width - 38px; height: 34px;
+                        x: 8px; y: 8px; width: parent.width - 16px; height: 34px;
                         text: root.entry.episode_title != "" ? root.entry.episode_title : root.entry.title;
                         color: #eeeef4; font-size: 12px; font-weight: 600;
                         vertical-alignment: top; wrap: word-wrap; overflow: elide;
-                    }
-                    upcoming_menu := HomeCardMenuButton {
-                        x: parent.width - self.width - 3px; y: 8px;
-                        tappable: root.tappable; rail-gesture: root.rail-gesture;
-                        pointer_pressed => { root.pointer_pressed(); }
-                        pan_hint => { root.pan_hint(); } pan_release => { root.pan_release(); }
-                        picked => {
-                            if (root.touch_menus) { root.menu_requested(); }
-                            else { up_ctx.show({x: root.width - 8px, y: root.height - 24px}); }
-                        }
                     }
                     // Keep the series identifiable when several shows share a rail.
                     Text {
@@ -707,10 +637,12 @@ component FeaturedActionButton inherits Rectangle {
 
     width: root.content_width + (root.compact ? 24px : 36px);
     height: root.narrow ? 46px : 52px;
-    border-radius: self.height / 2;
+    border-radius: root.narrow ? 18px : 22px;
     background: action_touch.has-hover
-        ? @linear-gradient(90deg, #b060ff, #9749f6)
-        : @linear-gradient(90deg, #a044ff, #8738ed);
+        ? @linear-gradient(110deg, #b079ff, #5657ef)
+        : @linear-gradient(110deg, #a15bff, #644bff, #443dcc);
+    border-width: 1px;
+    border-color: #b4a1ff70;
     animate background { duration: Anim.hover_fast; }
 
     HorizontalLayout {
@@ -728,7 +660,7 @@ component FeaturedActionButton inherits Rectangle {
         action_label := Text {
             text: root.label;
             font-size: root.narrow ? (root.compact ? 13px : 14px) : 16px;
-            font-weight: 700; color: #ffffff; vertical-alignment: center;
+            font-weight: 600; color: #ffffff; vertical-alignment: center;
             min-width: 0px; overflow: elide;
         }
     }
@@ -862,7 +794,7 @@ component FeaturedCaption inherits VerticalLayout {
         text: root.slide.title; width: 100%; height: self.preferred-height; max-lines: 2;
         font-size: root.narrow ? (root.banner_width < 400px ? 30px : 36px)
             : Math.min(52px, Math.max(34px, root.banner_width * 0.04));
-        font-weight: 700; color: #ffffff; horizontal-alignment: left;
+        font-weight: 800; color: #ffffff; horizontal-alignment: left;
         wrap: word-wrap; overflow: elide; min-width: 0px;
     }
     if root.slide.tagline != "": caption_tagline := Text {
@@ -880,7 +812,7 @@ component FeaturedCaption inherits VerticalLayout {
     }
     if root.slide.description != "": caption_description := Text {
         text: root.slide.description; width: 100%; height: self.preferred-height; max-lines: 3;
-        font-size: root.narrow ? 14px : 16px; color: #b2b9c9;
+        font-size: root.narrow ? 14px : 16px; color: #bec3d2;
         horizontal-alignment: left; wrap: word-wrap; overflow: elide; min-width: 0px;
     }
 }
@@ -900,6 +832,9 @@ component FeaturedShowcase inherits Rectangle {
     // Backend advances this only after the full incoming payload is published.
     in property <int> revision;
     in property <bool> narrow;
+    in property <length> safe-top;
+    in property <length> safe-left;
+    in property <length> safe-right;
     callback picked();
     callback watch_now();
     callback step(int);
@@ -991,18 +926,19 @@ component FeaturedShowcase inherits Rectangle {
     width: 100%;
     // Both caption layers reserve their measured height during a fade. Long
     // translations can put the pager below the button instead of overlapping it.
-    property <length> inset: root.narrow ? 16px : 32px;
+    property <length> left_inset: (root.narrow ? 18px : 32px) + root.safe-left;
+    property <length> right_inset: (root.narrow ? 18px : 32px) + root.safe-right;
     property <length> pager_width: root.count > 1 ? (root.narrow ? 134px : 152px) : 0px;
     property <bool> controls_stacked: root.count > 1
-        && featured_actions.width + root.pager_width + 12px > root.width - root.inset * 2;
+        && featured_actions.width + root.pager_width + 12px > root.width - root.left_inset - root.right_inset;
     property <length> controls_height: featured_actions.height + (root.controls_stacked ? 50px : 0px);
-    height: Math.max(root.narrow ? Math.min(560px, Math.max(360px, root.width * 1.05))
-            : Math.min(640px, Math.max(420px, root.width * 0.42)),
+    height: Math.max(root.narrow ? Math.min(560px, Math.max(360px, root.width * 1.05)) + root.safe-top
+            : Math.min(640px, Math.max(420px, root.width * 0.42)) + root.safe-top,
         Math.max(current_caption.height, root.fading ? previous_caption.height : 0px)
-            + root.controls_height + 110px);
+            + root.controls_height + 110px + root.safe-top);
     border-radius: 0px;
     clip: true;
-    background: #080d17;
+    background: #080f19;
 
     Image {
         source: root.displayed_slide.backdrop;
@@ -1014,7 +950,7 @@ component FeaturedShowcase inherits Rectangle {
     if root.fading && root.previous_slide.backdrop.width == 0: Rectangle {
         width: 100%;
         height: 100%;
-        background: #080d17;
+        background: #080f19;
         opacity: 1.0 - root.mix;
     }
     Image {
@@ -1024,10 +960,16 @@ component FeaturedShowcase inherits Rectangle {
         height: 100%;
         opacity: root.fading ? 1.0 - root.mix : 0.0;
     }
-    // FemtoVG can flatten brush gradients. An SVG rasterized into a tall
-    // alpha ramp gives both desktop and Android one continuous bottom fade.
+    // Reuse Detail's renderer-safe scrims, scaled to this smaller hero.
+    // Phones use the bottom fade; wide captions also get its left-side shade.
     Image {
-        source: @image-url("../../assets/featured-backdrop-scrim.svg");
+        source: @image-url("../../assets/detail-bottom-scrim.svg");
+        image-fit: fill;
+        width: 100%;
+        height: 100%;
+    }
+    if !root.narrow: Image {
+        source: @image-url("../../assets/detail-side-scrim.svg");
         image-fit: fill;
         width: 100%;
         height: 100%;
@@ -1104,7 +1046,7 @@ component FeaturedShowcase inherits Rectangle {
     }
 
     if root.count > 1: featured_pager := HorizontalLayout {
-        x: root.width - self.width - root.inset;
+        x: root.width - self.width - root.right_inset;
         y: root.height - self.height - 24px;
         width: root.pager_width; height: 44px; spacing: 2px;
         FeaturedPagerButton { narrow: root.narrow; stepped => { root.step(-1); } }
@@ -1120,22 +1062,22 @@ component FeaturedShowcase inherits Rectangle {
     // Text follows the same left edge and stays above the steady controls.
     previous_caption := FeaturedCaption {
         slide: root.previous_slide; narrow: root.narrow; banner_width: root.width;
-        x: root.inset;
+        x: root.left_inset;
         y: root.height - self.height - root.controls_height - 40px;
-        width: root.narrow ? root.width - root.inset * 2 : Math.min(640px, root.width * 0.55);
+        width: root.narrow ? root.width - root.left_inset - root.right_inset : Math.min(Math.max(0px, root.width - root.left_inset - root.right_inset), Math.min(640px, root.width * 0.55));
         opacity: root.fading && root.fade_text ? 1.0 - root.mix : 0.0;
     }
     current_caption := FeaturedCaption {
         slide: root.displayed_slide; narrow: root.narrow; banner_width: root.width;
-        x: root.inset;
+        x: root.left_inset;
         y: root.height - self.height - root.controls_height - 40px;
-        width: root.narrow ? root.width - root.inset * 2 : Math.min(640px, root.width * 0.55);
+        width: root.narrow ? root.width - root.left_inset - root.right_inset : Math.min(Math.max(0px, root.width - root.left_inset - root.right_inset), Math.min(640px, root.width * 0.55));
         opacity: root.fading && root.fade_text ? root.mix : 1.0;
     }
     featured_actions := FeaturedActions {
         narrow: root.narrow; compact: root.width < 400px;
-        available-width: Math.max(0px, root.width - root.inset * 2);
-        x: root.inset; y: root.height - root.controls_height - 24px;
+        available-width: Math.max(0px, root.width - root.left_inset - root.right_inset);
+        x: root.left_inset; y: root.height - root.controls_height - 24px;
         watch_now => { root.watch_now(); }
     }
 
@@ -1196,7 +1138,7 @@ export component HomePage {
     // Landing carousel card: ~2.45 cards visible on narrow (Android), the
     // grid card elsewhere.
     property <length> rail_item_width: root.narrow
-        ? Math.max(96px, (land_scroll.width + root.item-gap) / 2.5 - root.item-gap)
+        ? Math.max(96px, (continue_rail_host.width + root.item-gap) / 2.5 - root.item-gap)
         : root.grid_item_width;
     property <length> rail_h: root.rail_item_width * 3 / 2 + 76px;
     property <length> rail_h_up: root.rail_item_width * 3 / 2 + 88px;
@@ -1546,14 +1488,14 @@ export component HomePage {
         }
         if (root.kb_zone == 1 && root.continue_rows.length > 0) {
             let cw = root.rail_item_width;
-            let x = root.kb_idx * (cw + root.item-gap);
+            let x = c_row.padding-left + root.kb_idx * (cw + root.item-gap);
             rail_continue.content-x = root.rail_show(rail_continue.content-x, x, cw, rail_continue.width, rail_continue.content-width);
-            root.kb_scroll_to(root.continue_top, continue_rail_host.y + continue_rail_host.height);
+            root.kb_scroll_to(landing_rows.y + root.continue_top, landing_rows.y + continue_rail_host.y + continue_rail_host.height);
         } else if (root.kb_zone == 2 && root.upcoming_rows.length > 0) {
             let cw = root.rail_item_width;
-            let x = root.kb_up_idx * (cw + root.item-gap);
+            let x = u_row.padding-left + root.kb_up_idx * (cw + root.item-gap);
             rail_upcoming.content-x = root.rail_show(rail_upcoming.content-x, x, cw, rail_upcoming.width, rail_upcoming.content-width);
-            root.kb_scroll_to(root.upcoming_top, upcoming_rail_host.y + upcoming_rail_host.height);
+            root.kb_scroll_to(landing_rows.y + root.upcoming_top, landing_rows.y + upcoming_rail_host.y + upcoming_rail_host.height);
         }
     }
 
@@ -1670,7 +1612,7 @@ export component HomePage {
     Rectangle {
         width: 100%;
         height: 100%;
-        background: #080d17;
+        background: #080f19;
 
         // 6-button scope: overlays the page without intercepting the mouse.
         nav_scope := FocusScope {
@@ -1734,10 +1676,12 @@ export component HomePage {
         VerticalLayout {
             width: 100%;
             height: 100%;
-            padding-left: 18px + safe-left + root.rail_w;
-            padding-right: 18px + safe-right;
+            // Artwork fills the landing viewport; safe padding belongs to its
+            // captions, rows and subpage controls rather than the whole page.
+            padding-left: root.rail_w + (root.narrow ? 0px : root.safe-left);
+            padding-right: 0px;
             padding-bottom: 18px;
-            padding-top: 18px + safe-top;
+            padding-top: 0px;
             spacing: 12px;
 
             content_host := Rectangle {
@@ -1803,6 +1747,9 @@ export component HomePage {
                                 count: root.featured_count;
                                 revision: root.featured_revision;
                                 narrow: root.narrow;
+                                safe-top: root.safe-top;
+                                safe-left: root.narrow ? root.safe-left : 0px;
+                                safe-right: root.safe-right;
                                 picked => {
                                     root.kb_active = false;
                                     root.featured_picked();
@@ -1819,142 +1766,158 @@ export component HomePage {
                                 step(d) => { root.step_featured(d); }
                             }
 
-                            if root.continue_rows.length == 0
-                                && root.upcoming_rows.length == 0
-                                && root.featured_count == 0
-                                && root.continue_enabled: VerticalLayout {
-                                alignment: center;
-                                // Take enough height to center in the viewport.
-                                min-height: 300px;
-                                Text {
-                                    text: root.home_empty_hint;
-                                    font-size: 14px;
-                                    color: #8a8a9a;
-                                    horizontal-alignment: center;
-                                    wrap: word-wrap;
-                                    width: 100%;
-                                }
-                            }
-
-                            // ---- Continue Watching --------------------
-                            if root.continue_rows.length > 0: SectionHeader {
-                                title: @tr("Continue Watching");
-                                count: root.continue_rows.length;
-                                changed y => { root.continue_top = self.y; }
-                                open_all => { root.open_subpage(1); }
-                            }
-
-
-                            // Horizontal carousel: the inner Flickable owns
-                            // dragging and native momentum, like the stream
-                            // filter pills. Cards report early axis hints so
-                            // the vertical page does not steal the gesture.
-                            continue_rail_host := Rectangle {
-                                visible: root.continue_rows.length > 0;
-                                width: 100%;
-                                height: root.rail_h + 8px;
-
-                                rail_continue := Flickable {
-                                    width: 100%;
-                                    height: 100%;
-                                    interactive: root.view == 0;
-                                    mouse-drag-pan-enabled: true;
-                                    content-width: c_row.width;
-                                    content-height: self.height;
-                                    init => { self.content-x = root.continue_x; }
-                                    changed content-x => {
-                                        root.continue_x = self.content-x;
-                                        if (!root.kb_active && root.view == 0) { root.rail_panned(); }
+                            landing_rows := VerticalLayout {
+                                width: 100%; spacing: 12px;
+                                padding-left: 18px + (root.narrow ? root.safe-left : 0px);
+                                padding-right: 18px + root.safe-right;
+                                padding-top: root.featured_count == 0 ? 18px + root.safe-top : 0px;
+                                if root.continue_rows.length == 0
+                                    && root.upcoming_rows.length == 0
+                                    && root.featured_count == 0
+                                    && root.continue_enabled: VerticalLayout {
+                                    alignment: center;
+                                    // Take enough height to center in the viewport.
+                                    min-height: 300px;
+                                    Text {
+                                        text: root.home_empty_hint;
+                                        font-size: 14px;
+                                        color: #8a8a9a;
+                                        horizontal-alignment: center;
+                                        wrap: word-wrap;
+                                        width: 100%;
                                     }
+                                }
 
-                                    c_row := HorizontalLayout {
-                                        y: 8px;
-                                        height: root.rail_h;
-                                        width: self.preferred-width;
-                                        spacing: root.item-gap;
+                                // ---- Continue Watching --------------------
+                                if root.continue_rows.length > 0: SectionHeader {
+                                    title: @tr("Continue Watching");
+                                    count: root.continue_rows.length;
+                                    changed y => { root.continue_top = self.y; }
+                                    open_all => { root.open_subpage(1); }
+                                }
 
-                                        for c[i] in root.continue_rows: ContinueCard {
-                                            entry: c;
-                                            card-width: root.rail_item_width;
-                                            tappable: root.view == 0;
-                                            rail-gesture: root.view == 0;
-                                            touch_menus: root.touch_menus;
-                                            focused: root.kb_active && root.kb_zone == 1 && root.kb_idx == i;
-                                            pointer_pressed => { root.kb_active = false; }
-                                            picked => {
-                                                root.kb_active = false;
-                                                root.kb_zone = 1;
-                                                root.kb_idx = i;
-                                                root.continue_picked(i);
+
+                                // Horizontal carousel: the inner Flickable owns
+                                // dragging and native momentum, like the stream
+                                // filter pills. Cards report early axis hints so
+                                // the vertical page does not steal the gesture.
+                                continue_rail_host := Rectangle {
+                                    visible: root.continue_rows.length > 0;
+                                    width: 100%;
+                                    height: root.rail_h + 8px;
+
+                                    rail_continue := Flickable {
+                                        // Bleed the scroll clip to the screen edges while
+                                        // the first card keeps the section's safe inset.
+                                        x: -18px - (root.narrow ? root.safe-left : 0px);
+                                        width: content_host.width;
+                                        height: 100%;
+                                        interactive: root.view == 0;
+                                        mouse-drag-pan-enabled: true;
+                                        content-width: c_row.width;
+                                        content-height: self.height;
+                                        init => { self.content-x = root.continue_x; }
+                                        changed content-x => {
+                                            root.continue_x = self.content-x;
+                                            if (!root.kb_active && root.view == 0) { root.rail_panned(); }
+                                        }
+
+                                        c_row := HorizontalLayout {
+                                            y: 8px;
+                                            height: root.rail_h;
+                                            width: self.preferred-width;
+                                            padding-left: 18px + (root.narrow ? root.safe-left : 0px);
+                                            padding-right: 18px + root.safe-right;
+                                            spacing: root.item-gap;
+
+                                            for c[i] in root.continue_rows: ContinueCard {
+                                                entry: c;
+                                                card-width: root.rail_item_width;
+                                                tappable: root.view == 0;
+                                                rail-gesture: root.view == 0;
+                                                touch_menus: root.touch_menus;
+                                                focused: root.kb_active && root.kb_zone == 1 && root.kb_idx == i;
+                                                pointer_pressed => { root.kb_active = false; }
+                                                picked => {
+                                                    root.kb_active = false;
+                                                    root.kb_zone = 1;
+                                                    root.kb_idx = i;
+                                                    root.continue_picked(i);
+                                                }
+                                                menu_requested => {
+                                                    if (root.touch_menus) { root.open_continue_menu(i); }
+                                                }
+                                                enter_requested => { root.continue_enter(i); }
+                                                remove_requested => { root.continue_remove(i); }
+                                                pan_hint => {
+                                                    root.kb_active = false;
+                                                    root.rail_panned();
+                                                }
+                                                pan_release => { root.rail_pan_released(); }
                                             }
-                                            menu_requested => {
-                                                if (root.touch_menus) { root.open_continue_menu(i); }
-                                            }
-                                            enter_requested => { root.continue_enter(i); }
-                                            remove_requested => { root.continue_remove(i); }
-                                            pan_hint => {
-                                                root.kb_active = false;
-                                                root.rail_panned();
-                                            }
-                                            pan_release => { root.rail_pan_released(); }
                                         }
                                     }
                                 }
-                            }
 
-                            // ---- Upcoming (caught-up series, unaired) --
-                            if root.upcoming_rows.length > 0: SectionHeader {
-                                title: @tr("Upcoming Episodes");
-                                count: root.upcoming_rows.length;
-                                changed y => { root.upcoming_top = self.y; }
-                                open_all => { root.open_subpage(2); }
-                            }
+                                // ---- Upcoming (caught-up series, unaired) --
+                                if root.upcoming_rows.length > 0: SectionHeader {
+                                    title: @tr("Upcoming Episodes");
+                                    count: root.upcoming_rows.length;
+                                    changed y => { root.upcoming_top = self.y; }
+                                    open_all => { root.open_subpage(2); }
+                                }
 
 
-                            upcoming_rail_host := Rectangle {
-                                visible: root.upcoming_rows.length > 0;
-                                width: 100%;
-                                height: root.rail_h_up + 8px;
-
-                                rail_upcoming := Flickable {
+                                upcoming_rail_host := Rectangle {
+                                    visible: root.upcoming_rows.length > 0;
                                     width: 100%;
-                                    height: 100%;
-                                    interactive: root.view == 0;
-                                    mouse-drag-pan-enabled: true;
-                                    content-width: u_row.width;
-                                    content-height: self.height;
-                                    init => { self.content-x = root.upcoming_x; }
-                                    changed content-x => {
-                                        root.upcoming_x = self.content-x;
-                                        if (!root.kb_active && root.view == 0) { root.rail_panned(); }
-                                    }
+                                    height: root.rail_h_up + 8px;
 
-                                    u_row := HorizontalLayout {
-                                        y: 8px;
-                                        height: root.rail_h_up;
-                                        width: self.preferred-width;
-                                        spacing: root.item-gap;
+                                    rail_upcoming := Flickable {
+                                        // Bleed the scroll clip to the screen edges while
+                                        // the first card keeps the section's safe inset.
+                                        x: -18px - (root.narrow ? root.safe-left : 0px);
+                                        width: content_host.width;
+                                        height: 100%;
+                                        interactive: root.view == 0;
+                                        mouse-drag-pan-enabled: true;
+                                        content-width: u_row.width;
+                                        content-height: self.height;
+                                        init => { self.content-x = root.upcoming_x; }
+                                        changed content-x => {
+                                            root.upcoming_x = self.content-x;
+                                            if (!root.kb_active && root.view == 0) { root.rail_panned(); }
+                                        }
 
-                                        for u[i] in root.upcoming_rows: UpcomingCard {
-                                            entry: u;
-                                            card-width: root.rail_item_width;
-                                            tappable: root.view == 0;
-                                            rail-gesture: root.view == 0;
-                                            touch_menus: root.touch_menus;
-                                            focused: root.kb_active && root.kb_zone == 2 && root.kb_up_idx == i;
-                                            pointer_pressed => { root.kb_active = false; }
-                                            picked => {
-                                                root.kb_active = false;
-                                                root.kb_zone = 2;
-                                                root.kb_up_idx = i;
-                                                root.upcoming_picked(i);
+                                        u_row := HorizontalLayout {
+                                            y: 8px;
+                                            height: root.rail_h_up;
+                                            width: self.preferred-width;
+                                            padding-left: 18px + (root.narrow ? root.safe-left : 0px);
+                                            padding-right: 18px + root.safe-right;
+                                            spacing: root.item-gap;
+
+                                            for u[i] in root.upcoming_rows: UpcomingCard {
+                                                entry: u;
+                                                card-width: root.rail_item_width;
+                                                tappable: root.view == 0;
+                                                rail-gesture: root.view == 0;
+                                                touch_menus: root.touch_menus;
+                                                focused: root.kb_active && root.kb_zone == 2 && root.kb_up_idx == i;
+                                                pointer_pressed => { root.kb_active = false; }
+                                                picked => {
+                                                    root.kb_active = false;
+                                                    root.kb_zone = 2;
+                                                    root.kb_up_idx = i;
+                                                    root.upcoming_picked(i);
+                                                }
+                                                menu_requested => { root.open_upcoming_menu(i); }
+                                                pan_hint => {
+                                                    root.kb_active = false;
+                                                    root.rail_panned();
+                                                }
+                                                pan_release => { root.rail_pan_released(); }
                                             }
-                                            menu_requested => { root.open_upcoming_menu(i); }
-                                            pan_hint => {
-                                                root.kb_active = false;
-                                                root.rail_panned();
-                                            }
-                                            pan_release => { root.rail_pan_released(); }
                                         }
                                     }
                                 }
@@ -1967,7 +1930,7 @@ export component HomePage {
                 sub_layer := Rectangle {
                     width: 100%;
                     height: 100%;
-                    background: #080d17;
+                    background: #080f19;
                     x: root.view != 0 ? 0px : content_host.width;
                     opacity: root.view != 0 ? 1.0 : 0.0;
                     animate x { duration: Anim.transition_slide; easing: ease-out; }
@@ -1976,6 +1939,9 @@ export component HomePage {
                     VerticalLayout {
                         width: 100%;
                         height: 100%;
+                        padding-left: 18px + (root.narrow ? root.safe-left : 0px);
+                        padding-right: 18px + root.safe-right;
+                        padding-top: 18px + root.safe-top;
                         spacing: 12px;
 
                         // Back bar: returns to the landing (Backspace too).
@@ -2333,6 +2299,8 @@ export component HomePage {
             if root.narrow && root.view == 0: bottom := BottomNav {
                 active: 0;
                 safe-bottom: root.safe-bottom;
+                safe-left: root.safe-left;
+                safe-right: root.safe-right;
                 kb_zone: root.kb_zone;
                 kb_nav: root.kb_nav;
                 kb_active <=> root.kb_active;

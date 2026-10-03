@@ -1,28 +1,19 @@
-import { KbMark } from "kbnav.slint";
-import { IcHome, IcSearch, IcVideoLibrary, IcSettingsGear } from "icons.slint";
+import { IcHome, IcExplore, IcVideoLibrary, IcSettingsGear } from "icons.slint";
 import { NavFeedback } from "sidenav.slint";
 
-// Bottom tab bar for narrow (phone) layouts: a compact floating capsule,
-// centered with fixed side margins, icons only — the active tab gets an
-// accent circle behind its icon (reference-dock style). Thumb-friendly
-// targets, lifted above the Android system bar via `safe-bottom`.
-// Wide windows use the left rail (sidenav.slint) instead; pages switch
-// between the two on `narrow`. Same TouchArea-driven taps as the cards.
-//
-// The accent circle is a single marker shared by the four tabs (not one
-// background per tab), snapping to the picked tab. The shared NavFeedback
-// driver only pops the incoming icon; the marker never travels or stretches.
-//
-// The pill sizes itself (capped width, side margins) so every host page
-// renders it identically — host layout padding must not affect it.
-// A tap-eating backdrop swallows stray taps in gaps/margins: plain
-// Rectangles don't consume taps in Slint, and without it taps beside a
-// tab would fall through to cards underneath.
+// A wide, labelled phone bar. The selected tab owns a purple pill and glow;
+// selection still snaps immediately and NavFeedback only pops its icon.
+// Host pages reserve the bar's height in their layout. Their existing page
+// insets are bled out by the panel so its geometry stays identical on each
+// page, while the labels and touch targets respect the window's safe area.
 export component BottomNav inherits Rectangle {
-    // Active section: 0 Home, 1 Discover, 2 Library, 3 Settings.
+    // 0 Home, 1 Discover, 2 Library, 3 Settings.
     in property <int> active: 0;
-    // Bottom system-bar inset (Android gesture/nav bar). 0 on desktop.
     in property <length> safe-bottom: 0px;
+    in property <length> safe-left: 0px;
+    in property <length> safe-right: 0px;
+    in property <length> page-inset-left: 0px;
+    in property <length> page-inset-right: 0px;
     in property <int> kb_zone;
     in property <int> kb_nav;
     in-out property <bool> kb_active;
@@ -33,129 +24,201 @@ export component BottomNav inherits Rectangle {
     callback settings_picked();
 
     width: 100%;
-    // 64px touch bar + system inset, pinned so content above never shifts.
-    height: 64px + root.safe-bottom;
+    height: 76px + root.safe-bottom;
+    vertical-stretch: 0;
 
     motion := NavFeedback { active: root.active; }
 
-    // Eats stray taps anywhere in the bar footprint (gaps between tabs,
-    // side margins, safe zone) so they never reach content underneath.
-    eater := TouchArea {
-        width: 100%;
-        height: 100%;
-        clicked => { }
-    }
+    pill := Rectangle {
+        x: -root.page-inset-left;
+        y: 0px;
+        width: root.width + root.page-inset-left + root.page-inset-right;
+        height: root.height;
+        background: #11121c;
+        border-radius: 24px;
+        border-width: 1px;
+        border-color: #393047;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: #08081280;
 
-    // Centered compact capsule: capped width with fixed side margins
-    // instead of spanning the window.
-    HorizontalLayout {
-        width: 100%;
-        height: 100%;
-        alignment: center;
+        // Gaps and the system-bar safe zone also absorb taps, preventing
+        // touches beside a tab from opening content behind the bar.
+        eater := TouchArea {
+            width: 100%; height: 100%;
+            clicked => { }
+        }
 
-        pill := Rectangle {
-            width: Math.min(280px, parent.width - 96px);
-            height: 64px;
-            background: #17171d;
-            border-radius: 32px;
+        // The marker shares exactly the same pitch as the item row. Keeping
+        // keyboard rings inside the slots prevents focus from shifting tabs.
+        marker_dot := Rectangle {
+            property <length> pitch: tabs.width / 4;
+            x: tabs.x + root.active * pitch + 4px;
+            y: tabs.y;
+            width: pitch - 8px;
+            height: 60px;
+            border-radius: 28px;
+            background: #6334a7;
             border-width: 1px;
-            border-color: #2a2a33;
-            clip: true;
+            border-color: #9658eb;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #853ce080;
+        }
 
-            // The shared accent marker. The four items stretch equally across
-            // the capsule's inner width, so the pitch follows the capsule
-            // (8px side padding); the circle is centered in its item's slot.
-            // Declared before the item row, which draws the icons over it.
-            marker_dot := Rectangle {
-                property <length> pitch: (pill.width - 16px) / 4;
-                width: 48px;
-                height: 48px;
-                x: 8px + root.active * pitch + (pitch - self.width) / 2;
-                y: (pill.height - self.height) / 2;
-                border-radius: 24px;
-                background: #8b5cf6;
+        tabs := HorizontalLayout {
+            x: 12px + root.safe-left;
+            y: 8px;
+            width: pill.width - 24px - root.safe-left - root.safe-right;
+            height: 60px;
+
+            Rectangle {
+                width: tabs.width / 4;
+                height: 100%;
+
+                Rectangle {
+                    x: 4px; y: 0px;
+                    width: parent.width - 8px; height: 60px;
+                    border-radius: 28px;
+                    border-width: root.kb_active && root.kb_zone == 0 && root.kb_nav == 0 ? 2px : 0px;
+                    border-color: #ffffff;
+                    background: transparent;
+                }
+
+                icon_home := IcHome {
+                    x: (parent.width - self.width) / 2;
+                    y: 19px - self.height / 2;
+                    width: 24px + (root.active == 0 ? motion.pulse * 2px : 0px);
+                    height: self.width;
+                    fill: root.active == 0 ? #ffffff : #93929f;
+                }
+                label_home := Text {
+                    x: 4px; y: 36px;
+                    width: parent.width - 8px; height: 17px;
+                    text: @tr("Home");
+                    font-size: 12px;
+                    font-weight: root.active == 0 ? 600 : 400;
+                    color: root.active == 0 ? #ffffff : #aaa8b6;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                tab_home := TouchArea {
+                    width: 100%; height: 100%;
+                    mouse-cursor: pointer;
+                    clicked => { root.kb_active = false; root.home_picked(); }
+                }
             }
 
-            HorizontalLayout {
-                width: 100%;
+            Rectangle {
+                width: tabs.width / 4;
                 height: 100%;
-                padding-left: 8px;
-                padding-right: 8px;
 
-                KbMark { on: root.kb_zone == 0 && root.kb_nav == 0; active: root.kb_active; }
                 Rectangle {
-                    horizontal-stretch: 1;
-                    height: 100%;
-
-                    icon_home := IcHome {
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        width: 24px + (root.active == 0 ? motion.pulse * 2px : 0px);
-                        height: self.width;
-                        fill: root.active == 0 ? #ffffff : #8a8a9a;
-                    }
-
-                    tab_home := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.kb_active = false; root.home_picked(); }
-                    }
+                    x: 4px; y: 0px;
+                    width: parent.width - 8px; height: 60px;
+                    border-radius: 28px;
+                    border-width: root.kb_active && root.kb_zone == 0 && root.kb_nav == 1 ? 2px : 0px;
+                    border-color: #ffffff;
+                    background: transparent;
                 }
 
-                KbMark { on: root.kb_zone == 0 && root.kb_nav == 1; active: root.kb_active; }
+                icon_discover := IcExplore {
+                    x: (parent.width - self.width) / 2;
+                    y: 19px - self.height / 2;
+                    width: 24px + (root.active == 1 ? motion.pulse * 2px : 0px);
+                    height: self.width;
+                    fill: root.active == 1 ? #ffffff : #93929f;
+                }
+                label_discover := Text {
+                    x: 4px; y: 36px;
+                    width: parent.width - 8px; height: 17px;
+                    text: @tr("Discover");
+                    font-size: 12px;
+                    font-weight: root.active == 1 ? 600 : 400;
+                    color: root.active == 1 ? #ffffff : #aaa8b6;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                tab_discover := TouchArea {
+                    width: 100%; height: 100%;
+                    mouse-cursor: pointer;
+                    clicked => { root.kb_active = false; root.discover_picked(); }
+                }
+            }
+
+            Rectangle {
+                width: tabs.width / 4;
+                height: 100%;
+
                 Rectangle {
-                    horizontal-stretch: 1;
-                    height: 100%;
-
-                    icon_discover := IcSearch {
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        width: 24px + (root.active == 1 ? motion.pulse * 2px : 0px);
-                        height: self.width;
-                        fill: root.active == 1 ? #ffffff : #8a8a9a;
-                    }
-
-                    tab_discover := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.kb_active = false; root.discover_picked(); }
-                    }
+                    x: 4px; y: 0px;
+                    width: parent.width - 8px; height: 60px;
+                    border-radius: 28px;
+                    border-width: root.kb_active && root.kb_zone == 0 && root.kb_nav == 2 ? 2px : 0px;
+                    border-color: #ffffff;
+                    background: transparent;
                 }
 
-                KbMark { on: root.kb_zone == 0 && root.kb_nav == 2; active: root.kb_active; }
+                icon_library := IcVideoLibrary {
+                    x: (parent.width - self.width) / 2;
+                    y: 19px - self.height / 2;
+                    width: 24px + (root.active == 2 ? motion.pulse * 2px : 0px);
+                    height: self.width;
+                    fill: root.active == 2 ? #ffffff : #93929f;
+                }
+                label_library := Text {
+                    x: 4px; y: 36px;
+                    width: parent.width - 8px; height: 17px;
+                    text: @tr("Library");
+                    font-size: 12px;
+                    font-weight: root.active == 2 ? 600 : 400;
+                    color: root.active == 2 ? #ffffff : #aaa8b6;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                tab_library := TouchArea {
+                    width: 100%; height: 100%;
+                    mouse-cursor: pointer;
+                    clicked => { root.kb_active = false; root.library_picked(); }
+                }
+            }
+
+            Rectangle {
+                width: tabs.width / 4;
+                height: 100%;
+
                 Rectangle {
-                    horizontal-stretch: 1;
-                    height: 100%;
-
-                    icon_library := IcVideoLibrary {
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        width: 24px + (root.active == 2 ? motion.pulse * 2px : 0px);
-                        height: self.width;
-                        fill: root.active == 2 ? #ffffff : #8a8a9a;
-                    }
-
-                    tab_library := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.kb_active = false; root.library_picked(); }
-                    }
+                    x: 4px; y: 0px;
+                    width: parent.width - 8px; height: 60px;
+                    border-radius: 28px;
+                    border-width: root.kb_active && root.kb_zone == 0 && root.kb_nav == 3 ? 2px : 0px;
+                    border-color: #ffffff;
+                    background: transparent;
                 }
 
-                KbMark { on: root.kb_zone == 0 && root.kb_nav == 3; active: root.kb_active; }
-                Rectangle {
-                    horizontal-stretch: 1;
-                    height: 100%;
-
-                    icon_settings := IcSettingsGear {
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        width: 24px + (root.active == 3 ? motion.pulse * 2px : 0px);
-                        height: self.width;
-                        fill: root.active == 3 ? #ffffff : #8a8a9a;
-                    }
-
-                    tab_settings := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.kb_active = false; root.settings_picked(); }
-                    }
+                icon_settings := IcSettingsGear {
+                    x: (parent.width - self.width) / 2;
+                    y: 19px - self.height / 2;
+                    width: 24px + (root.active == 3 ? motion.pulse * 2px : 0px);
+                    height: self.width;
+                    fill: root.active == 3 ? #ffffff : #93929f;
+                }
+                label_settings := Text {
+                    x: 4px; y: 36px;
+                    width: parent.width - 8px; height: 17px;
+                    text: @tr("Settings");
+                    font-size: 12px;
+                    font-weight: root.active == 3 ? 600 : 400;
+                    color: root.active == 3 ? #ffffff : #aaa8b6;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                tab_settings := TouchArea {
+                    width: 100%; height: 100%;
+                    mouse-cursor: pointer;
+                    clicked => { root.kb_active = false; root.settings_picked(); }
                 }
             }
         }

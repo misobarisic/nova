@@ -1,11 +1,10 @@
 import { IcHome, IcSearch, IcVideoLibrary, IcSettingsGear } from "icons.slint";
 import { Anim } from "anim.slint";
 
-// Left navigation rail for wide layouts: the narrow BottomNav design turned
-// on its side — one vertical capsule of icon buttons, the active one behind
-// the same accent circle. Hosted by each page itself (like the top pills it
-// replaces), so page + rail stay one unit and the pages keep their own
-// insets; pages reserve exactly `NavMetrics.rail-width` of extra left
+// Left navigation rail for wide layouts: an icon-only column with a selected
+// accent circle. It shares selection state and icon feedback with the labelled
+// phone bar. Hosted by each page itself, so page + rail stay one unit and
+// the pages keep their own insets; pages reserve `NavMetrics.rail-width` of extra left
 // padding (0 on narrow) and anchor the rail to the window edge.
 //
 // Wide subpages keep the rail (unlike the narrow bottom bar, which hides on
@@ -168,8 +167,7 @@ export component SideNav inherits Rectangle {
 
     // Panel: a plain full-bleed column — no outer margin, no rounded corners
     // — spanning from the window's left edge to its bottom edge, with the
-    // four items listed top to bottom just under the top. Same colours and
-    // border as the bottom bar, minus the capsule geometry: flush against the
+    // four items listed top to bottom just under the top. Flush against the
     // window edges a rounded corner would only read as a bug.
     Rectangle {
         x: root.safe-left;

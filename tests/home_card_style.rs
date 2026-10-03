@@ -38,8 +38,28 @@ fn tap(app: &nova::AppWindow, element: &ElementHandle) {
     idle(100);
 }
 
+fn hold(app: &nova::AppWindow, element: &ElementHandle) {
+    let position = center(element);
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    // The Flickable forwards the press after its own delay. Advance frames so
+    // the card's hold timer starts before the remaining hold time elapses.
+    for _ in 0..10 {
+        idle(100);
+    }
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    idle(100);
+}
+
 #[test]
-fn home_card_geometry_menus_and_menu_target_flick_remain_usable() {
+fn home_card_geometry_menus_and_footer_flick_remain_usable() {
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = nova::AppWindow::new().unwrap();
     app.set_animations(false);
@@ -120,7 +140,7 @@ fn home_card_geometry_menus_and_menu_target_flick_remain_usable() {
             let visible = 2.0 + (viewport - 2.0 * stride) / expected_width;
             assert!(
                 (2.35..2.5).contains(&visible),
-                "preserve roughly 2.45 visible cards"
+                "preserve the card size from the original roughly 2.45-card layout"
             );
         }
         let cards = elements(&app, "ContinueCard");
@@ -140,7 +160,65 @@ fn home_card_geometry_menus_and_menu_target_flick_remain_usable() {
         );
     }
 
+    // Artwork fills the window even with a status bar and landscape cutouts;
+    // captions, actions and cards retain safe padding.
     app.window().set_size(slint::PhysicalSize::new(390, 1600));
+    i_slint_core::window::WindowInner::from_pub(app.window()).set_window_item_safe_area(
+        i_slint_core::lengths::LogicalEdges::new(28.0, 16.0, 12.0, 8.0),
+    );
+    app.set_home_featured_title("Featured title".into());
+    app.set_home_featured_count(3);
+    app.set_home_featured_revision(1);
+    idle(400);
+    let banner = elements(&app, "FeaturedShowcase").remove(0);
+    assert!(banner.absolute_position().x.abs() < 0.5);
+    assert!(banner.absolute_position().y.abs() < 0.5);
+    assert!((banner.size().width - 390.0).abs() < 0.5);
+    let caption = child(&banner, "FeaturedShowcase::current_caption");
+    assert!(caption.absolute_position().x >= 12.0 + 18.0 - 0.5);
+    assert!(caption.absolute_position().y >= 28.0);
+    let action = child(&banner, "FeaturedShowcase::featured_actions");
+    assert!(action.absolute_position().x >= 12.0 + 18.0 - 0.5);
+    for id in ["HomePage::rail_continue", "HomePage::rail_upcoming"] {
+        let rail = i_slint_backend_testing::ElementHandle::find_by_element_id(&app, id)
+            .next()
+            .unwrap();
+        assert!(rail.absolute_position().x.abs() < 0.5, "{id}: left edge");
+        assert!((rail.size().width - 390.0).abs() < 0.5, "{id}: right edge");
+    }
+    let card = &elements(&app, "ContinueCard")[0];
+    assert!((card.absolute_position().x - 30.0).abs() < 0.5);
+    assert!((card.size().width - ((390.0 - 36.0 - 20.0 + 18.0) / 2.5 - 18.0)).abs() < 0.5);
+    // Keyboard follow includes the new content padding, otherwise the focused
+    // card's right edge would still be clipped by exactly that inset.
+    let card_width = card.size().width;
+    app.set_kb_active(true);
+    for zone in [1, 2] {
+        app.set_home_kb_zone(zone);
+        if zone == 1 {
+            app.set_home_kb_idx(3);
+        } else {
+            app.set_home_kb_up_idx(3);
+        }
+        idle(100);
+        let offset = if zone == 1 {
+            app.get_home_continue_x()
+        } else {
+            app.get_home_upcoming_x()
+        };
+        let left = 30.0 + 3.0 * (card_width + 18.0) + offset;
+        assert!(left >= -0.5 && left + card_width <= 390.5);
+        if zone == 1 {
+            app.set_home_kb_idx(0);
+        } else {
+            app.set_home_kb_up_idx(0);
+        }
+        idle(100);
+    }
+    app.set_kb_active(false);
+    app.set_home_featured_count(0);
+    i_slint_core::window::WindowInner::from_pub(app.window())
+        .set_window_item_safe_area(i_slint_core::lengths::LogicalEdges::default());
     idle(400);
     let picks = Rc::new(RefCell::new(Vec::new()));
     let callback = picks.clone();
@@ -149,13 +227,7 @@ fn home_card_geometry_menus_and_menu_target_flick_remain_usable() {
     let callback = upcoming.clone();
     app.on_upcoming_picked(move |i| callback.borrow_mut().push(i));
 
-    tap(
-        &app,
-        &child(
-            &elements(&app, "ContinueCard")[0],
-            "ContinueCard::continue_menu",
-        ),
-    );
+    hold(&app, &elements(&app, "ContinueCard")[0]);
 
     assert!(
         ElementHandle::find_by_accessible_label(&app, "Play")
@@ -164,39 +236,28 @@ fn home_card_geometry_menus_and_menu_target_flick_remain_usable() {
     );
     assert!(
         picks.borrow().is_empty(),
-        "menu button must not play the card"
+        "holding a card must not also play it"
     );
     app.set_system_back_request(app.get_system_back_request() + 1);
     idle(400);
 
-    tap(
-        &app,
-        &child(
-            &elements(&app, "UpcomingCard")[0],
-            "UpcomingCard::upcoming_menu",
-        ),
-    );
-    let action = ElementHandle::find_by_accessible_label(&app, "Enter series")
-        .next()
-        .unwrap();
-    assert!(
-        ElementHandle::find_by_accessible_label(&app, "Remove from Continue Watching")
-            .next()
-            .is_none()
-    );
-    assert!(upcoming.borrow().is_empty());
-    tap(&app, &action);
+    tap(&app, &elements(&app, "UpcomingCard")[0]);
     assert_eq!(upcoming.borrow().as_slice(), [0]);
 
     // A short viewport lets a stolen vertical gesture actually scroll the page.
     app.window().set_size(slint::PhysicalSize::new(390, 650));
     idle(400);
-    // A quick diagonal touch over the new menu affordance remains a row flick.
+    // The footer's right edge uses the card's normal gesture handling now
+    // that the unsupported menu glyph/button has been removed.
     use i_slint_core::input::TouchPhase;
-    let start = center(&child(
+    let title = child(
         &elements(&app, "ContinueCard")[0],
-        "ContinueCard::continue_menu",
-    ));
+        "ContinueCard::continue_title",
+    );
+    let start = LogicalPosition::new(
+        title.absolute_position().x + title.size().width - 10.0,
+        title.absolute_position().y + title.size().height / 2.0,
+    );
     let touch = |position: LogicalPosition, phase| {
         app.window()
             .dispatch_event(slint::platform::WindowEvent::internal(
@@ -224,5 +285,29 @@ fn home_card_geometry_menus_and_menu_target_flick_remain_usable() {
             .next()
             .is_none()
     );
+    assert!(picks.borrow().is_empty());
+
+    // A flick starting in the newly exposed left gutter must reach the rail,
+    // even though that gutter is outside the padded row host's bounds.
+    let before = app.get_home_continue_x();
+    let rail = ElementHandle::find_by_element_id(&app, "HomePage::rail_continue")
+        .next()
+        .unwrap();
+    let start = LogicalPosition::new(3.0, rail.absolute_position().y + 32.0);
+    touch(start, TouchPhase::Started);
+    idle(16);
+    let mut end = start;
+    for step in 1..=8 {
+        end = LogicalPosition::new(start.x + step as f32 * 12.0, start.y - step as f32 * 2.0);
+        touch(end, TouchPhase::Moved);
+        idle(16);
+    }
+    touch(end, TouchPhase::Ended);
+    idle(200);
+    assert!(
+        app.get_home_continue_x() > before + 20.0,
+        "edge touch must pan the row"
+    );
+    assert!(app.get_home_scroll_y().abs() < 1.0);
     assert!(picks.borrow().is_empty());
 }

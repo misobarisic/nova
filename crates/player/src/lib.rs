@@ -1859,8 +1859,9 @@ impl Player {
             app.set_sub_track_label(slint::SharedString::default());
             app.set_audio_track_label(slint::SharedString::default());
             // Android: leave fullscreen with the player, so a fullscreen press
-            // cannot leak into the catalog (Slint keys zero safe-area insets
-            // off this flag, which would draw the catalog under the bars).
+            // cannot leak into the catalog: Slint zeros safe-area insets for
+            // fullscreen, but catalog controls still need those insets even
+            // when backgrounds such as Home's artwork draw under the bars.
             #[cfg(target_os = "android")]
             if app.get_is_fullscreen() {
                 let _ = app.window().set_fullscreen(false);

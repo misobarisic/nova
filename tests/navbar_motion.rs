@@ -1,4 +1,4 @@
-//! Icon-only feedback on both responsive navbars: highlight snaps, actual
+//! Icon feedback on both responsive navbars: highlight snaps, actual
 //! clicks, interrupted pops, rebuilds and independent motion switches.
 
 use i_slint_backend_testing::ElementHandle;
@@ -20,6 +20,16 @@ fn center(item: &ElementHandle) -> LogicalPosition {
     let p = item.absolute_position();
     let s = item.size();
     LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0)
+}
+
+fn check_marker_shape(item: &ElementHandle, wide: bool) {
+    let size = item.size();
+    if wide {
+        assert_eq!(size, slint::LogicalSize::new(48.0, 48.0));
+    } else {
+        assert!(size.width >= 56.0, "phone selection fills its tab slot");
+        assert!((size.height - 60.0).abs() < 0.5);
+    }
 }
 
 fn icon(app: &nova::AppWindow, wide: bool, index: usize) -> ElementHandle {
@@ -127,10 +137,7 @@ fn nav_icons_pop_while_highlights_snap() {
             axis(selected) > home,
             "highlight snaps to Settings immediately"
         );
-        assert_eq!(
-            marker(&app, wide).size(),
-            slint::LogicalSize::new(48.0, 48.0)
-        );
+        check_marker_shape(&marker(&app, wide), wide);
         idle(&app, wide, 90);
         assert_eq!(
             center(&marker(&app, wide)),
@@ -160,8 +167,7 @@ fn nav_icons_pop_while_highlights_snap() {
         );
         idle(&app, wide, 400);
         let settled = marker(&app, wide);
-        assert!((settled.size().width - 48.0).abs() < 0.5);
-        assert!((settled.size().height - 48.0).abs() < 0.5);
+        check_marker_shape(&settled, wide);
         assert_eq!(icon(&app, wide, 1).size().width, 24.0);
         // Clicking the already selected item does not replay feedback.
         click(&app, wide, 1);
@@ -187,7 +193,7 @@ fn nav_icons_pop_while_highlights_snap() {
             idle(&app, wide, 90);
             let m = marker(&app, wide);
             assert!((axis(center(&m)) - home).abs() < 0.5);
-            assert_eq!(m.size(), slint::LogicalSize::new(48.0, 48.0));
+            check_marker_shape(&m, wide);
             assert_eq!(icon(&app, wide, 0).size().width, 24.0);
             click(&app, wide, 1);
             idle(&app, wide, 1);
@@ -205,5 +211,40 @@ fn nav_icons_pop_while_highlights_snap() {
             "disabling feedback must not move the highlight"
         );
         assert_eq!(icon(&app, wide, 0).size().width, 24.0);
+    }
+
+    // Padded page hosts and Home's edge-to-edge host must produce the same
+    // full-width bar. Cutouts protect the labels rather than inset the panel.
+    app.global::<nova::Anim>().set_enabled(false);
+    i_slint_core::window::WindowInner::from_pub(app.window()).set_window_item_safe_area(
+        i_slint_core::lengths::LogicalEdges::new(28.0, 16.0, 12.0, 8.0),
+    );
+    for width in [320, 390, 620] {
+        app.window().set_size(slint::PhysicalSize::new(width, 900));
+        for scroll_page in [false, true] {
+            app.set_discover_scroll_page(scroll_page);
+            for page in 0..4 {
+                switch(&app, page);
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+                let panel = ElementHandle::find_by_element_id(&app, "BottomNav::pill")
+                    .next()
+                    .unwrap();
+                assert!(panel.absolute_position().x.abs() < 0.5);
+                assert!((panel.size().width - width as f32).abs() < 0.5);
+                for name in ["home", "discover", "library", "settings"] {
+                    let label = ElementHandle::find_by_element_id(
+                        &app,
+                        &format!("BottomNav::label_{name}"),
+                    )
+                    .next()
+                    .unwrap();
+                    let p = label.absolute_position();
+                    let size = label.size();
+                    assert!(p.x >= 12.0);
+                    assert!(p.x + size.width <= width as f32 - 8.0);
+                    assert!(p.y + size.height <= panel.absolute_position().y + 76.0);
+                }
+            }
+        }
     }
 }

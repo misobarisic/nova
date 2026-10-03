@@ -1,4 +1,4 @@
-//! Navigation selection marker (headless): the accent circle must sit centred
+//! Navigation selection marker (headless): the accent highlight must sit centred
 //! on the item it marks — in the wide rail *and* in the narrow bottom bar —
 //! must land on the item that was picked (the bar is rebuilt on every switch,
 //! with an instantly positioned highlight), and must not drift when something
@@ -63,7 +63,14 @@ fn bar_icons(app: &nova::AppWindow, height: f32) -> Vec<(f32, f32)> {
 }
 
 fn bar_dots(app: &nova::AppWindow, height: f32) -> Vec<(f32, f32)> {
-    centres(app, 48.0, 48.0, move |_, cy| cy > height - 100.0)
+    ElementHandle::find_by_element_id(app, "BottomNav::marker_dot")
+        .filter_map(|e| {
+            let p = e.absolute_position();
+            let s = e.size();
+            let center = (p.x + s.width / 2.0, p.y + s.height / 2.0);
+            (center.1 > height - 120.0).then_some(center)
+        })
+        .collect()
 }
 
 /// The marker must sit on `index`'s item: its centre matches that item's icon
@@ -158,7 +165,7 @@ fn nav_marker_is_centred_and_lands_on_the_picked_item() {
                 &f2,
             );
 
-            // Narrow: the bottom bar's marker is the only 48px square.
+            // Narrow: the bottom bar has one selection pill above its labels.
             app.window().set_size(slint::PhysicalSize::new(360, 800));
             app.global::<nova::NavState>().set_from(0);
             app.set_show_home(false);
