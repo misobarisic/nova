@@ -253,7 +253,9 @@ component DiscoverHeader {
             }
         }
 
-        if !root.narrow: HorizontalLayout {
+        // Both widths use the same field. Replacing a touch-focused input on
+        // rotation loses the window's Back capture chain (and its keyboard).
+        HorizontalLayout {
             width: 100%;
             vertical-stretch: 0;
             spacing: root.search_mark_gap;
@@ -283,44 +285,8 @@ component DiscoverHeader {
 
             edit_t := Timer {
                 interval: 80ms;
-                running: root.kb_edit && !root.narrow;
+                running: root.kb_edit;
                 triggered => { search_line.focus(); }
-            }
-
-        }
-
-        if root.narrow: HorizontalLayout {
-            width: 100%;
-            vertical-stretch: 0;
-            spacing: root.search_mark_gap;
-            height: 58px;
-
-            KbMark { on: root.search_mark_on; active: root.kb_active; }
-            search_line_narrow := SearchField {
-                roomy: true;
-                prominent: true;
-                enabled: root.searchable;
-                text <=> root.search_text;
-                focus_changed(focused) => {
-                    root.search_focused = focused;
-                    if (focused) { root.search_activated(); }
-                }
-                placeholder-text: root.searchable ? @tr("Search movies, shows…") : root.searchable_hint;
-                accepted(t) => {
-                    root.kb_edit = false;
-                    root.search_done();
-                    root.search_submitted(t);
-                }
-                edited(t) => {
-                    root.search_edited(t);
-                }
-                horizontal-stretch: 1;
-            }
-
-            edit_tn := Timer {
-                interval: 80ms;
-                running: root.kb_edit && root.narrow;
-                triggered => { search_line_narrow.focus(); }
             }
 
         }

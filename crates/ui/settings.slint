@@ -978,6 +978,15 @@ export component SettingsPage {
 
     // Compact layout for narrow (portrait) windows.
     in property <bool> narrow;
+    changed narrow => {
+        // These editors swap instances between stacked and wide layouts.
+        // Keep a surviving focus target when a touch-focused input is removed;
+        // keyboard edit timers can still focus the replacement field.
+        if (root.sel == 0 || root.sel == 1 || root.sel == 4) {
+            root.input_focused = false;
+            nav_scope.focus();
+        }
+    }
     // Mirrors the content scroll offset (bound by AppWindow; same pattern
     // as the Discover/Library grids).
     in-out property <length> scroll_y: 0px;
@@ -1178,6 +1187,9 @@ export component SettingsPage {
 
     function close_page() {
         root.kb_active = false;
+        // The outgoing subpage can own a focused editor or tracking's blur
+        // scope. Keep Back routed after the close animation removes it.
+        nav_scope.focus();
         // Nested pages return to their parent rather than the landing menu.
         if (root.sel == 9) {
             root.open_page(8);

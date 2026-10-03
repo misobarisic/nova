@@ -257,12 +257,21 @@ export component TrackingSheet inherits Rectangle {
     property <string> edit_last;
     property <string> edit_start;
     property <bool> individual_mode:false;
-    changed candidate_title => {root.edit_first=root.range_first;root.edit_last=root.range_last;root.edit_start=root.range_start;root.individual_mode=false;}
+    changed candidate_title => {
+        root.edit_first=root.range_first;root.edit_last=root.range_last;root.edit_start=root.range_start;root.individual_mode=false;
+        // Adjust/cancel replaces the focused range editor. The header stays
+        // mounted in both states, keeping Android Back in the capture chain.
+        if root.open {close_button.focus();}
+    }
     property <bool> manual_search:false;
     property <string> query_text:"";
     property <bool> include_history:false;
     property <bool> setup_review: root.setup_active && root.candidate_title == "" && !root.manual_search && root.setup.length > 0;
-    changed setup_revision => {root.include_history=false;root.manual_search=false;}
+    changed setup_revision => {
+        root.include_history=false;root.manual_search=false;
+        // Reloading suggestions can also remove a focused manual-search field.
+        if root.open {close_button.focus();}
+    }
     changed open => {if root.open {root.include_history=false;root.manual_search=false;close_button.focus();}}
     callback accept_setup(string,bool);
     callback adjust_setup(int);

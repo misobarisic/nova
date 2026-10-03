@@ -1094,6 +1094,7 @@ export component DetailPage {
         root.kb_ep = 0;
         root.kb_ci = 2;
         root.kb_tab = root.detail_tab == 3 ? 3 : 0;
+        if (root.detail_tab != 3) { root.leave_episode_search(); }
     }
     changed episode_rows => {
         if (root.kb_ep >= root.episode_rows.length) {
@@ -1111,7 +1112,10 @@ export component DetailPage {
         }
     }
     changed episode_context => { root.det_top_fix(); }
-    changed modal_episodes => { root.det_top_fix(); }
+    changed modal_episodes => {
+        root.det_top_fix();
+        if (!root.modal_episodes) { root.leave_episode_search(); }
+    }
     changed in_library => {
         root.det_top_fix();
         if (!root.in_library && root.menu_kind == 2) { root.close_menu(); }
@@ -1121,6 +1125,19 @@ export component DetailPage {
         if (!root.popup_open) {
             nav_scope.focus();
         }
+    }
+    changed tracking_open => {
+        // Closing tracking hides its focused button/input. Android treats an
+        // unhandled Back as activity exit, so keep focus in the visible page.
+        if (!root.tracking_open) { nav_scope.focus(); }
+    }
+
+    function leave_episode_search() {
+        // Tab/stream navigation removes the focused search input. Clear its
+        // edit state and leave focus on a control that survives that change.
+        root.kb_edit = false;
+        root.filter_focused = false;
+        if (!root.tracking_open && !root.popup_open) { nav_scope.focus(); }
     }
 
     callback back();
