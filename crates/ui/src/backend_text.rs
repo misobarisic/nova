@@ -1037,6 +1037,41 @@ pub fn tracking_history_preview(progress: u32) -> String {
     }
 }
 
+/// Cache maintenance progress and final counts, including a stopped sweep.
+pub fn cache_rewrite_status(
+    processed: usize,
+    total: usize,
+    converted: usize,
+    skipped: usize,
+    failed: usize,
+    cancelled: bool,
+    done: bool,
+) -> String {
+    if croatian() {
+        let state = if !done {
+            "Obrada"
+        } else if cancelled {
+            "Zaustavljeno"
+        } else {
+            "Dovršeno"
+        };
+        format!(
+            "{state}: {processed}/{total} · pretvoreno {converted}, preskočeno {skipped}, neuspjelo {failed}"
+        )
+    } else {
+        let state = if !done {
+            "Processing"
+        } else if cancelled {
+            "Stopped"
+        } else {
+            "Complete"
+        };
+        format!(
+            "{state}: {processed}/{total} · converted {converted}, skipped {skipped}, failed {failed}"
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

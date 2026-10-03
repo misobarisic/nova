@@ -1,5 +1,7 @@
 //! Tracking uses the real Slint pages; verify narrow layouts, explicit history
 //! confirmation, suggestion selection and sheet-first Back without network access.
+#[path = "support/destinations.rs"]
+mod destinations;
 use i_slint_backend_testing::{ElementHandle, ElementQuery};
 use slint::{ComponentHandle, SharedString, VecModel};
 use std::{
@@ -32,7 +34,13 @@ async fn settle() {
     .await;
 }
 async fn click(app: &nova::AppWindow, label: &str) {
-    ElementHandle::find_by_accessible_label(app, label)
+    let candidates: Vec<_> = if label.starts_with("settings:") {
+        destinations::find(app, label).collect()
+    } else {
+        ElementHandle::find_by_accessible_label(app, label).collect()
+    };
+    candidates
+        .into_iter()
         .next()
         .unwrap_or_else(|| panic!("missing action {label}"))
         .single_click(slint::platform::PointerEventButton::Left)
@@ -77,6 +85,7 @@ fn check_width(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) {
 fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
     i_slint_backend_testing::init_integration_test_with_system_time();
     let app = nova::AppWindow::new().unwrap();
+    app.on_settings_search_matches(|q, h| nova_ui::settings_search_matches(&q, &h));
     app.window().set_size(slint::PhysicalSize::new(360, 800));
     app.window().show().unwrap();
     app.set_show_home(false);
@@ -151,9 +160,9 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
     slint::spawn_local(async move {
         settle().await;
         let app = weak.upgrade().unwrap();
-        // The tracking link follows Downloads; reveal it before clicking.
-        scroll_down(&app).await;
-        click(&app, "Tracking").await;
+        app.set_settings_search_query("Tracking".into());
+        settle().await;
+        click(&app, "settings:tracking").await;
         check_width(&app, &f);
         assert_eq!(
             ElementHandle::find_by_element_type_name(&app, "AccountEditor").count(),
@@ -162,11 +171,17 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
         // AniList is below MAL on a phone; reveal its pending sign-in controls.
         scroll_down(&app).await;
         assert_eq!(
-            ElementHandle::find_by_accessible_label(&app, "AniList token").count(),
+            ElementHandle::find_by_accessible_label(&app, "AniList token")
+                .filter(|e| e.accessible_role()
+                    == Some(i_slint_backend_testing::AccessibleRole::TextInput))
+                .count(),
             1
         );
         assert_eq!(
-            ElementHandle::find_by_accessible_label(&app, "Finish sign-in").count(),
+            ElementHandle::find_by_accessible_label(&app, "Finish sign-in")
+                .filter(|e| e.accessible_role()
+                    == Some(i_slint_backend_testing::AccessibleRole::Button))
+                .count(),
             1
         );
         app.set_show_settings(false);

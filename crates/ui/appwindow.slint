@@ -13,6 +13,7 @@ import { PlayerOverlay } from "player.slint";
 export { Anim } from "anim.slint";
 // Same re-export for the navigation bookkeeping the backend writes: which
 // section a page switch is leaving, for the incoming nav icon's feedback.
+import { NavMetrics } from "sidenav.slint";
 export { NavState } from "sidenav.slint";
 
 // Shared structs used by the property declarations below; they are exported
@@ -130,7 +131,7 @@ export component AppWindow inherits Window {
     }
     changed show_home => { if (root.show_home) { root.discover_search_focused = false; } }
     changed show_library => { if (root.show_library) { root.discover_search_focused = false; } }
-    changed show_settings => { if (root.show_settings) { root.discover_search_focused = false; } }
+    changed show_settings => { if (root.show_settings) { root.discover_search_focused = false; if (root.settings_two_pane) { root.settings_detail_open = true; } } }
     changed player_open => { if (root.player_open) { root.discover_search_focused = false; } }
     in-out property <bool> search_loading: false;
     in-out property <bool> search_loading_more: false;
@@ -406,6 +407,22 @@ export component AppWindow inherits Window {
     in-out property <bool> discover_scroll_page: false;
     // Settings content offset (same mirror pattern as the grids).
     in-out property <length> settings_scroll_y: 0px;
+    in-out property <int> settings_selected_id: 13;
+    in-out property <bool> settings_detail_open: root.settings_two_pane;
+    out property <bool> settings_two_pane: !root.is_android && root.width - (root.narrow_ui ? 0px : NavMetrics.width-for(root.width)) - root.safe-area-insets.left - root.safe-area-insets.right - 36px >= 900px;
+    changed settings_two_pane => { if (root.settings_two_pane && root.show_settings) { root.settings_detail_open = true; } }
+    in-out property <string> settings_search_query: "";
+    in-out property <int> settings_focused_id: 13;
+    in-out property <length> settings_navigation_scroll: 0px;
+    in-out property <[length]> settings_page_scrolls: [0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px];
+    in-out property <bool> cache_busy: false;
+    in-out property <bool> cache_rewriting: false;
+    in-out property <int> cache_processed: 0;
+    in-out property <int> cache_total: 0;
+    in-out property <string> cache_status: "";
+    pure callback settings_search_matches(string, string) -> bool;
+    callback cancel_reencode();
+
 
     callback addon_added(string);
     callback addon_toggled(int);
@@ -962,6 +979,20 @@ export component AppWindow inherits Window {
 
     // ---- Settings page --------------------------------------------------
     if root.show_settings && !root.player_open && !root.modal_visible && !root.show_home: SettingsPage {
+        sel <=> root.settings_selected_id;
+        sub_open <=> root.settings_detail_open;
+        two_pane: root.settings_two_pane;
+        search_query <=> root.settings_search_query;
+        kb_land <=> root.settings_focused_id;
+        land_scroll_y <=> root.settings_navigation_scroll;
+        page_scrolls <=> root.settings_page_scrolls;
+        search_matches(query, haystack) => { return root.settings_search_matches(query, haystack); }
+        cache_busy: root.cache_busy;
+        cache_rewriting: root.cache_rewriting;
+        cache_processed: root.cache_processed;
+        cache_total: root.cache_total;
+        cache_status: root.cache_status;
+        cancel_reencode => { root.cancel_reencode(); }
         nav-viewport-width: root.width;
         tracking_accounts: root.tracking_accounts;
         tracking_notice: root.tracking_notice;
@@ -1048,7 +1079,7 @@ export component AppWindow inherits Window {
         sync_pair_prompt_name <=> root.sync_pair_prompt_name;
         sync_pair_prompt_code <=> root.sync_pair_prompt_code;
         kb_active <=> root.kb_active;
-        narrow: root.narrow_ui;
+        phone_layout: root.is_android || root.narrow_ui;
         safe-top: root.safe-area-insets.top;
         safe-left: root.safe-area-insets.left;
         safe-right: root.safe-area-insets.right;

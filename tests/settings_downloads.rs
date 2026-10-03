@@ -6,6 +6,11 @@
 //! lists completed episodes and dispatches a remove for the tapped row.
 //! One test function: the testing backend initializes once per process.
 
+#[path = "support/settings.rs"]
+mod settings_support;
+
+#[path = "support/destinations.rs"]
+mod destinations;
 use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle, SharedString, VecModel};
 use std::cell::RefCell;
@@ -31,6 +36,9 @@ fn downloads_subpage_shows_auto_delete_and_lists_episodes() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
     app.window().set_size(slint::PhysicalSize::new(360, 800));
     app.window().show().unwrap();
     app.set_show_settings(true);
@@ -72,8 +80,10 @@ fn downloads_subpage_shows_auto_delete_and_lists_episodes() {
     after(400, move || {
         let app = app1.upgrade().unwrap();
         // Downloads is the 9th landing entry (index 8).
-        let Some(downloads) = ElementHandle::find_by_element_type_name(&app, "SettingsLink").nth(8)
-        else {
+        let Some(downloads) = ({
+            app.set_settings_search_query("Downloads".into());
+            destinations::find(&app, "settings:downloads").next()
+        }) else {
             fail(&failures1, false, "DIAG: no Downloads landing entry");
             slint::quit_event_loop().unwrap();
             return;
@@ -96,9 +106,9 @@ fn downloads_subpage_shows_auto_delete_and_lists_episodes() {
                     toggles >= 1,
                     "Downloads subpage must show the auto-delete toggle",
                 );
-                let Some(view) =
-                    ElementHandle::find_by_element_type_name(&app, "PillButton").next()
-                else {
+                let Some(view) = ElementHandle::find_by_accessible_label(&app, "View").find(|e| {
+                    e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)
+                }) else {
                     fail(&failures2, false, "DIAG: no Downloaded episodes link");
                     slint::quit_event_loop().unwrap();
                     return;
@@ -107,13 +117,17 @@ fn downloads_subpage_shows_auto_delete_and_lists_episodes() {
                 let failures3 = failures2.clone();
                 let removed3 = removed2.clone();
                 slint::spawn_local(async move {
-                    view.single_click(slint::platform::PointerEventButton::Left)
-                        .await;
+                    settings_support::click(&app, &view).await;
                     after(400, move || {
                         let app = app3.upgrade().unwrap();
                         // Two Delete buttons, one per listed episode.
                         let deletes: Vec<_> =
-                            ElementHandle::find_by_element_type_name(&app, "PillButton").collect();
+                            ElementHandle::find_by_accessible_label(&app, "Delete")
+                                .filter(|e| {
+                                    e.accessible_role()
+                                        == Some(i_slint_backend_testing::AccessibleRole::Button)
+                                })
+                                .collect();
                         fail(
                             &failures3,
                             deletes.len() == 2,

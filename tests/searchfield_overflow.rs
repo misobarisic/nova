@@ -1,5 +1,7 @@
 //! The shared input's compact, touch and prominent layouts follow long text.
 
+#[path = "support/destinations.rs"]
+mod destinations;
 use i_slint_backend_testing::ElementHandle;
 use slint::ComponentHandle;
 use std::cell::RefCell;
@@ -23,18 +25,23 @@ fn exercise_field(
     settings: bool,
     done: impl FnOnce(nova::AppWindow, Failures) + 'static,
 ) {
-    let field = ElementHandle::find_by_element_type_name(app, "SearchField")
-        .next()
-        .unwrap();
-    let viewport = ElementHandle::find_by_element_id(app, "SearchField::input_viewport")
-        .next()
-        .unwrap();
-    let input = ElementHandle::find_by_element_id(app, "SearchField::inner")
-        .next()
-        .unwrap();
-    let clear = ElementHandle::find_by_element_id(app, "SearchField::clear_button")
-        .next()
-        .expect("nonempty field has a clear button");
+    let field = if settings {
+        ElementHandle::find_by_element_id(app, "SettingsPage::addon_url_narrow")
+            .chain(ElementHandle::find_by_element_id(
+                app,
+                "SettingsPage::addon_url_wide",
+            ))
+            .next()
+            .unwrap()
+    } else {
+        ElementHandle::find_by_element_type_name(app, "SearchField")
+            .next()
+            .unwrap()
+    };
+    let child = |id: &str| field.query_descendants().match_id(id).find_first().unwrap();
+    let viewport = child("SearchField::input_viewport");
+    let input = child("SearchField::inner");
+    let clear = child("SearchField::clear_button");
     if field.absolute_position().x + field.size().width > app.window().size().width as f32 + 0.5 {
         failures
             .borrow_mut()
@@ -114,6 +121,9 @@ fn exercise_field(
 fn all_input_sizes_follow_the_caret_and_clear_text() {
     i_slint_backend_testing::init_integration_test_with_system_time();
     let app = nova::AppWindow::new().unwrap();
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
     app.window().set_size(slint::PhysicalSize::new(360, 800));
     app.set_show_home(false);
     app.set_search_text(long_text());
@@ -130,9 +140,11 @@ fn all_input_sizes_follow_the_caret_and_clear_text() {
             let weak = app.as_weak();
             after(300, move || {
                 let app = weak.upgrade().unwrap();
-                let addons = ElementHandle::find_by_element_type_name(&app, "SettingsLink")
-                    .next()
-                    .unwrap();
+                let addons = ({
+                    app.set_settings_search_query("Addons".into());
+                    destinations::find(&app, "settings:addons").next()
+                })
+                .unwrap();
                 let weak = app.as_weak();
                 let _ = slint::spawn_local(async move {
                     addons
@@ -142,7 +154,7 @@ fn all_input_sizes_follow_the_caret_and_clear_text() {
                         let app = weak.upgrade().unwrap();
                         // Touch-sized Settings input.
                         exercise_field(&app, failures, true, move |app, failures| {
-                            app.window().set_size(slint::PhysicalSize::new(1100, 800));
+                            app.window().set_size(slint::PhysicalSize::new(1400, 800));
                             app.set_addon_url(long_text());
                             let weak = app.as_weak();
                             after(300, move || {

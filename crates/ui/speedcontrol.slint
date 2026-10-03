@@ -31,14 +31,16 @@ component SpeedStepButton inherits Rectangle {
     // Accessible name (the glyph alone reads badly, and the headless tests
     // locate the buttons by label).
     in property <string> name: "";
+    in property <bool> roomy: false;
+    in-out property <bool> keyboard-mode: false;
     callback clicked();
 
-    width: 32px;
-    height: 32px;
+    width: root.roomy ? 44px : 32px;
+    height: root.roomy ? 44px : 32px;
     border-radius: 8px;
     background: step_touch.has-hover ? #2b2b35 : #232330;
-    border-width: 1px;
-    border-color: #33333d;
+    border-width: focus.has-focus && root.keyboard-mode ? 2px : 1px;
+    border-color: focus.has-focus && root.keyboard-mode ? #8b5cf6 : #33333d;
     accessible-role: button;
     accessible-label: root.name;
 
@@ -51,25 +53,36 @@ component SpeedStepButton inherits Rectangle {
         vertical-alignment: center;
     }
 
+    focus := FocusScope {
+        key-pressed(e) => {
+            root.keyboard-mode = true;
+            if (e.text == Key.Return || e.text == " ") { root.clicked(); accept } else { reject }
+        }
+    }
     step_touch := TouchArea {
         width: 100%;
         height: 100%;
         mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        clicked => { root.keyboard-mode = false; root.clicked(); }
     }
+    forward-focus: focus;
+
+
 }
 
 // One preset chip under the slider (1×, 1.25×, …): the active rate is filled.
 component SpeedPreset inherits Rectangle {
     in property <string> label;
     in property <bool> selected: false;
+    in property <bool> roomy: false;
+    in-out property <bool> keyboard-mode: false;
     callback clicked();
 
     horizontal-stretch: 1;
-    height: 28px;
+    height: root.roomy ? 44px : 28px;
     border-radius: 8px;
     background: root.selected ? #443e66 : (preset_touch.has-hover ? #2b2b35 : #232330);
-    border-width: 1px;
+    border-width: focus.has-focus && root.keyboard-mode ? 2px : 1px;
     border-color: root.selected ? #8b5cf6 : #33333d;
 
     Text {
@@ -81,12 +94,21 @@ component SpeedPreset inherits Rectangle {
         vertical-alignment: center;
     }
 
+    focus := FocusScope {
+        key-pressed(e) => {
+            root.keyboard-mode = true;
+            if (e.text == Key.Return || e.text == " ") { root.clicked(); accept } else { reject }
+        }
+    }
     preset_touch := TouchArea {
         width: 100%;
         height: 100%;
         mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        clicked => { root.keyboard-mode = false; root.clicked(); }
     }
+    forward-focus: focus;
+
+
 }
 
 export component SpeedControl inherits Rectangle {
@@ -95,6 +117,8 @@ export component SpeedControl inherits Rectangle {
     /// Keyboard focus ring, drawn on the slider (the host adjusts it with
     /// Left/Right or Up/Down through `stepped`).
     in property <bool> focused: false;
+    in property <bool> roomy: false;
+    in-out property <bool> keyboard-mode: false;
 
     /// The rate changed (slider drag/tap, ± step or a preset): a raw value.
     callback changed(float);
@@ -120,7 +144,7 @@ export component SpeedControl inherits Rectangle {
     }
 
     // Slider row (32) + gap (8) + preset row (28).
-    height: 68px;
+    height: root.roomy ? 96px : 68px;
 
     VerticalLayout {
         width: 100%;
@@ -130,10 +154,11 @@ export component SpeedControl inherits Rectangle {
         // alignment.
         HorizontalLayout {
             width: 100%;
-            height: 32px;
+            height: root.roomy ? 44px : 32px;
             spacing: 8px;
 
             SpeedStepButton {
+                roomy: root.roomy; keyboard-mode <=> root.keyboard-mode;
                 glyph: "−";
                 name: @tr("Slower");
                 clicked => { root.request_step(-1); }
@@ -141,8 +166,8 @@ export component SpeedControl inherits Rectangle {
 
             slider := Rectangle {
                 horizontal-stretch: 1;
-                height: 32px;
-                border-width: root.focused ? 2px : 0px;
+                height: root.roomy ? 44px : 32px;
+                border-width: root.focused || (slider_focus.has-focus && root.keyboard-mode) ? 2px : 0px;
                 border-color: #8b5cf6;
                 border-radius: 6px;
 
@@ -175,6 +200,13 @@ export component SpeedControl inherits Rectangle {
                     background: #a89af5;
                 }
 
+                forward-focus: slider_focus;
+                slider_focus := FocusScope {
+                    key-pressed(e) => {
+                        root.keyboard-mode = true;
+                        if e.text == Key.LeftArrow || e.text == Key.RightArrow { root.request_step(e.text == Key.RightArrow ? 1 : -1); accept } else { reject }
+                    }
+                }
                 track_touch := TouchArea {
                     width: 100%;
                     height: 100%;
@@ -186,10 +218,13 @@ export component SpeedControl inherits Rectangle {
                     }
 
                     moved => {
+                        if (!self.pressed) { return; }
+                        root.keyboard-mode = false;
                         root.speed = value_at(self.mouse-x);
                         root.changed(root.speed);
                     }
                     clicked => {
+                        root.keyboard-mode = false;
                         root.speed = value_at(self.mouse-x);
                         root.changed(root.speed);
                     }
@@ -197,6 +232,7 @@ export component SpeedControl inherits Rectangle {
             }
 
             SpeedStepButton {
+                roomy: root.roomy; keyboard-mode <=> root.keyboard-mode;
                 glyph: "+";
                 name: @tr("Faster");
                 clicked => { root.request_step(1); }
@@ -204,7 +240,7 @@ export component SpeedControl inherits Rectangle {
 
             Text {
                 width: 52px;
-                height: 32px;
+                height: root.roomy ? 44px : 32px;
                 text: PlaybackSpeed.label(root.speed);
                 color: #e6e6ea;
                 font-size: 13px;
@@ -216,25 +252,29 @@ export component SpeedControl inherits Rectangle {
         // Presets, straight under the slider.
         HorizontalLayout {
             width: 100%;
-            height: 28px;
+            height: root.roomy ? 44px : 28px;
             spacing: 8px;
 
             SpeedPreset {
+                roomy: root.roomy; keyboard-mode <=> root.keyboard-mode;
                 label: "1×";
                 selected: root.is_set(1.0);
                 clicked => { root.apply(1.0); }
             }
             SpeedPreset {
+                roomy: root.roomy; keyboard-mode <=> root.keyboard-mode;
                 label: "1.25×";
                 selected: root.is_set(1.25);
                 clicked => { root.apply(1.25); }
             }
             SpeedPreset {
+                roomy: root.roomy; keyboard-mode <=> root.keyboard-mode;
                 label: "1.5×";
                 selected: root.is_set(1.5);
                 clicked => { root.apply(1.5); }
             }
             SpeedPreset {
+                roomy: root.roomy; keyboard-mode <=> root.keyboard-mode;
                 label: "2×";
                 selected: root.is_set(2.0);
                 clicked => { root.apply(2.0); }

@@ -1,0 +1,1010 @@
+import { SearchField } from "searchfield.slint";
+import { IcExtension, IcTag, IcImage, IcDisplay, IcPlay, IcChevronLeft, IcChevronRight, IcSettingsGear, IcSync, IcDelete, IcHome, IcVideoLibrary } from "icons.slint";
+import { KbMark } from "kbnav.slint";
+import { Anim } from "anim.slint";
+
+// ---- Shared Settings controls ------------------------
+
+// Purple pill button ("Add", "Save", "Show"…). Primary = filled accent.
+export component PillButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> destructive: false;
+    in property <length> btn_min_width: 0px;
+    // 6-button nav highlight.
+    in property <bool> enabled: true;
+    in property <bool> focused: false;
+    // Finger-sized height on narrow screens (44px touch target).
+    in property <bool> roomy: false;
+    // Narrower side padding (20px instead of 28px): for rows that must fit
+    // more pills than a phone's width allows with the default padding
+    // (Settings → Addons stacks seven controls on two lines). Height, colour
+    // and touch target are unchanged.
+    in property <bool> compact: false;
+    callback clicked();
+    // Expose the label to the accessibility tree (and headless tests, which
+    // locate a specific pill by label rather than by traversal index).
+    accessible-role: button;
+    accessible-label: label;
+    accessible-enabled: root.enabled;
+    width: Math.max(pill_lbl.preferred-width + (root.compact ? 20px : 28px), self.btn_min_width);
+    height: 44px;
+    border-radius: 8px;
+    border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;
+    border-color: #8b5cf6;
+    background: root.destructive ? (touch.has-hover ? #492936 : #30202c) : touch.has-hover
+    ? (primary ? #9165f7 : #28334a)
+    : (primary ? #8b5cf6 : #1b2538);
+    animate background { duration: Anim.hover_fast; }
+
+    pill_lbl := Text {
+        text: label;
+        font-size: 13px;
+        color: root.destructive ? #fda4af : (primary ? #ffffff : #bac1d3);
+        vertical-alignment: center;
+    }
+
+    key_focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            SettingsStyle.keyboard-mode = true;
+            if e.text == Key.Return || e.text == " " { root.clicked(); accept } else { reject }
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { SettingsStyle.keyboard-mode = false; root.clicked(); }
+    }
+    property <bool> focus_visible: root.enabled && SettingsStyle.keyboard-mode && (root.focused || key_focus.has-focus);
+    changed focus_visible => {
+        if (self.focus_visible) {
+            SettingsStyle.focus-y = root.absolute-position.y;
+            SettingsStyle.focus-height = root.height;
+            SettingsStyle.navigation-focus = false;
+            SettingsStyle.focus-request += 1;
+        }
+    }
+    forward-focus: key_focus;
+    opacity: root.enabled ? 1 : 0.45;
+
+}
+
+// Toggle switch with a 44px interaction area, matching the
+// buttons so both share the same vertical center in a row.
+export component ToggleSwitch inherits Rectangle {
+    in-out property <bool> checked: false;
+    // 6-button nav highlight.
+    in property <bool> enabled: true;
+    in property <bool> focused: false;
+    in property <string> name: "";
+    accessible-role: checkbox;
+    accessible-label: root.name;
+    accessible-checkable: true;
+    accessible-checked <=> root.checked;
+    accessible-enabled: root.enabled;
+    callback toggled();
+    width: 44px;
+    height: 44px;
+    border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;
+    border-color: #8b5cf6;
+    border-radius: 6px;
+
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        width: 100%;
+        height: 24px;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: checked ? #a89af5 : #ffffff20;
+        background: checked ? #a89af5 : #1b2538;
+        animate background { duration: Anim.hover_fast; }
+
+        knob := Rectangle {
+            x: checked ? parent.width - self.width - 3px : 3px;
+            y: (parent.height - self.height) / 2;
+            width: 18px;
+            height: 18px;
+            border-radius: 9px;
+            background: checked ? #14141a : #d9d9e2;
+            animate x { duration: Anim.hover_fast; }
+        }
+    }
+
+    key_focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            SettingsStyle.keyboard-mode = true;
+            if e.text == Key.Return || e.text == " " { root.checked = !root.checked; root.toggled(); accept } else { reject }
+        }
+    }
+    TouchArea {
+        enabled: root.enabled;
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => {
+            SettingsStyle.keyboard-mode = false;
+            checked = !checked;
+            toggled();
+        }
+    }
+    property <bool> focus_visible: root.enabled && SettingsStyle.keyboard-mode && (root.focused || key_focus.has-focus);
+    changed focus_visible => {
+        if (self.focus_visible) {
+            SettingsStyle.focus-y = root.absolute-position.y;
+            SettingsStyle.focus-height = root.height;
+            SettingsStyle.navigation-focus = false;
+            SettingsStyle.focus-request += 1;
+        }
+    }
+    forward-focus: key_focus;
+    opacity: root.enabled ? 1 : 0.45;
+
+}
+
+// Square icon button for the narrow addon rows (configure / refresh /
+// remove / move): a 22px glyph on the pill fill, same hover and keyboard
+// ring language as PillButton. Labels stay on the accessibility tree via
+// `name`, so icon-only buttons keep their translated names.
+export component AddonIconButton inherits Rectangle {
+    in property <string> name: "";
+    in property <bool> destructive: false;
+    // 6-button nav highlight.
+    in property <bool> enabled: true;
+    in property <bool> focused: false;
+    // Finger-sized target on narrow screens (44px, like roomy pills);
+    // 32px elsewhere, exactly matching ToggleSwitch and text pills so a
+    // shared row stays aligned.
+    in property <bool> roomy: false;
+    callback clicked();
+    width: 44px;
+    height: 44px;
+    border-radius: 16px;
+    border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;
+    border-color: #8b5cf6;
+    background: root.destructive ? (touch.has-hover ? #492936 : #30202c) : (touch.has-hover ? #28334a : #1b2538);
+    animate background { duration: Anim.hover_fast; }
+    accessible-role: button;
+    accessible-label: root.name;
+    accessible-enabled: root.enabled;
+    @children
+    key_focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            SettingsStyle.keyboard-mode = true;
+            if e.text == Key.Return || e.text == " " { root.clicked(); accept } else { reject }
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { SettingsStyle.keyboard-mode = false; root.clicked(); }
+    }
+    property <bool> focus_visible: root.enabled && SettingsStyle.keyboard-mode && (root.focused || key_focus.has-focus);
+    changed focus_visible => {
+        if (self.focus_visible) {
+            SettingsStyle.focus-y = root.absolute-position.y;
+            SettingsStyle.focus-height = root.height;
+            SettingsStyle.navigation-focus = false;
+            SettingsStyle.focus-request += 1;
+        }
+    }
+    forward-focus: key_focus;
+    opacity: root.enabled ? 1 : 0.45;
+
+}
+
+// One addon row on narrow screens: the name owns the first line (toggle +
+// title + move arrows) and the remaining actions sit on a second line
+// underneath (configure cog, Copy link, refresh, remove) — a phone's row
+// offers ~260px for controls, so seven text pills either squeeze the title
+// to nothing or spill off the row. Keyboard column order matches the wide
+// row's: 0 toggle, 1 Configure, 2 Copy link, 3 Refresh, 4 Remove, 5 move
+// up, 6 move down.
+export component AddonRowCard inherits Rectangle {
+    in property <string> title: "";
+    in property <bool> tinted: false;
+    in property <bool> on: false;
+    in property <bool> has_config: false;
+    // Keyboard row focus (zone 2, this row) and modality.
+    in property <bool> kb_focused_row: false;
+    in property <bool> kb_active: false;
+    // Keyboard column on this row (same numbering as the wide row).
+    in property <int> kb_col: -1;
+    callback toggled(bool);
+    callback configure();
+    callback copy_link();
+    callback refresh();
+    callback remove();
+    callback move_up();
+    callback move_down();
+
+    background: #111827;
+
+    VerticalLayout {
+        padding-top: 12px;
+        padding-bottom: 12px;
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 10px;
+
+        // Row 1: identity + order.
+        HorizontalLayout {
+            spacing: 12px;
+
+            KbMark { on: root.kb_focused_row; active: root.kb_active; }
+            // Centered on the 44px arrow line (a layout child would ride 6px
+            // high next to the roomy buttons).
+            Rectangle {
+                width: 44px;
+                height: 44px;
+
+                ToggleSwitch {
+                    x: 0px;
+                    y: (parent.height - self.height) / 2;
+                    checked: root.on;
+                    focused: root.kb_active && root.kb_focused_row && root.kb_col == 0;
+                    toggled => { root.toggled(self.checked); }
+                }
+            }
+
+            Text {
+                text: root.title;
+                font-size: 16px;
+                font-weight: 600;
+                color: #ffffff;
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                vertical-alignment: center;
+                min-width: 0px;
+                wrap: word-wrap;
+            }
+
+            AddonIconButton {
+                roomy: true;
+                name: @tr("Move up");
+                focused: root.kb_active && root.kb_focused_row && root.kb_col == 5;
+                clicked => { root.move_up(); }
+                Text {
+                    text: "↑";
+                    font-size: 18px;
+                    color: #bac1d3;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            AddonIconButton {
+                roomy: true;
+                name: @tr("Move down");
+                focused: root.kb_active && root.kb_focused_row && root.kb_col == 6;
+                clicked => { root.move_down(); }
+                Text {
+                    text: "↓";
+                    font-size: 18px;
+                    color: #bac1d3;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Row 2: actions, in keyboard-column order.
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+
+            if root.has_config: AddonIconButton {
+                roomy: true;
+                name: @tr("Configure");
+                focused: root.kb_active && root.kb_focused_row && root.kb_col == 1;
+                clicked => { root.configure(); }
+                IcSettingsGear {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 22px;
+                    height: 22px;
+                    fill: #bac1d3;
+                }
+            }
+
+            PillButton {
+                label: @tr("Copy link");
+                roomy: true;
+                compact: true;
+                focused: root.kb_active && root.kb_focused_row && root.kb_col == 2;
+                clicked => { root.copy_link(); }
+            }
+
+            AddonIconButton {
+                roomy: true;
+                name: @tr("Refresh");
+                focused: root.kb_active && root.kb_focused_row && root.kb_col == 3;
+                clicked => { root.refresh(); }
+                IcSync {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 22px;
+                    height: 22px;
+                    fill: #bac1d3;
+                }
+            }
+
+            AddonIconButton {
+                roomy: true;
+                name: @tr("Remove"); destructive: true;
+                focused: root.kb_active && root.kb_focused_row && root.kb_col == 4;
+                clicked => { root.remove(); }
+                IcDelete {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 22px;
+                    height: 22px;
+                    fill: #bac1d3;
+                }
+            }
+        }
+    }
+}
+
+// Slider with a 44px interaction area and restrained accent.
+export component MiniSlider inherits Rectangle {
+    in-out property <float> value: 0.0;
+    in property <float> minimum: 0.0;
+    in property <float> maximum: 100.0;
+    in property <float> step: 1.0;
+    // 6-button nav highlight (Left/Right adjusts when focused).
+    in property <bool> enabled: true;
+    in property <bool> focused: false;
+    callback changed(float);
+    height: 44px;
+    border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;
+    border-color: #8b5cf6;
+    border-radius: 6px;
+
+    property <float> span: Math.max(maximum - minimum, 0.001);
+    property <float> pct: Math.clamp((value - minimum) / span, 0, 1);
+
+    Rectangle {
+        x: 0;
+        width: 100%;
+        y: (parent.height - 4px) / 2;
+        height: 4px;
+        border-radius: 2px;
+        background: #2e2e38;
+
+        Rectangle {
+            x: 0;
+            width: root.pct * parent.width;
+            height: 100%;
+            border-radius: 2px;
+            background: #a89af5;
+        }
+    }
+
+    Rectangle {
+        x: root.pct * (parent.width - 14px);
+        y: (parent.height - 14px) / 2;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: #a89af5;
+    }
+
+    key_focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            SettingsStyle.keyboard-mode = true;
+            if e.text == Key.LeftArrow || e.text == Key.RightArrow { root.value = Math.clamp(root.value + (e.text == Key.RightArrow ? root.step : -root.step), root.minimum, root.maximum); root.changed(root.value); accept } else { reject }
+        }
+    }
+    TouchArea {
+        enabled: root.enabled;
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        moved => {
+            if (!self.pressed) { return; }
+            SettingsStyle.keyboard-mode = false;
+            value = minimum + Math.clamp(self.mouse-x / self.width, 0, 1) * span;
+            value = Math.round(value / root.step) * root.step;
+            root.changed(value);
+        }
+        clicked => {
+            SettingsStyle.keyboard-mode = false;
+            value = minimum + Math.clamp(self.mouse-x / self.width, 0, 1) * span;
+            value = Math.round(value / root.step) * root.step;
+            root.changed(value);
+        }
+    }
+    property <bool> focus_visible: root.enabled && SettingsStyle.keyboard-mode && (root.focused || key_focus.has-focus);
+    changed focus_visible => {
+        if (self.focus_visible) {
+            SettingsStyle.focus-y = root.absolute-position.y;
+            SettingsStyle.focus-height = root.height;
+            SettingsStyle.navigation-focus = false;
+            SettingsStyle.focus-request += 1;
+        }
+    }
+    forward-focus: key_focus;
+    opacity: root.enabled ? 1 : 0.45;
+
+}
+
+// Segmented option picker (e.g. JPEG | WebP).
+export component Segmented inherits HorizontalLayout {
+    in property <[string]> labels;
+    in-out property <int> current_index: 0;
+    // 6-button nav highlight (Left/Right cycles when focused).
+    in property <bool> enabled: true;
+    in property <bool> focused: false;
+    callback picked(int);
+    spacing: 0px;
+
+    for opt[i] in labels: Rectangle {
+        accessible-role: button;
+        accessible-label: opt;
+        accessible-enabled: root.enabled;
+        width: seg_lbl.preferred-width + 28px;
+        height: 44px;
+        border-radius: 8px;
+        border-width: root.enabled && SettingsStyle.keyboard-mode && ((root.focused && root.current_index == i) || segment_focus.has-focus) ? 2px : 0px;
+        border-color: #8b5cf6;
+        background: root.current_index == i ? #443e66 : transparent;
+        animate background { duration: Anim.hover_fast; }
+
+        seg_lbl := Text {
+            text: opt;
+            font-size: 13px;
+            color: root.current_index == i ? #e6e0ff : #bac1d3;
+            vertical-alignment: center;
+        }
+
+        property <bool> focus_visible: root.enabled && SettingsStyle.keyboard-mode && ((root.focused && root.current_index == i) || segment_focus.has-focus);
+        changed focus_visible => {
+            if (self.focus_visible) {
+                SettingsStyle.focus-y = self.absolute-position.y;
+                SettingsStyle.focus-height = self.height;
+                SettingsStyle.navigation-focus = false;
+                SettingsStyle.focus-request += 1;
+            }
+        }
+        forward-focus: segment_focus;
+        segment_focus := FocusScope {
+            enabled: root.enabled;
+            key-pressed(e) => {
+                SettingsStyle.keyboard-mode = true;
+                if e.text == Key.Return || e.text == " " { root.current_index = i; root.picked(i); accept } else { reject }
+            }
+        }
+        TouchArea {
+            enabled: root.enabled;
+            width: 100%;
+            height: 100%;
+            mouse-cursor: pointer;
+            clicked => {
+                SettingsStyle.keyboard-mode = false;
+                root.current_index = i;
+                root.picked(i);
+            }
+        }
+    }
+}
+
+// Section title: purple icon + uppercase label.
+export component SectionHeader inherits HorizontalLayout {
+    in property <int> icon-kind: 0;   // 1 addons, 2 categories, 3 cache, 4 display, 5 player, 6 settings, 7 sync
+    in property <string> label;
+    spacing: 10px;
+    alignment: start;
+
+    Rectangle {
+        width: 26px;
+        height: 26px;
+
+        if icon-kind == 1: IcExtension {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 20px;
+            height: 20px;
+            fill: #a89af5;
+        }
+        if icon-kind == 2: IcTag {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 20px;
+            height: 20px;
+            fill: #a89af5;
+        }
+        if icon-kind == 3: IcImage {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 20px;
+            height: 20px;
+            fill: #a89af5;
+        }
+        if icon-kind == 4: IcDisplay {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 20px;
+            height: 20px;
+            fill: #a89af5;
+        }
+        if icon-kind == 5: IcPlay {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 20px;
+            height: 20px;
+            fill: #a89af5;
+        }
+        if icon-kind == 6: IcSettingsGear {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 20px;
+            height: 20px;
+            fill: #a89af5;
+        }
+        if icon-kind == 7: IcSync {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 20px;
+            height: 20px;
+            fill: #a89af5;
+        }
+        if icon-kind == 8: IcImage {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 20px;
+            height: 20px;
+            fill: #a89af5;
+        }
+    }
+
+    Text {
+        text: label;
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: 0px;
+        color: #bac1d3;
+        vertical-alignment: center;
+    }
+}
+
+// One setting row: title + description on the left, any control(s) after.
+// Rows share a solid card surface and separate with inset rules.
+export component SettingsRow inherits Rectangle {
+    in property <string> row-title: "";
+    in property <string> row-desc: "";
+    in property <bool> tinted: false;
+    in property <length> row-min-height: 64px;
+    background: #111827;
+
+    property <length> inner-width: Math.max(0px, self.width - 32px);
+    property <length> control-width: controls.preferred-width;
+    property <length> control-height: controls.preferred-height;
+    // Keep the text column from sprawling across a very wide settings card,
+    // while making its narrow-width limit explicit instead of splitting free
+    // space with an invisible spacer.
+    property <length> side-text-width: Math.min(
+    Math.max(0px, root.inner-width - root.control-width - 16px),
+    root.inner-width * 0.62
+    );
+    property <bool> stack-controls: root.side-text-width < 150px;
+    property <length> text-width: root.stack-controls
+    ? root.inner-width
+    : root.side-text-width;
+    property <length> text-height: measure_col.preferred-height;
+
+    // Keep at least 150px for a readable text column. Rows whose controls
+    // would crowd it instead put the controls on a second line; small controls
+    // such as toggles stay beside their text. The wrapped measurement is at
+    // that same live text width, so both layouts reserve enough height for
+    // titles and descriptions that wrap.
+    height: Math.max(
+    row-min-height,
+    28px + (root.stack-controls
+    ? root.text-height + 10px + root.control-height
+    : Math.max(root.text-height, root.control-height))
+    );
+
+    Rectangle { x: 16px; y: parent.height - 1px; width: Math.max(0px, parent.width - 32px); height: 1px; background: #ffffff0c; }
+
+    title_col := VerticalLayout {
+        x: 16px;
+        y: root.stack-controls
+        ? 14px
+        : (root.height - self.height) / 2;
+        width: root.text-width;
+        height: root.text-height;
+        alignment: center;
+        spacing: 3px;
+
+        Text {
+            text: row-title;
+            font-size: 16px;
+            font-weight: 600;
+            color: #ffffff;
+            // min-width: 0 lets the column shrink past a long unbreakable token
+            // (an addon URL, a slug) without widening the settings page.
+            min-width: 0px;
+            wrap: word-wrap;
+        }
+
+        if row-desc != "": Text {
+            text: row-desc;
+            font-size: 14px;
+            color: #bac1d3;
+            min-width: 0px;
+            wrap: word-wrap;
+        }
+    }
+
+    // A single slot keeps caller-provided controls intact (including grouped
+    // controls). It is right-aligned beside the text when there is room, and
+    // left-aligned below it when the control group would leave under 150px for
+    // the label and description.
+    controls := HorizontalLayout {
+        x: root.stack-controls
+        ? 16px
+        : root.width - 16px - root.control-width;
+        y: root.stack-controls
+        ? 14px + root.text-height + 10px
+        : (root.height - self.height) / 2;
+        width: root.stack-controls ? root.inner-width : root.control-width;
+        height: root.control-height;
+        alignment: start;
+
+        @children
+    }
+
+    // Hidden measurement copy of the whole text column (same text, fonts,
+    // width and spacing as `title_col`; clipped to zero height so it renders
+    // nothing) — its natural wrapped height drives the row minimum above.
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        height: 0;
+        clip: true;
+
+        measure_col := VerticalLayout {
+            width: title_col.width;
+            spacing: 3px;
+
+            Text {
+                text: row-title;
+                font-size: 16px;
+                font-weight: 600;
+                wrap: word-wrap;
+                min-width: 0px;
+            }
+
+            if row-desc != "": Text {
+                text: row-desc;
+                font-size: 14px;
+                wrap: word-wrap;
+                min-width: 0px;
+            }
+        }
+    }
+}
+
+// Bordered value readout shown under sliders.
+export component ValueBox inherits Rectangle {
+    in property <string> text;
+    width: 120px;
+    height: 30px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: #ffffff20;
+    background: #111827;
+
+    Text {
+        text: text;
+        font-size: 13px;
+        color: #ffffff;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+
+// Landing-page entry: icon + title + subtitle + chevron. Tapping opens the
+// corresponding settings subpage (see `open_page`).
+export component SettingsLink inherits Rectangle {
+    in property <int> icon-kind: 0;   // 0 addons, 1 categories, 2 cache, 3 display, 4 torrents, 5 player, 6 look-and-feel, 7 sync
+    in property <string> destination-id: "";
+    in property <bool> selected: false;
+    in property <string> title: "";
+    in property <string> subtitle: "";
+    in property <bool> enabled: true;
+    in property <bool> focused: false;
+    // False while a subpage is open: blocks taps that would fall through the
+    // subpage layer (Slint hit-tests TouchAreas regardless of z-order).
+    in property <bool> interactive: true;
+    callback picked();
+
+    accessible-role: button;
+    accessible-id: root.destination-id;
+    accessible-label: root.title;
+    accessible-description: root.subtitle;
+    height: Math.max(72px, 28px + link_measure.preferred-height);
+    Rectangle {
+        height: 0px; clip: true;
+        link_measure := VerticalLayout {
+            width: Math.max(0px, root.width - 128px); spacing: 2px;
+            Text { text: root.title; font-size: 16px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+            if root.subtitle != "": Text { text: root.subtitle; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+        }
+    }
+    border-radius: 8px;
+    border-width: SettingsStyle.keyboard-mode && (root.focused || link_focus.has-focus) ? 2px : 0px;
+    border-color: #8b5cf6;
+    background: root.selected ? #8b5cf622 : (touch.has-hover && interactive ? #1b2538 : #111827);
+    animate background { duration: Anim.hover_fast; }
+
+    HorizontalLayout {
+        width: 100%; height: 100%;
+        padding-top: 14px;
+        padding-bottom: 14px;
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 14px;
+
+        Rectangle {
+            width: 34px;
+            height: 34px;
+
+            if root.icon-kind == 0: IcExtension {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                fill: #a89af5;
+            }
+            if root.icon-kind == 1: IcTag {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                fill: #a89af5;
+            }
+            if root.icon-kind == 2: IcImage {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                fill: #a89af5;
+            }
+            if root.icon-kind == 3: IcDisplay {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                fill: #a89af5;
+            }
+            if root.icon-kind == 4: IcTag {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                fill: #a89af5;
+            }
+            if root.icon-kind == 5: IcPlay {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                fill: #a89af5;
+            }
+            if root.icon-kind == 6: IcSettingsGear {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                fill: #a89af5;
+            }
+            if root.icon-kind == 13: IcHome { x: 7px; y: 7px; width: 20px; height: 20px; fill: #a89af5; }
+            if root.icon-kind == 6 || root.icon-kind == 10: IcSettingsGear { x: 7px; y: 7px; width: 20px; height: 20px; fill: #a89af5; }
+            if root.icon-kind == 9: IcVideoLibrary { x: 7px; y: 7px; width: 20px; height: 20px; fill: #a89af5; }
+            if root.icon-kind == 11: IcTag { x: 7px; y: 7px; width: 20px; height: 20px; fill: #a89af5; }
+            if root.icon-kind == 12: IcSync { x: 7px; y: 7px; width: 20px; height: 20px; fill: #a89af5; }
+            if root.icon-kind == 7: IcSync {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                fill: #a89af5;
+            }
+            if root.icon-kind == 8: IcImage {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 20px;
+                height: 20px;
+                fill: #a89af5;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: root.title;
+                font-size: 16px;
+                font-weight: 600;
+                color: #ffffff;
+                wrap: word-wrap;
+                min-width: 0px;
+            }
+
+            if root.subtitle != "": Text {
+                text: root.subtitle;
+                font-size: 14px;
+                color: #bac1d3;
+                wrap: word-wrap;
+                min-width: 0px;
+            }
+        }
+
+        Rectangle {
+            width: 34px;
+            height: 34px;
+
+            IcChevronRight {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 18px;
+                height: 18px;
+                fill: #6c6c7a;
+            }
+        }
+    }
+
+    forward-focus: link_focus;
+    property <bool> focus_visible: root.interactive && SettingsStyle.keyboard-mode && (root.focused || link_focus.has-focus);
+    changed focus_visible => {
+        if (self.focus_visible) {
+            SettingsStyle.focus-y = root.absolute-position.y;
+            SettingsStyle.focus-height = root.height;
+            SettingsStyle.navigation-focus = true;
+            SettingsStyle.focus-request += 1;
+        }
+    }
+    link_focus := FocusScope {
+        enabled: root.interactive;
+        key-pressed(e) => {
+            SettingsStyle.keyboard-mode = true;
+            if (e.text == Key.Return || e.text == " ") { root.picked(); accept } else { reject }
+        }
+    }
+    touch := TouchArea {
+        enabled: root.interactive;
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { SettingsStyle.keyboard-mode = false; root.picked(); }
+    }
+}
+
+
+export global SettingsStyle {
+    in-out property <bool> keyboard-mode: false;
+    in-out property <length> focus-y;
+    in-out property <length> focus-height;
+    in-out property <bool> navigation-focus: false;
+    in-out property <int> focus-request: 0;
+}
+export component SettingsCard inherits Rectangle {
+    background: #111827; border-radius: 16px; border-width: 1px; border-color: #ffffff14;
+    vertical-stretch: 0; clip: true;
+    VerticalLayout { spacing: 0px; @children }
+}
+export component NumericSetting inherits Rectangle {
+    in-out property <float> value;
+    in property <float> minimum;
+    in property <float> maximum;
+    in property <float> step: 1;
+    in property <string> suffix: "";
+    in property <bool> enabled: true;
+    in property <bool> focused: false;
+    callback changed(float);
+    preferred-width: 252px; min-width: 0px; height: 44px;
+    HorizontalLayout {
+        spacing: 4px;
+        PillButton { label: "−"; enabled: root.enabled && root.value > root.minimum; compact: true; btn_min_width: 44px;
+            clicked => { root.value = Math.max(root.minimum, root.value - root.step); root.changed(root.value); } }
+        MiniSlider { min-width: 36px; horizontal-stretch: 1; enabled: root.enabled; focused: root.focused;
+            value <=> root.value; minimum: root.minimum; maximum: root.maximum; step: root.step;
+            changed(v) => { root.changed(v); } }
+        ValueBox { width: root.suffix == "" ? 36px : 68px; height: 44px; text: Math.round(root.value) + root.suffix; }
+        PillButton { label: "+"; enabled: root.enabled && root.value < root.maximum; compact: true; btn_min_width: 44px;
+            clicked => { root.value = Math.min(root.maximum, root.value + root.step); root.changed(root.value); } }
+    }
+}
+export struct SettingsDestination { id: int, stable-id: string, group: int, title: string, description: string, terms: string, aliases: string, parent: int }
+export global SettingsDestinations {
+    out property <[SettingsDestination]> entries: [
+    { id: 13, stable-id: "settings:home", group: 0, title: @tr("Home"), description: @tr("Featured titles and catalog sources"), terms: @tr("Continue watching Upcoming Home sections featured catalogs Add catalog Remove") + " " + @tr("HOME ROWS") + " " + @tr("Continue Watching") + " " + @tr("Upcoming") + " " + @tr("FEATURED SHOWCASE") + " " + @tr("Remove") + " " + @tr("Add catalog") + " " + @tr("HOME ROWS") + " " + @tr("Continue Watching") + " " + @tr("Upcoming") + " " + @tr("FEATURED SHOWCASE") + " " + @tr("Remove") + " " + @tr("Add catalog"), aliases: "Home Featured titles and catalog sources Continue watching Upcoming Home sections featured catalogs Add catalog Remove HOME ROWS Continue Watching Upcoming FEATURED SHOWCASE Remove Add catalog", parent: -1 },
+    { id: 3, stable-id: "settings:display", group: 0, title: @tr("Display"), description: @tr("Dates, metadata, grid layout and language"), terms: @tr("Language artwork metadata relative dates Discover Library grid columns catalog addon names unwatched thumbnails prefetch") + " " + @tr("Language") + " " + @tr("Artwork and metadata") + " " + @tr("Relative episode dates") + " " + @tr("Prefetch episode metadata") + " " + @tr("Show unwatched thumbnails") + " " + @tr("Discover layout") + " " + @tr("Discover grid columns") + " " + @tr("Show addon names in catalogs") + " " + @tr("Library layout") + " " + @tr("Library grid columns") + " " + @tr("Language") + " " + @tr("Artwork and metadata") + " " + @tr("Relative episode dates") + " " + @tr("Prefetch episode metadata") + " " + @tr("Show unwatched thumbnails") + " " + @tr("Discover layout") + " " + @tr("Discover grid columns") + " " + @tr("Show addon names in catalogs") + " " + @tr("Library layout") + " " + @tr("Library grid columns") + " 2 3 4 5 6 English Hrvatski", aliases: "Display Dates, metadata, grid layout and language Language artwork metadata relative dates Discover Library grid columns catalog addon names unwatched thumbnails prefetch Language Artwork and metadata Relative episode dates Prefetch episode metadata Show unwatched thumbnails Discover layout Discover grid columns Show addon names in catalogs Library layout Library grid columns", parent: -1 },
+    { id: 6, stable-id: "settings:look-and-feel", group: 0, title: @tr("Look and feel"), description: @tr("Motion, transitions and hover effects"), terms: @tr("Enable animations Page transitions Hover effects Player OSD Navigation feedback") + " " + @tr("Animations") + " " + @tr("Enable animations") + " " + @tr("Motion options") + " " + @tr("Page transitions") + " " + @tr("Hover effects") + " " + @tr("Player OSD") + " " + @tr("Navigation feedback"), aliases: "Look and feel Motion, transitions and hover effects Enable animations Page transitions Hover effects Player OSD Navigation feedback", parent: -1 },
+    { id: 5, stable-id: "settings:player", group: 0, title: @tr("Player"), description: @tr("Built-in or external player"), terms: @tr("Player choice Episode playback decoder hardware mpv external app Playback speed presets") + " " + @tr("Player") + " " + @tr("Episode playback") + " " + @tr("External app") + " " + @tr("Video decoder") + " " + @tr("Playback speed") + " " + @tr("Player choice") + " " + @tr("Player") + " " + @tr("Episode playback") + " " + @tr("Playback controls") + " " + @tr("External app") + " " + @tr("Video decoder") + " " + @tr("Playback speed") + " " + @tr("Built-in") + " " + @tr("External") + " " + @tr("Start over") + " " + @tr("Resume") + " " + @tr("Ask") + " " + @tr("System default") + " Built-in External Start over Resume Ask System default VLC mpv HW+ HW SW 1× 1.25× 1.5× 2× 1x 1.25x 1.5x 2x", aliases: "Player Built-in or external player Player choice Episode playback decoder hardware mpv external app Playback speed presets Player Episode playback External app Video decoder Playback speed", parent: -1 },
+    { id: 0, stable-id: "settings:addons", group: 1, title: @tr("Addons"), description: @tr("Installed addons and catalog sources"), terms: @tr("Install addon URL sources Enable Configure Copy link Refresh Remove Move up Move down") + " " + @tr("Add") + " " + @tr("Copy link") + " " + @tr("Installation") + " " + @tr("Addon install URL — e.g. https://v3-cinemeta.strem.io") + " " + @tr("Add") + " " + @tr("Installed sources") + " " + @tr("Copy link"), aliases: "Addons Installed addons and catalog sources Install addon URL sources Enable Configure Copy link Refresh Remove Move up Move down Add Copy link", parent: -1 },
+    { id: 1, stable-id: "settings:categories", group: 1, title: @tr("Categories"), description: @tr("Tags for organising My Library"), terms: @tr("Create Add category Remove tags") + " " + @tr("Add") + " " + @tr("Remove") + " " + @tr("Creation") + " " + @tr("New category name") + " " + @tr("Add") + " " + @tr("Existing categories") + " " + @tr("Remove"), aliases: "Categories Tags for organising My Library Create Add category Remove tags Add Remove", parent: -1 },
+    { id: 7, stable-id: "settings:sync", group: 1, title: @tr("Sync"), description: @tr("Sync library and watch history between devices"), terms: @tr("Enable This device Automatic sync Pairing Connected peers Invite ticket QR code confirmation remove") + " " + @tr("Accept") + " " + @tr("Deny") + " " + @tr("Cancel") + " " + @tr("Remove") + " " + @tr("Enablement") + " " + @tr("Enable cross-device sync") + " " + @tr("THIS DEVICE") + " " + @tr("Device name") + " " + @tr("Copy") + " " + @tr("Sync now") + " " + @tr("AUTO-SYNC") + " " + @tr("Auto-sync while the app is running") + " " + @tr("Background sync") + " " + @tr("Local network discovery") + " " + @tr("PAIRING") + " " + @tr("Ask before accepting devices") + " " + @tr("Create invite") + " " + @tr("Copy code") + " " + @tr("paste invite code") + " " + @tr("Join") + " " + @tr("Scan QR code") + " " + @tr("PEERS") + " " + @tr("peer endpoint id") + " " + @tr("Add") + " " + @tr("30s") + " " + @tr("1m") + " " + @tr("5m") + " " + @tr("15m") + " 30s 1m 5m 15m", aliases: "Sync Sync library and watch history between devices Enable This device Automatic sync Pairing Connected peers Invite ticket QR code confirmation remove", parent: -1 },
+    { id: 12, stable-id: "settings:tracking", group: 1, title: @tr("Tracking"), description: @tr("Anime progress on MyAnimeList and AniList"), terms: @tr("MyAnimeList AniList MAL Sign in account Connect Disconnect Automatic tracking recovery Reset history") + " " + @tr("Public client ID") + " " + @tr("Registered redirect URL") + " " + @tr("Finish sign-in") + " " + @tr("Cancel sign-in") + " " + @tr("Disconnect") + " " + @tr("Sign-in is saved and shared with paired devices. Disconnect removes shared sign-in.") + " " + @tr("Reset local tracking") + " " + @tr("Reset all local links and queued updates? A recovery backup is retained. Nova history and remote tracker lists stay unchanged.") + " " + @tr("Confirm tracking reset") + " " + @tr("Cancel") + " " + @tr("Automatic tracking for linked releases") + " " + @tr("Public client ID") + " " + @tr("Registered redirect URL") + " " + @tr("Reconnect") + " " + @tr("Connect") + " " + @tr("Approve Nova in AniList, then copy the displayed token and paste it below.") + " " + @tr("Finish sign-in in your browser. Paste the full return URL here if automatic return fails.") + " " + @tr("AniList token") + " " + @tr("Full return URL") + " " + @tr("Finish sign-in") + " " + @tr("Cancel sign-in") + " " + @tr("Disconnect") + " " + @tr("Sign-in is saved and shared with paired devices. Disconnect removes shared sign-in.") + " " + @tr("Reset local tracking") + " " + @tr("Reset all local links and queued updates? A recovery backup is retained. Nova history and remote tracker lists stay unchanged.") + " " + @tr("Confirm tracking reset") + " " + @tr("Cancel"), aliases: "Tracking Anime progress on MyAnimeList and AniList MyAnimeList AniList MAL Sign in account Connect Disconnect Automatic tracking recovery Reset history", parent: -1 },
+    { id: 2, stable-id: "settings:image-cache", group: 2, title: @tr("Image cache"), description: @tr("Poster and thumbnail caching"), terms: @tr("Storage disk caching Compression JPEG WebP Quality Downscale Re-encode on load Memory decoded-image budget Clear cache Re-encode now") + " " + @tr("Storage") + " " + @tr("Disk caching") + " " + @tr("Compression") + " " + @tr("Compress images") + " " + @tr("Format") + " " + @tr("Quality") + " " + @tr("Downscale") + " " + @tr("Re-encode on load") + " " + @tr("Memory") + " " + @tr("Decoded-image budget") + " " + @tr("Maintenance") + " " + @tr("Disk usage") + " " + @tr("Clear cache") + " " + @tr("Convert existing images") + " " + @tr("Storage") + " " + @tr("Disk caching") + " " + @tr("Compression") + " " + @tr("Compress images") + " " + @tr("Format") + " " + @tr("Quality") + " " + @tr("Downscale") + " " + @tr("Re-encode on load") + " " + @tr("Memory") + " " + @tr("Decoded-image budget") + " " + @tr("Maintenance") + " " + @tr("Disk usage") + " " + @tr("Clear cache") + " " + @tr("Convert existing images"), aliases: "Image cache Poster and thumbnail caching Storage disk caching Compression JPEG WebP Quality Downscale Re-encode on load Memory decoded-image budget Clear cache Re-encode now Storage Disk caching Compression Compress images Format Quality Downscale Re-encode on load Memory Decoded-image budget Maintenance Disk usage Clear cache Convert existing images", parent: -1 },
+    { id: 8, stable-id: "settings:downloads", group: 2, title: @tr("Downloads"), description: @tr("Offline media and cleanup policy"), terms: @tr("Cleanup Auto-delete watched episodes Downloaded episodes") + " " + @tr("Auto-delete watched episodes") + " " + @tr("Downloaded episodes") + " " + @tr("View") + " " + @tr("Cleanup policy") + " " + @tr("Auto-delete watched episodes") + " " + @tr("Downloaded episodes") + " " + @tr("View"), aliases: "Downloads Offline media and cleanup policy Cleanup Auto-delete watched episodes Downloaded episodes Auto-delete watched episodes Downloaded episodes View", parent: -1 },
+    { id: 9, stable-id: "settings:downloaded-episodes", group: 2, title: @tr("Downloaded episodes"), description: @tr("Episode files stored on this device"), terms: @tr("Downloads offline media downloaded episodes delete Remove") + " " + @tr("DOWNLOADED EPISODES") + " " + @tr("Delete") + " " + @tr("Delete"), aliases: "Downloaded episodes Episode files stored on this device Downloads offline media downloaded episodes delete Remove DOWNLOADED EPISODES Delete", parent: 8 },
+    { id: 4, stable-id: "settings:p2p", group: 2, title: @tr("P2P"), description: @tr("Stream P2P with the built-in client"), terms: @tr("Streaming torrents Cache location folder limits size disk usage cleanup rate limit") + " " + @tr("Stream P2P") + " " + @tr("Cache size limit") + " " + @tr("Download rate limit") + " " + @tr("No caching") + " " + @tr("Disk usage") + " " + @tr("Clear") + " " + @tr("Streaming") + " " + @tr("Stream P2P") + " " + @tr("Cache location and limits") + " " + @tr("Default (app cache folder)") + " " + @tr("Cache size limit") + " " + @tr("Download rate limit") + " " + @tr("No caching") + " " + @tr("Disk usage and cleanup") + " " + @tr("Disk usage") + " " + @tr("Clear"), aliases: "P2P Stream P2P with the built-in client Streaming torrents Cache location folder limits size disk usage cleanup rate limit Stream P2P Cache size limit Download rate limit No caching Disk usage Clear", parent: -1 },
+    { id: 10, stable-id: "settings:about", group: 3, title: @tr("About"), description: @tr("Information about Nova"), terms: @tr("App information version source links Licenses") + " " + @tr("Licenses") + " " + @tr("App information") + " " + @tr("Licenses"), aliases: "About Information about Nova App information version source links Licenses Licenses", parent: -1 },
+    { id: 11, stable-id: "settings:licenses", group: 3, title: @tr("Licenses"), description: @tr("Open-source components and license texts"), terms: @tr("About GPL copyright source code Open source Rust bundled native components") + " " + @tr("SOURCE CODE") + " " + @tr("Open source") + " " + @tr("LICENSE TEXTS") + " " + @tr("Cancel") + " " + @tr("SOURCE CODE") + " " + @tr("Open source") + " " + @tr("LICENSE TEXTS"), aliases: "Licenses Open-source components and license texts About GPL copyright source code Open source Rust bundled native components SOURCE CODE Open source LICENSE TEXTS Cancel", parent: 10 },
+    ];
+}
+
+// The only decorative surface in Settings; controls retain opaque fills.
+export component SettingsHeader inherits Rectangle {
+    in property <string> title;
+    in property <string> introduction;
+    in property <bool> overview: false;
+    callback back();
+    vertical-stretch: 0;
+    height: Math.max(108px, heading_measure.preferred-height + intro_measure.preferred-height + 48px);
+    clip: true;
+    Image { width: 100%; height: 100%; source: @image-url("../../assets/settings-header.svg"); image-fit: cover; }
+    Rectangle {
+        height: 0px; clip: true;
+        heading_measure := Text { width: Math.max(0px, root.width - (root.overview ? 32px : 88px)); text: root.title; font-size: root.overview ? 32px : 24px; font-weight: 700; wrap: word-wrap; }
+        intro_measure := Text { width: Math.max(0px, root.width - 32px); text: root.introduction; font-size: 14px; wrap: word-wrap; }
+    }
+    VerticalLayout {
+        padding: 16px; spacing: 8px;
+        HorizontalLayout {
+            spacing: 12px;
+            if !root.overview: Rectangle {
+                width: 44px; height: 44px; border-radius: 22px;
+                background: back_touch.has-hover ? #28334a : #1b2538;
+                border-width: back_focus.has-focus && SettingsStyle.keyboard-mode ? 2px : 0px;
+                border-color: #8b5cf6;
+                accessible-role: button; accessible-label: @tr("Back");
+                forward-focus: back_focus;
+                IcChevronLeft { width: 20px; height: 20px; x: 12px; y: 12px; fill: #bac1d3; }
+                back_focus := FocusScope {
+                    key-pressed(e) => {
+                        SettingsStyle.keyboard-mode = true;
+                        if e.text == Key.Return || e.text == " " { root.back(); accept } else { reject }
+                    }
+                }
+                back_touch := TouchArea { width: 100%; height: 100%; mouse-cursor: pointer; clicked => { SettingsStyle.keyboard-mode = false; root.back(); } }
+            }
+            Text { text: root.title; font-size: root.overview ? 32px : 24px; font-weight: 700; color: #ffffff; wrap: word-wrap; min-width: 0px; vertical-alignment: center; }
+        }
+        Text { text: root.introduction; font-size: 14px; color: #bac1d3; wrap: word-wrap; min-width: 0px; }
+    }
+}
+
+// Account editors use the same caret/IME handling without a pointer focus ring.
+export component SettingsInput inherits SearchField {
+    roomy: true;
+    show-pointer-focus: false;
+    keyboard-mode: SettingsStyle.keyboard-mode;
+    background: #1b2538;
+    property <bool> focus-visible: root.has-focus && SettingsStyle.keyboard-mode;
+    changed focus-visible => {
+        if (self.focus-visible) {
+            SettingsStyle.focus-y = root.absolute-position.y;
+            SettingsStyle.focus-height = root.height;
+            SettingsStyle.navigation-focus = false;
+            SettingsStyle.focus-request += 1;
+        }
+    }
+    accessible-role: text-input;
+    accessible-label: root.placeholder-text;
+    accessible-value <=> root.text;
+    accessible-action-set-value(v) => { root.text = v; root.edited(v); }
+}

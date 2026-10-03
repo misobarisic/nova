@@ -7,6 +7,8 @@
 //! layer and let the page pan sideways. Asserts nothing extends past the
 //! window edge at phone widths.
 
+#[path = "support/destinations.rs"]
+mod destinations;
 use i_slint_backend_testing::{ElementHandle, ElementQuery};
 use slint::{ComponentHandle, SharedString, VecModel};
 use std::rc::Rc;
@@ -41,6 +43,9 @@ fn settings_sync_subpage_has_no_horizontal_overflow() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
     app.window().set_size(slint::PhysicalSize::new(360, 800));
     app.window().show().unwrap();
     app.set_show_settings(true);
@@ -76,9 +81,11 @@ fn settings_sync_subpage_has_no_horizontal_overflow() {
         let app = app1.upgrade().unwrap();
         // Sync is the last landing entry: addons, categories, cache, display,
         // p2p, player, look and feel, sync.
-        let sync_link = ElementHandle::find_by_element_type_name(&app, "SettingsLink")
-            .nth(7)
-            .expect("Sync landing entry");
+        let sync_link = ({
+            app.set_settings_search_query("Sync".into());
+            destinations::find(&app, "settings:sync").next()
+        })
+        .expect("Sync landing entry");
         let app2 = app.as_weak();
         let failures2 = failures1.clone();
         slint::spawn_local(async move {

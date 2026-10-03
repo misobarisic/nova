@@ -693,14 +693,21 @@ mod persistence_tests {
         let dir = scratch("posters");
         let a = "https://img.example/tt1/img";
         let b = "https://img.example/tt2/img";
-        let bytes_a = b"\xff\xd8fake-jpeg-a";
-        let bytes_b = b"\xff\xd8fake-jpeg-b";
+        let png = |color| {
+            let mut out = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(2, 2, image::Rgba(color)))
+                .write_to(&mut out, image::ImageFormat::Png)
+                .unwrap();
+            out.into_inner()
+        };
+        let bytes_a = png([255, 0, 0, 255]);
+        let bytes_b = png([0, 0, 255, 255]);
 
         // Nothing cached yet.
         assert!(read_poster_bytes(&dir, a).is_none());
 
-        write_poster_bytes(&dir, a, bytes_a);
-        write_poster_bytes(&dir, b, bytes_b);
+        write_poster_bytes(&dir, a, &bytes_a);
+        write_poster_bytes(&dir, b, &bytes_b);
         assert_eq!(
             read_poster_bytes(&dir, a).as_deref(),
             Some(bytes_a.as_slice())
@@ -1551,139 +1558,6 @@ mod stream_display_tests {
     #[test]
     fn blank_stream_uses_placeholder() {
         assert_eq!(stream_display(&s(None, None, None)), "Stream");
-    }
-}
-
-#[cfg(test)]
-mod image_cache_tests {
-    use super::super::*;
-
-    fn solid_rgba(w: u32, h: u32) -> SharedPixelBuffer<Rgba8Pixel> {
-        let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
-        for b in buf.make_mut_bytes().iter_mut() {
-            *b = 128;
-        }
-        buf
-    }
-
-    #[test]
-    fn downscale_dims_math() {
-        assert_eq!(downscale_dims(1200, 600), Some((1024, 512)));
-        assert_eq!(downscale_dims(500, 300), None);
-        assert_eq!(downscale_dims(1024, 768), None);
-        let (w, h) = downscale_dims(3000, 2000).unwrap();
-        assert!(w <= nova_config::IMAGE_DOWNSCALE_MAX && h <= nova_config::IMAGE_DOWNSCALE_MAX);
-    }
-
-    #[test]
-    fn encode_disabled_is_passthrough() {
-        let settings = CacheSettings {
-            enabled: false,
-            ..CacheSettings::default()
-        };
-        assert!(encode_for_cache(&settings, &solid_rgba(16, 16)).is_none());
-    }
-
-    #[test]
-    fn webp_encode_has_webp_magic() {
-        let settings = CacheSettings {
-            enabled: true,
-            format: CacheImageFormat::Webp,
-            quality: 75,
-            downscale: true,
-            ..CacheSettings::default()
-        };
-        let bytes = encode_for_cache(&settings, &solid_rgba(40, 30)).expect("webp bytes");
-        assert!(bytes.starts_with(b"RIFF") && bytes.windows(4).any(|w| w == b"WEBP"));
-    }
-
-    #[test]
-    fn jpeg_encode_has_jpeg_magic() {
-        let settings = CacheSettings {
-            enabled: true,
-            format: CacheImageFormat::Jpeg,
-            quality: 75,
-            downscale: true,
-            ..CacheSettings::default()
-        };
-        let bytes = encode_for_cache(&settings, &solid_rgba(40, 30)).expect("jpeg bytes");
-        assert!(bytes.starts_with(&[0xFF, 0xD8, 0xFF]));
-    }
-}
-
-#[cfg(test)]
-mod rewrite_cache_tests {
-    use super::super::*;
-    use std::io::Cursor;
-
-    fn scratch(sub: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("nova-rewrite-test-{}-{sub}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn png_bytes() -> Vec<u8> {
-        let mut buf = Vec::new();
-        let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([200u8, 40, 30, 255]));
-        image::DynamicImage::ImageRgba8(img)
-            .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
-            .unwrap();
-        buf
-    }
-
-    fn jpeg_settings() -> CacheSettings {
-        CacheSettings {
-            enabled: true,
-            format: CacheImageFormat::Jpeg,
-            quality: 75,
-            downscale: false,
-            ..CacheSettings::default()
-        }
-    }
-
-    #[test]
-    fn rewrites_unencoded_entries_and_is_idempotent() {
-        let dir = scratch("sweep");
-        let png = png_bytes();
-        fs::write(dir.join("1111111111111111.img"), &png).unwrap();
-        fs::write(dir.join("2222222222222222.img"), &png).unwrap();
-        // An entry whose sidecar already matches the target config is skipped.
-        let settings = jpeg_settings();
-        let key = settings.config_key();
-        fs::write(dir.join("3333333333333333.img"), &png).unwrap();
-        fs::write(dir.join("3333333333333333.cfg"), &key).unwrap();
-
-        assert_eq!(rewrite_cache_dir_to_format(&dir, &settings), 2);
-        for n in ["1111111111111111", "2222222222222222"] {
-            let bytes = fs::read(dir.join(format!("{n}.img"))).unwrap();
-            assert!(bytes.starts_with(&[0xFF, 0xD8, 0xFF]), "jpeg magic for {n}");
-            assert_eq!(
-                fs::read_to_string(dir.join(format!("{n}.cfg"))).unwrap(),
-                key
-            );
-        }
-        // The already-matching entry keeps its original bytes.
-        assert_eq!(fs::read(dir.join("3333333333333333.img")).unwrap(), png);
-        // A second pass has nothing left to rewrite.
-        assert_eq!(rewrite_cache_dir_to_format(&dir, &settings), 0);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn disabled_reencoding_rewrites_nothing() {
-        let dir = scratch("disabled");
-        let png = png_bytes();
-        fs::write(dir.join("1111111111111111.img"), &png).unwrap();
-        let settings = CacheSettings {
-            enabled: false,
-            ..jpeg_settings()
-        };
-        assert_eq!(rewrite_cache_dir_to_format(&dir, &settings), 0);
-        assert_eq!(fs::read(dir.join("1111111111111111.img")).unwrap(), png);
-        assert!(!dir.join("1111111111111111.cfg").exists());
-        let _ = fs::remove_dir_all(&dir);
     }
 }
 

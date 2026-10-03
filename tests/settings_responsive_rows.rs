@@ -4,6 +4,8 @@
 //! them on the right would leave the text column too narrow. At wide widths
 //! they stay beside the text, and the controls remain inside their rows.
 
+#[path = "support/destinations.rs"]
+mod destinations;
 use i_slint_backend_testing::ElementHandle;
 use slint::ComponentHandle;
 use std::cell::RefCell;
@@ -106,7 +108,10 @@ fn crowded_settings_controls_stack_on_narrow_windows() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
-    app.window().set_size(slint::PhysicalSize::new(320, 800));
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
+    app.window().set_size(slint::PhysicalSize::new(320, 1600));
     app.window().show().unwrap();
     app.set_show_settings(true);
     app.set_show_home(false);
@@ -117,8 +122,10 @@ fn crowded_settings_controls_stack_on_narrow_windows() {
     after(400, move || {
         let app = app1.upgrade().unwrap();
         // Display is the 4th landing entry (index 3).
-        let Some(display) = ElementHandle::find_by_element_type_name(&app, "SettingsLink").nth(3)
-        else {
+        let Some(display) = ({
+            app.set_settings_search_query("Display".into());
+            destinations::find(&app, "settings:display").next()
+        }) else {
             failures1
                 .borrow_mut()
                 .push("missing Display landing entry".into());
@@ -135,7 +142,7 @@ fn crowded_settings_controls_stack_on_narrow_windows() {
                 let app = app2.upgrade().unwrap();
                 check_segmented_rows(&app, "320px Display", 2, true, &failures2);
 
-                app.window().set_size(slint::PhysicalSize::new(360, 800));
+                app.window().set_size(slint::PhysicalSize::new(360, 1600));
                 let app3 = app.as_weak();
                 let failures3 = failures2.clone();
                 after(300, move || {
@@ -179,7 +186,7 @@ fn continue_to_player(app: nova::AppWindow, failures: Rc<RefCell<Vec<String>>>) 
     // Restore the source language when available, then verify the wide layout
     // still keeps controls beside their text.
     let _ = slint::select_bundled_translation("en");
-    app.window().set_size(slint::PhysicalSize::new(1100, 800));
+    app.window().set_size(slint::PhysicalSize::new(1100, 1600));
     let app1 = app.as_weak();
     let failures1 = failures.clone();
     after(300, move || {
@@ -191,15 +198,16 @@ fn continue_to_player(app: nova::AppWindow, failures: Rc<RefCell<Vec<String>>>) 
         let failures2 = failures1.clone();
         after(400, move || {
             let app = app2.upgrade().unwrap();
-            app.window().set_size(slint::PhysicalSize::new(320, 800));
+            app.window().set_size(slint::PhysicalSize::new(320, 1600));
             let app3 = app.as_weak();
             let failures3 = failures2.clone();
             after(300, move || {
                 let app = app3.upgrade().unwrap();
                 // Player follows the P2P entry (index 5).
-                let Some(player) =
-                    ElementHandle::find_by_element_type_name(&app, "SettingsLink").nth(5)
-                else {
+                let Some(player) = ({
+                    app.set_settings_search_query("Player".into());
+                    destinations::find(&app, "settings:player").next()
+                }) else {
                     failures3
                         .borrow_mut()
                         .push("missing Player landing entry".into());

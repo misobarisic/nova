@@ -6,6 +6,8 @@
 //! layer and let the page pan sideways. Asserts nothing extends past the
 //! window edge on the Addons subpage at phone and desktop widths.
 
+#[path = "support/destinations.rs"]
+mod destinations;
 use slint::{ComponentHandle, SharedString, VecModel};
 use std::rc::Rc;
 
@@ -41,6 +43,9 @@ fn settings_addons_subpage_has_no_horizontal_overflow() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
     app.window().set_size(slint::PhysicalSize::new(360, 800));
     app.window().show().unwrap();
     app.set_show_settings(true);
@@ -63,10 +68,11 @@ fn settings_addons_subpage_has_no_horizontal_overflow() {
     after(400, move || {
         let app = app1.upgrade().unwrap();
         // Open the first landing entry (Addons).
-        use i_slint_backend_testing::ElementHandle;
-        let first = ElementHandle::find_by_element_type_name(&app, "SettingsLink")
-            .next()
-            .expect("landing has SettingsLinks");
+        let first = ({
+            app.set_settings_search_query("Addons".into());
+            destinations::find(&app, "settings:addons").next()
+        })
+        .expect("landing has SettingsLinks");
         let app2 = app.as_weak();
         let failures2 = failures1.clone();
         slint::spawn_local(async move {

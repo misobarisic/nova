@@ -12,12 +12,13 @@ slint = { workspace = true }
 # formats used by the app.
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 
+# Lossy encoder on both targets; libwebp-sys builds bundled C with the NDK CC/AR.
+webp = "=0.3.1"
+
 # --- Desktop (non-Android) -------------------------------------------------
 [target.'cfg(not(target_os = "android"))'.dependencies]
 addons = { path = "../addons", features = ["client"] }
 reqwest = { version = "0.13.4", features = ["blocking"] }
-# Lossy WebP encoding (image's WebP encoder is lossless-only).
-webp = "0.3.1"
 
 # --- Android ---------------------------------------------------------------
 # rustls stack (OpenSSL does not cross-compile); blocking reqwest only.

@@ -72,6 +72,11 @@ fn switch(app: &nova::AppWindow, next: i32) {
     }
     app.set_show_home(next == 0);
     app.set_show_library(next == 2);
+    // This test exercises the overview's bottom bar. Responsive Settings
+    // otherwise retains the desktop detail selection when returning on a phone.
+    if next == 3 && app.window().size().width < 700 {
+        app.set_settings_detail_open(false);
+    }
     app.set_show_settings(next == 3);
 }
 

@@ -1,4 +1,5 @@
 import { Button, LineEdit, ComboBox, CheckBox, ScrollView } from "std-widgets.slint";
+import { PillButton, ToggleSwitch, SettingsStyle, SettingsRow, SettingsInput } from "settings-controls.slint";
 import { Dropdown } from "dropdown.slint";
 import { IcClose, IcChevronRight, IcSync } from "icons.slint";
 import { Anim } from "anim.slint";
@@ -117,34 +118,35 @@ component AccountEditor inherits Rectangle {
     callback input_focus(bool);
     callback automatic(int,bool);
     min-width: 0px;
-    background: #19191f;
-    border-radius: 8px;
+    background: #111827;
+    border-width: 1px; border-color: #ffffff14;
+    border-radius: 16px;
     vertical-stretch: 0;
     property <string> client: root.entry.client_id;
     property <string> redirect: root.entry.redirect_uri;
     property <bool> pin_sign_in: root.entry.service == 1 && root.entry.redirect_uri == "https://anilist.co/api/v2/oauth/pin";
     VerticalLayout {
-        padding: 12px; spacing: 8px;
-        Text { text: root.entry.service == 0 ? "MyAnimeList" : "AniList"; color: #f2f2f4; font-weight: 700; }
-        Text { text: root.entry.name; color: #c9c9d4; wrap: word-wrap; min-width: 0; }
-        Text { text: root.entry.state; color: #c9c9d4; wrap: word-wrap; min-width: 0; }
-        CheckBox {text:@tr("Automatic tracking for linked releases");checked:root.entry.automatic;toggled => {root.automatic(root.entry.service,self.checked);}}
-        Text { text: @tr("Public client ID"); color: #c9c9d4; }
-        LineEdit { changed has-focus => {root.input_focus(self.has-focus);} text <=> root.client; placeholder-text: @tr("Public client ID"); accessible-label: @tr("Public client ID"); }
-        Text { text: @tr("Registered redirect URL"); color: #c9c9d4; }
-        LineEdit { changed has-focus => {root.input_focus(self.has-focus);} text <=> root.redirect; placeholder-text: @tr("Registered redirect URL"); accessible-label: @tr("Registered redirect URL"); }
-        if !root.entry.signing_in: Button {
-            text: root.entry.connected ? @tr("Reconnect") : @tr("Connect");
+        padding: 16px; spacing: 8px;
+        Text { text: root.entry.service == 0 ? "MyAnimeList" : "AniList"; color: #ffffff; font-weight: 700; }
+        Text { text: root.entry.name; color: #bac1d3; wrap: word-wrap; min-width: 0; }
+        Text { text: root.entry.state; color: #bac1d3; wrap: word-wrap; min-width: 0; }
+        SettingsRow { row-title: @tr("Automatic tracking for linked releases"); ToggleSwitch { name: @tr("Automatic tracking for linked releases"); checked: root.entry.automatic; toggled => { root.automatic(root.entry.service, self.checked); } } }
+        Text { text: @tr("Public client ID"); color: #bac1d3; }
+        SettingsInput { changed has-focus => {root.input_focus(self.has-focus);} text <=> root.client; placeholder-text: @tr("Public client ID"); accessible-label: @tr("Public client ID"); }
+        Text { text: @tr("Registered redirect URL"); color: #bac1d3; }
+        SettingsInput { changed has-focus => {root.input_focus(self.has-focus);} text <=> root.redirect; placeholder-text: @tr("Registered redirect URL"); accessible-label: @tr("Registered redirect URL"); }
+        if !root.entry.signing_in: PillButton {
+            label: root.entry.connected ? @tr("Reconnect") : @tr("Connect");
             clicked => {root.connect(root.entry.service,root.client,root.redirect);}
         }
         if root.entry.signing_in: VerticalLayout {
             spacing: 8px;
-            Text { text: root.pin_sign_in ? @tr("Approve Nova in AniList, then copy the displayed token and paste it below.") : @tr("Finish sign-in in your browser. Paste the full return URL here if automatic return fails."); color: #c9c9d4; wrap: word-wrap; min-width: 0; }
-            returned := LineEdit { changed has-focus => {root.input_focus(self.has-focus);} placeholder-text: root.pin_sign_in ? @tr("AniList token") : @tr("Full return URL"); accessible-label: root.pin_sign_in ? @tr("AniList token") : @tr("Full return URL"); input-type: password; }
-            Button { text: @tr("Finish sign-in"); clicked => {root.complete(root.entry.service,returned.text);returned.text="";} }
-            Button { text: @tr("Cancel sign-in"); clicked => {returned.text="";root.cancel(root.entry.service);} }
+            Text { text: root.pin_sign_in ? @tr("Approve Nova in AniList, then copy the displayed token and paste it below.") : @tr("Finish sign-in in your browser. Paste the full return URL here if automatic return fails."); color: #bac1d3; wrap: word-wrap; min-width: 0; }
+            returned := SettingsInput { changed has-focus => {root.input_focus(self.has-focus);} placeholder-text: root.pin_sign_in ? @tr("AniList token") : @tr("Full return URL"); accessible-label: root.pin_sign_in ? @tr("AniList token") : @tr("Full return URL"); input-type: password; }
+            PillButton { label: @tr("Finish sign-in"); primary: true; clicked => {root.complete(root.entry.service,returned.full-text);returned.text="";} }
+            PillButton { label: @tr("Cancel sign-in"); clicked => {returned.text="";root.cancel(root.entry.service);} }
         }
-        if root.entry.connected: Button { text: @tr("Disconnect"); clicked => {root.disconnect(root.entry.service);} }
+        if root.entry.connected: PillButton { label: @tr("Disconnect"); destructive: true; clicked => {root.disconnect(root.entry.service);} }
     }
 }
 export component TrackingSettings inherits Rectangle {
@@ -156,7 +158,7 @@ export component TrackingSettings inherits Rectangle {
     callback cancel(int);
     callback reset();
     callback automatic(int,bool);
-    property <bool> reset_confirm:false;
+    in-out property <bool> reset_confirm:false;
     property <int> focus_count:0;
     out property <bool> input_focused:root.focus_count>0;
     in property <bool> blur;
@@ -166,8 +168,7 @@ export component TrackingSettings inherits Rectangle {
     min-width: 0px;
     VerticalLayout {
         spacing: 14px;
-        Text { text: @tr("Tracking"); color: #f2f2f4; font-size: 18px; font-weight: 700; }
-        Text { text: @tr("Sign-in is saved and shared with paired devices. Disconnect removes shared sign-in."); color: #c9c9d4; wrap: word-wrap; min-width: 0; }
+        Text { text: @tr("Sign-in is saved and shared with paired devices. Disconnect removes shared sign-in."); color: #bac1d3; wrap: word-wrap; min-width: 0; }
         Text { text: root.notice; color: #d7cfff; wrap: word-wrap; min-width: 0; }
         for row in root.accounts: AccountEditor {
             entry: row;
@@ -178,11 +179,11 @@ export component TrackingSettings inherits Rectangle {
             automatic(service,enabled) => {root.automatic(service,enabled);}
             input_focus(focused) => {root.focus_count=Math.max(0,root.focus_count+(focused ? 1 : -1));}
         }
-        Button {text:@tr("Reset local tracking");clicked => {root.reset_confirm=true;}}
+        PillButton {label:@tr("Reset local tracking");destructive:true;clicked => {root.reset_confirm=true;}}
         if root.reset_confirm: VerticalLayout {
-            Text {text:@tr("Reset all local links and queued updates? A recovery backup is retained. Nova history and remote tracker lists stay unchanged.");color:#c9c9d4;wrap:word-wrap;min-width:0;}
-            Button {text:@tr("Confirm tracking reset");clicked => {root.reset_confirm=false;root.reset();}}
-            Button {text:@tr("Cancel");clicked => {root.reset_confirm=false;}}
+            Text {text:@tr("Reset all local links and queued updates? A recovery backup is retained. Nova history and remote tracker lists stay unchanged.");color:#bac1d3;wrap:word-wrap;min-width:0;}
+            PillButton {label:@tr("Confirm tracking reset");destructive:true;clicked => {root.reset_confirm=false;root.reset();}}
+            PillButton {label:@tr("Cancel");clicked => {root.reset_confirm=false;}}
         }
 
     }

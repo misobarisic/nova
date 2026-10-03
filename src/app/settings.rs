@@ -1,5 +1,11 @@
 //! Settings page: cache + torrent settings, maintenance.
 use super::*;
+static CACHE_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(super) fn cancel_cache_rewrite() {
+    CACHE_CANCEL.store(true, std::sync::atomic::Ordering::Release);
+}
+
 static UNSUPPORTED_SETTINGS: Mutex<Option<HashMap<String, serde_json::Value>>> = Mutex::new(None);
 
 pub(crate) fn protect_setting_field(field: &str, raw: serde_json::Value) {
@@ -79,6 +85,9 @@ impl Bridge {
             );
         };
         if let Some(app) = self.app() {
+            app.on_settings_search_matches(|query, haystack| {
+                nova_ui::settings_search_matches(&query, &haystack)
+            });
             let b = self.clone();
             let callback_schedule = schedule.clone();
             app.on_save_settings(move || {
@@ -525,65 +534,101 @@ impl Bridge {
         self.persist_settings();
     }
 
-    /// Immediate one-shot for the "Re-encode now" button: persist the
-    /// current controls, then rewrite already-cached images to that config
-    /// in the background (skips entries already matching it).
-    /// Desktop-only.
-    #[cfg(feature = "desktop")]
+    /// Snapshot after immediate capture; job ownership outlives the Settings page.
     pub(super) fn reencode_now(&self) {
+        let Some(guard) = MaintenanceGuard::try_acquire() else {
+            return;
+        };
         self.save_settings();
         let settings = self.shared.lock().unwrap().cache_settings.clone();
-        if !(settings.cache_images && settings.enabled) {
+        if !settings.cache_images || !settings.enabled {
             return;
         }
-        self.rewrite_existing_cache(settings);
-    }
-
-    #[cfg(not(feature = "desktop"))]
-    pub(super) fn reencode_now(&self) {}
-
-    /// Rewrite every already-cached image to `settings` on a worker thread.
-    #[cfg(feature = "desktop")]
-    pub(super) fn rewrite_existing_cache(&self, settings: CacheSettings) {
-        let dir = poster_cache_dir();
-        thread::spawn(move || {
-            let _ = rewrite_cache_dir_to_format(&dir, &settings);
-        });
-    }
-
-    /// Clear the on-disk image cache and drop decoded images from memory
-    /// ("Clear" next to the disk-usage readout). The wipe runs on a worker
-    /// thread; in-flight downloads may repopulate either cache after.
-    /// Desktop only (the button is hidden on web, where the browser owns
-    /// image caching; Android has its own variant below).
-    #[cfg(all(feature = "desktop", not(target_os = "android")))]
-    pub(super) fn clear_image_cache(&self) {
+        CACHE_CANCEL.store(false, std::sync::atomic::Ordering::Release);
+        if let Some(app) = self.app() {
+            app.set_cache_busy(true);
+            app.set_cache_rewriting(true);
+            app.set_cache_processed(0);
+            app.set_cache_total(0);
+            app.set_cache_status(text::cache_rewrite_status(0, 0, 0, 0, 0, false, false).into());
+        }
         let bridge = self.clone();
         thread::spawn(move || {
-            let _ = clear_poster_cache_dir(&poster_cache_dir());
-            decoded_cache_clear();
+            let mut last_update = std::time::Instant::now() - Duration::from_secs(1);
+            let result = guard.rewrite(&poster_cache_dir(), &settings, &CACHE_CANCEL, |p| {
+                if p.processed != p.total && last_update.elapsed() < Duration::from_millis(100) {
+                    return;
+                }
+                last_update = std::time::Instant::now();
+                let bridge = bridge.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(app) = bridge.app() {
+                        app.set_cache_processed(p.processed as i32);
+                        app.set_cache_total(p.total as i32);
+                        app.set_cache_status(
+                            text::cache_rewrite_status(
+                                p.processed,
+                                p.total,
+                                p.converted,
+                                p.skipped,
+                                p.failed,
+                                p.cancelled,
+                                false,
+                            )
+                            .into(),
+                        );
+                    }
+                });
+            });
             let _ = slint::invoke_from_event_loop(move || {
+                if let Some(app) = bridge.app() {
+                    app.set_cache_busy(false);
+                    app.set_cache_rewriting(false);
+                    app.set_cache_processed(result.processed as i32);
+                    app.set_cache_total(result.total as i32);
+                    app.set_cache_status(
+                        text::cache_rewrite_status(
+                            result.processed,
+                            result.total,
+                            result.converted,
+                            result.skipped,
+                            result.failed,
+                            result.cancelled,
+                            true,
+                        )
+                        .into(),
+                    );
+                }
                 bridge.refresh_cache_disk_usage();
+                // Keep the job gate until its final UI state is applied, so
+                // a newly started job cannot be overwritten by this callback.
+                drop(guard);
             });
         });
     }
 
-    #[cfg(target_os = "android")]
     pub(super) fn clear_image_cache(&self) {
-        // Same shape as desktop (raw originals only — no derivatives or
-        // re-encode on Android).
+        let Some(guard) = MaintenanceGuard::try_acquire() else {
+            return;
+        };
+        if let Some(app) = self.app() {
+            app.set_cache_busy(true);
+        }
         let bridge = self.clone();
         thread::spawn(move || {
-            let _ = clear_poster_cache_dir(&poster_cache_dir());
-            decoded_cache_clear();
+            let _ = guard.clear(&poster_cache_dir());
             let _ = slint::invoke_from_event_loop(move || {
+                if let Some(app) = bridge.app() {
+                    app.set_cache_busy(false);
+                    app.set_cache_status(SharedString::default());
+                }
                 bridge.refresh_cache_disk_usage();
+                // Keep the job gate until its final UI state is applied, so
+                // a newly started job cannot be overwritten by this callback.
+                drop(guard);
             });
         });
     }
-
-    #[cfg(all(not(feature = "desktop"), not(target_os = "android")))]
-    pub(super) fn clear_image_cache(&self) {}
 
     pub(super) fn modal_closed(&self) {
         // Snapshot position first (backing out + reopening restores it).
@@ -616,52 +661,6 @@ impl Bridge {
     }
 }
 
-/// Delete every file in the on-disk image cache `dir` (leaving the dir
-/// itself), returning the freed `(bytes, file_count)`. Missing dir reads
-/// as nothing to free. Native only (web has no app-level image cache).
-pub(crate) fn clear_poster_cache_dir(dir: &Path) -> (u64, usize) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return (0, 0);
-    };
-    let mut bytes = 0u64;
-    let mut files = 0usize;
-    for entry in entries.flatten() {
-        let Ok(meta) = entry.metadata() else {
-            continue;
-        };
-        if !meta.is_file() {
-            continue;
-        }
-        let len = meta.len();
-        if fs::remove_file(entry.path()).is_ok() {
-            bytes = bytes.saturating_add(len);
-            files += 1;
-        }
-    }
-    (bytes, files)
-}
-/// Total size of the on-disk image cache: `(bytes, file_count)` over every
-/// regular file in `dir` (originals `*.img`, display derivatives
-/// `*.d<side>.jpg`, sidecars — the dir is flat and cache-owned).
-/// Missing/unreadable dir reads as empty. Native only (web has no
-/// app-level image cache).
-pub(crate) fn poster_cache_disk_usage(dir: &Path) -> (u64, usize) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return (0, 0);
-    };
-    let mut bytes = 0u64;
-    let mut files = 0usize;
-    for entry in entries.flatten() {
-        let Ok(meta) = entry.metadata() else {
-            continue;
-        };
-        if meta.is_file() {
-            bytes = bytes.saturating_add(meta.len());
-            files += 1;
-        }
-    }
-    (bytes, files)
-}
 /// App-wide cache settings (also mirrored in the settings page).
 pub(crate) fn read_settings() -> CacheSettings {
     match read_json_result::<serde_json::Value>("settings") {
@@ -819,11 +818,10 @@ mod tests {
                 app.window().dispatch_event(event);
             }
         };
-        tap(
-            i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app, "SettingsLink")
-                .nth(3)
-                .unwrap(),
-        );
+        tap(i_slint_backend_testing::ElementQuery::from_root(&app)
+            .match_predicate(|e| e.accessible_id().as_deref() == Some("settings:display"))
+            .find_first()
+            .unwrap());
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
         tap(
             i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app, "ToggleSwitch")

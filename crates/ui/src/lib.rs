@@ -7,3 +7,24 @@
 pub mod backend_text;
 
 slint::include_modules!();
+
+/// Local AND search over Unicode lowercase, whitespace-separated terms.
+/// The caller supplies localized labels and the registry's English aliases.
+pub fn settings_search_matches(query: &str, haystack: &str) -> bool {
+    let haystack = haystack.to_lowercase();
+    query
+        .split_whitespace()
+        .all(|term| haystack.contains(&term.to_lowercase()))
+}
+
+#[cfg(test)]
+mod search_tests {
+    #[test]
+    fn matches_all_terms_in_any_order_and_language() {
+        use super::settings_search_matches as matches;
+        assert!(matches("  WEBP  quality ", "Kvaliteta JPEG WebP Quality"));
+        assert!(matches("kvaliteta", "Kvaliteta JPEG WebP Quality"));
+        assert!(matches("", "Home"));
+        assert!(!matches("quality tracking", "Quality JPEG WebP"));
+    }
+}

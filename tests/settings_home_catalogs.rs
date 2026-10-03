@@ -1,6 +1,8 @@
 //! Settings → Home keeps only configured catalog/genre pairs and adds them
 //! through the focused catalog picker.
 
+#[path = "support/destinations.rs"]
+mod destinations;
 use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle, LogicalPosition, SharedString, VecModel};
 use std::cell::RefCell;
@@ -37,6 +39,9 @@ fn home_catalogs_are_added_with_a_genre_and_removed_individually() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
     app.window().set_size(slint::PhysicalSize::new(1100, 900));
     app.window().show().unwrap();
     app.set_show_settings(true);
@@ -93,10 +98,9 @@ fn home_catalogs_are_added_with_a_genre_and_removed_individually() {
     let app_weak = app.as_weak();
     after(100, move || {
         let app = app_weak.upgrade().unwrap();
-        let home_link =
-            ElementHandle::find_by_accessible_label(&app, "Featured titles and catalog sources")
-                .next()
-                .expect("Home settings link");
+        let home_link = destinations::find(&app, "settings:home")
+            .next()
+            .expect("Home settings link");
         tap(&app, center(&home_link));
 
         let app_weak = app.as_weak();

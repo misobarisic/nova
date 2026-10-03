@@ -6,6 +6,11 @@
 //! image itself is covered by the `src/app/qr.rs` round-trip unit test.
 //! One test function: the testing backend initializes once per process.
 
+#[path = "support/settings.rs"]
+mod settings_support;
+
+#[path = "support/destinations.rs"]
+mod destinations;
 use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle, SharedString};
 use std::cell::RefCell;
@@ -24,6 +29,9 @@ fn sync_scan_qr_button_dispatches() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
     // Tall window so the whole Sync subpage (Scan sits near its end) is on
     // screen; clicking an element scrolled out of view would hit whatever
     // overlay is at its coordinates.
@@ -52,8 +60,10 @@ fn sync_scan_qr_button_dispatches() {
         let app = app1.upgrade().unwrap();
         // Sync is the last landing entry (addons, categories, cache, display,
         // p2p, player, look and feel, sync).
-        let Some(sync_link) = ElementHandle::find_by_element_type_name(&app, "SettingsLink").nth(7)
-        else {
+        let Some(sync_link) = ({
+            app.set_settings_search_query("Sync".into());
+            destinations::find(&app, "settings:sync").next()
+        }) else {
             failures1
                 .borrow_mut()
                 .push("DIAG: no Sync landing entry".to_string());
@@ -81,8 +91,7 @@ fn sync_scan_qr_button_dispatches() {
                 let failures3 = failures2.clone();
                 let scans3 = scans2.clone();
                 slint::spawn_local(async move {
-                    scan.single_click(slint::platform::PointerEventButton::Left)
-                        .await;
+                    settings_support::click(&app, &scan).await;
                     if *scans3.borrow() != 1 {
                         failures3
                             .borrow_mut()

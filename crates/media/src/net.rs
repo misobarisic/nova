@@ -125,11 +125,9 @@ mod imp {
 // Android implementation
 //
 // Same shapes as desktop (worker thread + continuation, sized-LRU image
-// cache plus the on-disk raw-byte tier under the app cache dir) but
-// self-contained: the `addons` blocking client and the desktop poster
-// pipeline are unavailable here (no `client` feature, no re-encode
-// machinery), and TLS runs through rustls (OpenSSL does not cross-compile
-// to Android). Decoding uses the pure-Rust `image` crate.
+// cache and shared source-file encoding under the app cache dir). Transport
+// remains separate: the desktop addons client uses OpenSSL, while Android
+// uses rustls. Both decode, resize and compress through nova-media cache.
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "android")]
@@ -295,26 +293,13 @@ mod imp {
             .name(format!("image {}", short_url(&url)))
             .spawn(move || {
                 let pixels = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let key = crate::cache::sized_cache_key(&url, max_side);
-                    if let Some(pixels) = crate::cache::decoded_cache_get(&key) {
-                        return Some(pixels);
-                    }
-                    let cache_images = nova_config::active_cache_settings().cache_images;
-                    let dir = nova_config::poster_cache_dir();
-                    if cache_images
-                        && let Some(bytes) = crate::cache::read_poster_bytes(&dir, &url)
-                        && let Some(pixels) = decode_and_fit(&bytes, max_side)
-                    {
-                        crate::cache::decoded_cache_insert(&key, pixels.clone());
-                        return Some(pixels);
-                    }
-                    let bytes = get_with_retries(&url).ok()?;
-                    if cache_images {
-                        crate::cache::write_poster_bytes(&dir, &url, &bytes);
-                    }
-                    let pixels = decode_and_fit(&bytes, max_side)?;
-                    crate::cache::decoded_cache_insert(&key, pixels.clone());
-                    Some(pixels)
+                    crate::cache::cached_pixels_with(
+                        &nova_config::poster_cache_dir(),
+                        &url,
+                        max_side,
+                        &nova_config::active_cache_settings(),
+                        || get_with_retries(&url).ok(),
+                    )
                 }))
                 .ok()
                 .flatten();

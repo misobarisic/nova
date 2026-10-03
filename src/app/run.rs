@@ -530,6 +530,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let b = bridge.clone();
     app.on_reencode_cache(move || b.reencode_now());
+    app.on_cancel_reencode(settings::cancel_cache_rewrite);
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
 
     // Torrent settings callbacks.
     let b = bridge.clone();

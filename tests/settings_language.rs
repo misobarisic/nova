@@ -17,6 +17,8 @@
 //!
 //! One test function: the testing backend initializes once per process.
 
+#[path = "support/destinations.rs"]
+mod destinations;
 use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle, Model, SharedString, VecModel};
 use std::cell::RefCell;
@@ -120,47 +122,14 @@ fn check_row_fits(
     }
 }
 
-fn press(app: &nova::AppWindow, position: slint::LogicalPosition) {
-    let _ = app
-        .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::PointerPressed {
-            position,
-            button: slint::platform::PointerEventButton::Left,
-        });
-}
-
-fn moved(app: &nova::AppWindow, position: slint::LogicalPosition) {
-    let _ = app
-        .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::PointerMoved { position });
-}
-
-fn release(app: &nova::AppWindow, position: slint::LogicalPosition) {
-    let _ =
-        app.window()
-            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
-                position,
-                button: slint::platform::PointerEventButton::Left,
-            });
-}
-
-/// Scroll a settings subpage up by dragging its left text column — the
-/// accessibility tree only reports what is on screen, and the Language row is
-/// the last one in the Display card (off-screen on a phone).
-fn drag_page_up(app: &nova::AppWindow) {
-    let x = 40.0;
-    press(app, slint::LogicalPosition::new(x, 620.0));
-    for y in [560.0, 460.0, 340.0, 220.0] {
-        moved(app, slint::LogicalPosition::new(x, y));
-    }
-    release(app, slint::LogicalPosition::new(x, 200.0));
-}
-
 #[test]
 fn display_language_picker_renders_and_reaches_the_backend() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
     app.window().set_size(slint::PhysicalSize::new(1100, 800));
     app.window().show().unwrap();
     app.set_show_settings(true);
@@ -204,12 +173,12 @@ fn display_language_picker_renders_and_reaches_the_backend() {
     // catalogs bundled, the Croatian strings; without them, the English source
     // text the interpreter build falls back to.
     let (hr_header, hr_title): (&'static str, &'static str) = if catalogs {
-        ("PRIKAZ", "Jezik")
+        ("Prikaz", "Jezik")
     } else {
-        ("DISPLAY", "Language")
+        ("Display", "Language")
     };
     let hr_absent: &'static [&'static str] = if catalogs {
-        &["DISPLAY", "Language"]
+        &["Display", "Language"]
     } else {
         &[]
     };
@@ -227,8 +196,10 @@ fn display_language_picker_renders_and_reaches_the_backend() {
     after(400, move || {
         let app = app1.upgrade().unwrap();
         // Display is the 4th landing entry (index 3).
-        let Some(display) = ElementHandle::find_by_element_type_name(&app, "SettingsLink").nth(3)
-        else {
+        let Some(display) = ({
+            app.set_settings_search_query("Display".into());
+            destinations::find(&app, "settings:display").next()
+        }) else {
             fail(&failures1, false, "DIAG: no Display landing entry");
             slint::quit_event_loop().unwrap();
             return;
@@ -247,9 +218,9 @@ fn display_language_picker_renders_and_reaches_the_backend() {
                     &app,
                     &failures2,
                     "en",
-                    "DISPLAY",
+                    "Display",
                     "Language",
-                    &["PRIKAZ", "Jezik"],
+                    &["Prikaz", "Jezik"],
                 );
                 check_row_fits(&app, 1100.0, &failures2, "Language");
 
@@ -276,9 +247,9 @@ fn display_language_picker_renders_and_reaches_the_backend() {
                             &app,
                             &failures4,
                             "en",
-                            "DISPLAY",
+                            "Display",
                             "Language",
-                            &["PRIKAZ", "Jezik"],
+                            &["Prikaz", "Jezik"],
                         );
 
                         // Phone width: the picker has to fit next to the row
@@ -289,7 +260,7 @@ fn display_language_picker_renders_and_reaches_the_backend() {
                         let saved5 = saved4.clone();
                         after(400, move || {
                             let app = app5.upgrade().unwrap();
-                            drag_page_up(&app);
+                            app.set_settings_scroll_y(0.0);
                             let app6 = app.as_weak();
                             let failures6 = failures5.clone();
                             let saved6 = saved5.clone();

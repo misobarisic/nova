@@ -1411,3 +1411,207 @@ msgstr "Usluga"
 
 msgid "Apply saved watch history"
 msgstr "Primijeni spremljenu povijest gledanja"
+
+msgid "About GPL copyright source code Open source Rust bundled native components"
+msgstr "O aplikaciji GPL autorska prava izvorni kod Otvori izvorni kod Rust uključene izvorne komponente"
+
+msgid "App information"
+msgstr "O aplikaciji"
+
+msgid "App information version source links Licenses"
+msgstr "O aplikaciji inačica poveznice izvorni kod Licence"
+
+msgid "Cleanup Auto-delete watched episodes Downloaded episodes"
+msgstr "Čišćenje Automatski izbriši odgledane epizode Preuzete epizode"
+
+msgid "Clear cache"
+msgstr "Očisti predmemoriju"
+
+msgid "Clear search"
+msgstr "Očisti pretragu"
+
+msgid "Compress images"
+msgstr "Komprimiraj slike"
+
+msgid "Compress new downloads. Existing files change only when requested."
+msgstr "Komprimiraj nova preuzimanja. Postojeće se datoteke mijenjaju samo na zahtjev."
+
+msgid "Compression"
+msgstr "Kompresija"
+
+msgid "Continue watching Upcoming Home sections featured catalogs Add catalog Remove"
+msgstr "Nastavi gledati Uskoro odjeljci početne stranice istaknuti katalozi Dodaj katalog Ukloni"
+
+msgid "Convert existing disk entries when accessed, using the current compression settings."
+msgstr "Pretvori postojeće slike pri pristupu prema trenutačnim postavkama kompresije."
+
+msgid "Convert existing images"
+msgstr "Pretvori postojeće slike"
+
+msgid "Create Add category Remove tags"
+msgstr "Stvori Dodaj kategoriju Ukloni oznake"
+
+msgid "Decoded-image budget"
+msgstr "Memorija za dekodirane slike"
+
+msgid "Disk caching"
+msgstr "Predmemorija na disku"
+
+msgid "Downloads offline media downloaded episodes delete Remove"
+msgstr "Preuzimanja izvanmrežni sadržaj preuzete epizode brisanje Ukloni"
+
+msgid "Downscale"
+msgstr "Smanji dimenzije"
+
+msgid "Enable This device Automatic sync Pairing Connected peers Invite ticket QR code confirmation remove"
+msgstr "Omogući Ovaj uređaj Automatska sinkronizacija Uparivanje Povezani uređaji Pozivnica QR kod potvrda ukloni"
+
+msgid "Enable animations Page transitions Hover effects Player OSD Navigation feedback"
+msgstr "Omogući animacije Prijelazi stranica Efekti prelaska pokazivača Kontrole reproduktora Povratne informacije navigacije"
+
+msgid "Enable disk caching and compression to adjust encoding options."
+msgstr "Omogući predmemoriju na disku i kompresiju za prilagodbu kodiranja."
+
+msgid "Enable disk caching to use compression."
+msgstr "Omogući predmemoriju na disku za kompresiju."
+
+msgid "Enable animations to use the motion options below."
+msgstr "Omogući animacije za korištenje opcija kretanja u nastavku."
+
+msgid "Experience"
+msgstr "Iskustvo"
+
+msgid "Higher values retain more detail and use more disk space."
+msgstr "Više vrijednosti zadržavaju više detalja i zauzimaju više prostora na disku."
+
+msgid "Install addon URL sources Enable Configure Copy link Refresh Remove Move up Move down"
+msgstr "Instaliraj dodatak URL izvori Omogući Konfiguriraj Kopiraj poveznicu Osvježi Ukloni Pomakni gore Pomakni dolje"
+
+msgid "JPEG or WebP for compressed artwork."
+msgstr "JPEG ili WebP za komprimirane slike."
+
+msgid "Keep downloaded artwork on this device to reduce network use."
+msgstr "Zadrži preuzete slike na ovom uređaju radi manje potrošnje mreže."
+
+msgid "Language artwork metadata relative dates Discover Library grid columns catalog addon names unwatched thumbnails prefetch"
+msgstr "Jezik slike metapodaci relativni datumi Istraži Moja zbirka stupci mreže katalozi nazivi dodataka neodgledane sličice preddohvat"
+
+msgid "Library and services"
+msgstr "Zbirka i usluge"
+
+msgid "Limit the longest side of compressed images to 1024 pixels."
+msgstr "Ograniči najdulju stranu komprimiranih slika na 1024 piksela."
+
+msgid "Maintenance"
+msgstr "Održavanje"
+
+msgid "Make Nova yours"
+msgstr "Prilagodi Novu sebi"
+
+msgid "Memory"
+msgstr "Memorija"
+
+msgid "Memory available for decoded artwork, independent of disk caching."
+msgstr "Memorija dostupna za dekodirane slike, neovisno o predmemoriji na disku."
+
+msgid "MyAnimeList AniList MAL Sign in account Connect Disconnect Automatic tracking recovery Reset history"
+msgstr "MyAnimeList AniList MAL Prijava račun Poveži Odspoji Automatsko praćenje oporavak Poništi povijest"
+
+msgid "No settings found."
+msgstr "Nema pronađenih postavki."
+
+msgid "Open-source components and license texts"
+msgstr "Komponente otvorenog koda i tekstovi licenci"
+
+msgid "Player choice Episode playback decoder hardware mpv external app Playback speed presets"
+msgstr "Odabir reproduktora Reprodukcija epizode dekoder hardver mpv vanjska aplikacija Brzina reprodukcije unaprijed postavljene vrijednosti"
+
+msgid "Run a background sweep with the current compression settings."
+msgstr "Pretvori predmemoriju u pozadini prema trenutačnim postavkama kompresije."
+
+msgid "Search settings"
+msgstr "Pretraži postavke"
+
+msgid "Services"
+msgstr "Usluge"
+
+msgid "Stop"
+msgstr "Zaustavi"
+
+msgid "Storage"
+msgstr "Pohrana"
+
+msgid "Storage and compression controls are locked during maintenance. Memory remains available."
+msgstr "Postavke pohrane i kompresije zaključane su tijekom održavanja. Memorija ostaje dostupna."
+
+msgid "Storage and network"
+msgstr "Pohrana i mreža"
+
+msgid "Storage disk caching Compression JPEG WebP Quality Downscale Re-encode on load Memory decoded-image budget Clear cache Re-encode now"
+msgstr "Pohrana predmemorija na disku Kompresija JPEG WebP Kvaliteta Smanji dimenzije Ponovno kodiraj pri učitavanju Memorija dekodirane slike Očisti predmemoriju Ponovno kodiraj sada"
+
+msgid "Streaming torrents Cache location folder limits size disk usage cleanup rate limit"
+msgstr "Reprodukcija torrenti Mjesto predmemorije mapa ograničenja veličina zauzeće diska čišćenje ograničenje brzine"
+
+msgid "Artwork and metadata"
+msgstr "Slike i metapodaci"
+
+msgid "Discover layout"
+msgstr "Raspored stranice Istraži"
+
+msgid "Library layout"
+msgstr "Raspored zbirke"
+
+msgid "Player choice"
+msgstr "Odabir reproduktora"
+
+msgid "Playback controls"
+msgstr "Kontrole reprodukcije"
+
+msgid "Animations"
+msgstr "Animacije"
+
+msgid "Motion options"
+msgstr "Opcije kretanja"
+
+msgid "Installation and sources"
+msgstr "Instalacija i izvori"
+
+msgid "Create and manage categories"
+msgstr "Stvaranje i upravljanje kategorijama"
+
+msgid "Streaming and cache"
+msgstr "Reprodukcija i predmemorija"
+
+msgid "Enablement"
+msgstr "Omogućivanje"
+
+msgid "Cleanup and downloaded episodes"
+msgstr "Čišćenje i preuzete epizode"
+
+msgid "Installation"
+msgstr "Instalacija"
+
+msgid "Installed sources"
+msgstr "Instalirani izvori"
+
+msgid "Creation"
+msgstr "Stvaranje"
+
+msgid "Existing categories"
+msgstr "Postojeće kategorije"
+
+msgid "Cleanup policy"
+msgstr "Pravila čišćenja"
+
+msgid "Streaming"
+msgstr "Strujanje"
+
+msgid "Cache location and limits"
+msgstr "Lokacija i ograničenja predmemorije"
+
+msgid "Disk usage and cleanup"
+msgstr "Zauzeće diska i čišćenje"
+
+msgid "Resume"
+msgstr "Nastavite"

@@ -8,6 +8,8 @@
 //! that a long subpage (Sync with many peers) still scrolls.
 //! One test function: the testing backend initializes once per process.
 
+#[path = "support/destinations.rs"]
+mod destinations;
 use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle, LogicalPosition, SharedString, VecModel};
 use std::cell::RefCell;
@@ -57,6 +59,9 @@ fn short_settings_subpage_is_top_aligned_not_stretched() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
     app.window().set_size(slint::PhysicalSize::new(360, 800));
     app.window().show().unwrap();
     app.set_show_settings(true);
@@ -88,10 +93,11 @@ fn short_settings_subpage_is_top_aligned_not_stretched() {
     let failures1 = failures.clone();
     after(400, move || {
         let app = app1.upgrade().unwrap();
-        // Categories is the 2nd landing entry (index 1).
-        let Some(categories) =
-            ElementHandle::find_by_element_type_name(&app, "SettingsLink").nth(1)
-        else {
+        // Resolve Categories by its stable navigation identity.
+        let Some(categories) = ({
+            app.set_settings_search_query("Categories".into());
+            destinations::find(&app, "settings:categories").next()
+        }) else {
             fail(&failures1, false, "DIAG: no Categories landing entry");
             slint::quit_event_loop().unwrap();
             return;
@@ -106,7 +112,7 @@ fn short_settings_subpage_is_top_aligned_not_stretched() {
                 let app = app2.upgrade().unwrap();
                 let window_h = app.window().size().height as f32;
                 if let Some(card) =
-                    ElementHandle::find_by_element_id(&app, "SettingsPage::cat_card").next()
+                    ElementHandle::find_by_element_id(&app, "SettingsPage::cat_box").next()
                 {
                     let pos = card.absolute_position();
                     let size = card.size();
@@ -141,9 +147,9 @@ fn short_settings_subpage_is_top_aligned_not_stretched() {
                 let failures3 = failures2.clone();
                 after(400, move || {
                     let app = app3.upgrade().unwrap();
-                    // Sync is the 8th landing entry (index 7).
+                    // Resolve Sync independently of the overview ordering.
                     let Some(sync) =
-                        ElementHandle::find_by_element_type_name(&app, "SettingsLink").nth(7)
+                        ({ app.set_settings_search_query("Sync".into()); destinations::find(&app, "settings:sync").next() })
                     else {
                         fail(&failures3, false, "DIAG: no Sync landing entry");
                         slint::quit_event_loop().unwrap();

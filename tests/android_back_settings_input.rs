@@ -246,8 +246,7 @@ fn tracking_settings_back_blurs_then_returns_to_landing_and_home() {
             "only a separate Back on Home root may background the app",
         );
 
-        // The top-left subpage Back can remove a still-focused LineEdit,
-        // rather than the hidden blur scope used by keyboard/system Back.
+        // Pointer Back follows the same nearest-editor rule as system Back.
         app.set_show_home(false);
         app.set_show_settings(true);
         settle().await;
@@ -255,8 +254,8 @@ fn tracking_settings_back_blurs_then_returns_to_landing_and_home() {
             slint::quit_event_loop().unwrap();
             return;
         }
-        let Some(top_back) =
-            ElementHandle::find_by_element_id(&app, "SettingsPage::back_touch").next()
+        let Some(top_back) = ElementHandle::find_by_accessible_label(&app, "Back")
+            .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button))
         else {
             failures
                 .borrow_mut()
@@ -270,11 +269,17 @@ fn tracking_settings_back_blurs_then_returns_to_landing_and_home() {
         settle().await;
         check(
             failures,
+            ElementHandle::find_by_element_type_name(&app, "TrackingSettings").count() == 1,
+            "top-left Back must blur the input before closing Tracking",
+        );
+        back(&app, failures).await;
+        check(
+            failures,
             ElementHandle::find_by_element_type_name(&app, "TrackingSettings").count() == 0
                 && app.get_show_settings()
                 && home_picks.get() == 1
                 && backgrounds.get() == 1,
-            "top-left Back must remove the focused tracking page while retaining Settings landing",
+            "Back after pointer blur must close Tracking while retaining Settings landing",
         );
         back(&app, failures).await;
         check(

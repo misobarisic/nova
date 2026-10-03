@@ -3,6 +3,8 @@
 //! The old height reserved only a single title line, so a wrapping series name
 //! clipped the description on narrow screens.
 
+#[path = "support/destinations.rs"]
+mod destinations;
 use i_slint_backend_testing::{ElementHandle, ElementQuery};
 use slint::{ComponentHandle, SharedString, VecModel};
 use std::rc::Rc;
@@ -51,6 +53,9 @@ fn wrapped_download_row_grows_to_fit() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
     app.window().set_size(slint::PhysicalSize::new(320, 800));
     app.window().show().unwrap();
     app.set_show_settings(true);
@@ -69,8 +74,10 @@ fn wrapped_download_row_grows_to_fit() {
     after(400, move || {
         let app = app1.upgrade().unwrap();
         // Downloads is the 9th landing entry (index 8).
-        let Some(downloads) = ElementHandle::find_by_element_type_name(&app, "SettingsLink").nth(8)
-        else {
+        let Some(downloads) = ({
+            app.set_settings_search_query("Downloads".into());
+            destinations::find(&app, "settings:downloads").next()
+        }) else {
             slint::quit_event_loop().unwrap();
             panic!("DIAG: no Downloads landing entry");
         };

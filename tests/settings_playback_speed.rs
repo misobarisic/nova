@@ -8,6 +8,11 @@
 //! the shared value with two decimals. One test function: the testing backend
 //! initializes once per process.
 
+#[path = "support/settings.rs"]
+mod settings_support;
+
+#[path = "support/destinations.rs"]
+mod destinations;
 use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle, LogicalPosition};
 use std::cell::RefCell;
@@ -43,9 +48,9 @@ fn click_then(
 ) {
     let weak = app.as_weak();
     slint::spawn_local(async move {
-        element
-            .single_click(slint::platform::PointerEventButton::Left)
-            .await;
+        if let Some(app) = weak.upgrade() {
+            settings_support::click(&app, &element).await;
+        }
         after(ms, move || {
             if let Some(app) = weak.upgrade() {
                 body(app);
@@ -60,6 +65,9 @@ fn playback_speed_control_renders_and_reports_steps() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
     app.window().set_size(slint::PhysicalSize::new(360, 800));
     app.window().show().unwrap();
     app.set_show_settings(true);
@@ -91,9 +99,10 @@ fn playback_speed_control_renders_and_reports_steps() {
         };
 
         // ---- Settings → Player (landing entry 5) ----
-        let Some(player_link) =
-            ElementHandle::find_by_element_type_name(&app, "SettingsLink").nth(5)
-        else {
+        let Some(player_link) = ({
+            app.set_settings_search_query("Player".into());
+            destinations::find(&app, "settings:player").next()
+        }) else {
             fail(&failures1, false, "DIAG: no Player landing entry");
             slint::quit_event_loop().unwrap();
             return;

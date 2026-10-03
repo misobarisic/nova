@@ -5,6 +5,8 @@
 //! narrow and wide layouts. One test function: the testing backend initializes
 //! once per process.
 
+#[path = "support/destinations.rs"]
+mod destinations;
 use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle, LogicalPosition, SharedString, VecModel};
 use std::cell::RefCell;
@@ -132,7 +134,10 @@ fn about_opens_nested_licenses_and_centers_source_buttons() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
-    app.window().set_size(slint::PhysicalSize::new(360, 800));
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
+    app.window().set_size(slint::PhysicalSize::new(360, 1600));
     app.window().show().unwrap();
     app.set_show_settings(true);
     app.set_show_home(false);
@@ -172,10 +177,12 @@ fn about_opens_nested_licenses_and_centers_source_buttons() {
     let failures1 = failures.clone();
     after(400, move || {
         let app = app1.upgrade().unwrap();
-        // About follows Downloads and the Home showcase entry, so scroll the
-        // landing list before looking up its link on a phone-sized window.
+        // Resolve About by destination identity, independently of landing order.
         scroll_landing_down(&app);
-        let Some(about) = ElementHandle::find_by_accessible_label(&app, "About").next() else {
+        let Some(about) = ({
+            app.set_settings_search_query("About".into());
+            destinations::find(&app, "settings:about").next()
+        }) else {
             fail(&failures1, false, "DIAG: no About landing entry");
             slint::quit_event_loop().unwrap();
             return;
@@ -283,9 +290,7 @@ fn about_opens_nested_licenses_and_centers_source_buttons() {
                                     let app = app6.upgrade().unwrap();
                                     fail(
                                         &failures6,
-                                        ElementHandle::find_by_accessible_label(&app, "About")
-                                            .count()
-                                            == 1
+                                        destinations::find(&app, "settings:about").count() == 1
                                             && ElementHandle::find_by_element_id(
                                                 &app,
                                                 "SettingsPage::about_licenses_button",

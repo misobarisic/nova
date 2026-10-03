@@ -13,6 +13,9 @@ export component SearchField inherits Rectangle {
     in-out property <string> text: "";
     in property <string> placeholder-text: "";
     in property <bool> enabled: true;
+    in property <InputType> input-type: InputType.text;
+    in property <bool> show-pointer-focus: true;
+    in property <bool> keyboard-mode: false;
     // Touch-sized box (44px) on narrow layouts, compact (32px) otherwise.
 
     in property <bool> roomy: false;
@@ -56,7 +59,7 @@ export component SearchField inherits Rectangle {
     border-width: 1px;
     // Calm 1px ring on focus instead of the stock underline + background
     // flare that looked permanently "selected" on touch screens.
-    border-color: inner.has-focus ? #8b5cf6 : #33333c;
+    border-color: inner.has-focus && (root.show-pointer-focus || root.keyboard-mode) ? #8b5cf6 : #33333c;
     background: #1c1c22;
     clip: true;
 
@@ -88,6 +91,7 @@ export component SearchField inherits Rectangle {
 
         inner := TextInput {
             text <=> root.text;
+            input-type: root.input-type;
             enabled: root.enabled;
             font-size: root.prominent ? 16px : 13px;
             color: #e6e6ea;
