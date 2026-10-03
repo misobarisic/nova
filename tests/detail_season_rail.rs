@@ -54,9 +54,7 @@ fn drag(app: &nova::AppWindow, start: LogicalPosition, dx: f32, dy: f32) {
     idle(500);
 }
 
-#[test]
-fn narrow_seasons_stay_in_one_row_and_swipes_do_not_select_or_trap_the_page() {
-    i_slint_backend_testing::init_integration_test_with_mock_time();
+fn setup() -> (nova::AppWindow, Rc<RefCell<Vec<i32>>>) {
     let app = nova::AppWindow::new().unwrap();
     app.window().set_size(slint::PhysicalSize::new(360, 1000));
     app.set_animations(false);
@@ -102,7 +100,14 @@ fn narrow_seasons_stay_in_one_row_and_swipes_do_not_select_or_trap_the_page() {
     app.on_season_picked(move |index| picked.borrow_mut().push(index));
     app.window().show().unwrap();
     idle(400);
+    (app, picks)
+}
 
+#[test]
+fn narrow_seasons_stay_in_one_row_and_swipes_do_not_select_or_trap_the_page() {
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    quick_touch_swipes_keep_their_axis();
+    let (app, picks) = setup();
     let rail = element(&app, "season_flick");
     let grid = element(&app, "season_grid");
     let first = season(&app, 1);
@@ -187,4 +192,85 @@ fn narrow_seasons_stay_in_one_row_and_swipes_do_not_select_or_trap_the_page() {
         element(&app, "season_grid").size().width
             <= element(&app, "season_flick").size().width + 1.0
     );
+}
+
+fn touch(app: &nova::AppWindow, position: LogicalPosition, phase: i_slint_core::input::TouchPhase) {
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::internal(
+            slint::platform::InternalEvent::Touch {
+                id: 1,
+                position: i_slint_core::lengths::LogicalPoint::new(position.x, position.y),
+                phase,
+            },
+        ));
+}
+
+fn quick_touch_swipes_keep_their_axis() {
+    use i_slint_core::input::TouchPhase;
+    for scenario in ["diagonal", "pause", "vertical"] {
+        let (app, picks) = setup();
+        let rail = element(&app, "season_flick");
+        let grid = element(&app, "season_grid");
+        let before = grid.absolute_position();
+        let start = LogicalPosition::new(rail.absolute_position().x + 180.0, center(&rail).y);
+        touch(&app, start, TouchPhase::Started);
+        // Move immediately, including across the gap between cards, before
+        // Slint's delayed press arrives. No stationary 150ms pre-drag hold.
+        idle(16);
+        let mut end = start;
+        for step in 1..=8 {
+            let (dx, dy) = match scenario {
+                "vertical" => (step as f32 * 0.5, step as f32 * -15.0),
+                _ => (step as f32 * -18.0, step as f32 * 3.0),
+            };
+            end = LogicalPosition::new(start.x + dx, start.y + dy);
+            touch(&app, end, TouchPhase::Moved);
+            idle(16);
+            if scenario == "pause" && step == 7 {
+                // Pausing a captured drag must not hand it to the page.
+                idle(350);
+            }
+        }
+        touch(&app, end, TouchPhase::Ended);
+        idle(16);
+        let after = grid.absolute_position();
+        if scenario == "vertical" {
+            assert!(
+                after.y < before.y - 30.0,
+                "vertical touch must scroll the page"
+            );
+            assert!((after.x - before.x).abs() < 1.0);
+        } else {
+            assert!(
+                after.x < before.x - 30.0,
+                "{scenario} touch must move seasons"
+            );
+            assert!(
+                (after.y - before.y).abs() < 1.0,
+                "{scenario} touch must hold the page"
+            );
+        }
+        idle(800);
+        assert!(
+            picks.borrow().is_empty(),
+            "{scenario} touch must not select a season"
+        );
+        assert!(
+            ElementHandle::find_by_element_type_name(&app, "MenuSheet")
+                .next()
+                .is_none(),
+            "drag must not open the hold menu"
+        );
+        let tap = LogicalPosition::new(rail.absolute_position().x + 100.0, center(&rail).y);
+        touch(&app, tap, TouchPhase::Started);
+        idle(150);
+        touch(&app, tap, TouchPhase::Ended);
+        idle(16);
+        assert_eq!(
+            picks.borrow().len(),
+            1,
+            "tap after {scenario} must select a season"
+        );
+        app.window().hide().unwrap();
+    }
 }

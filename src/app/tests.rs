@@ -571,6 +571,39 @@ mod playback_tests {
     }
 
     #[test]
+    fn episode_playback_progress_does_not_follow_manual_watched_marks() {
+        let key = progress_map_key("series", "episode");
+        let mut map = std::collections::HashMap::new();
+        assert_eq!(
+            Bridge::episode_watch_state(&map, "series", "episode").1,
+            0.0
+        );
+        map.insert(
+            key.clone(),
+            EpisodeProgress {
+                watched: true,
+                ..Default::default()
+            },
+        );
+        let (watched, progress, _) = Bridge::episode_watch_state(&map, "series", "episode");
+        assert!(watched);
+        assert_eq!(progress, 0.0, "a manual watched mark has no playback rail");
+        let saved = map.get_mut(&key).unwrap();
+        saved.position_secs = 30.0;
+        saved.duration_secs = 120.0;
+        saved.watched = false;
+        assert_eq!(
+            Bridge::episode_watch_state(&map, "series", "episode").1,
+            0.25
+        );
+        map.get_mut(&key).unwrap().watched = true;
+        assert_eq!(
+            Bridge::episode_watch_state(&map, "series", "episode").1,
+            1.0
+        );
+    }
+
+    #[test]
     fn episode_details_counts_resume_suffix_in_budget() {
         // The resume suffix rides outside truncate_synopsis, so the
         // combined string must still fit the 150-char card budget:

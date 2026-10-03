@@ -28,6 +28,7 @@ fn episode(n: usize) -> nova::EpisodeRow {
         progress: 0.0,
         ep_no: s(format!("EP {n}").as_str()),
         date: SharedString::default(),
+        runtime: Default::default(),
     }
 }
 

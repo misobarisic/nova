@@ -1365,3 +1365,7 @@ msgstr "Pročitaj više"
 
 msgid "▶  Watch Now"
 msgstr "▶  Gledaj sada"
+
+#. Episode playback percentage.
+msgid "{}%"
+msgstr "{}%"

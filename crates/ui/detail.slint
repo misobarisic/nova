@@ -5,7 +5,7 @@ import { SearchField } from "searchfield.slint";
 import { CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem } from "types.slint";
 import { KbMark } from "kbnav.slint";
 import { MenuSheet } from "menusheet.slint";
-import { IcBookmark, IcBookmarkBorder, IcCheck, IcChevronLeft, IcChevronRight, IcTag } from "icons.slint";
+import { IcBookmark, IcBookmarkBorder, IcCheck, IcChevronLeft, IcChevronRight, IcTag, IcSchedule } from "icons.slint";
 import { Anim } from "anim.slint";
 
 // One filter pill in the horizontal addon bar above the stream list.
@@ -658,8 +658,10 @@ export component DetailPage {
     in-out property <string> selected_year: "";
     in-out property <string> selected_description: "";
     property <bool> synopsis_expanded: false;
+    property <bool> hero_description_expanded: false;
     property <length> overview_width: root.width - (root.narrow ? 40px : 128px) - root.safe-left - root.safe-right;
     property <length> synopsis_width: root.narrow ? root.overview_width : (root.overview_width - 24px) * 0.56;
+    property <length> hero_text_width: root.narrow ? root.overview_width : Math.min(650px, root.overview_width * 0.55);
     in-out property <[string]> selected_genre_list: [];
     // Tab bar: 0 = Overview, 3 = Episodes (1/2 are stubs — Stremio addons
     // provide no Characters/Artwork data).
@@ -1431,7 +1433,7 @@ export component DetailPage {
 
                         HorizontalLayout {
                             VerticalLayout {
-                                width: root.narrow ? root.overview_width : Math.min(650px, root.overview_width * 0.55);
+                                width: root.hero_text_width;
                                 spacing: root.narrow ? 14px : 18px;
                                 alignment: start;
                                 Text {
@@ -1475,17 +1477,53 @@ export component DetailPage {
                                         }
                                     }
                                 }
-                                if root.selected_description != "": Rectangle {
-                                    height: root.narrow ? 66px : 84px;
+                                if root.selected_description != "": hero_description := Rectangle {
+                                    // Match the Synopsis card's full-text measurement
+                                    // and animated viewport, using the hero's own width.
+                                    height: root.hero_description_expanded ? hero_description_measure.preferred-height + 1px : Math.min(hero_description_measure.preferred-height + 1px, root.narrow ? 66px : 84px);
+                                    animate height {
+                                        duration: Anim.transition_slide;
+                                        easing: ease-in-out;
+                                    }
                                     clip: true;
-                                    Text {
-                                        width: 100%;
+                                    hero_description_measure := Text {
+                                        x: 0px; y: 0px;
+                                        width: root.hero_text_width;
+                                        text: root.selected_description;
+                                        font-size: root.narrow ? 15px : 19px;
+                                        wrap: word-wrap;
+                                        visible: false;
+                                    }
+                                    hero_description_text := Text {
+                                        x: 0px; y: 0px;
+                                        width: root.hero_text_width;
                                         height: 100%;
                                         overflow: elide;
-                                        text: root.selected_description;
+                                        text: hero_description_measure.text;
                                         color: #bec3d2;
                                         font-size: root.narrow ? 15px : 19px;
                                         wrap: word-wrap;
+                                        vertical-alignment: top;
+                                    }
+                                    hero_description_touch := TouchArea {
+                                        enabled: hero_description_measure.preferred-height > (root.narrow ? 66px : 84px);
+                                        mouse-cursor: pointer;
+                                        accessible-role: button;
+                                        accessible-label: root.hero_description_expanded ? @tr("Show less") : @tr("Read more");
+                                        property <bool> dragged: false;
+                                        pointer-event(ev) => {
+                                            if (ev.kind == PointerEventKind.down) { self.dragged = false; }
+                                        }
+                                        moved => {
+                                            if (Math.abs(self.mouse-x - self.pressed-x) + Math.abs(self.mouse-y - self.pressed-y) > 12px) {
+                                                self.dragged = true;
+                                            }
+                                        }
+                                        clicked => {
+                                            if (!self.dragged) {
+                                                root.hero_description_expanded = !root.hero_description_expanded;
+                                            }
+                                        }
                                     }
                                 }
                                 if root.has_episodes: HorizontalLayout {
@@ -1870,20 +1908,32 @@ export component DetailPage {
                                             interactive: root.narrow;
                                             content-width: Math.max(self.width, season_grid.width);
                                             content-height: self.height;
-                                            // Only pointer hints lock the page: revealing a
-                                            // selected card must not block the next vertical drag.
+                                            // Match Home's Continue row: card hints choose the
+                                            // axis early, and row movement maintains the page hold.
+                                            // Automatic selected-card reveal must not arm it.
+                                            property <length> revealed_x: 0px;
+                                            changed content-x => {
+                                                if (root.narrow && !root.kb_active && self.content-x != self.revealed_x) {
+                                                    root.filters_panned();
+                                                }
+                                            }
                                             changed width => { self.reveal_selected(); }
                                             init => { self.reveal_selected(); }
                                             function reveal_selected() {
-                                                if (!root.narrow) { self.content-x = 0px; return; }
+                                                if (!root.narrow) {
+                                                    self.revealed_x = 0px;
+                                                    self.content-x = 0px;
+                                                    return;
+                                                }
                                                 let left = Math.max(0, root.season_combo_idx) * (root.season_card_w + 12px);
                                                 let right = left + root.season_card_w;
-                                                if (left + self.content-x < 0px) {
-                                                    self.content-x = -left;
-                                                } else if (right + self.content-x > self.width) {
-                                                    self.content-x = self.width - right;
-                                                }
-                                                self.content-x = Math.max(self.width - self.content-width, Math.min(0px, self.content-x));
+                                                let target = left + self.content-x < 0px ? -left :
+                                                    right + self.content-x > self.width ? self.width - right : self.content-x;
+                                                // Publish the automatic offset before moving the row,
+                                                // so its content-x callback cannot hold the page.
+                                                self.revealed_x = Math.max(self.width - self.content-width, Math.min(0px, target));
+                                                self.content-x = self.revealed_x;
+                                                root.filters_pan_released();
                                             }
 
                                             season_grid := GridLayout {
@@ -2021,6 +2071,7 @@ export component DetailPage {
                                                                     season_ctx.show({ x: touch_season.mouse-x, y: touch_season.mouse-y });
                                                                 }
                                                             } else if (ev.kind == PointerEventKind.down) {
+                                                                root.kb_active = false;
                                                                 touch_season.lp_suppress = false;
                                                                 touch_season.dragged = false;
                                                                 self.hint_x = self.mouse-x;
@@ -2040,6 +2091,7 @@ export component DetailPage {
                                                                     self.hint_stop();
                                                                     return;
                                                                 }
+                                                                root.kb_active = false;
                                                                 if (!self.hint_live) {
                                                                     self.hint_x = self.mouse-x;
                                                                     self.hint_y = self.mouse-y;
@@ -2125,6 +2177,7 @@ export component DetailPage {
                                             // Fixed shared width (see ep_card_w):
                                             // keeps every column equal.
                                             width: root.ep_card_w;
+                                            height: Math.max(240px, self.width * 0.43);
                                             // Hard containment: on some renderer
                                             // paths overflowing text is painted
                                             // past its element instead of being
@@ -2132,10 +2185,10 @@ export component DetailPage {
                                             // clip (nothing may reach the next
                                             // row's thumbnails).
                                             clip: true;
-                                            background: e.watched ? #1a1c26 : #1c1c23;
-                                            border-radius: 8px;
-                                            border-width: root.kb_active && root.kb_zone == 3 && root.kb_ci == 2 && root.kb_ep == i ? 2px : 0px;
-                                            border-color: #8b5cf6;
+                                            background: #0b1221;
+                                            border-radius: 16px;
+                                            border-width: root.kb_active && root.kb_zone == 3 && root.kb_ci == 2 && root.kb_ep == i ? 2px : 1px;
+                                            border-color: root.kb_active && root.kb_zone == 3 && root.kb_ci == 2 && root.kb_ep == i ? #8b5cf6 : #ffffff12;
 
                                             // Card menu: desktop right-click opens the
                                             // native popup at the cursor; touch hold
@@ -2231,179 +2284,172 @@ export component DetailPage {
                                                 }
                                             }
 
-                                            VerticalLayout {
-                                                padding: 8px;
-                                                // Slightly roomier bottom edge
-                                                // so the 3rd description line
-                                                // and rail don't sit on the
-                                                // card border.
-                                                padding-bottom: 12px;
-                                                spacing: 6px;
-                                                // Pack content at the top: with
-                                                // the default stretch alignment
-                                                // leftover row height would be
-                                                // dealt out as gaps between
-                                                // every element (blank lines
-                                                // through the card) instead of
-                                                // one blank area at the bottom.
+                                            // Full-bleed artwork: badges stay at the top while
+                                            // text sits over a dark, continuous bottom scrim.
+                                            if e.has_thumb: episode_artwork := Image {
+                                                x: 0px; y: 0px;
+                                                width: 100%; height: 100%;
+                                                source: e.thumb;
+                                                image-fit: cover;
+                                            }
+                                            Image {
+                                                x: 0px; y: 0px;
+                                                width: 100%; height: 100%;
+                                                source: @image-url("../../assets/episode-card-scrim.svg");
+                                                image-fit: fill;
+                                            }
+
+                                            if e.ep_no != "": Rectangle {
+                                                x: 14px; y: 14px;
+                                                width: episode_badge.preferred-width + 24px;
+                                                height: 30px;
+                                                border-radius: 15px;
+                                                background: #5b21b6dc;
+                                                border-width: 1.5px;
+                                                border-color: #a855f7;
+                                                episode_badge := Text {
+                                                    x: 12px; y: 0px;
+                                                    height: 100%;
+                                                    text: e.ep_no;
+                                                    color: #ffffff;
+                                                    font-size: 14px;
+                                                    font-weight: 700;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+
+                                            if e.watched: episode_watched := Rectangle {
+                                                x: parent.width - self.width - 14px;
+                                                y: 14px;
+                                                width: 30px; height: 30px;
+                                                border-radius: 15px;
+                                                background: #ffffff;
+                                                IcCheck {
+                                                    x: (parent.width - self.width) / 2;
+                                                    y: (parent.height - self.height) / 2;
+                                                    width: 18px; height: 18px;
+                                                    fill: #0b1221;
+                                                }
+                                            }
+
+                                            // Measure with the same font as the visible title:
+                                            // a guessed line height can elide its second line.
+                                            episode_title_measure := Text {
+                                                width: episode_title.width;
+                                                text: e.text;
+                                                font-size: episode_title.font-size;
+                                                font-weight: 700;
+                                                wrap: word-wrap;
+                                                visible: false;
+                                            }
+                                            episode_title_two_lines := Text {
+                                                text: "Ag\nAg";
+                                                font-size: episode_title.font-size;
+                                                font-weight: 700;
+                                                visible: false;
+                                            }
+
+                                            episode_content := VerticalLayout {
+                                                x: 16px;
+                                                y: ep_card.height - self.height - 16px;
+                                                width: ep_card.width - 32px;
+                                                height: self.preferred-height;
+                                                spacing: 7px;
                                                 alignment: start;
 
-                                                // 16:9 thumbnail with EP badge.
-                                                Rectangle {
-                                                    height: 110px;
-                                                    border-radius: 6px;
-                                                    clip: true;
-                                                    background: #000000;
-
-                                                    if e.has_thumb: Image {
-                                                        source: e.thumb;
-                                                        image-fit: cover;
-                                                        width: 100%;
-                                                        height: 100%;
-                                                    }
-
-                                                    if !e.has_thumb: Text {
-                                                        text: "▶";
-                                                        color: #5a5a6e;
-                                                        font-size: 18px;
-                                                        horizontal-alignment: center;
-                                                        vertical-alignment: center;
-                                                    }
-
-                                                    // EP badge pinned bottom-left,
-                                                    // sized to its text by the
-                                                    // row layout (never the
-                                                    // thumbnail width).
-                                                    VerticalLayout {
-                                                        width: 100%;
-                                                        height: 100%;
-
-                                                        Rectangle { vertical-stretch: 1; }
-
-                                                        HorizontalLayout {
-                                                            padding-left: 6px;
-                                                            padding-bottom: 6px;
-                                                            spacing: 0px;
-
-                                                            Rectangle {
-                                                                height: 22px;
-                                                                border-radius: 11px;
-                                                                background: #000000c0;
-
-                                                                HorizontalLayout {
-                                                                    padding-left: 8px;
-                                                                    padding-right: 8px;
-
-                                                                    Text {
-                                                                        text: e.ep_no;
-                                                                        color: #ffffff;
-                                                                        font-size: 11px;
-                                                                        font-weight: 700;
-                                                                        vertical-alignment: center;
-                                                                    }
-                                                                }
-                                                            }
-
-                                                            // Absorbs the row's free
-                                                            // width so the badge
-                                                            // keeps its text width.
-                                                            Rectangle { horizontal-stretch: 1; }
-                                                        }
-                                                    }
-
-                                                    // Watched check, Stremio-style: a small white
-                                                    // disc with a black check, pinned to the
-                                                    // thumbnail's top-right corner — part of the
-                                                    // artwork, no pill box.
-                                                    if e.watched: Rectangle {
-                                                        x: parent.width - 28px;
-                                                        y: 4px;
-                                                        width: 22px;
-                                                        height: 22px;
-                                                        border-radius: 11px;
-                                                        background: #ffffff;
-
-                                                        IcCheck {
-                                                            x: (parent.width - self.width) / 2;
-                                                            y: (parent.height - self.height) / 2;
-                                                            width: 13px;
-                                                            height: 13px;
-                                                            fill: #000000;
-                                                        }
-                                                    }
-                                                }
-
-                                                // Single-line elided title/synopsis
-                                                // (Discover-card pattern): a
-                                                // wrapped synopsis spans a
-                                                // different line count per card
-                                                // and grid rows stretch to the
-                                                // tallest, leaving uneven blank
-                                                // areas. One line each keeps
-                                                // every card the same height at
-                                                // any window width.
-                                                Text {
+                                                episode_title := Text {
+                                                    width: parent.width * (ep_card.width > 520px ? 0.75 : 1.0);
                                                     text: e.text;
-                                                    color: e.watched ? #8a8a9a : #e6e6ea;
-                                                    font-size: 14px;
-                                                    font-weight: 600;
-                                                    overflow: elide;
-                                                }
-
-                                                // Always rendered (blank space keeps
-                                                // the line height): every card
-                                                // keeps the same height whether
-                                                // the addon sent a date or not.
-                                                Text {
-                                                    text: e.date == "" ? " " : e.date;
-                                                    color: #8f8fa0;
-                                                    font-size: 12px;
-                                                    overflow: elide;
-                                                }
-
-                                                // Always rendered, same reason as
-                                                // the date. The reserved height
-                                                // admits exactly 3 lines with an
-                                                // ellipsis on the last one and
-                                                // never a 4th: elide keeps only
-                                                // the lines whose full block
-                                                // fits, and the grid row height
-                                                // no longer depends on the
-                                                // measured wrapped-text height.
-                                                // NOTE: the height is derived
-                                                // from the font size (not a
-                                                // pixel constant) so larger
-                                                // fonts in the future cannot
-                                                // outgrow the reserved space:
-                                                // 3 * 1.45em covers the default
-                                                // font's ~1.36em line height
-                                                // with margin (~56.6px at
-                                                // 13px) while staying well
-                                                // short of a 4th line.
-                                                Text {
-                                                    text: e.details == "" ? " " : e.details;
-                                                    color: #8f8fa0;
-                                                    font-size: 13px;
-                                                    height: 3 * self.font-size * 1.45;
+                                                    color: #ffffff;
+                                                    font-size: Math.max(18px, Math.min(24px, ep_card.width * 0.045));
+                                                    font-weight: 700;
+                                                    height: Math.min(episode_title_measure.preferred-height, episode_title_two_lines.preferred-height) + 1px;
+                                                    vertical-alignment: top;
                                                     wrap: word-wrap;
                                                     overflow: elide;
                                                 }
 
-                                                // Resume rail, always present so
-                                                // cards never differ by it: the
-                                                // fill is zero-width when there
-                                                // is nothing to resume.
-                                                Rectangle {
-                                                    height: 4px;
-                                                    border-radius: 2px;
-                                                    background: #2b2b35;
+                                                if e.date != "" || e.runtime != "": HorizontalLayout {
+                                                    height: 18px;
+                                                    spacing: e.date != "" && e.runtime != "" ? 12px : 0px;
+                                                    if e.date != "": HorizontalLayout {
+                                                        width: Math.min(e.runtime != "" ? (parent.width - 24px) * 0.6 : parent.width, episode_date.preferred-width + 23px);
+                                                        horizontal-stretch: 0;
+                                                        spacing: 7px;
+                                                        Path {
+                                                            width: 16px; height: 16px;
+                                                            viewbox-width: 24; viewbox-height: 24;
+                                                            commands: "M4 5H20V21H4Z M4 10H20 M8 2V7 M16 2V7 M8 13H9 M12 13H13 M16 13H17 M8 17H9 M12 17H13 M16 17H17";
+                                                            fill: transparent;
+                                                            stroke: #bac1d3;
+                                                            stroke-width: 1.5px;
+                                                        }
+                                                        episode_date := Text {
+                                                            text: e.date;
+                                                            color: #bac1d3;
+                                                            font-size: 13px;
+                                                            overflow: elide;
+                                                            vertical-alignment: center;
+                                                            horizontal-stretch: 1;
+                                                        }
+                                                    }
+                                                    if e.runtime != "": HorizontalLayout {
+                                                        width: Math.min(e.date != "" ? (parent.width - 24px) * 0.4 : parent.width, episode_runtime.preferred-width + 23px);
+                                                        horizontal-stretch: 0;
+                                                        spacing: 7px;
+                                                        IcSchedule {
+                                                            width: 16px; height: 16px;
+                                                            fill: #bac1d3;
+                                                        }
+                                                        episode_runtime := Text {
+                                                            text: e.runtime;
+                                                            color: #bac1d3;
+                                                            font-size: 13px;
+                                                            overflow: elide;
+                                                            vertical-alignment: center;
+                                                            horizontal-stretch: 1;
+                                                        }
+                                                    }
+                                                    Rectangle { horizontal-stretch: 1; }
+                                                }
 
+                                                if e.details != "": episode_synopsis := Text {
+                                                    text: e.details;
+                                                    color: #bac1d3;
+                                                    font-size: 14px;
+                                                    height: 2 * self.font-size * 1.4;
+                                                    vertical-alignment: top;
+                                                    wrap: word-wrap;
+                                                    overflow: elide;
+                                                }
+
+                                                // No empty rail or percentage for an unplayed
+                                                // episode, including a manual watched mark.
+                                                if e.progress > 0: episode_progress := HorizontalLayout {
+                                                    height: 20px;
+                                                    spacing: 10px;
                                                     Rectangle {
-                                                        x: 0;
-                                                        width: parent.width * (!e.watched ? e.progress : 0.0);
-                                                        height: 100%;
-                                                        border-radius: 2px;
-                                                        background: #8b5cf6;
+                                                        horizontal-stretch: 1;
+                                                        episode_progress_track := Rectangle {
+                                                            x: 0px;
+                                                            y: (parent.height - self.height) / 2;
+                                                            width: 100%; height: 7px;
+                                                            border-radius: 3.5px;
+                                                            background: #ffffff24;
+                                                            Rectangle {
+                                                                x: 0px;
+                                                                width: parent.width * Math.max(0, Math.min(1, e.progress));
+                                                                height: 100%;
+                                                                border-radius: 3.5px;
+                                                                background: @linear-gradient(90deg, #a855f7, #7c3aed);
+                                                            }
+                                                        }
+                                                    }
+                                                    episode_percentage := Text {
+                                                        text: @tr("{}%", Math.round(Math.max(0, Math.min(1, e.progress)) * 100));
+                                                        color: #ffffff;
+                                                        font-size: 14px;
+                                                        vertical-alignment: center;
                                                     }
                                                 }
                                             }

@@ -50,12 +50,14 @@ export struct EpisodeRow {
     has_thumb: bool,
     /// True once the episode was watched past the threshold (or to the end).
     watched: bool,
-    /// Fraction watched (0..1) for unwatched episodes with saved progress.
+    /// Playback fraction (0..1); watched playback shows 1, manual watched marks without a position show 0.
     progress: float,
     /// Short episode badge for grid cards (e.g. "EP 1").
     ep_no: string,
     /// Human-readable release date for grid cards (may be empty).
     date: string,
+    /// Episode-specific runtime supplied by the addon (may be empty).
+    runtime: string,
 }
 
 /// One installed addon shown in the Settings → Addons list.

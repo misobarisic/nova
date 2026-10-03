@@ -79,6 +79,7 @@ fn episode_row(i: usize) -> nova::EpisodeRow {
         progress: 0.0,
         ep_no: s(&format!("S1 E{i}")),
         date: s("January 1st, 2024, Extra Long Date Label"),
+        runtime: Default::default(),
     }
 }
 

@@ -1082,13 +1082,8 @@ impl Bridge {
         }
     }
 
-    /// Episode-card synopsis: the overview truncated to 150 chars total
-    /// *including* the resume suffix, which is appended afterwards.
-    /// Budgeting the truncation against the combined string (not the
-    /// overview alone) keeps the card text inside the 3-line window
-    /// the .slint side reserves at any column count: without this the
-    /// suffix chars could push a borderline 3-line synopsis onto a
-    /// 4th line that the card then clips mid-glyph.
+    /// Bound the episode overview and resume suffix together before the UI
+    /// wraps and elides them inside the card's two-line synopsis viewport.
     pub(super) fn episode_details(overview: Option<&str>, resume_suffix: &str) -> String {
         const EPISODE_SYNOPSIS_CHARS: usize = 150;
         let budget = EPISODE_SYNOPSIS_CHARS.saturating_sub(resume_suffix.chars().count());
@@ -1116,7 +1111,13 @@ impl Bridge {
         episode_id: &str,
     ) -> (bool, f32, String) {
         match map.get(&progress_map_key(series_id, episode_id)) {
-            Some(p) if p.watched => (true, 1.0f32, String::new()),
+            Some(p) if p.watched => (
+                true,
+                // A manual watched mark has no playback position. Keep its
+                // checkmark without inventing a completed playback rail.
+                if p.position_secs > 0.0 { 1.0 } else { 0.0 },
+                String::new(),
+            ),
             Some(p) if resumable_position(p.position_secs, p.duration_secs, p.watched) => (
                 false,
                 progress_fraction(p.position_secs, p.duration_secs),
@@ -1156,6 +1157,7 @@ impl Bridge {
             progress: f32,
             ep_no: SharedString,
             date: SharedString,
+            runtime: SharedString,
         }
         let seeds: Vec<RowSeed> = {
             let state = self.shared.lock().unwrap();
@@ -1182,13 +1184,11 @@ impl Bridge {
                         Self::episode_watch_state(&state.progress, &m.id, &v.id);
                     let label = episode_row_label(v);
                     // No checkmark prefix: watched state already shows on the
-                    // thumbnail disc overlay plus the dimmed title color.
+                    // artwork disc overlay.
                     let text = SharedString::from(label);
-                    // Grid cards show the date on its own line, so the
-                    // synopsis is the (truncated) overview only. The card
-                    // reserves exactly 3 lines (see detail.slint); this
-                    // Rust-side truncation keeps the text short so the
-                    // renderer ellipsis rarely has to do any work.
+                    // The artwork card keeps release metadata separate from
+                    // its two-line synopsis. Bound the supplied overview before
+                    // Slint elides it at the current card width.
                     let details = Self::episode_details(v.overview.as_deref(), &resume_suffix);
                     let date = v
                         .released
@@ -1207,6 +1207,15 @@ impl Bridge {
                         progress,
                         ep_no: SharedString::from(episode_badge(v)),
                         date: SharedString::from(date),
+                        // The SDK's optional Video runtime is preserved in
+                        // Video.extra; never substitute a series-wide average.
+                        runtime: SharedString::from(
+                            v.extra
+                                .get("runtime")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::trim)
+                                .unwrap_or_default(),
+                        ),
                     }
                 })
                 .collect()
@@ -1250,6 +1259,7 @@ impl Bridge {
                     progress: seed.progress,
                     ep_no: seed.ep_no,
                     date: seed.date,
+                    runtime: seed.runtime,
                 }
             })
             .collect()
