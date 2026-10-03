@@ -40,8 +40,10 @@ fn artwork_cards_contain_text_and_only_show_recorded_playback() {
         .into(),
     );
     app.window().show().unwrap();
+    // Keep every card footer visible below the taller search toolbar; the
+    // accessibility query excludes children clipped outside the viewport.
     for width in [320, 390, 620, 1280] {
-        app.window().set_size(slint::PhysicalSize::new(width, 1600));
+        app.window().set_size(slint::PhysicalSize::new(width, 2000));
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(400));
         let cards = elements(&app, "ep_card");
         assert_eq!(cards.len(), 4);

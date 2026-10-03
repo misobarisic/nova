@@ -90,6 +90,7 @@ impl Bridge {
     /// Completed buckets). Lightweight: no thumbnail re-queue.
     pub(super) fn refresh_library_progress_ui(&self) {
         self.update_library_badges();
+        self.refresh_detail_library_watched();
         self.rebuild_continue_list();
         self.rebuild_upcoming_list();
         self.apply_home_to_ui();

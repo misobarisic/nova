@@ -777,7 +777,10 @@ export component DiscoverPage {
     // Floor from Settings → Display (phones fit N across at 160px cards).
     in property <int> min_cols: 2;
     // Left inset reserved by the wide-layout navigation rail (0 on narrow).
-    property <length> rail_w: root.narrow ? 0px : NavMetrics.rail-width;
+    // Window width is supplied separately so responsive padding does not
+    // feed back into the page’s own intrinsic layout width.
+    in property <length> nav-viewport-width;
+    property <length> rail_w: root.narrow ? 0px : NavMetrics.width-for(root.nav-viewport-width);
     // The active ScrollView reports its measured width; it already clears
     // page padding, the rail, cutouts and scroll chrome.
     property <length> grid-width: Math.max(1px, root.sv_vw);
@@ -1212,7 +1215,7 @@ export component DiscoverPage {
         height: 100%;
         padding-left: 18px + safe-left + root.rail_w;
         padding-right: 18px + safe-right;
-        padding-bottom: 18px;
+        padding-bottom: root.narrow ? 0px : 18px;
         padding-top: 18px + safe-top;
         spacing: 12px;
 
@@ -1444,7 +1447,7 @@ export component DiscoverPage {
         height: 100%;
         padding-left: 18px + safe-left + root.rail_w;
         padding-right: 18px + safe-right;
-        padding-bottom: 18px;
+        padding-bottom: root.narrow ? 0px : 18px;
         padding-top: 18px + safe-top;
         spacing: 12px;
 
@@ -1641,6 +1644,7 @@ export component DiscoverPage {
     // footprint reserves — both columns widen their left padding by `rail_w`,
     // so no page content lands under it.
     if !root.narrow: rail := SideNav {
+        viewport-width: root.nav-viewport-width;
         active: 1;
         safe-top: root.safe-top;
         safe-left: root.safe-left;

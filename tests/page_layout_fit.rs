@@ -89,7 +89,15 @@ fn text_fits(failures: &RefCell<Vec<String>>, container: &ElementHandle, case: &
 
 fn content_bounds(width: u32, height: u32, left: f32, right: f32) -> Bounds {
     Bounds {
-        left: 18.0 + left + if width >= 700 { 76.0 } else { 0.0 },
+        left: 18.0
+            + left
+            + if width >= 1200 {
+                240.0
+            } else if width >= 700 {
+                76.0
+            } else {
+                0.0
+            },
         top: 18.0,
         right: width as f32 - 18.0 - right,
         bottom: height as f32 - 18.0,

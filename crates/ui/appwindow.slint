@@ -159,6 +159,7 @@ export component AppWindow inherits Window {
     in-out property <bool> show_library: false;
     in-out property <bool> show_home: true;
     in-out property <bool> in_library: false;
+    in-out property <bool> detail_library_watched: false;
     in-out property <string> library_empty_hint: @tr("Your library is empty — open any movie, series or anime and press \"+ Add to library\".");
     // --- Home (landing page, Continue Watching) ------------------------
     in-out property <[ContinueRow]> home_continue: [];
@@ -544,6 +545,7 @@ export component AppWindow inherits Window {
     callback library_watch_action(int, int);
     callback library_status_action(int, int);
     callback add_to_library();
+    callback detail_library_action(int);
     callback remove_library_item(int);
     callback library_item_picked(int);
     // System back on the root screen: background the app (Android only;
@@ -659,6 +661,7 @@ export component AppWindow inherits Window {
 
         // ---- Discover page --------------------------------------------
     if !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_home: DiscoverPage {
+        nav-viewport-width: root.width;
         catalog <=> root.catalog;
         addon_names <=> root.addon_names;
         type_names <=> root.type_names;
@@ -733,6 +736,7 @@ export component AppWindow inherits Window {
 
     // ---- Home page (landing page, Continue Watching) --------------------
     if root.show_home && !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings: HomePage {
+        nav-viewport-width: root.width;
         continue_rows <=> root.home_continue;
         upcoming_rows <=> root.home_upcoming;
         cal_cells <=> root.home_cal_cells;
@@ -885,6 +889,8 @@ export component AppWindow inherits Window {
         }
         episodes_back => { root.episodes_back(); }
         add_to_library => { root.add_to_library(); }
+        library_watched: root.detail_library_watched;
+        library_action(a) => { root.detail_library_action(a); }
         open_categories => { root.categories_modal = true; }
         season_picked(i) => { root.season_picked(i); }
         episode_picked(i) => { root.episode_picked(i); }
@@ -917,6 +923,7 @@ export component AppWindow inherits Window {
 
     // ---- Library page ---------------------------------------------------
     if root.show_library && !root.player_open && !root.modal_visible && !root.show_settings && !root.show_home: LibraryPage {
+        nav-viewport-width: root.width;
         library <=> root.library;
         category_rows <=> root.category_rows;
         category_names <=> root.library_category_names;
@@ -953,6 +960,7 @@ export component AppWindow inherits Window {
 
     // ---- Settings page --------------------------------------------------
     if root.show_settings && !root.player_open && !root.modal_visible && !root.show_home: SettingsPage {
+        nav-viewport-width: root.width;
         tracking_accounts: root.tracking_accounts;
         tracking_notice: root.tracking_notice;
         tracking_connect(a0,a1,a2) => {root.tracking_connect(a0,a1,a2);}

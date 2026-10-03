@@ -171,6 +171,7 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
         );
         app.set_show_settings(false);
         app.set_modal_visible(true);
+        app.set_in_library(true);
         app.set_selected_title(s("An anime title"));
         app.set_tracking_links(
             Rc::new(VecModel::from(vec![nova::TrackingLinkRow {

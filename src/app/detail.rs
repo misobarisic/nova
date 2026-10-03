@@ -162,6 +162,7 @@ impl Bridge {
         }
 
         app.set_in_library(self.library_contains(&preview.id));
+        self.refresh_detail_library_watched();
         if self.library_contains(&preview.id) {
             self.sync_modal_category_flags();
         }

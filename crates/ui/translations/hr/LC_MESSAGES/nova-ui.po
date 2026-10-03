@@ -1387,3 +1387,21 @@ msgstr "{} / {}"
 
 msgid "Library"
 msgstr "Biblioteka"
+
+msgid "Search episodes…"
+msgstr "Pretražite epizode…"
+
+msgid "Found: {}"
+msgstr "Pronađeno: {}"
+
+msgid "No matching episodes"
+msgstr "Nema pronađenih epizoda"
+
+msgid "Try a different title or episode number."
+msgstr "Pokušajte s drugim naslovom ili brojem epizode."
+
+msgid "Search episodes"
+msgstr "Pretražite epizode"
+
+msgid "Hide episode search"
+msgstr "Sakrijte pretraživanje epizoda"

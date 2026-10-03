@@ -1,4 +1,4 @@
-//! Icon feedback on both responsive navbars: highlight snaps, actual
+//! Three responsive navigation layouts and their icon feedback: highlight snaps, actual
 //! clicks, interrupted pops, rebuilds and independent motion switches.
 
 use i_slint_backend_testing::ElementHandle;
@@ -89,7 +89,10 @@ fn click(app: &nova::AppWindow, wide: bool, index: usize) {
         ][index];
         ElementHandle::find_by_element_id(app, id).next().unwrap()
     };
-    let position = center(&item);
+    click_at(app, center(&item));
+}
+
+fn click_at(app: &nova::AppWindow, position: LogicalPosition) {
     for event in [
         slint::platform::WindowEvent::PointerPressed {
             position,
@@ -231,6 +234,10 @@ fn nav_icons_pop_while_highlights_snap() {
                     .unwrap();
                 assert!(panel.absolute_position().x.abs() < 0.5);
                 assert!((panel.size().width - width as f32).abs() < 0.5);
+                assert!(
+                    (panel.absolute_position().y + panel.size().height - 900.0).abs() < 0.5,
+                    "bottom bar must reach the window edge on page {page}"
+                );
                 for name in ["home", "discover", "library", "settings"] {
                     let label = ElementHandle::find_by_element_id(
                         &app,
@@ -245,6 +252,75 @@ fn nav_icons_pop_while_highlights_snap() {
                     assert!(p.y + size.height <= panel.absolute_position().y + 76.0);
                 }
             }
+        }
+    }
+    // Exercise both breakpoint boundaries in both directions, on every host.
+    // Wide labels are clickable, and selection stays aligned with the icons
+    // rather than moving to the middle of the expanded tile.
+    for width in [699, 700, 1199, 1200, 1600, 1199, 699] {
+        app.window().set_size(slint::PhysicalSize::new(width, 900));
+        for scroll_page in [false, true] {
+            app.set_discover_scroll_page(scroll_page);
+            for page in 0..4 {
+                switch(&app, page);
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+                let labels =
+                    ElementHandle::find_by_element_id(&app, "SideItem::label").collect::<Vec<_>>();
+                if width < 700 {
+                    assert!(labels.is_empty());
+                    assert!(
+                        ElementHandle::find_by_element_type_name(&app, "SideNav")
+                            .next()
+                            .is_none()
+                    );
+                    assert!(
+                        ElementHandle::find_by_element_type_name(&app, "BottomNav")
+                            .next()
+                            .is_some()
+                    );
+                    continue;
+                }
+                assert!(
+                    ElementHandle::find_by_element_type_name(&app, "BottomNav")
+                        .next()
+                        .is_none()
+                );
+                let panel = ElementHandle::find_by_element_id(&app, "SideNav::panel")
+                    .next()
+                    .unwrap();
+                assert_eq!(panel.absolute_position(), LogicalPosition::new(12.0, 28.0));
+                assert_eq!(panel.size().width, if width >= 1200 { 228.0 } else { 64.0 });
+                let highlight = marker(&app, true);
+                assert_eq!(
+                    highlight.size(),
+                    slint::LogicalSize::new(if width >= 1200 { 204.0 } else { 48.0 }, 48.0)
+                );
+                assert!(highlight.absolute_position().x >= panel.absolute_position().x);
+                assert!(
+                    highlight.absolute_position().x + highlight.size().width
+                        <= panel.absolute_position().x + panel.size().width
+                );
+                assert!(
+                    (center(&highlight).y - center(&icon(&app, true, page as usize)).y).abs() < 0.5
+                );
+                assert_eq!(labels.len(), if width >= 1200 { 4 } else { 0 });
+                for label in &labels {
+                    assert!(label.absolute_position().x > center(&icon(&app, true, 0)).x);
+                    assert!(
+                        label.absolute_position().x + label.size().width
+                            <= panel.absolute_position().x + panel.size().width
+                    );
+                }
+            }
+        }
+        if width >= 1200 {
+            switch(&app, 0);
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+            let label = ElementHandle::find_by_element_id(&app, "SideItem::label")
+                .nth(3)
+                .unwrap();
+            click_at(&app, center(&label));
+            assert!(app.get_show_settings(), "the text area navigates too");
         }
     }
 }

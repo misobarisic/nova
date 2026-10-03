@@ -1,20 +1,26 @@
-import { IcHome, IcSearch, IcVideoLibrary, IcSettingsGear } from "icons.slint";
+import { IcHome, IcExplore, IcVideoLibrary, IcSettingsGear } from "icons.slint";
 import { Anim } from "anim.slint";
 
-// Left navigation rail for wide layouts: an icon-only column with a selected
-// accent circle. It shares selection state and icon feedback with the labelled
-// phone bar. Hosted by each page itself, so page + rail stay one unit and
-// the pages keep their own insets; pages reserve `NavMetrics.rail-width` of extra left
-// padding (0 on narrow) and anchor the rail to the window edge.
+// Left navigation has a compact icon rail and a labelled wide sidebar.
+// It shares selection state and icon feedback with the phone bar. Hosted by
+// each page itself, so page + rail stay one unit and the pages keep their own
+// insets; NavMetrics.width-for() reserves the matching footprint (0 on
+// narrow pages), keeping content clear of either sidebar.
 //
 // Wide subpages keep the rail (unlike the narrow bottom bar, which hides on
 // the Home/Settings subpages): on a desktop the rail is window chrome, not
 // page chrome. The detail modal and the player cover it, as they always did.
 //
-// Rail geometry, shared with the pages that make room for it: the 64px
-// panel plus the gap before the page's own content padding.
+// Shared geometry prevents the sidebar and page content from choosing
+// different widths when the window crosses the label breakpoint.
 export global NavMetrics {
     out property <length> rail-width: 76px;
+    out property <length> labelled-width: 240px;
+    out property <length> labels-breakpoint: 1200px;
+
+    public pure function width-for(viewport-width: length) -> length {
+        return viewport-width >= root.labels-breakpoint ? root.labelled-width : root.rail-width;
+    }
 }
 
 // Navigation state shared by the two bars (SideNav here, BottomNav on
@@ -66,6 +72,7 @@ component SideItem inherits Rectangle {
     // 0 Home, 1 Discover, 2 Library, 3 Settings (same order as BottomNav).
     in property <int> kind: 0;
     in property <bool> active: false;
+    in property <bool> expanded: false;
     // Keyboard cursor (6-button nav, zone 0). Drawn as a ring on the icon
     // circle instead of the bottom bar's "▶" KbMark: that marker is a
     // horizontal-layout row and would consume a row of the rail's height.
@@ -77,45 +84,58 @@ component SideItem inherits Rectangle {
     height: 56px;
 
     // Only the hover fill and keyboard ring live here; SideNav owns the
-    // shared, instantly positioned accent circle.
+    // shared highlight. Labelled rows make the entire tile clickable.
     Rectangle {
-        width: 48px;
+        width: root.expanded ? parent.width - 24px : 48px;
         height: 48px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: (root.active || root.kb_focused) ? transparent : (item_touch.has-hover ? #2b2b35 : transparent);
-        border-radius: 24px;
+        border-radius: root.expanded ? 12px : 24px;
         border-width: root.kb_focused ? 2px : 0px;
         border-color: #ffffff;
 
         if root.kind == 0: icon_home := IcHome {
-            x: (parent.width - self.width) / 2;
+            x: root.expanded ? 24px - self.width / 2 : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 24px + root.pop * 2px;
             height: self.width;
             fill: root.active ? #ffffff : #8a8a9a;
         }
-        if root.kind == 1: icon_discover := IcSearch {
-            x: (parent.width - self.width) / 2;
+        if root.kind == 1: icon_discover := IcExplore {
+            x: root.expanded ? 24px - self.width / 2 : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 24px + root.pop * 2px;
             height: self.width;
             fill: root.active ? #ffffff : #8a8a9a;
         }
         if root.kind == 2: icon_library := IcVideoLibrary {
-            x: (parent.width - self.width) / 2;
+            x: root.expanded ? 24px - self.width / 2 : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 24px + root.pop * 2px;
             height: self.width;
             fill: root.active ? #ffffff : #8a8a9a;
         }
         if root.kind == 3: icon_settings := IcSettingsGear {
-            x: (parent.width - self.width) / 2;
+            x: root.expanded ? 24px - self.width / 2 : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 24px + root.pop * 2px;
             height: self.width;
             fill: root.active ? #ffffff : #8a8a9a;
         }
+    }
+
+    if root.expanded: label := Text {
+        x: 64px;
+        y: (parent.height - self.height) / 2;
+        width: parent.width - self.x - 24px;
+        height: 24px;
+        text: root.kind == 0 ? @tr("Home") : root.kind == 1 ? @tr("Discover") : root.kind == 2 ? @tr("Library") : @tr("Settings");
+        color: root.active ? #ffffff : #a2a2b4;
+        font-size: 16px;
+        font-weight: root.active ? 600 : 400;
+        vertical-alignment: center;
+        overflow: elide;
     }
 
     item_touch := TouchArea {
@@ -127,6 +147,9 @@ component SideItem inherits Rectangle {
 export component SideNav inherits Rectangle {
     // Active section: 0 Home, 1 Discover, 2 Library, 3 Settings.
     in property <int> active: 0;
+    // Use the hosting page's width, not this component's own footprint.
+    in property <length> viewport-width;
+    private property <bool> expanded: root.viewport-width >= NavMetrics.labels-breakpoint;
     // Window insets: the rail is anchored to the window's left edge, so it
     // clears the status bar / a landscape cutout itself. 0 on desktop.
     in property <length> safe-top: 0px;
@@ -143,8 +166,8 @@ export component SideNav inherits Rectangle {
 
     motion := NavFeedback { active: root.active; }
 
-    // Fixed footprint: the hosting page reserves exactly this much on its
-    // left (its padding-left grows by `NavMetrics.rail-width`). Safe area is
+    // Responsive footprint: the hosting page reserves this same width on its
+    // left through NavMetrics.width-for(). Safe area is
     // added here only — the page's own `safe-left` padding then reads as the
     // gap between rail and content.
     //
@@ -153,7 +176,7 @@ export component SideNav inherits Rectangle {
     // would float the rail into the middle of the window.
     x: 0px;
     y: 0px;
-    width: NavMetrics.rail-width + root.safe-left;
+    width: NavMetrics.width-for(root.viewport-width) + root.safe-left;
     height: 100%;
 
     // Eats stray taps in the rail strip (the hosting page's left padding):
@@ -169,16 +192,16 @@ export component SideNav inherits Rectangle {
     // — spanning from the window's left edge to its bottom edge, with the
     // four items listed top to bottom just under the top. Flush against the
     // window edges a rounded corner would only read as a bug.
-    Rectangle {
+    panel := Rectangle {
         x: root.safe-left;
         y: root.safe-top;
-        width: 64px;
+        width: root.width - root.safe-left - 12px;
         height: root.height - root.safe-top - root.safe-bottom;
-        background: #17171d;
+        background: #101019;
         border-width: 1px;
         border-color: #2a2a33;
 
-        // The one accent circle, shared by all four items: it is positioned by
+        // The selected tile (a circle in compact mode) is positioned by
         // the item index (56px item pitch, 8px panel padding), with no glide.
         // Declared before the item column, which draws the icons over it.
         marker_dot := Rectangle {
@@ -186,10 +209,12 @@ export component SideNav inherits Rectangle {
             // Centred inside the item slot, like the item's own 48px ring:
             // the 4px is half of the 8px the 48px circle leaves in a 56px item.
             y: 8px + (56px - self.height) / 2 + root.active * 56px;
-            width: 48px;
+            width: root.expanded ? parent.width - 24px : 48px;
             height: 48px;
-            border-radius: 24px;
-            background: #8b5cf6;
+            border-radius: root.expanded ? 12px : 24px;
+            background: root.expanded ? @linear-gradient(110deg, #713dd0, #48278c) : #8b5cf6;
+            border-width: root.expanded ? 1px : 0px;
+            border-color: #a873ff40;
         }
 
         VerticalLayout {
@@ -201,6 +226,7 @@ export component SideNav inherits Rectangle {
             padding-bottom: 8px;
 
             SideItem {
+                expanded: root.expanded;
                 kind: 0;
                 active: root.active == 0;
                 pop: root.active == 0 ? motion.pulse : 0.0;
@@ -209,6 +235,7 @@ export component SideNav inherits Rectangle {
             }
 
             SideItem {
+                expanded: root.expanded;
                 kind: 1;
                 active: root.active == 1;
                 pop: root.active == 1 ? motion.pulse : 0.0;
@@ -217,6 +244,7 @@ export component SideNav inherits Rectangle {
             }
 
             SideItem {
+                expanded: root.expanded;
                 kind: 2;
                 active: root.active == 2;
                 pop: root.active == 2 ? motion.pulse : 0.0;
@@ -225,6 +253,7 @@ export component SideNav inherits Rectangle {
             }
 
             SideItem {
+                expanded: root.expanded;
                 kind: 3;
                 active: root.active == 3;
                 pop: root.active == 3 ? motion.pulse : 0.0;

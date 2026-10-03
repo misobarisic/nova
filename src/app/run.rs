@@ -431,6 +431,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_add_to_library(move || b.toggle_current_in_library());
 
     let b = bridge.clone();
+    app.on_detail_library_action(move |action| b.detail_library_action(action));
+
+    let b = bridge.clone();
     app.on_remove_library_item(move |i| b.remove_library_at(i as usize));
 
     let b = bridge.clone();

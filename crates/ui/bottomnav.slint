@@ -35,7 +35,8 @@ export component BottomNav inherits Rectangle {
         width: root.width + root.page-inset-left + root.page-inset-right;
         height: root.height;
         background: #11121c;
-        border-radius: 24px;
+        // Square corners keep the full-width bar flush against screen edges.
+        border-radius: 0px;
         border-width: 1px;
         border-color: #393047;
         drop-shadow-blur: 16px;

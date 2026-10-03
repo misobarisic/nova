@@ -992,7 +992,10 @@ export component SettingsPage {
     // tab bar. 0 on desktop/web.
     in property <length> safe-bottom: 0px;
     // Left inset reserved by the wide-layout navigation rail (0 on narrow).
-    property <length> rail_w: root.narrow ? 0px : NavMetrics.rail-width;
+    // Window width is supplied separately so responsive padding does not
+    // feed back into the page’s own intrinsic layout width.
+    in property <length> nav-viewport-width;
+    property <length> rail_w: root.narrow ? 0px : NavMetrics.width-for(root.nav-viewport-width);
     // Keyboard modality (bound to AppWindow, see DiscoverPage).
     in-out property <bool> kb_active;
 
@@ -1998,7 +2001,7 @@ export component SettingsPage {
             height: 100%;
             padding-left: 18px + safe-left + root.rail_w;
             padding-right: 18px + safe-right;
-            padding-bottom: 18px;
+            padding-bottom: root.narrow && !root.sub_open ? 0px : 18px;
             padding-top: 18px + safe-top;
             spacing: 12px;
 
@@ -5138,6 +5141,7 @@ export component SettingsPage {
         // column widens its left padding by `rail_w`, so no page content
         // lands under it.
         if !root.narrow: rail := SideNav {
+            viewport-width: root.nav-viewport-width;
             active: 3;
             safe-top: root.safe-top;
             safe-left: root.safe-left;

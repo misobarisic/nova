@@ -1,108 +1,192 @@
-//! Detail top bar regression (headless): it must be icon-only — no
-//! "Add to library"/"Remove from library"/"Categories" text buttons — and
-//! stay within the viewport horizontally at phone width.
+//! Detail library controls: save state in the hero, saved-only sync/options,
+//! and the same watched/status/removal actions as a library card.
 
-use i_slint_backend_testing::{ElementHandle, ElementQuery};
-use slint::{ComponentHandle, SharedString, VecModel};
-use std::cell::RefCell;
-use std::rc::Rc;
+use i_slint_backend_testing::ElementHandle;
+use slint::{ComponentHandle, LogicalPosition, VecModel};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
-fn s(v: &str) -> SharedString {
-    SharedString::from(v)
+fn settle() {
+    for _ in 0..10 {
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+    }
 }
 
-fn after(ms: u64, body: impl FnOnce() + 'static) {
-    slint::Timer::single_shot(std::time::Duration::from_millis(ms), body);
+fn element(app: &nova::AppWindow, id: &str) -> ElementHandle {
+    ElementHandle::find_by_element_id(app, id).next().expect(id)
 }
 
-fn max_right_edge(app: &nova::AppWindow) -> f32 {
-    ElementQuery::from_root(app)
-        .match_predicate(|_: &ElementHandle| true)
-        .find_all()
-        .into_iter()
-        .map(|e| e.absolute_position().x + e.size().width)
-        .fold(0.0, f32::max)
+fn click(app: &nova::AppWindow, item: ElementHandle) {
+    let p = item.absolute_position();
+    let s = item.size();
+    let position = LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0);
+    for event in [
+        slint::platform::WindowEvent::PointerPressed {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        },
+        slint::platform::WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        },
+    ] {
+        app.window().dispatch_event(event);
+    }
+    settle();
 }
 
-/// Text `Text` elements currently laid out (non-zero size).
-fn visible_texts(app: &nova::AppWindow) -> Vec<String> {
-    ElementQuery::from_root(app)
-        .match_type_name("Text")
-        .find_all()
-        .into_iter()
-        .filter(|e| e.size().width > 0.0 && e.size().height > 0.0)
-        .filter_map(|e| e.accessible_label().map(|l| l.to_string()))
-        .collect()
-}
-
-fn show_series(app: &nova::AppWindow) {
-    app.set_show_settings(false);
-    app.set_show_home(false);
-    app.set_modal_visible(true);
-    app.set_detail_tab(0);
-    app.set_selected_title(s("A Series Title"));
-    app.set_selected_description(s(""));
-    app.set_streams(Rc::new(VecModel::from(Vec::new())).into());
-    app.set_in_library(true);
-    app.set_category_rows(
-        Rc::new(VecModel::from(vec![nova::CategoryRow { name: s("Anime") }])).into(),
+fn click_label(app: &nova::AppWindow, label: &str) {
+    click(
+        app,
+        ElementHandle::find_by_accessible_label(app, label)
+            .last()
+            .expect(label),
     );
-    app.set_selected_category_count(1);
 }
 
 #[test]
-fn detail_top_bar_is_icon_only_and_fits() {
-    i_slint_backend_testing::init_integration_test_with_system_time();
-
+fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
+    i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = nova::AppWindow::new().unwrap();
-    app.window().set_size(slint::PhysicalSize::new(360, 800));
-    app.window().show().unwrap();
-    show_series(&app);
-
-    let failures: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
-    let app1 = app.as_weak();
-    let failures1 = failures.clone();
-    after(400, move || {
-        let app = app1.upgrade().unwrap();
-
-        let labels = visible_texts(&app).join(" | ");
-        for banned in [
-            "Add to library",
-            "Remove from library",
-            "Categories",
-            "Back",
-        ] {
-            if labels.contains(banned) {
-                failures1
-                    .borrow_mut()
-                    .push(format!("top bar still shows text button {banned:?}"));
-            }
-        }
-
-        // In library + categories present: back, library, categories.
-        let buttons = ElementHandle::find_by_element_type_name(&app, "TopIconButton").count();
-        if buttons < 3 {
-            failures1
-                .borrow_mut()
-                .push(format!("expected 3 icon buttons, found {buttons}"));
-        }
-
-        if max_right_edge(&app) > 361.0 {
-            failures1.borrow_mut().push(format!(
-                "top bar overflows 360px (edge {})",
-                max_right_edge(&app)
-            ));
-        }
-
-        slint::quit_event_loop().unwrap();
+    app.set_animations(false);
+    app.set_anim_transitions(false);
+    app.set_show_home(false);
+    app.set_modal_visible(true);
+    app.set_selected_title("A series title".into());
+    app.set_season_names(Rc::new(VecModel::from(vec!["Season 1".into()])).into());
+    app.set_category_rows(
+        Rc::new(VecModel::from(vec![nova::CategoryRow {
+            name: "Anime".into(),
+        }]))
+        .into(),
+    );
+    let weak = app.as_weak();
+    app.on_add_to_library(move || {
+        let app = weak.upgrade().unwrap();
+        app.set_in_library(!app.get_in_library());
     });
+    let tracking = Rc::new(RefCell::new(0));
+    let recorded_tracking = tracking.clone();
+    app.on_tracking_show(move || *recorded_tracking.borrow_mut() += 1);
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded_actions = actions.clone();
+    let weak = app.as_weak();
+    app.on_detail_library_action(move |action| {
+        recorded_actions.borrow_mut().push(action);
+        if action == 4 {
+            weak.upgrade().unwrap().set_in_library(false);
+        }
+    });
+    app.window().set_size(slint::PhysicalSize::new(390, 1600));
+    app.window().show().unwrap();
+    settle();
 
-    slint::run_event_loop().unwrap();
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(&app, "TopIconButton").count(),
+        1
+    );
+    assert_eq!(
+        element(&app, "DetailPage::library_state_button")
+            .accessible_label()
+            .as_deref(),
+        Some("Add to library")
+    );
+    // The sole save control lives beside Watch Now, not in the top bar.
+    click(&app, element(&app, "DetailPage::library_hero"));
+    assert!(app.get_in_library());
+    assert_eq!(
+        element(&app, "DetailPage::library_state_button")
+            .accessible_label()
+            .as_deref(),
+        Some("Remove from library")
+    );
 
-    let failures = failures.borrow();
+    for width in [320, 390, 900, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 1600));
+        settle();
+        assert_eq!(
+            ElementHandle::find_by_element_type_name(&app, "TopIconButton").count(),
+            3
+        );
+        let sync = element(&app, "DetailPage::tracking_button");
+        let options = element(&app, "DetailPage::library_options_button");
+        assert!((sync.absolute_position().y - options.absolute_position().y).abs() < 0.5);
+        assert!(sync.absolute_position().x + sync.size().width <= options.absolute_position().x);
+        assert!(options.absolute_position().x + options.size().width <= width as f32);
+    }
+    app.window().set_size(slint::PhysicalSize::new(390, 1600));
+    settle();
+    click(&app, element(&app, "DetailPage::tracking_button"));
+    assert_eq!(*tracking.borrow(), 1);
+
+    for (label, action) in [
+        ("Mark series as watched", 0),
+        ("Mark as On Hold", 1),
+        ("Mark as Dropped", 2),
+        ("Back to automatic", 3),
+    ] {
+        click(&app, element(&app, "DetailPage::library_options_button"));
+        click_label(&app, label);
+        assert_eq!(actions.borrow().last(), Some(&action));
+    }
+    app.set_detail_library_watched(true);
+    click(&app, element(&app, "DetailPage::library_options_button"));
     assert!(
-        failures.is_empty(),
-        "detail top bar failures:\n  {}",
-        failures.join("\n  ")
+        ElementHandle::find_by_accessible_label(&app, "Mark series as unwatched")
+            .next()
+            .is_some()
+    );
+    // Android Back dismisses the sheet without leaving details or taking an action.
+    app.set_system_back_request(app.get_system_back_request() + 1);
+    settle();
+    assert!(app.get_modal_visible());
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, "Mark series as unwatched")
+            .next()
+            .is_none()
+    );
+    assert_eq!(actions.borrow().len(), 4);
+
+    click(&app, element(&app, "DetailPage::library_options_button"));
+    click_label(&app, "Categories");
+    assert!(app.get_categories_modal());
+    app.set_categories_modal(false);
+    settle();
+    click(&app, element(&app, "DetailPage::library_options_button"));
+    click_label(&app, "Remove from library");
+    assert_eq!(actions.borrow().last(), Some(&4));
+    assert!(!app.get_in_library());
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(&app, "TopIconButton").count(),
+        1
+    );
+    assert_eq!(app.get_detail_kb_top(), 0);
+
+    // Hidden top-right controls are skipped by directional navigation.
+    app.set_detail_kb_zone(0);
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::RightArrow.into(),
+        });
+    settle();
+    assert_eq!(app.get_detail_kb_top(), 0);
+
+    // Movies also need an add control when no episode Watch Now action exists.
+    app.set_season_names(Default::default());
+    settle();
+    assert_eq!(
+        element(&app, "DetailPage::library_state_button")
+            .accessible_label()
+            .as_deref(),
+        Some("Add to library")
+    );
+    app.set_detail_kb_zone(2);
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Return.into(),
+        });
+    settle();
+    assert!(
+        app.get_in_library(),
+        "movies retain keyboard access to saving"
     );
 }

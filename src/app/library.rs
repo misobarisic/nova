@@ -91,6 +91,13 @@ impl Bridge {
     /// released episodes — unaired ones stay untouched (they surface on
     /// Home → Upcoming instead).
     pub(super) fn library_watch_action(&self, index: usize, action: i32) {
+        let view = self.current_library_view();
+        if let Some(entry) = view.get(index) {
+            self.library_entry_watch_action(entry, action);
+        }
+    }
+
+    fn library_entry_watch_action(&self, entry: &LibraryEntry, action: i32) {
         let target = match action {
             1 => true,
             2 => false,
@@ -98,11 +105,7 @@ impl Bridge {
         };
         let today = today_days();
         let (series_id, episode_ids) = {
-            let view = self.current_library_view();
-            let e = match view.get(index) {
-                Some(e) => e,
-                None => return,
-            };
+            let e = entry;
             let episodes = read_episodes_cache_for(&e.type_, &e.id).unwrap_or_default();
             let ids = if target {
                 episodes
@@ -132,6 +135,13 @@ impl Bridge {
     /// to automatic, 1 pin On Hold, 2 pin Dropped. Pins override the
     /// derived bucket (Plan to Watch / Watching / Completed).
     pub(super) fn library_status_action(&self, index: usize, status: i32) {
+        let view = self.current_library_view();
+        if let Some(entry) = view.get(index) {
+            self.library_entry_status_action(&entry.id, status);
+        }
+    }
+
+    fn library_entry_status_action(&self, entry_id: &str, status: i32) {
         let watch_status = match status {
             1 => WatchStatus::OnHold,
             2 => WatchStatus::Dropped,
@@ -139,11 +149,6 @@ impl Bridge {
             _ => return,
         };
         let changed = {
-            let view = self.current_library_view();
-            let entry_id = match view.get(index) {
-                Some(e) => e.id.clone(),
-                None => return,
-            };
             let mut state = self.shared.lock().unwrap();
             match state.entries.iter_mut().find(|e| e.id == entry_id) {
                 Some(e) if e.watch_status != watch_status => {
@@ -156,6 +161,49 @@ impl Bridge {
         if changed {
             self.persist_library();
             self.apply_library_to_ui();
+        }
+    }
+
+    /// Detail actions resolve the saved identity directly: a library filter
+    /// may hide this entry or change after its status is edited.
+    /// Actions: 0 toggle watched, 1 On Hold, 2 Dropped, 3 automatic, 4 remove.
+    pub(super) fn detail_library_action(&self, action: i32) {
+        let entry = {
+            let state = self.shared.lock().unwrap();
+            state
+                .modal_item
+                .as_ref()
+                .and_then(|item| state.entries.iter().find(|e| e.id == item.id).cloned())
+        };
+        let Some(entry) = entry else { return };
+        match action {
+            0 => {
+                let episodes = read_episodes_cache_for(&entry.type_, &entry.id).unwrap_or_default();
+                let watched = series_fully_watched(
+                    &entry.id,
+                    &episodes,
+                    &self.shared.lock().unwrap().progress,
+                );
+                self.library_entry_watch_action(&entry, if watched { 2 } else { 1 });
+            }
+            1 => self.library_entry_status_action(&entry.id, 1),
+            2 => self.library_entry_status_action(&entry.id, 2),
+            3 => self.library_entry_status_action(&entry.id, 0),
+            4 => self.toggle_current_in_library(),
+            _ => {}
+        }
+    }
+
+    pub(super) fn refresh_detail_library_watched(&self) {
+        let watched = {
+            let state = self.shared.lock().unwrap();
+            state.modal_item.as_ref().is_some_and(|item| {
+                let episodes = read_episodes_cache_for(&item.type_, &item.id).unwrap_or_default();
+                series_fully_watched(&item.id, &episodes, &state.progress)
+            })
+        };
+        if let Some(app) = self.app() {
+            app.set_detail_library_watched(watched);
         }
     }
 

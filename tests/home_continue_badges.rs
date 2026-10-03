@@ -29,9 +29,8 @@ fn continue_badges_mark_next_up_and_new_episode() {
     app.window().show().unwrap();
     app.set_show_home(true);
     app.set_home_view(0);
-    // New episode, resume, next up. Two rows so both landing cards stay in
-    // the viewport (the headless element query only returns viewport-visible
-    // delegates) — the third row is covered by the subpage phase.
+    // New episode, resume, next up. The 2.45-card phone carousel includes
+    // a partially visible third delegate; the subpage renders all three.
     let cont: Vec<nova::ContinueRow> = [2, 0, 1]
         .iter()
         .enumerate()
@@ -59,8 +58,8 @@ fn continue_badges_mark_next_up_and_new_episode() {
     let failures1 = failures.clone();
     after(300, move || {
         let app = app1.upgrade().unwrap();
-        // Landing shows the first two cards: the new-episode badge, and no
-        // next-up badge (its card is offscreen) and nothing on the resume.
+        // The landing renders two full cards and part of the third, so both
+        // badge delegates exist; the resume card still has no badge.
         let next_up = ElementHandle::find_by_element_type_name(&app, "NextUpBadge").count();
         let new_ep = ElementHandle::find_by_element_type_name(&app, "NewEpisodeBadge").count();
         fail(
@@ -70,8 +69,8 @@ fn continue_badges_mark_next_up_and_new_episode() {
         );
         fail(
             &failures1,
-            next_up == 0,
-            &format!("landing must not badge offscreen cards, found {next_up}"),
+            next_up == 1,
+            &format!("landing must badge its partially visible next-up card, found {next_up}"),
         );
 
         // Same cards, same badges in the subpage grid (the covered landing
@@ -85,8 +84,8 @@ fn continue_badges_mark_next_up_and_new_episode() {
             let new_ep = ElementHandle::find_by_element_type_name(&app, "NewEpisodeBadge").count();
             fail(
                 &failures2,
-                next_up == 1,
-                &format!("subpage must badge the next-up card, found {next_up}"),
+                next_up == 2,
+                &format!("landing and subpage must each badge the next-up card, found {next_up}"),
             );
             // Landing's own new-episode badge plus the subpage grid's.
             fail(

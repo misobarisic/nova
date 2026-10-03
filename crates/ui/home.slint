@@ -1128,7 +1128,10 @@ export component HomePage {
     property <length> max-card: 200px;
     in property <int> min_cols: 2;
     // Left inset reserved by the wide-layout navigation rail (0 on narrow).
-    property <length> rail_w: root.narrow ? 0px : NavMetrics.rail-width;
+    // Window width is supplied separately so responsive padding does not
+    // feed back into the page’s own intrinsic layout width.
+    in property <length> nav-viewport-width;
+    property <length> rail_w: root.narrow ? 0px : NavMetrics.width-for(root.nav-viewport-width);
     // Use the measured scroll viewport so cutouts and scroll chrome cannot
     // leave the last column wider than the space it actually occupies.
     property <length> grid_width: Math.max(1px, sub_scroll.visible-width);
@@ -1680,7 +1683,7 @@ export component HomePage {
             // captions, rows and subpage controls rather than the whole page.
             padding-left: root.rail_w + (root.narrow ? 0px : root.safe-left);
             padding-right: 0px;
-            padding-bottom: 18px;
+            padding-bottom: root.narrow && root.view == 0 ? 0px : 18px;
             padding-top: 0px;
             spacing: 12px;
 
@@ -2318,6 +2321,7 @@ export component HomePage {
         // column widens its left padding by `rail_w`, so no page content
         // lands under it.
         if !root.narrow: rail := SideNav {
+            viewport-width: root.nav-viewport-width;
             active: 0;
             safe-top: root.safe-top;
             safe-left: root.safe-left;

@@ -5,7 +5,7 @@ import { SearchField } from "searchfield.slint";
 import { CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem } from "types.slint";
 import { KbMark } from "kbnav.slint";
 import { MenuSheet } from "menusheet.slint";
-import { IcBookmark, IcBookmarkBorder, IcCheck, IcChevronLeft, IcChevronRight, IcTag, IcSchedule } from "icons.slint";
+import { IcBookmark, IcAdd, IcMoreHoriz, IcSync, IcCheck, IcChevronLeft, IcChevronRight, IcSchedule, IcSearch, IcClose } from "icons.slint";
 import { Anim } from "anim.slint";
 
 // One filter pill in the horizontal addon bar above the stream list.
@@ -139,35 +139,47 @@ component StreamFilterPill inherits Rectangle {
     }
 }
 
-// Small round chevron button for the Episodes tab pager.
+// Chevron button shared by compact stream controls and touch-sized episode paging.
 component PageButton inherits Rectangle {
     // 0 = previous (‹), 1 = next (›).
     in property <int> glyph: 0;
+    in property <bool> roomy: false;
+    in property <bool> minimal: false;
     in property <string> name: "";
     in property <bool> enabled: true;
     callback picked();
 
-    width: 28px;
-    height: 28px;
-    border-radius: 8px;
-    background: !root.enabled ? transparent : (pg_touch.has-hover ? #2b2b35 : #232330);
-    border-width: 1px;
+    width: root.roomy ? 44px : 28px;
+    height: self.width;
+    horizontal-stretch: 0;
+    border-radius: root.roomy ? 12px : 8px;
+    background: root.minimal || !root.enabled ? transparent : (pg_touch.has-hover ? #303149 : (root.roomy ? #22283a : #232330));
+    border-width: root.minimal ? 0px : 1px;
     border-color: root.enabled ? #33333d : #2a2a32;
     accessible-role: button;
     accessible-label: root.name;
 
+    // The icon stays visually small without shrinking its touch target.
+    if root.minimal: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 28px; height: 28px;
+        border-radius: 8px;
+        background: root.enabled && pg_touch.has-hover ? #ffffff0c : transparent;
+    }
+
     if root.glyph == 0: IcChevronLeft {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 18px;
-        height: 18px;
+        width: root.minimal ? 16px : 18px;
+        height: self.width;
         fill: root.enabled ? #e6e6ea : #55555f;
     }
     if root.glyph == 1: IcChevronRight {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 18px;
-        height: 18px;
+        width: root.minimal ? 16px : 18px;
+        height: self.width;
         fill: root.enabled ? #e6e6ea : #55555f;
     }
 
@@ -183,24 +195,50 @@ component PageButton inherits Rectangle {
 // Pager buttons for the episode list: rendered both above and under the grid,
 // so a 200-episode season can be turned from either end without scrolling back
 // to the top.
-component EpisodePager inherits HorizontalLayout {
+component EpisodePager inherits Rectangle {
     in property <int> page: 0;
     in property <int> count: 1;
+    // Stream/filter hosts keep the compact chevrons. Episodes retain touch
+    // targets around small, unboxed arrows and a quiet page counter.
+    in property <bool> episode-style: false;
     callback picked(int);
 
-    spacing: 6px;
+    width: root.episode-style ? 152px : 62px;
+    height: root.episode-style ? 44px : 28px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    background: transparent;
 
-    PageButton {
-        glyph: 0;
-        name: @tr("Previous page");
-        enabled: root.page > 0;
-        picked => { root.picked(root.page - 1); }
-    }
-    PageButton {
-        glyph: 1;
-        name: @tr("Next page");
-        enabled: root.page + 1 < root.count;
-        picked => { root.picked(root.page + 1); }
+    HorizontalLayout {
+        spacing: root.episode-style ? 4px : 6px;
+        PageButton {
+            glyph: 0;
+            roomy: root.episode-style;
+            minimal: root.episode-style;
+            name: @tr("Previous page");
+            enabled: root.page > 0;
+            picked => { root.picked(root.page - 1); }
+        }
+        if root.episode-style: page_counter := Text {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            height: 44px;
+            text: @tr("{} / {}", root.page + 1, root.count);
+            accessible-label: @tr("Page {}/{}", root.page + 1, root.count);
+            color: #9ca6b8;
+            font-size: 13px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        PageButton {
+            glyph: 1;
+            roomy: root.episode-style;
+            minimal: root.episode-style;
+            name: @tr("Next page");
+            enabled: root.page + 1 < root.count;
+            picked => { root.picked(root.page + 1); }
+        }
     }
 }
 
@@ -668,6 +706,8 @@ export component DetailPage {
     in-out property <int> detail_tab: 0;
     in-out property <string> episode_filter: "";
     in-out property <bool> in_library: false;
+    in property <bool> library_watched: false;
+    private property <bool> hero_library_focused: false;
     in-out property <[CategoryRow]> category_rows: [];
     in-out property <int> selected_category_count: 0;
     in-out property <[StreamRow]> streams: [];
@@ -709,6 +749,7 @@ export component DetailPage {
     in property <int> system_back_request: 0;
     property <int> last_system_back_request: -1;
     property <bool> filter_focused: false;
+    private property <bool> episode_search_open: false;
     // Compact layout for narrow (portrait) windows.
     in property <bool> narrow;
     // Top system-bar inset (Android status bar): Window.safe-area-insets,
@@ -754,14 +795,14 @@ export component DetailPage {
     in property <bool> popup_open: false;
 
     // ---- 6-button keyboard nav (arrows + Enter + Backspace) ----
-    // Zones: 0 top bar, 1 tabs, 2 watch-now, 3 content. Content kind:
+    // Zones: 0 top bar, 1 tabs, 2 hero actions, 3 content. Content kind:
     // 0 none, 1 stream list, 2 episode picker (season/filter/grid).
     // Enter activates; Backspace steps back (episode streams -> list ->
     // modal). The filter field uses edit mode like Discover's search.
     // Bound to AppWindow (survives modal recreation): reopening the same
     // entry restores focus. kb_edit stays local (transient edit mode).
     in-out property <int> kb_zone: 0;
-    in-out property <int> kb_top: 0; // 0 back, 1 library, 2 categories
+    in-out property <int> kb_top: 0; // 0 back, 1 sync/Tracking, 2 library options
     in-out property <int> kb_tab: 0;
     in-out property <int> kb_ci: 2; // picker control: 0 season, 1 filter, 2 grid
     in-out property <int> kb_ep: 0;
@@ -784,44 +825,26 @@ export component DetailPage {
     }
 
     function det_top_visible(i: int) -> bool {
-        if (i == 0 || i == 1 || i == 3) {
-            return true;
-        }
-        return root.in_library && root.category_rows.length > 0;
+        return i == 0 || (root.in_library && (i == 1 || i == 2));
     }
 
     function det_top_fix() {
-        if (root.kb_top == 2 && !root.det_top_visible(2)) {
-            root.kb_top = 1;
-        }
+        if (!root.det_top_visible(root.kb_top)) { root.kb_top = 0; }
     }
 
     function det_top_right() {
-        if (root.kb_top == 0) {
-            root.kb_top = 1;
-        } else if (root.kb_top == 1) {
-            root.kb_top = root.det_top_visible(2) ? 2 : 3;
-        } else if (root.kb_top == 2) {root.kb_top=3;}
+        if (root.in_library) { root.kb_top = Math.min(2, root.kb_top + 1); }
     }
 
     function det_top_left() {
-        if (root.kb_top == 3) {root.kb_top=root.det_top_visible(2) ? 2 : 1;
-        } else if (root.kb_top == 2) {
-            root.kb_top = 1;
-        } else if (root.kb_top == 1) {
-            root.kb_top = 0;
-        }
+        root.kb_top = Math.max(0, root.kb_top - 1);
     }
 
     function det_zone_down() {
         if (root.kb_zone == 0) {
             root.kb_zone = 1;
         } else if (root.kb_zone == 1) {
-            if (root.has_episodes) {
-                root.kb_zone = 2;
-            } else if (root.det_content() != 0) {
-                root.kb_zone = 3;
-            }
+            root.kb_zone = 2;
         } else if (root.kb_zone == 2) {
             if (root.det_content() != 0) {
                 root.kb_zone = 3;
@@ -859,15 +882,9 @@ export component DetailPage {
                 root.kb_ci = 0;
                 root.kb_nudge(80px);
             } else if (root.det_content() == 2 && root.kb_ci == 0) {
-                if (root.has_episodes) {
-                    root.kb_zone = 2;
-                } else {
-                    root.kb_zone = 1;
-                }
-            } else if (root.has_episodes) {
                 root.kb_zone = 2;
             } else {
-                root.kb_zone = 1;
+                root.kb_zone = 2;
             }
         } else if (root.kb_zone == 2) {
             root.kb_zone = 1;
@@ -879,6 +896,8 @@ export component DetailPage {
     function kb_left() {
         if (root.kb_zone == 0) {
             root.det_top_left();
+        } else if (root.kb_zone == 2) {
+            root.hero_library_focused = false;
         } else if (root.kb_zone == 1) {
             root.kb_tab = root.kb_tab == 0 ? 3 : 0;
         } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 0) {
@@ -898,6 +917,8 @@ export component DetailPage {
     function kb_right() {
         if (root.kb_zone == 0) {
             root.det_top_right();
+        } else if (root.kb_zone == 2) {
+            root.hero_library_focused = true;
         } else if (root.kb_zone == 1) {
             root.kb_tab = root.kb_tab == 0 ? 3 : 0;
         } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 0) {
@@ -931,16 +952,16 @@ export component DetailPage {
         if (root.kb_zone == 0) {
             if (root.kb_top == 0) {
                 root.back();
-            } else if (root.kb_top == 1) {
-                root.add_to_library();
-            } else if (root.kb_top == 3) {root.tracking_show();
-            } else {
-                root.open_categories();
+            } else if (root.kb_top == 1 && root.in_library) {
+                root.tracking_show();
+            } else if (root.kb_top == 2 && root.in_library) {
+                root.menu_kind = 2;
             }
         } else if (root.kb_zone == 1) {
             root.detail_tab_picked(root.kb_tab);
         } else if (root.kb_zone == 2) {
-            root.watch_now();
+            if (root.hero_library_focused || !root.has_episodes) { root.add_to_library(); }
+            else { root.watch_now(); }
         } else {
             if (root.det_content() == 1) {
                 if (root.kb_s >= 0 && root.kb_s < root.stream_total) {
@@ -1047,9 +1068,9 @@ export component DetailPage {
         det_scroll.content-y = Math.max(min_y, Math.min(0px, v));
     }
 
-    function scroll_stream_list_to_top(list_y: length) {
-        // The final pager sits after up to 25 variable-height rows. Align the
-        // start of this stream list in the outer detail scroller after it is
+    function scroll_list_to_top(list_y: length) {
+        // The final pager sits after many variable-height rows. Align the
+        // start of the episode or stream list in the outer scroller after it is
         // used, so the next page begins at its first entry rather than at an
         // arbitrary offset left over from the bottom controls.
         let relative_y = list_y - det_scroll.absolute-position.y;
@@ -1090,7 +1111,10 @@ export component DetailPage {
     }
     changed episode_context => { root.det_top_fix(); }
     changed modal_episodes => { root.det_top_fix(); }
-    changed in_library => { root.det_top_fix(); }
+    changed in_library => {
+        root.det_top_fix();
+        if (!root.in_library && root.menu_kind == 2) { root.close_menu(); }
+    }
     changed category_rows => { root.det_top_fix(); }
     changed popup_open => {
         if (!root.popup_open) {
@@ -1101,6 +1125,7 @@ export component DetailPage {
     callback back();
     callback episodes_back();
     callback add_to_library();
+    callback library_action(int);
     callback open_categories();
     callback season_picked(int);
     callback episode_picked(int);
@@ -1123,7 +1148,7 @@ export component DetailPage {
     callback season_watch_action(int, int);
 
     // Card bottom-sheet menu state (single instance per kind; -1 closed,
-    // 0 episode, 1 season). Pure UI state: the actions reuse the
+    // 0 episode, 1 season, 2 library entry). Pure UI state: the actions reuse the
     // callbacks above with the stored index.
     property <int> menu_kind: -1;
     property <int> menu_idx: 0;
@@ -1328,68 +1353,30 @@ export component DetailPage {
                     spacing: root.narrow ? 6px : 10px;
                     alignment: end;
 
-                    // Add / remove from library: bookmark outline vs filled.
-                    TopIconButton {
+                    if root.in_library: tracking_button := TopIconButton {
                         narrow: root.narrow;
                         accessible-role: button;
                         accessible-label: @tr("Tracking");
-                        focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 3;
-                        clicked => {root.kb_active=false;root.kb_top=3;root.tracking_show();}
-                        Text {text: "✓"; color:#c9c9d4; horizontal-alignment:center; vertical-alignment:center; width:100%; height:100%;}
-                    }
-                    TopIconButton {
-                        narrow: root.narrow;
                         focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 1;
-                        clicked => { root.kb_active = false; root.kb_top = 1; root.add_to_library(); }
-
-                        if root.in_library: IcBookmark {
+                        clicked => { root.kb_active = false; root.kb_top = 1; root.tracking_show(); }
+                        IcSync {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
-                            width: 24px;
-                            height: 24px;
-                            fill: #8b5cf6;
-                        }
-
-                        if !root.in_library: IcBookmarkBorder {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            width: 24px;
-                            height: 24px;
-                            fill: #ffffff;
+                            width: 24px; height: 24px;
+                            fill: #e2e5ef;
                         }
                     }
-
-                    // Category assignment.
-                    if root.in_library && root.category_rows.length > 0: TopIconButton {
+                    if root.in_library: library_options_button := TopIconButton {
                         narrow: root.narrow;
+                        accessible-role: button;
+                        accessible-label: @tr("Library options");
                         focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 2;
-                        clicked => { root.kb_active = false; root.kb_top = 2; root.open_categories(); }
-
-                        IcTag {
+                        clicked => { root.kb_active = false; root.kb_top = 2; root.menu_kind = 2; }
+                        IcMoreHoriz {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
-                            width: 24px;
-                            height: 24px;
+                            width: 24px; height: 24px;
                             fill: #ffffff;
-                        }
-
-                        // Assignment count, when any.
-                        if root.selected_category_count > 0: Rectangle {
-                            x: parent.width - 16px;
-                            y: 4px;
-                            width: 14px;
-                            height: 14px;
-                            border-radius: 7px;
-                            background: #8b5cf6;
-
-                            Text {
-                                text: root.selected_category_count;
-                                color: #ffffff;
-                                font-size: 9px;
-                                font-weight: 700;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
                         }
                     }
                 }
@@ -1526,16 +1513,17 @@ export component DetailPage {
                                         }
                                     }
                                 }
-                                if root.has_episodes: HorizontalLayout {
+                                HorizontalLayout {
                                     spacing: 12px;
-                                    Rectangle {
+                                    if !root.has_episodes: Rectangle { horizontal-stretch: 1; }
+                                    if root.has_episodes: Rectangle {
                                         horizontal-stretch: 1;
                                         min-width: 0px;
                                         height: root.narrow ? 56px : 62px;
                                         border-radius: root.narrow ? 22px : 26px;
                                         background: watch_hero.has-hover ? @linear-gradient(110deg, #b079ff, #5657ef) : @linear-gradient(110deg, #a15bff, #644bff, #443dcc);
                                         border-width: 1px;
-                                        border-color: root.kb_active && root.kb_zone == 2 ? #ffffff : #b4a1ff70;
+                                        border-color: root.kb_active && root.kb_zone == 2 && !root.hero_library_focused ? #ffffff : #b4a1ff70;
                                         Text {
                                             text: @tr("▶  Watch Now");
                                             color: #ffffff;
@@ -1549,21 +1537,26 @@ export component DetailPage {
                                             clicked => { root.kb_active = false; root.watch_now(); }
                                         }
                                     }
-                                    Rectangle {
+                                    library_state_button := Rectangle {
                                         width: root.narrow ? 56px : 62px;
                                         height: self.width;
                                         border-radius: self.width / 2;
                                         background: library_hero.has-hover ? #343b4d : #252c3bcc;
                                         border-width: 1px;
-                                        border-color: #ffffff20;
+                                        border-color: root.kb_active && root.kb_zone == 2 && (root.hero_library_focused || !root.has_episodes) ? #a477ff : #ffffff20;
                                         accessible-role: button;
                                         accessible-label: root.in_library ? @tr("Remove from library") : @tr("Add to library");
-                                        Text {
-                                            text: root.in_library ? "✓" : "+";
-                                            color: #e2e5ef;
-                                            font-size: 32px;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
+                                        if !root.in_library: IcAdd {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            width: 26px; height: 26px;
+                                            fill: #e2e5ef;
+                                        }
+                                        if root.in_library: IcBookmark {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            width: 26px; height: 26px;
+                                            fill: #a477ff;
                                         }
                                         library_hero := TouchArea {
                                             mouse-cursor: pointer;
@@ -1840,7 +1833,7 @@ export component DetailPage {
                                         root.kb_active = false;
                                         root.stream_page_picked(p);
                                         root.kb_s = p * 25;
-                                        root.scroll_stream_list_to_top(y);
+                                        root.scroll_list_to_top(y);
                                     }
                                     action_requested(id) => { root.stream_action_requested(id); }
                                     filter_picked(i) => {
@@ -1882,7 +1875,7 @@ export component DetailPage {
                                     edit_watcher := Timer {
                                         interval: 80ms;
                                         running: root.kb_edit;
-                                        triggered => { filter_line.focus(); }
+                                        triggered => { root.episode_search_open = true; filter_line.focus(); }
                                     }
 
                                     // ---- Season picker ----------------------
@@ -2132,21 +2125,95 @@ export component DetailPage {
                                         }
                                     }
 
-                                    HorizontalLayout {
-                                        width: 100%;
-                                        spacing: 8px;
+                                    episode_search_focus := Timer {
+                                        interval: 80ms;
+                                        running: false;
+                                        triggered => {
+                                            self.stop();
+                                            if (root.episode_search_open) { filter_line.focus(); }
+                                        }
+                                    }
 
-                                        KbMark { on: root.kb_zone == 3 && root.kb_ci == 1; active: root.kb_active; }
+                                    episode_toolbar := Rectangle {
+                                        width: 100%;
+                                        height: root.episode_search_open ? 120px : 64px;
+                                        animate height { duration: Anim.transition_slide; easing: ease-out; }
+                                        border-radius: 16px;
+                                        background: #111927;
+                                        border-width: 1px;
+                                        border-color: root.filter_focused ? #a477ff60 : #ffffff16;
+                                        // The field stays instantiated for keyboard focus requests.
+                                        // Explicit row positions keep the header stable as it expands.
+                                        clip: true;
+
+                                        HorizontalLayout {
+                                            x: 10px; y: 10px;
+                                            width: parent.width - 20px;
+                                            height: 44px;
+                                            spacing: 8px;
+                                            Rectangle {
+                                                width: 44px; height: 44px;
+                                                horizontal-stretch: 0;
+                                                border-radius: 12px;
+                                                background: root.episode_search_open ? #8b5cf624 : (episode_search_toggle.has-hover ? #2b3448 : #1d2638);
+                                                border-width: 1px;
+                                                border-color: root.kb_active && root.kb_zone == 3 && root.kb_ci == 1 ? #a477ff : (root.episode_search_open || root.episode_filter != "" ? #a477ff60 : #ffffff16);
+                                                if !root.episode_search_open: IcSearch {
+                                                    x: 12px; y: 12px;
+                                                    width: 20px; height: 20px;
+                                                    fill: root.episode_filter != "" ? #cbb7ff : #c2cad9;
+                                                }
+                                                if root.episode_search_open: IcClose {
+                                                    x: 12px; y: 12px;
+                                                    width: 20px; height: 20px;
+                                                    fill: #cbb7ff;
+                                                }
+                                                episode_search_toggle := TouchArea {
+                                                    accessible-role: button;
+                                                    accessible-label: root.episode_search_open ? @tr("Hide episode search") : @tr("Search episodes");
+                                                    mouse-cursor: pointer;
+                                                    clicked => {
+                                                        root.kb_active = false;
+                                                        root.episode_search_open = !root.episode_search_open;
+                                                        if (root.episode_search_open) {
+                                                            episode_search_focus.start();
+                                                        } else {
+                                                            episode_search_focus.stop();
+                                                            root.kb_edit = false;
+                                                            nav_scope.focus();
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            episode_result_count := Text {
+                                                text: root.episode_filter != "" ? @tr("Found: {}", root.episode_total) : @tr("{} in this season", root.episode_total);
+                                                color: #b5a1de;
+                                                font-size: 12px;
+                                                min-width: 0px;
+                                                horizontal-stretch: 1;
+                                                overflow: elide;
+                                                vertical-alignment: center;
+                                            }
+                                            if root.episode_page_count > 1: episode_top_pager := EpisodePager {
+                                                episode-style: true;
+                                                page: root.episode_page;
+                                                count: root.episode_page_count;
+                                                picked(p) => { root.episode_page_picked(p); }
+                                            }
+                                        }
                                         filter_line := SearchField {
-                                            roomy: root.narrow;
-                                            // Typed filter text grows the preferred
-                                            // width; without this the input paints
-                                            // past the viewport's right edge.
+                                            x: 10px; y: 62px;
+                                            width: parent.width - 20px;
+                                            height: 48px;
+                                            visible: root.episode_search_open;
+                                            enabled: root.episode_search_open;
+                                            prominent: true;
+                                            search-icon: true;
                                             min-width: 0px;
                                             text <=> root.episode_filter;
-                                            placeholder-text: @tr("Filter episodes…");
+                                            placeholder-text: @tr("Search episodes…");
+                                            background: #080f1b;
                                             focus_changed(focused) => { root.filter_focused = focused; }
-                                            horizontal-stretch: 1;
                                             edited(t) => { root.episode_filter_changed(t); }
                                             accepted(t) => {
                                                 root.episode_filter_changed(t);
@@ -2156,15 +2223,29 @@ export component DetailPage {
                                         }
                                     }
 
-                                    // Pager (hidden when the season fits on a
-                                    // single page); the episode filter needs no
-                                    // separate item-count row.
-                                    if root.episode_page_count > 1: HorizontalLayout {
-                                        width: 100%;
-                                        EpisodePager {
-                                            page: root.episode_page;
-                                            count: root.episode_page_count;
-                                            picked(p) => { root.episode_page_picked(p); }
+                                    if root.episode_rows.length == 0 && root.episode_filter != "": episode_empty := Rectangle {
+                                        height: 96px;
+                                        border-radius: 16px;
+                                        background: #0b1221;
+                                        VerticalLayout {
+                                            padding: 16px;
+                                            spacing: 6px;
+                                            alignment: center;
+                                            Text {
+                                                text: @tr("No matching episodes");
+                                                color: #e6e6ea;
+                                                font-size: 15px;
+                                                font-weight: 600;
+                                                horizontal-alignment: center;
+                                                wrap: word-wrap;
+                                            }
+                                            Text {
+                                                text: @tr("Try a different title or episode number.");
+                                                color: #929caf;
+                                                font-size: 13px;
+                                                horizontal-alignment: center;
+                                                wrap: word-wrap;
+                                            }
                                         }
                                     }
 
@@ -2456,25 +2537,20 @@ export component DetailPage {
                                         }
                                     }
 
-                                    // Same pager under the grid.
+                                    // Turning the page at the bottom returns to the search
+                                    // bar and first new card, even for a shorter last page.
                                     if root.episode_page_count > 1: HorizontalLayout {
                                         width: 100%;
-                                        height: 28px;
-                                        spacing: 10px;
+                                        height: 44px;
                                         alignment: end;
-
-                                        Text {
-                                            text: @tr("Page {}/{}", root.episode_page + 1, root.episode_page_count);
-                                            height: 28px;
-                                            font-size: 12px;
-                                            color: #8a8a9a;
-                                            vertical-alignment: center;
-                                        }
-
                                         EpisodePager {
+                                            episode-style: true;
                                             page: root.episode_page;
                                             count: root.episode_page_count;
-                                            picked(p) => { root.episode_page_picked(p); }
+                                            picked(p) => {
+                                                root.episode_page_picked(p);
+                                                root.scroll_list_to_top(episode_toolbar.absolute-position.y);
+                                            }
                                         }
                                     }
                                 }
@@ -2560,7 +2636,7 @@ export component DetailPage {
                                             root.kb_active = false;
                                             root.stream_page_picked(p);
                                             root.kb_s = p * 25;
-                                            root.scroll_stream_list_to_top(y);
+                                            root.scroll_list_to_top(y);
                                         }
                                         action_requested(id) => { root.stream_action_requested(id); }
                                         filter_picked(i) => {
@@ -2680,6 +2756,29 @@ export component DetailPage {
             }
             closed => { root.close_menu(); }
         }
+        library_options_sheet := MenuSheet {
+            open: root.in_library && root.menu_kind == 2;
+            safe-bottom: root.safe-bottom;
+            safe-left: root.safe-left;
+            safe-right: root.safe-right;
+            max_h: root.height * 0.85;
+            sheet_title: @tr("Library options");
+            items: [
+                { label: root.library_watched ? @tr("Mark series as unwatched") : @tr("Mark series as watched"), enabled: true },
+                { label: @tr("Mark as On Hold"), enabled: true },
+                { label: @tr("Mark as Dropped"), enabled: true },
+                { label: @tr("Back to automatic"), enabled: true },
+                { label: @tr("Categories"), enabled: root.category_rows.length > 0 },
+                { label: @tr("Remove from library"), enabled: true },
+            ];
+            picked(a) => {
+                root.close_menu();
+                if (a == 4) { root.open_categories(); }
+                else { root.library_action(a == 5 ? 4 : a); }
+            }
+            closed => { root.close_menu(); }
+        }
+
         TrackingSheet {
             open:root.tracking_open;
             safe-bottom:root.safe-bottom; safe-left:root.safe-left; safe-right:root.safe-right;

@@ -7,7 +7,7 @@
 // while typing. This field keeps one calm look: same background always,
 // a thin 1px focus ring, and a dimmed selection wash.
 
-import { IcClose } from "icons.slint";
+import { IcClose, IcSearch } from "icons.slint";
 
 export component SearchField inherits Rectangle {
     in-out property <string> text: "";
@@ -19,6 +19,8 @@ export component SearchField inherits Rectangle {
     // The Discover search bar is a page-level control rather than a compact
     // filter; give it the larger height and type scale from the mobile UI.
     in property <bool> prominent: false;
+    // Optional leading icon, with input/caret space reserved beside it.
+    in property <bool> search-icon: false;
 
     callback accepted(string);
     callback edited(string);
@@ -39,7 +41,7 @@ export component SearchField inherits Rectangle {
     // caret/text never sits under it.
     property <bool> has_text: root.full-text != "";
     property <length> clear_box: root.height;
-    property <length> input_left: root.prominent ? 16px : 12px;
+    property <length> input_left: root.search-icon ? 44px : (root.prominent ? 16px : 12px);
     property <length> input_right: root.has_text
         ? root.clear_box + 4px
         : (root.prominent ? 16px : 12px);
@@ -57,6 +59,22 @@ export component SearchField inherits Rectangle {
     border-color: inner.has-focus ? #8b5cf6 : #33333c;
     background: #1c1c22;
     clip: true;
+
+    if root.search-icon: search_glyph := IcSearch {
+        x: 14px;
+        y: (parent.height - self.height) / 2;
+        width: 20px;
+        height: 20px;
+        fill: inner.has-focus ? #b59aff : #8791a6;
+    }
+
+    if root.search-icon: search_touch := TouchArea {
+        enabled: root.enabled;
+        x: 0px; y: 0px;
+        width: root.input_left;
+        height: root.height;
+        clicked => { inner.focus(); }
+    }
 
     input_viewport := Rectangle {
         x: root.input_left;
@@ -104,10 +122,10 @@ export component SearchField inherits Rectangle {
     // Placeholder overlay (raw TextInput has none). Hidden while there
     // is composing IME text too, otherwise it overlaps the composition.
     // Plain Text never intercepts pointer events, so taps fall through.
-    if root.full-text == "" && root.placeholder-text != "": Text {
-        x: root.prominent ? 16px : 12px;
+    if root.full-text == "" && root.placeholder-text != "": placeholder_label := Text {
+        x: root.input_left;
         y: 0px;
-        width: parent.width - (root.prominent ? 32px : 24px);
+        width: Math.max(1px, parent.width - root.input_left - root.input_right);
         height: parent.height;
         text: root.placeholder-text;
         color: #6c6c7d;
