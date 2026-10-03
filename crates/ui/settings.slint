@@ -230,6 +230,24 @@ export component SettingsPage {
         }
     }
 
+    // Draw the compact overview glow behind the safe-area and page gutters.
+    // This clip is visual only; it does not participate in the landing
+    // ScrollView's viewport or its touch-scroll geometry.
+    if root.phone_layout && !root.sub_open: Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: root.safe-top + 139px;
+        clip: true;
+        Image {
+            width: 100%;
+            y: root.landing_header_shift;
+            height: root.safe-top + 139px;
+            source: @image-url("../../assets/settings-header.svg");
+            image-fit: cover;
+        }
+    }
+
     // Subpage transitions: `open` drives the slide; `sel` (which section's
     // content is built) is cleared only after the slide-out finishes so the
     // outgoing page stays visible during the animation.
@@ -358,6 +376,10 @@ export component SettingsPage {
     callback cancel_reencode();
     // Landing scroll offset (the subpage uses the external `scroll_y`).
     in-out property <length> land_scroll_y: 0px;
+    // Collapse the landing hero visually while keeping its layout slots
+    // fixed. Resizing the hero from the Flickable offset also resizes its
+    // viewport, which feeds back into touch scrolling and causes jitter.
+    property <length> landing_header_shift: Math.max(-108px, Math.min(0px, root.land_scroll_y));
 
     // Which sections are offered on the landing menu, in order.
     // The Player section is always offered: the backend picker (built-in
@@ -625,8 +647,14 @@ export component SettingsPage {
         if (top < 0px) { set_scroll.content-y -= top; }
         else if (top + h > set_scroll.visible-height) { set_scroll.content-y -= top + h - set_scroll.visible-height; }
     }
+    function navigation_top_inset() -> length {
+        // Once the hero has collapsed, the search field and shortcut row stay
+        // pinned above the list and cover this part of the scroll viewport.
+        return root.land_scroll_y <= -108px ? 124px : 0px;
+    }
     function reveal_navigation(y: length, h: length) {
-        if (y + land_scroll.content-y < 0px) { land_scroll.content-y = -y; }
+        let top = root.navigation_top_inset();
+        if (y + land_scroll.content-y < top) { land_scroll.content-y = top - y; }
         else if (y + h + land_scroll.content-y > land_scroll.visible-height) { land_scroll.content-y = land_scroll.visible-height - y - h; }
     }
     function jump_section(group: int) {
@@ -1417,46 +1445,30 @@ export component SettingsPage {
                     opacity: root.sub_open && !root.two_pane ? 0.0 : 1.0;
                     animate x { duration: Anim.transition_slide; easing: ease-out; }
                     animate opacity { duration: Anim.transition_fade; }
-
-                    VerticalLayout {
+                    // One stable viewport scrolls the whole landing column.
+                    // Placeholder slots retain the initial title/search/chip
+                    // spacing; the live controls float over them and stick
+                    // below the hero once its 108px slot has scrolled away.
+                    land_scroll := ScrollView {
+                        x: 0px;
+                        y: 0px;
                         width: 100%;
                         height: 100%;
-                        spacing: 12px;
+                        mouse-drag-pan-enabled: true;
+                        init => { self.content-y = root.land_scroll_y; }
+                        changed content-y => { root.land_scroll_y = self.content-y; }
 
-                        Rectangle {
-                            vertical-stretch: 0;
-                            height: Math.max(0px, 108px + root.land_scroll_y);
-                            clip: true;
-                            Image { width: 100%; height: 108px; source: @image-url("../../assets/settings-header.svg"); image-fit: cover; }
-                            Text { x: 16px; y: 24px; text: @tr("Settings"); font-size: root.two_pane ? 28px : 32px; font-weight: 700; color: #ffffff; }
-                            Text { x: 16px; y: 66px; width: parent.width - 32px; text: @tr("Make Nova yours"); font-size: 14px; color: #bac1d3; wrap: word-wrap; }
-                        }
-                        settings_search := SearchField {
-                            show-pointer-focus: false; keyboard-mode: root.kb_active;
-                            roomy: true; search-icon: true; text <=> root.search_query;
-                            enabled: !root.sub_open || root.two_pane;
-                            placeholder-text: @tr("Search settings");
-                            focus_changed(f) => { root.input_focused = f; }
-                            edited(q) => { root.kb_land = root.land_first(); }
-                            accepted(q) => { root.kb_land = root.land_first(); root.kb_zone = 8; root.kb_active = true; nav_scope.focus(); }
-                        }
-                        HorizontalLayout {
-                            vertical-stretch: 0; spacing: 4px;
-                            for group[i] in [@tr("Experience"), @tr("Services"), @tr("Storage")]: PillButton {
-                                label: group; compact: true; enabled: (!root.sub_open || root.two_pane) && root.group_available(i);
-                                clicked => { root.jump_section(i); }
-                            }
-                        }
-                        land_scroll := ScrollView {
+                        VerticalLayout {
                             width: 100%;
-                            vertical-stretch: 1;
-                            // Touch devices scroll by dragging.
-                            mouse-drag-pan-enabled: true;
-                            init => { self.content-y = root.land_scroll_y; }
-                            changed content-y => { root.land_scroll_y = self.content-y; }
+                            spacing: 12px;
+
+                            Rectangle { width: 100%; height: 108px; }
+                            Rectangle { width: 100%; height: 44px; }
+                            Rectangle { width: 100%; height: 44px; }
 
                             VerticalLayout {
                                 width: 100%;
+                                vertical-stretch: 1;
                                 spacing: 8px;
 
                                 for group[g] in [@tr("Experience"), @tr("Library and services"), @tr("Storage and network"), @tr("App information")]: group_section := VerticalLayout {
@@ -1483,10 +1495,71 @@ export component SettingsPage {
                                 }
                                 if !root.group_available(0) && !root.group_available(1) && !root.group_available(2) && !root.group_available(3): VerticalLayout {
                                     vertical-stretch: 0; spacing: 12px;
-                                    Text { text: @tr("No settings found."); color: #bac1d3; font-size: 14px; wrap: word-wrap; }
+                                    Text { text: @tr("No settings found."); color: #bac1d3; font-size: 14px; wrap: word-wrap; min-width: 0px; }
                                     PillButton { label: @tr("Clear search"); clicked => { root.search_query = ""; } }
                                 }
                                 Rectangle { vertical-stretch: 1; }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        x: 0px;
+                        y: 0px;
+                        width: 100%;
+                        height: 100%;
+                        clip: false;
+
+                        // Cover the scrolling rows between and around the
+                        // sticky controls, including the top gutter once the
+                        // hero collapses. Keep the scroll viewport unchanged.
+                        Rectangle {
+                            x: 0px;
+                            y: 108px + root.landing_header_shift;
+                            width: 100%;
+                            height: 124px;
+                            background: #080f19;
+                        }
+
+                        Rectangle {
+                            x: 0px;
+                            y: 0px;
+                            width: 100%;
+                            height: 108px;
+                            clip: true;
+                            if !root.phone_layout || root.sub_open: Image {
+                                width: 100%;
+                                y: root.landing_header_shift;
+                                height: 108px;
+                                source: @image-url("../../assets/settings-header.svg");
+                                image-fit: cover;
+                            }
+                            Text { x: 16px; y: 24px + root.landing_header_shift; text: @tr("Settings"); font-size: root.two_pane ? 28px : 32px; font-weight: 700; color: #ffffff; }
+                            Text { x: 16px; y: 66px + root.landing_header_shift; width: parent.width - 32px; text: @tr("Make Nova yours"); font-size: 14px; color: #bac1d3; wrap: word-wrap; }
+                        }
+
+                        settings_search := SearchField {
+                            x: 0px;
+                            y: Math.max(12px, 120px + root.landing_header_shift);
+                            width: 100%;
+                            show-pointer-focus: false; keyboard-mode: root.kb_active;
+                            roomy: true; search-icon: true; text <=> root.search_query;
+                            enabled: !root.sub_open || root.two_pane;
+                            placeholder-text: @tr("Search settings");
+                            focus_changed(f) => { root.input_focused = f; }
+                            edited(q) => { root.kb_land = root.land_first(); }
+                            accepted(q) => { root.kb_land = root.land_first(); root.kb_zone = 8; root.kb_active = true; nav_scope.focus(); }
+                        }
+
+                        HorizontalLayout {
+                            x: 0px;
+                            y: Math.max(68px, 176px + root.landing_header_shift);
+                            width: 100%;
+                            height: 44px;
+                            spacing: 4px;
+                            for group[i] in [@tr("Experience"), @tr("Services"), @tr("Storage")]: PillButton {
+                                label: group; compact: true; enabled: (!root.sub_open || root.two_pane) && root.group_available(i);
+                                clicked => { root.jump_section(i); }
                             }
                         }
                     }
