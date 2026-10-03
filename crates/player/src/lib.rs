@@ -957,8 +957,7 @@ impl Player {
                             );
                             #[cfg(target_os = "windows")]
                             gl_state::restore(&gl, &saved);
-                            if status < 0
-                            {
+                            if status < 0 {
                                 let msg = "cannot play in-app: mpv render context creation failed";
                                 *notifier_state.mpv_error.lock().unwrap() = Some(msg.to_string());
                                 #[cfg(target_os = "android")]
