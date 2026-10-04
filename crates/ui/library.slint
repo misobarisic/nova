@@ -83,7 +83,9 @@ export component LibraryPage {
     // Use the measured viewport: page padding, the rail, cutouts and scroll
     // chrome have already taken their space out of it.
     property <length> grid-width: Math.max(1px, lib_scroll.visible-width);
-    property <length> grid-top: 8px;
+    property <length> grid-top: library_header.height + 8px;
+    property <length> header_shift: Math.max(-library_hero.height - 14px, Math.min(0px, root.scroll_y));
+    property <length> header_cover: library_header.height + root.header_shift;
     property <int> cols: root.list_view ? 1 : Math.max(root.min_cols, Math.floor((root.grid-width + root.item-gap) / (root.min-card + root.item-gap)));
     property <length> item-width: Math.max(1px, Math.min(root.list_view ? root.grid-width : root.max-card, (root.grid-width - (root.cols - 1) * root.item-gap) / root.cols));
 
@@ -314,8 +316,8 @@ export component LibraryPage {
         let vy = lib_scroll.content-y;
         let vh = lib_scroll.visible-height;
         let min_y = Math.min(0px, vh - lib_scroll.content-height);
-        if (top < -vy) {
-            lib_scroll.content-y = -top;
+        if (top < root.header_cover - vy) {
+            lib_scroll.content-y = root.header_cover - top;
         } else if (bot > vh - vy) {
             lib_scroll.content-y = Math.max(min_y, vh - bot);
         }
@@ -350,8 +352,8 @@ export component LibraryPage {
         let vy = lib_scroll.content-y;
         let vh = lib_scroll.visible-height;
         let min_y = Math.min(0px, vh - lib_scroll.content-height);
-        if (bot <= -vy) {
-            lib_scroll.content-y = Math.max(min_y, -top);
+        if (bot <= root.header_cover - vy) {
+            lib_scroll.content-y = Math.max(min_y, root.header_cover - top);
         } else if (top >= vh - vy) {
             lib_scroll.content-y = Math.max(min_y, vh - bot);
         }
@@ -438,185 +440,9 @@ export component LibraryPage {
             padding-top: 18px + safe-top;
             spacing: 14px;
 
-            library_heading := HorizontalLayout {
-                vertical-stretch: 0;
-                min-height: 44px;
-                spacing: 8px;
-                Text {
-                    text: @tr("My Library");
-                    font-size: root.narrow ? 25px : 32px;
-                    font-weight: 700;
-                    color: Theme.current.text_bright;
-                    min-width: 0px;
-                    max-width: self.preferred-width;
-                    horizontal-stretch: 1;
-                    height: self.preferred-height;
-                    wrap: word-wrap;
-                }
-                Text {
-                    text: @tr("({n} item)" | "({n} items)" % root.library.length);
-                    font-size: 13px;
-                    color: Theme.current.text_hint;
-                    vertical-alignment: center;
-                }
-                Rectangle { horizontal-stretch: 1; min-width: 0px; }
-                library_search_button := Rectangle {
-                    width: 44px;
-                    height: 44px;
-                    border-radius: 22px;
-                    border-width: 1px;
-                    border-color: Theme.current.border_strong;
-                    background: search_button_touch.has-hover ? Theme.current.control_hover : Theme.current.hero_control;
-                    accessible-role: button;
-                    accessible-label: @tr("Search library");
-                    if !root.search_open: IcSearch {
-                        x: 12px; y: 12px; width: 20px; height: 20px;
-                        fill: Theme.current.text_primary;
-                    }
-                    if root.search_open: IcClose {
-                        x: 12px; y: 12px; width: 20px; height: 20px;
-                        fill: Theme.current.text_primary;
-                    }
-                    search_button_touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.search_open = !root.search_open;
-                            if (!root.search_open) {
-                                root.query = "";
-                                root.view_changed();
-                                nav_scope.focus();
-                            }
-                        }
-                    }
-                }
-            }
-            Text {
-                text: @tr("Your saved anime, continue watching, and downloads.");
-                color: Theme.current.text_home_metadata;
-                font-size: 14px;
-                wrap: word-wrap;
-                min-width: 0px;
-                height: self.preferred-height;
-            }
-            if root.search_open: SearchField {
-                text <=> root.query;
-                placeholder-text: @tr("Search library");
-                search-icon: true;
-                roomy: true;
-                init => { self.focus(); }
-                edited(_) => { root.view_changed(); }
-            }
-
-            // All automatic and custom categories remain reachable on a fresh
-            // install. A horizontal rail keeps every pill at its natural size.
-            filter_rail := Flickable {
-                visible: root.category_names.length > 0;
-                height: root.category_names.length > 0 ? 44px : 0px;
-                vertical-stretch: 0;
-                content-width: filter_chips.preferred-width;
-                content-height: self.height;
-                interactive: true;
-                changed width => {
-                    root.reveal_filter(root.selected_filter_left, root.selected_filter_width);
-                }
-                changed content-width => {
-                    root.reveal_filter(root.selected_filter_left, root.selected_filter_width);
-                }
-                filter_chips := HorizontalLayout {
-                    spacing: 8px;
-                    alignment: start;
-                    LibraryFilterChip {
-                        label: @tr("All");
-                        selected: root.library_filter_category == "";
-                        picked => { root.library_filter_picked(""); }
-                        reveal(left, w) => { root.reveal_filter(left, w); }
-                    }
-                    for name[i] in root.category_names: LibraryFilterChip {
-                        label: i < root.category_labels.length ? root.category_labels[i] : name;
-                        selected: root.library_filter_category == name;
-                        picked => { root.library_filter_picked(name); }
-                        reveal(left, w) => { root.reveal_filter(left, w); }
-                    }
-                }
-                KbMark { on: root.kb_zone == 1; active: root.kb_active; }
-            }
-
-            HorizontalLayout {
-                height: 44px;
-                vertical-stretch: 0;
-                spacing: 10px;
-                library_sort := Dropdown {
-                    model: [@tr("Recently Added"), @tr("Title"), @tr("Release year")];
-                    current-index <=> root.sort_index;
-                    roomy: true;
-                    pill: true;
-                    min-width: 0px;
-                    max-width: 190px;
-                    horizontal-stretch: 1;
-                    selected(_) => { root.view_changed(); }
-                }
-                Rectangle { horizontal-stretch: 1; min-width: 0px; }
-                Rectangle {
-                    width: 88px;
-                    height: 44px;
-                    border-radius: 22px;
-                    border-width: 1px;
-                    border-color: Theme.current.border_medium;
-                    background: Theme.current.hero_control;
-                    clip: true;
-                    for mode in [false, true]: library_view_button := Rectangle {
-                        x: mode ? 44px : 0px;
-                        width: 44px;
-                        height: 44px;
-                        background: root.list_view == mode ? Theme.current.selection_wash : transparent;
-                        accessible-role: button;
-                        accessible-label: mode ? @tr("List view") : @tr("Grid view");
-                        if !mode: Path {
-                            x: 12px; y: 12px; width: 20px; height: 20px;
-                            viewbox-width: 24; viewbox-height: 24;
-                            commands: "M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h7v7h-7z";
-                            fill: root.list_view == mode ? Theme.current.accent_vivid : Theme.current.text_hint;
-                        }
-                        if mode: Path {
-                            x: 12px; y: 12px; width: 20px; height: 20px;
-                            viewbox-width: 24; viewbox-height: 24;
-                            commands: "M3 4h3v3H3zm5 0h13v3H8zM3 10h3v3H3zm5 0h13v3H8zM3 16h3v3H3zm5 0h13v3H8z";
-                            fill: root.list_view == mode ? Theme.current.accent_vivid : Theme.current.text_hint;
-                        }
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.list_view = mode; }
-                        }
-                    }
-                }
-            }
-
-            // Empty state
-            if root.library.length == 0: VerticalLayout {
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-                alignment: center;
-
-                Text {
-                    text: "📚";
-                    font-size: 42px;
-                    horizontal-alignment: center;
-                }
-
-                Text {
-                    text: root.query != "" ? @tr("No matching titles in your library.") : root.library_empty_hint;
-                    font-size: 14px;
-                    color: #8a8a9a;
-                    horizontal-alignment: center;
-                    wrap: word-wrap;
-                    min-width: 0px;
-                    max-width: 560px;
-                }
-            }
-
             // Grid (always present so the keyboard scope can drive its
             // ScrollView; empty with no cards when the library is empty).
-            Rectangle {
+            library_body := Rectangle {
                 vertical-stretch: 1;
                 clip: true;
 
@@ -664,7 +490,7 @@ export component LibraryPage {
                     changed content-y => {
                         root.scroll_y = self.content-y;
                         if (root.library.length > 0) {
-                            let first_row = Math.max(0, Math.floor((-self.content-y - root.grid-top) / root.row_stride));
+                            let first_row = Math.max(0, Math.floor((root.header_cover - self.content-y - root.grid-top) / root.row_stride));
                             let vis_rows = Math.ceil(self.visible-height / root.row_stride);
                             let first_idx = Math.max(0, (first_row - 2) * root.cols);
                             let last_idx = Math.min(root.library.length - 1, (first_row + vis_rows + 2) * root.cols - 1);
@@ -687,7 +513,7 @@ export component LibraryPage {
                         alignment: start;
 
                     library_grid := GridLayout {
-                        // Exact content width so centering above has an effect.
+                        // Keep the grid at its exact column width, aligned left.
                         width: root.cols * (root.item-width + root.item-gap) - root.item-gap;
                         spacing: root.item-gap;
 
@@ -943,6 +769,204 @@ export component LibraryPage {
                     }
                     }
                 }
+                // Fixed viewport, like Settings: scroll a placeholder for
+                // the header, then paint its live controls above the cards.
+                // Moving this overlay never changes the Flickable geometry.
+                library_header := Rectangle {
+                    y: root.header_shift;
+                    width: 100%;
+                    height: library_toolbar.preferred-height;
+                    background: Theme.current.artwork_canvas;
+                    TouchArea {}
+                    library_toolbar := VerticalLayout {
+                        width: 100%;
+                        spacing: 14px;
+                        library_hero := VerticalLayout {
+                                vertical-stretch: 0;
+                                spacing: 14px;
+                            library_heading := HorizontalLayout {
+                                vertical-stretch: 0;
+                                min-height: 44px;
+                                spacing: 8px;
+                                Text {
+                                    text: @tr("My Library");
+                                    font-size: root.narrow ? 25px : 32px;
+                                    font-weight: 700;
+                                    color: Theme.current.text_bright;
+                                    min-width: 0px;
+                                    max-width: self.preferred-width;
+                                    horizontal-stretch: 1;
+                                    height: self.preferred-height;
+                                    wrap: word-wrap;
+                                }
+                                Text {
+                                    text: @tr("({n} item)" | "({n} items)" % root.library.length);
+                                    font-size: 13px;
+                                    color: Theme.current.text_hint;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { horizontal-stretch: 1; min-width: 0px; }
+
+                            }
+                            Text {
+                                text: @tr("Your saved anime, continue watching, and downloads.");
+                                color: Theme.current.text_home_metadata;
+                                font-size: 14px;
+                                wrap: word-wrap;
+                                min-width: 0px;
+                                height: self.preferred-height;
+                            }
+                        }
+                        if root.search_open: SearchField {
+                            text <=> root.query;
+                            placeholder-text: @tr("Search library");
+                            search-icon: true;
+                            roomy: true;
+                            init => { self.focus(); }
+                            edited(_) => { root.view_changed(); }
+                        }
+
+                        // All automatic and custom categories remain reachable on a fresh
+                        // install. A horizontal rail keeps every pill at its natural size.
+                        filter_rail := Flickable {
+                            visible: root.category_names.length > 0;
+                            height: root.category_names.length > 0 ? 44px : 0px;
+                            vertical-stretch: 0;
+                            content-width: filter_chips.preferred-width;
+                            content-height: self.height;
+                            interactive: true;
+                            changed width => {
+                                root.reveal_filter(root.selected_filter_left, root.selected_filter_width);
+                            }
+                            changed content-width => {
+                                root.reveal_filter(root.selected_filter_left, root.selected_filter_width);
+                            }
+                            filter_chips := HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                LibraryFilterChip {
+                                    label: @tr("All");
+                                    selected: root.library_filter_category == "";
+                                    picked => { root.library_filter_picked(""); }
+                                    reveal(left, w) => { root.reveal_filter(left, w); }
+                                }
+                                for name[i] in root.category_names: LibraryFilterChip {
+                                    label: i < root.category_labels.length ? root.category_labels[i] : name;
+                                    selected: root.library_filter_category == name;
+                                    picked => { root.library_filter_picked(name); }
+                                    reveal(left, w) => { root.reveal_filter(left, w); }
+                                }
+                            }
+                            KbMark { on: root.kb_zone == 1; active: root.kb_active; }
+                        }
+
+                        library_sort_controls := HorizontalLayout {
+                            height: 44px;
+                            vertical-stretch: 0;
+                            spacing: 10px;
+                            library_sort := Dropdown {
+                                model: [@tr("Recently Added"), @tr("Title"), @tr("Release year")];
+                                current-index <=> root.sort_index;
+                                roomy: true;
+                                pill: true;
+                                min-width: 0px;
+                                max-width: 190px;
+                                horizontal-stretch: 1;
+                                selected(_) => { root.view_changed(); }
+                            }
+                            Rectangle { horizontal-stretch: 1; min-width: 0px; }
+                            Rectangle {
+                                width: 88px;
+                                height: 44px;
+                                border-radius: 22px;
+                                border-width: 1px;
+                                border-color: Theme.current.border_medium;
+                                background: Theme.current.hero_control;
+                                clip: true;
+                                for mode in [false, true]: library_view_button := Rectangle {
+                                    x: mode ? 44px : 0px;
+                                    width: 44px;
+                                    height: 44px;
+                                    background: root.list_view == mode ? Theme.current.selection_wash : transparent;
+                                    accessible-role: button;
+                                    accessible-label: mode ? @tr("List view") : @tr("Grid view");
+                                    if !mode: Path {
+                                        x: 12px; y: 12px; width: 20px; height: 20px;
+                                        viewbox-width: 24; viewbox-height: 24;
+                                        commands: "M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h7v7h-7z";
+                                        fill: root.list_view == mode ? Theme.current.accent_vivid : Theme.current.text_hint;
+                                    }
+                                    if mode: Path {
+                                        x: 12px; y: 12px; width: 20px; height: 20px;
+                                        viewbox-width: 24; viewbox-height: 24;
+                                        commands: "M3 4h3v3H3zm5 0h13v3H8zM3 10h3v3H3zm5 0h13v3H8zM3 16h3v3H3zm5 0h13v3H8z";
+                                        fill: root.list_view == mode ? Theme.current.accent_vivid : Theme.current.text_hint;
+                                    }
+                                    TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.list_view = mode; }
+                                    }
+                                }
+                            }
+                            library_search_button := Rectangle {
+                                width: 44px;
+                                height: 44px;
+                                border-radius: 22px;
+                                border-width: 1px;
+                                border-color: Theme.current.border_strong;
+                                background: search_button_touch.has-hover ? Theme.current.control_hover : Theme.current.hero_control;
+                                accessible-role: button;
+                                accessible-label: @tr("Search library");
+                                if !root.search_open: IcSearch {
+                                    x: 12px; y: 12px; width: 20px; height: 20px;
+                                    fill: Theme.current.text_primary;
+                                }
+                                if root.search_open: IcClose {
+                                    x: 12px; y: 12px; width: 20px; height: 20px;
+                                    fill: Theme.current.text_primary;
+                                }
+                                search_button_touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.search_open = !root.search_open;
+                                        if (!root.search_open) {
+                                            root.query = "";
+                                            root.view_changed();
+                                            nav_scope.focus();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                    }
+                }
+            // Empty state
+            if root.library.length == 0: VerticalLayout {
+                y: root.header_cover;
+                width: 100%;
+                height: Math.max(1px, parent.height - root.header_cover);
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                alignment: center;
+
+                Text {
+                    text: "📚";
+                    font-size: 42px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: root.query != "" ? @tr("No matching titles in your library.") : root.library_empty_hint;
+                    font-size: 14px;
+                    color: #8a8a9a;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                    min-width: 0px;
+                    max-width: 560px;
+                }
+            }
+
             }
 
             // Bottom tab bar (narrow only): wide layouts use the left rail.
