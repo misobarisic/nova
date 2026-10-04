@@ -947,7 +947,7 @@ export global SettingsDestinations {
     ];
 }
 
-// The only decorative surface in Settings; controls retain opaque fills.
+// Header captions and controls; SettingsPage owns the edge-to-edge artwork.
 export component SettingsHeader inherits Rectangle {
     in property <string> title;
     in property <string> introduction;
@@ -956,7 +956,6 @@ export component SettingsHeader inherits Rectangle {
     vertical-stretch: 0;
     height: Math.max(108px, heading_measure.preferred-height + intro_measure.preferred-height + 48px);
     clip: true;
-    Image { width: 100%; height: 100%; source: @image-url("../../assets/settings-header.svg"); image-fit: cover; }
     Rectangle {
         height: 0px; clip: true;
         heading_measure := Text { width: Math.max(0px, root.width - (root.overview ? 32px : 88px)); text: root.title; font-size: root.overview ? 32px : 24px; font-weight: 700; wrap: word-wrap; }
