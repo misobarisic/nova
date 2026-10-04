@@ -98,6 +98,9 @@
             (lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
               LIBCLANG_PATH = "${llvmPackages.libclang.lib}/lib";
               CPATH = "${glibc.dev}/include:${linuxHeaders}/include";
+              # Opt-in Mesa vendor for headless GL tests, from the same Nix
+              # package set as libEGL. Leave normal desktop driver selection alone.
+              NOVA_TEST_EGL_VENDOR_LIBRARY_FILENAMES = "${mesa}/share/glvnd/egl_vendor.d/50_mesa.json";
               # mold is the default linker for native GNU/Linux builds only.
               # Target-scoped so Android (NDK clang, built in the separate
               # .#android shell) is left alone.

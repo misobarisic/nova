@@ -556,6 +556,9 @@ The renderer feature supplies image decoding for the UI's embedded assets,
 which the root app normally enables through its desktop feature.
 The Linux PR check runs this test with Mesa software rendering, without a
 display server; the Windows job checks compilation of the production guard.
+In the Linux Nix shell, set `__EGL_VENDOR_LIBRARY_FILENAMES` to
+`$NOVA_TEST_EGL_VENDOR_LIBRARY_FILENAMES` for this test. The shell exposes the
+matching Nix Mesa manifest; CI selects it explicitly instead of a host driver.
 The player's Linux D-Bus dependency explicitly enables its `async-io` runtime
 so the crate can build and run tests independently of workspace feature unification.
 

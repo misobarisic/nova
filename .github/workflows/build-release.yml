@@ -89,8 +89,12 @@ jobs:
       - name: Test shared OpenGL state guard
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
-          __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/50_mesa.json
-        run: nix develop .#default --command cargo test -p nova-player --lib --features slint/renderer-femtovg clean_draw_and_host_state_round_trip --locked
+        run: |
+          nix develop .#default --command sh -eu -c '
+            test -f "$NOVA_TEST_EGL_VENDOR_LIBRARY_FILENAMES"
+            export __EGL_VENDOR_LIBRARY_FILENAMES="$NOVA_TEST_EGL_VENDOR_LIBRARY_FILENAMES"
+            exec cargo test -p nova-player --lib --features slint/renderer-femtovg clean_draw_and_host_state_round_trip --locked
+          '
 
   check-windows:
     name: Windows GNU target check
