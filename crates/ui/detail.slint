@@ -405,7 +405,9 @@ component StreamList {
     callback picked(int);
     callback page_picked(int);
     callback bottom_page_picked(int, length);
+    in property <[SheetItem]> action_items: [];
     callback action_requested(string);
+    callback action_selected(string, int);
     callback filter_picked(int);
     // Forwarded from the filter bar's own `panned` / `pan_released` (see
     // DetailPage::page_pan_enabled).
@@ -573,6 +575,21 @@ component StreamList {
                     }
                 }
 
+                // Populate the backend-owned actions before explicitly showing
+                // the desktop popup; a ContextMenuArea's automatic right-click
+                // would otherwise open before this row's actions are prepared.
+                stream_ctx := ContextMenuArea {
+                    x: 0px; y: 0px;
+                    width: 0px; height: 0px;
+                    Menu {
+                        for action[a] in root.action_items: MenuItem {
+                            title: action.label;
+                            enabled: action.enabled;
+                            activated => { root.action_selected(st.id, a); }
+                        }
+                    }
+                }
+
                 touch_st := TouchArea {
                     property <bool> lp_suppress: false;
                     width: 100%;
@@ -592,6 +609,9 @@ component StreamList {
                             row_lp_timer.stop();
                             touch_st.lp_suppress = true;
                             root.action_requested(st.id);
+                            if (!root.touch_menus) {
+                                stream_ctx.show({ x: self.mouse-x, y: self.mouse-y });
+                            }
                         } else if (ev.kind == PointerEventKind.down) {
                             touch_st.lp_suppress = false;
                             if (root.touch_menus) {
@@ -956,7 +976,7 @@ export component DetailPage {
             } else if (root.kb_top == 1 && root.in_library) {
                 root.tracking_show();
             } else if (root.kb_top == 2 && root.in_library) {
-                root.menu_kind = 2;
+                root.open_library_menu();
             }
         } else if (root.kb_zone == 1) {
             root.detail_tab_picked(root.kb_tab);
@@ -1186,6 +1206,33 @@ export component DetailPage {
         root.menu_flag = watched;
     }
 
+    property <[SheetItem]> library_menu_items: [
+        { label: root.library_watched ? @tr("Mark series as unwatched") : @tr("Mark series as watched"), enabled: true },
+        { label: @tr("Mark as On Hold"), enabled: true },
+        { label: @tr("Mark as Dropped"), enabled: true },
+        { label: @tr("Back to automatic"), enabled: true },
+        { label: @tr("Categories"), enabled: root.category_rows.length > 0 },
+        { label: @tr("Remove from library"), enabled: true },
+    ];
+
+    function open_library_menu() {
+        if (root.touch_menus) { root.menu_kind = 2; }
+        else { library_options_ctx.show({ x: 0px, y: 0px }); }
+    }
+
+    function library_menu_picked(a: int) {
+        root.close_menu();
+        if (a == 4) { root.open_categories(); }
+        else { root.library_action(a == 5 ? 4 : a); }
+    }
+
+    function request_stream_action(id: string) {
+        root.stream_action_requested(id);
+        // The backend fills the shared model and opens the touch sheet.
+        // Desktop consumes the same model in the row's native popup instead.
+        if (!root.touch_menus) { root.stream_action_open = false; }
+    }
+
     function close_menu() {
         root.menu_kind = -1;
     }
@@ -1332,6 +1379,22 @@ export component DetailPage {
             }
         }
 
+        // Anchor below the saved-entry options button. Keep the menu outside
+        // the conditional button so keyboard activation can reach it too.
+        library_options_ctx := ContextMenuArea {
+            x: root.width - root.safe-right - (root.narrow ? 10px + 44px : 16px + 48px);
+            y: root.safe-top + (root.narrow ? 10px + 44px : 16px + 48px);
+            width: 0px; height: 0px;
+            enabled: root.in_library && !root.touch_menus;
+            Menu {
+                for action[a] in root.library_menu_items: MenuItem {
+                    title: action.label;
+                    enabled: action.enabled;
+                    activated => { root.library_menu_picked(a); }
+                }
+            }
+        }
+
         page_body := VerticalLayout {
             width: 100%;
             height: 100%;
@@ -1389,7 +1452,7 @@ export component DetailPage {
                         accessible-role: button;
                         accessible-label: @tr("Library options");
                         focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 2;
-                        clicked => { root.kb_active = false; root.kb_top = 2; root.menu_kind = 2; }
+                        clicked => { root.kb_active = false; root.kb_top = 2; root.open_library_menu(); }
                         IcMoreHoriz {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
@@ -1786,7 +1849,9 @@ export component DetailPage {
                                         root.kb_s = p * 25;
                                         root.scroll_list_to_top(y);
                                     }
-                                    action_requested(id) => { root.stream_action_requested(id); }
+                                    action_items: root.stream_action_items;
+                                    action_requested(id) => { root.request_stream_action(id); }
+                                    action_selected(id, a) => { root.stream_action_selected(id, a); }
                                     filter_picked(i) => {
                                         root.kb_active = false;
                                         root.kb_s = 0;
@@ -2595,7 +2660,9 @@ export component DetailPage {
                                             root.kb_s = p * 25;
                                             root.scroll_list_to_top(y);
                                         }
-                                        action_requested(id) => { root.stream_action_requested(id); }
+                                        action_items: root.stream_action_items;
+                                        action_requested(id) => { root.request_stream_action(id); }
+                                        action_selected(id, a) => { root.stream_action_selected(id, a); }
                                         filter_picked(i) => {
                                             root.kb_active = false;
                                             root.kb_s = 0;
@@ -2640,7 +2707,7 @@ export component DetailPage {
         // Card bottom sheets (single instance per kind): the dim
         // backdrop eats outside taps (dismiss only, never forwarded).
         MenuSheet {
-            open: root.stream_action_open;
+            open: root.touch_menus && root.stream_action_open;
             width: 100%;
             height: 100%;
             safe-bottom: root.safe-bottom;
@@ -2714,25 +2781,14 @@ export component DetailPage {
             closed => { root.close_menu(); }
         }
         library_options_sheet := MenuSheet {
-            open: root.in_library && root.menu_kind == 2;
+            open: root.touch_menus && root.in_library && root.menu_kind == 2;
             safe-bottom: root.safe-bottom;
             safe-left: root.safe-left;
             safe-right: root.safe-right;
             max_h: root.height * 0.85;
             sheet_title: @tr("Library options");
-            items: [
-                { label: root.library_watched ? @tr("Mark series as unwatched") : @tr("Mark series as watched"), enabled: true },
-                { label: @tr("Mark as On Hold"), enabled: true },
-                { label: @tr("Mark as Dropped"), enabled: true },
-                { label: @tr("Back to automatic"), enabled: true },
-                { label: @tr("Categories"), enabled: root.category_rows.length > 0 },
-                { label: @tr("Remove from library"), enabled: true },
-            ];
-            picked(a) => {
-                root.close_menu();
-                if (a == 4) { root.open_categories(); }
-                else { root.library_action(a == 5 ? 4 : a); }
-            }
+            items: root.library_menu_items;
+            picked(a) => { root.library_menu_picked(a); }
             closed => { root.close_menu(); }
         }
 

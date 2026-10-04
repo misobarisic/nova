@@ -47,6 +47,7 @@ fn click_label(app: &nova::AppWindow, label: &str) {
 fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = nova::AppWindow::new().unwrap();
+    app.set_touch_menus(true);
     app.set_animations(false);
     app.set_anim_transitions(false);
     app.set_show_home(false);

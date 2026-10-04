@@ -50,6 +50,7 @@ fn sheet_count(app: &nova::AppWindow) -> usize {
 fn sheet_and_player_feedback_respect_animation_switches() {
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = nova::AppWindow::new().unwrap();
+    app.set_touch_menus(true);
     app.window().set_size(slint::PhysicalSize::new(360, 800));
     app.window().show().unwrap();
     app.set_modal_visible(true);
