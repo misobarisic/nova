@@ -17,6 +17,28 @@ pub fn settings_search_matches(query: &str, haystack: &str) -> bool {
         .all(|term| haystack.contains(&term.to_lowercase()))
 }
 
+/// Apply a device's display preference without remounting any controls.
+/// Always derive from the standard palette so toggling off restores every token.
+pub fn apply_theme(app: &AppWindow, true_black: bool) {
+    use slint::ComponentHandle;
+    let theme = app.global::<Theme>();
+    let mut palette = theme.get_standard();
+    if true_black {
+        let black = slint::Color::from_rgb_u8(0, 0, 0);
+        palette.canvas = black;
+        palette.artwork_canvas = black;
+        palette.artwork_backdrop = black;
+        palette.nav_bottom = black;
+        palette.nav_rail = black;
+        palette.scrim_artwork = black;
+        palette.episode_card = black;
+        palette.scrim_episode_card = black;
+        palette.season_scrim = theme.get_black_season_scrim();
+    }
+    theme.set_true_black(true_black);
+    theme.set_current(palette);
+}
+
 #[cfg(test)]
 mod search_tests {
     #[test]

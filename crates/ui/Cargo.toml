@@ -13,6 +13,7 @@ license.workspace = true
 live-preview = ["slint/live-preview"]
 
 [dependencies]
+serde_json = "1.0.151"
 slint = { workspace = true }
 nova-config = { path = "../config" }
 

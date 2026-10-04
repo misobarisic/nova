@@ -238,3 +238,6 @@ export struct TrackingCandidateRow { title: string, detail: string, reason: stri
 export struct TrackingMappingRow { source_row: int, label: string, target_episode: string }
 
 export struct TrackingSetupRow { title:string, season:string, coverage:string, source_range:string, target_range:string, reason:string, history:string }
+
+export struct SettingSyncInfo {
+    can_override: bool, key: string, status: int, local_value: string, shared_value: string, has_shared: bool, shared_supported: bool }

@@ -100,4 +100,25 @@ fn existing_theme_defaults_and_live_palette_replacement_reach_shared_controls() 
     assert_eq!(app_theme.card, original.card);
     assert_eq!(app_theme.accent, original.accent);
     assert_eq!(app_theme.primary_button, original.primary_button);
+    nova_ui::apply_theme(&app, true);
+    let black_theme = app.global::<nova::Theme>().get_current();
+    let black = Color::from_rgb_u8(0, 0, 0);
+    for surface in [
+        black_theme.canvas,
+        black_theme.artwork_canvas,
+        black_theme.nav_bottom,
+        black_theme.nav_rail,
+        black_theme.scrim_artwork,
+        black_theme.episode_card,
+        black_theme.scrim_episode_card,
+    ] {
+        assert_eq!(surface, black);
+    }
+    assert_eq!(black_theme.accent, original.accent);
+    assert_eq!(black_theme.card, original.card);
+    assert_eq!(black_theme.primary_button, original.primary_button);
+    assert!(app.global::<nova::Theme>().get_true_black());
+    nova_ui::apply_theme(&app, false);
+    assert_eq!(app.global::<nova::Theme>().get_current(), app_theme);
+    assert!(!app.global::<nova::Theme>().get_true_black());
 }

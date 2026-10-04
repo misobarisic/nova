@@ -1,3 +1,5 @@
+import { SettingsSync, SettingSyncBadge } from "settings-sync.slint";
+import { SettingSyncModal } from "settings-sync-modal.slint";
 import { Theme } from "theme.slint";
 import { TrackingSettings } from "tracking.slint";
 import { ScrollView, Button } from "std-widgets.slint";
@@ -91,6 +93,7 @@ export component SettingsPage {
     in-out property <float> playback_speed: 1.0;
     in-out property <int> episode_start_index: 1;
     // Look and feel (Settings → Look and feel): master + per-category switches.
+    in-out property <bool> true_black: false;
     in-out property <bool> animations: true;
     in-out property <bool> anim_transitions: true;
     in-out property <bool> anim_hover: true;
@@ -209,7 +212,7 @@ export component SettingsPage {
     function schedule_save() {
         if (root.kb_zone == 5 && root.kb_hr < 7) {
             root.settings_edited(["cache_images", "enabled", "format", "quality", "downscale", "lazy_reencode", "lru_cache_mb"][root.kb_hr]);
-        } else if (root.kb_zone == 6 && root.kb_dr != 5) {
+        } else if (root.kb_zone == 6) {
             root.settings_edited(["date_relative", "prefetch_metadata", "show_unwatched_thumbs", "discover_min_cols", "library_min_cols", "language", "discover_catalog_addon_names"][root.kb_dr]);
         } else if (root.kb_zone == 10) {
             root.settings_edited(["animations", "anim_transitions", "anim_hover", "anim_player", "anim_nav_slide"][root.kb_anr]);
@@ -352,7 +355,7 @@ export component SettingsPage {
     in-out property <string> search_query: "";
     property <bool> search_active: root.search_query != "" && !root.search_matches(root.search_query, "");
     property <int> reveal_request: 0;
-    in-out property <[length]> page_scrolls: [0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px];
+    in-out property <[length]> page_scrolls: [0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px];
     pure callback search_matches(string, string) -> bool;
     in property <bool> cache_busy: false;
     in property <bool> cache_rewriting: false;
@@ -376,25 +379,26 @@ export component SettingsPage {
         if (id == 4) { return root.show_torrents; }
         if (id == 5) { return true; }
         if (id == 7) { return true; }
-        if (id == 8 || id == 9 || id == 10 || id == 11 || id == 12 || id == 13) { return true; }
+        if (id == 8 || id == 9 || id == 10 || id == 11 || id == 12 || id == 13 || id == 14) { return true; }
         return (id >= 0 && id <= 3) || id == 6;
     }
 
     function destination_index(id: int) -> int {
         if (id == 13) { return 0; }
         if (id == 3) { return 1; }
-        if (id == 6) { return 2; }
-        if (id == 5) { return 3; }
-        if (id == 0) { return 4; }
-        if (id == 1) { return 5; }
-        if (id == 7) { return 6; }
-        if (id == 12) { return 7; }
-        if (id == 2) { return 8; }
-        if (id == 8) { return 9; }
-        if (id == 9) { return 10; }
-        if (id == 4) { return 11; }
-        if (id == 10) { return 12; }
-        if (id == 11) { return 13; }
+        if (id == 14) { return 2; }
+        if (id == 6) { return 3; }
+        if (id == 5) { return 4; }
+        if (id == 0) { return 5; }
+        if (id == 1) { return 6; }
+        if (id == 7) { return 7; }
+        if (id == 12) { return 8; }
+        if (id == 2) { return 9; }
+        if (id == 8) { return 10; }
+        if (id == 9) { return 11; }
+        if (id == 4) { return 12; }
+        if (id == 10) { return 13; }
+        if (id == 11) { return 14; }
         return 0;
     }
     function land_title(id: int) -> string { return SettingsDestinations.entries[root.destination_index(id)].title; }
@@ -404,7 +408,7 @@ export component SettingsPage {
         return root.land_platform_avail(id) && (!root.search_active ? entry.parent < 0 : root.search_matches(root.search_query, entry.title + " " + entry.description + " " + entry.terms + " " + entry.aliases));
     }
     function group_available(group: int) -> bool {
-        if (group == 0) { return root.land_avail(13) || root.land_avail(3) || root.land_avail(6) || root.land_avail(5); }
+        if (group == 0) { return root.land_avail(13) || root.land_avail(3) || root.land_avail(14) || root.land_avail(6) || root.land_avail(5); }
         if (group == 1) { return root.land_avail(0) || root.land_avail(1) || root.land_avail(7) || root.land_avail(12); }
         if (group == 2) { return root.land_avail(2) || root.land_avail(8) || root.land_avail(9) || root.land_avail(4); }
         if (group == 3) { return root.land_avail(10) || root.land_avail(11); }
@@ -413,6 +417,7 @@ export component SettingsPage {
     function land_first() -> int {
         if (root.land_avail(13)) { return 13; }
         if (root.land_avail(3)) { return 3; }
+        if (root.land_avail(14)) { return 14; }
         if (root.land_avail(6)) { return 6; }
         if (root.land_avail(5)) { return 5; }
         if (root.land_avail(0)) { return 0; }
@@ -430,6 +435,7 @@ export component SettingsPage {
     function land_next(id: int) -> int {
         if (root.destination_index(id) < root.destination_index(13) && root.land_avail(13)) { return 13; }
         if (root.destination_index(id) < root.destination_index(3) && root.land_avail(3)) { return 3; }
+        if (root.destination_index(id) < root.destination_index(14) && root.land_avail(14)) { return 14; }
         if (root.destination_index(id) < root.destination_index(6) && root.land_avail(6)) { return 6; }
         if (root.destination_index(id) < root.destination_index(5) && root.land_avail(5)) { return 5; }
         if (root.destination_index(id) < root.destination_index(0) && root.land_avail(0)) { return 0; }
@@ -457,6 +463,7 @@ export component SettingsPage {
         if (root.destination_index(id) > root.destination_index(0) && root.land_avail(0)) { return 0; }
         if (root.destination_index(id) > root.destination_index(5) && root.land_avail(5)) { return 5; }
         if (root.destination_index(id) > root.destination_index(6) && root.land_avail(6)) { return 6; }
+        if (root.destination_index(id) > root.destination_index(14) && root.land_avail(14)) { return 14; }
         if (root.destination_index(id) > root.destination_index(3) && root.land_avail(3)) { return 3; }
         if (root.destination_index(id) > root.destination_index(13) && root.land_avail(13)) { return 13; }
         return id;
@@ -475,6 +482,7 @@ export component SettingsPage {
         if (root.sel == 7) { return 11; }
         if (root.sel == 8) { return 12; }
         if (root.sel == 13) { return 16; }
+        if (root.sel == 14) { return 17; }
         if (root.sel == 9) { return 13; }
         if (root.sel == 10) { return 15; }
         if (root.sel == 11) { return 14; }
@@ -523,6 +531,7 @@ export component SettingsPage {
     }
 
     function system_back() {
+        if SettingsSync.open { SettingsSync.open = false; nav_scope.focus(); return; }
         if (root.home_catalog_add_open) {
             root.home_catalog_add_open = false;
         } else if (root.sync_remove_prompt_visible) {
@@ -689,6 +698,7 @@ export component SettingsPage {
     }
 
     function kb_up() {
+        if (root.kb_zone == 17) { root.kb_zone = 0; return; }
         if (root.kb_zone == 16) {
             if (root.kb_home > 0) {
                 root.kb_home -= 1;
@@ -1125,6 +1135,9 @@ export component SettingsPage {
             }
         } else if (root.kb_zone == 10) {
             root.kb_anim_flip(root.kb_anr);
+        } else if (root.kb_zone == 17) {
+            root.true_black = !root.true_black;
+            root.schedule_setting("true_black");
         } else if (root.kb_zone == 16) {
             root.kb_home_activate();
         }
@@ -1183,6 +1196,9 @@ export component SettingsPage {
             }
         } else if (root.kb_zone == 10) {
             root.kb_anim_flip(root.kb_anr);
+        } else if (root.kb_zone == 17) {
+            root.true_black = !root.true_black;
+            root.schedule_setting("true_black");
         } else if (root.kb_zone == 16) {
             root.kb_home_activate();
         }
@@ -1272,6 +1288,9 @@ export component SettingsPage {
             }
         } else if (root.kb_zone == 10) {
             root.kb_anim_flip(root.kb_anr);
+        } else if (root.kb_zone == 17) {
+            root.true_black = !root.true_black;
+            root.schedule_setting("true_black");
         } else if (root.kb_zone == 16) {
             root.kb_home_activate();
         }
@@ -1328,6 +1347,7 @@ export component SettingsPage {
         // Artwork belongs to the page canvas so safe-area and content gutters
         // never frame it. Only the captions and controls retain their padding.
         settings_backdrop := Rectangle {
+            visible: !Theme.true_black;
             x: 0px;
             y: 0px;
             width: 100%;
@@ -2273,6 +2293,7 @@ export component SettingsPage {
                                     SectionHeader { label: @tr("Storage"); }
                                     SettingsCard {
                                         SettingsRow {
+                                            setting-key: "cache_images";
                                             row-title: @tr("Disk caching");
                                             row-desc: @tr("Keep downloaded artwork on this device to reduce network use.");
                                             ToggleSwitch {
@@ -2284,6 +2305,7 @@ export component SettingsPage {
                                     SectionHeader { label: @tr("Compression"); }
                                     SettingsCard {
                                         SettingsRow {
+                                            setting-key: "enabled";
                                             row-title: @tr("Compress images");
                                             row-desc: root.cache_images ? @tr("Compress new downloads. Existing files change only when requested.") : @tr("Enable disk caching to use compression.");
                                             ToggleSwitch {
@@ -2292,6 +2314,7 @@ export component SettingsPage {
                                                 toggled => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 1; root.schedule_save(); } }
                                         }
                                         SettingsRow {
+                                            setting-key: "format";
                                             row-title: @tr("Format");
                                             row-desc: @tr("JPEG or WebP for compressed artwork.");
                                             Segmented { labels: root.cache_format_names; current_index <=> root.cache_format_index; enabled: root.cache_images && root.cache_enabled && !root.cache_busy;
@@ -2299,12 +2322,14 @@ export component SettingsPage {
                                                 picked(i) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 2; root.schedule_save(); } }
                                         }
                                         SettingsRow {
+                                            setting-key: "quality";
                                             row-title: @tr("Quality"); row-desc: @tr("Higher values retain more detail and use more disk space.");
                                             NumericSetting { value <=> root.cache_quality; minimum: 1; maximum: 100; step: 1; enabled: root.cache_images && root.cache_enabled && !root.cache_busy;
                                                 focused: root.kb_active && root.kb_zone == 5 && root.kb_hr == 3;
                                                 changed(v) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 3; root.schedule_save(); } }
                                         }
                                         SettingsRow {
+                                            setting-key: "downscale";
                                             row-title: @tr("Downscale"); row-desc: @tr("Limit the longest side of compressed images to 1024 pixels.");
                                             ToggleSwitch {
                                                 name: @tr("Downscale"); checked <=> root.cache_downscale; enabled: root.cache_images && root.cache_enabled && !root.cache_busy;
@@ -2312,6 +2337,7 @@ export component SettingsPage {
                                                 toggled => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 4; root.schedule_save(); } }
                                         }
                                         SettingsRow {
+                                            setting-key: "lazy_reencode";
                                             row-title: @tr("Re-encode on load"); row-desc: @tr("Convert existing disk entries when accessed, using the current compression settings.");
                                             ToggleSwitch {
                                                 name: @tr("Re-encode on load"); checked <=> root.cache_lazy_reencode; enabled: root.cache_images && root.cache_enabled && !root.cache_busy;
@@ -2323,6 +2349,7 @@ export component SettingsPage {
                                     SectionHeader { label: @tr("Memory"); }
                                     SettingsCard {
                                         SettingsRow {
+                                            setting-key: "lru_cache_mb";
                                             row-title: @tr("Decoded-image budget"); row-desc: @tr("Memory available for decoded artwork, independent of disk caching.");
                                             NumericSetting { value <=> root.cache_lru_mb; minimum: 32; maximum: 512; step: 16; suffix: " MB";
                                                 focused: root.kb_active && root.kb_zone == 5 && root.kb_hr == 6;
@@ -2353,8 +2380,9 @@ export component SettingsPage {
                                     SettingsCard {
                                         SettingsRow {
                                             tinted: true;
+                                            setting-key: "language";
                                             row-title: @tr("Language");
-                                            row-desc: @tr("Language of the interface. Applies to this device only.");
+                                            row-desc: @tr("Language of the interface.");
 
                                             Segmented {
                                                 labels: root.language_names;
@@ -2367,6 +2395,7 @@ export component SettingsPage {
                                     SectionHeader { label: @tr("Artwork and metadata"); }
                                     SettingsCard {
                                         SettingsRow {
+                                            setting-key: "date_relative";
                                             row-title: @tr("Relative episode dates");
                                             row-desc: @tr("Show release dates as \"3 days ago\" instead of \"Mar 15, 2024\".");
 
@@ -2379,6 +2408,7 @@ export component SettingsPage {
                                         }
                                         SettingsRow {
                                             tinted: true;
+                                            setting-key: "prefetch_metadata";
                                             row-title: @tr("Prefetch episode metadata");
                                             row-desc: @tr("Download season/episode info in the background for items in Discover. My Library is always prefetched.");
 
@@ -2391,6 +2421,7 @@ export component SettingsPage {
                                         }
                                         SettingsRow {
                                             tinted: false;
+                                            setting-key: "show_unwatched_thumbs";
                                             row-title: @tr("Show unwatched thumbnails");
                                             row-desc: @tr("Show artwork for episodes you haven't started. When off, unwatched episodes show a placeholder instead.");
 
@@ -2406,6 +2437,7 @@ export component SettingsPage {
                                     SettingsCard {
                                         SettingsRow {
                                             tinted: true;
+                                            setting-key: "discover_min_cols";
                                             row-title: @tr("Discover grid columns");
                                             row-desc: @tr("Minimum columns in the Discover grid. More columns show smaller cards — e.g. 3 across on a phone.");
 
@@ -2417,6 +2449,7 @@ export component SettingsPage {
                                             }
                                         }
                                         SettingsRow {
+                                            setting-key: "discover_catalog_addon_names";
                                             row-title: @tr("Show addon names in catalogs");
                                             row-desc: @tr("Prefix catalog names with their addon in Discover's All addons view.");
                                             ToggleSwitch {
@@ -2431,6 +2464,7 @@ export component SettingsPage {
                                     SettingsCard {
                                         SettingsRow {
                                             tinted: false;
+                                            setting-key: "library_min_cols";
                                             row-title: @tr("Library grid columns");
                                             row-desc: @tr("Minimum columns in My Library. Applies automatically.");
 
@@ -2455,6 +2489,7 @@ export component SettingsPage {
                                     // the web build, so the whole section is hidden there.
 
                                     SettingsCard { SettingsRow {
+                                            setting-key: "torrent_enabled";
                                             row-title: @tr("Stream P2P");
                                             row-desc: @tr("Play P2P stream rows (Torrentio and friends) in the in-app player using a built-in P2P client. Files are kept for instant replay unless \"No caching\" is on.");
 
@@ -2497,6 +2532,7 @@ export component SettingsPage {
                                                                 font-weight: 600;
                                                                 color: Theme.current.text_bright;
                                                             }
+                                                            SettingSyncBadge { max-width: parent.width; setting_key: "torrent_dir"; setting_title: @tr("Download folder"); }
 
                                                             Text {
                                                                 text: @tr("Where P2P data is stored. Leave empty to use the default app cache folder.");
@@ -2563,6 +2599,7 @@ export component SettingsPage {
                                                                 color: Theme.current.text_bright;
                                                                 wrap: word-wrap;
                                                             }
+                                                            SettingSyncBadge { max-width: parent.width; setting_key: "torrent_dir"; setting_title: @tr("Download folder"); }
 
                                                             Text {
                                                                 text: @tr("Where P2P data is stored. Leave empty to use the default app cache folder.");
@@ -2621,6 +2658,7 @@ export component SettingsPage {
                                                 if !root.narrow: SettingsRow {
                                                     tinted: true;
                                                     row-min-height: 88px;
+                                                    setting-key: "torrent_max_mb";
                                                     row-title: @tr("Cache size limit");
                                                     row-desc: @tr("Maximum disk space for downloaded P2P data. Least-recently-used items are removed first once exceeded.");
 
@@ -2678,6 +2716,7 @@ export component SettingsPage {
                                                                 color: Theme.current.text_bright;
                                                                 wrap: word-wrap;
                                                             }
+                                                            SettingSyncBadge { max-width: parent.width; setting_key: "torrent_max_mb"; setting_title: @tr("Cache size limit"); }
 
                                                             Text {
                                                                 text: @tr("Maximum disk space for downloaded P2P data. Least-recently-used items are removed first once exceeded.");
@@ -2716,6 +2755,7 @@ export component SettingsPage {
                                                 // Download rate limit (wide).
                                                 if !root.narrow: SettingsRow {
                                                     row-min-height: 88px;
+                                                    setting-key: "torrent_down_limit";
                                                     row-title: @tr("Download rate limit");
                                                     row-desc: @tr("Cap the download speed. 0 means unlimited.");
 
@@ -2773,6 +2813,7 @@ export component SettingsPage {
                                                                 color: Theme.current.text_bright;
                                                                 wrap: word-wrap;
                                                             }
+                                                            SettingSyncBadge { max-width: parent.width; setting_key: "torrent_down_limit"; setting_title: @tr("Download rate limit"); }
 
                                                             Text {
                                                                 text: @tr("Cap the download speed. 0 means unlimited.");
@@ -2810,6 +2851,7 @@ export component SettingsPage {
 
                                                 SettingsRow {
                                                     tinted: true;
+                                                    setting-key: "torrent_no_cache";
                                                     row-title: @tr("No caching");
                                                     row-desc: @tr("Delete a stream's downloaded data as soon as its playback stops. Overrides keep-for-replay.");
 
@@ -2907,6 +2949,7 @@ export component SettingsPage {
 
 
                                         SettingsRow {
+                                            setting-key: "player_external";
                                             row-title: @tr("Player");
                                             row-desc: @tr("Built-in plays streams inside the app. External hands them to another video app.");
 
@@ -2924,6 +2967,7 @@ export component SettingsPage {
 
                                         SettingsRow {
                                             tinted: true;
+                                            setting-key: "episode_start_behavior";
                                             row-title: @tr("Episode playback");
                                             row-desc: @tr("Choose how episodes with saved playback history start.");
 
@@ -2941,6 +2985,7 @@ export component SettingsPage {
 
                                         if !root.is_android && root.player_backend_index == 1: SettingsRow {
                                             tinted: true;
+                                            setting-key: "desktop_external_app";
                                             row-title: @tr("External app");
                                             row-desc: @tr("Which app opens the stream. System default uses whatever handles video URLs.");
 
@@ -2954,6 +2999,7 @@ export component SettingsPage {
 
                                         if root.is_android && root.player_backend_index == 0: SettingsRow {
                                             tinted: true;
+                                            setting-key: "android_hwdec";
                                             row-title: @tr("Video decoder");
                                             row-desc: @tr("HW+ keeps decoded frames on the GPU and is fastest; it falls back to HW, then SW. HW falls back to SW.");
 
@@ -2975,6 +3021,7 @@ export component SettingsPage {
                                             // Android decoder row (built-in) is
                                             // already tinted.
                                             tinted: !root.is_android;
+                                            setting-key: "playback_speed";
                                             row-title: @tr("Playback speed");
                                             row-desc: @tr("Rate the built-in player starts at. The slider covers 0.5×–2.0×; ± moves in 0.05× steps.");
 
@@ -3027,6 +3074,7 @@ export component SettingsPage {
                                                         color: Theme.current.text_bright;
                                                         wrap: word-wrap;
                                                     }
+                                                    SettingSyncBadge { max-width: parent.width; setting_key: "playback_speed"; setting_title: @tr("Playback speed"); }
 
                                                     Text {
                                                         text: @tr("Rate the built-in player starts at. The slider covers 0.5×–2.0×; ± moves in 0.05× steps.");
@@ -3057,10 +3105,31 @@ export component SettingsPage {
                                     }
                                 }
 
+                                if root.sel == 14: VerticalLayout {
+                                    vertical-stretch: 0; spacing: 16px;
+                                    SectionHeader { label: @tr("Theme"); }
+                                    SettingsCard { SettingsRow {
+                                        setting-key: "true_black";
+                                        row-title: @tr("True black");
+                                        row-desc: @tr("Use pure black backgrounds and artwork fades.");
+                                        ToggleSwitch {
+                                            name: @tr("True black");
+                                            checked <=> root.true_black;
+                                            focused: root.kb_zone == 17 && root.kb_active;
+                                            toggled => {
+                                                root.kb_active = SettingsStyle.keyboard-mode;
+                                                root.kb_zone = 17;
+                                                root.schedule_setting("true_black");
+                                            }
+                                        }
+                                    } }
+                                }
+
                                 if root.sel == 6: VerticalLayout {
                                     vertical-stretch: 0; spacing: 16px;
                                     SectionHeader { label: @tr("Animations"); }
                                     SettingsCard { SettingsRow {
+                                            setting-key: "animations";
                                             row-title: @tr("Enable animations");
                                             row-desc: @tr("Master switch. Turn off to make every transition and hover effect instant.");
 
@@ -3075,6 +3144,7 @@ export component SettingsPage {
                                     if !root.animations: Text { text: @tr("Enable animations to use the motion options below."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
                                     SettingsCard { SettingsRow {
                                             tinted: true;
+                                            setting-key: "anim_transitions";
                                             row-title: @tr("Page transitions");
                                             row-desc: @tr("Slide and fade when opening settings subpages and detail pages.");
 
@@ -3088,6 +3158,7 @@ export component SettingsPage {
                                         }
                                         SettingsRow {
                                             tinted: false;
+                                            setting-key: "anim_hover";
                                             row-title: @tr("Hover effects");
                                             row-desc: @tr("Card lift and the highlight on buttons, toggles and rows.");
 
@@ -3101,6 +3172,7 @@ export component SettingsPage {
                                         }
                                         SettingsRow {
                                             tinted: true;
+                                            setting-key: "anim_player";
                                             row-title: @tr("Player OSD");
                                             row-desc: @tr("Fade and slide of the player controls, close button and volume slider.");
 
@@ -3114,6 +3186,7 @@ export component SettingsPage {
                                         }
                                         SettingsRow {
                                             tinted: false;
+                                            setting-key: "anim_nav_slide";
                                             row-title: @tr("Navigation feedback");
                                             row-desc: @tr("Gently pop the selected navigation icon when switching pages.");
 
@@ -3262,6 +3335,7 @@ export component SettingsPage {
                                             spacing: 0px;
 
                                             SettingsRow {
+                                                setting-key: "sync_enabled";
                                                 row-title: @tr("Enable cross-device sync");
                                                 row-desc: @tr("Keep your library, watch history, addons and settings in step across your devices. Direct, end-to-end encrypted connections — no account or server.");
 
@@ -3304,6 +3378,7 @@ export component SettingsPage {
                                                     font-weight: 600;
                                                     color: Theme.current.text_bright;
                                                 }
+                                                SettingSyncBadge { max-width: parent.width; setting_key: "sync_device_name"; setting_title: @tr("Device name"); }
 
                                                 SearchField {
                                                     show-pointer-focus: false; keyboard-mode: root.kb_active;
@@ -3382,6 +3457,7 @@ export component SettingsPage {
                                                 spacing: 0px;
 
                                                 SettingsRow {
+                                                    setting-key: "sync_interval";
                                                     row-title: @tr("Auto-sync while the app is running");
                                                     row-desc: @tr("How often to check for changes while the app is open or a download is active.");
 
@@ -3393,6 +3469,7 @@ export component SettingsPage {
                                                 }
 
                                                 SettingsRow {
+                                                    setting-key: "sync_background";
                                                     row-title: @tr("Background sync");
                                                     row-desc: @tr("Best-effort sync while the app is closed. Android schedules it and may delay it — often every 15–60 min, longer in deep Doze.");
 
@@ -3404,6 +3481,7 @@ export component SettingsPage {
                                                 }
 
                                                 SettingsRow {
+                                                    setting-key: "sync_local_discovery";
                                                     row-title: @tr("Local network discovery");
                                                     row-desc: @tr("Probe the local network for direct connections (UPnP, LAN discovery). Turn off on faulty Wi-Fi that chokes on multicast traffic.");
 
@@ -3432,6 +3510,7 @@ export component SettingsPage {
                                                 spacing: 0px;
 
                                                 SettingsRow {
+                                                    setting-key: "sync_pair_confirm";
                                                     row-title: @tr("Ask before accepting devices");
                                                     row-desc: @tr("Show a confirmation prompt with a match code instead of trusting an invite automatically.");
 
@@ -3704,6 +3783,7 @@ export component SettingsPage {
                                             spacing: 0px;
 
                                             SettingsRow {
+                                                setting-key: "home_continue_enabled";
                                                 row-title: @tr("Continue Watching");
                                                 row-desc: @tr("Show the Continue Watching row on Home.");
 
@@ -3723,6 +3803,7 @@ export component SettingsPage {
 
                                             SettingsRow {
                                                 tinted: true;
+                                                setting-key: "home_upcoming_enabled";
                                                 row-title: @tr("Upcoming");
                                                 row-desc: @tr("Show the Upcoming row on Home.");
 
@@ -3782,6 +3863,7 @@ export component SettingsPage {
 
                                             for home[i] in root.home_catalog_rows: SettingsRow {
                                                 tinted: Math.mod(i, 2) == 0;
+                                                setting-key: "home_catalog_sources";
                                                 row-title: home.title;
                                                 row-desc: home.addon + " · " + home.media_type
                                                 + " · " + (home.genre == "" ? @tr("All genres") : home.genre)
@@ -3823,6 +3905,7 @@ export component SettingsPage {
                                     SectionHeader { label: @tr("Cleanup policy"); }
 
                                     SettingsCard { SettingsRow {
+                                            setting-key: "download_auto_delete_watched";
                                             row-title: @tr("Auto-delete watched episodes");
                                             row-desc: @tr("Delete a downloaded episode once you mark it watched. Movie downloads are never removed by this setting.");
 
@@ -4228,4 +4311,11 @@ export component SettingsPage {
             }
         }
     }
+    SettingSyncModal {
+        narrow: root.phone_layout;
+        safe-top: root.safe-top; safe-bottom: root.safe-bottom;
+        safe-left: root.safe-left; safe-right: root.safe-right;
+        closed => { nav_scope.focus(); }
+    }
+
 }

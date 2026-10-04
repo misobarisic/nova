@@ -172,7 +172,7 @@ impl AndroidHwdec {
 /// written in, so it is also what `code()` returns for the fallback: the
 /// bundled catalogs live in `crates/ui/translations/<code>/LC_MESSAGES/nova-ui.po`
 /// and a language with no catalog (or one missing a string) simply renders the
-/// English source text. Per-device: never synced, like the playback rate.
+/// English source text. Syncs by default, with an optional per-device override.
 ///
 /// Adding a language = a variant here (plus its `ALL`/`index`/`code`/`label`
 /// arms) and a catalog directory; the picker list in Settings → Display is
@@ -393,10 +393,15 @@ pub struct CacheSettings {
     /// Language of the user interface (Settings → Display). English is the
     /// source language, so an older settings blob without the field (or one
     /// naming a language this build does not bundle) reads as English.
-    /// Local-only: never synced (see `UNSYNCED_SETTINGS_FIELDS` in
-    /// `src/app/sync.rs`).
+    /// Syncs by default; `sync_overrides` can retain a different device language.
     #[serde(default)]
     pub language: Language,
+    /// Pure black backgrounds (Settings → Theme), synced unless overridden.
+    #[serde(default)]
+    pub true_black: bool,
+    /// Device-local overrides, retaining a shared baseline for unseeded fields.
+    #[serde(default)]
+    pub sync_overrides: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl Default for CacheSettings {
@@ -433,6 +438,8 @@ impl Default for CacheSettings {
             anim_player: true,
             anim_nav_slide: true,
             language: Language::English,
+            true_black: false,
+            sync_overrides: Default::default(),
         }
     }
 }
@@ -751,6 +758,32 @@ mod tests {
             EpisodeStartBehavior::Resume
         );
         assert_eq!(CacheSettings::default().language.index(), 0);
+    }
+
+    #[test]
+    fn device_override_baselines_default_empty_and_round_trip() {
+        let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
+        let mut settings: CacheSettings = serde_json::from_str(older).unwrap();
+        assert!(settings.sync_overrides.is_empty());
+        settings
+            .sync_overrides
+            .insert("quality".into(), serde_json::json!(60));
+        settings.quality = 95;
+        let restored: CacheSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.quality, 95);
+        assert_eq!(restored.sync_overrides["quality"], 60);
+    }
+
+    #[test]
+    fn true_black_defaults_off_and_round_trips() {
+        let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
+        let mut settings: CacheSettings = serde_json::from_str(older).unwrap();
+        assert!(!settings.true_black);
+        settings.true_black = true;
+        let restored: CacheSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert!(restored.true_black);
     }
 
     #[test]

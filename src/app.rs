@@ -715,6 +715,7 @@ mod playback;
 mod posters;
 mod run;
 mod settings;
+mod settings_sync;
 pub use run::run;
 
 mod qr;

@@ -120,6 +120,7 @@ fn settings_navigation_survives_search_back_breakpoints_and_recreation() {
         let destinations = vec![
             "home",
             "display",
+            "theme",
             "look-and-feel",
             "player",
             "addons",

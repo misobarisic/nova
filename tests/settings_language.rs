@@ -146,7 +146,8 @@ fn display_language_picker_renders_and_reaches_the_backend() {
     {
         let saved = saved.clone();
         let weak = app.as_weak();
-        app.on_save_settings(move || {
+        app.on_settings_edited(move |field| {
+            assert_eq!(field.as_str(), "language");
             if let Some(app) = weak.upgrade() {
                 saved.borrow_mut().push(app.get_language_index());
             }

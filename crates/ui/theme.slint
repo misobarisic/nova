@@ -1,10 +1,11 @@
-// Initial theme foundation. The current Nova appearance is the only built-in
-// theme; no selection or persistence is needed yet. Library and Discover page
-// bodies intentionally retain their local styling until their redesigns.
+// Shared palettes: the standard appearance plus true-black mode.
 //
 // Tokens name visual roles, not hex values. Similar shades stay distinct where
 // they currently serve different roles, so extraction does not restyle the UI.
 export struct ThemePalette {
+    scope_synced_fill: color, scope_synced_text: color,
+    scope_local_fill: color, scope_local_text: color,
+    scope_override_fill: color, scope_override_text: color,
     // Core surfaces and content.
     canvas: color,
     artwork_canvas: color,
@@ -187,7 +188,13 @@ export struct ThemePalette {
 
 export global Theme {
     // Replace this value on the UI thread; component bindings update live.
-    in-out property <ThemePalette> current: {
+    in-out property <bool> true_black: false;
+    out property <brush> black_season_scrim: @linear-gradient(180deg, transparent, #000000c0);
+    in-out property <ThemePalette> current: self.standard;
+    out property <ThemePalette> standard: {
+        scope_synced_fill: #10382b, scope_synced_text: #6fe0a0,
+        scope_local_fill: #292044, scope_local_text: #bca0ff,
+        scope_override_fill: #48301a, scope_override_text: #efb76f,
         // Core surfaces and content.
         canvas: #0f0f12,
         artwork_canvas: #080f19,

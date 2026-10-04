@@ -1,6 +1,7 @@
 import { Theme } from "theme.slint";
 import { Button, LineEdit, ComboBox, CheckBox, ScrollView } from "std-widgets.slint";
 import { PillButton, ToggleSwitch, SettingsStyle, SettingsRow, SettingsInput } from "settings-controls.slint";
+import { SettingSyncBadge } from "settings-sync.slint";
 import { Dropdown } from "dropdown.slint";
 import { IcClose, IcChevronRight, IcSync } from "icons.slint";
 import { Anim } from "anim.slint";
@@ -131,10 +132,12 @@ component AccountEditor inherits Rectangle {
         Text { text: root.entry.service == 0 ? "MyAnimeList" : "AniList"; color: Theme.current.text_bright; font-weight: 700; }
         Text { text: root.entry.name; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0; }
         Text { text: root.entry.state; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0; }
-        SettingsRow { row-title: @tr("Automatic tracking for linked releases"); ToggleSwitch { name: @tr("Automatic tracking for linked releases"); checked: root.entry.automatic; toggled => { root.automatic(root.entry.service, self.checked); } } }
+        SettingsRow { setting-key: "tracking_automatic_" + root.entry.service; row-title: @tr("Automatic tracking for linked releases"); ToggleSwitch { name: @tr("Automatic tracking for linked releases"); checked: root.entry.automatic; toggled => { root.automatic(root.entry.service, self.checked); } } }
         Text { text: @tr("Public client ID"); color: Theme.current.text_settings; }
+        SettingSyncBadge { max-width: parent.width; setting_key: "tracking_client_" + root.entry.service; setting_title: @tr("Public client ID"); }
         SettingsInput { changed has-focus => {root.input_focus(self.has-focus);} text <=> root.client; placeholder-text: @tr("Public client ID"); accessible-label: @tr("Public client ID"); }
         Text { text: @tr("Registered redirect URL"); color: Theme.current.text_settings; }
+        SettingSyncBadge { max-width: parent.width; setting_key: "tracking_redirect_" + root.entry.service; setting_title: @tr("Registered redirect URL"); }
         SettingsInput { changed has-focus => {root.input_focus(self.has-focus);} text <=> root.redirect; placeholder-text: @tr("Registered redirect URL"); accessible-label: @tr("Registered redirect URL"); }
         if !root.entry.signing_in: PillButton {
             label: root.entry.connected ? @tr("Reconnect") : @tr("Connect");

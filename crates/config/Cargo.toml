@@ -6,8 +6,4 @@ license.workspace = true
 
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
-
-[dev-dependencies]
-# Settings blobs are JSON (the `settings` key in redb), so the back-compat
-# test deserializes a blob saved before the `language` field existed.
 serde_json = "1.0.151"

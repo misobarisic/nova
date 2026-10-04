@@ -1,3 +1,6 @@
+export { SettingSyncInfo } from "types.slint";
+import { SettingsSync } from "settings-sync.slint";
+export { SettingsSync } from "settings-sync.slint";
 import { Theme } from "theme.slint";
 export { Theme, ThemePalette } from "theme.slint";
 // Bundle the same UI family on desktop and Android, including a real bold face.
@@ -244,6 +247,7 @@ export component AppWindow inherits Window {
     in-out property <int> system_back_request: 0;
     // --- Settings (animations) ----------------------------------------
     // Master + per-category animation switches (Settings → Look and feel).
+    in-out property <bool> true_black: false;
     in-out property <bool> animations: true;
     in-out property <bool> anim_transitions: true;
     in-out property <bool> anim_hover: true;
@@ -423,7 +427,7 @@ export component AppWindow inherits Window {
     in-out property <string> settings_search_query: "";
     in-out property <int> settings_focused_id: 13;
     in-out property <length> settings_navigation_scroll: 0px;
-    in-out property <[length]> settings_page_scrolls: [0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px];
+    in-out property <[length]> settings_page_scrolls: [0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px];
     in-out property <bool> cache_busy: false;
     in-out property <bool> cache_rewriting: false;
     in-out property <int> cache_processed: 0;
@@ -1057,6 +1061,7 @@ export component AppWindow inherits Window {
         playback_speed <=> root.playback_speed;
         episode_start_index <=> root.episode_start_index;
         is_android: root.is_android;
+        true_black <=> root.true_black;
         animations <=> root.animations;
         anim_transitions <=> root.anim_transitions;
         anim_hover <=> root.anim_hover;

@@ -63,6 +63,16 @@ pub fn tr(english: &'static str) -> &'static str {
         return english;
     }
     match english {
+        "On" => "Uključeno",
+        "Off" => "Isključeno",
+        "Unlimited" => "Neograničeno",
+        "Not received yet" => "Još nije primljeno",
+        "Every minute" => "Svake minute",
+        "Every 5 minutes" => "Svakih 5 minuta",
+        "Every 15 minutes" => "Svakih 15 minuta",
+        "Start over" => "Od početka",
+        "Ask" => "Pitaj",
+        "System default" => "Zadano sustava",
         "Movie" => "Film",
         "TV" => "TV",
         "Streams for other sources" => "Streamovi za druge izvore",
@@ -1075,9 +1085,98 @@ pub fn cache_rewrite_status(
     }
 }
 
+/// Readable values for setting-scope comparisons; identifiers remain untranslated.
+pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
+    if let Some(enabled) = value.as_bool() {
+        return tr(if enabled { "On" } else { "Off" }).into();
+    }
+    let number = value
+        .as_f64()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| value.to_string());
+    match field {
+        "lru_cache_mb" | "torrent_max_mb" => format!("{number} MB"),
+        "quality" => format!("{}%", value),
+        "playback_speed" => format!("{}×", value),
+        "torrent_down_limit" if value.as_f64() == Some(0.0) => tr("Unlimited").into(),
+        "torrent_down_limit" => format!("{number} KB/s"),
+        "home_catalog_sources" => {
+            let count = value.as_array().map_or(0, Vec::len);
+            let word = if croatian() {
+                plural(count as u64, "katalog", "kataloga", "kataloga")
+            } else if count == 1 {
+                "catalog"
+            } else {
+                "catalogs"
+            };
+            format!("{count} {word}")
+        }
+        "torrent_dir" if value.as_str() == Some("") => tr("Default (app cache folder)").into(),
+        "sync_interval" => match value.as_i64().unwrap_or(1) {
+            0 => "30 s",
+            1 => tr("Every minute"),
+            2 => tr("Every 5 minutes"),
+            _ => tr("Every 15 minutes"),
+        }
+        .into(),
+        _ => value
+            .as_str()
+            .map(|s| {
+                match s {
+                    "jpeg" => "JPEG",
+                    "webp" => "WebP",
+                    "en" | "English" => "English",
+                    "hr" | "Croatian" => "Hrvatski",
+                    "Resume" | "resume" => tr("Resume"),
+                    "StartOver" | "start_over" => tr("Start over"),
+                    "Ask" | "ask" => tr("Ask"),
+                    "system" | "system_default" => tr("System default"),
+                    "vlc" => "VLC",
+                    "mpv" => "mpv",
+                    "hw+" | "hw_plus" => "HW+",
+                    "hw" => "HW",
+                    "sw" => "SW",
+                    _ => s,
+                }
+                .into()
+            })
+            .unwrap_or_else(|| value.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setting_comparisons_translate_values_and_format_units() {
+        with_language(Language::English, || {
+            assert_eq!(setting_sync_value("quality", &serde_json::json!(60)), "60%");
+            assert_eq!(
+                setting_sync_value("language", &serde_json::json!("Croatian")),
+                "Hrvatski"
+            );
+            assert_eq!(
+                setting_sync_value("language", &serde_json::json!("English")),
+                "English"
+            );
+            assert_eq!(
+                setting_sync_value("torrent_max_mb", &serde_json::json!(20480.0)),
+                "20480 MB"
+            );
+            assert_eq!(
+                setting_sync_value("episode_start_behavior", &serde_json::json!("StartOver")),
+                "Start over"
+            );
+        });
+        with_language(Language::Croatian, || {
+            assert_eq!(
+                setting_sync_value("animations", &serde_json::json!(false)),
+                "Isključeno"
+            );
+            assert_eq!(tr("Not received yet"), "Još nije primljeno");
+        });
+    }
 
     #[test]
     fn tracking_ranges_preserve_gaps_and_summary_hides_zero_warning() {

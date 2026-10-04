@@ -562,8 +562,8 @@ msgstr "Najmanji broj stupaca u Mojoj biblioteci. Primjenjuje se automatski."
 msgid "Language"
 msgstr "Jezik"
 
-msgid "Language of the interface. Applies to this device only."
-msgstr "Jezik sučelja. Primjenjuje se samo na ovom uređaju."
+msgid "Language of the interface."
+msgstr "Jezik sučelja."
 
 msgid "Stream P2P"
 msgstr "P2P prijenos"
@@ -1657,3 +1657,81 @@ msgstr "Nema odgovarajućih naslova u vašoj biblioteci."
 
 msgid "Find your next movie, show, or anime."
 msgstr "Pronađite svoj sljedeći film, seriju ili anime."
+
+msgid "Theme"
+msgstr "Tema"
+
+msgid "Background colours and artwork fades"
+msgstr "Boje pozadine i prijelazi slika"
+
+msgid "True black"
+msgstr "Prava crna"
+
+msgid "Use pure black backgrounds and artwork fades."
+msgstr "Koristite potpuno crne pozadine i prijelaze slika."
+
+msgid "Synced"
+msgstr "Sinkronizirano"
+
+msgid "This device (overridden)"
+msgstr "Ovaj uređaj (iznimka)"
+
+msgid "Sync status"
+msgstr "Status sinkronizacije"
+
+msgid "Value on this device"
+msgstr "Vrijednost na ovom uređaju"
+
+msgid "Synced value"
+msgstr "Sinkronizirana vrijednost"
+
+msgid "This setting is saved only on this device. Changes won’t affect your other devices."
+msgstr "Ova se postavka sprema samo na ovom uređaju. Promjene neće utjecati na vaše druge uređaje."
+
+msgid "This device uses a separate value. Changes here won’t affect your other devices."
+msgstr "Ovaj uređaj koristi zasebnu vrijednost. Promjene ovdje neće utjecati na vaše druge uređaje."
+
+msgid "Changes sync to your paired devices. Choose a separate value to keep future changes on this device."
+msgstr "Promjene se sinkroniziraju s vašim uparenim uređajima. Odaberite zasebnu vrijednost kako bi buduće promjene ostale na ovom uređaju."
+
+msgid "No synced value is available yet. Switching back restores the value saved when you started this override."
+msgstr "Sinkronizirana vrijednost još nije dostupna. Povratak vraća vrijednost spremljenu kad ste uključili nadjačavanje."
+
+msgid "Use synced value"
+msgstr "Koristi sinkroniziranu vrijednost"
+
+msgid "Use device override"
+msgstr "Koristi nadjačavanje uređaja"
+
+msgid "Keep override and edit setting"
+msgstr "Zadrži nadjačavanje i uredi postavku"
+
+msgid "Not received yet"
+msgstr "Još nije primljeno"
+
+msgid "catalogs"
+msgstr "kataloga"
+
+msgid "Manual only"
+msgstr "Samo ručno"
+
+msgid "Every minute"
+msgstr "Svake minute"
+
+msgid "Every 5 minutes"
+msgstr "Svakih 5 minuta"
+
+msgid "Every 15 minutes"
+msgstr "Svakih 15 minuta"
+
+msgid "This version of Nova cannot use the synced value. Update Nova before switching back. You can keep using your separate value."
+msgstr "Ova verzija Nove ne može koristiti sinkroniziranu vrijednost. Ažurirajte Novu prije povratka. Možete nastaviti koristiti zasebnu vrijednost."
+
+msgid "This setting always syncs. Changes apply to your paired devices."
+msgstr "Ova se postavka uvijek sinkronizira. Promjene se primjenjuju na vaše uparene uređaje."
+
+msgid "Switching back replaces this device’s value with the synced value shown above."
+msgstr "Povratak zamjenjuje vrijednost ovog uređaja sinkroniziranom vrijednošću prikazanom iznad."
+
+msgid "No synced value has been received yet. A separate value starts with the current value on this device."
+msgstr "Sinkronizirana vrijednost još nije primljena. Zasebna vrijednost počinje trenutačnom vrijednošću na ovom uređaju."

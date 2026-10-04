@@ -2577,6 +2577,7 @@ impl Coordinator {
             if let Some(app) = bridge.app() {
                 if let Some(model) = update_rows(app.get_tracking_accounts(), accounts) {
                     app.set_tracking_accounts(model);
+                    bridge.refresh_setting_sync();
                 }
                 if bridge.tracking.context_generation.load(Ordering::Acquire) == generation
                     || !app.get_tracking_open()

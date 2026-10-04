@@ -53,6 +53,10 @@ pub(crate) fn preserve_unsupported_settings(_old: Option<&str>, new: &str) -> St
 
 pub(crate) fn recover_settings(value: serde_json::Value) -> Option<CacheSettings> {
     let source = value.as_object()?;
+    // Losing unreadable policy could publish device overrides as account values.
+    if source.get("sync_overrides").is_some_and(|v| !v.is_object()) {
+        return None;
+    }
     let mut current = serde_json::to_value(CacheSettings::default()).ok()?;
     for (key, value) in source {
         let mut trial = current.clone();
@@ -104,6 +108,7 @@ impl Bridge {
                 callback_schedule();
             });
         }
+        self.bind_setting_sync();
         schedule
     }
 
@@ -139,6 +144,7 @@ impl Bridge {
                 EpisodeStartBehavior::Resume => 1,
                 EpisodeStartBehavior::Ask => 2,
             });
+            app.set_true_black(settings.true_black);
             app.set_animations(settings.animations);
             app.set_anim_transitions(settings.anim_transitions);
             app.set_anim_hover(settings.anim_hover);
@@ -151,15 +157,23 @@ impl Bridge {
         }
         self.apply_home_catalog_rows();
         self.download_settings_to_ui();
+        self.apply_theme(&settings);
         self.apply_animations(&settings);
         self.apply_language(&settings);
         self.apply_catalog_labels_to_ui();
+        self.refresh_setting_sync();
         self.refresh_cache_disk_usage();
         self.apply_category_rows();
     }
 
-    /// Push the animation switches into the `Anim` global, which every
-    /// `animate` duration in the UI reads. Takes effect immediately.
+    /// Apply the effective palette to all mounted pages.
+    pub(super) fn apply_theme(&self, settings: &CacheSettings) {
+        if let Some(app) = self.app() {
+            nova_ui::apply_theme(&app, settings.true_black);
+        }
+    }
+
+    /// Push animation switches into the shared global for immediate feedback.
     pub(super) fn apply_animations(&self, settings: &CacheSettings) {
         if let Some(app) = self.app() {
             let anim = app.global::<crate::Anim>();
@@ -273,6 +287,8 @@ impl Bridge {
                     2 => EpisodeStartBehavior::Ask,
                     _ => EpisodeStartBehavior::Resume,
                 },
+                sync_overrides: state.cache_settings.sync_overrides.clone(),
+                true_black: app.get_true_black(),
                 animations: app.get_animations(),
                 anim_transitions: app.get_anim_transitions(),
                 anim_hover: app.get_anim_hover(),
@@ -293,9 +309,11 @@ impl Bridge {
         if !applying() {
             notify_settings(&settings);
         }
+        self.apply_theme(&settings);
         self.apply_animations(&settings);
         self.apply_language(&settings);
         self.apply_catalog_labels_to_ui();
+        self.refresh_setting_sync();
 
         // Torrent controls share the same immediate capture and disk debounce.
         let torrent = TorrentSettings {
@@ -692,6 +710,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unreadable_override_policy_does_not_fall_back_to_shared_publication() {
+        assert!(recover_settings(serde_json::json!({"sync_overrides": []})).is_none());
+        assert!(recover_settings(serde_json::json!({"sync_overrides": "invalid"})).is_none());
+    }
+
+    #[test]
     fn autosave_survives_navigation_and_preserves_current_memory() {
         // Storage and Slint initialize once per process. Isolate this test
         // from unit tests that intentionally run with an uninitialized KV
@@ -794,6 +818,84 @@ mod tests {
         bridge.settings_to_ui();
         bridge.torrent_settings_to_ui();
         bridge.persist_settings();
+        app.set_true_black(true);
+        app.invoke_settings_edited("true_black".into());
+        assert!(app.global::<crate::Theme>().get_true_black());
+        assert_eq!(
+            app.global::<crate::Theme>().get_current().artwork_canvas,
+            slint::Color::from_rgb_u8(0, 0, 0)
+        );
+        bridge.persist_settings();
+        assert!(read_settings().true_black);
+        assert_eq!(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_SETTINGS, "true_black")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("true"),
+            "theme edits publish a synced preference"
+        );
+        app.set_true_black(false);
+        bridge.settings_to_ui();
+        assert!(app.get_true_black(), "stored theme is restored on reload");
+        // A local override leaves the shared record and its clock unchanged,
+        // including when another member of the coupled cache group is edited.
+        app.set_cache_quality(80.0);
+        app.invoke_settings_edited("quality".into());
+        let shared_before = owner
+            .lock()
+            .unwrap()
+            .record(DOMAIN_SETTINGS, "cache")
+            .unwrap()
+            .clone();
+        bridge.set_setting_override("quality", true);
+        app.set_cache_quality(95.0);
+        app.invoke_settings_edited("quality".into());
+        bridge.persist_settings();
+        assert_eq!(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_SETTINGS, "cache")
+                .unwrap(),
+            &shared_before
+        );
+        assert_eq!(read_settings().quality, 95);
+        assert!(read_settings().sync_overrides.contains_key("quality"));
+        {
+            let mut store = owner.lock().unwrap();
+            store.apply(
+                DOMAIN_SETTINGS,
+                "cache",
+                nova_sync::Record {
+                    value: Some(r#"{"quality":60,"format":"webp","downscale":true}"#.into()),
+                    version: nova_sync::Version::new(nova_config::now_ms() + 1000, 0, 999, false),
+                },
+            );
+            store.save().unwrap();
+        }
+        bridge.sync_apply(vec![DOMAIN_SETTINGS.into()]);
+        assert_eq!(app.get_cache_quality(), 95.0);
+        assert_eq!(read_settings().sync_overrides["quality"], 60);
+        app.set_cache_downscale(false);
+        app.invoke_settings_edited("downscale".into());
+        let raw = owner
+            .lock()
+            .unwrap()
+            .record(DOMAIN_SETTINGS, "cache")
+            .unwrap()
+            .value
+            .clone()
+            .unwrap();
+        let shared: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(shared["quality"], 60);
+        assert_eq!(shared["downscale"], false);
+        bridge.set_setting_override("quality", false);
+        assert_eq!(app.get_cache_quality(), 60.0);
+        assert!(!read_settings().sync_overrides.contains_key("quality"));
         let initial = read_settings();
         app.set_show_home(false);
         app.set_show_settings(true);

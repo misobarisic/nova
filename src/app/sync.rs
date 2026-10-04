@@ -159,7 +159,7 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
         "settings" => {
             let settings: CacheSettings = serde_json::from_str(raw)?;
             vec![
-                (DOMAIN_SETTINGS, settings_fields(&settings)),
+                (DOMAIN_SETTINGS, live_settings_fields(&settings)),
                 (
                     DOMAIN_CATEGORY,
                     settings
@@ -205,7 +205,7 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
     // Map entries are user data, not unknown schema fields: retaining absent
     // keys here would resurrect projected progress/hide deletions on restart.
     let raw = if key == "settings" {
-        nova_sync::preserve_unknown(old.as_deref(), &raw)
+        preserve_settings_snapshot(old.as_deref(), &raw)
     } else {
         raw
     };
@@ -344,7 +344,7 @@ pub(crate) fn sort_by_order(current: Vec<String>, order: &[String]) -> Vec<Strin
 
 /// `CacheSettings` fields that are never synced: device-specific
 /// (`android_hwdec`, `player_external`, `desktop_external_app`,
-/// `episode_start_behavior`, `playback_speed`, `language`) or local-only
+/// `episode_start_behavior`, `playback_speed`) or local-only
 /// (`rewrite_existing`);
 /// `categories` sync as their own domain so concurrent additions union.
 const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
@@ -353,7 +353,7 @@ const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
     "desktop_external_app",
     "playback_speed",
     "episode_start_behavior",
-    "language",
+    "sync_overrides",
     "rewrite_existing",
     "categories",
 ];
@@ -376,7 +376,7 @@ const SETTINGS_GROUP_CACHE: &[&str] = &[
 const SYNCED_SETTINGS_GROUPS: &[(&str, &[&str])] = &[("cache", SETTINGS_GROUP_CACHE)];
 
 /// The group record that carries `field`, if any.
-fn settings_group_of(field: &str) -> Option<&'static str> {
+pub(super) fn settings_group_of(field: &str) -> Option<&'static str> {
     SYNCED_SETTINGS_GROUPS
         .iter()
         .find(|(_, fields)| fields.contains(&field))
@@ -384,7 +384,7 @@ fn settings_group_of(field: &str) -> Option<&'static str> {
 }
 
 /// The field names carried by the group record key `record`, if it is one.
-fn settings_group_fields(record: &str) -> Option<&'static [&'static str]> {
+pub(super) fn settings_group_fields(record: &str) -> Option<&'static [&'static str]> {
     SYNCED_SETTINGS_GROUPS
         .iter()
         .find(|(key, _)| *key == record)
@@ -400,9 +400,17 @@ fn settings_fields(settings: &CacheSettings) -> Vec<(String, String, u64)> {
     };
     let old = storage::try_get_str("settings").ok().flatten();
     let raw = preserve_unsupported_settings(old.as_deref(), &raw);
-    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&raw) else {
+    let Ok(serde_json::Value::Object(mut map)) = serde_json::from_str::<serde_json::Value>(&raw)
+    else {
         return Vec::new();
     };
+    // Overrides never become account records. The fallback is captured before
+    // the override starts; live publication refreshes it from the account store.
+    for (field, shared) in &settings.sync_overrides {
+        if setting_can_override(field) {
+            map.insert(field.clone(), shared.clone());
+        }
+    }
     let mut out = Vec::new();
     let mut groups: HashMap<&str, serde_json::Map<String, serde_json::Value>> = HashMap::new();
     for (name, value) in map {
@@ -426,6 +434,62 @@ fn settings_fields(settings: &CacheSettings) -> Vec<(String, String, u64)> {
         }
     }
     out
+}
+
+/// Override membership is user data, not unknown schema: a removed key must
+/// not be resurrected by the recursive forward-compatibility merge.
+fn preserve_settings_snapshot(old: Option<&str>, raw: &str) -> String {
+    let merged = nova_sync::preserve_unknown(old, raw);
+    let (Ok(mut merged), Ok(current)) = (
+        serde_json::from_str::<serde_json::Value>(&merged),
+        serde_json::from_str::<serde_json::Value>(raw),
+    ) else {
+        return raw.into();
+    };
+    merged["sync_overrides"] = current
+        .get("sync_overrides")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    merged.to_string()
+}
+
+/// Only actual general-setting fields may opt out of sync.
+pub(super) fn setting_can_override(field: &str) -> bool {
+    !UNSYNCED_SETTINGS_FIELDS.contains(&field)
+        && serde_json::to_value(CacheSettings::default())
+            .ok()
+            .is_some_and(|v| v.get(field).is_some())
+}
+
+pub(super) fn shared_setting_value(
+    records: &[(String, String)],
+    field: &str,
+) -> Option<serde_json::Value> {
+    let key = settings_group_of(field).unwrap_or(field);
+    let raw = &records.iter().find(|(name, _)| name == key)?.1;
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    if settings_group_of(field).is_some() {
+        value.get(field).cloned()
+    } else {
+        Some(value)
+    }
+}
+
+pub(super) fn account_setting_records() -> Vec<(String, String)> {
+    projection_store()
+        .map(|engine| engine.records(DOMAIN_SETTINGS))
+        .unwrap_or_default()
+}
+
+fn live_settings_fields(settings: &CacheSettings) -> Vec<(String, String, u64)> {
+    let records = account_setting_records();
+    let mut shared = settings.clone();
+    for (field, fallback) in &mut shared.sync_overrides {
+        if let Some(latest) = shared_setting_value(&records, field) {
+            *fallback = latest;
+        }
+    }
+    settings_fields(&shared)
 }
 
 /// Rebuild settings by overlaying records onto `base` (the local settings).
@@ -482,6 +546,27 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
             }
         }
     }
+    let local = serde_json::to_value(base).unwrap_or_default();
+    let mut overrides = base.sync_overrides.clone();
+    for (field, baseline) in &mut overrides {
+        if !setting_can_override(field) {
+            continue;
+        }
+        if let Some(shared) = shared_setting_value(fields, field) {
+            let mut trial = local.clone();
+            trial[field] = shared.clone();
+            if serde_json::from_value::<CacheSettings>(trial).is_ok() {
+                *baseline = shared;
+            }
+        }
+        if let Some(effective) = local.get(field) {
+            map.insert(field.clone(), effective.clone());
+        }
+    }
+    map.insert(
+        "sync_overrides".into(),
+        serde_json::to_value(overrides).unwrap_or_default(),
+    );
     let mut merged: CacheSettings =
         serde_json::from_value(serde_json::Value::Object(map)).unwrap_or_else(|_| base.clone());
     // Device-specific fields are never taken from the remote record.
@@ -500,7 +585,7 @@ pub(crate) fn notify_settings(settings: &CacheSettings) {
     // devices union; the cache group syncs as one coupled record (see above).
     // `sync_records` tombstones any live settings key that is no longer
     // emitted, which retires the legacy whole-blob `core` key automatically.
-    sync_records(DOMAIN_SETTINGS, settings_fields(settings));
+    sync_records(DOMAIN_SETTINGS, live_settings_fields(settings));
     let categories = settings
         .categories
         .iter()
@@ -510,8 +595,11 @@ pub(crate) fn notify_settings(settings: &CacheSettings) {
 }
 
 pub(crate) fn notify_setting_choice(field: &str, settings: &CacheSettings) {
+    if settings.sync_overrides.contains_key(field) {
+        return;
+    }
     let key = settings_group_of(field).unwrap_or(field);
-    if let Some((key, value, _)) = settings_fields(settings)
+    if let Some((key, value, _)) = live_settings_fields(settings)
         .into_iter()
         .find(|(k, _, _)| k == key)
     {
@@ -1659,6 +1747,30 @@ mod tests {
         assert!(!fields.contains_key("desktop_external_app"));
         assert!(!fields.contains_key("playback_speed"));
         assert!(!fields.contains_key("rewrite_existing"));
+        assert_eq!(fields.get("true_black").map(String::as_str), Some("false"));
+        let base = CacheSettings {
+            true_black: true,
+            ..Default::default()
+        };
+        let merged = merge_settings_fields(&base, &[("true_black".into(), "false".into())]);
+        assert!(
+            !merged.true_black,
+            "remote settings update the synced theme"
+        );
+        let mut overridden = base;
+        overridden
+            .sync_overrides
+            .insert("true_black".into(), serde_json::json!(false));
+        let merged = merge_settings_fields(&overridden, &[("true_black".into(), "false".into())]);
+        assert!(
+            merged.true_black,
+            "a device theme override survives remote changes"
+        );
+        let published: HashMap<_, _> = settings_fields(&merged)
+            .into_iter()
+            .map(|(k, v, _)| (k, v))
+            .collect();
+        assert_eq!(published["true_black"], "false");
         let home_sources: serde_json::Value = serde_json::from_str(
             fields
                 .get("home_catalog_sources")
@@ -1667,6 +1779,94 @@ mod tests {
         .unwrap();
         assert_eq!(home_sources[0]["catalogId"], "trending");
         assert_eq!(home_sources[0]["genre"], "Action");
+    }
+
+    #[test]
+    fn overrides_mask_publication_and_follow_shared_values_without_changing_local() {
+        let mut local = CacheSettings {
+            quality: 95,
+            animations: false,
+            ..Default::default()
+        };
+        local
+            .sync_overrides
+            .insert("quality".into(), serde_json::json!(80));
+        local
+            .sync_overrides
+            .insert("animations".into(), serde_json::json!(true));
+        let published: HashMap<_, _> = settings_fields(&local)
+            .into_iter()
+            .map(|(k, v, _)| (k, v))
+            .collect();
+        let cache: serde_json::Value = serde_json::from_str(&published["cache"]).unwrap();
+        assert_eq!(cache["quality"], 80);
+        assert_eq!(published["animations"], "true");
+        assert!(!published.contains_key("sync_overrides"));
+        let records = vec![
+            ("cache".into(), r#"{"quality":60,"format":"jpeg"}"#.into()),
+            ("animations".into(), "false".into()),
+        ];
+        let merged = merge_settings_fields(&local, &records);
+        assert_eq!(merged.quality, 95);
+        assert_eq!(merged.format, CacheImageFormat::Jpeg);
+        assert!(!merged.animations);
+        assert_eq!(merged.sync_overrides["quality"], 60);
+        assert_eq!(merged.sync_overrides["animations"], false);
+        let published: HashMap<_, _> = settings_fields(&merged)
+            .into_iter()
+            .map(|(k, v, _)| (k, v))
+            .collect();
+        let cache: serde_json::Value = serde_json::from_str(&published["cache"]).unwrap();
+        assert_eq!(cache["quality"], 60);
+        assert_eq!(cache["format"], "jpeg");
+        let absent = merge_settings_fields(&local, &[]);
+        assert_eq!(
+            absent.sync_overrides["quality"], 80,
+            "an absent shared field keeps its captured baseline"
+        );
+    }
+
+    #[test]
+    fn language_syncs_unless_this_device_has_an_override() {
+        let mut local = CacheSettings {
+            language: Language::Croatian,
+            ..Default::default()
+        };
+        let published: HashMap<_, _> = settings_fields(&local)
+            .into_iter()
+            .map(|(k, v, _)| (k, v))
+            .collect();
+        assert_eq!(published["language"], "\"Croatian\"");
+        let incoming = vec![("language".into(), "\"English\"".into())];
+        assert_eq!(
+            merge_settings_fields(&local, &incoming).language,
+            Language::English
+        );
+        local
+            .sync_overrides
+            .insert("language".into(), serde_json::json!("English"));
+        let merged = merge_settings_fields(&local, &incoming);
+        assert_eq!(merged.language, Language::Croatian);
+        assert_eq!(merged.sync_overrides["language"], "English");
+        let published: HashMap<_, _> = settings_fields(&merged)
+            .into_iter()
+            .map(|(k, v, _)| (k, v))
+            .collect();
+        assert_eq!(published["language"], "\"English\"");
+    }
+
+    #[test]
+    fn removing_override_membership_survives_forward_compatible_snapshot_merge() {
+        let old = r#"{"quality":95,"sync_overrides":{"quality":80},"future":true}"#;
+        let new = r#"{"quality":60,"sync_overrides":{}}"#;
+        let merged: serde_json::Value =
+            serde_json::from_str(&preserve_settings_snapshot(Some(old), new)).unwrap();
+        assert_eq!(merged["sync_overrides"], serde_json::json!({}));
+        assert_eq!(merged["quality"], 60);
+        assert_eq!(merged["future"], true);
+        assert!(setting_can_override("language"));
+        assert!(setting_can_override("true_black"));
+        assert!(!setting_can_override("not_a_setting"));
     }
 
     #[test]
