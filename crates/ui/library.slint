@@ -829,9 +829,12 @@ export component LibraryPage {
                                 height: self.preferred-height;
                             }
                         }
-                        library_controls := VerticalLayout {
-                            spacing: 0px;
+                        library_controls := Rectangle {
+                            height: library_search_reveal.height + library_filter_and_sort.height;
+                            // Keep the field mounted while moving it below its toggle on phones.
                             library_search_reveal := Rectangle {
+                                y: root.narrow ? library_filter_and_sort.height : 0px;
+                                width: 100%;
                                 height: root.search_open ? 58px : 0px;
                                 visible: self.height > 0px;
                                 opacity: root.search_open ? 1.0 : 0.0;
@@ -852,7 +855,10 @@ export component LibraryPage {
                             }
 
                             library_filter_and_sort := VerticalLayout {
-                                    spacing: 14px;
+                                y: root.narrow ? 0px : library_search_reveal.height;
+                                width: 100%;
+                                height: self.preferred-height;
+                                spacing: 14px;
                                 // All automatic and custom categories remain reachable on a fresh
                                 // install. A horizontal rail keeps every pill at its natural size.
                                 filter_rail := Flickable {

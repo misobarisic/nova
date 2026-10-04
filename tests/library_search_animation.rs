@@ -55,6 +55,14 @@ fn search_expands_and_fades_then_closes_with_motion_settings_respected() {
     assert!(faded, "opening must fade through intermediate opacity");
     let panel = element(&app, "library_search_reveal");
     assert!((panel.size().height - 58.0).abs() < 0.5);
+    let button = element(&app, "library_search_button");
+    assert!(panel.absolute_position().y >= button.absolute_position().y + button.size().height);
+    // Resizing preserves the mounted field and the desktop ordering.
+    app.window().set_size(slint::PhysicalSize::new(1280, 900));
+    tick(&app, 100);
+    assert!(panel.absolute_position().y + panel.size().height <= button.absolute_position().y);
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    tick(&app, 100);
     // Delayed focus still allows typing as soon as the search unfolds.
     app.window()
         .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });

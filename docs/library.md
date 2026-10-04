@@ -147,7 +147,9 @@ replaces its row, preventing its old index from acting on a different show.
   viewport and header placeholder avoid touch-scroll jitter.
 - Search opens/closes with the same expansion and fade durations as Detail’s
   episode search. Focus moves into the input after 80 ms; motion-disabled
-  settings make the expansion immediate.
+  settings make the expansion immediate. On narrow screens the field opens
+  on its own row below the sort/view/search-icon row; wide layouts keep it
+  above the filters.
 - Column floor comes from Settings → Display (min columns), applied live.
   Grid/list selection, search visibility/query and sort order survive detail
   navigation in AppWindow; these controls do not add persisted settings.
