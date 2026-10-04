@@ -1,4 +1,4 @@
-//! Three responsive navigation layouts and their icon feedback: highlight snaps, actual
+//! Responsive navigation and icon feedback: desktop highlight snaps, flat phone tabs, actual
 //! clicks, interrupted pops, rebuilds and independent motion switches.
 
 use i_slint_backend_testing::ElementHandle;
@@ -6,14 +6,28 @@ use slint::{ComponentHandle, LogicalPosition};
 use std::time::Duration;
 
 fn marker(app: &nova::AppWindow, wide: bool) -> ElementHandle {
-    let id = if wide {
-        "SideNav::marker_dot"
+    if wide {
+        ElementHandle::find_by_element_id(app, "SideNav::marker_dot")
+            .next()
+            .expect("rail marker")
     } else {
-        "BottomNav::marker_dot"
-    };
-    ElementHandle::find_by_element_id(app, id)
-        .next()
-        .expect("nav marker")
+        assert!(
+            ElementHandle::find_by_element_id(app, "BottomNav::marker_dot")
+                .next()
+                .is_none(),
+            "the flat phone bar has no selection pill"
+        );
+        let index = if app.get_show_home() {
+            0
+        } else if app.get_show_library() {
+            2
+        } else if app.get_show_settings() {
+            3
+        } else {
+            1
+        };
+        icon(app, false, index)
+    }
 }
 
 fn center(item: &ElementHandle) -> LogicalPosition {
@@ -27,8 +41,8 @@ fn check_marker_shape(item: &ElementHandle, wide: bool) {
     if wide {
         assert_eq!(size, slint::LogicalSize::new(48.0, 48.0));
     } else {
-        assert!(size.width >= 56.0, "phone selection fills its tab slot");
-        assert!((size.height - 60.0).abs() < 0.5);
+        assert!((24.0..=26.0).contains(&size.width));
+        assert_eq!(size.height, size.width);
     }
 }
 

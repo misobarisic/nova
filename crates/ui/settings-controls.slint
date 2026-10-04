@@ -32,8 +32,10 @@ export component PillButton inherits Rectangle {
     width: Math.max(pill_lbl.preferred-width + (root.compact ? 20px : 28px), self.btn_min_width);
     height: 44px;
     border-radius: 8px;
-    border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;
-    border-color: Theme.current.focus_ring;
+    property <bool> outlined: Theme.true_black && !root.primary;
+    property <bool> keyboard_focused: (root.focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled;
+    border-width: root.keyboard_focused ? 2px : (root.outlined ? 1px : 0px);
+    border-color: root.keyboard_focused ? Theme.current.focus_ring : Theme.current.control_border;
     background: root.destructive ? (touch.has-hover ? Theme.current.destructive_control_hover : Theme.current.destructive_control) : touch.has-hover
     ? (primary ? Theme.current.accent_hover : Theme.current.settings_control_hover)
     : (primary ? Theme.current.accent : Theme.current.settings_control);

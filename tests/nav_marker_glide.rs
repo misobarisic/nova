@@ -1,13 +1,7 @@
-//! Navigation selection marker (headless): the accent highlight must sit centred
-//! on the item it marks — in the wide rail *and* in the narrow bottom bar —
-//! must land on the item that was picked (the bar is rebuilt on every switch,
-//! with an instantly positioned highlight), and must not drift when something
-//! else rebuilds the page (detail modal, player, subpages).
-//!
-//! Regression: the rail's shared marker was positioned from the item's top
-//! edge instead of its centre, so the circle sat 4px high on every item.
-//! One test function: the testing backend initializes once per process, so the
-//! phases run sequentially on one window.
+//! Desktop navigation markers and flat phone labels remain aligned through
+//! page switches and detail round trips. The rail circle must stay centered
+//! on its item; every phone label must stay centered below its icon.
+//! One test function: the testing backend initializes once per process.
 
 use i_slint_backend_testing::{ElementHandle, ElementQuery};
 use slint::ComponentHandle;
@@ -62,9 +56,17 @@ fn bar_icons(app: &nova::AppWindow, height: f32) -> Vec<(f32, f32)> {
     centres(app, 24.0, 24.0, move |_, cy| cy > height - 100.0)
 }
 
-fn bar_dots(app: &nova::AppWindow, height: f32) -> Vec<(f32, f32)> {
-    ElementHandle::find_by_element_id(app, "BottomNav::marker_dot")
-        .filter_map(|e| {
+fn bar_labels(app: &nova::AppWindow, height: f32) -> Vec<(f32, f32)> {
+    assert!(
+        ElementHandle::find_by_element_id(app, "BottomNav::marker_dot")
+            .next()
+            .is_none()
+    );
+    ["home", "discover", "library", "settings"]
+        .into_iter()
+        .filter_map(|name| {
+            let e = ElementHandle::find_by_element_id(app, &format!("BottomNav::label_{name}"))
+                .next()?;
             let p = e.absolute_position();
             let s = e.size();
             let center = (p.x + s.width / 2.0, p.y + s.height / 2.0);
@@ -92,8 +94,8 @@ fn check_marker(
     }
     let icon = icons[index];
     let axis = |p: (f32, f32)| if vertical { p.1 } else { p.0 };
-    // In the rail each item also draws its own (invisible) ring, so the marked
-    // item carries two 48px squares; the bottom bar has only the marker.
+    // Rail items have a focus ring as well as the shared selection marker.
+    // On phones, the supplied centers belong to the labels.
     let on_item = dots
         .iter()
         .filter(|d| (axis(**d) - axis(icon)).abs() < 1.0)
@@ -165,7 +167,7 @@ fn nav_marker_is_centred_and_lands_on_the_picked_item() {
                 &f2,
             );
 
-            // Narrow: the bottom bar has one selection pill above its labels.
+            // Narrow: the flat bar aligns each label under its icon.
             app.window().set_size(slint::PhysicalSize::new(360, 800));
             app.global::<nova::NavState>().set_from(0);
             app.set_show_home(false);
@@ -178,7 +180,7 @@ fn nav_marker_is_centred_and_lands_on_the_picked_item() {
                 check_marker(
                     "bar library",
                     &bar_icons(&app, h),
-                    &bar_dots(&app, h),
+                    &bar_labels(&app, h),
                     2,
                     false,
                     &f3,
@@ -199,14 +201,13 @@ fn nav_marker_is_centred_and_lands_on_the_picked_item() {
                         check_marker(
                             "bar library after modal",
                             &bar_icons(&app, h),
-                            &bar_dots(&app, h),
+                            &bar_labels(&app, h),
                             2,
                             false,
                             &f5,
                         );
 
-                        // Navigation feedback is confined to the marker and
-                        // icon; there is no whole-screen flash.
+                        // Navigation feedback stays in the icon.
                         slint::quit_event_loop().unwrap();
                     });
                 });

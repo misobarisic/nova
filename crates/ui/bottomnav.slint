@@ -2,8 +2,8 @@ import { Theme } from "theme.slint";
 import { IcHome, IcExplore, IcVideoLibrary, IcSettingsGear } from "icons.slint";
 import { NavFeedback } from "sidenav.slint";
 
-// A wide, labelled phone bar. The selected tab owns a purple pill and glow;
-// selection still snaps immediately and NavFeedback only pops its icon.
+// A flat, labelled phone bar. The selected icon and label turn purple;
+// selection snaps immediately and NavFeedback only pops the incoming icon.
 // Host pages reserve the bar's height in their layout. Their existing page
 // insets are bled out by the panel so its geometry stays identical on each
 // page, while the labels and touch targets respect the window's safe area.
@@ -48,22 +48,8 @@ export component BottomNav inherits Rectangle {
             clicked => { }
         }
 
-        // The marker shares exactly the same pitch as the item row. Keeping
-        // keyboard rings inside the slots prevents focus from shifting tabs.
-        marker_dot := Rectangle {
-            property <length> pitch: tabs.width / 4;
-            x: tabs.x + root.active * pitch + 4px;
-            y: tabs.y;
-            width: pitch - 8px;
-            height: 60px;
-            border-radius: 28px;
-            background: Theme.current.nav_selected;
-            border-width: 1px;
-            border-color: Theme.current.nav_selected_border;
-            drop-shadow-blur: 12px;
-            drop-shadow-color: Theme.current.nav_selected_glow;
-        }
-
+        // Equal-width slots keep labels and keyboard focus aligned without
+        // a selected background or a shadow above the page canvas.
         tabs := HorizontalLayout {
             x: 12px + root.safe-left;
             y: 8px;
@@ -88,7 +74,7 @@ export component BottomNav inherits Rectangle {
                     y: 19px - self.height / 2;
                     width: 24px + (root.active == 0 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.active == 0 ? Theme.current.on_accent : Theme.current.nav_icon_inactive;
+                    fill: root.active == 0 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
                 }
                 label_home := Text {
                     x: 4px; y: 36px;
@@ -96,7 +82,7 @@ export component BottomNav inherits Rectangle {
                     text: @tr("Home");
                     font-size: 12px;
                     font-weight: root.active == 0 ? 600 : 400;
-                    color: root.active == 0 ? Theme.current.on_accent : Theme.current.nav_label_inactive;
+                    color: root.active == 0 ? Theme.current.accent_soft : Theme.current.nav_label_inactive;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;
@@ -126,7 +112,7 @@ export component BottomNav inherits Rectangle {
                     y: 19px - self.height / 2;
                     width: 24px + (root.active == 1 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.active == 1 ? Theme.current.on_accent : Theme.current.nav_icon_inactive;
+                    fill: root.active == 1 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
                 }
                 label_discover := Text {
                     x: 4px; y: 36px;
@@ -134,7 +120,7 @@ export component BottomNav inherits Rectangle {
                     text: @tr("Discover");
                     font-size: 12px;
                     font-weight: root.active == 1 ? 600 : 400;
-                    color: root.active == 1 ? Theme.current.on_accent : Theme.current.nav_label_inactive;
+                    color: root.active == 1 ? Theme.current.accent_soft : Theme.current.nav_label_inactive;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;
@@ -164,7 +150,7 @@ export component BottomNav inherits Rectangle {
                     y: 19px - self.height / 2;
                     width: 24px + (root.active == 2 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.active == 2 ? Theme.current.on_accent : Theme.current.nav_icon_inactive;
+                    fill: root.active == 2 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
                 }
                 label_library := Text {
                     x: 4px; y: 36px;
@@ -172,7 +158,7 @@ export component BottomNav inherits Rectangle {
                     text: @tr("Library");
                     font-size: 12px;
                     font-weight: root.active == 2 ? 600 : 400;
-                    color: root.active == 2 ? Theme.current.on_accent : Theme.current.nav_label_inactive;
+                    color: root.active == 2 ? Theme.current.accent_soft : Theme.current.nav_label_inactive;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;
@@ -202,7 +188,7 @@ export component BottomNav inherits Rectangle {
                     y: 19px - self.height / 2;
                     width: 24px + (root.active == 3 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.active == 3 ? Theme.current.on_accent : Theme.current.nav_icon_inactive;
+                    fill: root.active == 3 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
                 }
                 label_settings := Text {
                     x: 4px; y: 36px;
@@ -210,7 +196,7 @@ export component BottomNav inherits Rectangle {
                     text: @tr("Settings");
                     font-size: 12px;
                     font-weight: root.active == 3 ? 600 : 400;
-                    color: root.active == 3 ? Theme.current.on_accent : Theme.current.nav_label_inactive;
+                    color: root.active == 3 ? Theme.current.accent_soft : Theme.current.nav_label_inactive;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;

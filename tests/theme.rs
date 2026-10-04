@@ -20,6 +20,10 @@ slint::slint! {
         out property <brush> button_fill: button.background;
         out property <brush> button_border: button.border-color;
         out property <brush> input_fill: input.background;
+        out property <brush> secondary_fill: secondary.background;
+        out property <brush> secondary_border: secondary.border-color;
+        out property <length> secondary_border_width: secondary.border-width;
+        out property <length> secondary_height: secondary.height;
         out property <brush> nav_fill: nav.panel-background;
         out property <length> button_height: button.height;
         out property <length> input_height: input.height;
@@ -27,6 +31,7 @@ slint::slint! {
         card := SettingsCard { x: 80px; y: 10px; width: 280px; height: 240px; }
         button := PillButton { x: 100px; y: 30px; label: "Theme test"; primary: true; focused: true; }
         input := SearchField { x: 100px; y: 100px; width: 220px; }
+        secondary := PillButton { x: 100px; y: 170px; label: "Secondary"; }
         nav := SideNav { viewport-width: root.width; }
     }
 }
@@ -115,7 +120,53 @@ fn existing_theme_defaults_and_live_palette_replacement_reach_shared_controls() 
         assert_eq!(surface, black);
     }
     assert_eq!(black_theme.accent, original.accent);
-    assert_eq!(black_theme.card, original.card);
+    assert_eq!(black_theme.card, Brush::from(black));
+    for surface in [
+        black_theme.popup,
+        black_theme.control,
+        black_theme.settings_control,
+        black_theme.stream_card,
+        black_theme.season_card,
+        black_theme.episode_toolbar,
+        black_theme.tracking_panel,
+        black_theme.player_menu,
+    ] {
+        assert_eq!(surface, black);
+    }
+    let secondary_height = harness.get_secondary_height();
+    theme.set_true_black(true);
+    // The separately compiled harness has its own generated struct type.
+    // Feed it the app's actual surface values rather than recreating the mode.
+    let mut harness_black = original.clone();
+    harness_black.card = black_theme.card.clone();
+    harness_black.popup = black_theme.popup;
+    harness_black.nav_rail = black_theme.nav_rail;
+    harness_black.settings_control = black_theme.settings_control;
+    harness_black.control_border = black_theme.control_border;
+    harness_black.border_soft = black_theme.border_soft;
+    theme.set_current(harness_black);
+    assert_eq!(harness.get_card_fill(), Brush::from(black));
+    assert_eq!(harness.get_input_fill(), Brush::from(black));
+    assert_eq!(harness.get_secondary_fill(), Brush::from(black));
+    assert_eq!(harness.get_secondary_border_width(), 1.0);
+    assert_eq!(
+        harness.get_secondary_border(),
+        Brush::from(black_theme.control_border)
+    );
+    assert_eq!(harness.get_button_fill(), Brush::from(original.accent));
+    assert_eq!(
+        (harness.get_button_height(), harness.get_input_height()),
+        heights
+    );
+    assert_eq!(harness.get_secondary_height(), secondary_height);
+    theme.set_true_black(false);
+    theme.set_current(original.clone());
+    assert_eq!(harness.get_secondary_border_width(), 0.0);
+    assert_eq!(
+        harness.get_secondary_fill(),
+        Brush::from(original.settings_control)
+    );
+    assert_eq!(harness.get_card_fill(), original.card);
     assert_eq!(black_theme.primary_button, original.primary_button);
     assert!(app.global::<nova::Theme>().get_true_black());
     nova_ui::apply_theme(&app, false);

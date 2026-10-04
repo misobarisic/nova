@@ -34,6 +34,38 @@ pub fn apply_theme(app: &AppWindow, true_black: bool) {
         palette.episode_card = black;
         palette.scrim_episode_card = black;
         palette.season_scrim = theme.get_black_season_scrim();
+        // True black also flattens neutral cards and controls. Keep accents,
+        // status badges and artwork intact, and use outlines for separation.
+        palette.card = black.into();
+        palette.popup = black;
+        palette.category_panel = black;
+        palette.control = black;
+        palette.settings_control = black;
+        palette.stream_card = black;
+        palette.season_card = black;
+        palette.episode_placeholder = black;
+        palette.episode_toolbar = black;
+        palette.episode_search = black;
+        palette.episode_empty_panel = black;
+        palette.home_artwork_placeholder = black;
+        palette.calendar_control = black;
+        palette.tracking_control = black;
+        palette.tracking_mapping = black;
+        palette.tracking_panel = black;
+        palette.tracking_service_control = black;
+        palette.player_menu = black;
+        let hover = slint::Color::from_rgb_u8(18, 18, 18);
+        palette.control_hover = hover;
+        palette.input_hover = hover;
+        palette.settings_control_hover = hover;
+        palette.tracking_control_hover = hover;
+        palette.popup_divider = slint::Color::from_rgb_u8(32, 32, 32);
+        let outline = slint::Color::from_rgb_u8(48, 48, 48);
+        palette.control_border = outline;
+        palette.step_border = outline;
+        palette.border_soft = slint::Color::from_argb_u8(48, 255, 255, 255);
+        palette.border_card = slint::Color::from_argb_u8(32, 255, 255, 255);
+        palette.border_subtle = slint::Color::from_argb_u8(24, 255, 255, 255);
     }
     theme.set_true_black(true_black);
     theme.set_current(palette);
