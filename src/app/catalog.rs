@@ -1690,7 +1690,10 @@ fn build_search_targets(installed: &[Installed]) -> Vec<SearchTarget> {
             continue;
         }
         for catalog in &addon.manifest.catalogs {
-            if !catalog.supports_extra("search")
+            if !addon
+                .manifest
+                .search_catalogs(&catalog.type_)
+                .any(|c| c.id == catalog.id)
                 || !seen.insert((addon.url.clone(), catalog.type_.clone(), catalog.id.clone()))
             {
                 continue;

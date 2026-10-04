@@ -54,6 +54,7 @@ fn settings_addons_subpage_has_no_horizontal_overflow() {
     app.set_addon_rows(
         Rc::new(VecModel::from(vec![nova::AddonRow {
             label: s("Cinemeta"),
+            capabilities: s(""),
             url: s("https://v3-cinemeta.strem.io/manifest.json"),
             enabled: true,
             config_url: s("https://v3-cinemeta.strem.io/configure"),

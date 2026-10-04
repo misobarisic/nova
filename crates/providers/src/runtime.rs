@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -29,13 +29,24 @@ pub struct PluginManifest {
     pub entry: String,
     pub permissions: PluginPermissions,
     #[serde(default)]
+    pub capabilities: PluginCapabilities,
+    #[serde(default)]
     pub limits: PluginLimits,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PluginPermissions {
+    #[serde(default, rename = "addonMetadata")]
+    pub addon_metadata: bool,
     #[serde(default)]
     pub domains: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCapabilities {
+    #[serde(default)]
+    pub contextual_streams: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -93,6 +104,8 @@ impl PluginRuntime {
                 "invalid provider manifest version or ID".into(),
             ));
         }
+        let is_details = request.get("op").and_then(serde_json::Value::as_str) == Some("details");
+        let fallback = Arc::new(Mutex::new(None::<String>));
         let request = serde_json::to_string(request)
             .map_err(|error| ProviderError::InvalidData(error.to_string()))?;
         if request.len() > MAX_PLUGIN_BODY || self.source.len() > MAX_PLUGIN_BODY {
@@ -126,7 +139,14 @@ impl PluginRuntime {
             let convert = |error| {
                 ProviderError::Script(rquickjs::CaughtError::from_error(&ctx, error).to_string())
             };
-            install_capabilities(&ctx, host.clone(), &self.manifest).map_err(convert)?;
+            install_capabilities(
+                &ctx,
+                host.clone(),
+                &self.manifest,
+                fallback.clone(),
+                is_details,
+            )
+            .map_err(convert)?;
             ctx.eval::<(), _>(self.source.as_str()).map_err(convert)?;
             ctx.globals()
                 .set("__nova_request", request)
@@ -135,7 +155,24 @@ impl PluginRuntime {
                 "JSON.stringify(globalThis.novaProvider.handle(JSON.parse(__nova_request)))",
             )
             .map_err(convert)
-        })?;
+        });
+        let mut raw = match raw {
+            Ok(raw) => raw,
+            Err(error) => {
+                // Optional discovery/enrichment must not discard details already
+                // fetched. Never resume interrupted JS to retrieve its fallback.
+                let Some(native) = fallback.lock().unwrap().take() else {
+                    return Err(error);
+                };
+                host.log(&format!("optional metadata work failed: {error}"));
+                native
+            }
+        };
+        if raw.len() > MAX_PLUGIN_BODY
+            && let Some(native) = fallback.lock().unwrap().take()
+        {
+            raw = native;
+        }
         if raw.len() > MAX_PLUGIN_BODY {
             return Err(ProviderError::InvalidData(
                 "provider output exceeded its byte limit".into(),
@@ -206,6 +243,35 @@ impl ProviderHost for OperationHost {
         Ok(response)
     }
 
+    fn metadata_available(&self, caller: &str) -> bool {
+        self.inner.metadata_available(caller)
+    }
+
+    fn metadata_enrich(
+        &self,
+        request: crate::EnrichmentRequest,
+        caller: &str,
+        budget: Duration,
+    ) -> crate::EnrichmentResult {
+        let started = Instant::now();
+        let remaining = self
+            .budget
+            .wall_limit
+            .saturating_sub(self.budget.started.elapsed());
+        let result = self
+            .inner
+            .metadata_enrich(request, caller, budget.min(remaining));
+        self.host_work_elapsed(started.elapsed());
+        result
+    }
+
+    fn host_work_elapsed(&self, duration: Duration) {
+        self.budget.http_micros.fetch_add(
+            duration.as_micros().min(u64::MAX as u128) as u64,
+            Ordering::Relaxed,
+        );
+    }
+
     fn storage_get(&self, key: &str) -> Option<String> {
         if key.len() > 128 {
             return None;
@@ -241,6 +307,8 @@ fn install_capabilities<'js>(
     ctx: &rquickjs::Ctx<'js>,
     host: Arc<dyn ProviderHost>,
     manifest: &PluginManifest,
+    fallback: Arc<Mutex<Option<String>>>,
+    is_details: bool,
 ) -> rquickjs::Result<()> {
     let nova = Object::new(ctx.clone())?;
     let http = Object::new(ctx.clone())?;
@@ -309,6 +377,98 @@ fn install_capabilities<'js>(
                 .unwrap_or_else(|error| error.to_string())
         })?,
     )?;
+    let metadata = Object::new(ctx.clone())?;
+    let provider_id = manifest.id.clone();
+    metadata.set(
+        "checkpoint",
+        Function::new(ctx.clone(), move |raw: String| {
+            if !is_details || raw.len() > MAX_PLUGIN_BODY {
+                return "invalid native details checkpoint".to_owned();
+            }
+            let Ok(details) = serde_json::from_str::<crate::ProviderDetails>(&raw) else {
+                return "invalid native details checkpoint".to_owned();
+            };
+            if details.media.provider_id != provider_id
+                || details
+                    .episodes
+                    .iter()
+                    .any(|episode| episode.provider_id != provider_id)
+            {
+                return "checkpoint provider identity mismatch".to_owned();
+            }
+            let Ok(native) = serde_json::to_string(&details) else {
+                return "invalid native details checkpoint".to_owned();
+            };
+            if native.len() > MAX_PLUGIN_BODY {
+                return "native details checkpoint exceeded its byte limit".to_owned();
+            }
+            *fallback.lock().unwrap() = Some(native);
+            String::new()
+        })?,
+    )?;
+    let allowed = manifest.permissions.addon_metadata;
+    let available_host = host.clone();
+    let available_caller = format!("nova-provider://{}", manifest.id);
+    metadata.set(
+        "available",
+        Function::new(ctx.clone(), move || {
+            allowed
+                && !crate::metadata::nested()
+                && available_host.metadata_available(&available_caller)
+        })?,
+    )?;
+    let caller = format!("nova-provider://{}", manifest.id);
+    let metadata_host = host.clone();
+    metadata.set(
+        "enrich",
+        Function::new(ctx.clone(), move |raw: String| {
+            if !allowed {
+                return serde_json::json!({"error":"addon metadata permission denied"}).to_string();
+            }
+            if raw.len() > MAX_PLUGIN_BODY {
+                return serde_json::json!({"error":"metadata input exceeded its byte limit"})
+                    .to_string();
+            }
+            let request = match serde_json::from_str::<crate::EnrichmentRequest>(&raw) {
+                Ok(request) => request,
+                Err(error) => return serde_json::json!({"error":error.to_string()}).to_string(),
+            };
+            let result = metadata_host.metadata_enrich(request, &caller, Duration::from_secs(5));
+            let output = serde_json::to_string(&result).unwrap_or_default();
+            if output.len() > MAX_PLUGIN_BODY {
+                serde_json::json!({"error":"metadata output exceeded its byte limit"}).to_string()
+            } else {
+                output
+            }
+        })?,
+    )?;
+    metadata.set(
+        "resolveEpisode",
+        Function::new(ctx.clone(), move |raw: String| {
+            if !allowed {
+                return serde_json::json!({"error":"addon metadata permission denied"}).to_string();
+            }
+            if raw.len() > MAX_PLUGIN_BODY {
+                return serde_json::json!({"error":"mapping input exceeded its byte limit"})
+                    .to_string();
+            }
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Request {
+                target: crate::StreamLookupRequest,
+                source_sequences: Vec<crate::SourceSequence>,
+            }
+            match serde_json::from_str::<Request>(&raw) {
+                Ok(request) => serde_json::to_string(&crate::resolve_episode(
+                    &request.target,
+                    &request.source_sequences,
+                ))
+                .unwrap_or_default(),
+                Err(error) => serde_json::json!({"error":error.to_string()}).to_string(),
+            }
+        })?,
+    )?;
+    nova.set("metadata", metadata)?;
     let host_ref = host;
     nova.set(
         "log",
@@ -576,7 +736,9 @@ mod tests {
             name: "Fixture".into(),
             version: "1".into(),
             entry: "index.js".into(),
+            capabilities: PluginCapabilities::default(),
             permissions: PluginPermissions {
+                addon_metadata: false,
                 domains: vec!["example.com".into()],
             },
             limits: PluginLimits::default(),
@@ -620,6 +782,41 @@ mod tests {
         assert!(result[6].as_str().unwrap().contains("permissions"));
         assert_eq!(host.storage_get("fixture:key").as_deref(), Some("value"));
         assert_eq!(host.storage_get("key"), None);
+    }
+
+    #[test]
+    fn native_checkpoint_survives_optional_timeout_and_rejects_other_identities() {
+        let mut manifest = manifest();
+        manifest.limits.request_timeout_ms = 25;
+        let details = crate::ProviderDetails {
+            media: crate::MediaItem {
+                provider_id: manifest.id.clone(),
+                source_id: "native".into(),
+                media_type: "series".into(),
+                title: "Native".into(),
+                ..Default::default()
+            },
+            episodes: vec![],
+        };
+        let script = "globalThis.novaProvider = {handle(request) {nova.metadata.checkpoint(JSON.stringify(request.details)); while(true) {} }};";
+        let request = serde_json::json!({"op":"details","details":details});
+        let native = PluginRuntime::new(manifest.clone(), script)
+            .invoke(crate::MemoryProviderHost::new(), &request)
+            .unwrap();
+        assert_eq!(native["media"]["source_id"], "native");
+        let mut invalid = request.clone();
+        invalid["details"]["media"]["provider_id"] = serde_json::json!("other");
+        assert!(
+            PluginRuntime::new(manifest.clone(), script)
+                .invoke(crate::MemoryProviderHost::new(), &invalid)
+                .is_err()
+        );
+        invalid["op"] = serde_json::json!("streams");
+        assert!(
+            PluginRuntime::new(manifest, script)
+                .invoke(crate::MemoryProviderHost::new(), &invalid)
+                .is_err()
+        );
     }
 
     #[test]

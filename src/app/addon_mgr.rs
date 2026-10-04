@@ -277,7 +277,7 @@ impl Bridge {
     /// page. A 404 (or any failure) simply leaves the Configure button
     /// hidden; the body is discarded.
     pub(super) fn probe_configure_page(&self, base: String) {
-        if base == nova_providers::ANIKOTO_PROVIDER_URL {
+        if base.starts_with("nova-provider://") {
             self.set_configure_state(&base, false);
             return;
         }
@@ -356,6 +356,7 @@ impl Bridge {
     /// Snapshot the installed addons (URLs + enabled flags + configure
     /// verdicts) into the KV store.
     pub(super) fn persist_installed(&self) {
+        self.publish_metadata_addons();
         if self.shared.lock().unwrap().loading_addons {
             return;
         }
@@ -546,6 +547,7 @@ impl Bridge {
 
     /// Rebuild picker lists from the chosen addon's manifest and reload.
     pub(super) fn refresh_all(&self, load: bool) {
+        self.publish_metadata_addons();
         let app = match self.app() {
             Some(a) => a,
             None => return,
@@ -626,22 +628,12 @@ impl Bridge {
         if !load {
             state.previews.clear();
         }
-        let addon_rows: Vec<AddonRow> = state
-            .installed
-            .iter()
-            .map(|a| AddonRow {
-                label: SharedString::from(&a.label),
-                url: SharedString::from(&a.url),
-                enabled: a.enabled,
-                config_url: SharedString::from(Self::addon_config_url(a)),
-            })
-            .collect();
         drop(state);
 
         app.set_addon_names(Rc::new(VecModel::from(addon_names)).into());
         app.set_type_names(Rc::new(VecModel::from(type_names)).into());
         app.set_catalog_names(Rc::new(VecModel::from(catalog_names)).into());
-        app.set_addon_rows(Rc::new(VecModel::from(addon_rows)).into());
+        self.apply_addon_rows();
         // Map chosen_addon to the combo index over the *enabled* addons only:
         // "All addons" = 0, others = position in the enabled list + 1.
         let addon_combo_idx = if chosen_addon == usize::MAX {
@@ -748,25 +740,60 @@ impl Bridge {
         Some(new_idx)
     }
 
-    /// Mirror the installed addons (all, including disabled ones) to the
-    /// Settings → Addons list.
+    /// Publish only active sources to the worker-side metadata service.
+    fn publish_metadata_addons(&self) {
+        let addons = self
+            .shared
+            .lock()
+            .unwrap()
+            .installed
+            .iter()
+            .filter(|a| a.enabled && a.available)
+            .map(|a| nova_providers::MetadataAddon {
+                url: a.url.clone(),
+                manifest: a.manifest.clone(),
+            })
+            .collect();
+        nova_providers::configure_metadata_addons(addons);
+    }
+
+    /// Resolve a filtered UI row by URL, never by its displayed position in
+    /// the full installed list. Filtering must not redirect destructive actions.
+    pub(super) fn installed_row_index(&self, visible: usize) -> Option<usize> {
+        let url = self.app()?.get_addon_rows().row_data(visible)?.url;
+        installed_index_for_url(&self.shared.lock().unwrap().installed, url.as_str())
+    }
+
+    /// Mirror matching installed addons, including disabled ones, to Settings.
     pub(super) fn apply_addon_rows(&self) {
-        let rows: Vec<AddonRow> = {
-            let state = self.shared.lock().unwrap();
-            state
-                .installed
-                .iter()
-                .map(|a| AddonRow {
-                    label: SharedString::from(&a.label),
-                    url: SharedString::from(&a.url),
-                    enabled: a.enabled,
-                    config_url: SharedString::from(Self::addon_config_url(a)),
-                })
-                .collect()
+        self.publish_metadata_addons();
+        let Some(app) = self.app() else {
+            return;
         };
-        if let Some(app) = self.app() {
-            app.set_addon_rows(Rc::new(VecModel::from(rows)).into());
-        }
+        let query = app.get_addon_search_text().trim().to_lowercase();
+        let filter = app.get_addon_capability_filter();
+        let rows = self
+            .shared
+            .lock()
+            .unwrap()
+            .installed
+            .iter()
+            .filter(|a| addon_matches(a, &query, filter))
+            .map(|a| AddonRow {
+                label: SharedString::from(&a.label),
+                url: SharedString::from(&a.url),
+                enabled: a.enabled,
+                config_url: SharedString::from(Self::addon_config_url(a)),
+                capabilities: SharedString::from(
+                    if nova_providers::supports_contextual_streams(&a.url) {
+                        text::tr("Streams for other sources")
+                    } else {
+                        ""
+                    },
+                ),
+            })
+            .collect::<Vec<_>>();
+        app.set_addon_rows(Rc::new(VecModel::from(rows)).into());
     }
 
     /// Settings → Addons: copy the addon's install URL. The row prints only the
@@ -960,5 +987,93 @@ mod move_tests {
         let mut items = v(&["a", "b"]);
         assert_eq!(Bridge::move_item(&mut items, 7, -1), None);
         assert_eq!(items, v(&["a", "b"]));
+    }
+}
+
+fn addon_matches(addon: &Installed, query: &str, filter: i32) -> bool {
+    let haystack = format!(
+        "{} {} {} {}",
+        addon.label,
+        addon.url,
+        addon.manifest.name,
+        addon.manifest.description.as_deref().unwrap_or_default()
+    )
+    .to_lowercase();
+    let matches_text = query.split_whitespace().all(|term| haystack.contains(term));
+    matches_text
+        && match filter {
+            1 => addon.manifest.catalogs.iter().any(|catalog| {
+                addon
+                    .manifest
+                    .search_catalogs(&catalog.type_)
+                    .any(|c| c.id == catalog.id)
+            }),
+            2 => addon.manifest.has_meta(),
+            3 => addon.manifest.has_streams(),
+            _ => true,
+        }
+}
+
+fn installed_index_for_url(installed: &[Installed], url: &str) -> Option<usize> {
+    installed.iter().position(|a| a.url == url)
+}
+
+#[cfg(test)]
+mod addon_filter_tests {
+    use super::*;
+    fn addon(
+        label: &str,
+        url: &str,
+        resources: serde_json::Value,
+        catalogs: serde_json::Value,
+    ) -> Installed {
+        Installed {label:label.into(),url:url.into(),enabled:false,available:true,configure_ok:Some(false),generation:1,manifest:serde_json::from_value(serde_json::json!({"id":label,"name":label,"version":"1","description":"Anime metadata","resources":resources,"catalogs":catalogs,"types":["series"]})).unwrap()}
+    }
+    #[test]
+    fn filters_keep_disabled_addons_and_use_manifest_capabilities() {
+        let metadata = addon(
+            "Anime",
+            "https://anime.example",
+            serde_json::json!(["meta", "catalog"]),
+            serde_json::json!([{"id":"search","name":"Search","type":"series","extra":[{"name":"search"}]}]),
+        );
+        assert!(addon_matches(&metadata, "anime metadata", 1));
+        assert!(addon_matches(&metadata, "anime.example", 2));
+        assert!(!addon_matches(&metadata, "", 3));
+        assert!(!addon_matches(&metadata, "missing", 0));
+        let streams = addon(
+            "Streams",
+            "https://streams.example",
+            serde_json::json!(["stream"]),
+            serde_json::json!([]),
+        );
+        assert!(addon_matches(&streams, "", 3));
+        assert!(!addon_matches(&streams, "", 1));
+    }
+    #[test]
+    fn filtered_row_actions_resolve_identity_after_reordering_and_removal() {
+        let first = addon(
+            "First",
+            "https://one.example",
+            serde_json::json!(["stream"]),
+            serde_json::json!([]),
+        );
+        let second = addon(
+            "Second",
+            "https://two.example",
+            serde_json::json!(["meta"]),
+            serde_json::json!([]),
+        );
+        let mut installed = vec![first, second];
+        let filtered = installed
+            .iter()
+            .filter(|a| addon_matches(a, "", 2))
+            .map(|a| a.url.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(installed_index_for_url(&installed, &filtered[0]), Some(1));
+        installed.swap(0, 1);
+        assert_eq!(installed_index_for_url(&installed, &filtered[0]), Some(0));
+        installed.remove(0);
+        assert_eq!(installed_index_for_url(&installed, &filtered[0]), None);
     }
 }

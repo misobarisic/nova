@@ -65,7 +65,7 @@ impl StremioProvider {
         }
     }
 
-    fn convert_detail(&self, detail: MetaItem) -> (MediaItem, Vec<Episode>) {
+    pub(crate) fn convert_detail(&self, detail: MetaItem) -> (MediaItem, Vec<Episode>) {
         let mut item = self.convert_preview(detail.preview.clone());
         item.aliases = string_values(&detail.extra, &["aliases", "aka", "akaNames"]);
         // Detail and preview fields can carry different claims. Preserve both,
@@ -316,6 +316,11 @@ pub fn normalize_external_ids(
 ) -> ExternalIds {
     use crate::{ExternalId, IdNamespace, IdResolution};
     let mut ids = ExternalIds::default();
+    if let Some(value) = fields.get("novaExternalIds")
+        && let Ok(typed) = serde_json::from_value::<Vec<ExternalId>>(value.clone())
+    {
+        ids.typed.extend(typed);
+    }
     let namespaces = [
         (IdNamespace::Imdb, &["imdb_id", "imdbId", "imdb"][..]),
         (

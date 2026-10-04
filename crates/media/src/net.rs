@@ -56,7 +56,7 @@ mod imp {
                 } else {
                     get_blocking(&url).map_err(|error| to_fetch_error(&url, error))
                 };
-                then(result);
+                then(result.map(|bytes| nova_providers::enrich_addon_response(&url, bytes)));
             })
             .expect("spawn fetch thread");
     }
@@ -214,7 +214,7 @@ mod imp {
 
     /// rustls client config with bundled Mozilla roots (no platform
     /// verifier, no JNI, no system trust store — pure Rust).
-    fn tls_config() -> Result<rustls::ClientConfig, String> {
+    pub(super) fn tls_config() -> Result<rustls::ClientConfig, String> {
         let mut roots = rustls::RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
@@ -254,6 +254,7 @@ mod imp {
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     get_with_retries(&url)
+                        .map(|bytes| nova_providers::enrich_addon_response(&url, bytes))
                 }));
                 then(match result {
                     Ok(r) => r,
@@ -414,3 +415,50 @@ pub(crate) use imp::fetch_image_fresh;
 #[cfg(target_os = "android")]
 pub use imp::install_panic_hook;
 pub use imp::{fetch_bytes, fetch_image};
+
+/// Metadata service transport runs on the caller's fetch worker. It never
+/// starts a continuation and never accesses app/Slint state.
+struct MetadataTransport;
+impl nova_providers::AddonMetadataTransport for MetadataTransport {
+    fn fetch(
+        &self,
+        url: &str,
+        timeout: std::time::Duration,
+        response_limit: usize,
+    ) -> Result<Vec<u8>, nova_providers::ProviderHostError> {
+        if let Some(result) = nova_providers::fetch_builtin_addon_with_timeout(url, timeout) {
+            return result;
+        }
+        use std::io::Read;
+        let builder = reqwest::blocking::Client::builder()
+            .timeout(timeout)
+            .redirect(reqwest::redirect::Policy::limited(5));
+        #[cfg(target_os = "android")]
+        let builder = builder.tls_backend_preconfigured(
+            imp::tls_config().map_err(nova_providers::ProviderHostError)?,
+        );
+        let client = builder
+            .build()
+            .map_err(|e| nova_providers::ProviderHostError(e.to_string()))?;
+        let response = client
+            .get(url)
+            .send()
+            .and_then(reqwest::blocking::Response::error_for_status)
+            .map_err(|e| nova_providers::ProviderHostError(e.to_string()))?;
+        let mut body = Vec::new();
+        response
+            .take(response_limit as u64 + 1)
+            .read_to_end(&mut body)
+            .map_err(|e| nova_providers::ProviderHostError(e.to_string()))?;
+        if body.len() > response_limit {
+            return Err(nova_providers::ProviderHostError(
+                "metadata response exceeded its byte limit".into(),
+            ));
+        }
+        Ok(body)
+    }
+}
+
+pub fn init_metadata_transport() {
+    nova_providers::set_metadata_transport(std::sync::Arc::new(MetadataTransport));
+}

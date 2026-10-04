@@ -29,6 +29,9 @@ export component SettingsPage {
     preferred-height: 100%;
 
     in-out property <[AddonRow]> addon_rows: [];
+    in-out property <string> addon_search_text: "";
+    in-out property <int> addon_capability_filter: 0;
+    callback addon_filter_changed();
     in-out property <string> addon_url: "";
     in-out property <string> license_catalog: "";
     in-out property <[LicenseSource]> license_sources: [];
@@ -1827,6 +1830,31 @@ export component SettingsPage {
                                             }
                                         } }
                                     SectionHeader { label: @tr("Installed sources"); }
+                                    SearchField {
+                                        placeholder-text: @tr("Search installed addons…");
+                                        text <=> root.addon_search_text;
+                                        search-icon: true;
+                                        focus_changed(focused) => { root.input_focused = focused; }
+                                        edited(t) => { root.addon_search_text = t; root.addon_filter_changed(); }
+                                    }
+                                    if !root.narrow: Segmented {
+                                        labels: [@tr("All"), @tr("Searchable catalogs"), @tr("Metadata"), @tr("Streams")];
+                                        current_index <=> root.addon_capability_filter;
+                                        picked(index) => { root.addon_capability_filter = index; root.addon_filter_changed(); }
+                                    }
+                                    if root.narrow: VerticalLayout {
+                                        spacing: 0px;
+                                        Segmented {
+                                            labels: [@tr("All"), @tr("Searchable catalogs")];
+                                            current_index: root.addon_capability_filter < 2 ? root.addon_capability_filter : -1;
+                                            picked(index) => { root.addon_capability_filter = index; root.addon_filter_changed(); }
+                                        }
+                                        Segmented {
+                                            labels: [@tr("Metadata"), @tr("Streams")];
+                                            current_index: root.addon_capability_filter >= 2 ? root.addon_capability_filter - 2 : -1;
+                                            picked(index) => { root.addon_capability_filter = index + 2; root.addon_filter_changed(); }
+                                        }
+                                    }
                                     Rectangle {
                                         background: Theme.current.card;
                                         border-radius: 16px;
@@ -1851,7 +1879,7 @@ export component SettingsPage {
                                                     x: 16px;
                                                     width: parent.width - 32px;
                                                     y: (parent.height - self.height) / 2;
-                                                    text: @tr("No addons installed yet. Paste an addon install URL above and click Add.");
+                                                    text: root.addon_search_text != "" || root.addon_capability_filter != 0 ? @tr("No installed addons match these filters.") : @tr("No addons installed yet. Paste an addon install URL above and click Add.");
                                                     color: Theme.current.text_settings;
                                                     font-size: 14px;
                                                     wrap: word-wrap;
@@ -1863,10 +1891,8 @@ export component SettingsPage {
                                                 for row[i] in root.addon_rows: SettingsRow {
                                                     tinted: Math.mod(i, 2) == 1;
                                                     row-title: row.label;
-                                                    // No description: an install URL wrapped over
-                                                    // several lines and dominated the row. It is
-                                                    // reachable through the "Copy link" pill.
-                                                    row-desc: "";
+                                                    row-desc: row.capabilities;
+                                                    // The install URL stays behind Copy link.
 
                                                     // Wide: text pill + icon actions on one
                                                     // line, in keyboard-column order
@@ -1987,7 +2013,7 @@ export component SettingsPage {
                                                 spacing: 0px;
                                                 for row[i] in root.addon_rows: AddonRowCard {
                                                     tinted: Math.mod(i, 2) == 1;
-                                                    title: row.label;
+                                                    title: row.capabilities == "" ? row.label : row.label + " · " + row.capabilities;
                                                     on: row.enabled;
                                                     has_config: row.config_url != "";
                                                     kb_focused_row: root.kb_zone == 2 && root.kb_ar == i;

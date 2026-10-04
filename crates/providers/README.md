@@ -14,21 +14,21 @@ This version loads trusted source files bundled at compile time.
 
 ## Files and interface
 
-- `src/models.rs`: `ContentProvider` and normalized media, episode, stream,
-  subtitle, descriptor, and request types. Pagination uses item offsets; media
-  and stream requests carry their media type explicitly.
-- `src/stremio.rs`: Stremio adapter to the normalized contract.
-- `src/runtime.rs`: synchronous QuickJS invocation and injected capabilities.
-- `src/host.rs`: HTTP policy, DNS validation/pinning, and bounded session storage.
-- `src/anikoto.rs`: bundled source registration, protocol adaptation, and
-  Cinemeta metadata enrichment through confirmed episode mappings.
-- `src/matching.rs`: external ID/title/alias/year matching. Ambiguity leaves
-  the source's own metadata and identity intact.
-- `plugins/anikoto/`: source, permission manifest, addon-facing manifest, notice.
+- `src/models.rs` / `src/ids.rs`: normalized provider models and typed external IDs.
+- `src/registry.rs`: bundled provider definitions, generic JS provider adapter,
+  source ownership, and `nova-provider://<provider-id>` protocol dispatch.
+- `src/runtime.rs` / `src/host.rs`: QuickJS capabilities, HTTP policy, DNS
+  validation/pinning, and bounded shared session storage.
+- `src/metadata.rs`: installed-addon metadata broker, ID connections, enrichment,
+  provenance, and session caching. Transport is injected by `nova-media`.
+- `src/sequence.rs` / `src/matching.rs`: provider-neutral candidate matching and
+  forward/reverse episode alignment.
+- `src/stremio.rs`: Stremio normalization, including typed identity claims.
+- `plugins/anikoto/`: site scraping, source-family discovery, playback extraction,
+  permission manifest, addon manifest, and notice.
 
-Invoke providers on background workers. The bundled source exposes
-`globalThis.novaProvider.handle(request)` and returns a JSON-compatible value.
-AniKoto accepts:
+Invoke providers on background workers. A source exposes
+`globalThis.novaProvider.handle(request)` and returns a JSON-compatible value:
 
 ```js
 { op: "catalog", catalogId: "anikoto.popular", extra: { skip: "0" } }
@@ -39,69 +39,113 @@ AniKoto accepts:
 ```
 
 Catalogs return `MediaItem[]`; details return `{ media: MediaItem, episodes:
-Episode[] }`; streams return `ProviderStream[]`. Model fields use snake case.
-Persisted IDs are `provider_id:source_id`. AniKoto episodes encode the show path
-and episode number, then look up expiring server tokens at playback time.
-Cinemeta matches provide external IDs and fill missing metadata; they never
-replace the source IDs.
-The optional lookup has a separate 3-second deadline and a one-hour session
-cache; its failure does not fail the source request.
+Episode[], enrichment?: EnrichmentResult }`; streams return `ProviderStream[]`.
+Normalized models use snake case, while host-service requests use camel case.
+Persisted provider IDs remain `provider_id:source_id`. AniKoto episodes encode
+show path and native episode number; expiring server tokens are fetched only
+at playback time. Descriptors/catalogs come from the addon manifest.
+`capabilities.contextualStreams` enables the contextual `resolve/series/...`
+transport, rather than app code checking a particular provider name.
 
-Library shows from other addons also request AniKoto streams. The app builds
-a contextual `resolve/series/...` request with the existing title/year and the
-selected video's season, episode number, title, and release date, plus episode
-counts when metadata has contiguous numbering. The plugin matches up to six
-source candidates. A unique meaningful episode title can locate an episode
-at a different number. For exact series families, it orders numbered seasons,
-parts, and cours and aligns their episode counts against metadata boundaries
-or a matching series total. This covers merged/split seasons, unequal cour
-lengths, and continuous numbering without assuming a fixed cour size.
-The native site's declared episode count supports ongoing parts; the selected
-episode must still have servers. Missing parts, numbering gaps, duplicate
-editions, conflicting years, specials, and ambiguous mappings are rejected.
-Count alignment tolerates translated/edited episode titles; weaker numbering
-fallbacks reject conflicting meaningful titles.
-Shortened series titles require episode-title confirmation. Positive source
-mappings are cached for one hour in bounded session storage; stream tokens
-are always refreshed. Library IDs, episode history, downloads, and sync retain
-the original addon identifiers.
+### Rust metadata services called from JS
 
-The reverse path uses the same episode mapper. During AniKoto metadata loading,
-the host finds a unique Cinemeta series and fetches its episode metadata with a
-separate five-second deadline. The JavaScript `canonicalCandidate` and
-`mapEpisodes` operations confirm canonical episode IDs without resolving streams.
-The source entry you opened is always included, even when it is absent from
-the current search pages. Its already-fetched episode rows are reused. Exact
-series families and the selected season take priority over side stories under
-the six-candidate limit, so later seasons are not displaced by OVAs/specials.
-Confirmed IMDb episode aliases are attached to native videos as `novaStreamIds`
-and retained by the existing episode cache. Matched canonical episodes also
-supply meaningful titles, aired dates, thumbnails, and descriptions. Displayed
-season/episode numbers follow the confirmed mapping (Slime S4 starts at S4E1;
-the second Asterisk cour is E13–E24 in Cinemeta's merged first season). Only
-episodes available in that native entry are shown, and their stable IDs still
-encode native playback numbers. Canonical series metadata fills missing art,
-descriptions, genres, and external IDs without replacing the source title/year.
-For shortened canonical titles, two globally unique episode names at matching
-positions and equal season counts can confirm the other positions; conflicting
-anchors, repeated names, and missing counts do not prove that alignment.
-Nullable optional metadata arrays are accepted by the Stremio parser.
-Other installed stream addons use
-the first alias their manifest accepts, including AIOStreams and Torrentio;
-AniKoto requests continue using native IDs. Unresolved private AniKoto IDs are
-not sent to foreign addons. Unavailable/ambiguous canonical metadata leaves
-only native routing.
-Mappings and matched metadata have a one-hour session cache (empty results:
-30 seconds), invalidated when native episode availability changes. Host cache
-entries are capped at 256 KiB under the shared 2 MiB session limit; larger
-results remain usable but are not cached. JS storage keeps its 16 KiB entry cap.
-Fresh aliases update a cached picker and restart an open stream search if its
-selected episode gained or lost aliases; playback already in progress is left
-alone. Addons requiring other ID namespaces need mappings for those namespaces.
-Each stream search has a generation: old replies cannot change rows, loading
-state, or addon pills after aliases cause the same episode to be queried again.
-An open stream view also receives the refreshed selected episode's caption
-and thumbnail without changing its selected episode or playback identity.
+Grant `permissions.addonMetadata: true` to use the following capability. JS
+supplies normalized source information; Rust handles matching, enrichment,
+network budgets, caching, and ambiguity. Scripts do not receive account tokens
+or configured addon URLs; provenance uses opaque addon IDs.
+
+```js
+const native = { media, episodes };
+if (nova.metadata.available()) {
+  nova.metadata.checkpoint(JSON.stringify(native));
+  const enriched = JSON.parse(nova.metadata.enrich(JSON.stringify({
+    details: native,
+    sourceSequences,
+    query: familyTitle,
+    targets: ["imdb", "tmdb:tv", "mal:anime", "anilist:anime"],
+  })));
+  if (!enriched.error) {
+    return { ...native, media: enriched.details.media, enrichment: enriched };
+  }
+}
+return native;
+```
+
+`SourceSequence` contains `mediaId`, title/aliases/year, optional season/part and
+`declaredCount`, and available episodes `{ id, number, title, released }`.
+Episode IDs are stable native IDs including the provider prefix. Include the
+opened entry even if it is absent from search results. AniKoto retains site
+parsing and related-entry discovery in JS and reuses the already-fetched rows.
+
+`EnrichmentResult` contains `status` (`confirmed`, `ambiguous`, or `missing`),
+`inventoryRevision`, `details`, show `connections`, and `episodeMetadata` keyed by native episode ID.
+A connection records an opaque `addonId`, `mediaId`, typed IDs, and confirmation
+basis. Conflicting identifiers remain typed claims with a conflicting basis;
+they do not create outbound stream aliases. `details.episodes` retains native
+playback numbering. The generic protocol adapter applies confirmed display
+metadata and aliases separately without replacing stable IDs.
+
+For the other direction, plugins call:
+
+```js
+const match = JSON.parse(nova.metadata.resolveEpisode(JSON.stringify({
+  target: request.lookup,
+  sourceSequences,
+})));
+if (match.status !== "confirmed") return [];
+// Refresh tokens using match.sourceEpisodeId, not a canonical playback ID.
+```
+
+The result includes `sourceEpisodeId`, `sourceMediaId`, and native `number`.
+The same Rust engine supports separate seasons, split/merged cours, unequal
+part lengths, continuous numbering, ongoing declared counts, and unique title
+anchors. It rejects missing parts, numbering gaps, duplicate editions,
+conflicting years/titles, specials, and ambiguous mappings. Shortened series
+names need two globally unique positional episode anchors with equal season
+counts and no conflicting anchors to confirm the remaining positions.
+
+### Installed addons as the enrichment network
+
+Rust searches enabled, available addon catalogs declaring search support and
+fetches candidate details through ordinary catalog/meta endpoints. Confirmed
+identifiers can find further compatible metadata addons, connecting IMDb,
+TMDB, MAL, and AniList when the installed sources provide those IDs. `targets`
+expresses the desired connection namespaces; it does not synthesize IDs or
+promise that an installed addon provides every namespace. Cinemeta is an
+ordinary installed source, with no hidden fallback when disabled or removed.
+
+The app publishes an immutable addon snapshot on inventory changes. Enrichment
+runs on fetch workers with a five-second deadline, up to 32 requests, 100
+previews per search response, six detail candidates, and 2 MiB responses.
+Visited requests and a nested-operation guard prevent lookup cycles; nested
+JS providers receive a deadline bounded by the remaining metadata budget.
+Optional failures preserve native metadata and playback. `checkpoint` saves a
+bounded native details response before optional JS discovery so a subsequent
+timeout can return that response without resuming interrupted JS. It is available
+only during a details operation and validates provider ownership.
+
+Host metadata caching allows 256 KiB entries under the same 2 MiB session
+storage cap used by JS; JS storage keeps its 16 KiB entry cap. Successful results
+last one hour; missing/ambiguous results last 30 seconds. Cache keys include
+source sequence/availability, requested namespaces, and the addon inventory
+revision. Oversized results remain usable without caching.
+
+Ordinary addon details also use this service. Only native available episodes
+are retained. Confirmed episode metadata supplies meaningful titles, dates,
+artwork, descriptions, and canonical season/episode numbers. Aliases are stored
+as `novaStreamIds` with `novaConnections` and `novaMetadataRevision`; typed show
+claims use `novaExternalIds`. The inventory revision prevents obsolete cached
+aliases from routing after addons change. Source ownership restricts private
+IDs to their owner; foreign requests use confirmed aliases accepted by the
+recipient manifest. Non-global aliases additionally require matching provenance.
+Library history, downloads, and sync continue using original native IDs.
+Fresh aliases refresh cached pickers and restart an open stream search; search
+generations reject stale replies, while active playback is left alone.
+
+Settings → Addons searches installed names, descriptions and URLs and filters
+All / Searchable catalogs / Metadata / Streams. Disabled addons remain visible
+there. Contextual providers show “Streams for other sources.” Additional sources
+are installed by URL; this version does not integrate an external directory.
 
 ## Injected JavaScript API
 
@@ -112,6 +156,10 @@ and thumbnail without changing its selected episode or playback identity.
 | `nova.storage.get(key)` | Stored string, or an empty string |
 | `nova.storage.set(key, value)` | Empty string on success, error string on failure |
 | `nova.log(message)` | Bounded diagnostic log |
+| `nova.metadata.checkpoint(JSON.stringify(details))` | Empty string on success, error string otherwise; native fallback for details operations |
+| `nova.metadata.available()` | Whether addon metadata is available outside a nested lookup |
+| `nova.metadata.enrich(JSON.stringify(request))` | JSON string with normalized details, connections, and episode metadata, or `error` |
+| `nova.metadata.resolveEpisode(JSON.stringify(request))` | JSON string with confirmed native episode identity or missing/ambiguous status |
 | `nova.crypto.base64UrlEncode(value)` / `base64UrlDecode(value)` | UTF-8 opaque ID encoding |
 | `nova.crypto.rc4Base64Url(value, key)` | Padded URL-safe RC4 output for the site's VRF convention |
 | `nova.crypto.aes256CbcDecrypt(ciphertextBase64, keyBase64, ivBase64)` | UTF-8 plaintext with PKCS#7 padding removed, or an empty string on invalid input |

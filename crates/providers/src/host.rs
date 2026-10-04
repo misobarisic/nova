@@ -37,6 +37,20 @@ impl std::error::Error for ProviderHostError {}
 /// Capabilities exposed to a source implementation. JS code receives this
 /// interface through Nova's host API; it never gets a socket or filesystem.
 pub trait ProviderHost: Send + Sync {
+    fn host_work_elapsed(&self, _duration: Duration) {}
+
+    fn metadata_available(&self, caller: &str) -> bool {
+        crate::metadata::has_metadata_addons(caller)
+    }
+
+    fn metadata_enrich(
+        &self,
+        request: crate::EnrichmentRequest,
+        caller: &str,
+        budget: Duration,
+    ) -> crate::EnrichmentResult {
+        crate::metadata::enrich_metadata_with_budget(request, caller, budget)
+    }
     fn get(
         &self,
         url: &str,
@@ -398,6 +412,12 @@ impl ProviderHost for MemoryProviderHost {
             message.chars().take(512).collect::<String>()
         );
     }
+}
+
+/// Provider storage and host metadata share one bounded session store.
+pub(crate) fn session_state() -> Arc<MemoryProviderHost> {
+    static STATE: std::sync::OnceLock<Arc<MemoryProviderHost>> = std::sync::OnceLock::new();
+    STATE.get_or_init(MemoryProviderHost::new).clone()
 }
 
 #[cfg(test)]

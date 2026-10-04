@@ -122,6 +122,7 @@ impl Bridge {
         self.update_library_badges();
         self.refresh_home_language_text();
         self.refresh_addon_picker_language_text();
+        self.apply_addon_rows();
         self.refresh_catalog_language_text();
         self.refresh_detail_language_text();
 

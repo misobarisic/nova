@@ -4,24 +4,36 @@
 //! Providers return normalized Nova models. A Stremio adapter and the bundled
 //! source's protocol bridge let the app reuse its catalog and library flows.
 
-mod anikoto;
 mod host;
 mod ids;
 mod matching;
+mod metadata;
 mod models;
+mod registry;
 mod runtime;
+mod sequence;
 mod stremio;
 
-pub use anikoto::{
-    ANIKOTO_PROVIDER_URL, builtin_manifest, builtin_stream_lookup_url, fetch_builtin_addon,
-};
 pub use host::{HttpResponse, MemoryProviderHost, ProviderHost, ProviderHostError, ScopedHttpHost};
 pub use ids::{ExternalId, IdNamespace, IdResolution};
 pub use matching::{MetadataMatch, match_metadata};
+pub use metadata::{
+    AddonMetadataTransport, EnrichmentRequest, EnrichmentResult, EpisodeEnrichment, MetadataAddon,
+    MetadataConnection, ProviderDetails, addon_metadata_id, apply_enrichment,
+    configure_metadata_addons, enrich_addon_response, enrich_metadata, metadata_revision,
+    set_metadata_transport,
+};
 pub use models::{
     CatalogRequest, ContentProvider, Episode, ExternalIds, MediaItem, MediaRequest,
     ProviderCatalog, ProviderDescriptor, ProviderError, ProviderFuture, ProviderStream,
     ProviderSubtitle, SearchRequest, StreamLookupRequest, StreamRequest,
 };
-pub use runtime::{PluginLimits, PluginManifest, PluginPermissions, PluginRuntime};
+pub use registry::{
+    ANIKOTO_PROVIDER_URL, bundled_providers, fetch_builtin_addon, fetch_builtin_addon_with_timeout,
+    private_provider_id, provider_owns_id, stream_lookup_url, supports_contextual_streams,
+};
+pub use runtime::{
+    PluginCapabilities, PluginLimits, PluginManifest, PluginPermissions, PluginRuntime,
+};
+pub use sequence::{EpisodeResolution, SequenceEpisode, SourceSequence, resolve_episode};
 pub use stremio::{StremioProvider, normalize_external_ids};

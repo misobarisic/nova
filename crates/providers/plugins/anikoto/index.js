@@ -206,7 +206,7 @@
     return Number.isFinite(date.getTime()) ? date.toISOString() : null;
   }
 
-  function details(request) {
+  function nativeDetails(request) {
     const series = loadSeries(request.sourceId);
     const { path, page, currentBase, episodeRows } = series;
     const mediaSourceId = request.sourceId;
@@ -259,6 +259,49 @@
       mappingContext: series,
       mappingQuery: seriesIdentity(page.englishTitle || page.title).base,
     };
+  }
+
+  function sourceSequence(candidate) {
+    const series = candidate.series;
+    return {
+      mediaId: `${PROVIDER_ID}:${nova.crypto.base64UrlEncode(series.path)}`,
+      title: String(series.page.englishTitle || series.page.title || "").trim(),
+      aliases: String(series.page.aliases || "").split(";").map(value => value.trim()).filter(Boolean),
+      year: String(series.page.year || ""),
+      season: candidate.identity.season,
+      part: candidate.identity.part,
+      declaredCount: sourceEpisodeCount(series),
+      episodes: series.episodeRows.filter(row => Number.isInteger(Number(row.number))
+        && Number(row.number) > 0 && row.serverIds).map(row => ({
+          id: `${PROVIDER_ID}:${episodeToken(series.path, Number(row.number))}`,
+          number: Number(row.number), title: String(row.title || ""),
+          released: releaseDate(row.timestamp),
+        })),
+    };
+  }
+
+  function sourceSequences(source) {
+    const title = seriesIdentity(source.page.englishTitle || source.page.title).base;
+    return loadLookupCandidates({ title, season: seriesIdentity(source.page.englishTitle || source.page.title).season }, source).map(sourceSequence);
+  }
+
+  function details(request) {
+    const native = nativeDetails(request);
+    if (!nova.metadata.available()) return native;
+    nova.metadata.checkpoint(JSON.stringify({ media: native.media, episodes: native.episodes }));
+    try {
+      const enrichment = JSON.parse(nova.metadata.enrich(JSON.stringify({
+        details: { media: native.media, episodes: native.episodes },
+        sourceSequences: sourceSequences(native.mappingContext),
+        query: native.mappingQuery,
+        targets: ["imdb", "tmdb:tv", "mal:anime", "anilist:anime"],
+      })));
+      if (enrichment.error) throw new Error(enrichment.error);
+      return { ...native, media: enrichment.details.media, enrichment };
+    } catch (error) {
+      nova.log(`metadata enrichment failed: ${error}`);
+      return native;
+    }
   }
 
   function streams(request, loadedSeries = null) {
@@ -404,44 +447,6 @@
     return declared || maximum;
   }
 
-  function episodeSequence(lookup, candidates, expectedIdentity, sourceYear) {
-    if (expectedIdentity.labeled) return null;
-    const ordered = candidates.filter((candidate) => candidate.baseRelation === 2)
-      .sort((a, b) => a.identity.season - b.identity.season || a.identity.part - b.identity.part);
-    if (!ordered.length || ordered[0].identity.season !== 1 || ordered[0].identity.part !== 1) return null;
-    if (sourceYear && ordered[0].year && ordered[0].year !== sourceYear) return null;
-    let total = 0;
-    const boundaries = new Set([0]);
-    for (let index = 0; index < ordered.length; index++) {
-      const entry = ordered[index];
-      if (!entry.count) return null;
-      if (index) {
-        const previous = ordered[index - 1];
-        const sameSeason = entry.identity.season === previous.identity.season
-          && entry.identity.part === previous.identity.part + 1;
-        const nextSeason = entry.identity.season === previous.identity.season + 1 && entry.identity.part === 1;
-        // Gaps, duplicate editions, and reversed dates leave the ordering
-        // unknown. Never shift episodes across an unverified missing part.
-        if ((!sameSeason && !nextSeason) || (entry.year && previous.year && entry.year < previous.year)) return null;
-      }
-      entry.offset = total;
-      total += entry.count;
-      boundaries.add(total);
-    }
-    const absolute = lookup.absoluteEpisode;
-    const count = lookup.seasonEpisodeCount;
-    if (!Number.isInteger(absolute) || !Number.isInteger(count) || count < lookup.episode || absolute > total) return null;
-    const start = absolute - lookup.episode;
-    const end = start + count;
-    // Matching block boundaries proves a merged metadata season covers whole
-    // native parts. Equal series totals also prove the inverse (split metadata
-    // seasons inside one native entry), without assuming twelve-episode cours.
-    if (!((boundaries.has(start) && boundaries.has(end)) || lookup.seriesEpisodeCount === total)) return null;
-    if (start < 0 || end > total) return null;
-    const entry = ordered.find((candidate) => absolute > candidate.offset && absolute <= candidate.offset + candidate.count);
-    return entry ? { candidate: entry, number: absolute - entry.offset } : null;
-  }
-
   function lookupStreams(request) {
     const lookup = request.lookup || {};
     const cacheKey = `lookup:v2:${nova.crypto.hmacSha256Base64Url(JSON.stringify(lookup), "anikoto-source-lookup")}`;
@@ -453,7 +458,15 @@
         if (result.length) return result;
       } catch (_) {}
     }
-    const match = resolveEpisode(lookup, loadLookupCandidates(lookup));
+    const loaded = loadLookupCandidates(lookup);
+    const match = JSON.parse(nova.metadata.resolveEpisode(JSON.stringify({
+      target: lookup, sourceSequences: loaded.map(sourceSequence),
+    })));
+    if (match.status !== "confirmed") return [];
+    const candidate = loaded.find((entry) => sourceSequence(entry).mediaId === match.sourceMediaId);
+    if (!candidate) return [];
+    match.path = candidate.path;
+    match.series = candidate.series;
     if (!match) return [];
     nova.storage.set(cacheKey, JSON.stringify({ path: match.path, number: match.number, expires: Date.now() + 3600000 }));
     // Only the session cache contains the source mapping. Playback keeps
@@ -518,173 +531,6 @@
       }
     }
     return loaded;
-  }
-
-  function resolveEpisode(lookup, loaded) {
-    if (lookup.mediaType !== "series" || !Number.isInteger(lookup.season) || lookup.season < 1
-      || !Number.isInteger(lookup.episode) || lookup.episode < 1
-      || (lookup.absoluteEpisode != null && lookup.absoluteEpisode < lookup.episode)
-      || (lookup.seasonEpisodeCount != null && lookup.seasonEpisodeCount < lookup.episode)) return null;
-    const expectedIdentity = seriesIdentity(lookup.title);
-    if (!expectedIdentity.base) return null;
-    const sourceYear = startYear(lookup.year);
-    const releaseYear = startYear(lookup.released);
-    const expectedEpisode = episodeTitle(lookup.episodeTitle);
-    const matchesByTarget = new Map();
-    function eligible(candidate) {
-      return !(sourceYear && candidate.year && candidate.year < sourceYear)
-        && !(releaseYear && candidate.year && candidate.year > releaseYear);
-    }
-    function addMatch(candidate, number, confidence, alignedSequence = false) {
-      if (!eligible(candidate)) return;
-      const episode = candidate.episodeIndex.get(number);
-      if (!episode) return;
-      const actual = episodeTitle(episode.title);
-      // Episode titles can be translated or edited differently. Exact family
-      // identity and verified partition counts can prove the sequence without
-      // requiring identical wording; number-only fallbacks cannot.
-      if (expectedEpisode && actual && expectedEpisode !== actual && !alignedSequence) return;
-      const key = `${candidate.path}:${number}`;
-      const previous = matchesByTarget.get(key);
-      if (!previous || previous.confidence < confidence) {
-        matchesByTarget.set(key, { path: candidate.path, number, series: candidate.series, confidence });
-      }
-    }
-    // Meaningful episode names can locate the same episode even when neither
-    // season nor episode numbering agrees. Repeated names are not evidence.
-    const titleMatches = [];
-    if (expectedEpisode) {
-      for (const candidate of loaded) {
-        if (!eligible(candidate)) continue;
-        for (const number of candidate.titleIndex.get(expectedEpisode) || []) titleMatches.push({ candidate, number });
-      }
-    }
-    if (titleMatches.length === 1) addMatch(titleMatches[0].candidate, titleMatches[0].number, 1000);
-    const aligned = episodeSequence(lookup, loaded, expectedIdentity, sourceYear);
-    if (aligned) addMatch(aligned.candidate, aligned.number, 800, true);
-    for (const candidate of loaded) {
-      // Counts that disagree invalidate the simple season-number assumption.
-      // The sequence/title strategies above must prove that different grouping.
-      if (lookup.seasonEpisodeCount && candidate.count !== lookup.seasonEpisodeCount) continue;
-      const sameStart = !sourceYear || !candidate.year || candidate.year === sourceYear;
-      let number = lookup.episode;
-      let continuous = false;
-      if (lookup.season === 1) {
-        if (!sameStart || (!sourceYear && releaseYear && candidate.year && candidate.year !== releaseYear)) continue;
-      } else if (candidate.identity.season !== lookup.season) {
-        if (candidate.relation !== 2 || !Number.isInteger(lookup.absoluteEpisode)
-          || lookup.absoluteEpisode <= lookup.episode || !sameStart) continue;
-        number = lookup.absoluteEpisode;
-        continuous = true;
-      }
-      const episode = candidate.episodeIndex.get(number);
-      const sameEpisode = expectedEpisode && episodeTitle(episode?.title) === expectedEpisode;
-      const confirmedSeason = !continuous && candidate.confirmedSeason === lookup.season
-        && candidate.count === lookup.seasonEpisodeCount;
-      if (candidate.relation < 2 && candidate.baseRelation < 2
-        && !(sameEpisode && titleMatches.length === 1) && !confirmedSeason) continue;
-      addMatch(candidate, number, confirmedSeason ? 750 : (continuous ? 400 : 500) + (sameEpisode ? 150 : 0)
-        + (candidate.relation === 2 ? 50 : 0) + (sourceYear && candidate.year === sourceYear ? 50 : 0), confirmedSeason);
-    }
-    const matches = [...matchesByTarget.values()];
-    matches.sort((a, b) => b.confidence - a.confidence);
-    if (!matches.length || (matches[1] && matches[0].confidence === matches[1].confidence)) {
-      nova.log(matches.length ? "source lookup is ambiguous" : "source lookup found no matching episode");
-      return null;
-    }
-    return matches[0];
-  }
-
-  function canonicalCandidate(request) {
-    const source = request.source;
-    const identity = seriesIdentity(source.title);
-    const sourceYear = startYear(source.year);
-    const matches = (request.candidates || []).map((candidate) => {
-      if (candidate.media_type !== "series" || !/^tt\d+$/.test(candidate.external_ids?.imdb || "")) return null;
-      const year = startYear(candidate.year);
-      if (sourceYear && (!year || (identity.labeled ? year > sourceYear : year !== sourceYear))) return null;
-      if (source.external_ids?.imdb) return source.external_ids.imdb === candidate.external_ids.imdb ? { candidate, relation: 3 } : null;
-      const titles = [source.title, ...(source.aliases || [])].map((title) => seriesIdentity(title).base);
-      const relation = Math.max(...[candidate.title, ...(candidate.aliases || [])].map((title) => titleRelation(seriesIdentity(title).base, titles)));
-      return relation ? { candidate, relation } : null;
-    }).filter(Boolean).sort((a, b) => b.relation - a.relation);
-    return matches.length && (!matches[1] || matches[1].relation < matches[0].relation)
-      ? matches[0].candidate.external_ids.imdb : null;
-  }
-
-  function mapEpisodes(request) {
-    const canonical = request.canonical;
-    const source = request.source;
-    const identity = seriesIdentity(source.page.englishTitle || source.page.title);
-    const loaded = loadLookupCandidates({ title: canonical.title, season: identity.season }, source);
-    const seasons = new Map();
-    for (const video of canonical.videos.slice(0, 10000)) {
-      if (!Number.isInteger(video.season) || video.season < 1 || video.season > 100
-        || !Number.isInteger(video.episode) || video.episode < 1 || video.episode > 10000) continue;
-      if (!seasons.has(video.season)) seasons.set(video.season, new Set());
-      seasons.get(video.season).add(video.episode);
-    }
-    const counts = new Map();
-    for (const [season, numbers] of seasons) {
-      const maximum = Math.max(...numbers);
-      if (numbers.size === maximum) counts.set(season, maximum);
-    }
-    const offsets = new Map();
-    let total = 0;
-    const lastSeason = Math.max(0, ...seasons.keys());
-    for (let season = 1; season <= lastSeason; season++) {
-      if (!counts.has(season)) { total = null; break; }
-      offsets.set(season, total);
-      total += counts.get(season);
-    }
-    // A shortened canonical series title (e.g. "Code Geass") cannot by
-    // itself prove that a longer native title belongs to the same series.
-    // Two distinct, globally unique episode names at the same positions,
-    // together with equal season counts, confirm the remaining positions
-    // even when one provider has edited an individual episode title.
-    const canonicalTitleCounts = new Map();
-    for (const video of canonical.videos.slice(0, 10000)) {
-      if (!seasons.get(video.season)?.has(video.episode)) continue;
-      const title = episodeTitle(video.title);
-      if (title) canonicalTitleCounts.set(title, (canonicalTitleCounts.get(title) || 0) + 1);
-    }
-    const sourceTitleCounts = new Map();
-    for (const candidate of loaded) {
-      for (const [title, numbers] of candidate.titleIndex) {
-        sourceTitleCounts.set(title, (sourceTitleCounts.get(title) || 0) + numbers.length);
-      }
-    }
-    for (const candidate of loaded) {
-      const season = candidate.identity.season;
-      if (candidate.count !== counts.get(season)) continue;
-      const anchors = new Set();
-      let conflictingAnchor = false;
-      for (const video of canonical.videos.slice(0, 10000)) {
-        if (video.season !== season || !video.id.startsWith(`${canonical.mediaId}:`)) continue;
-        const title = episodeTitle(video.title);
-        if (!title || canonicalTitleCounts.get(title) !== 1 || sourceTitleCounts.get(title) !== 1) continue;
-        const nativeNumber = candidate.titleIndex.get(title)?.[0];
-        if (nativeNumber === video.episode) anchors.add(title);
-        else if (nativeNumber != null) conflictingAnchor = true;
-      }
-      if (anchors.size >= 2 && !conflictingAnchor) candidate.confirmedSeason = season;
-    }
-    const mapped = new Map();
-    for (const video of canonical.videos.slice(0, 10000)) {
-      if (!video.id.startsWith(`${canonical.mediaId}:`) || !seasons.get(video.season)?.has(video.episode)) continue;
-      const match = resolveEpisode({
-        mediaType: "series", title: canonical.title, year: canonical.year,
-        season: video.season, episode: video.episode,
-        absoluteEpisode: offsets.has(video.season) ? offsets.get(video.season) + video.episode : null,
-        seasonEpisodeCount: counts.get(video.season), seriesEpisodeCount: total,
-        episodeTitle: video.title, released: video.released,
-      }, loaded);
-      if (!match || match.path !== source.path) continue;
-      const previous = mapped.get(match.number);
-      // Two canonical episodes pointing at one source episode are ambiguous.
-      mapped.set(match.number, mapped.has(match.number) && previous !== video.id ? false : video.id);
-    }
-    return [...mapped].filter(([, id]) => id).map(([number, id]) => ({ number, ids: [id] }));
   }
 
   function episodeToken(path, number) {
@@ -796,8 +642,7 @@
         case "details": return details(request);
         case "streams": return streams(request);
         case "lookupStreams": return lookupStreams(request);
-        case "canonicalCandidate": return canonicalCandidate(request);
-        case "mapEpisodes": return mapEpisodes(request);
+        case "sourceSequences": return sourceSequences(request.source);
         default: throw new Error(`unsupported provider operation: ${request.op}`);
       }
     },

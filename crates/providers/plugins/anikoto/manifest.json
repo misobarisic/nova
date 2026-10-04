@@ -15,12 +15,16 @@
       "mapper.nekostream.site",
       "megaplay.buzz",
       "mewcdn.online"
-    ]
+    ],
+    "addonMetadata": true
   },
   "limits": {
     "requestTimeoutMs": 30000,
     "responseBytes": 2097152,
     "redirects": 5,
     "requestsPerOperation": 32
+  },
+  "capabilities": {
+    "contextualStreams": true
   }
 }

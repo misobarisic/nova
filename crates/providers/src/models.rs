@@ -74,7 +74,11 @@ pub struct MediaItem {
 
 impl MediaItem {
     pub fn stable_id(&self) -> String {
-        format!("{}:{}", self.provider_id, self.source_id)
+        if self.provider_id.is_empty() {
+            self.source_id.clone()
+        } else {
+            format!("{}:{}", self.provider_id, self.source_id)
+        }
     }
 }
 
@@ -95,7 +99,11 @@ pub struct Episode {
 
 impl Episode {
     pub fn stable_id(&self) -> String {
-        format!("{}:{}", self.provider_id, self.source_id)
+        if self.provider_id.is_empty() {
+            self.source_id.clone()
+        } else {
+            format!("{}:{}", self.provider_id, self.source_id)
+        }
     }
 }
 

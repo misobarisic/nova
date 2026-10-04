@@ -169,6 +169,7 @@ fn addon_row_controls_fit_their_row() {
     app.set_addon_rows(
         Rc::new(VecModel::from(vec![nova::AddonRow {
             label: s("Cinemeta"),
+            capabilities: s(""),
             url: s("https://v3-cinemeta.strem.io/manifest.json"),
             enabled: true,
             config_url: s("https://v3-cinemeta.strem.io/configure"),

@@ -242,8 +242,44 @@ impl Bridge {
                 .installed
                 .iter()
                 .filter_map(|a| {
-                    stream_endpoint(a, &modal_type, &request_id, lookup.as_ref(), &stream_ids)
-                        .map(|url| (a.label.clone(), url))
+                    let video = state
+                        .modal_item
+                        .as_ref()
+                        .and_then(|modal| modal.videos.iter().find(|v| v.id == request_id));
+                    let owner = video
+                        .and_then(|v| v.extra.get("novaSourceUrl"))
+                        .and_then(serde_json::Value::as_str);
+                    let aliases = stream_ids
+                        .iter()
+                        .filter(|id| {
+                            if public_stream_id(id) {
+                                return true;
+                            }
+                            video
+                                .and_then(|v| v.extra.get("novaStreamIds"))
+                                .and_then(serde_json::Value::as_array)
+                                .and_then(|ids| {
+                                    ids.iter()
+                                        .position(|value| value.as_str() == Some(id.as_str()))
+                                })
+                                .and_then(|i| {
+                                    video?.extra.get("novaConnections")?.as_array()?.get(i)
+                                })
+                                .and_then(|c| c.get("addonId"))
+                                .and_then(serde_json::Value::as_str)
+                                .is_some_and(|id| id == nova_providers::addon_metadata_id(&a.url))
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    stream_endpoint_owned(
+                        a,
+                        &modal_type,
+                        &request_id,
+                        lookup.as_ref(),
+                        &aliases,
+                        owner,
+                    )
+                    .map(|url| (a.label.clone(), url))
                 })
                 .collect()
         };
@@ -2462,6 +2498,29 @@ fn stream_response_is_current(state: &Shared, request_id: &str, generation: u64)
             .is_some_and(|modal| modal.request_id == request_id)
 }
 
+fn public_stream_id(id: &str) -> bool {
+    if nova_providers::ExternalId::parse(id).is_some() {
+        return true;
+    }
+    let parts = id.split(':').collect::<Vec<_>>();
+    let positive = |number: &str| {
+        !number.is_empty()
+            && number.bytes().all(|c| c.is_ascii_digit())
+            && number.parse::<u32>().is_ok_and(|n| n > 0)
+    };
+    match parts.as_slice() {
+        [head, season, episode] if nova_providers::ExternalId::parse(head).is_some() => {
+            positive(season) && positive(episode)
+        }
+        ["tmdb" | "mal" | "anilist", number] => positive(number),
+        ["tmdb" | "mal" | "anilist", number, season, episode] => {
+            positive(number) && positive(season) && positive(episode)
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
 fn stream_endpoint(
     addon: &Installed,
     media_type: &str,
@@ -2469,16 +2528,30 @@ fn stream_endpoint(
     lookup: Option<&nova_providers::StreamLookupRequest>,
     stream_ids: &[String],
 ) -> Option<String> {
+    stream_endpoint_owned(addon, media_type, request_id, lookup, stream_ids, None)
+}
+
+fn stream_endpoint_owned(
+    addon: &Installed,
+    media_type: &str,
+    request_id: &str,
+    lookup: Option<&nova_providers::StreamLookupRequest>,
+    stream_ids: &[String],
+    owner: Option<&str>,
+) -> Option<String> {
     if !addon.enabled || !addon.manifest.has_streams() {
         return None;
     }
-    // Contextual resolution is explicit for the bundled source. Its own
+    // Contextual resolution is declared by the provider. Its own
     // manifest restrictions continue to protect normal meta/stream routing.
-    if addon.url == nova_providers::ANIKOTO_PROVIDER_URL && !request_id.starts_with("anikoto:") {
-        return nova_providers::builtin_stream_lookup_url(lookup?).ok();
+    if nova_providers::supports_contextual_streams(&addon.url)
+        && !nova_providers::provider_owns_id(&addon.url, request_id)
+    {
+        return nova_providers::stream_lookup_url(&addon.url, lookup?).ok();
     }
-    let target_id = if addon.url != nova_providers::ANIKOTO_PROVIDER_URL
-        && request_id.starts_with("anikoto:")
+    let target_id = if !nova_providers::provider_owns_id(&addon.url, request_id)
+        && (nova_providers::private_provider_id(request_id)
+            || owner.is_some_and(|url| url != addon.url && !public_stream_id(request_id)))
     {
         // A source episode keeps its own library identity. Only the outbound
         // addon request uses a canonical episode ID confirmed by the mapper.
@@ -2486,8 +2559,13 @@ fn stream_endpoint(
             .iter()
             .find(|id| addon.manifest.accepts("stream", media_type, id))
             .map(String::as_str)?
-    } else {
+    } else if addon.manifest.accepts("stream", media_type, request_id) {
         request_id
+    } else {
+        stream_ids
+            .iter()
+            .find(|id| addon.manifest.accepts("stream", media_type, id))
+            .map(String::as_str)?
     };
     if !addon.manifest.accepts("stream", media_type, target_id) {
         return None;
@@ -2500,13 +2578,17 @@ fn stream_endpoint(
 }
 
 fn episode_stream_ids(modal: &ModalItem, request_id: &str) -> Vec<String> {
-    if !modal.id.starts_with("anikoto:") || !request_id.starts_with("anikoto:") {
-        return Vec::new();
-    }
     modal
         .videos
         .iter()
         .find(|video| video.id == request_id)
+        .filter(|video| {
+            video
+                .extra
+                .get("novaMetadataRevision")
+                .and_then(serde_json::Value::as_u64)
+                .is_none_or(|revision| revision == nova_providers::metadata_revision())
+        })
         .and_then(|video| video.extra.get("novaStreamIds"))
         .and_then(serde_json::Value::as_array)
         .into_iter()
@@ -2516,7 +2598,7 @@ fn episode_stream_ids(modal: &ModalItem, request_id: &str) -> Vec<String> {
         .filter(|id| {
             !id.is_empty()
                 && id.len() <= 1024
-                && !id.starts_with("anikoto:")
+                && !nova_providers::private_provider_id(id)
                 && !id.chars().any(char::is_control)
         })
         .map(String::from)
@@ -2528,17 +2610,21 @@ fn merge_episode_stream_ids(existing: &mut [Video], fresh: &[Video]) {
         .iter()
         .map(|video| (video.id.as_str(), video))
         .collect::<std::collections::HashMap<_, _>>();
-    for video in existing
-        .iter_mut()
-        .filter(|video| video.id.starts_with("anikoto:"))
-    {
+    for video in existing.iter_mut() {
         let Some(updated) = fresh.get(video.id.as_str()) else {
             continue;
         };
-        if let Some(ids) = updated.extra.get("novaStreamIds") {
-            video.extra.insert("novaStreamIds".into(), ids.clone());
-        } else {
-            video.extra.remove("novaStreamIds");
+        for key in [
+            "novaStreamIds",
+            "novaConnections",
+            "novaMetadataRevision",
+            "novaSourceUrl",
+        ] {
+            if let Some(value) = updated.extra.get(key) {
+                video.extra.insert(key.into(), value.clone());
+            } else {
+                video.extra.remove(key);
+            }
         }
     }
 }
@@ -2547,7 +2633,7 @@ fn source_stream_lookup(
     modal: &ModalItem,
     request_id: &str,
 ) -> Option<nova_providers::StreamLookupRequest> {
-    if modal.type_ != "series" || modal.id.starts_with("anikoto:") {
+    if modal.type_ != "series" {
         return None;
     }
     let video = modal.videos.iter().find(|video| video.id == request_id)?;
@@ -2667,7 +2753,12 @@ mod source_lookup_tests {
             label: "AniKoto".into(),
             enabled: true,
             configure_ok: Some(false),
-            manifest: nova_providers::builtin_manifest(),
+            manifest: Addon::parse_manifest(
+                nova_providers::bundled_providers()[0]
+                    .addon_manifest
+                    .as_bytes(),
+            )
+            .unwrap(),
             available: true,
             generation: 1,
         };
@@ -2718,7 +2809,12 @@ mod source_lookup_tests {
         assert!(stream_endpoint(&addon, "series", &modal.request_id, None, &ids).is_none());
         addon.enabled = true;
         addon.url = nova_providers::ANIKOTO_PROVIDER_URL.into();
-        addon.manifest = nova_providers::builtin_manifest();
+        addon.manifest = Addon::parse_manifest(
+            nova_providers::bundled_providers()[0]
+                .addon_manifest
+                .as_bytes(),
+        )
+        .unwrap();
         let url = stream_endpoint(&addon, "series", &modal.request_id, None, &ids).unwrap();
         assert!(url.ends_with("/stream/series/anikoto:ep:native-episode-1.json"));
         assert_eq!(modal.videos[0].id, modal.request_id);
@@ -2845,7 +2941,9 @@ mod source_lookup_tests {
         modal.videos.last_mut().unwrap().season = Some(0);
         assert!(source_stream_lookup(&modal, &modal.request_id).is_none());
         modal.id = "anikoto:source".into();
-        assert!(source_stream_lookup(&modal, &modal.request_id).is_none());
+        // Native providers can supply context to other contextual sources too.
+        modal.videos.last_mut().unwrap().season = Some(1);
+        assert!(source_stream_lookup(&modal, &modal.request_id).is_some());
     }
 
     #[test]

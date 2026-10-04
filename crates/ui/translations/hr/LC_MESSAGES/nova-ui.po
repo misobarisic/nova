@@ -1615,3 +1615,18 @@ msgstr "Zauzeće diska i čišćenje"
 
 msgid "Resume"
 msgstr "Nastavite"
+
+msgid "Search installed addons…"
+msgstr "Pretraži instalirane dodatke…"
+
+msgid "Searchable catalogs"
+msgstr "Pretraživi katalozi"
+
+msgid "Metadata"
+msgstr "Metapodaci"
+
+msgid "Streams"
+msgstr "Streamovi"
+
+msgid "No installed addons match these filters."
+msgstr "Nijedan instalirani dodatak ne odgovara ovim filtrima."

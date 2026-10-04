@@ -51,6 +51,26 @@ pub fn match_metadata(source: &MediaItem, candidates: &[MediaItem]) -> MetadataM
     }
 }
 
+pub(crate) fn ids_conflict(a: &MediaItem, b: &MediaItem) -> bool {
+    [
+        IdNamespace::Imdb,
+        IdNamespace::MalAnime,
+        IdNamespace::MalManga,
+        IdNamespace::AnilistAnime,
+        IdNamespace::AnilistManga,
+        IdNamespace::TmdbTv,
+        IdNamespace::TmdbMovie,
+    ]
+    .into_iter()
+    .any(
+        |ns| match (a.external_ids.resolve_id(ns), b.external_ids.resolve_id(ns)) {
+            (IdResolution::Conflict(_), _) | (_, IdResolution::Conflict(_)) => true,
+            (IdResolution::Unique(a), IdResolution::Unique(b)) => a != b,
+            _ => false,
+        },
+    )
+}
+
 fn normalized_titles(item: &MediaItem) -> Vec<String> {
     std::iter::once(&item.title)
         .chain(&item.aliases)

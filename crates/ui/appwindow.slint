@@ -102,6 +102,9 @@ export component AppWindow inherits Window {
     in-out property <[string]> catalog_labels: [];
     in-out property <[string]> genre_names: [];
     in-out property <[AddonRow]> addon_rows: [];
+    in-out property <string> addon_search_text: "";
+    in-out property <int> addon_capability_filter: 0;
+    callback addon_filter_changed();
     in-out property <[StreamRow]> streams: [];
     in-out property <int> addon_combo_idx: -1;
     in-out property <int> type_combo_idx: -1;
@@ -1007,6 +1010,9 @@ export component AppWindow inherits Window {
 
         persistence_failed: root.persistence_failed;
         addon_rows <=> root.addon_rows;
+        addon_search_text <=> root.addon_search_text;
+        addon_capability_filter <=> root.addon_capability_filter;
+        addon_filter_changed => { root.addon_filter_changed(); }
         addon_url <=> root.addon_url;
         category_rows <=> root.category_rows;
         category_input <=> root.category_input;

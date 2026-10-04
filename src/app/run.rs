@@ -33,6 +33,7 @@ fn note_nav_switch(bridge: &Bridge, next: i32) {
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     crate::diagnostics::init();
+    net::init_metadata_transport();
     // Native desktop: in-app playback renders through mpv's OpenGL underlay
     // (src/player.rs). Like the reference prototype, the app runs on the
     // default femtovg GL renderer (it exposes GraphicsAPI::NativeOpenGL to
@@ -240,19 +241,42 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_addon_added(move |url| b.add_addon(&url));
 
     let b = bridge.clone();
-    app.on_addon_toggled(move |i| b.toggle_addon(i as usize));
+    app.on_addon_toggled(move |i| {
+        if let Some(idx) = b.installed_row_index(i as usize) {
+            b.toggle_addon(idx);
+        }
+    });
 
     let b = bridge.clone();
-    app.on_addon_remove(move |i| b.remove_addon_at(i as usize));
+    app.on_addon_remove(move |i| {
+        if let Some(idx) = b.installed_row_index(i as usize) {
+            b.remove_addon_at(idx);
+        }
+    });
 
     let b = bridge.clone();
-    app.on_addon_move_up(move |i| b.move_addon(i as usize, -1));
+    app.on_addon_move_up(move |i| {
+        if let Some(idx) = b.installed_row_index(i as usize) {
+            b.move_addon(idx, -1);
+        }
+    });
 
     let b = bridge.clone();
-    app.on_addon_move_down(move |i| b.move_addon(i as usize, 1));
+    app.on_addon_move_down(move |i| {
+        if let Some(idx) = b.installed_row_index(i as usize) {
+            b.move_addon(idx, 1);
+        }
+    });
 
     let b = bridge.clone();
-    app.on_addon_refresh(move |i| b.refresh_addon(i as usize));
+    app.on_addon_refresh(move |i| {
+        if let Some(idx) = b.installed_row_index(i as usize) {
+            b.refresh_addon(idx);
+        }
+    });
+
+    let b = bridge.clone();
+    app.on_addon_filter_changed(move || b.apply_addon_rows());
 
     // Settings → Addons → "Copy link": the install URL stays out of the row
     // (it used to be the row's description) and is copied from here instead.
@@ -687,14 +711,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     // Register this bundled-source generation once. Its ordinary addon row
     // preserves disable/remove choices on subsequent launches.
-    if nova_storage::get_str("providers:bundled:v1").is_none() {
-        bridge.install_persisted(
-            nova_providers::ANIKOTO_PROVIDER_URL,
-            true,
-            Some(false),
-            Some("AniKoto".into()),
-        );
-        nova_storage::set_str("providers:bundled:v1", "1");
+    for provider in nova_providers::bundled_providers() {
+        if nova_storage::get_str(provider.registration_key).is_none() {
+            let manifest = Addon::parse_manifest(provider.addon_manifest.as_bytes())
+                .expect("valid bundled addon manifest");
+            bridge.install_persisted(provider.url, true, Some(false), Some(manifest.name));
+            nova_storage::set_str(provider.registration_key, "1");
+        }
     }
     bridge.shared.lock().unwrap().loading_addons = false;
     bridge.persist_installed();

@@ -112,6 +112,14 @@ impl Manifest {
         self.catalogs.iter().filter(move |c| c.type_ == type_)
     }
 
+    /// Search capability shared by Discover and metadata enrichment.
+    pub fn search_catalogs<'a>(&'a self, type_: &'a str) -> impl Iterator<Item = &'a Catalog> {
+        self.catalogs_for_type(type_).filter(|catalog| {
+            (self.resources.is_empty() || self.accepts("catalog", type_, &catalog.id))
+                && catalog.supports_extra("search")
+        })
+    }
+
     /// Find the catalog with the given media type and catalog id.
     pub fn catalog_for(&self, type_: &str, id: &str) -> Option<&Catalog> {
         self.catalogs

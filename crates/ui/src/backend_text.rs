@@ -63,6 +63,7 @@ pub fn tr(english: &'static str) -> &'static str {
         return english;
     }
     match english {
+        "Streams for other sources" => "Streamovi za druge izvore",
         // ---- Anime tracking -------------------------------------------
         "Add tracking or align another release" => "Dodajte praćenje ili uskladite drugo izdanje",
         "Adjust individual assignments below. Leave empty to exclude a source episode." => {
