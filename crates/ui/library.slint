@@ -65,6 +65,18 @@ export component LibraryPage {
     in-out property <bool> list_view: false;
     in-out property <bool> search_open: false;
     callback view_changed();
+    changed search_open => {
+        if (root.search_open) { search_focus_t.start(); }
+        else { search_focus_t.stop(); }
+    }
+    search_focus_t := Timer {
+        interval: 80ms;
+        running: false;
+        triggered => {
+            self.stop();
+            if (root.search_open) { library_search_line.focus(); }
+        }
+    }
     in property <int> system_back_request: 0;
     property <int> last_system_back_request: -1;
 
@@ -782,8 +794,8 @@ export component LibraryPage {
                         width: 100%;
                         spacing: 14px;
                         library_hero := VerticalLayout {
-                                vertical-stretch: 0;
-                                spacing: 14px;
+                            vertical-stretch: 0;
+                            spacing: 14px;
                             library_heading := HorizontalLayout {
                                 vertical-stretch: 0;
                                 min-height: 44px;
@@ -817,128 +829,144 @@ export component LibraryPage {
                                 height: self.preferred-height;
                             }
                         }
-                        if root.search_open: SearchField {
-                            text <=> root.query;
-                            placeholder-text: @tr("Search library");
-                            search-icon: true;
-                            roomy: true;
-                            init => { self.focus(); }
-                            edited(_) => { root.view_changed(); }
-                        }
-
-                        // All automatic and custom categories remain reachable on a fresh
-                        // install. A horizontal rail keeps every pill at its natural size.
-                        filter_rail := Flickable {
-                            visible: root.category_names.length > 0;
-                            height: root.category_names.length > 0 ? 44px : 0px;
-                            vertical-stretch: 0;
-                            content-width: filter_chips.preferred-width;
-                            content-height: self.height;
-                            interactive: true;
-                            changed width => {
-                                root.reveal_filter(root.selected_filter_left, root.selected_filter_width);
-                            }
-                            changed content-width => {
-                                root.reveal_filter(root.selected_filter_left, root.selected_filter_width);
-                            }
-                            filter_chips := HorizontalLayout {
-                                spacing: 8px;
-                                alignment: start;
-                                LibraryFilterChip {
-                                    label: @tr("All");
-                                    selected: root.library_filter_category == "";
-                                    picked => { root.library_filter_picked(""); }
-                                    reveal(left, w) => { root.reveal_filter(left, w); }
-                                }
-                                for name[i] in root.category_names: LibraryFilterChip {
-                                    label: i < root.category_labels.length ? root.category_labels[i] : name;
-                                    selected: root.library_filter_category == name;
-                                    picked => { root.library_filter_picked(name); }
-                                    reveal(left, w) => { root.reveal_filter(left, w); }
-                                }
-                            }
-                            KbMark { on: root.kb_zone == 1; active: root.kb_active; }
-                        }
-
-                        library_sort_controls := HorizontalLayout {
-                            height: 44px;
-                            vertical-stretch: 0;
-                            spacing: 10px;
-                            library_sort := Dropdown {
-                                model: [@tr("Recently Added"), @tr("Title"), @tr("Release year")];
-                                current-index <=> root.sort_index;
-                                roomy: true;
-                                pill: true;
-                                min-width: 0px;
-                                max-width: 190px;
-                                horizontal-stretch: 1;
-                                selected(_) => { root.view_changed(); }
-                            }
-                            Rectangle { horizontal-stretch: 1; min-width: 0px; }
-                            Rectangle {
-                                width: 88px;
-                                height: 44px;
-                                border-radius: 22px;
-                                border-width: 1px;
-                                border-color: Theme.current.border_medium;
-                                background: Theme.current.hero_control;
+                        library_controls := VerticalLayout {
+                            spacing: 0px;
+                            library_search_reveal := Rectangle {
+                                height: root.search_open ? 58px : 0px;
+                                visible: self.height > 0px;
+                                opacity: root.search_open ? 1.0 : 0.0;
                                 clip: true;
-                                for mode in [false, true]: library_view_button := Rectangle {
-                                    x: mode ? 44px : 0px;
-                                    width: 44px;
+                                animate height { duration: Anim.transition_slide; easing: ease-out; }
+                                animate opacity { duration: Anim.transition_fade; easing: ease-out; }
+                                library_search_line := SearchField {
+                                    width: 100%;
                                     height: 44px;
-                                    background: root.list_view == mode ? Theme.current.selection_wash : transparent;
-                                    accessible-role: button;
-                                    accessible-label: mode ? @tr("List view") : @tr("Grid view");
-                                    if !mode: Path {
-                                        x: 12px; y: 12px; width: 20px; height: 20px;
-                                        viewbox-width: 24; viewbox-height: 24;
-                                        commands: "M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h7v7h-7z";
-                                        fill: root.list_view == mode ? Theme.current.accent_vivid : Theme.current.text_hint;
-                                    }
-                                    if mode: Path {
-                                        x: 12px; y: 12px; width: 20px; height: 20px;
-                                        viewbox-width: 24; viewbox-height: 24;
-                                        commands: "M3 4h3v3H3zm5 0h13v3H8zM3 10h3v3H3zm5 0h13v3H8zM3 16h3v3H3zm5 0h13v3H8z";
-                                        fill: root.list_view == mode ? Theme.current.accent_vivid : Theme.current.text_hint;
-                                    }
-                                    TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => { root.list_view = mode; }
-                                    }
+                                    enabled: root.search_open;
+                                    text <=> root.query;
+                                    placeholder-text: @tr("Search library");
+                                    search-icon: true;
+                                    roomy: true;
+                                    init => { if (root.search_open) { search_focus_t.start(); } }
+                                    edited(_) => { root.view_changed(); }
                                 }
                             }
-                            library_search_button := Rectangle {
-                                width: 44px;
-                                height: 44px;
-                                border-radius: 22px;
-                                border-width: 1px;
-                                border-color: Theme.current.border_strong;
-                                background: search_button_touch.has-hover ? Theme.current.control_hover : Theme.current.hero_control;
-                                accessible-role: button;
-                                accessible-label: @tr("Search library");
-                                if !root.search_open: IcSearch {
-                                    x: 12px; y: 12px; width: 20px; height: 20px;
-                                    fill: Theme.current.text_primary;
+
+                            library_filter_and_sort := VerticalLayout {
+                                    spacing: 14px;
+                                // All automatic and custom categories remain reachable on a fresh
+                                // install. A horizontal rail keeps every pill at its natural size.
+                                filter_rail := Flickable {
+                                    visible: root.category_names.length > 0;
+                                    height: root.category_names.length > 0 ? 44px : 0px;
+                                    vertical-stretch: 0;
+                                    content-width: filter_chips.preferred-width;
+                                    content-height: self.height;
+                                    interactive: true;
+                                    changed width => {
+                                        root.reveal_filter(root.selected_filter_left, root.selected_filter_width);
+                                    }
+                                    changed content-width => {
+                                        root.reveal_filter(root.selected_filter_left, root.selected_filter_width);
+                                    }
+                                    filter_chips := HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: start;
+                                        LibraryFilterChip {
+                                            label: @tr("All");
+                                            selected: root.library_filter_category == "";
+                                            picked => { root.library_filter_picked(""); }
+                                            reveal(left, w) => { root.reveal_filter(left, w); }
+                                        }
+                                        for name[i] in root.category_names: LibraryFilterChip {
+                                            label: i < root.category_labels.length ? root.category_labels[i] : name;
+                                            selected: root.library_filter_category == name;
+                                            picked => { root.library_filter_picked(name); }
+                                            reveal(left, w) => { root.reveal_filter(left, w); }
+                                        }
+                                    }
+                                    KbMark { on: root.kb_zone == 1; active: root.kb_active; }
                                 }
-                                if root.search_open: IcClose {
-                                    x: 12px; y: 12px; width: 20px; height: 20px;
-                                    fill: Theme.current.text_primary;
-                                }
-                                search_button_touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.search_open = !root.search_open;
-                                        if (!root.search_open) {
-                                            root.query = "";
-                                            root.view_changed();
-                                            nav_scope.focus();
+
+                                library_sort_controls := HorizontalLayout {
+                                    height: 44px;
+                                    vertical-stretch: 0;
+                                    spacing: 10px;
+                                    library_sort := Dropdown {
+                                        model: [@tr("Recently Added"), @tr("Title"), @tr("Release year")];
+                                        current-index <=> root.sort_index;
+                                        roomy: true;
+                                        pill: true;
+                                        min-width: 0px;
+                                        max-width: 190px;
+                                        horizontal-stretch: 1;
+                                        selected(_) => { root.view_changed(); }
+                                    }
+                                    Rectangle { horizontal-stretch: 1; min-width: 0px; }
+                                    Rectangle {
+                                        width: 88px;
+                                        height: 44px;
+                                        border-radius: 22px;
+                                        border-width: 1px;
+                                        border-color: Theme.current.border_medium;
+                                        background: Theme.current.hero_control;
+                                        clip: true;
+                                        for mode in [false, true]: library_view_button := Rectangle {
+                                            x: mode ? 44px : 0px;
+                                            width: 44px;
+                                            height: 44px;
+                                            background: root.list_view == mode ? Theme.current.selection_wash : transparent;
+                                            accessible-role: button;
+                                            accessible-label: mode ? @tr("List view") : @tr("Grid view");
+                                            if !mode: Path {
+                                                x: 12px; y: 12px; width: 20px; height: 20px;
+                                                viewbox-width: 24; viewbox-height: 24;
+                                                commands: "M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h7v7h-7z";
+                                                fill: root.list_view == mode ? Theme.current.accent_vivid : Theme.current.text_hint;
+                                            }
+                                            if mode: Path {
+                                                x: 12px; y: 12px; width: 20px; height: 20px;
+                                                viewbox-width: 24; viewbox-height: 24;
+                                                commands: "M3 4h3v3H3zm5 0h13v3H8zM3 10h3v3H3zm5 0h13v3H8zM3 16h3v3H3zm5 0h13v3H8z";
+                                                fill: root.list_view == mode ? Theme.current.accent_vivid : Theme.current.text_hint;
+                                            }
+                                            TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => { root.list_view = mode; }
+                                            }
+                                        }
+                                    }
+                                    library_search_button := Rectangle {
+                                        width: 44px;
+                                        height: 44px;
+                                        border-radius: 22px;
+                                        border-width: 1px;
+                                        border-color: Theme.current.border_strong;
+                                        background: search_button_touch.has-hover ? Theme.current.control_hover : Theme.current.hero_control;
+                                        accessible-role: button;
+                                        accessible-label: @tr("Search library");
+                                        if !root.search_open: IcSearch {
+                                            x: 12px; y: 12px; width: 20px; height: 20px;
+                                            fill: Theme.current.text_primary;
+                                        }
+                                        if root.search_open: IcClose {
+                                            x: 12px; y: 12px; width: 20px; height: 20px;
+                                            fill: Theme.current.text_primary;
+                                        }
+                                        search_button_touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.search_open = !root.search_open;
+                                                if (!root.search_open) {
+                                                    root.query = "";
+                                                    root.view_changed();
+                                                    nav_scope.focus();
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
-
                     }
                 }
             // Empty state

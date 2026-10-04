@@ -5,6 +5,7 @@ import { SideNav, NavMetrics } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
 import { Dropdown } from "dropdown.slint";
 import { SearchField } from "searchfield.slint";
+import { Theme } from "theme.slint";
 import { Anim } from "anim.slint";
 import { IcChevronLeft, IcChevronRight, IcDelete, IcSearch } from "icons.slint";
 
@@ -32,7 +33,7 @@ component DiscoverFilters inherits Flickable {
 
     width: 100%;
     vertical-stretch: 0;
-    height: root.narrow ? 44px : 32px;
+    height: 44px;
     interactive: true;
     content-width: filter_row.width;
     content-height: self.height;
@@ -54,7 +55,7 @@ component DiscoverFilters inherits Flickable {
         if root.addon_names.length > 0: KbMark { on: root.kb_enabled && root.kb_zone == 1; active: root.kb_active; }
         if root.addon_names.length > 0: Dropdown {
             width: 180px;
-            roomy: root.narrow;
+            roomy: true;
             pill: true;
             rail-gesture: true;
             accessible-role: button;
@@ -72,7 +73,7 @@ component DiscoverFilters inherits Flickable {
         KbMark { on: root.kb_enabled && root.kb_zone == 2 && root.kb_ctl == 0; active: root.kb_active; }
         Dropdown {
             width: 110px;
-            roomy: root.narrow;
+            roomy: true;
             pill: true;
             rail-gesture: true;
             accessible-role: button;
@@ -90,7 +91,7 @@ component DiscoverFilters inherits Flickable {
         KbMark { on: root.kb_enabled && root.kb_zone == 2 && root.kb_ctl == 1; active: root.kb_active; }
         Dropdown {
             width: 220px;
-            roomy: root.narrow;
+            roomy: true;
             pill: true;
             rail-gesture: true;
             accessible-role: button;
@@ -109,7 +110,7 @@ component DiscoverFilters inherits Flickable {
         if root.genre_names.length > 1: KbMark { on: root.kb_enabled && root.kb_zone == 2 && root.kb_ctl == 2; active: root.kb_active; }
         if root.genre_names.length > 1: Dropdown {
             width: 140px;
-            roomy: root.narrow;
+            roomy: true;
             pill: true;
             rail-gesture: true;
             accessible-role: button;
@@ -127,13 +128,16 @@ component DiscoverFilters inherits Flickable {
     }
 }
 
-// Filter header (nav buttons, title, addon/type/catalog/search pickers).
-// Instantiated twice by DiscoverPage — once pinned above the grid
-// (desktop) and once scrolling with the page (Android, `scroll_page`)
-// — so it owns no page state: everything is forwarded properties, and
+// Shared hero/search/filter header. Each platform branch paints this over
+// a measured placeholder: the browse hero scrolls away, controls stay pinned.
+// It owns no page state: everything is forwarded properties, and
 // the search-field refocus escapes through `search_done` (the page's
 // FocusScope id is not visible from inside this component).
 component DiscoverHeader {
+    // Only the browse hero collapses. Search Back/input/filter/history
+    // controls remain available throughout the search session.
+    out property <length> hero_height: root.results_open || root.search_filters_open ? 0px : discover_hero.height + 12px;
+
     in property <[string]> addon_names;
     in property <[string]> type_names;
     in property <[string]> catalog_names;
@@ -200,14 +204,14 @@ component DiscoverHeader {
         // Search has its own temporary selectors; browse keeps its selection.
         if root.results_open || root.search_filters_open: results_heading := HorizontalLayout {
             vertical-stretch: 0;
-            height: Math.max(root.narrow ? 44px : 36px, results_title.preferred-height);
+            height: Math.max(44px, results_title.preferred-height);
             spacing: 12px;
 
             Rectangle {
-                width: root.narrow ? 44px : 36px;
-                height: root.narrow ? 44px : 36px;
-                border-radius: 8px;
-                background: back_touch.has-hover ? #2b2b35 : #1f1f27;
+                width: 44px;
+                height: 44px;
+                border-radius: 22px;
+                background: back_touch.has-hover ? Theme.current.control_hover : Theme.current.hero_control;
                 accessible-role: button;
                 accessible-label: @tr("Back");
 
@@ -216,7 +220,7 @@ component DiscoverHeader {
                     y: (parent.height - self.height) / 2;
                     width: 22px;
                     height: 22px;
-                    fill: #eeeeee;
+                    fill: Theme.current.text_primary;
                 }
                 back_touch := TouchArea {
                     width: 100%;
@@ -227,9 +231,9 @@ component DiscoverHeader {
             }
             results_title := Text {
                 text: root.results_open ? @tr("Search results") : @tr("Search");
-                font-size: root.results_open ? (root.narrow ? 27px : 24px) : (root.narrow ? 32px : 26px);
+                font-size: root.results_open ? (root.narrow ? 25px : 32px) : (root.narrow ? 32px : 26px);
                 font-weight: 700;
-                color: #ffffff;
+                color: Theme.current.text_bright;
                 vertical-alignment: center;
                 min-width: 0px;
                 height: self.preferred-height;
@@ -237,18 +241,27 @@ component DiscoverHeader {
             }
         }
 
-        if !root.results_open && !root.search_filters_open: HorizontalLayout {
-            vertical-stretch: 0;
-            min-height: 38px;
-            alignment: start;
-
-            Text {
-                text: @tr("Search");
-                font-size: root.narrow ? 32px : 26px;
+        discover_hero := Rectangle {
+            height: root.results_open || root.search_filters_open ? 0px : Math.max(44px, hero_title.preferred-height) + 14px + hero_description.preferred-height;
+            visible: !root.results_open && !root.search_filters_open;
+            hero_title := Text {
+                x: 0px; y: 0px;
+                width: 100%;
+                height: Math.max(44px, self.preferred-height);
+                text: @tr("Discover");
+                font-size: root.narrow ? 25px : 32px;
                 font-weight: 700;
-                color: #ffffff;
-                min-width: 0px;
+                color: Theme.current.text_bright;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+            hero_description := Text {
+                y: hero_title.height + 14px;
+                width: 100%;
                 height: self.preferred-height;
+                text: @tr("Find your next movie, show, or anime.");
+                font-size: 14px;
+                color: Theme.current.text_home_metadata;
                 wrap: word-wrap;
             }
         }
@@ -263,6 +276,7 @@ component DiscoverHeader {
 
             KbMark { on: root.search_mark_on; active: root.kb_active; }
             search_line := SearchField {
+                search-icon: true;
                 roomy: true;
                 prominent: true;
                 enabled: root.searchable;
@@ -296,7 +310,7 @@ component DiscoverHeader {
             spacing: 6px;
             Text {
                 text: @tr("Search filters");
-                color: #a9a9b7;
+                color: Theme.current.text_secondary;
                 font-size: 13px;
                 height: self.preferred-height;
             }
@@ -329,10 +343,10 @@ component DiscoverHeader {
             animate height { duration: Anim.transition_slide; easing: ease-in-out; }
             animate opacity { duration: Anim.transition_fade; }
             vertical-stretch: 0;
-            background: #18181f;
+            background: Theme.current.card;
             border-radius: 14px;
             border-width: 1px;
-            border-color: #33333c;
+            border-color: Theme.current.border_card;
             VerticalLayout {
                 padding: 10px;
                 spacing: 6px;
@@ -340,7 +354,7 @@ component DiscoverHeader {
                     height: 28px;
                     Text {
                         text: @tr("Recent searches");
-                        color: #d8d8e2;
+                        color: Theme.current.text_primary;
                         font-size: 13px;
                         font-weight: 600;
                         vertical-alignment: center;
@@ -350,12 +364,12 @@ component DiscoverHeader {
                         width: clear_label.preferred-width + 16px;
                         height: 28px;
                         border-radius: 8px;
-                        background: clear_history_touch.has-hover ? #ffffff14 : transparent;
+                        background: clear_history_touch.has-hover ? Theme.current.hover_overlay : transparent;
                         accessible-role: button;
                         accessible-label: @tr("Clear history");
                         clear_label := Text {
                             text: @tr("Clear history");
-                            color: #a99ac9;
+                            color: Theme.current.text_download;
                             font-size: 12px;
                             horizontal-alignment: center;
                             vertical-alignment: center;
@@ -374,7 +388,7 @@ component DiscoverHeader {
                         for query in root.search_history: Rectangle {
                             height: 40px;
                             border-radius: 8px;
-                            background: history_touch.has-hover ? #8b5cf61c : transparent;
+                            background: history_touch.has-hover ? Theme.current.selection_wash : transparent;
                             HorizontalLayout {
                                 padding-left: 8px;
                                 padding-right: 8px;
@@ -386,13 +400,13 @@ component DiscoverHeader {
                                         width: 18px;
                                         height: 18px;
                                         y: (parent.height - self.height) / 2;
-                                        fill: #8b7eaa;
+                                        fill: Theme.current.text_hint;
                                     }
                                 }
                                 Text {
                                     text: query;
                                     height: 100%;
-                                    color: #e6e6ea;
+                                    color: Theme.current.text_primary;
                                     font-size: 14px;
                                     min-width: 0px;
                                     horizontal-stretch: 1;
@@ -403,7 +417,7 @@ component DiscoverHeader {
                                     width: 30px;
                                     height: 100%;
                                     border-radius: 8px;
-                                    background: remove_touch.has-hover ? #ffffff14 : transparent;
+                                    background: remove_touch.has-hover ? Theme.current.hover_overlay : transparent;
                                     accessible-role: button;
                                     accessible-label: @tr("Remove search: {}", query);
                                     IcDelete {
@@ -411,7 +425,7 @@ component DiscoverHeader {
                                         height: 16px;
                                         x: (parent.width - self.width) / 2;
                                         y: (parent.height - self.height) / 2;
-                                        fill: #a99ac9;
+                                        fill: Theme.current.text_download;
                                     }
                                     remove_touch := TouchArea {
                                         mouse-cursor: pointer;
@@ -425,7 +439,7 @@ component DiscoverHeader {
                                         width: 16px;
                                         height: 16px;
                                         y: (parent.height - self.height) / 2;
-                                        fill: #8b7eaa;
+                                        fill: Theme.current.text_hint;
                                     }
                                 }
                             }
@@ -446,29 +460,6 @@ component DiscoverHeader {
                     }
                 }
             }
-        }
-
-        // ---- Title: own line(s) so the header never
-        // overflows on narrow windows --------------------------------
-        // Pinned like every other header row: an unpinned row absorbs
-        // free vertical space (it measured 421px tall on desktop),
-        // leaving big blanks above/below the count.
-        if !root.results_open: HorizontalLayout {
-            vertical-stretch: 0;
-            min-height: 36px;
-            spacing: 8px;
-            alignment: start;
-
-            Text {
-                text: @tr("Discover");
-                font-size: 26px;
-                font-weight: 700;
-                color: #ffffff;
-                min-width: 0px;
-                height: self.preferred-height;
-                wrap: word-wrap;
-            }
-
         }
 
         if !root.results_open: filter_flick := DiscoverFilters {
@@ -496,7 +487,7 @@ component DiscoverHeader {
             filters_pan_released => { root.filters_pan_released(); }
         }
 
-        if !root.results_open: Rectangle { height: 1px; background: #23232b; }
+
     }
 
 }
@@ -524,14 +515,12 @@ component DiscoverGrid {
         width: 100%;
         padding-top: 8px;
 
-        // Centered: when cards hit max-card the grid is narrower than the
-        // viewport and centers; when fluid it spans the full width and
-        // the centering is a no-op.
+        // Left-align capped poster rows, matching My Library.
         HorizontalLayout {
-            alignment: center;
+            alignment: start;
 
         grid_box := GridLayout {
-            // Exact content width so centering above has an effect.
+            // Keep the exact column width when cards reach their cap.
             width: root.cols * (root.item-width + root.item-gap) - root.item-gap;
             spacing: root.item-gap;
 
@@ -568,10 +557,11 @@ component DiscoverGrid {
                     lift := Rectangle {
                         width: 100%;
                         height: 100%;
-                        background: #18181c;
+                        background: Theme.current.card;
                         border-radius: 10px;
-                        border-width: root.kb_active && root.kb_zone == 3 && root.kb_idx == i ? 2px : 0px;
-                        border-color: #8b5cf6;
+                        border-width: root.kb_active && root.kb_zone == 3 && root.kb_idx == i ? 2px : 1px;
+                        clip: true;
+                        border-color: root.kb_active && root.kb_zone == 3 && root.kb_idx == i ? Theme.current.accent : Theme.current.border_card;
 
                         // Touch hover can remain latched after a scroll;
                         // keep the lift exclusive to a released pointer.
@@ -585,7 +575,7 @@ component DiscoverGrid {
                                 height: root.item-width * 3 / 2;
                                 border-radius: 10px;
                                 clip: true;
-                                background: #222228;
+                                background: Theme.current.home_artwork_placeholder;
 
                                 if card.is_loaded: Image {
                                     source: card.poster;
@@ -600,17 +590,22 @@ component DiscoverGrid {
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                 }
+                                Rectangle {
+                                    y: parent.height - 50px;
+                                    height: 50px;
+                                    background: @linear-gradient(180deg, transparent, Theme.current.card);
+                                }
                             }
 
                             VerticalLayout {
-                                padding-left: 8px;
-                                padding-right: 8px;
+                                padding-left: 9px;
+                                padding-right: 9px;
                                 padding-top: 6px;
-                                spacing: 2px;
+                                spacing: 4px;
 
                                 Text {
                                     text: card.title;
-                                    color: #eeeeee;
+                                    color: Theme.current.text_primary;
                                     font-size: 13px;
                                     font-weight: 600;
                                     overflow: elide;
@@ -618,7 +613,7 @@ component DiscoverGrid {
 
                                 Text {
                                     text: card.year;
-                                    color: #7a7a8c;
+                                    color: Theme.current.text_home_metadata;
                                     font-size: 11px;
                                     overflow: elide;
                                 }
@@ -682,7 +677,7 @@ component DiscoverGrid {
             Text {
                 text: root.empty_hint;
                 font-size: 14px;
-                color: #8a8a9a;
+                color: Theme.current.text_secondary;
                 horizontal-alignment: center;
                 wrap: word-wrap;
                 min-width: 0px;
@@ -733,13 +728,10 @@ export component DiscoverPage {
     in-out property <string> empty_hint: @tr("No addons installed yet — add one in Settings → Addons.");
     in-out property <string> searchable_hint: "";
 
-    property <length> item-gap: 18px;
-    // Column count derives from a 160px minimum card (phones always get
-    // at least 2 columns); the live card width below then stretches to
-    // fill the row exactly (capped), so leftover space never pools on
-    // the right — and when capped, the grid centers instead.
+    property <length> item-gap: 14px;
+    // Match Library's fluid 160–230px poster grid; capped rows align left.
     property <length> min-card: 160px;
-    property <length> max-card: 200px;
+    property <length> max-card: 230px;
     // Floor from Settings → Display (phones fit N across at 160px cards).
     in property <int> min_cols: 2;
     // Left inset reserved by the wide-layout navigation rail (0 on narrow).
@@ -823,8 +815,8 @@ export component DiscoverPage {
     in-out property <length> scroll_y: 0px;
     in-out property <length> search_scroll_y: 0px;
     property <length> display_scroll_y: root.search_results_open ? root.search_scroll_y : root.scroll_y;
-    // Whole-page scroll on Android (filters scroll away with the grid);
-    // desktop keeps the filter header pinned and scrolls only the grid.
+    // Platform scroll branches retain their input/focus and offset mirrors;
+    // both use a collapsing browse hero with pinned search/filter controls.
     // Set once from Rust (target_os-gated).
     in property <bool> scroll_page: false;
     // Live metrics of whichever scroll is mounted (written by its
@@ -834,6 +826,10 @@ export component DiscoverPage {
     property <length> sv_vh: 0px;
     property <length> sv_vph: 0px;
     property <length> sv_grid_top: 0px;
+    property <length> sv_header_height: 0px;
+    property <length> sv_hero_height: 0px;
+    property <length> header_shift: Math.max(-root.sv_hero_height, Math.min(0px, root.display_scroll_y));
+    property <length> header_cover: root.sv_header_height + root.header_shift;
     property <bool> transition_cover: false;
     property <bool> page_pan_enabled: true;
     function filters_panned() {
@@ -1074,8 +1070,8 @@ export component DiscoverPage {
         let vy = root.display_scroll_y;
         let vh = root.sv_vh;
         let min_y = Math.min(0px, vh - root.sv_vph);
-        if (top < -vy) {
-            root.set_display_scroll_y(-top);
+        if (top < root.header_cover - vy) {
+            root.set_display_scroll_y(root.header_cover - top);
         } else if (bot > vh - vy) {
             root.set_display_scroll_y(Math.max(min_y, vh - bot));
         }
@@ -1129,7 +1125,7 @@ export component DiscoverPage {
     Rectangle {
         width: 100%;
         height: 100%;
-        background: #0f0f12;
+        background: Theme.current.artwork_canvas;
 
     // 6-button scope: covers the page without intercepting the mouse.
     nav_scope := FocusScope {
@@ -1174,8 +1170,8 @@ export component DiscoverPage {
         }
     }
 
-    // Desktop: filter header pinned, only the grid scrolls (same tree
-    // as before — header + grid region in a padded column).
+    // Desktop retains its grid-scroll/input tree while the measured hero
+    // collapses above an opaque, pinned search/filter overlay.
     if !root.scroll_page: fix_col := VerticalLayout {
         width: 100%;
         height: 100%;
@@ -1185,61 +1181,7 @@ export component DiscoverPage {
         padding-top: 18px + safe-top;
         spacing: 12px;
 
-        fix_header := DiscoverHeader {
-            width: 100%;
-            catalog_names: root.catalog_names;
-            catalog_labels: root.catalog_labels;
-            genre_names: root.genre_names;
-            search_history: root.search_history;
-            type_names: root.type_names;
-            addon_names: root.addon_names;
-            searchable: root.searchable;
-            results_open: root.search_results_open;
-            addon_combo_idx <=> root.addon_combo_idx;
-            type_combo_idx <=> root.type_combo_idx;
-            catalog_combo_idx <=> root.catalog_combo_idx;
-            genre_combo_idx <=> root.genre_combo_idx;
-            search_text <=> root.search_text;
-            search_focused <=> root.search_focused;
-            search_filters_open: root.search_filters_open;
-            search_addon_names: root.search_addon_names;
-            search_addon_combo_idx <=> root.search_addon_combo_idx;
-            search_type_names: root.search_type_names;
-            search_type_combo_idx <=> root.search_type_combo_idx;
-            search_catalog_names: root.search_catalog_names;
-            search_catalog_combo_idx <=> root.search_catalog_combo_idx;
-            search_genre_names: root.search_genre_names;
-            search_genre_combo_idx <=> root.search_genre_combo_idx;
-            search_catalog_labels: root.search_catalog_labels;
-            searchable_hint: root.searchable_hint;
-            narrow: root.narrow;
-            kb_zone: root.kb_zone;
-            kb_nav: root.kb_nav;
-            kb_ctl: root.kb_ctl;
-            kb_active <=> root.kb_active;
-            kb_edit <=> root.kb_edit;
 
-            addon_picked(v) => { root.addon_picked(v); }
-            type_picked(v) => { root.type_picked(v); }
-            catalog_picked(v) => { root.catalog_picked(v); }
-            genre_picked(v) => { root.genre_picked(v); }
-            search_activated => { root.search_activated(); }
-            search_filter_picked(kind, index) => { root.search_filter_picked(kind, index); }
-            search_edited(v) => {
-                root.search_scroll_y = 0px;
-                root.search_edited(v);
-            }
-            search_submitted(v) => {
-                root.search_scroll_y = 0px;
-                root.search_submitted(v);
-            }
-            back_picked => { root.leave_search(); }
-            search_history_cleared => { root.search_history_cleared(); }
-            search_history_item_removed(query) => { root.search_history_item_removed(query); }
-            search_done => { nav_scope.focus(); }
-            filters_panned => { root.filters_panned(); }
-            filters_pan_released => { root.filters_pan_released(); }
-        }
 
         Rectangle {
             vertical-stretch: 1;
@@ -1296,7 +1238,7 @@ export component DiscoverPage {
                         root.sv_vw = grid_scroll.visible-width;
                         root.sv_vh = grid_scroll.visible-height;
                         root.sv_vph = grid_scroll.content-height;
-                        root.sv_grid_top = 8px;
+                        root.sv_grid_top = fix_header.height + 20px;
                         root.kb_clamp_idx();
                         root.kb_clamp_view();
                         root.kb_follow();
@@ -1319,7 +1261,7 @@ export component DiscoverPage {
                     // functions cannot read this gated scroll directly).
                     root.sv_vh = self.visible-height;
                     root.sv_vph = self.content-height;
-                    root.sv_grid_top = 8px;
+                    root.sv_grid_top = fix_header.height + 20px;
                     // Near-bottom guard: content-y runs 0 (top) down to
                     // visible-height - content-height (bottom, negative), so
                     // remaining content below the viewport is
@@ -1332,7 +1274,7 @@ export component DiscoverPage {
                     if (root.display_catalog.length > 0) {
                         // Only the hover inset precedes this grid; the
                         // whole-page branch also has its header above it.
-                        let first_row = Math.max(0, Math.floor((-self.content-y - 8px) / root.row_stride));
+                        let first_row = Math.max(0, Math.floor((root.header_cover - self.content-y - root.sv_grid_top) / root.row_stride));
                         let vis_rows = Math.ceil(self.visible-height / root.row_stride);
                         let first_idx = Math.max(0, (first_row - 2) * root.cols);
                         let last_idx = Math.min(root.display_catalog.length - 1, (first_row + vis_rows + 2) * root.cols - 1);
@@ -1355,6 +1297,9 @@ export component DiscoverPage {
                     // drag scrolling silently stops. (Library/Settings keep
                     // a layout directly inside their ScrollViews.)
                     width: 100%;
+                    spacing: 12px;
+
+                Rectangle { height: fix_header.height; }
 
                 fix_grid := DiscoverGrid {
                     width: 100%;
@@ -1370,11 +1315,79 @@ export component DiscoverPage {
                     empty_hint: root.display_empty_hint;
                     stagger: root.search_results_open && root.animate_search_results && Anim.enabled && Anim.transitions;
                     touch_menus: root.touch_menus;
-                    init => { root.sv_grid_top = 8px; }
+                    init => { root.sv_grid_top = fix_header.height + 20px; }
                     item_selected(id, i) => { root.item_selected(id, i); }
                 }
                 }
             }
+            // Paint the measured header over a fixed scroll viewport.
+            Rectangle {
+                y: root.header_shift;
+                width: 100%;
+                height: fix_header.preferred-height;
+                background: Theme.current.artwork_canvas;
+                TouchArea {}
+                fix_header := DiscoverHeader {
+                    height: self.preferred-height;
+                    width: 100%;
+                    changed height => { root.sv_header_height = self.height; }
+                    changed hero_height => { root.sv_hero_height = self.hero_height; }
+                    init => { root.sv_header_height = self.height; root.sv_hero_height = self.hero_height; }
+                    catalog_names: root.catalog_names;
+                    catalog_labels: root.catalog_labels;
+                    genre_names: root.genre_names;
+                    search_history: root.search_history;
+                    type_names: root.type_names;
+                    addon_names: root.addon_names;
+                    searchable: root.searchable;
+                    results_open: root.search_results_open;
+                    addon_combo_idx <=> root.addon_combo_idx;
+                    type_combo_idx <=> root.type_combo_idx;
+                    catalog_combo_idx <=> root.catalog_combo_idx;
+                    genre_combo_idx <=> root.genre_combo_idx;
+                    search_text <=> root.search_text;
+                    search_focused <=> root.search_focused;
+                    search_filters_open: root.search_filters_open;
+                    search_addon_names: root.search_addon_names;
+                    search_addon_combo_idx <=> root.search_addon_combo_idx;
+                    search_type_names: root.search_type_names;
+                    search_type_combo_idx <=> root.search_type_combo_idx;
+                    search_catalog_names: root.search_catalog_names;
+                    search_catalog_combo_idx <=> root.search_catalog_combo_idx;
+                    search_genre_names: root.search_genre_names;
+                    search_genre_combo_idx <=> root.search_genre_combo_idx;
+                    search_catalog_labels: root.search_catalog_labels;
+                    searchable_hint: root.searchable_hint;
+                    narrow: root.narrow;
+                    kb_zone: root.kb_zone;
+                    kb_nav: root.kb_nav;
+                    kb_ctl: root.kb_ctl;
+                    kb_active <=> root.kb_active;
+                    kb_edit <=> root.kb_edit;
+
+                    addon_picked(v) => { root.addon_picked(v); }
+                    type_picked(v) => { root.type_picked(v); }
+                    catalog_picked(v) => { root.catalog_picked(v); }
+                    genre_picked(v) => { root.genre_picked(v); }
+                    search_activated => { root.search_activated(); }
+                    search_filter_picked(kind, index) => { root.search_filter_picked(kind, index); }
+                    search_edited(v) => {
+                        root.search_scroll_y = 0px;
+                        root.search_edited(v);
+                    }
+                    search_submitted(v) => {
+                        root.search_scroll_y = 0px;
+                        root.search_submitted(v);
+                    }
+                    back_picked => { root.leave_search(); }
+                    search_history_cleared => { root.search_history_cleared(); }
+                    search_history_item_removed(query) => { root.search_history_item_removed(query); }
+                    search_done => { nav_scope.focus(); }
+                    filters_panned => { root.filters_panned(); }
+                    filters_pan_released => { root.filters_pan_released(); }
+                }
+            }
+
         }
 
         // Bottom tab bar (narrow only): desktop/wide navigate up top.
@@ -1399,15 +1412,9 @@ export component DiscoverPage {
         }
     }
 
-    // Android (`scroll_page`): filters and grid scroll as one column, so
-    // drags starting on the filter rows scroll the page too. Same
-    // components, same mirrors — only the scroll parent differs. The
-    // column mirrors the desktop branch (and Home/Library/Settings):
-    // padded page, stretching scroll region, in-flow bottom tab bar.
-    // The bar is a layout sibling of the scroll region — never an
-    // absolutely-positioned overlay (`y: parent.height - self.height`,
-    // which re-resolves against the window on every resize/scroll
-    // metric change) — so it stays pinned while the page scrolls.
+    // Android retains its page-scroll/input tree and horizontal filter-axis
+    // hints. A placeholder and overlay keep controls pinned without resizing
+    // the touch viewport; the bottom bar stays a layout sibling.
     if root.scroll_page: and_col := VerticalLayout {
         width: 100%;
         height: 100%;
@@ -1486,7 +1493,7 @@ export component DiscoverPage {
                 root.load_more();
             }
             if (root.display_catalog.length > 0) {
-                let grid_off = Math.max(0px, -self.content-y - root.sv_grid_top);
+                let grid_off = Math.max(0px, root.header_cover - self.content-y - root.sv_grid_top);
                 let first_row = Math.floor(grid_off / root.row_stride);
                 let vis_rows = Math.ceil(self.visible-height / root.row_stride);
                 let first_idx = Math.max(0, (first_row - 2) * root.cols);
@@ -1506,8 +1513,39 @@ export component DiscoverPage {
             width: 100%;
             spacing: 12px;
 
-            and_header := DiscoverHeader {
+            Rectangle { height: and_header.height; }
+
+            and_grid := DiscoverGrid {
                 width: 100%;
+                catalog: root.display_catalog;
+                cols: root.cols;
+                item-width: root.item-width;
+                item-gap: root.item-gap;
+                kb_active <=> root.kb_active;
+                kb_zone <=> root.kb_zone;
+                kb_idx <=> root.kb_idx;
+                loading_more: root.display_loading_more;
+                loading: root.display_loading;
+                empty_hint: root.display_empty_hint;
+                stagger: root.search_results_open && root.animate_search_results && Anim.enabled && Anim.transitions;
+                touch_menus: root.touch_menus;
+                changed y => { root.sv_grid_top = self.y + 8px; }
+                item_selected(id, i) => { root.item_selected(id, i); }
+            }
+        }
+        }
+        Rectangle {
+            y: root.header_shift;
+            width: 100%;
+            height: and_header.preferred-height;
+            background: Theme.current.artwork_canvas;
+            TouchArea {}
+            and_header := DiscoverHeader {
+                height: self.preferred-height;
+                width: 100%;
+                changed height => { root.sv_header_height = self.height; }
+                changed hero_height => { root.sv_hero_height = self.hero_height; }
+                init => { root.sv_header_height = self.height; root.sv_hero_height = self.hero_height; }
                 catalog_names: root.catalog_names;
                 catalog_labels: root.catalog_labels;
                 genre_names: root.genre_names;
@@ -1561,25 +1599,6 @@ export component DiscoverPage {
                 filters_panned => { root.filters_panned(); }
                 filters_pan_released => { root.filters_pan_released(); }
             }
-
-            and_grid := DiscoverGrid {
-                width: 100%;
-                catalog: root.display_catalog;
-                cols: root.cols;
-                item-width: root.item-width;
-                item-gap: root.item-gap;
-                kb_active <=> root.kb_active;
-                kb_zone <=> root.kb_zone;
-                kb_idx <=> root.kb_idx;
-                loading_more: root.display_loading_more;
-                loading: root.display_loading;
-                empty_hint: root.display_empty_hint;
-                stagger: root.search_results_open && root.animate_search_results && Anim.enabled && Anim.transitions;
-                touch_menus: root.touch_menus;
-                changed y => { root.sv_grid_top = self.y + 8px; }
-                item_selected(id, i) => { root.item_selected(id, i); }
-            }
-        }
         }
         }
 
@@ -1630,7 +1649,7 @@ export component DiscoverPage {
     Rectangle {
         width: 100%;
         height: 100%;
-        background: #000000;
+        background: Theme.current.artwork_canvas;
         opacity: root.transition_cover ? 0.16 : 0.0;
         animate opacity { duration: Anim.transition_fade; easing: ease-in-out; }
     }

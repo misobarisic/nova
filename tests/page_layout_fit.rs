@@ -656,7 +656,20 @@ fn pages_fit_translations_cutouts_density_and_touch() {
         .next()
         .unwrap();
         let bounds = Bounds::of(&scroll);
-        let start = LogicalPosition::new(bounds.left + 30.0, bounds.top + 200.0);
+        // The scroll viewport now extends behind the pinned header. Start on
+        // the exposed cards so this exercises momentum rather than controls.
+        let header = ElementHandle::find_by_element_id(
+            &app,
+            if whole_page {
+                "DiscoverPage::and_header"
+            } else {
+                "DiscoverPage::fix_header"
+            },
+        )
+        .next()
+        .unwrap();
+        let header_bounds = Bounds::of(&header);
+        let start = LogicalPosition::new(bounds.left + 30.0, header_bounds.bottom + 120.0);
         pointer(&app, "down", start);
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(120));
         for step in 1..=4 {

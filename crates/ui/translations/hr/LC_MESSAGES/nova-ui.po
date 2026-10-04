@@ -1654,3 +1654,6 @@ msgstr "Mrežni prikaz"
 
 msgid "No matching titles in your library."
 msgstr "Nema odgovarajućih naslova u vašoj biblioteci."
+
+msgid "Find your next movie, show, or anime."
+msgstr "Pronađite svoj sljedeći film, seriju ili anime."

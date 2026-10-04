@@ -145,6 +145,9 @@ replaces its row, preventing its old index from acting on a different show.
   Search, category filters, sorting and grid/list controls move to the top
   and stay pinned; returning to the top restores the hero. A fixed scroll
   viewport and header placeholder avoid touch-scroll jitter.
+- Search opens/closes with the same expansion and fade durations as Detail’s
+  episode search. Focus moves into the input after 80 ms; motion-disabled
+  settings make the expansion immediate.
 - Column floor comes from Settings → Display (min columns), applied live.
   Grid/list selection, search visibility/query and sort order survive detail
   navigation in AppWindow; these controls do not add persisted settings.
