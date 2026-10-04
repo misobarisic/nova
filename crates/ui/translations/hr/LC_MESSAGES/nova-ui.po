@@ -1630,3 +1630,27 @@ msgstr "Streamovi"
 
 msgid "No installed addons match these filters."
 msgstr "Nijedan instalirani dodatak ne odgovara ovim filtrima."
+
+msgid "Your saved anime, continue watching, and downloads."
+msgstr "Vaš spremljeni anime, nastavak gledanja i preuzimanja."
+
+msgid "Search library"
+msgstr "Pretraži biblioteku"
+
+msgid "Recently Added"
+msgstr "Nedavno dodano"
+
+msgid "Title"
+msgstr "Naslov"
+
+msgid "Release year"
+msgstr "Godina izdanja"
+
+msgid "List view"
+msgstr "Prikaz popisa"
+
+msgid "Grid view"
+msgstr "Mrežni prikaz"
+
+msgid "No matching titles in your library."
+msgstr "Nema odgovarajućih naslova u vašoj biblioteci."

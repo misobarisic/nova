@@ -811,13 +811,13 @@ impl WatchStatus {
 }
 
 /// Built-in (automatic) library filters, listed before user categories in
-/// the filter dropdown. "All" (empty filter) still shows everything.
+/// the filter rail. "All" (empty filter) still shows everything.
 const BUILTIN_FILTERS: &[&str] = &[
-    "Plan to Watch",
     "Watching",
     "Completed",
     "On Hold",
     "Dropped",
+    "Plan to Watch",
 ];
 
 /// One saved library item. `type_` is the meta type as reported by the

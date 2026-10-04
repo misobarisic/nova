@@ -70,12 +70,12 @@ pub(crate) fn resumable_position(pos: f64, dur: f64, watched: bool) -> bool {
 }
 /// Library badge for one series: `""` when nothing to report, otherwise
 /// `"▶ Resume <label>"`, `"N left"` and/or `"M unaired"`. A fully watched
-/// series reports nothing here: its card already carries the top-right
-/// checkmark. `episodes` are the known videos of the series (episode-cache
+/// series reports nothing here: its card carries a Completed status pill
+/// and a full watched/total rail. `episodes` are the known videos of the series (episode-cache
 /// order); unknown totals fall back to resume-only badges. Released and
 /// unaired episodes are tallied separately: a dated-complete series reads
 /// "Caught up" (plus " · 2 unaired" when episodes are still to come), while
-/// a fully watched one stays silent — the checkmark carries it.
+/// a fully watched one stays silent — its status and rail carry it.
 pub(crate) fn library_badge_for(
     series_id: &str,
     episodes: &[Video],
@@ -291,6 +291,25 @@ pub(crate) fn series_fully_watched(
             map.get(&progress_map_key(series_id, &v.id))
                 .is_some_and(|p| p.watched)
         })
+}
+/// Card progress uses the whole known episode list, including specials,
+/// dateless episodes and announced future episodes. Partial playback does
+/// not count as a watched episode; stale progress outside this list does not
+/// inflate the numerator. Unknown totals stay hidden until metadata arrives.
+pub(crate) fn library_episode_counts(
+    series_id: &str,
+    episodes: &[Video],
+    map: &HashMap<String, EpisodeProgress>,
+) -> (i32, i32) {
+    let ids: HashSet<&str> = episodes.iter().map(|v| v.id.as_str()).collect();
+    let watched = ids
+        .iter()
+        .filter(|id| {
+            map.get(&progress_map_key(series_id, id))
+                .is_some_and(|p| p.watched)
+        })
+        .count();
+    (watched as i32, ids.len() as i32)
 }
 /// Automatic bucket for a library entry: "Completed" (every known episode
 /// watched — series with unaired episodes never complete), "Watching"

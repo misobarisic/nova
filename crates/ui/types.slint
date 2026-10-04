@@ -9,9 +9,14 @@ export struct MediaCard {
     /// "✓ Seen"). Empty when there is nothing to report.
     badge: string,
     /// True when every known episode of the series is marked watched
-    /// (library cards show the white-disc check; always false for
+    /// (drives the library watched/unwatched menu; always false for
     /// Discover catalog cards).
     watched: bool,
+    /// Library-only display state; catalog cards leave these at their defaults.
+    status: string,
+    media_type: string,
+    watched_count: int,
+    episode_count: int,
 }
 
 export struct StreamRow {

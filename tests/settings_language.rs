@@ -49,6 +49,7 @@ fn card(id: usize) -> nova::MediaCard {
         is_loaded: false,
         badge: SharedString::default(),
         watched: false,
+        ..Default::default()
     }
 }
 

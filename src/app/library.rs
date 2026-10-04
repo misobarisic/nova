@@ -12,69 +12,99 @@ impl Bridge {
     }
 
     /// The library entries currently shown in the grid, i.e. `Shared.entries`
-    /// filtered by the active category filter (empty = all). The order matches
+    /// filtered by category/title and sorted by the chosen order. The order matches
     /// the Slint `library` model, so UI indices map 1:1 onto this list.
     pub(super) fn current_library_view(&self) -> Vec<LibraryEntry> {
-        let filter = self
+        let (filter, query, sort) = self
             .app()
-            .map(|a| a.get_library_filter_category().to_string())
+            .map(|a| {
+                (
+                    a.get_library_filter_category().to_string(),
+                    a.get_library_query().to_string(),
+                    a.get_library_sort(),
+                )
+            })
             .unwrap_or_default();
         let (entries, progress) = {
             let state = self.shared.lock().unwrap();
             (state.entries.clone(), state.progress.clone())
         };
-        if filter.is_empty() {
-            return entries;
-        }
-        if BUILTIN_FILTERS.contains(&filter.as_str()) {
-            // Automatic buckets: pinned statuses win, the rest derive
-            // from playback progress (episode lists come from cache).
-            return entries
-                .into_iter()
-                .filter(|e| match filter.as_str() {
-                    "On Hold" => e.watch_status == WatchStatus::OnHold,
-                    "Dropped" => e.watch_status == WatchStatus::Dropped,
-                    bucket => {
-                        if e.watch_status != WatchStatus::Auto {
-                            false
-                        } else {
+        let entries = entries
+            .into_iter()
+            .filter(|e| {
+                if filter.is_empty() {
+                    true
+                } else if BUILTIN_FILTERS.contains(&filter.as_str()) {
+                    match filter.as_str() {
+                        "On Hold" => e.watch_status == WatchStatus::OnHold,
+                        "Dropped" => e.watch_status == WatchStatus::Dropped,
+                        bucket => {
                             let episodes =
                                 read_episodes_cache_for(&e.type_, &e.id).unwrap_or_default();
-                            auto_bucket(&e.id, &episodes, &progress) == bucket
+                            e.watch_status == WatchStatus::Auto
+                                && auto_bucket(&e.id, &episodes, &progress) == bucket
                         }
                     }
-                })
-                .collect();
+                } else {
+                    e.categories.iter().any(|c| c == &filter)
+                }
+            })
+            .collect();
+        order_library_view(entries, &query, sort)
+    }
+
+    pub(super) fn library_view_changed(&self) {
+        if let Some(app) = self.app() {
+            app.set_library_scroll_y(0.0);
+            app.set_library_kb_idx(0);
         }
-        entries
-            .into_iter()
-            .filter(|e| e.categories.iter().any(|c| c == &filter))
-            .collect()
+        self.apply_library_to_ui();
     }
 
     /// Refresh the Slint `library` model from `Shared.entries`.
     pub(super) fn apply_library_to_ui(&self) {
         let view = self.current_library_view();
         let map = self.shared.lock().unwrap().progress.clone();
+        // Search and sorting replace the model frequently. Retain decoded
+        // artwork by identity so existing titles do not flash placeholders.
+        let artwork: HashMap<String, MediaCard> = self
+            .app()
+            .map(|app| {
+                app.get_library()
+                    .iter()
+                    .filter(|card| card.is_loaded)
+                    .map(|card| (card.id.to_string(), card))
+                    .collect()
+            })
+            .unwrap_or_default();
         let cards: Vec<MediaCard> = view
             .iter()
             .map(|e| {
                 let episodes = read_episodes_cache_for(&e.type_, &e.id).unwrap_or_default();
-                // A pinned status (On Hold / Dropped) replaces the playback
-                // badge; automatic entries show the progress badge.
-                let badge = match e.watch_status.badge_label() {
-                    // Display only: the stored variant keeps its English label.
-                    Some(label) => SharedString::from(text::tr(label)),
-                    None => SharedString::from(library_badge_for(&e.id, &episodes, &map)),
+                let status = e
+                    .watch_status
+                    .badge_label()
+                    .unwrap_or_else(|| auto_bucket(&e.id, &episodes, &map));
+                let (watched_count, episode_count) = if e.type_ == "movie" {
+                    (0, 0)
+                } else {
+                    library_episode_counts(&e.id, &episodes, &map)
                 };
+                let previous = artwork
+                    .get(&e.id)
+                    .filter(|card| card.poster_path.as_str() == e.poster_url);
                 MediaCard {
                     id: e.id.clone().into(),
                     title: e.name.clone().into(),
                     year: e.year.clone().into(),
                     poster_path: e.poster_url.clone().into(),
-                    poster: Image::default(),
-                    is_loaded: false,
-                    badge,
+                    poster: previous.map(|card| card.poster.clone()).unwrap_or_default(),
+                    is_loaded: previous.is_some(),
+                    badge: library_badge_for(&e.id, &episodes, &map).into(),
+                    status: text::tr(status).into(),
+                    media_type: text::tr(if e.type_ == "movie" { "Movie" } else { "TV" }).into(),
+                    watched_count,
+                    episode_count,
                     watched: series_fully_watched(&e.id, &episodes, &map),
                 }
             })
@@ -573,9 +603,8 @@ impl Bridge {
     }
 
     /// Index of the active library category filter within the category
-    /// names (-1 = All). Keeps the filter dropdown's selection in sync when
-    /// the filter is set from the "All" chip, keyboard nav, or category
-    /// add/remove rather than the dropdown itself.
+    /// names (-1 = All). Keeps keyboard cycling in sync with pill selection
+    /// and category add/remove.
     pub(super) fn sync_library_category_index(&self) {
         let Some(app) = self.app() else {
             return;
@@ -588,7 +617,7 @@ impl Bridge {
             .cache_settings
             .categories
             .clone();
-        // Dropdown order: built-ins first (see apply_category_rows),
+        // Pill order: built-ins first (see apply_category_rows),
         // then user categories. -1 = All.
         let idx = if filter.is_empty() {
             -1
@@ -604,7 +633,7 @@ impl Bridge {
     }
 
     /// Sync the category list from settings to the UI. Built-in automatic
-    /// filters lead the dropdown, user categories follow.
+    /// filters lead the rail, user categories follow.
     pub(super) fn apply_category_rows(&self) {
         let cats = {
             let state = self.shared.lock().unwrap();
@@ -618,8 +647,8 @@ impl Bridge {
             .collect();
         // `category_names` holds the values the filter is keyed on (the
         // English identifiers also used by `BUILTIN_FILTERS`/`auto_bucket`);
-        // `category_labels` is what the dropdown shows — the same list with
-        // the automatic buckets translated. Picking an entry still sends back
+        // `category_labels` is what the pills show — the same list with
+        // the automatic buckets translated. Picking a pill still sends back
         // the value, so a localized label can never leak into the data.
         let names: Vec<SharedString> = BUILTIN_FILTERS
             .iter()
@@ -743,4 +772,64 @@ pub(crate) fn merge_library_header_text(
         touched = true;
     }
     touched
+}
+
+/// Sort the same view used for both card rendering and actions, so search and
+/// sorting cannot make a displayed index open or remove a different entry.
+fn order_library_view(mut entries: Vec<LibraryEntry>, query: &str, sort: i32) -> Vec<LibraryEntry> {
+    let needle = query.trim().to_lowercase();
+    entries.retain(|entry| entry.name.to_lowercase().contains(&needle));
+    // Newer insertions win ties, including older entries with no timestamp.
+    entries.reverse();
+    match sort {
+        1 => entries.sort_by_cached_key(|e| e.name.to_lowercase()),
+        2 => entries.sort_by_cached_key(|e| std::cmp::Reverse(e.year.clone())),
+        _ => entries.sort_by_key(|e| std::cmp::Reverse(e.added_at_secs)),
+    }
+    entries
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_and_sort_keep_entries_and_action_indices_together() {
+        let entry = |id: &str, name: &str, year: &str, added: u64| LibraryEntry {
+            id: id.into(),
+            type_: "series".into(),
+            name: name.into(),
+            year: year.into(),
+            poster_url: String::new(),
+            background_url: String::new(),
+            genres: vec![],
+            description: String::new(),
+            categories: vec![],
+            watch_status: WatchStatus::Auto,
+            added_at_secs: added,
+        };
+        let entries = vec![
+            entry("a", "Zebra", "2020", 10),
+            entry("b", "alpha", "2026", 20),
+            entry("c", "Beta", "2024", 20),
+        ];
+        let ids = |rows: Vec<LibraryEntry>| rows.into_iter().map(|e| e.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(order_library_view(entries.clone(), "", 0)),
+            ["c", "b", "a"]
+        );
+        assert_eq!(
+            ids(order_library_view(entries.clone(), "", 1)),
+            ["b", "c", "a"]
+        );
+        assert_eq!(
+            ids(order_library_view(entries.clone(), "", 2)),
+            ["b", "c", "a"]
+        );
+        assert_eq!(
+            ids(order_library_view(entries.clone(), "  ALP  ", 0)),
+            ["b"]
+        );
+        assert!(order_library_view(entries, "missing", 0).is_empty());
+    }
 }

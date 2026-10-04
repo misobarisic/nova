@@ -672,6 +672,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_library_filter_picked(move |cat| b.filter_library(&cat));
 
+    let b = bridge.clone();
+    app.on_library_view_changed(move || b.library_view_changed());
+
     // Startup addon set: the persisted KV list first, plus any
     // extra URLs from NOVA_ADDONS / --addon. Both are installed from their
     // cached manifest when available (no server ping); the cache is only

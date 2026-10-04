@@ -268,6 +268,48 @@ mod playback_tests {
     }
 
     #[test]
+    fn library_counts_whole_known_series_and_only_watched_episodes() {
+        let mut eps = vec![
+            video("s:1:1", 1, 1, "Aired"),
+            video("s:1:2", 1, 2, "Dateless"),
+            video("s:1:3", 1, 3, "Future"),
+            video("s:0:1", 0, 1, "Special"),
+        ];
+        eps[0].released = Some("2020-01-01".into());
+        eps[2].released = Some("2099-01-01".into());
+        assert_eq!(library_episode_counts("s", &eps, &HashMap::new()), (0, 4));
+        let mut map = HashMap::new();
+        for id in ["s:1:1", "s:0:1", "stale"] {
+            map.insert(progress_map_key("s", id), entry("s", id, 0.0, 0.0, true, 1));
+        }
+        // A started episode doesn't become a watched episode just by having
+        // a saved position. Another show's history cannot count either.
+        map.insert(
+            progress_map_key("s", "s:1:2"),
+            entry("s", "s:1:2", 60.0, 600.0, false, 2),
+        );
+        map.insert(
+            progress_map_key("other", "s:1:3"),
+            entry("other", "s:1:3", 0.0, 0.0, true, 3),
+        );
+        assert_eq!(library_episode_counts("s", &eps, &map), (2, 4));
+        assert_eq!(library_episode_counts("s", &[], &map), (0, 0));
+        eps.push(eps[0].clone());
+        assert_eq!(library_episode_counts("s", &eps, &map), (2, 4));
+        for v in &eps {
+            map.insert(
+                progress_map_key("s", &v.id),
+                entry("s", &v.id, 0.0, 0.0, true, 4),
+            );
+        }
+        assert_eq!(library_episode_counts("s", &eps, &map), (4, 4));
+        map.get_mut(&progress_map_key("s", "s:1:1"))
+            .unwrap()
+            .watched = false;
+        assert_eq!(library_episode_counts("s", &eps, &map), (3, 4));
+    }
+
+    #[test]
     fn progress_keys_distinguish_series_and_episode() {
         assert_ne!(progress_map_key("a", "e1"), progress_map_key("a", "e2"));
         assert_ne!(progress_map_key("a", "e1"), progress_map_key("b", "e1"));

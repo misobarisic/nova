@@ -312,6 +312,10 @@ export component AppWindow inherits Window {
     in-out property <string> home_catalog_add_error: "";
     // Library filter: empty string = show all, otherwise filter by category.
     in-out property <string> library_filter_category: "";
+    in-out property <string> library_query: "";
+    in-out property <int> library_sort: 0;
+    in-out property <bool> library_list_view: false;
+    in-out property <bool> library_search_open: false;
     // Category names for the library filter dropdown.
     in-out property <[string]> library_category_names: [];
     // Display text for `library_category_names` (see library.slint): the
@@ -612,6 +616,7 @@ export component AppWindow inherits Window {
     callback category_renamed(int, string);
     callback toggle_entry_category(string);
     callback library_filter_picked(string);
+    callback library_view_changed();
 
     public function set_card_poster(idx: int, img: image) {
         // Guard against stale indices (an in-flight poster fetch landing
@@ -954,6 +959,11 @@ export component AppWindow inherits Window {
         category_labels <=> root.library_category_labels;
         category_index <=> root.library_category_index;
         library_filter_category <=> root.library_filter_category;
+        query <=> root.library_query;
+        sort_index <=> root.library_sort;
+        list_view <=> root.library_list_view;
+        search_open <=> root.library_search_open;
+        view_changed => { root.library_view_changed(); }
         min_cols: root.library_min_cols;
         library_empty_hint <=> root.library_empty_hint;
         system_back_request: root.system_back_request;

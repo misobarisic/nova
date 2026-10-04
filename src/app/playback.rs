@@ -614,22 +614,54 @@ impl Bridge {
             self.shared.lock().unwrap().progress.clone(),
         );
         let model = app.get_library();
-        if model.row_count() != view.len() {
-            return; // filter changed mid-flight; next full apply covers it
+        if model.row_count() != view.len()
+            || view.iter().enumerate().any(|(i, entry)| {
+                model
+                    .row_data(i)
+                    .is_none_or(|card| card.id.as_str() != entry.id)
+            })
+        {
+            // Progress can move a title between automatic filters. Refresh
+            // the model before indices can drift away from the displayed cards.
+            self.apply_library_to_ui();
+            return;
         }
         for (i, entry) in view.iter().enumerate() {
             let episodes = read_episodes_cache_for(&entry.type_, &entry.id).unwrap_or_default();
-            let badge = match entry.watch_status.badge_label() {
-                Some(label) => text::tr(label).to_string(),
-                None => library_badge_for(&entry.id, &episodes, &map),
-            };
+            let badge = library_badge_for(&entry.id, &episodes, &map);
+            let status = text::tr(
+                entry
+                    .watch_status
+                    .badge_label()
+                    .unwrap_or_else(|| auto_bucket(&entry.id, &episodes, &map)),
+            );
+            let media_type = text::tr(if entry.type_ == "movie" {
+                "Movie"
+            } else {
+                "TV"
+            });
             let watched = series_fully_watched(&entry.id, &episodes, &map);
+            let (watched_count, episode_count) = if entry.type_ == "movie" {
+                (0, 0)
+            } else {
+                library_episode_counts(&entry.id, &episodes, &map)
+            };
             let Some(mut card) = model.row_data(i) else {
                 continue;
             };
-            if card.badge.as_str() != badge.as_str() || card.watched != watched {
-                card.badge = SharedString::from(&badge);
+            if card.badge.as_str() != badge.as_str()
+                || card.watched != watched
+                || card.status.as_str() != status
+                || card.media_type.as_str() != media_type
+                || card.watched_count != watched_count
+                || card.episode_count != episode_count
+            {
+                card.badge = badge.into();
+                card.status = status.into();
+                card.media_type = media_type.into();
                 card.watched = watched;
+                card.watched_count = watched_count;
+                card.episode_count = episode_count;
                 model.set_row_data(i, card);
             }
         }

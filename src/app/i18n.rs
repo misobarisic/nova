@@ -219,7 +219,7 @@ mod tests {
 
         bridge.shared.lock().unwrap().entries = vec![LibraryEntry {
             id: "show-1".into(),
-            type_: "series".into(),
+            type_: "movie".into(),
             name: "Show".into(),
             year: "2024".into(),
             poster_url: String::new(),
@@ -239,7 +239,8 @@ mod tests {
         bridge.apply_language(&settings);
         bridge.apply_library_to_ui();
         bridge.apply_category_rows();
-        assert_eq!(app.get_library().row_data(0).unwrap().badge, "On Hold");
+        assert_eq!(app.get_library().row_data(0).unwrap().status, "On Hold");
+        assert_eq!(app.get_library().row_data(0).unwrap().media_type, "Movie");
 
         settings.language = Language::Croatian;
         bridge.apply_language(&settings);
@@ -248,17 +249,36 @@ mod tests {
         } else {
             "On Hold"
         };
-        assert_eq!(app.get_library().row_data(0).unwrap().badge, expected);
+        assert_eq!(app.get_library().row_data(0).unwrap().status, expected);
         assert_eq!(
-            app.get_library_category_labels().row_data(3).unwrap(),
+            app.get_library().row_data(0).unwrap().media_type,
+            if catalogs_available { "Film" } else { "Movie" }
+        );
+        assert_eq!(
+            app.get_library_category_labels()
+                .row_data(
+                    BUILTIN_FILTERS
+                        .iter()
+                        .position(|name| *name == "On Hold")
+                        .unwrap()
+                )
+                .unwrap(),
             expected
         );
 
         settings.language = Language::English;
         bridge.apply_language(&settings);
-        assert_eq!(app.get_library().row_data(0).unwrap().badge, "On Hold");
+        assert_eq!(app.get_library().row_data(0).unwrap().status, "On Hold");
+        assert_eq!(app.get_library().row_data(0).unwrap().media_type, "Movie");
         assert_eq!(
-            app.get_library_category_labels().row_data(3).unwrap(),
+            app.get_library_category_labels()
+                .row_data(
+                    BUILTIN_FILTERS
+                        .iter()
+                        .position(|name| *name == "On Hold")
+                        .unwrap()
+                )
+                .unwrap(),
             "On Hold"
         );
     }

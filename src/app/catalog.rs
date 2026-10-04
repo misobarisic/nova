@@ -298,6 +298,7 @@ impl Bridge {
                             is_loaded: false,
                             badge: SharedString::default(),
                             watched: false,
+                            ..Default::default()
                         });
                     }
                     // Poster downloads only for the new cards (background sweep:
@@ -379,6 +380,7 @@ impl Bridge {
                         is_loaded: false,
                         badge: SharedString::default(),
                         watched: false,
+                        ..Default::default()
                     })
                     .collect();
 
@@ -2039,6 +2041,7 @@ fn search_media_card(meta: &MetaPreview) -> MediaCard {
         is_loaded: false,
         badge: SharedString::default(),
         watched: false,
+        ..Default::default()
     }
 }
 
