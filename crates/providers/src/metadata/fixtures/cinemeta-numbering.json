@@ -1,0 +1,220 @@
+{
+  "native": {
+    "id": "tt21209876",
+    "videos": [
+      {
+        "id": "tt21209876:2:1",
+        "name": "You Aren't E-Rank, Are You?",
+        "released": "2025-01-04T15:00:00.000Z",
+        "season": 2,
+        "episode": 1,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/2/1/w780.jpg"
+      },
+      {
+        "id": "tt21209876:2:2",
+        "name": "I Suppose You Aren't Aware",
+        "released": "2025-01-11T15:00:00.000Z",
+        "season": 2,
+        "episode": 2,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/2/2/w780.jpg"
+      },
+      {
+        "id": "tt21209876:2:3",
+        "name": "Still a Long Way to Go",
+        "released": "2025-01-18T15:00:00.000Z",
+        "season": 2,
+        "episode": 3,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/2/3/w780.jpg"
+      },
+      {
+        "id": "tt21209876:2:4",
+        "name": "I Need to Stop Faking",
+        "released": "2025-01-25T15:00:00.000Z",
+        "season": 2,
+        "episode": 4,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/2/4/w780.jpg"
+      },
+      {
+        "id": "tt21209876:2:5",
+        "name": "This is What We're Trained to Do",
+        "released": "2025-02-01T15:00:00.000Z",
+        "season": 2,
+        "episode": 5,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/2/5/w780.jpg"
+      },
+      {
+        "id": "tt21209876:2:6",
+        "name": "Don't Look Down on My Guys",
+        "released": "2025-02-08T15:00:00.000Z",
+        "season": 2,
+        "episode": 6,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/2/6/w780.jpg"
+      },
+      {
+        "id": "tt21209876:2:7",
+        "name": "The 10th S-Rank Hunter",
+        "released": "2025-02-15T15:00:00.000Z",
+        "season": 2,
+        "episode": 7,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/2/7/w780.jpg"
+      },
+      {
+        "id": "tt21209876:2:8",
+        "name": "Looking Up Was Tiring Me Out",
+        "released": "2025-02-21T15:00:00.000Z",
+        "season": 2,
+        "episode": 8,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/2/8/w780.jpg"
+      },
+      {
+        "id": "tt21209876:2:9",
+        "name": "It was All Worth It",
+        "released": "2025-03-01T15:00:00.000Z",
+        "season": 2,
+        "episode": 9,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/2/9/w780.jpg"
+      },
+      {
+        "id": "tt21209876:2:10",
+        "name": "We Need a Hero",
+        "released": "2025-03-08T15:00:00.000Z",
+        "season": 2,
+        "episode": 10,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/2/10/w780.jpg"
+      },
+      {
+        "id": "tt21209876:2:11",
+        "name": "It's Going to Get Even More Intense",
+        "released": "2025-03-15T15:00:00.000Z",
+        "season": 2,
+        "episode": 11,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/2/11/w780.jpg"
+      },
+      {
+        "id": "tt21209876:2:12",
+        "name": "Are You the King of Humans",
+        "released": "2025-03-22T15:00:00.000Z",
+        "season": 2,
+        "episode": 12,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/2/12/w780.jpg"
+      },
+      {
+        "id": "tt21209876:2:13",
+        "name": "On to the Next Target",
+        "released": "2025-03-29T15:00:00.000Z",
+        "season": 2,
+        "episode": 13,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/2/13/w780.jpg"
+      }
+    ]
+  },
+  "live": {
+    "id": "tt21209876",
+    "videos": [
+      {
+        "id": "tt21209876:1:13",
+        "title": "You Aren't E-Rank, Are You",
+        "released": "2025-01-05T00:00:00.000Z",
+        "season": 1,
+        "episode": 13,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/1/13/w780.jpg"
+      },
+      {
+        "id": "tt21209876:1:14",
+        "title": "I Suppose You Aren't Aware",
+        "released": "2025-01-12T00:00:00.000Z",
+        "season": 1,
+        "episode": 14,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/1/14/w780.jpg"
+      },
+      {
+        "id": "tt21209876:1:15",
+        "title": "Still a Long Way to Go",
+        "released": "2025-01-19T00:00:00.000Z",
+        "season": 1,
+        "episode": 15,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/1/15/w780.jpg"
+      },
+      {
+        "id": "tt21209876:1:16",
+        "title": "I Need to Stop Faking",
+        "released": "2025-01-26T00:00:00.000Z",
+        "season": 1,
+        "episode": 16,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/1/16/w780.jpg"
+      },
+      {
+        "id": "tt21209876:1:17",
+        "title": "This Is What We're Trained to Do",
+        "released": "2025-02-02T00:00:00.000Z",
+        "season": 1,
+        "episode": 17,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/1/17/w780.jpg"
+      },
+      {
+        "id": "tt21209876:1:18",
+        "title": "Don't Look Down on My Guys",
+        "released": "2025-02-09T00:00:00.000Z",
+        "season": 1,
+        "episode": 18,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/1/18/w780.jpg"
+      },
+      {
+        "id": "tt21209876:1:19",
+        "title": "The 10th S-Rank Hunter",
+        "released": "2025-02-16T00:00:00.000Z",
+        "season": 1,
+        "episode": 19,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/1/19/w780.jpg"
+      },
+      {
+        "id": "tt21209876:1:20",
+        "title": "Looking Up Was Tiring Me Out",
+        "released": "2025-02-23T00:00:00.000Z",
+        "season": 1,
+        "episode": 20,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/1/20/w780.jpg"
+      },
+      {
+        "id": "tt21209876:1:21",
+        "title": "It Was All Worth It",
+        "released": "2025-03-02T00:00:00.000Z",
+        "season": 1,
+        "episode": 21,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/1/21/w780.jpg"
+      },
+      {
+        "id": "tt21209876:1:22",
+        "title": "We Need a Hero",
+        "released": "2025-03-09T00:00:00.000Z",
+        "season": 1,
+        "episode": 22,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/1/22/w780.jpg"
+      },
+      {
+        "id": "tt21209876:1:23",
+        "title": "It's Going to Get Even More Intense",
+        "released": "2025-03-16T00:00:00.000Z",
+        "season": 1,
+        "episode": 23,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/1/23/w780.jpg"
+      },
+      {
+        "id": "tt21209876:1:24",
+        "title": "Are You the King of Humans",
+        "released": "2025-03-23T00:00:00.000Z",
+        "season": 1,
+        "episode": 24,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/1/24/w780.jpg"
+      },
+      {
+        "id": "tt21209876:1:25",
+        "title": "On to the Next Target",
+        "released": "2025-03-30T00:00:00.000Z",
+        "season": 1,
+        "episode": 25,
+        "thumbnail": "https://episodes.metahub.space/tt21209876/1/25/w780.jpg"
+      }
+    ]
+  }
+}

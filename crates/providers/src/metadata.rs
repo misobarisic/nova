@@ -176,7 +176,8 @@ impl EnrichmentResult {
 }
 
 fn cache_key(revision: u64, caller: &str, request: &EnrichmentRequest) -> String {
-    let input = serde_json::to_vec(&(revision, caller, request)).unwrap_or_default();
+    let input = serde_json::to_vec(&(revision, caller, request, cinemeta::ARTWORK_MATCH_VERSION))
+        .unwrap_or_default();
     let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, &input);
     format!(
         "metadata:v2:{}",

@@ -134,7 +134,12 @@ source sequence/availability, requested namespaces, and the addon inventory
 revision. Manifest objects are canonicalized so identical inventories keep
 their revision across restarts. Oversized results remain usable without caching.
 Official Cinemeta candidates also receive bounded live-endpoint thumbnail
-repair before mapping, using the remaining enrichment deadline.
+repair before mapping, using the remaining enrichment deadline. It requires
+one-to-one normalized-title matches within the same IMDb series and matching
+special/regular classification, preserving native episode identities. Unique
+titles tolerate missing/differing dates; repeated titles require a unique air-date
+match within one calendar day, including month/year boundaries. The
+matcher version is part of cache keys so matching fixes invalidate obsolete results.
 
 Ordinary addon details also use this service. Only native available episodes
 are retained. Confirmed episode metadata supplies meaningful titles, dates,

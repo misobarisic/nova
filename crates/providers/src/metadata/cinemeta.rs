@@ -17,23 +17,91 @@ fn series_id(raw_url: &str) -> Option<String> {
         .then(|| id.to_owned())
 }
 
-fn episode_key(video: &Value) -> Option<(bool, String, String)> {
-    let title = video.get("name").or_else(|| video.get("title"))?.as_str()?;
-    let title = crate::sequence::episode_title(title);
-    let date = video.get("released")?.as_str()?.get(..10)?;
-    if title.is_empty()
-        || date.len() != 10
-        || !date.bytes().enumerate().all(|(i, b)| {
-            if i == 4 || i == 7 {
-                b == b'-'
-            } else {
-                b.is_ascii_digit()
-            }
-        })
-    {
+// Bump when matching changes so old partial/broken artwork does not remain
+// pinned by the persistent cache. This is local cache data, not a wire schema.
+pub(super) const ARTWORK_MATCH_VERSION: u32 = 2;
+type EpisodeKey = (bool, String, Option<i64>);
+type ArtworkIndex<'a> = BTreeMap<(bool, String), Vec<(usize, &'a Value)>>;
+
+fn release_day(value: &str) -> Option<i64> {
+    let date = value.get(..10)?;
+    if !date.bytes().enumerate().all(|(i, b)| {
+        if i == 4 || i == 7 {
+            b == b'-'
+        } else {
+            b.is_ascii_digit()
+        }
+    }) {
         return None;
     }
-    Some((video.get("season")?.as_u64()? == 0, title, date.into()))
+    let year: i64 = date[..4].parse().ok()?;
+    let month: usize = date[5..7].parse().ok()?;
+    let day: i64 = date[8..10].parse().ok()?;
+    if year == 0 || !(1..=12).contains(&month) {
+        return None;
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let lengths = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if !(1..=lengths[month - 1]).contains(&day) {
+        return None;
+    }
+    let previous = year - 1;
+    Some(
+        365 * previous + previous / 4 - previous / 100
+            + previous / 400
+            + lengths[..month - 1].iter().sum::<i64>()
+            + day,
+    )
+}
+
+fn episode_key(video: &Value) -> Option<EpisodeKey> {
+    let title = video
+        .get("name")
+        .and_then(Value::as_str)
+        .or_else(|| video.get("title").and_then(Value::as_str))?;
+    let title = crate::sequence::episode_title(title);
+    let day = video
+        .get("released")
+        .and_then(Value::as_str)
+        .and_then(release_day);
+    if title.is_empty() {
+        return None;
+    }
+    Some((video.get("season")?.as_u64()? == 0, title, day))
+}
+
+fn unique_match<'a>(images: &ArtworkIndex<'a>, key: &EpisodeKey) -> Option<(usize, &'a Value)> {
+    let (special, title, day) = key;
+    let candidates = images.get(&(*special, title.clone()))?;
+    // A globally unique episode title within the same IMDb series is a strong
+    // identity anchor even when providers disagree about (or omit) air dates.
+    // The caller also checks the reverse direction before applying artwork.
+    if candidates.len() == 1 {
+        return Some(candidates[0]);
+    }
+    let day = (*day)?;
+    // Repeated titles need a unique nearby date. Japanese broadcast dates and
+    // UTC/global release dates may differ by one calendar day.
+    let mut matches = candidates.iter().copied().filter(|(_, video)| {
+        episode_key(video)
+            .and_then(|(_, _, day)| day)
+            .is_some_and(|other| (other - day).abs() <= 1)
+    });
+    let matched = matches.next()?;
+    matches.next().is_none().then_some(matched)
 }
 
 fn image_for_series(image: &str, id: &str) -> bool {
@@ -123,6 +191,7 @@ fn artwork_key(raw_url: &str, videos: &[Value]) -> String {
     // Header changes do not alter an episode match; inventory/title/date/URL
     // changes do. The original Cinemeta IDs scope cached artwork to this list.
     let input = serde_json::to_vec(&serde_json::json!([
+        ARTWORK_MATCH_VERSION,
         raw_url,
         videos
             .iter()
@@ -179,28 +248,35 @@ fn apply_images(meta: &mut Value, live: &Value, id: &str) -> BTreeMap<String, Ep
         return matched;
     };
     let mut images = BTreeMap::new();
-    for video in alternates {
-        if let Some(key) = episode_key(video) {
-            images.entry(key).or_insert_with(Vec::new).push(video);
+    for (index, video) in alternates.iter().enumerate() {
+        if let Some((special, title, _)) = episode_key(video) {
+            images
+                .entry((special, title))
+                .or_insert_with(Vec::new)
+                .push((index, video));
         }
     }
     let mut counts = BTreeMap::new();
     for video in videos.iter() {
-        if let Some(key) = episode_key(video) {
-            *counts.entry(key).or_insert(0) += 1;
+        if let Some(key) = episode_key(video)
+            && let Some((target_index, _)) = unique_match(&images, &key)
+        {
+            // The reverse direction must be unique too: two native entries
+            // must never borrow artwork from the same near-dated episode.
+            *counts.entry(target_index).or_insert(0) += 1;
         }
     }
     for video in videos {
         let Some(key) = episode_key(video) else {
             continue;
         };
-        if counts.get(&key) != Some(&1) {
-            continue;
-        }
-        let Some(matches) = images.get(&key).filter(|matches| matches.len() == 1) else {
+        let Some((target_index, target)) = unique_match(&images, &key) else {
             continue;
         };
-        let Some(image) = matches[0].get("thumbnail").and_then(Value::as_str) else {
+        if counts.get(&target_index) != Some(&1) {
+            continue;
+        }
+        let Some(image) = target.get("thumbnail").and_then(Value::as_str) else {
             continue;
         };
         if image_for_series(image, id)
@@ -238,6 +314,131 @@ mod tests {
     }
 
     #[test]
+    fn repairs_entire_shifted_season_from_cinemeta_without_other_addons() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("fixtures/cinemeta-numbering.json")).unwrap();
+        let original = fixture["native"].clone();
+        let mut meta = original.clone();
+        repair_with(
+            "https://v3-cinemeta.strem.io/meta/series/tt21209876.json",
+            &mut meta,
+            |url| {
+                assert_eq!(
+                    url,
+                    "https://cinemeta-live.strem.io/meta/series/tt21209876.json"
+                );
+                Some(serde_json::to_vec(&json!({"meta": fixture["live"]})).unwrap())
+            },
+        );
+        assert_eq!(meta["videos"].as_array().unwrap().len(), 13);
+        for (index, video) in meta["videos"].as_array().unwrap().iter().enumerate() {
+            assert_eq!(
+                video["thumbnail"],
+                fixture["live"]["videos"][index]["thumbnail"]
+            );
+            let mut expected = original["videos"][index].clone();
+            expected["thumbnail"] = video["thumbnail"].clone();
+            assert_eq!(*video, expected); // IDs, seasons, numbering and dates stay native
+        }
+    }
+
+    #[test]
+    fn tolerates_both_date_directions_across_month_year_and_leap_boundaries() {
+        for (first, second) in [
+            ("2025-01-31", "2025-02-01"),
+            ("2025-12-31", "2026-01-01"),
+            ("2024-02-28", "2024-02-29"),
+            ("2024-02-29", "2024-03-01"),
+            ("2025-02-28", "2025-03-01"),
+        ] {
+            assert_eq!(
+                release_day(second).unwrap() - release_day(first).unwrap(),
+                1
+            );
+            for (native_date, live_date) in [(first, second), (second, first)] {
+                let mut native = video(2, 1, "Promise");
+                native["released"] = json!(native_date);
+                let mut alternate = video(1, 26, "Promise");
+                alternate["released"] = json!(live_date);
+                let mut meta = json!({"videos": [native]});
+                apply_images(
+                    &mut meta,
+                    &json!({"videos": [alternate.clone()]}),
+                    "tt5607616",
+                );
+                assert_eq!(meta["videos"][0]["thumbnail"], alternate["thumbnail"]);
+            }
+        }
+        for invalid in [
+            "2025-02-29",
+            "2024-02-30",
+            "2025-13-01",
+            "0000-01-01",
+            "2025-01-00",
+            "bad date",
+        ] {
+            assert!(release_day(invalid).is_none());
+        }
+    }
+
+    #[test]
+    fn unique_titles_cover_missing_dates_while_repeated_titles_require_dates() {
+        let mut original = video(2, 1, "Promise");
+        original["released"] = Value::Null;
+        let mut alternate = video(1, 26, "Promise");
+        alternate["released"] = Value::Null;
+        let mut meta = json!({"videos": [original.clone()]});
+        apply_images(
+            &mut meta,
+            &json!({"videos": [alternate.clone()]}),
+            "tt5607616",
+        );
+        assert_eq!(meta["videos"][0]["thumbnail"], alternate["thumbnail"]);
+        let mut meta = json!({"videos": [original.clone()]});
+        apply_images(
+            &mut meta,
+            &json!({"videos": [alternate, video(1, 27, "Promise")]}),
+            "tt5607616",
+        );
+        assert_eq!(meta["videos"][0], original);
+        let mut native = video(2, 1, "Promise");
+        native["released"] = json!("2020-07-08");
+        let mut nearby = video(1, 26, "Promise");
+        nearby["released"] = json!("2020-07-09");
+        let mut other = video(1, 27, "Promise");
+        other["released"] = json!("2020-08-09");
+        let mut meta = json!({"videos": [native]});
+        apply_images(
+            &mut meta,
+            &json!({"videos": [nearby.clone(), other]}),
+            "tt5607616",
+        );
+        assert_eq!(meta["videos"][0]["thumbnail"], nearby["thumbnail"]);
+    }
+
+    #[test]
+    fn near_dates_still_require_unique_matches_in_both_directions() {
+        let original = video(2, 1, "Promise");
+        let mut following = video(2, 2, "Promise");
+        following["released"] = json!("2020-07-09");
+        let mut alternate = video(1, 26, "Promise");
+        alternate["released"] = json!("2020-07-09");
+        let mut meta = json!({"videos": [original.clone(), following]});
+        let before = meta.clone();
+        apply_images(&mut meta, &json!({"videos": [alternate]}), "tt5607616");
+        assert_eq!(meta, before);
+        let mut following = video(1, 27, "Promise");
+        following["released"] = json!("2020-07-09");
+        let mut meta = json!({"videos": [original.clone()]});
+        apply_images(
+            &mut meta,
+            &json!({"videos": [video(1, 26, "Promise"), following]}),
+            "tt5607616",
+        );
+        assert_eq!(meta["videos"][0], original);
+    }
+
+    #[test]
     fn repairs_numbering_without_changing_episode_identity() {
         for (season, absolute) in [(2, 26), (3, 51), (4, 67)] {
             let original = video(season, 1, "Each One's Promise");
@@ -258,11 +459,18 @@ mod tests {
         for alternates in [
             vec![video(1, 26, "Promise"), video(1, 27, "Promise")],
             vec![video(0, 26, "Promise")],
-            vec![{
-                let mut v = video(1, 26, "Promise");
-                v["released"] = json!("2020-07-09");
-                v
-            }],
+            vec![
+                {
+                    let mut v = video(1, 26, "Promise");
+                    v["released"] = json!("2020-07-10");
+                    v
+                },
+                {
+                    let mut v = video(1, 27, "Promise");
+                    v["released"] = json!("2020-07-11");
+                    v
+                },
+            ],
             vec![{
                 let mut v = video(1, 26, "Promise");
                 v["thumbnail"] = json!("https://episodes.metahub.space/tt123/1/26/w780.jpg");
