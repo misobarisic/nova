@@ -1243,8 +1243,8 @@ export component DetailPage {
         height: 100%;
         background: Theme.current.artwork_canvas;
 
-        // Fade the image itself to a black canvas. Stopping at a lightly
-        // tinted overlay left bright artwork behind deep episode lists.
+        // Fade both artwork and its black backing to the page canvas. Leaving
+        // the backing opaque creates a black band above the coloured scrim.
         property <float> backdrop_fade: Math.min(1, Math.max(0, -det_scroll.content-y / (root.narrow ? 360px : 520px)));
         Rectangle {
             x: 0px;
@@ -1252,6 +1252,7 @@ export component DetailPage {
             width: 100%;
             height: root.narrow ? 560px + root.safe-top : 740px;
             background: Theme.current.artwork_backdrop;
+            opacity: 1 - page.backdrop_fade;
         }
 
         // Keep the artwork edge-to-edge behind the floating controls. The
