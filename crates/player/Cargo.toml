@@ -38,4 +38,5 @@ libc = "0.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 # Idle inhibition over D-Bus (ScreenSaver, logind fallback). Same major
 # version the tree already pulls in transitively via atspi.
-zbus = { version = "5", default-features = false, features = ["blocking-api"] }
+# Enable the blocking API's runtime explicitly for standalone player builds.
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }

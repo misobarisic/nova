@@ -554,6 +554,8 @@ checks a real framebuffer readback, and verifies the host state round trip.
 Run `cargo test -p nova-player --lib clean_draw_and_host_state_round_trip`.
 The Linux PR check runs this test with Mesa software rendering, without a
 display server; the Windows job checks compilation of the production guard.
+The player's Linux D-Bus dependency explicitly enables its `async-io` runtime
+so the crate can build and run tests independently of workspace feature unification.
 
 ---
 
