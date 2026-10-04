@@ -1,3 +1,4 @@
+import { Theme } from "theme.slint";
 // Touch-friendly dropdown replacing std-widgets ComboBox.
 //
 // Why not ComboBox: its popup ScrollView leaves Flickable.interactive at
@@ -48,8 +49,8 @@ export component Dropdown inherits Rectangle {
     height: root.item-h;
     border-radius: root.pill ? 22px : 6px;
     border-width: 1px;
-    border-color: #33333c;
-    background: touch.has-hover && root.enabled ? #23232e : #1c1c22;
+    border-color: Theme.current.control_border;
+    background: touch.has-hover && root.enabled ? Theme.current.input_hover : Theme.current.popup;
 
     HorizontalLayout {
         padding-left: 12px;
@@ -58,7 +59,7 @@ export component Dropdown inherits Rectangle {
 
         Text {
             text: root.shown-text;
-            color: root.has_selection ? #e6e6ea : #8a8a9a;
+            color: root.has_selection ? Theme.current.text_primary : Theme.current.text_muted;
             font-size: 13px;
             vertical-alignment: center;
             horizontal-stretch: 1;
@@ -67,7 +68,7 @@ export component Dropdown inherits Rectangle {
 
         Text {
             text: "▾";
-            color: #8a8a9a;
+            color: Theme.current.text_muted;
             font-size: 12px;
             vertical-alignment: center;
         }
@@ -156,9 +157,9 @@ export component Dropdown inherits Rectangle {
             Rectangle {
                 width: 100%;
                 height: 100%;
-                background: #1c1c22;
+                background: Theme.current.popup;
                 border-width: 1px;
-                border-color: #33333c;
+                border-color: Theme.current.control_border;
                 border-radius: 6px;
                 clip: true;
 
@@ -179,7 +180,7 @@ export component Dropdown inherits Rectangle {
                             width: 100%;
                             height: root.item-h;
                             border-radius: 4px;
-                            background: index == root.current-index ? #8b5cf633 : (item_touch.has-hover ? #2b2b35 : transparent);
+                            background: index == root.current-index ? Theme.current.selection_wash : (item_touch.has-hover ? Theme.current.control_hover : transparent);
 
                             HorizontalLayout {
                                 padding-left: 8px;
@@ -187,7 +188,7 @@ export component Dropdown inherits Rectangle {
 
                                 Text {
                                     text: root.text_at(index);
-                                    color: #e6e6ea;
+                                    color: Theme.current.text_primary;
                                     font-size: 13px;
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;

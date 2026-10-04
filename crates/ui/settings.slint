@@ -1,3 +1,4 @@
+import { Theme } from "theme.slint";
 import { TrackingSettings } from "tracking.slint";
 import { ScrollView, Button } from "std-widgets.slint";
 import { Dropdown } from "dropdown.slint";
@@ -1319,7 +1320,7 @@ export component SettingsPage {
     Rectangle {
         width: 100%;
         height: 100%;
-        background: #080f19;
+        background: Theme.current.artwork_canvas;
 
         // Artwork belongs to the page canvas so safe-area and content gutters
         // never frame it. Only the captions and controls retain their padding.
@@ -1419,7 +1420,7 @@ export component SettingsPage {
             Rectangle { vertical-stretch: 0; height: 1px; }
             if root.persistence_failed: Text {
                 text: @tr("Changes could not be saved. Check storage and retry.");
-                color: #ffaaaa;
+                color: Theme.current.text_error;
                 font-size: 14px;
                 min-width: 0;
                 wrap: word-wrap;
@@ -1473,7 +1474,7 @@ export component SettingsPage {
 
                                 for group[g] in [@tr("Experience"), @tr("Library and services"), @tr("Storage and network"), @tr("App information")]: group_section := VerticalLayout {
                                     vertical-stretch: 0; spacing: 8px;
-                                    if root.group_available(g): Text { text: group; color: #bac1d3; font-size: 14px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+                                    if root.group_available(g): Text { text: group; color: Theme.current.text_settings; font-size: 14px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
                                     if root.group_available(g): SettingsCard {
                                         for entry in SettingsDestinations.entries: VerticalLayout {
                                             vertical-stretch: 0;
@@ -1495,7 +1496,7 @@ export component SettingsPage {
                                 }
                                 if !root.group_available(0) && !root.group_available(1) && !root.group_available(2) && !root.group_available(3): VerticalLayout {
                                     vertical-stretch: 0; spacing: 12px;
-                                    Text { text: @tr("No settings found."); color: #bac1d3; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+                                    Text { text: @tr("No settings found."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
                                     PillButton { label: @tr("Clear search"); clicked => { root.search_query = ""; } }
                                 }
                                 Rectangle { vertical-stretch: 1; }
@@ -1518,7 +1519,7 @@ export component SettingsPage {
                             y: 108px + root.landing_header_shift;
                             width: 100%;
                             height: 124px;
-                            background: #080f19;
+                            background: Theme.current.artwork_canvas;
                         }
 
                         Rectangle {
@@ -1527,8 +1528,8 @@ export component SettingsPage {
                             width: 100%;
                             height: 108px;
                             clip: true;
-                            Text { x: 16px; y: 24px + root.landing_header_shift; text: @tr("Settings"); font-size: root.two_pane ? 28px : 32px; font-weight: 700; color: #ffffff; }
-                            Text { x: 16px; y: 66px + root.landing_header_shift; width: parent.width - 32px; text: @tr("Make Nova yours"); font-size: 14px; color: #bac1d3; wrap: word-wrap; }
+                            Text { x: 16px; y: 24px + root.landing_header_shift; text: @tr("Settings"); font-size: root.two_pane ? 28px : 32px; font-weight: 700; color: Theme.current.text_bright; }
+                            Text { x: 16px; y: 66px + root.landing_header_shift; width: parent.width - 32px; text: @tr("Make Nova yours"); font-size: 14px; color: Theme.current.text_settings; wrap: word-wrap; }
                         }
 
                         settings_search := SearchField {
@@ -1633,7 +1634,7 @@ export component SettingsPage {
                                     // ---- Addons ------------------------------------
 
                                     SettingsCard { install_box := Rectangle {
-                                            background: #111827;
+                                            background: Theme.current.card;
                                             // Dynamic narrow height (same wrapped-text
                                             // measuring quirk as SettingsRow above):
                                             // the stacked description wraps to 2+
@@ -1659,13 +1660,13 @@ export component SettingsPage {
                                                         text: @tr("Install addon");
                                                         font-size: 14px;
                                                         font-weight: 600;
-                                                        color: #ffffff;
+                                                        color: Theme.current.text_bright;
                                                     }
 
                                                     Text {
                                                         text: @tr("Paste an addon install URL and add it to the catalog sources.");
                                                         font-size: 14px;
-                                                        color: #bac1d3;
+                                                        color: Theme.current.text_settings;
                                                         wrap: word-wrap;
                                                         width: 360px;
                                                         height: 44px;
@@ -1751,13 +1752,13 @@ export component SettingsPage {
                                                         text: @tr("Install addon");
                                                         font-size: 14px;
                                                         font-weight: 600;
-                                                        color: #ffffff;
+                                                        color: Theme.current.text_bright;
                                                     }
 
                                                     Text {
                                                         text: @tr("Paste an addon install URL and add it to the catalog sources.");
                                                         font-size: 14px;
-                                                        color: #bac1d3;
+                                                        color: Theme.current.text_settings;
                                                         wrap: word-wrap;
                                                     }
                                                 }
@@ -1827,10 +1828,10 @@ export component SettingsPage {
                                         } }
                                     SectionHeader { label: @tr("Installed sources"); }
                                     Rectangle {
-                                        background: #111827;
+                                        background: Theme.current.card;
                                         border-radius: 16px;
                                         border-width: 1px;
-                                        border-color: #ffffff14;
+                                        border-color: Theme.current.border_soft;
                                         clip: true;
 
                                         VerticalLayout {
@@ -1843,7 +1844,7 @@ export component SettingsPage {
 
 
                                             if root.addon_rows.length == 0: Rectangle {
-                                                background: #111827;
+                                                background: Theme.current.card;
                                                 min-height: 96px;
 
                                                 Text {
@@ -1851,7 +1852,7 @@ export component SettingsPage {
                                                     width: parent.width - 32px;
                                                     y: (parent.height - self.height) / 2;
                                                     text: @tr("No addons installed yet. Paste an addon install URL above and click Add.");
-                                                    color: #bac1d3;
+                                                    color: Theme.current.text_settings;
                                                     font-size: 14px;
                                                     wrap: word-wrap;
                                                 }
@@ -1906,7 +1907,7 @@ export component SettingsPage {
                                                                 y: (parent.height - self.height) / 2;
                                                                 width: 22px;
                                                                 height: 22px;
-                                                                fill: #bac1d3;
+                                                                fill: Theme.current.text_settings;
                                                             }
                                                         }
 
@@ -1931,7 +1932,7 @@ export component SettingsPage {
                                                                 y: (parent.height - self.height) / 2;
                                                                 width: 22px;
                                                                 height: 22px;
-                                                                fill: #bac1d3;
+                                                                fill: Theme.current.text_settings;
                                                             }
                                                         }
 
@@ -1944,7 +1945,7 @@ export component SettingsPage {
                                                                 y: (parent.height - self.height) / 2;
                                                                 width: 22px;
                                                                 height: 22px;
-                                                                fill: #bac1d3;
+                                                                fill: Theme.current.text_settings;
                                                             }
                                                         }
 
@@ -1955,7 +1956,7 @@ export component SettingsPage {
                                                             Text {
                                                                 text: "↑";
                                                                 font-size: 18px;
-                                                                color: #bac1d3;
+                                                                color: Theme.current.text_settings;
                                                                 horizontal-alignment: center;
                                                                 vertical-alignment: center;
                                                             }
@@ -1968,7 +1969,7 @@ export component SettingsPage {
                                                             Text {
                                                                 text: "↓";
                                                                 font-size: 18px;
-                                                                color: #bac1d3;
+                                                                color: Theme.current.text_settings;
                                                                 horizontal-alignment: center;
                                                                 vertical-alignment: center;
                                                             }
@@ -2022,7 +2023,7 @@ export component SettingsPage {
                                     // ---- Categories -------------------------------
 
                                     SettingsCard { cat_box := Rectangle {
-                                            background: #111827;
+                                            background: Theme.current.card;
                                             // Same wrapped-text measuring fix as the
                                             // install row above: grow with the real
                                             // stacked-description height on narrow.
@@ -2045,13 +2046,13 @@ export component SettingsPage {
                                                         text: @tr("Add category");
                                                         font-size: 14px;
                                                         font-weight: 600;
-                                                        color: #ffffff;
+                                                        color: Theme.current.text_bright;
                                                     }
 
                                                     Text {
                                                         text: @tr("Create a tag you can assign to items from the detail page and filter the library with.");
                                                         font-size: 14px;
-                                                        color: #bac1d3;
+                                                        color: Theme.current.text_settings;
                                                         wrap: word-wrap;
                                                         width: 360px;
                                                         height: 44px;
@@ -2122,13 +2123,13 @@ export component SettingsPage {
                                                         text: @tr("Add category");
                                                         font-size: 14px;
                                                         font-weight: 600;
-                                                        color: #ffffff;
+                                                        color: Theme.current.text_bright;
                                                     }
 
                                                     Text {
                                                         text: @tr("Create a tag you can assign to items from the detail page and filter the library with.");
                                                         font-size: 14px;
-                                                        color: #bac1d3;
+                                                        color: Theme.current.text_settings;
                                                         wrap: word-wrap;
                                                     }
                                                 }
@@ -2191,10 +2192,10 @@ export component SettingsPage {
                                         } }
                                     SectionHeader { label: @tr("Existing categories"); }
                                     cat_card := Rectangle {
-                                        background: #111827;
+                                        background: Theme.current.card;
                                         border-radius: 16px;
                                         border-width: 1px;
-                                        border-color: #ffffff14;
+                                        border-color: Theme.current.border_soft;
                                         clip: true;
 
                                         VerticalLayout {
@@ -2205,7 +2206,7 @@ export component SettingsPage {
 
 
                                             if root.category_rows.length == 0: Rectangle {
-                                                background: #111827;
+                                                background: Theme.current.card;
                                                 min-height: 96px;
 
                                                 Text {
@@ -2213,7 +2214,7 @@ export component SettingsPage {
                                                     width: parent.width - 32px;
                                                     y: (parent.height - self.height) / 2;
                                                     text: @tr("No categories yet. Add one above, then assign items to categories from the detail page.");
-                                                    color: #bac1d3;
+                                                    color: Theme.current.text_settings;
                                                     font-size: 14px;
                                                     wrap: word-wrap;
                                                 }
@@ -2292,7 +2293,7 @@ export component SettingsPage {
                                                 toggled => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 5; root.schedule_save(); } }
                                         }
                                     }
-                                    if !root.cache_enabled || !root.cache_images: Text { text: @tr("Enable disk caching and compression to adjust encoding options."); color: #bac1d3; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+                                    if !root.cache_enabled || !root.cache_images: Text { text: @tr("Enable disk caching and compression to adjust encoding options."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
                                     SectionHeader { label: @tr("Memory"); }
                                     SettingsCard {
                                         SettingsRow {
@@ -2316,8 +2317,8 @@ export component SettingsPage {
                                                 clicked => { root.kb_active = SettingsStyle.keyboard-mode; if (root.cache_rewriting) { root.cancel_reencode(); } else { root.reencode_cache(); } } }
                                         }
                                     }
-                                    if root.cache_status != "": Text { text: root.cache_status; color: #bac1d3; font-size: 14px; wrap: word-wrap; min-width: 0px; }
-                                    if root.cache_busy: Text { text: @tr("Storage and compression controls are locked during maintenance. Memory remains available."); color: #bac1d3; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+                                    if root.cache_status != "": Text { text: root.cache_status; color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+                                    if root.cache_busy: Text { text: @tr("Storage and compression controls are locked during maintenance. Memory remains available."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
                                 }
 
                                 if root.sel == 3: VerticalLayout {
@@ -2448,7 +2449,7 @@ export component SettingsPage {
                                                 // measurement copy drives the narrow height
                                                 // (wrapped text measures at one line).
                                                 torrent_dir_box := Rectangle {
-                                                    background: #111827;
+                                                    background: Theme.current.card;
                                                     min-height: root.narrow ? Math.max(96px, 105px + torrent_dir_measure.height) : 88px;
 
                                                     if !root.narrow: HorizontalLayout {
@@ -2468,13 +2469,13 @@ export component SettingsPage {
                                                                 text: @tr("Download folder");
                                                                 font-size: 14px;
                                                                 font-weight: 600;
-                                                                color: #ffffff;
+                                                                color: Theme.current.text_bright;
                                                             }
 
                                                             Text {
                                                                 text: @tr("Where P2P data is stored. Leave empty to use the default app cache folder.");
                                                                 font-size: 14px;
-                                                                color: #bac1d3;
+                                                                color: Theme.current.text_settings;
                                                                 wrap: word-wrap;
                                                                 width: 360px;
                                                                 height: 44px;
@@ -2533,14 +2534,14 @@ export component SettingsPage {
                                                                 text: @tr("Download folder");
                                                                 font-size: 14px;
                                                                 font-weight: 600;
-                                                                color: #ffffff;
+                                                                color: Theme.current.text_bright;
                                                                 wrap: word-wrap;
                                                             }
 
                                                             Text {
                                                                 text: @tr("Where P2P data is stored. Leave empty to use the default app cache folder.");
                                                                 font-size: 14px;
-                                                                color: #bac1d3;
+                                                                color: Theme.current.text_settings;
                                                                 wrap: word-wrap;
                                                             }
                                                         }
@@ -2631,7 +2632,7 @@ export component SettingsPage {
 
                                                 // Size cap (narrow): stacked full-width.
                                                 if root.narrow: Rectangle {
-                                                    background: #111827;
+                                                    background: Theme.current.card;
 
                                                     VerticalLayout {
                                                         width: 100%;
@@ -2648,14 +2649,14 @@ export component SettingsPage {
                                                                 text: @tr("Cache size limit");
                                                                 font-size: 14px;
                                                                 font-weight: 600;
-                                                                color: #ffffff;
+                                                                color: Theme.current.text_bright;
                                                                 wrap: word-wrap;
                                                             }
 
                                                             Text {
                                                                 text: @tr("Maximum disk space for downloaded P2P data. Least-recently-used items are removed first once exceeded.");
                                                                 font-size: 14px;
-                                                                color: #bac1d3;
+                                                                color: Theme.current.text_settings;
                                                                 wrap: word-wrap;
                                                             }
                                                         }
@@ -2726,7 +2727,7 @@ export component SettingsPage {
 
                                                 // Download rate limit (narrow): stacked.
                                                 if root.narrow: Rectangle {
-                                                    background: #111827;
+                                                    background: Theme.current.card;
 
                                                     VerticalLayout {
                                                         width: 100%;
@@ -2743,14 +2744,14 @@ export component SettingsPage {
                                                                 text: @tr("Download rate limit");
                                                                 font-size: 14px;
                                                                 font-weight: 600;
-                                                                color: #ffffff;
+                                                                color: Theme.current.text_bright;
                                                                 wrap: word-wrap;
                                                             }
 
                                                             Text {
                                                                 text: @tr("Cap the download speed. 0 means unlimited.");
                                                                 font-size: 14px;
-                                                                color: #bac1d3;
+                                                                color: Theme.current.text_settings;
                                                                 wrap: word-wrap;
                                                             }
                                                         }
@@ -2821,7 +2822,7 @@ export component SettingsPage {
 
                                                 // Disk usage + clear (narrow): stacked.
                                                 if root.narrow: Rectangle {
-                                                    background: #111827;
+                                                    background: Theme.current.card;
 
                                                     VerticalLayout {
                                                         width: 100%;
@@ -2838,14 +2839,14 @@ export component SettingsPage {
                                                                 text: @tr("Disk usage");
                                                                 font-size: 14px;
                                                                 font-weight: 600;
-                                                                color: #ffffff;
+                                                                color: Theme.current.text_bright;
                                                                 wrap: word-wrap;
                                                             }
 
                                                             Text {
                                                                 text: @tr("Total size of downloaded P2P data on disk.");
                                                                 font-size: 14px;
-                                                                color: #bac1d3;
+                                                                color: Theme.current.text_settings;
                                                                 wrap: word-wrap;
                                                             }
                                                         }
@@ -2980,7 +2981,7 @@ export component SettingsPage {
                                         // sideways, so the control stacks under the
                                         // text (same split as the cache sliders).
                                         if root.narrow && root.player_backend_index == 0: Rectangle {
-                                            background: #111827;
+                                            background: Theme.current.card;
 
                                             VerticalLayout {
                                                 width: 100%;
@@ -2997,14 +2998,14 @@ export component SettingsPage {
                                                         text: @tr("Playback speed");
                                                         font-size: 14px;
                                                         font-weight: 600;
-                                                        color: #ffffff;
+                                                        color: Theme.current.text_bright;
                                                         wrap: word-wrap;
                                                     }
 
                                                     Text {
                                                         text: @tr("Rate the built-in player starts at. The slider covers 0.5×–2.0×; ± moves in 0.05× steps.");
                                                         font-size: 14px;
-                                                        color: #bac1d3;
+                                                        color: Theme.current.text_settings;
                                                         wrap: word-wrap;
                                                     }
                                                 }
@@ -3045,7 +3046,7 @@ export component SettingsPage {
                                             }
                                         } }
                                     SectionHeader { label: @tr("Motion options"); }
-                                    if !root.animations: Text { text: @tr("Enable animations to use the motion options below."); color: #bac1d3; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+                                    if !root.animations: Text { text: @tr("Enable animations to use the motion options below."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
                                     SettingsCard { SettingsRow {
                                             tinted: true;
                                             row-title: @tr("Page transitions");
@@ -3106,10 +3107,10 @@ export component SettingsPage {
 
                                     // Incoming pairing request (confirmation mode).
                                     if root.sync_pair_prompt_visible: Rectangle {
-                                        background: #1d1830;
+                                        background: Theme.current.pairing_prompt;
                                         border-radius: 16px;
                                         border-width: 1px;
-                                        border-color: #8b5cf6;
+                                        border-color: Theme.current.accent;
                                         clip: true;
 
                                         VerticalLayout {
@@ -3127,13 +3128,13 @@ export component SettingsPage {
                                                 min-width: 0px;
                                                 font-size: 14px;
                                                 font-weight: 700;
-                                                color: #ffffff;
+                                                color: Theme.current.text_bright;
                                             }
 
                                             Text {
                                                 text: @tr("{} wants to sync with this device.", root.sync_pair_prompt_name);
                                                 font-size: 14px;
-                                                color: #bac1d3;
+                                                color: Theme.current.text_settings;
                                                 wrap: word-wrap;
                                                 // A device name can be one long token; without
                                                 // min-width: 0 it would set the page's minimum
@@ -3145,7 +3146,7 @@ export component SettingsPage {
                                                 text: @tr("Match code: {}", root.sync_pair_prompt_code);
                                                 font-size: 20px;
                                                 font-weight: 700;
-                                                color: #a89af5;
+                                                color: Theme.current.accent_soft;
                                                 letter-spacing: 4px;
                                             }
 
@@ -3169,10 +3170,10 @@ export component SettingsPage {
                                     // Confirm a peer removal: it tombstones the peer across
                                     // the whole mesh, so a stray tap must not do it.
                                     if root.sync_remove_prompt_visible: Rectangle {
-                                        background: #2a1620;
+                                        background: Theme.current.removal_prompt;
                                         border-radius: 16px;
                                         border-width: 1px;
-                                        border-color: #b3556e;
+                                        border-color: Theme.current.removal_border;
                                         clip: true;
 
                                         VerticalLayout {
@@ -3186,13 +3187,13 @@ export component SettingsPage {
                                                 text: @tr("Remove device?");
                                                 font-size: 14px;
                                                 font-weight: 700;
-                                                color: #ffffff;
+                                                color: Theme.current.text_bright;
                                             }
 
                                             Text {
                                                 text: @tr("{} will be removed from sync on every paired device.", root.sync_remove_prompt_name);
                                                 font-size: 14px;
-                                                color: #bac1d3;
+                                                color: Theme.current.text_settings;
                                                 wrap: word-wrap;
                                                 min-width: 0px;
                                             }
@@ -3225,10 +3226,10 @@ export component SettingsPage {
                                     // endpoint id; there is no account or server.
 
                                     Rectangle {
-                                        background: #111827;
+                                        background: Theme.current.card;
                                         border-radius: 16px;
                                         border-width: 1px;
-                                        border-color: #ffffff14;
+                                        border-color: Theme.current.border_soft;
                                         clip: true;
 
                                         VerticalLayout {
@@ -3258,10 +3259,10 @@ export component SettingsPage {
                                         }
 
                                         Rectangle {
-                                            background: #111827;
+                                            background: Theme.current.card;
                                             border-radius: 16px;
                                             border-width: 1px;
-                                            border-color: #ffffff14;
+                                            border-color: Theme.current.border_soft;
                                             clip: true;
 
                                             VerticalLayout {
@@ -3275,7 +3276,7 @@ export component SettingsPage {
                                                     text: @tr("Device name");
                                                     font-size: 14px;
                                                     font-weight: 600;
-                                                    color: #ffffff;
+                                                    color: Theme.current.text_bright;
                                                 }
 
                                                 SearchField {
@@ -3293,13 +3294,13 @@ export component SettingsPage {
                                                     text: @tr("Endpoint ID");
                                                     font-size: 14px;
                                                     font-weight: 600;
-                                                    color: #ffffff;
+                                                    color: Theme.current.text_bright;
                                                 }
 
                                                 Text {
                                                     text: root.sync_identity;
                                                     font-size: 14px;
-                                                    color: #a89af5;
+                                                    color: Theme.current.accent_soft;
                                                     overflow: elide;
                                                     min-width: 0px;
                                                 }
@@ -3307,7 +3308,7 @@ export component SettingsPage {
                                                 Text {
                                                     text: @tr("Share this with a peer so it can add this device.");
                                                     font-size: 14px;
-                                                    color: #bac1d3;
+                                                    color: Theme.current.text_settings;
                                                     wrap: word-wrap;
                                                 }
 
@@ -3329,7 +3330,7 @@ export component SettingsPage {
                                                 if root.sync_status != "": Text {
                                                     text: root.sync_status;
                                                     font-size: 14px;
-                                                    color: #bac1d3;
+                                                    color: Theme.current.text_settings;
                                                     wrap: word-wrap;
                                                     // Status text embeds peer endpoint ids and
                                                     // errors; keep a long token from widening
@@ -3345,10 +3346,10 @@ export component SettingsPage {
                                         }
 
                                         Rectangle {
-                                            background: #111827;
+                                            background: Theme.current.card;
                                             border-radius: 16px;
                                             border-width: 1px;
-                                            border-color: #ffffff14;
+                                            border-color: Theme.current.border_soft;
                                             clip: true;
 
                                             VerticalLayout {
@@ -3395,10 +3396,10 @@ export component SettingsPage {
                                         }
 
                                         Rectangle {
-                                            background: #111827;
+                                            background: Theme.current.card;
                                             border-radius: 16px;
                                             border-width: 1px;
-                                            border-color: #ffffff14;
+                                            border-color: Theme.current.border_soft;
                                             clip: true;
 
                                             VerticalLayout {
@@ -3416,7 +3417,7 @@ export component SettingsPage {
                                                 }
 
                                                 Rectangle {
-                                                    background: #111827;
+                                                    background: Theme.current.card;
 
                                                     VerticalLayout {
                                                         spacing: 10px;
@@ -3432,7 +3433,7 @@ export component SettingsPage {
                                                             wrap: word-wrap;
                                                             min-width: 0px;
                                                             font-size: 14px;
-                                                            color: #bac1d3;
+                                                            color: Theme.current.text_settings;
                                                         }
 
                                                         HorizontalLayout {
@@ -3458,7 +3459,7 @@ export component SettingsPage {
                                                             // keep the modules crisp.
                                                             alignment: center;
                                                             Rectangle {
-                                                                background: #ffffff;
+                                                                background: Theme.current.text_bright;
                                                                 border-radius: 8px;
                                                                 width: 220px;
                                                                 height: 220px;
@@ -3475,7 +3476,7 @@ export component SettingsPage {
                                                         if root.sync_invite_ticket != "": Text {
                                                             text: root.sync_invite_ticket;
                                                             font-size: 14px;
-                                                            color: #a89af5;
+                                                            color: Theme.current.accent_soft;
                                                             wrap: word-wrap;
                                                             // The ticket is an "NV1" base32 token
                                                             // with no break opportunities; elide it
@@ -3501,10 +3502,10 @@ export component SettingsPage {
                                         }
 
                                         Rectangle {
-                                            background: #111827;
+                                            background: Theme.current.card;
                                             border-radius: 16px;
                                             border-width: 1px;
-                                            border-color: #ffffff14;
+                                            border-color: Theme.current.border_soft;
                                             clip: true;
 
                                             VerticalLayout {
@@ -3521,7 +3522,7 @@ export component SettingsPage {
                                                     wrap: word-wrap;
                                                     min-width: 0px;
                                                     font-size: 14px;
-                                                    color: #bac1d3;
+                                                    color: Theme.current.text_settings;
                                                 }
 
                                                 HorizontalLayout {
@@ -3557,7 +3558,7 @@ export component SettingsPage {
                                                 if root.sync_link_notice != "": Text {
                                                     text: root.sync_link_notice;
                                                     font-size: 14px;
-                                                    color: #bac1d3;
+                                                    color: Theme.current.text_settings;
                                                     wrap: word-wrap;
                                                     min-width: 0px;
                                                 }
@@ -3570,17 +3571,17 @@ export component SettingsPage {
                                         }
 
                                         Rectangle {
-                                            background: #111827;
+                                            background: Theme.current.card;
                                             border-radius: 16px;
                                             border-width: 1px;
-                                            border-color: #ffffff14;
+                                            border-color: Theme.current.border_soft;
                                             clip: true;
 
                                             VerticalLayout {
                                                 spacing: 0px;
 
                                                 Rectangle {
-                                                    background: #111827;
+                                                    background: Theme.current.card;
 
                                                     VerticalLayout {
                                                         spacing: 10px;
@@ -3596,7 +3597,7 @@ export component SettingsPage {
                                                             wrap: word-wrap;
                                                             min-width: 0px;
                                                             font-size: 14px;
-                                                            color: #bac1d3;
+                                                            color: Theme.current.text_settings;
                                                         }
 
                                                         HorizontalLayout {
@@ -3640,7 +3641,7 @@ export component SettingsPage {
                                                 }
 
                                                 if root.sync_peers.length == 0: Rectangle {
-                                                    background: #111827;
+                                                    background: Theme.current.card;
                                                     min-height: 56px;
 
                                                     Text {
@@ -3649,7 +3650,7 @@ export component SettingsPage {
                                                         width: parent.width - 32px;
                                                         text: @tr("No peers yet. Add another device to start syncing.");
                                                         font-size: 14px;
-                                                        color: #bac1d3;
+                                                        color: Theme.current.text_settings;
                                                         wrap: word-wrap;
                                                     }
                                                 }
@@ -3667,10 +3668,10 @@ export component SettingsPage {
                                     }
 
                                     Rectangle {
-                                        background: #111827;
+                                        background: Theme.current.card;
                                         border-radius: 16px;
                                         border-width: 1px;
-                                        border-color: #ffffff14;
+                                        border-color: Theme.current.border_soft;
                                         clip: true;
 
                                         VerticalLayout {
@@ -3724,22 +3725,22 @@ export component SettingsPage {
                                         width: 100%;
                                         text: @tr("Add catalogs with an optional genre filter. Each selection contributes up to five titles.");
                                         font-size: 14px;
-                                        color: #bac1d3;
+                                        color: Theme.current.text_settings;
                                         wrap: word-wrap;
                                     }
 
                                     Rectangle {
-                                        background: #111827;
+                                        background: Theme.current.card;
                                         border-radius: 16px;
                                         border-width: 1px;
-                                        border-color: #ffffff14;
+                                        border-color: Theme.current.border_soft;
                                         clip: true;
 
                                         VerticalLayout {
                                             spacing: 0px;
 
                                             if root.home_catalog_rows.length == 0: Rectangle {
-                                                background: #111827;
+                                                background: Theme.current.card;
                                                 min-height: 64px;
 
                                                 Text {
@@ -3748,7 +3749,7 @@ export component SettingsPage {
                                                     width: parent.width - 32px;
                                                     text: @tr("No featured catalogs selected. Add one to choose its genre.");
                                                     font-size: 14px;
-                                                    color: #bac1d3;
+                                                    color: Theme.current.text_settings;
                                                     wrap: word-wrap;
                                                 }
                                             }
@@ -3846,7 +3847,7 @@ export component SettingsPage {
                                         animate opacity { duration: Anim.transition_fade; }
 
                                         if root.downloads_rows.length == 0: Rectangle {
-                                            background: #111827;
+                                            background: Theme.current.card;
                                             border-radius: 16px;
                                             min-height: 56px;
 
@@ -3856,17 +3857,17 @@ export component SettingsPage {
                                                 width: parent.width - 32px;
                                                 text: @tr("No downloaded episodes. Download an episode from its stream list to see it here.");
                                                 font-size: 14px;
-                                                color: #bac1d3;
+                                                color: Theme.current.text_settings;
                                                 wrap: word-wrap;
                                             }
                                         }
 
                                         Rectangle {
                                             visible: root.downloads_rows.length > 0;
-                                            background: #111827;
+                                            background: Theme.current.card;
                                             border-radius: 16px;
                                             border-width: 1px;
-                                            border-color: #ffffff14;
+                                            border-color: Theme.current.border_soft;
                                             clip: true;
 
                                             VerticalLayout {
@@ -3904,7 +3905,7 @@ export component SettingsPage {
                                                 width: 100%;
                                                 text: @tr("Nova is a media catalog and player application.");
                                                 font-size: 14px;
-                                                color: #bac1d3;
+                                                color: Theme.current.text_settings;
                                                 wrap: word-wrap;
                                             }
 
@@ -3931,7 +3932,7 @@ export component SettingsPage {
                                         min-width: 0px;
                                         text: @tr("Nova is licensed under GPL-3.0-or-later. This page lists the Rust crates used by this build, Nova's workspace crates, bundled native media components, and their license texts.");
                                         font-size: 14px;
-                                        color: #bac1d3;
+                                        color: Theme.current.text_settings;
                                         wrap: word-wrap;
                                     }
 
@@ -3942,7 +3943,7 @@ export component SettingsPage {
 
                                     for source[i] in root.license_sources: source_card := Rectangle {
                                         width: 100%;
-                                        background: #111827;
+                                        background: Theme.current.card;
                                         height: Math.max(72px, source_measure.preferred-height + 24px);
                                         Rectangle {
                                             height: 0px; clip: true;
@@ -3970,7 +3971,7 @@ export component SettingsPage {
                                                 Text {
                                                     text: source.label;
                                                     font-size: 14px;
-                                                    color: #ffffff;
+                                                    color: Theme.current.text_bright;
                                                     wrap: char-wrap;
                                                     min-width: 0px;
                                                 }
@@ -3978,7 +3979,7 @@ export component SettingsPage {
                                                 Text {
                                                     text: source.license;
                                                     font-size: 14px;
-                                                    color: #bac1d3;
+                                                    color: Theme.current.text_settings;
                                                     wrap: char-wrap;
                                                     min-width: 0px;
                                                 }
@@ -4017,7 +4018,7 @@ export component SettingsPage {
                                         min-width: 0px;
                                         text: root.license_catalog;
                                         font-size: 14px;
-                                        color: #bac1d3;
+                                        color: Theme.current.text_settings;
                                         // Legal text may contain long unbroken tokens;
                                         // word-wrap preserves their intrinsic width and
                                         // can make the whole page pan on a narrow screen.
@@ -4081,7 +4082,7 @@ export component SettingsPage {
         if root.home_catalog_add_open: Rectangle {
             width: 100%;
             height: 100%;
-            background: #000000aa;
+            background: Theme.current.scrim_settings;
 
             TouchArea {
                 width: 100%;
@@ -4094,9 +4095,9 @@ export component SettingsPage {
                 y: (parent.height - self.height) / 2;
                 width: Math.min(parent.width - 32px, 520px);
                 height: Math.min(parent.height - 32px, 420px);
-                background: #111827;
+                background: Theme.current.card;
                 border-width: 1px;
-                border-color: #454552;
+                border-color: Theme.current.dialog_border;
                 border-radius: 12px;
                 clip: true;
 
@@ -4110,21 +4111,21 @@ export component SettingsPage {
                         text: @tr("Add featured catalog");
                         font-size: 17px;
                         font-weight: 700;
-                        color: #ffffff;
+                        color: Theme.current.text_bright;
                     }
 
                     Text {
                         width: 100%;
                         text: @tr("Choose a catalog and optional genre to feature on Home.");
                         font-size: 14px;
-                        color: #bac1d3;
+                        color: Theme.current.text_settings;
                         wrap: word-wrap;
                     }
 
                     Text {
                         text: @tr("Catalog");
                         font-size: 14px;
-                        color: #bac1d3;
+                        color: Theme.current.text_settings;
                     }
 
                     Dropdown {
@@ -4143,7 +4144,7 @@ export component SettingsPage {
                     Text {
                         text: @tr("Genre");
                         font-size: 14px;
-                        color: #bac1d3;
+                        color: Theme.current.text_settings;
                     }
 
                     Dropdown {
@@ -4160,7 +4161,7 @@ export component SettingsPage {
                         width: 100%;
                         text: @tr("No enabled addon catalogs are available. Enable an addon with catalogs first.");
                         font-size: 14px;
-                        color: #e3b5b5;
+                        color: Theme.current.text_removal_warning;
                         wrap: word-wrap;
                     }
 
@@ -4168,7 +4169,7 @@ export component SettingsPage {
                         width: 100%;
                         text: root.home_catalog_add_error;
                         font-size: 14px;
-                        color: #e3b5b5;
+                        color: Theme.current.text_removal_warning;
                         wrap: word-wrap;
                     }
 

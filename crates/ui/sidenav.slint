@@ -1,3 +1,4 @@
+import { Theme } from "theme.slint";
 import { IcHome, IcExplore, IcVideoLibrary, IcSettingsGear } from "icons.slint";
 import { Anim } from "anim.slint";
 
@@ -86,38 +87,38 @@ component SideItem inherits Rectangle {
         height: 48px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        background: (root.active || root.kb_focused) ? transparent : (item_touch.has-hover ? #2b2b35 : transparent);
+        background: (root.active || root.kb_focused) ? transparent : (item_touch.has-hover ? Theme.current.control_hover : transparent);
         border-radius: 24px;
         border-width: root.kb_focused ? 2px : 0px;
-        border-color: #ffffff;
+        border-color: Theme.current.text_bright;
 
         if root.kind == 0: icon_home := IcHome {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 24px + root.pop * 2px;
             height: self.width;
-            fill: root.active ? #ffffff : #8a8a9a;
+            fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
         if root.kind == 1: icon_discover := IcExplore {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 24px + root.pop * 2px;
             height: self.width;
-            fill: root.active ? #ffffff : #8a8a9a;
+            fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
         if root.kind == 2: icon_library := IcVideoLibrary {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 24px + root.pop * 2px;
             height: self.width;
-            fill: root.active ? #ffffff : #8a8a9a;
+            fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
         if root.kind == 3: icon_settings := IcSettingsGear {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 24px + root.pop * 2px;
             height: self.width;
-            fill: root.active ? #ffffff : #8a8a9a;
+            fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
     }
 
@@ -130,7 +131,7 @@ component SideItem inherits Rectangle {
 export component SideNav inherits Rectangle {
     // Active section: 0 Home, 1 Discover, 2 Library, 3 Settings.
     in property <int> active: 0;
-    in property <brush> panel-background: #101019;
+    in property <brush> panel-background: Theme.current.nav_rail;
     // Use the hosting page's width, not this component's own footprint.
     in property <length> viewport-width;
     // Window insets: the rail is anchored to the window's left edge, so it
@@ -194,7 +195,7 @@ export component SideNav inherits Rectangle {
             width: 48px;
             height: 48px;
             border-radius: 24px;
-            background: #8b5cf6;
+            background: Theme.current.accent;
         }
 
         VerticalLayout {

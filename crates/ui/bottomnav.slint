@@ -1,3 +1,4 @@
+import { Theme } from "theme.slint";
 import { IcHome, IcExplore, IcVideoLibrary, IcSettingsGear } from "icons.slint";
 import { NavFeedback } from "sidenav.slint";
 
@@ -34,12 +35,12 @@ export component BottomNav inherits Rectangle {
         y: 0px;
         width: root.width + root.page-inset-left + root.page-inset-right;
         height: root.height;
-        background: #11121c;
+        background: Theme.current.nav_bottom;
         // Square corners keep the full-width bar flush against screen edges.
         border-radius: 0px;
         border-width: 0px;
         drop-shadow-blur: 16px;
-        drop-shadow-color: #08081280;
+        drop-shadow-color: Theme.current.nav_shadow;
 
         // Gaps and the system-bar safe zone also absorb taps, preventing
         // touches beside a tab from opening content behind the bar.
@@ -57,11 +58,11 @@ export component BottomNav inherits Rectangle {
             width: pitch - 8px;
             height: 60px;
             border-radius: 28px;
-            background: #6334a7;
+            background: Theme.current.nav_selected;
             border-width: 1px;
-            border-color: #9658eb;
+            border-color: Theme.current.nav_selected_border;
             drop-shadow-blur: 12px;
-            drop-shadow-color: #853ce080;
+            drop-shadow-color: Theme.current.nav_selected_glow;
         }
 
         tabs := HorizontalLayout {
@@ -79,7 +80,7 @@ export component BottomNav inherits Rectangle {
                     width: parent.width - 8px; height: 60px;
                     border-radius: 28px;
                     border-width: root.kb_active && root.kb_zone == 0 && root.kb_nav == 0 ? 2px : 0px;
-                    border-color: #ffffff;
+                    border-color: Theme.current.text_bright;
                     background: transparent;
                 }
 
@@ -88,7 +89,7 @@ export component BottomNav inherits Rectangle {
                     y: 19px - self.height / 2;
                     width: 24px + (root.active == 0 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.active == 0 ? #ffffff : #93929f;
+                    fill: root.active == 0 ? Theme.current.on_accent : Theme.current.nav_icon_inactive;
                 }
                 label_home := Text {
                     x: 4px; y: 36px;
@@ -96,7 +97,7 @@ export component BottomNav inherits Rectangle {
                     text: @tr("Home");
                     font-size: 12px;
                     font-weight: root.active == 0 ? 600 : 400;
-                    color: root.active == 0 ? #ffffff : #aaa8b6;
+                    color: root.active == 0 ? Theme.current.on_accent : Theme.current.nav_label_inactive;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;
@@ -117,7 +118,7 @@ export component BottomNav inherits Rectangle {
                     width: parent.width - 8px; height: 60px;
                     border-radius: 28px;
                     border-width: root.kb_active && root.kb_zone == 0 && root.kb_nav == 1 ? 2px : 0px;
-                    border-color: #ffffff;
+                    border-color: Theme.current.text_bright;
                     background: transparent;
                 }
 
@@ -126,7 +127,7 @@ export component BottomNav inherits Rectangle {
                     y: 19px - self.height / 2;
                     width: 24px + (root.active == 1 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.active == 1 ? #ffffff : #93929f;
+                    fill: root.active == 1 ? Theme.current.on_accent : Theme.current.nav_icon_inactive;
                 }
                 label_discover := Text {
                     x: 4px; y: 36px;
@@ -134,7 +135,7 @@ export component BottomNav inherits Rectangle {
                     text: @tr("Discover");
                     font-size: 12px;
                     font-weight: root.active == 1 ? 600 : 400;
-                    color: root.active == 1 ? #ffffff : #aaa8b6;
+                    color: root.active == 1 ? Theme.current.on_accent : Theme.current.nav_label_inactive;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;
@@ -155,7 +156,7 @@ export component BottomNav inherits Rectangle {
                     width: parent.width - 8px; height: 60px;
                     border-radius: 28px;
                     border-width: root.kb_active && root.kb_zone == 0 && root.kb_nav == 2 ? 2px : 0px;
-                    border-color: #ffffff;
+                    border-color: Theme.current.text_bright;
                     background: transparent;
                 }
 
@@ -164,7 +165,7 @@ export component BottomNav inherits Rectangle {
                     y: 19px - self.height / 2;
                     width: 24px + (root.active == 2 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.active == 2 ? #ffffff : #93929f;
+                    fill: root.active == 2 ? Theme.current.on_accent : Theme.current.nav_icon_inactive;
                 }
                 label_library := Text {
                     x: 4px; y: 36px;
@@ -172,7 +173,7 @@ export component BottomNav inherits Rectangle {
                     text: @tr("Library");
                     font-size: 12px;
                     font-weight: root.active == 2 ? 600 : 400;
-                    color: root.active == 2 ? #ffffff : #aaa8b6;
+                    color: root.active == 2 ? Theme.current.on_accent : Theme.current.nav_label_inactive;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;
@@ -193,7 +194,7 @@ export component BottomNav inherits Rectangle {
                     width: parent.width - 8px; height: 60px;
                     border-radius: 28px;
                     border-width: root.kb_active && root.kb_zone == 0 && root.kb_nav == 3 ? 2px : 0px;
-                    border-color: #ffffff;
+                    border-color: Theme.current.text_bright;
                     background: transparent;
                 }
 
@@ -202,7 +203,7 @@ export component BottomNav inherits Rectangle {
                     y: 19px - self.height / 2;
                     width: 24px + (root.active == 3 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.active == 3 ? #ffffff : #93929f;
+                    fill: root.active == 3 ? Theme.current.on_accent : Theme.current.nav_icon_inactive;
                 }
                 label_settings := Text {
                     x: 4px; y: 36px;
@@ -210,7 +211,7 @@ export component BottomNav inherits Rectangle {
                     text: @tr("Settings");
                     font-size: 12px;
                     font-weight: root.active == 3 ? 600 : 400;
-                    color: root.active == 3 ? #ffffff : #aaa8b6;
+                    color: root.active == 3 ? Theme.current.on_accent : Theme.current.nav_label_inactive;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;

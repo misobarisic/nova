@@ -1,3 +1,4 @@
+import { Theme } from "theme.slint";
 import { TrackingSheet } from "tracking.slint";
 import { TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow } from "types.slint";
 import { ScrollView, Spinner } from "std-widgets.slint";
@@ -35,7 +36,7 @@ component StreamFilterPill inherits Rectangle {
 
     height: 30px;
     border-radius: 15px;
-    background: selected ? #8b5cf6 : (pill_touch.has-hover ? #3a3a46 : #232330);
+    background: selected ? Theme.current.accent : (pill_touch.has-hover ? Theme.current.detail_filter_hover : Theme.current.control);
     clip: true;
 
     HorizontalLayout {
@@ -45,7 +46,7 @@ component StreamFilterPill inherits Rectangle {
 
         Text {
             text: root.label;
-            color: root.selected ? #ffffff : #c8c8d2;
+            color: root.selected ? Theme.current.text_bright : Theme.current.text_filter;
             font-size: 13px;
             font-weight: 600;
             vertical-alignment: center;
@@ -153,9 +154,9 @@ component PageButton inherits Rectangle {
     height: self.width;
     horizontal-stretch: 0;
     border-radius: root.roomy ? 12px : 8px;
-    background: root.minimal || !root.enabled ? transparent : (pg_touch.has-hover ? #303149 : (root.roomy ? #22283a : #232330));
+    background: root.minimal || !root.enabled ? transparent : (pg_touch.has-hover ? Theme.current.pager_hover : (root.roomy ? Theme.current.pager_roomy : Theme.current.control));
     border-width: root.minimal ? 0px : 1px;
-    border-color: root.enabled ? #33333d : #2a2a32;
+    border-color: root.enabled ? Theme.current.step_border : Theme.current.pager_disabled_border;
     accessible-role: button;
     accessible-label: root.name;
 
@@ -165,7 +166,7 @@ component PageButton inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: 28px; height: 28px;
         border-radius: 8px;
-        background: root.enabled && pg_touch.has-hover ? #ffffff0c : transparent;
+        background: root.enabled && pg_touch.has-hover ? Theme.current.border_subtle : transparent;
     }
 
     if root.glyph == 0: IcChevronLeft {
@@ -173,14 +174,14 @@ component PageButton inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: root.minimal ? 16px : 18px;
         height: self.width;
-        fill: root.enabled ? #e6e6ea : #55555f;
+        fill: root.enabled ? Theme.current.text_primary : Theme.current.icon_disabled;
     }
     if root.glyph == 1: IcChevronRight {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: root.minimal ? 16px : 18px;
         height: self.width;
-        fill: root.enabled ? #e6e6ea : #55555f;
+        fill: root.enabled ? Theme.current.text_primary : Theme.current.icon_disabled;
     }
 
     pg_touch := TouchArea {
@@ -225,7 +226,7 @@ component EpisodePager inherits Rectangle {
             height: 44px;
             text: @tr("{} / {}", root.page + 1, root.count);
             accessible-label: @tr("Page {}/{}", root.page + 1, root.count);
-            color: #9ca6b8;
+            color: Theme.current.text_detail_metadata;
             font-size: 13px;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -253,9 +254,9 @@ component TopIconButton inherits Rectangle {
     width: narrow ? 44px : 48px;
     height: narrow ? 44px : 48px;
     border-radius: self.width / 2;
-    background: touch.has-hover ? #303442e0 : #101622b8;
+    background: touch.has-hover ? Theme.current.hero_control_hover : Theme.current.hero_control;
     border-width: focused ? 2px : 1px;
-    border-color: focused ? #a477ff : #ffffff28;
+    border-color: focused ? Theme.current.accent_vivid : Theme.current.border_strong;
 
     @children
 
@@ -425,7 +426,7 @@ component StreamList {
         Text {
             text: root.hint;
             font-size: 13px;
-            color: #8a8a9a;
+            color: Theme.current.text_muted;
             wrap: word-wrap;
             width: 100%;
         }
@@ -465,7 +466,7 @@ component StreamList {
                     text: @tr("Page {}/{}", root.page + 1, root.page_count);
                     height: 28px;
                     font-size: 12px;
-                    color: #8a8a9a;
+                    color: Theme.current.text_muted;
                     vertical-alignment: center;
                 }
                 EpisodePager {
@@ -489,10 +490,10 @@ component StreamList {
                         row_measure.preferred-height + 20px
                             + ((st.is_download && st.download_action != 4) ? 4px : 0px)),
                 );
-                background: st.is_download ? #24203a : #1f1f27;
+                background: st.is_download ? Theme.current.stream_download : Theme.current.stream_card;
                 border-radius: 8px;
                 border-width: root.kb_active && root.kb_focus == i + root.page_start ? 2px : 0px;
-                border-color: #8b5cf6;
+                border-color: Theme.current.focus_ring;
                 clip: true;
 
                 VerticalLayout {
@@ -508,7 +509,7 @@ component StreamList {
 
                     Text {
                         text: st.text;
-                        color: #e6e6ea;
+                        color: Theme.current.text_primary;
                         font-size: 16px;
                         wrap: word-wrap;
                         vertical-alignment: center;
@@ -518,7 +519,7 @@ component StreamList {
 
                     if st.details != "": Text {
                         text: st.details;
-                        color: #b9a7ff;
+                        color: Theme.current.text_download;
                         font-size: 12px;
                         wrap: word-wrap;
                         width: 100%;
@@ -534,14 +535,14 @@ component StreamList {
                         width: 100%;
                         height: 4px;
                         border-radius: 2px;
-                        background: #38324f;
+                        background: Theme.current.download_track;
 
                         dl_fill := Rectangle {
                             x: 0;
                             width: parent.width * st.download_progress;
                             height: 100%;
                             border-radius: 2px;
-                            background: #8b5cf6;
+                            background: Theme.current.accent;
                         }
                     }
                 }
@@ -652,7 +653,7 @@ component StreamList {
                     text: @tr("Page {}/{}", root.page + 1, root.page_count);
                     height: 28px;
                     font-size: 12px;
-                    color: #8a8a9a;
+                    color: Theme.current.text_muted;
                     vertical-alignment: center;
                 }
                 EpisodePager {
@@ -666,7 +667,7 @@ component StreamList {
         Text {
             text: @tr("Click a stream to start playback. Right-click or hold for actions.");
             font-size: 12px;
-            color: #5c5c6e;
+            color: Theme.current.text_disabled;
             width: 100%;
         }
     }
@@ -1240,7 +1241,7 @@ export component DetailPage {
     page := Rectangle {
         width: 100%;
         height: 100%;
-        background: #080f19;
+        background: Theme.current.artwork_canvas;
 
         // Fade the image itself to a black canvas. Stopping at a lightly
         // tinted overlay left bright artwork behind deep episode lists.
@@ -1250,7 +1251,7 @@ export component DetailPage {
             y: 0px;
             width: 100%;
             height: root.narrow ? 560px + root.safe-top : 740px;
-            background: #000000;
+            background: Theme.current.artwork_backdrop;
         }
 
         // Keep the artwork edge-to-edge behind the floating controls. The
@@ -1272,6 +1273,7 @@ export component DetailPage {
             width: 100%;
             height: root.narrow ? 620px + root.safe-top : 800px;
             source: @image-url("../../assets/detail-bottom-scrim.svg");
+            colorize: Theme.current.scrim_artwork;
             image-fit: fill;
         }
         if !root.narrow: Image {
@@ -1280,6 +1282,7 @@ export component DetailPage {
             width: 100%;
             height: 800px;
             source: @image-url("../../assets/detail-side-scrim.svg");
+            colorize: Theme.current.scrim_artwork;
             image-fit: fill;
         }
 
@@ -1425,7 +1428,7 @@ export component DetailPage {
                             y: (parent.height - self.height) / 2;
                             width: 24px;
                             height: 24px;
-                            fill: #ffffff;
+                            fill: Theme.current.text_bright;
                         }
                     }
                 }
@@ -1444,7 +1447,7 @@ export component DetailPage {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             width: 24px; height: 24px;
-                            fill: #e2e5ef;
+                            fill: Theme.current.text_hero_icon;
                         }
                     }
                     if root.in_library: library_options_button := TopIconButton {
@@ -1457,7 +1460,7 @@ export component DetailPage {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             width: 24px; height: 24px;
-                            fill: #ffffff;
+                            fill: Theme.current.text_bright;
                         }
                     }
                 }
@@ -1508,13 +1511,13 @@ export component DetailPage {
                                     text: root.selected_title;
                                     font-size: root.narrow ? 34px : (root.width >= 1200px ? 64px : 44px);
                                     font-weight: 800;
-                                    color: #ffffff;
+                                    color: Theme.current.text_bright;
                                     wrap: word-wrap;
                                     min-width: 0px;
                                 }
                                 if root.selected_year != "": Text {
                                     text: root.selected_year;
-                                    color: #c3c7d7;
+                                    color: Theme.current.text_hero_metadata;
                                     font-size: root.narrow ? 16px : 21px;
                                     min-width: 0px;
                                     overflow: elide;
@@ -1528,15 +1531,15 @@ export component DetailPage {
                                         height: root.narrow ? 34px : 42px;
                                         min-width: 0px;
                                         border-radius: self.height / 2;
-                                        background: #252b38b0;
+                                        background: Theme.current.hero_metadata_badge;
                                         border-width: 1px;
-                                        border-color: #ffffff20;
+                                        border-color: Theme.current.border_overlay;
                                         HorizontalLayout {
                                             padding-left: root.narrow ? 10px : 18px;
                                             padding-right: root.narrow ? 10px : 18px;
                                             Text {
                                                 text: g;
-                                                color: #ced1df;
+                                                color: Theme.current.text_hero_badge;
                                                 font-size: root.narrow ? 12px : 16px;
                                                 vertical-alignment: center;
                                                 min-width: 0px;
@@ -1568,7 +1571,7 @@ export component DetailPage {
                                         height: 100%;
                                         overflow: elide;
                                         text: hero_description_measure.text;
-                                        color: #bec3d2;
+                                        color: Theme.current.text_description;
                                         font-size: root.narrow ? 15px : 19px;
                                         wrap: word-wrap;
                                         vertical-alignment: top;
@@ -1602,12 +1605,12 @@ export component DetailPage {
                                         min-width: 0px;
                                         height: root.narrow ? 56px : 62px;
                                         border-radius: root.narrow ? 22px : 26px;
-                                        background: watch_hero.has-hover ? @linear-gradient(110deg, #b079ff, #5657ef) : @linear-gradient(110deg, #a15bff, #644bff, #443dcc);
+                                        background: watch_hero.has-hover ? Theme.current.primary_button_hover : Theme.current.primary_button;
                                         border-width: 1px;
-                                        border-color: root.kb_active && root.kb_zone == 2 && !root.hero_library_focused ? #ffffff : #b4a1ff70;
+                                        border-color: root.kb_active && root.kb_zone == 2 && !root.hero_library_focused ? Theme.current.text_bright : Theme.current.primary_button_border;
                                         Text {
                                             text: @tr("▶  Watch Now");
-                                            color: #ffffff;
+                                            color: Theme.current.text_bright;
                                             font-size: root.narrow ? 17px : 21px;
                                             font-weight: 600;
                                             horizontal-alignment: center;
@@ -1622,22 +1625,22 @@ export component DetailPage {
                                         width: root.narrow ? 56px : 62px;
                                         height: self.width;
                                         border-radius: self.width / 2;
-                                        background: library_hero.has-hover ? #343b4d : #252c3bcc;
+                                        background: library_hero.has-hover ? Theme.current.hero_library_hover : Theme.current.hero_library;
                                         border-width: 1px;
-                                        border-color: root.kb_active && root.kb_zone == 2 && (root.hero_library_focused || !root.has_episodes) ? #a477ff : #ffffff20;
+                                        border-color: root.kb_active && root.kb_zone == 2 && (root.hero_library_focused || !root.has_episodes) ? Theme.current.accent_vivid : Theme.current.border_overlay;
                                         accessible-role: button;
                                         accessible-label: root.in_library ? @tr("Remove from library") : @tr("Add to library");
                                         if !root.in_library: IcAdd {
                                             x: (parent.width - self.width) / 2;
                                             y: (parent.height - self.height) / 2;
                                             width: 26px; height: 26px;
-                                            fill: #e2e5ef;
+                                            fill: Theme.current.text_hero_icon;
                                         }
                                         if root.in_library: IcBookmark {
                                             x: (parent.width - self.width) / 2;
                                             y: (parent.height - self.height) / 2;
                                             width: 26px; height: 26px;
-                                            fill: #a477ff;
+                                            fill: Theme.current.accent_vivid;
                                         }
                                         library_hero := TouchArea {
                                             mouse-cursor: pointer;
@@ -1655,7 +1658,7 @@ export component DetailPage {
                         width: 100%;
                         background: transparent;
 
-                        Rectangle { y: parent.height - 1px; height: 1px; width: 100%; background: #ffffff20; }
+                        Rectangle { y: parent.height - 1px; height: 1px; width: 100%; background: Theme.current.border_overlay; }
                         HorizontalLayout {
                             spacing: root.narrow ? 4px : 24px;
                             padding: 0px;
@@ -1671,15 +1674,15 @@ export component DetailPage {
                                 height: 4px;
                                 width: 100%;
                                 border-radius: 2px;
-                                background: root.detail_tab == i ? #a477ff : transparent;
+                                background: root.detail_tab == i ? Theme.current.accent_vivid : transparent;
                             }
                             border-width: (i == 0 || i == 3) && root.kb_zone == 1 && root.kb_tab == i ? 2px : 0px;
-                            border-color: #8b5cf6;
+                            border-color: Theme.current.focus_ring;
                             clip: true;
 
                             Text {
                                 text: t;
-                                color: root.detail_tab == i ? #ffffff : #a6adc5;
+                                color: root.detail_tab == i ? Theme.current.text_bright : Theme.current.text_detail_tab;
                                 font-weight: root.detail_tab == i ? 600 : 400;
                                 font-size: root.narrow ? 13px : 18px;
                                 horizontal-alignment: center;
@@ -1733,7 +1736,7 @@ export component DetailPage {
                                         height: root.narrow ? 120px : 190px;
                                         border-radius: 18px;
                                         clip: true;
-                                        background: #151d2b;
+                                        background: Theme.current.season_card;
                                         Image {
                                             source: root.selected_backdrop.width > 0 ? root.selected_backdrop : root.selected_poster;
                                             image-fit: cover;
@@ -1742,12 +1745,12 @@ export component DetailPage {
                                         }
                                         Rectangle {
                                             width: 100%; height: 100%;
-                                            background: @linear-gradient(180deg, transparent, #080f19c0);
+                                            background: Theme.current.season_scrim;
                                         }
                                         Text {
                                             x: 20px; y: parent.height - 42px;
                                             text: @tr("Artwork");
-                                            color: #ffffff;
+                                            color: Theme.current.text_bright;
                                             font-size: 18px;
                                             font-weight: 600;
                                         }
@@ -1756,17 +1759,17 @@ export component DetailPage {
                                     row: root.narrow ? 1 : 0;
                                     col: root.narrow ? 0 : 1;
                                     width: root.synopsis_width;
-                                    background: #151d2bb8;
+                                    background: Theme.current.season_caption;
                                     border-radius: 18px;
                                     border-width: 1px;
-                                    border-color: #ffffff18;
+                                    border-color: Theme.current.hover_overlay;
                                     VerticalLayout {
                                         padding: root.narrow ? 16px : 24px;
                                         spacing: 12px;
                                         alignment: start;
                                         Text {
                                             text: @tr("Synopsis");
-                                            color: #ffffff;
+                                            color: Theme.current.text_bright;
                                             font-size: root.narrow ? 20px : 24px;
                                             font-weight: 700;
                                         }
@@ -1795,7 +1798,7 @@ export component DetailPage {
                                                 width: root.synopsis_width - (root.narrow ? 32px : 48px);
                                                 height: 100%;
                                                 text: synopsis_measure.text;
-                                                color: #b9c0d2;
+                                                color: Theme.current.text_episode_metadata;
                                                 font-size: root.narrow ? 15px : 18px;
                                                 wrap: word-wrap;
                                                 overflow: elide;
@@ -1806,7 +1809,7 @@ export component DetailPage {
                                             height: 28px;
                                             Text {
                                                 text: root.synopsis_expanded ? @tr("Show less") : @tr("Read more");
-                                                color: #a477ff;
+                                                color: Theme.current.accent_vivid;
                                                 font-size: 16px;
                                                 vertical-alignment: center;
                                             }
@@ -1865,7 +1868,7 @@ export component DetailPage {
                             // ---- Stub tabs (no addon data) ------------
                             if root.detail_tab == 1 || root.detail_tab == 2: Text {
                                 text: @tr("Not provided by Stremio addons.");
-                                color: #5c5c6e;
+                                color: Theme.current.text_disabled;
                                 font-size: 13px;
                             }
 
@@ -1968,9 +1971,9 @@ export component DetailPage {
                                                     height: root.season_card_w * 9 / 16;
                                                     border-radius: 8px;
                                                     clip: true;
-                                                    background: #1c1c23;
+                                                    background: Theme.current.episode_placeholder;
                                                     border-width: root.season_combo_idx == i ? 2px : 0px;
-                                                    border-color: root.kb_active && root.kb_zone == 3 && root.kb_ci == 0 && root.season_combo_idx == i ? #ffffff : #8b5cf6;
+                                                    border-color: root.kb_active && root.kb_zone == 3 && root.kb_ci == 0 && root.season_combo_idx == i ? Theme.current.text_bright : Theme.current.accent;
 
                                                     if s.has_thumb: Image {
                                                         source: s.thumb;
@@ -1991,12 +1994,12 @@ export component DetailPage {
                                                     Rectangle {
                                                         width: 100%;
                                                         height: 100%;
-                                                        background: #00000066;
+                                                        background: Theme.current.scrim_episode;
                                                     }
 
                                                     Text {
                                                         text: s.name;
-                                                        color: #ffffff;
+                                                        color: Theme.current.text_bright;
                                                         font-size: 17px;
                                                         font-weight: 700;
                                                         horizontal-alignment: center;
@@ -2012,14 +2015,14 @@ export component DetailPage {
                                                         width: 22px;
                                                         height: 22px;
                                                         border-radius: 11px;
-                                                        background: #ffffff;
+                                                        background: Theme.current.watched_badge;
 
                                                         IcCheck {
                                                             x: (parent.width - self.width) / 2;
                                                             y: (parent.height - self.height) / 2;
                                                             width: 13px;
                                                             height: 13px;
-                                                            fill: #000000;
+                                                            fill: Theme.current.on_watched_badge;
                                                         }
                                                     }
 
@@ -2160,9 +2163,9 @@ export component DetailPage {
                                         height: root.episode_search_open ? 120px : 64px;
                                         animate height { duration: Anim.transition_slide; easing: ease-out; }
                                         border-radius: 16px;
-                                        background: #111927;
+                                        background: Theme.current.episode_toolbar;
                                         border-width: 1px;
-                                        border-color: root.filter_focused ? #a477ff60 : #ffffff16;
+                                        border-color: root.filter_focused ? Theme.current.focus_soft : Theme.current.border_medium;
                                         // The field stays instantiated for keyboard focus requests.
                                         // Explicit row positions keep the header stable as it expands.
                                         clip: true;
@@ -2176,18 +2179,18 @@ export component DetailPage {
                                                 width: 44px; height: 44px;
                                                 horizontal-stretch: 0;
                                                 border-radius: 12px;
-                                                background: root.episode_search_open ? #8b5cf624 : (episode_search_toggle.has-hover ? #2b3448 : #1d2638);
+                                                background: root.episode_search_open ? Theme.current.search_active_wash : (episode_search_toggle.has-hover ? Theme.current.episode_search_hover : Theme.current.episode_search);
                                                 border-width: 1px;
-                                                border-color: root.kb_active && root.kb_zone == 3 && root.kb_ci == 1 ? #a477ff : (root.episode_search_open || root.episode_filter != "" ? #a477ff60 : #ffffff16);
+                                                border-color: root.kb_active && root.kb_zone == 3 && root.kb_ci == 1 ? Theme.current.accent_vivid : (root.episode_search_open || root.episode_filter != "" ? Theme.current.focus_soft : Theme.current.border_medium);
                                                 if !root.episode_search_open: IcSearch {
                                                     x: 12px; y: 12px;
                                                     width: 20px; height: 20px;
-                                                    fill: root.episode_filter != "" ? #cbb7ff : #c2cad9;
+                                                    fill: root.episode_filter != "" ? Theme.current.text_search_match : Theme.current.icon_episode_search;
                                                 }
                                                 if root.episode_search_open: IcClose {
                                                     x: 12px; y: 12px;
                                                     width: 20px; height: 20px;
-                                                    fill: #cbb7ff;
+                                                    fill: Theme.current.text_search_match;
                                                 }
                                                 episode_search_toggle := TouchArea {
                                                     accessible-role: button;
@@ -2208,7 +2211,7 @@ export component DetailPage {
                                             }
                                             episode_result_count := Text {
                                                 text: root.episode_filter != "" ? @tr("Found: {}", root.episode_total) : @tr("{} in this season", root.episode_total);
-                                                color: #b5a1de;
+                                                color: Theme.current.text_episode_counter;
                                                 font-size: 12px;
                                                 min-width: 0px;
                                                 horizontal-stretch: 1;
@@ -2233,7 +2236,7 @@ export component DetailPage {
                                             min-width: 0px;
                                             text <=> root.episode_filter;
                                             placeholder-text: @tr("Search episodes…");
-                                            background: #080f1b;
+                                            background: Theme.current.episode_empty_panel;
                                             focus_changed(focused) => { root.filter_focused = focused; }
                                             edited(t) => { root.episode_filter_changed(t); }
                                             accepted(t) => {
@@ -2248,14 +2251,14 @@ export component DetailPage {
                                         width: 100%;
                                         height: Math.max(96px, empty_copy.preferred-height);
                                         border-radius: 16px;
-                                        background: #0b1221;
+                                        background: Theme.current.episode_card;
                                         empty_copy := VerticalLayout {
                                             padding: 16px;
                                             spacing: 6px;
                                             alignment: center;
                                             episode_empty_title := Text {
                                                 text: @tr("No matching episodes");
-                                                color: #e6e6ea;
+                                                color: Theme.current.text_primary;
                                                 font-size: 15px;
                                                 font-weight: 600;
                                                 horizontal-alignment: center;
@@ -2263,7 +2266,7 @@ export component DetailPage {
                                             }
                                             episode_empty_hint := Text {
                                                 text: @tr("Try a different title or episode number.");
-                                                color: #929caf;
+                                                color: Theme.current.text_episode_hint;
                                                 font-size: 13px;
                                                 horizontal-alignment: center;
                                                 wrap: word-wrap;
@@ -2288,10 +2291,10 @@ export component DetailPage {
                                             // clip (nothing may reach the next
                                             // row's thumbnails).
                                             clip: true;
-                                            background: #0b1221;
+                                            background: Theme.current.episode_card;
                                             border-radius: 16px;
                                             border-width: root.kb_active && root.kb_zone == 3 && root.kb_ci == 2 && root.kb_ep == i ? 2px : 1px;
-                                            border-color: root.kb_active && root.kb_zone == 3 && root.kb_ci == 2 && root.kb_ep == i ? #8b5cf6 : #ffffff12;
+                                            border-color: root.kb_active && root.kb_zone == 3 && root.kb_ci == 2 && root.kb_ep == i ? Theme.current.focus_ring : Theme.current.border_card;
 
                                             // Card menu: desktop right-click opens the
                                             // native popup at the cursor; touch hold
@@ -2399,6 +2402,7 @@ export component DetailPage {
                                                 x: 0px; y: 0px;
                                                 width: 100%; height: 100%;
                                                 source: @image-url("../../assets/episode-card-scrim.svg");
+                                                colorize: Theme.current.scrim_episode_card;
                                                 image-fit: fill;
                                             }
 
@@ -2407,14 +2411,14 @@ export component DetailPage {
                                                 width: episode_badge.preferred-width + 24px;
                                                 height: 30px;
                                                 border-radius: 15px;
-                                                background: #5b21b6dc;
+                                                background: Theme.current.episode_number_badge;
                                                 border-width: 1.5px;
-                                                border-color: #a855f7;
+                                                border-color: Theme.current.episode_number_border;
                                                 episode_badge := Text {
                                                     x: 12px; y: 0px;
                                                     height: 100%;
                                                     text: e.ep_no;
-                                                    color: #ffffff;
+                                                    color: Theme.current.text_bright;
                                                     font-size: 14px;
                                                     font-weight: 700;
                                                     vertical-alignment: center;
@@ -2426,12 +2430,12 @@ export component DetailPage {
                                                 y: 14px;
                                                 width: 30px; height: 30px;
                                                 border-radius: 15px;
-                                                background: #ffffff;
+                                                background: Theme.current.watched_badge;
                                                 IcCheck {
                                                     x: (parent.width - self.width) / 2;
                                                     y: (parent.height - self.height) / 2;
                                                     width: 18px; height: 18px;
-                                                    fill: #0b1221;
+                                                    fill: Theme.current.episode_card;
                                                 }
                                             }
 
@@ -2463,7 +2467,7 @@ export component DetailPage {
                                                 episode_title := Text {
                                                     width: parent.width * (ep_card.width > 520px ? 0.75 : 1.0);
                                                     text: e.text;
-                                                    color: #ffffff;
+                                                    color: Theme.current.text_bright;
                                                     font-size: Math.max(18px, Math.min(24px, ep_card.width * 0.045));
                                                     font-weight: 700;
                                                     height: Math.min(episode_title_measure.preferred-height, episode_title_two_lines.preferred-height) + 1px;
@@ -2484,12 +2488,12 @@ export component DetailPage {
                                                             viewbox-width: 24; viewbox-height: 24;
                                                             commands: "M4 5H20V21H4Z M4 10H20 M8 2V7 M16 2V7 M8 13H9 M12 13H13 M16 13H17 M8 17H9 M12 17H13 M16 17H17";
                                                             fill: transparent;
-                                                            stroke: #bac1d3;
+                                                            stroke: Theme.current.text_settings;
                                                             stroke-width: 1.5px;
                                                         }
                                                         episode_date := Text {
                                                             text: e.date;
-                                                            color: #bac1d3;
+                                                            color: Theme.current.text_settings;
                                                             font-size: 13px;
                                                             overflow: elide;
                                                             vertical-alignment: center;
@@ -2502,11 +2506,11 @@ export component DetailPage {
                                                         spacing: 7px;
                                                         IcSchedule {
                                                             width: 16px; height: 16px;
-                                                            fill: #bac1d3;
+                                                            fill: Theme.current.text_settings;
                                                         }
                                                         episode_runtime := Text {
                                                             text: e.runtime;
-                                                            color: #bac1d3;
+                                                            color: Theme.current.text_settings;
                                                             font-size: 13px;
                                                             overflow: elide;
                                                             vertical-alignment: center;
@@ -2518,7 +2522,7 @@ export component DetailPage {
 
                                                 if e.details != "": episode_synopsis := Text {
                                                     text: e.details;
-                                                    color: #bac1d3;
+                                                    color: Theme.current.text_settings;
                                                     font-size: 14px;
                                                     height: 2 * self.font-size * 1.4;
                                                     vertical-alignment: top;
@@ -2538,19 +2542,19 @@ export component DetailPage {
                                                             y: (parent.height - self.height) / 2;
                                                             width: 100%; height: 7px;
                                                             border-radius: 3.5px;
-                                                            background: #ffffff24;
+                                                            background: Theme.current.progress_track_overlay;
                                                             Rectangle {
                                                                 x: 0px;
                                                                 width: parent.width * Math.max(0, Math.min(1, e.progress));
                                                                 height: 100%;
                                                                 border-radius: 3.5px;
-                                                                background: @linear-gradient(90deg, #a855f7, #7c3aed);
+                                                                background: Theme.current.progress_fill;
                                                             }
                                                         }
                                                     }
                                                     episode_percentage := Text {
                                                         text: @tr("{}%", Math.round(Math.max(0, Math.min(1, e.progress)) * 100));
-                                                        color: #ffffff;
+                                                        color: Theme.current.text_bright;
                                                         font-size: 14px;
                                                         vertical-alignment: center;
                                                     }
@@ -2589,7 +2593,7 @@ export component DetailPage {
                                         width: 100%;
                                         height: root.narrow ? 40px : 34px;
                                         border-radius: 8px;
-                                        background: ep_ctx_touch.has-hover ? #2b2b35 : #1f1f27;
+                                        background: ep_ctx_touch.has-hover ? Theme.current.control_hover : Theme.current.stream_card;
 
                                         HorizontalLayout {
                                             padding-left: 4px;
@@ -2612,13 +2616,13 @@ export component DetailPage {
                                                     y: (parent.height - self.height) / 2;
                                                     width: 20px;
                                                     height: 20px;
-                                                    fill: #c9c9d4;
+                                                    fill: Theme.current.text_secondary;
                                                 }
                                             }
 
                                             Text {
                                                 text: root.episode_context;
-                                                color: #cccccc;
+                                                color: Theme.current.text_context_menu;
                                                 font-size: 13px;
                                                 vertical-alignment: center;
                                                 overflow: elide;
@@ -2689,7 +2693,7 @@ export component DetailPage {
             x: page.width - self.width - 2px;
             y: page_body.y + det_scroll.y + (det_scroll.height - self.height) * (-det_scroll.content-y / (det_scroll.content-height - det_scroll.height));
             border-radius: self.width / 2;
-            background: #55555f;
+            background: Theme.current.icon_disabled;
         }
 
         // Hold behind the pill-bar axis lock (see `filters_panned`): the

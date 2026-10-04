@@ -1,3 +1,4 @@
+import { Theme } from "theme.slint";
 import { ScrollView } from "std-widgets.slint";
 import { TrackRow } from "types.slint";
 import {
@@ -23,8 +24,8 @@ component IconBtn inherits Rectangle {
     height: 40px;
     border-radius: 10px;
     border-width: focused ? 2px : 0px;
-    border-color: #8b5cf6;
-    background: (root.active || touch.has-hover) ? #ffffff1f : root.base;
+    border-color: Theme.current.focus_ring;
+    background: (root.active || touch.has-hover) ? Theme.current.player_control_hover : root.base;
     touch := TouchArea {
         width: 100%;
         height: 100%;
@@ -46,7 +47,7 @@ component MenuRow inherits Rectangle {
 
     height: 44px;
     border-radius: 8px;
-    background: root.focused ? #8b5cf6 : (row_t.has-hover ? #ffffff12 : transparent);
+    background: root.focused ? Theme.current.accent : (row_t.has-hover ? Theme.current.border_card : transparent);
 
     HorizontalLayout {
         padding-left: 16px;
@@ -62,20 +63,20 @@ component MenuRow inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: 20px;
                 height: 20px;
-                fill: #ffffff;
+                fill: Theme.current.text_bright;
             }
             if icon_kind == 2: IcCaptions {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 20px;
                 height: 20px;
-                fill: #ffffff;
+                fill: Theme.current.text_bright;
             }
         }
 
         Text {
             text: label;
-            color: #ffffff;
+            color: Theme.current.text_bright;
             font-size: 14px;
             vertical-alignment: center;
             overflow: elide;
@@ -84,7 +85,7 @@ component MenuRow inherits Rectangle {
 
         if value != "": Text {
             text: value;
-            color: #ffffff66;
+            color: Theme.current.text_player_muted;
             font-size: 13px;
             vertical-alignment: center;
         }
@@ -98,14 +99,14 @@ component MenuRow inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: 16px;
                 height: 16px;
-                fill: #ffffff;
+                fill: Theme.current.text_bright;
             }
             if !selected: IcChevronRight {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 16px;
                 height: 16px;
-                fill: #ffffff59;
+                fill: Theme.current.player_secondary;
             }
         }
     }
@@ -132,12 +133,12 @@ component TrackMenu inherits Rectangle {
 
     width: Math.min(340px, self.max_w);
     height: menu_scroll.height;
-    background: #262626;
+    background: Theme.current.player_menu;
     border-radius: 10px;
     border-width: 1px;
-    border-color: #ffffff17;
+    border-color: Theme.current.player_menu_border;
     drop-shadow-blur: 24px;
-    drop-shadow-color: #00000080;
+    drop-shadow-color: Theme.current.scrim_shadow;
 
     // Swallow clicks on the card itself so they don't reach the video.
     TouchArea { width: 100%; height: 100%; }
@@ -164,7 +165,7 @@ component TrackMenu inherits Rectangle {
 
                 Text {
                     text: @tr("No tracks available.");
-                    color: #ffffff66;
+                    color: Theme.current.text_player_muted;
                     font-size: 13px;
                     x: 16px;
                     vertical-alignment: center;
@@ -239,7 +240,7 @@ component SettingsMenu inherits Rectangle {
     }
 
     // Dim backdrop; tapping outside the card dismisses the modal.
-    Rectangle { width: 100%; height: 100%; background: #000000a6; }
+    Rectangle { width: 100%; height: 100%; background: Theme.current.scrim_player_feedback; }
     backdrop_touch := TouchArea {
         width: 100%;
         height: 100%;
@@ -251,12 +252,12 @@ component SettingsMenu inherits Rectangle {
         height: card_col.preferred-height;
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
-        background: #262626;
+        background: Theme.current.player_menu;
         border-radius: 12px;
         border-width: 1px;
-        border-color: #ffffff17;
+        border-color: Theme.current.player_menu_border;
         drop-shadow-blur: 24px;
-        drop-shadow-color: #00000080;
+        drop-shadow-color: Theme.current.scrim_shadow;
 
         // Swallow taps on the card so they don't reach the backdrop.
         TouchArea { width: 100%; height: 100%; }
@@ -290,13 +291,13 @@ component SettingsMenu inherits Rectangle {
                             y: (parent.height - self.height) / 2;
                             width: 20px;
                             height: 20px;
-                            fill: #ffffff;
+                            fill: Theme.current.text_bright;
                         }
                     }
 
                     Text {
                         text: root.page_title();
-                        color: #ffffff;
+                        color: Theme.current.text_bright;
                         font-size: 14px;
                         font-weight: 600;
                         vertical-alignment: center;
@@ -307,7 +308,7 @@ component SettingsMenu inherits Rectangle {
                     // Live decoder value on the right of the submenu title.
                     if root.page == 1: Text {
                         text: root.hwdec_label != "" ? root.hwdec_label : "…";
-                        color: #ffffff99;
+                        color: Theme.current.text_player_secondary;
                         font-size: 12px;
                         font-weight: 600;
                         vertical-alignment: center;
@@ -328,7 +329,7 @@ component SettingsMenu inherits Rectangle {
                             y: (parent.height - self.height) / 2;
                             width: 18px;
                             height: 18px;
-                            fill: #ffffff;
+                            fill: Theme.current.text_bright;
                         }
                     }
                 }
@@ -432,7 +433,7 @@ component SettingsMenu inherits Rectangle {
 
                             Text {
                                 text: @tr("No tracks available.");
-                                color: #ffffff66;
+                                color: Theme.current.text_player_muted;
                                 font-size: 13px;
                                 x: 16px;
                                 vertical-alignment: center;
@@ -1081,7 +1082,7 @@ export component PlayerOverlay {
         if !root.playback_started && root.player_poster.width > 0: Rectangle {
             width: 100%;
             height: 100%;
-            background: #00000059;
+            background: Theme.current.player_control;
         }
 
         // Center status while loading / on error (opaque bg still up).
@@ -1096,7 +1097,7 @@ export component PlayerOverlay {
 
                 Text {
                     text: root.player_status;
-                    color: #ffffff;
+                    color: Theme.current.text_bright;
                     font-size: 18px;
                     horizontal-alignment: center;
                     wrap: word-wrap;
@@ -1222,7 +1223,7 @@ export component PlayerOverlay {
             width: flash_lbl.preferred-width + 28px;
             height: 36px;
             border-radius: 18px;
-            background: #000000a6;
+            background: Theme.current.scrim_player_feedback;
             opacity: root.flash_show ? 1.0 : 0.0;
             animate opacity { duration: Anim.player_fast; easing: ease-out; }
             animate y { duration: Anim.player_slide; easing: ease-out; }
@@ -1231,7 +1232,7 @@ export component PlayerOverlay {
                 text: root.flash_text;
                 font-size: 15px;
                 font-weight: 700;
-                color: #ffffff;
+                color: Theme.current.text_bright;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
             }
@@ -1245,10 +1246,10 @@ export component PlayerOverlay {
             height: 40px;
             border-radius: 10px;
             border-width: root.kb_active && root.kb_idx == 0 && root.open_popup == 0 ? 2px : 0px;
-            border-color: #8b5cf6;
+            border-color: Theme.current.focus_ring;
             // A dark base keeps the white X readable over bright video;
             // hover lightens it.
-            background: close_touch.has-hover ? #ffffff26 : #00000059;
+            background: close_touch.has-hover ? Theme.current.player_close_hover : Theme.current.player_control;
             // Touch hover alone must not paint the bar: the backend wake owns
             // visibility, and a press can otherwise flash and release it.
             opacity: (root.osd_visible || !root.playback_started
@@ -1260,7 +1261,7 @@ export component PlayerOverlay {
                 y: (parent.height - self.height) / 2;
                 width: 24px;
                 height: 24px;
-                fill: #ffffff;
+                fill: Theme.current.text_bright;
             }
 
             close_touch := TouchArea {
@@ -1299,7 +1300,7 @@ export component PlayerOverlay {
                 width: 52px;
                 height: 52px;
                 border-radius: 26px;
-                base: #00000059;
+                base: Theme.current.player_control;
                 focused: root.kb_active && root.kb_idx == 3 && root.open_popup == 0;
                 clicked => {
                     if (!root.guard_osd_control()) { return; }
@@ -1314,7 +1315,7 @@ export component PlayerOverlay {
                     y: (parent.height - self.height) / 2;
                     width: 34px;
                     height: 34px;
-                    fill: #ffffff;
+                    fill: Theme.current.text_bright;
                 }
             }
 
@@ -1325,7 +1326,7 @@ export component PlayerOverlay {
                 width: 72px;
                 height: 72px;
                 border-radius: 36px;
-                base: #00000059;
+                base: Theme.current.player_control;
                 focused: root.kb_active && root.kb_idx == 1 && root.open_popup == 0;
                 clicked => {
                     if (!root.guard_osd_control()) { return; }
@@ -1336,14 +1337,14 @@ export component PlayerOverlay {
                     y: (parent.height - self.height) / 2;
                     width: 40px;
                     height: 40px;
-                    fill: #ffffff;
+                    fill: Theme.current.text_bright;
                 }
                 if !root.is_paused: IcPause {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     width: 40px;
                     height: 40px;
-                    fill: #ffffff;
+                    fill: Theme.current.text_bright;
                 }
             }
 
@@ -1354,7 +1355,7 @@ export component PlayerOverlay {
                 width: 52px;
                 height: 52px;
                 border-radius: 26px;
-                base: #00000059;
+                base: Theme.current.player_control;
                 focused: root.kb_active && root.kb_idx == 4 && root.open_popup == 0;
                 clicked => {
                     if (!root.guard_osd_control()) { return; }
@@ -1369,7 +1370,7 @@ export component PlayerOverlay {
                     y: (parent.height - self.height) / 2;
                     width: 34px;
                     height: 34px;
-                    fill: #ffffff;
+                    fill: Theme.current.text_bright;
                 }
             }
         }
@@ -1391,6 +1392,7 @@ export component PlayerOverlay {
                 width: 100%;
                 height: 100%;
                 source: root.scrim_image;
+                colorize: Theme.current.scrim_player;
             }
             // Visible when the wake timer says so, and always while loading or a
             // popup is open — the auto-hide countdown applies whether playing
@@ -1470,7 +1472,7 @@ export component PlayerOverlay {
                             y: 8px;
                             height: 3px;
                             width: 100%;
-                            background: #ffffff59;
+                            background: Theme.current.player_secondary;
                             border-radius: 1.5px;
                         }
 
@@ -1480,7 +1482,7 @@ export component PlayerOverlay {
                             y: 8px;
                             height: 3px;
                             width: root.duration > 0 ? (root.position / root.duration) * parent.width : 0;
-                            background: #ffffff;
+                            background: Theme.current.player_progress_fill;
                             border-radius: 1.5px;
                         }
 
@@ -1493,7 +1495,7 @@ export component PlayerOverlay {
                             y: (parent.height - 11px) / 2;
                             width: 11px;
                             height: 11px;
-                            background: #ffffff;
+                            background: Theme.current.player_progress_fill;
                             border-radius: 5.5px;
                             opacity: seek_touch.has-hover ? 1.0 : 0.0;
                             animate opacity { duration: Anim.player_fast; }
@@ -1531,13 +1533,13 @@ export component PlayerOverlay {
                             x: Math.clamp(seek_touch.mouse-x - self.width / 2, 0px, parent.width - self.width);
                             y: -self.height - 4px;
                             border-radius: 5px;
-                            background: #262626e6;
+                            background: Theme.current.player_tooltip;
                             opacity: seek_touch.has-hover ? 1.0 : 0.0;
                             animate opacity { duration: Anim.player_fast; }
 
                             seek_tip := Text {
                                 text: root.format_time((seek_touch.mouse-x / seek_touch.width) * root.duration);
-                                color: #ffffff;
+                                color: Theme.current.text_bright;
                                 font-size: 11px;
                                 width: 100%;
                                 height: 100%;
@@ -1581,14 +1583,14 @@ export component PlayerOverlay {
                             y: (parent.height - self.height) / 2;
                             width: 26px;
                             height: 26px;
-                            fill: #ffffff;
+                            fill: Theme.current.text_bright;
                         }
                         if !root.is_paused: IcPause {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             width: 26px;
                             height: 26px;
-                            fill: #ffffff;
+                            fill: Theme.current.text_bright;
                         }
                     }
 
@@ -1625,14 +1627,14 @@ export component PlayerOverlay {
                                 y: (parent.height - self.height) / 2;
                                 width: 26px;
                                 height: 26px;
-                                fill: #ffffff;
+                                fill: Theme.current.text_bright;
                             }
                             if !(root.muted || root.volume <= 0): IcVolumeUp {
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
                                 width: 26px;
                                 height: 26px;
-                                fill: #ffffff;
+                                fill: Theme.current.text_bright;
                             }
                         }
 
@@ -1651,7 +1653,7 @@ export component PlayerOverlay {
                                 x: 8px;
                                 width: parent.vol_pct * (parent.width - 16px);
                                 height: 3px;
-                                background: #ffffff;
+                                background: Theme.current.player_progress_fill;
                                 border-radius: 1.5px;
                             }
                             Rectangle {
@@ -1659,7 +1661,7 @@ export component PlayerOverlay {
                                 x: 8px;
                                 width: (1 - parent.vol_pct) * (parent.width - 16px);
                                 height: 3px;
-                                background: #ffffff59;
+                                background: Theme.current.player_secondary;
                                 border-radius: 1.5px;
                             }
                             // Thumb — same as the playback slider's, only
@@ -1669,7 +1671,7 @@ export component PlayerOverlay {
                                 y: (parent.height - 11px) / 2;
                                 width: 11px;
                                 height: 11px;
-                                background: #ffffff;
+                                background: Theme.current.player_progress_fill;
                                 border-radius: 5.5px;
                                 opacity: vol_slider_touch.has-hover ? 1.0 : 0.0;
                                 animate opacity { duration: Anim.player_fast; }
@@ -1703,7 +1705,7 @@ export component PlayerOverlay {
                             x: 46px + Math.clamp(vol_slider_touch.mouse-x - self.width / 2, 0px, 100px - self.width);
                             y: -self.height - 4px;
                             border-radius: 5px;
-                            background: #262626e6;
+                            background: Theme.current.player_tooltip;
                             opacity: vol_slider_touch.has-hover ? 1.0 : 0.0;
                             animate opacity { duration: Anim.player_fast; }
 
@@ -1712,7 +1714,7 @@ export component PlayerOverlay {
                                 // position as a percentage.
                                 text: root.format_volume(
                                     Math.clamp(vol_slider_touch.mouse-x / vol_slider_touch.width, 0, 1) * 100);
-                                color: #ffffff;
+                                color: Theme.current.text_bright;
                                 font-size: 11px;
                                 width: 100%;
                                 height: 100%;
@@ -1735,7 +1737,7 @@ export component PlayerOverlay {
 
                         time_lbl := Text {
                             text: root.time_text;
-                            color: #ffffff;
+                            color: Theme.current.text_bright;
                             font-size: 13px;
                             vertical-alignment: center;
                             x: 8px;
@@ -1749,7 +1751,7 @@ export component PlayerOverlay {
 
                         Text {
                             text: root.player_title;
-                            color: #ffffffd9;
+                            color: Theme.current.text_player_caption;
                             font-size: 13px;
                             vertical-alignment: center;
                             horizontal-alignment: center;
@@ -1780,7 +1782,7 @@ export component PlayerOverlay {
                             y: (parent.height - self.height) / 2;
                             width: 26px;
                             height: 26px;
-                            fill: #ffffff;
+                            fill: Theme.current.text_bright;
                         }
                     }
 
@@ -1799,7 +1801,7 @@ export component PlayerOverlay {
                             y: (parent.height - self.height) / 2;
                             width: 26px;
                             height: 26px;
-                            fill: #ffffff;
+                            fill: Theme.current.text_bright;
                         }
                     }
 
@@ -1832,7 +1834,7 @@ export component PlayerOverlay {
                                 y: (parent.height - self.height) / 2;
                                 width: 26px;
                                 height: 26px;
-                                fill: #ffffff;
+                                fill: Theme.current.text_bright;
                             }
                         }
 
@@ -1878,7 +1880,7 @@ export component PlayerOverlay {
                                 y: (parent.height - self.height) / 2;
                                 width: 24px;
                                 height: 24px;
-                                fill: #ffffff;
+                                fill: Theme.current.text_bright;
                             }
                         }
 
@@ -1922,7 +1924,7 @@ export component PlayerOverlay {
                             y: (parent.height - self.height) / 2;
                             width: 24px;
                             height: 24px;
-                            fill: #ffffff;
+                            fill: Theme.current.text_bright;
                         }
                     }
 
@@ -1940,14 +1942,14 @@ export component PlayerOverlay {
                             y: (parent.height - self.height) / 2;
                             width: 26px;
                             height: 26px;
-                            fill: #ffffff;
+                            fill: Theme.current.text_bright;
                         }
                         if !root.is_fullscreen: IcFullscreen {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             width: 26px;
                             height: 26px;
-                            fill: #ffffff;
+                            fill: Theme.current.text_bright;
                         }
                     }
                 }

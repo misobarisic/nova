@@ -1,3 +1,5 @@
+import { Theme } from "theme.slint";
+export { Theme, ThemePalette } from "theme.slint";
 // Bundle the same UI family on desktop and Android, including a real bold face.
 import "../../assets/fonts/Roboto-Regular.ttf";
 import "../../assets/fonts/Roboto-Bold.ttf";
@@ -89,7 +91,7 @@ export component AppWindow inherits Window {
     // video is missing reads as black instead of transparent.
     background: (root.player_open && root.playback_started)
         ? (root.is_android ? #000000 : transparent)
-        : #0f0f12;
+        : Theme.current.canvas;
 
     in-out property <[MediaCard]> catalog: [];
     in-out property <[MediaCard]> search_results: [];
@@ -1188,7 +1190,7 @@ export component AppWindow inherits Window {
     }
 
     if root.resume_prompt_visible: Rectangle {
-        x: 0; y: 0; width: 100%; height: 100%; background: #000000b8;
+        x: 0; y: 0; width: 100%; height: 100%; background: Theme.current.scrim_resume;
         TouchArea {
             width: 100%; height: 100%;
             clicked => { root.resume_cancel(); }
@@ -1198,24 +1200,24 @@ export component AppWindow inherits Window {
             height: 176px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            background: #262626; border-radius: 14px;
+            background: Theme.current.player_menu; border-radius: 14px;
             // Consume clicks inside the card instead of passing them to the
             // outside-click dismiss layer underneath.
             TouchArea { width: 100%; height: 100%; }
             VerticalLayout {
                 padding: 20px; spacing: 12px;
-                Text { text: @tr("Resume playback?"); color: #ffffff; font-size: 18px; font-weight: 600; }
-                Text { text: @tr("This episode has saved playback history."); color: #b8b8be; font-size: 14px; wrap: word-wrap; }
+                Text { text: @tr("Resume playback?"); color: Theme.current.text_bright; font-size: 18px; font-weight: 600; }
+                Text { text: @tr("This episode has saved playback history."); color: Theme.current.text_resume_hint; font-size: 14px; wrap: word-wrap; }
                 HorizontalLayout {
                     alignment: end; spacing: 8px;
                     Rectangle {
-                        width: 112px; height: 40px; border-radius: 8px; background: #ffffff18;
-                        Text { text: @tr("Start over"); color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+                        width: 112px; height: 40px; border-radius: 8px; background: Theme.current.hover_overlay;
+                        Text { text: @tr("Start over"); color: Theme.current.text_bright; horizontal-alignment: center; vertical-alignment: center; }
                         TouchArea { width: 100%; height: 100%; clicked => { root.resume_choice(false); } }
                     }
                     Rectangle {
-                        width: 100px; height: 40px; border-radius: 8px; background: #8b5cf6;
-                        Text { text: @tr("Resume"); color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+                        width: 100px; height: 40px; border-radius: 8px; background: Theme.current.accent;
+                        Text { text: @tr("Resume"); color: Theme.current.text_bright; horizontal-alignment: center; vertical-alignment: center; }
                         TouchArea { width: 100%; height: 100%; clicked => { root.resume_choice(true); } }
                     }
                 }

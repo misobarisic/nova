@@ -1,3 +1,4 @@
+import { Theme } from "theme.slint";
 // Custom single-line search field built directly on TextInput.
 //
 // Why not LineEdit: the stock field paints a persistent "active" look
@@ -59,8 +60,8 @@ export component SearchField inherits Rectangle {
     border-width: 1px;
     // Calm 1px ring on focus instead of the stock underline + background
     // flare that looked permanently "selected" on touch screens.
-    border-color: inner.has-focus && (root.show-pointer-focus || root.keyboard-mode) ? #8b5cf6 : #33333c;
-    background: #1c1c22;
+    border-color: inner.has-focus && (root.show-pointer-focus || root.keyboard-mode) ? Theme.current.focus_ring : Theme.current.control_border;
+    background: Theme.current.popup;
     clip: true;
 
     if root.search-icon: search_glyph := IcSearch {
@@ -68,7 +69,7 @@ export component SearchField inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: 20px;
         height: 20px;
-        fill: inner.has-focus ? #b59aff : #8791a6;
+        fill: inner.has-focus ? Theme.current.search_icon_focused : Theme.current.search_icon;
     }
 
     if root.search-icon: search_touch := TouchArea {
@@ -94,10 +95,10 @@ export component SearchField inherits Rectangle {
             input-type: root.input-type;
             enabled: root.enabled;
             font-size: root.prominent ? 16px : 13px;
-            color: #e6e6ea;
+            color: Theme.current.text_primary;
             // Dimmed selection wash instead of the bright stock accent.
-            selection-background-color: #8b5cf655;
-            selection-foreground-color: #ffffff;
+            selection-background-color: Theme.current.input_selection;
+            selection-foreground-color: Theme.current.text_bright;
             single-line: true;
             vertical-alignment: center;
             // Raw TextInput does not scroll its text when the caret leaves
@@ -132,7 +133,7 @@ export component SearchField inherits Rectangle {
         width: Math.max(1px, parent.width - root.input_left - root.input_right);
         height: parent.height;
         text: root.placeholder-text;
-        color: #6c6c7d;
+        color: Theme.current.text_hint;
         font-size: root.prominent ? 16px : 13px;
         vertical-alignment: center;
         overflow: elide;
@@ -146,7 +147,7 @@ export component SearchField inherits Rectangle {
         width: root.clear_box;
         height: parent.height;
         border-radius: 6px;
-        background: clear_touch.has-hover ? #ffffff14 : transparent;
+        background: clear_touch.has-hover ? Theme.current.border_soft : transparent;
         accessible-role: button;
         accessible-label: @tr("Clear");
 
@@ -156,14 +157,14 @@ export component SearchField inherits Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             border-radius: 8px;
-            background: #4a4a58;
+            background: Theme.current.input_disabled_mark;
 
             IcClose {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 11px;
                 height: 11px;
-                fill: #e6e6ea;
+                fill: Theme.current.text_primary;
             }
         }
 

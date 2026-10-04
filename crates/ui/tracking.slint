@@ -1,3 +1,4 @@
+import { Theme } from "theme.slint";
 import { Button, LineEdit, ComboBox, CheckBox, ScrollView } from "std-widgets.slint";
 import { PillButton, ToggleSwitch, SettingsStyle, SettingsRow, SettingsInput } from "settings-controls.slint";
 import { Dropdown } from "dropdown.slint";
@@ -17,10 +18,10 @@ component TrackingButton inherits Rectangle {
     min-width: 0px;
     vertical-stretch: 0;
     border-radius: root.icon == 1 ? 22px : 12px;
-    background: root.primary ? @linear-gradient(110deg, #a15bff, #644bff, #443dcc) : (root.quiet ? transparent : (touch.has-hover ? #293346 : #1b2435));
+    background: root.primary ? Theme.current.primary_button : (root.quiet ? transparent : (touch.has-hover ? Theme.current.tracking_control_hover : Theme.current.tracking_control));
     opacity: root.enabled ? 1 : 0.45;
     border-width: focus.has-focus ? 2px : (root.quiet ? 0px : 1px);
-    border-color: focus.has-focus ? #a477ff : #ffffff20;
+    border-color: focus.has-focus ? Theme.current.accent_vivid : Theme.current.border_overlay;
     accessible-role: button;
     accessible-label: root.text;
     accessible-enabled: root.enabled;
@@ -30,14 +31,14 @@ component TrackingButton inherits Rectangle {
         padding-right: root.icon == 1 ? 10px : 12px;
         spacing: 8px;
         alignment: center;
-        if root.icon == 1: Rectangle { width:24px; background:transparent; IcClose { y:(parent.height - self.height)/2; width:24px; height:24px; fill:#e2e5ef; } }
-        if root.icon == 2: Rectangle { width:20px; background:transparent; IcSync { y:(parent.height - self.height)/2; width:20px; height:20px; fill:#a477ff; } }
+        if root.icon == 1: Rectangle { width:24px; background:transparent; IcClose { y:(parent.height - self.height)/2; width:24px; height:24px; fill:Theme.current.text_hero_icon; } }
+        if root.icon == 2: Rectangle { width:20px; background:transparent; IcSync { y:(parent.height - self.height)/2; width:20px; height:20px; fill:Theme.current.accent_vivid; } }
         if root.icon != 1: Text {
-            text: root.text; color: root.primary ? #ffffff : #a477ff;
+            text: root.text; color: root.primary ? Theme.current.on_accent : Theme.current.accent_vivid;
             font-size: root.primary ? 16px : 14px; font-weight: root.primary ? 600 : 500;
             vertical-alignment: center; overflow: elide; min-width: 0px;
         }
-        if root.icon == 3: Rectangle { width:18px; background:transparent; IcChevronRight { y:(parent.height - self.height)/2; width:18px; height:18px; fill:#a477ff; } }
+        if root.icon == 3: Rectangle { width:18px; background:transparent; IcChevronRight { y:(parent.height - self.height)/2; width:18px; height:18px; fill:Theme.current.accent_vivid; } }
     }
     focus := FocusScope {
         enabled: root.enabled;
@@ -59,13 +60,13 @@ component MappingChip inherits Rectangle {
     VerticalLayout {
         spacing: 5px;
         chip := Rectangle {
-            background: #1d2638; border-radius: 10px; border-width: 1px; border-color: #ffffff16;
+            background: Theme.current.episode_search; border-radius: 10px; border-width: 1px; border-color: Theme.current.border_medium;
             VerticalLayout {
                 padding: 8px;
-                Text { text: root.numbers; color: #f2f2f4; font-weight: 600; font-size: 14px; wrap: word-wrap; min-width: 0px; horizontal-alignment: center; }
+                Text { text: root.numbers; color: Theme.current.text_tracking_primary; font-weight: 600; font-size: 14px; wrap: word-wrap; min-width: 0px; horizontal-alignment: center; }
             }
         }
-        Text { text: root.caption; color: #9ca6b8; font-size: 12px; horizontal-alignment: center; }
+        Text { text: root.caption; color: Theme.current.text_detail_metadata; font-size: 12px; horizontal-alignment: center; }
     }
 }
 component HistoryToggle inherits Rectangle {
@@ -80,23 +81,23 @@ component HistoryToggle inherits Rectangle {
     accessible-checked <=> root.checked;
     accessible-enabled: root.enabled;
     forward-focus: focus;
-    border-width: focus.has-focus ? 1px : 0px; border-color: #a477ff; border-radius: 10px;
+    border-width: focus.has-focus ? 1px : 0px; border-color: Theme.current.accent_vivid; border-radius: 10px;
     opacity: root.enabled ? 1 : 0.45;
     HorizontalLayout {
         spacing: 12px;
         labels := VerticalLayout {
             alignment: center; spacing: 4px;
-            Text { text: @tr("Include watched episodes"); font-size: 14px; color: #f2f2f4; wrap: word-wrap; min-width: 0px; }
-            Text { text: @tr("Apply saved watch history"); font-size: 12px; color: #9ca6b8; wrap: word-wrap; min-width: 0px; }
+            Text { text: @tr("Include watched episodes"); font-size: 14px; color: Theme.current.text_tracking_primary; wrap: word-wrap; min-width: 0px; }
+            Text { text: @tr("Apply saved watch history"); font-size: 12px; color: Theme.current.text_detail_metadata; wrap: word-wrap; min-width: 0px; }
         }
         Rectangle {
             width: 48px; background: transparent;
             Rectangle {
                 y: (parent.height - self.height) / 2;
-                width: 48px; height: 28px; border-radius: 14px; background: root.checked ? #8b5cf6 : #252c3b;
+                width: 48px; height: 28px; border-radius: 14px; background: root.checked ? Theme.current.accent : Theme.current.tracking_toggle;
                 Rectangle {
                     x: root.checked ? 24px : 4px; y: 4px; width: 20px; height: 20px;
-                    border-radius: 10px; background: #f2f2f4;
+                    border-radius: 10px; background: Theme.current.text_tracking_primary;
                     animate x { duration: Anim.enabled ? 140ms : 0ms; easing: ease-out; }
                 }
             }
@@ -118,8 +119,8 @@ component AccountEditor inherits Rectangle {
     callback input_focus(bool);
     callback automatic(int,bool);
     min-width: 0px;
-    background: #111827;
-    border-width: 1px; border-color: #ffffff14;
+    background: Theme.current.card;
+    border-width: 1px; border-color: Theme.current.border_soft;
     border-radius: 16px;
     vertical-stretch: 0;
     property <string> client: root.entry.client_id;
@@ -127,13 +128,13 @@ component AccountEditor inherits Rectangle {
     property <bool> pin_sign_in: root.entry.service == 1 && root.entry.redirect_uri == "https://anilist.co/api/v2/oauth/pin";
     VerticalLayout {
         padding: 16px; spacing: 8px;
-        Text { text: root.entry.service == 0 ? "MyAnimeList" : "AniList"; color: #ffffff; font-weight: 700; }
-        Text { text: root.entry.name; color: #bac1d3; wrap: word-wrap; min-width: 0; }
-        Text { text: root.entry.state; color: #bac1d3; wrap: word-wrap; min-width: 0; }
+        Text { text: root.entry.service == 0 ? "MyAnimeList" : "AniList"; color: Theme.current.text_bright; font-weight: 700; }
+        Text { text: root.entry.name; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0; }
+        Text { text: root.entry.state; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0; }
         SettingsRow { row-title: @tr("Automatic tracking for linked releases"); ToggleSwitch { name: @tr("Automatic tracking for linked releases"); checked: root.entry.automatic; toggled => { root.automatic(root.entry.service, self.checked); } } }
-        Text { text: @tr("Public client ID"); color: #bac1d3; }
+        Text { text: @tr("Public client ID"); color: Theme.current.text_settings; }
         SettingsInput { changed has-focus => {root.input_focus(self.has-focus);} text <=> root.client; placeholder-text: @tr("Public client ID"); accessible-label: @tr("Public client ID"); }
-        Text { text: @tr("Registered redirect URL"); color: #bac1d3; }
+        Text { text: @tr("Registered redirect URL"); color: Theme.current.text_settings; }
         SettingsInput { changed has-focus => {root.input_focus(self.has-focus);} text <=> root.redirect; placeholder-text: @tr("Registered redirect URL"); accessible-label: @tr("Registered redirect URL"); }
         if !root.entry.signing_in: PillButton {
             label: root.entry.connected ? @tr("Reconnect") : @tr("Connect");
@@ -141,7 +142,7 @@ component AccountEditor inherits Rectangle {
         }
         if root.entry.signing_in: VerticalLayout {
             spacing: 8px;
-            Text { text: root.pin_sign_in ? @tr("Approve Nova in AniList, then copy the displayed token and paste it below.") : @tr("Finish sign-in in your browser. Paste the full return URL here if automatic return fails."); color: #bac1d3; wrap: word-wrap; min-width: 0; }
+            Text { text: root.pin_sign_in ? @tr("Approve Nova in AniList, then copy the displayed token and paste it below.") : @tr("Finish sign-in in your browser. Paste the full return URL here if automatic return fails."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0; }
             returned := SettingsInput { changed has-focus => {root.input_focus(self.has-focus);} placeholder-text: root.pin_sign_in ? @tr("AniList token") : @tr("Full return URL"); accessible-label: root.pin_sign_in ? @tr("AniList token") : @tr("Full return URL"); input-type: password; }
             PillButton { label: @tr("Finish sign-in"); primary: true; clicked => {root.complete(root.entry.service,returned.full-text);returned.text="";} }
             PillButton { label: @tr("Cancel sign-in"); clicked => {returned.text="";root.cancel(root.entry.service);} }
@@ -168,8 +169,8 @@ export component TrackingSettings inherits Rectangle {
     min-width: 0px;
     VerticalLayout {
         spacing: 14px;
-        Text { text: @tr("Sign-in is saved and shared with paired devices. Disconnect removes shared sign-in."); color: #bac1d3; wrap: word-wrap; min-width: 0; }
-        Text { text: root.notice; color: #d7cfff; wrap: word-wrap; min-width: 0; }
+        Text { text: @tr("Sign-in is saved and shared with paired devices. Disconnect removes shared sign-in."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0; }
+        Text { text: root.notice; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0; }
         for row in root.accounts: AccountEditor {
             entry: row;
             connect(service,client,redirect) => {root.connect(service,client,redirect);}
@@ -181,7 +182,7 @@ export component TrackingSettings inherits Rectangle {
         }
         PillButton {label:@tr("Reset local tracking");destructive:true;clicked => {root.reset_confirm=true;}}
         if root.reset_confirm: VerticalLayout {
-            Text {text:@tr("Reset all local links and queued updates? A recovery backup is retained. Nova history and remote tracker lists stay unchanged.");color:#bac1d3;wrap:word-wrap;min-width:0;}
+            Text {text:@tr("Reset all local links and queued updates? A recovery backup is retained. Nova history and remote tracker lists stay unchanged.");color:Theme.current.text_settings;wrap:word-wrap;min-width:0;}
             PillButton {label:@tr("Confirm tracking reset");destructive:true;clicked => {root.reset_confirm=false;root.reset();}}
             PillButton {label:@tr("Cancel");clicked => {root.reset_confirm=false;}}
         }
@@ -192,17 +193,17 @@ component EntryEditor inherits Rectangle {
     in property <TrackingLinkRow> entry;
     callback edit(string,string,int,string,bool,string,bool,string);
     callback action(string,int);
-    background: #19191f; border-radius: 8px; vertical-stretch: 0; min-width: 0;
+    background: Theme.current.tracking_mapping; border-radius: 8px; vertical-stretch: 0; min-width: 0;
     property <bool> editing: false;
     property <bool> more: false;
     property <bool> history_confirm: false;
     property <bool> unlink_confirm: false;
     VerticalLayout {
         padding: 12px; spacing: 8px;
-        Text { text: root.entry.title; color: #f2f2f4; wrap: word-wrap; min-width: 0; font-weight: 700; }
-        Text { text: root.entry.coverage; color: #c9c9d4; wrap: word-wrap; min-width: 0; }
-        Text { text: root.entry.state; color: #d7cfff; wrap: word-wrap; min-width: 0; }
-        Text { text: @tr("Progress") + ": " + root.entry.progress; color: #c9c9d4; }
+        Text { text: root.entry.title; color: Theme.current.text_tracking_primary; wrap: word-wrap; min-width: 0; font-weight: 700; }
+        Text { text: root.entry.coverage; color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0; }
+        Text { text: root.entry.state; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0; }
+        Text { text: @tr("Progress") + ": " + root.entry.progress; color: Theme.current.text_secondary; }
         if !root.editing: Button {text:@tr("More");clicked => {root.more=!root.more;}}
         if !root.editing && root.more: VerticalLayout {
             spacing: 6px;
@@ -213,29 +214,29 @@ component EntryEditor inherits Rectangle {
             Button { text: @tr("Edit alignment"); clicked => {root.action(root.entry.id,1);} }
             Button { text: @tr("Apply Nova history"); clicked => {root.history_confirm=true;root.unlink_confirm=false;} }
             if root.history_confirm: VerticalLayout {
-                Text {text:root.entry.history_preview; color:#c9c9d4; wrap:word-wrap; min-width:0;}
+                Text {text:root.entry.history_preview; color:Theme.current.text_secondary; wrap:word-wrap; min-width:0;}
                 Button {text:@tr("Confirm history update"); clicked => {root.action(root.entry.id,2);root.history_confirm=false;}}
                 Button {text:@tr("Cancel"); clicked => {root.history_confirm=false;}}
             }
             Button { text: @tr("Unlink"); clicked => {root.unlink_confirm=true;root.history_confirm=false;} }
             if root.unlink_confirm: VerticalLayout {
-                Text {text:@tr("Unlink this release? Unsent updates will be discarded when no other source uses it. An update already sent may finish.");color:#c9c9d4;wrap:word-wrap;min-width:0;}
+                Text {text:@tr("Unlink this release? Unsent updates will be discarded when no other source uses it. An update already sent may finish.");color:Theme.current.text_secondary;wrap:word-wrap;min-width:0;}
                 Button {text:@tr("Confirm unlink");clicked => {root.action(root.entry.id,3);root.unlink_confirm=false;}}
                 Button {text:@tr("Cancel");clicked => {root.unlink_confirm=false;}}
             }
         }
         if root.editing: VerticalLayout {
             spacing: 6px;
-            Text { text: @tr("Progress (explicit decreases are allowed)"); color: #c9c9d4; wrap: word-wrap; min-width: 0; }
+            Text { text: @tr("Progress (explicit decreases are allowed)"); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0; }
             progress := LineEdit { text:root.entry.progress; accessible-label:@tr("Tracker progress"); }
             status := ComboBox { model:root.entry.dates_writable ? [@tr("Planning"),@tr("Watching"),@tr("Completed"),@tr("On hold"),@tr("Dropped"),@tr("Repeating")] : [@tr("Planning"),@tr("Watching"),@tr("Completed"),@tr("On hold"),@tr("Dropped")]; current-index:root.entry.status; accessible-label:@tr("Tracker status"); }
-            Text { text:root.entry.score_hint; color:#c9c9d4; wrap:word-wrap; min-width:0; }
+            Text { text:root.entry.score_hint; color:Theme.current.text_secondary; wrap:word-wrap; min-width:0; }
             score := LineEdit { text:root.entry.score; accessible-label:@tr("Tracker score"); }
             started_check := CheckBox { text:@tr("Change start date"); enabled:root.entry.dates_writable; }
             started := LineEdit { text:root.entry.started; placeholder-text:@tr("YYYY-MM-DD, partial date, or empty to clear"); enabled:root.entry.dates_writable; accessible-label:@tr("Start date"); }
             completed_check := CheckBox { text:@tr("Change finish date"); enabled:root.entry.dates_writable; }
             completed := LineEdit { text:root.entry.completed; placeholder-text:@tr("YYYY-MM-DD, partial date, or empty to clear"); enabled:root.entry.dates_writable; accessible-label:@tr("Finish date"); }
-            if !root.entry.dates_writable: Text { text:@tr("MyAnimeList dates are read-only through its API."); color:#c9c9d4; wrap:word-wrap; min-width:0; }
+            if !root.entry.dates_writable: Text { text:@tr("MyAnimeList dates are read-only through its API."); color:Theme.current.text_secondary; wrap:word-wrap; min-width:0; }
             Button { text:@tr("Save tracker edits"); clicked => {root.edit(root.entry.id,progress.text,status.current-index,score.text,started_check.checked,started.text,completed_check.checked,completed.text);root.editing=false;} }
             Button { text:@tr("Cancel"); clicked => {root.editing=false;} }
         }
@@ -296,7 +297,7 @@ export component TrackingSheet inherits Rectangle {
     callback assign(int,string);
     callback edit(string,string,int,string,bool,string,bool,string);
     callback action(string,int);
-    visible:root.open; width:100%; height:100%; background:#000b;
+    visible:root.open; width:100%; height:100%; background:Theme.current.scrim_tracking;
     TouchArea { clicked => {root.close();} }
     Rectangle {
         // Center on desktop; anchor above system insets on phones. Only the
@@ -306,16 +307,16 @@ export component TrackingSheet inherits Rectangle {
         height: Math.min(820px, self.available-h);
         x: root.safe-left + (root.width - root.safe-left - root.safe-right - self.width) / 2;
         y: root.width < 700px ? root.height - root.safe-bottom - self.height : root.safe-top + (self.available-h - self.height) / 2 + 12px;
-        background:#0d1522; border-radius:20px;
+        background:Theme.current.tracking_panel; border-radius:20px;
         TouchArea { }
         FocusScope {
             width:100%;height:100%;
             key-pressed(e) => {if e.text==Key.Escape || e.text==Key.Back {if root.candidate_title != "" {root.cancel_adjust();} else {root.close();}accept} else {reject}}
         VerticalLayout {
             padding:16px; spacing:8px;
-            HorizontalLayout { alignment: center; Rectangle { width: 36px; height: 4px; border-radius: 2px; background: #3b4456; } }
+            HorizontalLayout { alignment: center; Rectangle { width: 36px; height: 4px; border-radius: 2px; background: Theme.current.tracking_handle; } }
             HorizontalLayout {
-                Text { text:@tr("Tracking"); color:#f2f2f4; font-weight:700; font-size:26px; vertical-alignment:center; }
+                Text { text:@tr("Tracking"); color:Theme.current.text_tracking_primary; font-weight:700; font-size:26px; vertical-alignment:center; }
                 if root.candidate_title != "": TrackingButton {text:@tr("Back to review");quiet:true;clicked => {root.cancel_adjust();}}
                 close_button := TrackingButton { width:44px; text:@tr("Close");icon:1;clicked => {root.close();} }
             }
@@ -324,8 +325,8 @@ export component TrackingSheet inherits Rectangle {
                 mouse-drag-pan-enabled:true;
                 VerticalLayout {
                     width:100%; spacing:8px;
-                    if root.notice != "": Text { text:root.notice; color:#b9c0d2; font-size:14px; wrap:word-wrap; min-width:0; vertical-stretch:0; }
-                    if root.busy: Text { text:@tr("Loading tracker…"); color:#c9c9d4; vertical-stretch:0; }
+                    if root.notice != "": Text { text:root.notice; color:Theme.current.text_episode_metadata; font-size:14px; wrap:word-wrap; min-width:0; vertical-stretch:0; }
+                    if root.busy: Text { text:@tr("Loading tracker…"); color:Theme.current.text_secondary; vertical-stretch:0; }
                     if !root.setup_active && root.candidate_title == "": VerticalLayout {
                     for row in root.links: EntryEditor {
                         entry:row;
@@ -333,35 +334,35 @@ export component TrackingSheet inherits Rectangle {
                         action(id,action) => {root.action(id,action);}
                     }
                     }
-                    if !root.setup_review: Text { text:root.setup_active ? @tr("Review setup") : @tr("Tracking service"); color:#f2f2f4; font-weight:700; vertical-stretch:0; }
-                    service := Dropdown { model:["MyAnimeList","AniList"]; roomy:true; current-index <=> root.selected_service; accessible-role:combobox; accessible-label:@tr("Tracking service"); enabled:!root.busy; border-radius:12px; background:#182131; border-color:#ffffff20; vertical-stretch:0; selected(_) => {root.query_text="";root.search(self.current-index,"");} }
+                    if !root.setup_review: Text { text:root.setup_active ? @tr("Review setup") : @tr("Tracking service"); color:Theme.current.text_tracking_primary; font-weight:700; vertical-stretch:0; }
+                    service := Dropdown { model:["MyAnimeList","AniList"]; roomy:true; current-index <=> root.selected_service; accessible-role:combobox; accessible-label:@tr("Tracking service"); enabled:!root.busy; border-radius:12px; background:Theme.current.tracking_service_control; border-color:Theme.current.border_overlay; vertical-stretch:0; selected(_) => {root.query_text="";root.search(self.current-index,"");} }
                     TrackingButton {text:@tr("Choose another release");icon:3;enabled:!root.busy;clicked => {root.manual_search=!root.manual_search;}}
                     if root.setup_active && root.candidate_title == "" && !root.manual_search: VerticalLayout {
                         spacing:6px; vertical-stretch:0;
-                        Text {text:root.setup_summary;color:#b9c0d2;font-size:14px;wrap:word-wrap;min-width:0;}
-                        if root.setup_unmapped != "": Text {text:root.setup_unmapped;color:#eab465;font-size:13px;wrap:word-wrap;min-width:0;}
+                        Text {text:root.setup_summary;color:Theme.current.text_episode_metadata;font-size:14px;wrap:word-wrap;min-width:0;}
+                        if root.setup_unmapped != "": Text {text:root.setup_unmapped;color:Theme.current.text_tracking_warning;font-size:13px;wrap:word-wrap;min-width:0;}
                         Rectangle {
-                            background:#111927;border-radius:16px;border-width:1px;border-color:#ffffff16;vertical-stretch:0;min-width:0;
+                            background:Theme.current.episode_toolbar;border-radius:16px;border-width:1px;border-color:Theme.current.border_medium;vertical-stretch:0;min-width:0;
                             VerticalLayout {
                                 padding:12px;spacing:12px;
                                 for release[index] in root.setup: VerticalLayout {
                                     spacing:6px;vertical-stretch:0;
-                                    if index > 0: Rectangle {height:1px;background:#ffffff16;}
+                                    if index > 0: Rectangle {height:1px;background:Theme.current.border_medium;}
                                     HorizontalLayout {
-                                        Text {text:release.season;color:#a477ff;font-size:14px;font-weight:600;wrap:word-wrap;min-width:0;vertical-alignment:center;}
+                                        Text {text:release.season;color:Theme.current.accent_vivid;font-size:14px;font-weight:600;wrap:word-wrap;min-width:0;vertical-alignment:center;}
                                         TrackingButton {width:76px;text:@tr("Adjust");quiet:true;enabled:!root.busy;clicked => {root.adjust_setup(index);}}
                                     }
-                                    Text {text:release.title;color:#f2f2f4;font-size:15px;font-weight:600;wrap:word-wrap;min-width:0;}
+                                    Text {text:release.title;color:Theme.current.text_tracking_primary;font-size:15px;font-weight:600;wrap:word-wrap;min-width:0;}
                                     if release.source_range != "" && release.target_range != "": HorizontalLayout {
                                         spacing:12px;
                                         MappingChip {numbers:release.source_range;caption:@tr("Episodes");}
-                                        Text {text:"→";color:#a6adc5;font-size:22px;vertical-alignment:center;horizontal-stretch:0;}
+                                        Text {text:"→";color:Theme.current.text_detail_tab;font-size:22px;vertical-alignment:center;horizontal-stretch:0;}
                                         MappingChip {numbers:release.target_range;caption:@tr("Tracker");}
                                     }
                                     // Coverage remains a truthful fallback for unnumbered source rows.
-                                    if release.source_range == "" || release.target_range == "": Text {text:release.coverage;color:#b9c0d2;font-size:13px;wrap:word-wrap;min-width:0;}
-                                    if release.reason!="": Text {text:release.reason;color:#9ca6b8;font-size:12px;wrap:word-wrap;min-width:0;}
-                                    if root.include_history: Text {text:release.history;color:#b9c0d2;font-size:12px;wrap:word-wrap;min-width:0;}
+                                    if release.source_range == "" || release.target_range == "": Text {text:release.coverage;color:Theme.current.text_episode_metadata;font-size:13px;wrap:word-wrap;min-width:0;}
+                                    if release.reason!="": Text {text:release.reason;color:Theme.current.text_detail_metadata;font-size:12px;wrap:word-wrap;min-width:0;}
+                                    if root.include_history: Text {text:release.history;color:Theme.current.text_episode_metadata;font-size:12px;wrap:word-wrap;min-width:0;}
                                 }
                             }
                         }
@@ -373,32 +374,32 @@ export component TrackingSheet inherits Rectangle {
                     if root.manual_search || (!root.setup_active && root.links.length == 0): VerticalLayout {
                     for candidate[index] in root.candidates: VerticalLayout {
                         vertical-stretch:0; spacing:4px;
-                        Text {text:candidate.title;color:#f2f2f4;wrap:word-wrap;min-width:0;}
+                        Text {text:candidate.title;color:Theme.current.text_tracking_primary;wrap:word-wrap;min-width:0;}
                         Button { text:@tr("Select release"); accessible-label:candidate.title; enabled:!root.busy; clicked => {root.pick(index);} }
-                        Text {text:candidate.reason;color:#d7cfff;wrap:word-wrap;min-width:0;}
-                        Text { text:candidate.detail; color:#c9c9d4; wrap:word-wrap; min-width:0; }
+                        Text {text:candidate.reason;color:Theme.current.text_tracking_notice;wrap:word-wrap;min-width:0;}
+                        Text { text:candidate.detail; color:Theme.current.text_secondary; wrap:word-wrap; min-width:0; }
                     }
                     }
                     if root.candidate_title != "": VerticalLayout {
                         spacing:6px; vertical-stretch:0;
-                        Text { text:root.candidate_title; color:#f2f2f4; wrap:word-wrap; min-width:0; font-weight:700; }
-                        Text { text:@tr("Check the episode range. Use individual assignments only when the numbering differs."); color:#c9c9d4; wrap:word-wrap; min-width:0; }
-                        Text { text:@tr("First source row"); color:#c9c9d4; }
+                        Text { text:root.candidate_title; color:Theme.current.text_tracking_primary; wrap:word-wrap; min-width:0; font-weight:700; }
+                        Text { text:@tr("Check the episode range. Use individual assignments only when the numbering differs."); color:Theme.current.text_secondary; wrap:word-wrap; min-width:0; }
+                        Text { text:@tr("First source row"); color:Theme.current.text_secondary; }
                         first := LineEdit { text <=> root.edit_first; accessible-label:@tr("First source row"); }
-                        Text { text:@tr("Last source row"); color:#c9c9d4; }
+                        Text { text:@tr("Last source row"); color:Theme.current.text_secondary; }
                         last := LineEdit { text <=> root.edit_last; accessible-label:@tr("Last source row"); }
-                        Text { text:@tr("First tracker episode"); color:#c9c9d4; }
+                        Text { text:@tr("First tracker episode"); color:Theme.current.text_secondary; }
                         offset := LineEdit { text <=> root.edit_start; accessible-label:@tr("First tracker episode"); }
                         Button { text:@tr("Preview alignment"); clicked => {root.preview(first.text,last.text,offset.text);} }
                         CheckBox {text:@tr("Edit individual episodes");checked <=> root.individual_mode;}
                         if root.individual_mode: VerticalLayout {
-                        Text {text:@tr("Adjust individual assignments below. Leave empty to exclude a source episode.");color:#c9c9d4;wrap:word-wrap;min-width:0;}
+                        Text {text:@tr("Adjust individual assignments below. Leave empty to exclude a source episode.");color:Theme.current.text_secondary;wrap:word-wrap;min-width:0;}
                         for mapping in root.mapping_rows: VerticalLayout {
                             spacing:4px;vertical-stretch:0;
-                            Text {text:mapping.label;color:#c9c9d4;wrap:word-wrap;min-width:0;}
+                            Text {text:mapping.label;color:Theme.current.text_secondary;wrap:word-wrap;min-width:0;}
                             LineEdit {text:mapping.target_episode;placeholder-text:@tr("Tracker episode or empty");accessible-label:mapping.label;edited(value) => {root.assign(mapping.source_row,value);}}
                         }
-                        for label in root.preview_rows: Text { text:label; color:#d7cfff; wrap:word-wrap; min-width:0; vertical-stretch:0; }
+                        for label in root.preview_rows: Text { text:label; color:Theme.current.text_tracking_notice; wrap:word-wrap; min-width:0; vertical-stretch:0; }
                         }
                         Button { text:root.setup_active ? @tr("Save adjustment") : @tr("Confirm alignment"); enabled:root.can_confirm && !root.busy; clicked => {root.confirm();} }
                     }

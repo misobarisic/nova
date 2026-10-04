@@ -57,9 +57,11 @@ review. Some differences are intentional and are recorded after the findings.
 
 ### Visual foundations
 
-- **Medium — There is no common palette or token layer for page styling.** The
-  18 Slint files contain 108 distinct color literals, including transparency
-  variants. Repeated roles are assigned locally in page and control files.
+- **Partially resolved 2026-10-04 — The initial theme palette centralizes colors
+  and effects.** `crates/ui/theme.slint` defines `Theme.current` for Home,
+  Detail, Settings, tracking, the player and shared controls, preserving their
+  existing shades and alpha values. Library and Discover page bodies remain
+  deferred until their redesigns. Typography and geometry remain local.
 - **Medium — Page backgrounds differ.** Settings uses `#0b0b0e`; the main
   browsing pages and Detail use `#0f0f12`. Decide whether these are surface
   levels or separate page themes.

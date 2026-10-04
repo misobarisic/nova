@@ -1,3 +1,4 @@
+import { Theme } from "theme.slint";
 import { ScrollView } from "std-widgets.slint";
 import { ContinueRow, UpcomingRow, CalCell, SheetItem } from "types.slint";
 import { MenuSheet } from "menusheet.slint";
@@ -14,13 +15,13 @@ component NextUpBadge inherits Rectangle {
     width: Math.min(root.available-width, badge_lbl.preferred-width + 16px);
     height: 22px;
     border-radius: 8px;
-    background: #8b5cf6;
+    background: Theme.current.accent;
 
     badge_lbl := Text {
         text: @tr("Next up");
         font-size: 11px;
         font-weight: 700;
-        color: #ffffff;
+        color: Theme.current.text_bright;
         width: Math.max(0px, root.width - 16px);
         overflow: elide;
         x: (parent.width - self.width) / 2;
@@ -35,13 +36,13 @@ component NewEpisodeBadge inherits Rectangle {
     width: Math.min(root.available-width, badge_lbl.preferred-width + 16px);
     height: 22px;
     border-radius: 8px;
-    background: #8b5cf6;
+    background: Theme.current.accent;
 
     badge_lbl := Text {
         text: @tr("New Episode");
         font-size: 11px;
         font-weight: 700;
-        color: #ffffff;
+        color: Theme.current.text_bright;
         width: Math.max(0px, root.width - 16px);
         overflow: elide;
         x: (parent.width - self.width) / 2;
@@ -56,10 +57,10 @@ component HomeEpisodeBadge inherits Rectangle {
     width: Math.min(root.available-width, badge_label.preferred-width + 14px);
     height: 20px;
     border-radius: 8px;
-    background: #080d17dd;
+    background: Theme.current.home_badge;
     badge_label := Text {
         x: 7px; width: Math.max(0px, parent.width - 14px); height: 100%;
-        text: root.label; color: #ffffff; font-size: 10px; font-weight: 700;
+        text: root.label; color: Theme.current.text_bright; font-size: 10px; font-weight: 700;
         vertical-alignment: center; overflow: elide;
     }
 }
@@ -249,10 +250,10 @@ component ContinueCard inherits Rectangle {
         lift := Rectangle {
             width: 100%;
             height: 100%;
-            background: #111827;
+            background: Theme.current.card;
             border-radius: 10px;
             border-width: root.focused ? 2px : 0px;
-            border-color: #8b5cf6;
+            border-color: Theme.current.focus_ring;
 
             // Lift on real pointer hover only: on touch `has-hover` is true for
             // the whole press, so lifting then would make the card under the
@@ -267,7 +268,7 @@ component ContinueCard inherits Rectangle {
                     height: root.card-width * 3 / 2;
                     border-radius: 10px;
                     clip: true;
-                    background: #1b2231;
+                    background: Theme.current.home_artwork_placeholder;
                     if root.entry.is_loaded: Image { source: root.entry.poster; image-fit: cover; width: 100%; height: 100%; }
                     if !root.entry.is_loaded: Text { text: "🎬"; font-size: 34px; horizontal-alignment: center; vertical-alignment: center; }
                     if root.entry.ep_no != "": HomeEpisodeBadge {
@@ -292,30 +293,30 @@ component ContinueCard inherits Rectangle {
                             horizontal-stretch: 1;
                             Rectangle {
                                 y: (parent.height - self.height) / 2; width: 100%; height: 5px;
-                                border-radius: 2.5px; background: #252b3a;
+                                border-radius: 2.5px; background: Theme.current.home_progress_track;
                                 Rectangle {
                                     x: 0px; width: parent.width * Math.max(0, Math.min(1, root.entry.progress)); height: 100%;
-                                    border-radius: 2.5px; background: @linear-gradient(90deg, #a855f7, #7c3aed);
+                                    border-radius: 2.5px; background: Theme.current.progress_fill;
                                 }
                             }
                         }
                         Text {
                             text: @tr("{}%", Math.round(Math.max(0, Math.min(1, root.entry.progress)) * 100));
-                            color: #c4c9d5; font-size: 10px; vertical-alignment: center;
+                            color: Theme.current.text_home_badge; font-size: 10px; vertical-alignment: center;
                         }
                     }
                     continue_title := Text {
                         x: 8px; y: root.entry.progress > 0 ? 24px : 8px;
                         width: parent.width - 16px; height: 34px;
                         text: root.entry.episode_title != "" ? root.entry.episode_title : root.entry.title;
-                        color: #eeeeF4; font-size: 12px; font-weight: 600;
+                        color: Theme.current.text_home_title; font-size: 12px; font-weight: 600;
                         vertical-alignment: top; wrap: word-wrap; overflow: elide;
                     }
                     continue_status := Text {
                         x: 8px; y: parent.height - 17px; width: parent.width - 16px; height: 14px;
                         text: root.entry.remaining != "" ? root.entry.remaining :
                             root.entry.episode_title != "" ? root.entry.title : root.entry.subtitle;
-                        color: #858d9f; font-size: 10px; vertical-alignment: center; overflow: elide;
+                        color: Theme.current.text_home_date; font-size: 10px; vertical-alignment: center; overflow: elide;
                     }
                 }
             }
@@ -428,10 +429,10 @@ component UpcomingCard inherits Rectangle {
         lift := Rectangle {
             width: 100%;
             height: 100%;
-            background: #111827;
+            background: Theme.current.card;
             border-radius: 10px;
             border-width: root.focused ? 2px : 0px;
-            border-color: #8b5cf6;
+            border-color: Theme.current.focus_ring;
 
             // See ContinueCard: hover lift must not fire while pressed, and is
             // pointer-only (touch platforms strand the flag).
@@ -442,7 +443,7 @@ component UpcomingCard inherits Rectangle {
                 spacing: 0px;
                 upcoming_artwork := Rectangle {
                     height: root.card-width * 3 / 2;
-                    border-radius: 10px; clip: true; background: #1b2231;
+                    border-radius: 10px; clip: true; background: Theme.current.home_artwork_placeholder;
                     if root.entry.is_loaded: Image { source: root.entry.poster; image-fit: cover; width: 100%; height: 100%; }
                     if !root.entry.is_loaded: Text { text: "🎬"; font-size: 34px; horizontal-alignment: center; vertical-alignment: center; }
                     if root.entry.ep_no != "": HomeEpisodeBadge {
@@ -456,18 +457,18 @@ component UpcomingCard inherits Rectangle {
                     upcoming_title := Text {
                         x: 8px; y: 8px; width: parent.width - 16px; height: 34px;
                         text: root.entry.episode_title != "" ? root.entry.episode_title : root.entry.title;
-                        color: #eeeef4; font-size: 12px; font-weight: 600;
+                        color: Theme.current.text_home_title; font-size: 12px; font-weight: 600;
                         vertical-alignment: top; wrap: word-wrap; overflow: elide;
                     }
                     // Keep the series identifiable when several shows share a rail.
                     Text {
                         x: 8px; y: 46px; width: parent.width - 16px; height: 14px;
                         text: root.entry.episode_title != "" ? root.entry.title : root.entry.subtitle;
-                        color: #a7aec0; font-size: 10px; overflow: elide;
+                        color: Theme.current.text_home_metadata; font-size: 10px; overflow: elide;
                     }
                     upcoming_date := Text {
                         x: 8px; y: parent.height - 22px; width: parent.width - 16px; height: 14px;
-                        text: root.entry.date; color: #858d9f; font-size: 10px;
+                        text: root.entry.date; color: Theme.current.text_home_date; font-size: 10px;
                         vertical-alignment: center; overflow: elide;
                     }
                 }
@@ -487,7 +488,7 @@ component SectionHeader inherits Rectangle {
     height: Math.max(36px, header_layout.preferred-height);
     vertical-stretch: 0;
     border-radius: 8px;
-    background: header_touch.has-hover ? #ffffff0a : transparent;
+    background: header_touch.has-hover ? Theme.current.hover_subtle : transparent;
     animate background { duration: Anim.hover_fast; }
 
     header_layout := HorizontalLayout {
@@ -500,7 +501,7 @@ component SectionHeader inherits Rectangle {
             text: root.title;
             font-size: 22px;
             font-weight: 700;
-            color: #ffffff;
+            color: Theme.current.text_bright;
             min-width: 0px;
             horizontal-stretch: 1;
             height: self.preferred-height;
@@ -512,7 +513,7 @@ component SectionHeader inherits Rectangle {
             horizontal-stretch: 0;
             max-width: self.preferred-width;
             font-size: 12px;
-            color: #c4c9d5;
+            color: Theme.current.text_home_badge;
             vertical-alignment: center;
         }
 
@@ -525,7 +526,7 @@ component SectionHeader inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: 20px;
                 height: 20px;
-                fill: #8a8a9a;
+                fill: Theme.current.text_muted;
             }
         }
     }
@@ -552,10 +553,10 @@ component CalDayCell inherits Rectangle {
     width: root.cell_width;
     height: 44px;
     border-radius: 10px;
-    background: root.cell.selected ? #8b5cf6 : (touch.has-hover ? #ffffff14 : transparent);
+    background: root.cell.selected ? Theme.current.accent : (touch.has-hover ? Theme.current.border_soft : transparent);
     animate background { duration: Anim.hover_fast; }
     border-width: root.kb_ring && root.cell.selected ? 2px : 0px;
-    border-color: #ffffff;
+    border-color: Theme.current.text_bright;
     opacity: root.cell.in_month ? 1.0 : 0.35;
 
     VerticalLayout {
@@ -566,7 +567,7 @@ component CalDayCell inherits Rectangle {
             text: "" + root.cell.day;
             font-size: 14px;
             font-weight: root.cell.selected ? 700 : 400;
-            color: root.cell.selected ? #ffffff : (root.cell.today ? #c4b5fd : #eeeeee);
+            color: root.cell.selected ? Theme.current.on_accent : (root.cell.today ? Theme.current.text_calendar_today : Theme.current.text_calendar_day);
             horizontal-alignment: center;
         }
 
@@ -577,7 +578,7 @@ component CalDayCell inherits Rectangle {
                 width: 6px;
                 height: 6px;
                 border-radius: 3px;
-                background: root.cell.selected ? #ffffff : #8b5cf6;
+                background: root.cell.selected ? Theme.current.on_accent : Theme.current.accent;
             }
         }
     }
@@ -607,8 +608,8 @@ component CalToggle inherits Rectangle {
     y: 2px;
     border-radius: 16px;
     border-width: 1px;
-    border-color: #2a2a33;
-    background: touch.has-hover ? #ffffff14 : #17171d;
+    border-color: Theme.current.calendar_border;
+    background: touch.has-hover ? Theme.current.border_soft : Theme.current.calendar_control;
     animate background { duration: Anim.hover_fast; }
 
     label := Text {
@@ -617,7 +618,7 @@ component CalToggle inherits Rectangle {
         text: root.open ? @tr("List") : @tr("Calendar");
         font-size: 13px;
         font-weight: 600;
-        color: #c4b5fd;
+        color: Theme.current.text_calendar_today;
     }
 
     touch := TouchArea {
@@ -639,10 +640,10 @@ component FeaturedActionButton inherits Rectangle {
     height: root.narrow ? 46px : 52px;
     border-radius: root.narrow ? 18px : 22px;
     background: action_touch.has-hover
-        ? @linear-gradient(110deg, #b079ff, #5657ef)
-        : @linear-gradient(110deg, #a15bff, #644bff, #443dcc);
+        ? Theme.current.primary_button_hover
+        : Theme.current.primary_button;
     border-width: 1px;
-    border-color: #b4a1ff70;
+    border-color: Theme.current.primary_button_border;
     animate background { duration: Anim.hover_fast; }
 
     HorizontalLayout {
@@ -654,13 +655,13 @@ component FeaturedActionButton inherits Rectangle {
             width: 20px; height: 100%;
             IcPlay {
                 y: (parent.height - self.height) / 2;
-                width: 20px; height: 20px; fill: #ffffff;
+                width: 20px; height: 20px; fill: Theme.current.on_accent;
             }
         }
         action_label := Text {
             text: root.label;
             font-size: root.narrow ? (root.compact ? 13px : 14px) : 16px;
-            font-weight: 600; color: #ffffff; vertical-alignment: center;
+            font-weight: 600; color: Theme.current.on_accent; vertical-alignment: center;
             min-width: 0px; overflow: elide;
         }
     }
@@ -703,26 +704,26 @@ component FeaturedBadge inherits Rectangle {
             width: 18px; height: 100%;
             if root.icon == 0: IcDisplay {
                 y: (parent.height - self.height) / 2;
-                width: 18px; height: 18px; fill: #a7aec0;
+                width: 18px; height: 18px; fill: Theme.current.text_home_metadata;
             }
             if root.icon == 1: IcStarBorder {
                 y: (parent.height - self.height) / 2;
-                width: 18px; height: 18px; fill: #a7aec0;
+                width: 18px; height: 18px; fill: Theme.current.text_home_metadata;
             }
             if root.icon == 2: IcSchedule {
                 y: (parent.height - self.height) / 2;
-                width: 18px; height: 18px; fill: #a7aec0;
+                width: 18px; height: 18px; fill: Theme.current.text_home_metadata;
             }
             if root.icon == 3: Path {
                 y: (parent.height - self.height) / 2;
-                width: 18px; height: 18px; fill: #a7aec0;
+                width: 18px; height: 18px; fill: Theme.current.text_home_metadata;
                 viewbox-width: 24; viewbox-height: 24;
                 commands: "M19 4h-1V2h-2v2H8V2H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2zM7 12h4v4H7z";
             }
         }
         badge_label := Text {
             text: root.label; font-size: root.narrow ? 12px : 15px;
-            color: #a7aec0; vertical-alignment: center;
+            color: Theme.current.text_home_metadata; vertical-alignment: center;
             min-width: 0px; overflow: elide;
         }
     }
@@ -736,7 +737,7 @@ component FeaturedPagerButton inherits Rectangle {
     width: root.narrow ? 46px : 44px;
     height: self.width;
     border-radius: 9px;
-    background: pager_touch.has-hover ? #ffffff18 : transparent;
+    background: pager_touch.has-hover ? Theme.current.hover_overlay : transparent;
     animate background { duration: Anim.hover_fast; }
 
     if !root.next: IcChevronLeft {
@@ -744,14 +745,14 @@ component FeaturedPagerButton inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: 24px;
         height: 24px;
-        fill: #f4f4f5;
+        fill: Theme.current.icon_home_pager;
     }
     if root.next: IcChevronRight {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 24px;
         height: 24px;
-        fill: #f4f4f5;
+        fill: Theme.current.icon_home_pager;
     }
     pager_touch := TouchArea {
         accessible-role: button;
@@ -794,12 +795,12 @@ component FeaturedCaption inherits VerticalLayout {
         text: root.slide.title; width: 100%; height: self.preferred-height; max-lines: 2;
         font-size: root.narrow ? (root.banner_width < 400px ? 30px : 36px)
             : Math.min(52px, Math.max(34px, root.banner_width * 0.04));
-        font-weight: 800; color: #ffffff; horizontal-alignment: left;
+        font-weight: 800; color: Theme.current.text_bright; horizontal-alignment: left;
         wrap: word-wrap; overflow: elide; min-width: 0px;
     }
     if root.slide.tagline != "": caption_tagline := Text {
         text: root.slide.tagline; width: 100%; height: self.preferred-height; max-lines: 2;
-        font-size: root.narrow ? 14px : 17px; color: #c4c9d5;
+        font-size: root.narrow ? 14px : 17px; color: Theme.current.text_home_badge;
         horizontal-alignment: left; wrap: word-wrap; overflow: elide; min-width: 0px;
     }
     caption_metadata := HorizontalLayout {
@@ -812,7 +813,7 @@ component FeaturedCaption inherits VerticalLayout {
     }
     if root.slide.description != "": caption_description := Text {
         text: root.slide.description; width: 100%; height: self.preferred-height; max-lines: 3;
-        font-size: root.narrow ? 14px : 16px; color: #bec3d2;
+        font-size: root.narrow ? 14px : 16px; color: Theme.current.text_description;
         horizontal-alignment: left; wrap: word-wrap; overflow: elide; min-width: 0px;
     }
 }
@@ -938,7 +939,7 @@ component FeaturedShowcase inherits Rectangle {
             + root.controls_height + 110px + root.safe-top);
     border-radius: 0px;
     clip: true;
-    background: #080f19;
+    background: Theme.current.artwork_canvas;
 
     Image {
         source: root.displayed_slide.backdrop;
@@ -950,7 +951,7 @@ component FeaturedShowcase inherits Rectangle {
     if root.fading && root.previous_slide.backdrop.width == 0: Rectangle {
         width: 100%;
         height: 100%;
-        background: #080f19;
+        background: Theme.current.artwork_canvas;
         opacity: 1.0 - root.mix;
     }
     Image {
@@ -964,12 +965,14 @@ component FeaturedShowcase inherits Rectangle {
     // a raster-sampling seam at the rows and the desktop navigation rail.
     Image {
         source: @image-url("../../assets/home-bottom-scrim.svg");
+        colorize: Theme.current.scrim_artwork;
         image-fit: fill;
         width: 100%;
         height: 100%;
     }
     if !root.narrow: Image {
         source: @image-url("../../assets/home-side-scrim.svg");
+        colorize: Theme.current.scrim_artwork;
         image-fit: fill;
         width: 100%;
         height: 100%;
@@ -1054,7 +1057,7 @@ component FeaturedShowcase inherits Rectangle {
             text: @tr("{} / {}", root.index + 1, root.count);
             horizontal-stretch: 1; horizontal-alignment: center;
             font-size: root.narrow ? 14px : 16px; font-weight: 600;
-            color: #e2e5ed; vertical-alignment: center;
+            color: Theme.current.text_home_type; vertical-alignment: center;
         }
         FeaturedPagerButton { next: true; narrow: root.narrow; stepped => { root.step(1); } }
     }
@@ -1615,7 +1618,7 @@ export component HomePage {
     Rectangle {
         width: 100%;
         height: 100%;
-        background: #080f19;
+        background: Theme.current.artwork_canvas;
 
         // 6-button scope: overlays the page without intercepting the mouse.
         nav_scope := FocusScope {
@@ -1784,7 +1787,7 @@ export component HomePage {
                                     Text {
                                         text: root.home_empty_hint;
                                         font-size: 14px;
-                                        color: #8a8a9a;
+                                        color: Theme.current.text_muted;
                                         horizontal-alignment: center;
                                         wrap: word-wrap;
                                         width: 100%;
@@ -1933,7 +1936,7 @@ export component HomePage {
                 sub_layer := Rectangle {
                     width: 100%;
                     height: 100%;
-                    background: #080f19;
+                    background: Theme.current.artwork_canvas;
                     x: root.view != 0 ? 0px : content_host.width;
                     opacity: root.view != 0 ? 1.0 : 0.0;
                     animate x { duration: Anim.transition_slide; easing: ease-out; }
@@ -1958,7 +1961,7 @@ export component HomePage {
                                 width: 36px;
                                 height: 36px;
                                 border-radius: 8px;
-                                background: back_touch.has-hover ? #ffffff14 : transparent;
+                                background: back_touch.has-hover ? Theme.current.border_soft : transparent;
                                 animate background { duration: Anim.hover_fast; }
 
                                 IcChevronLeft {
@@ -1966,7 +1969,7 @@ export component HomePage {
                                     y: (parent.height - self.height) / 2;
                                     width: 22px;
                                     height: 22px;
-                                    fill: #ffffff;
+                                    fill: Theme.current.text_bright;
                                 }
 
                                 back_touch := TouchArea {
@@ -1990,7 +1993,7 @@ export component HomePage {
                                 text: root.view == 2 ? @tr("Upcoming") : @tr("Continue Watching");
                                 font-size: 22px;
                                 font-weight: 700;
-                                color: #ffffff;
+                                color: Theme.current.text_bright;
                                 vertical-alignment: center;
                                 min-width: 0px;
                                 max-width: self.preferred-width;
@@ -2002,7 +2005,7 @@ export component HomePage {
                             Text {
                                 text: "(" + (root.view == 2 ? root.upcoming_rows.length : root.continue_rows.length) + ")";
                                 font-size: 14px;
-                                color: #6c6c7d;
+                                color: Theme.current.text_hint;
                                 vertical-alignment: center;
                             }
 
@@ -2029,7 +2032,7 @@ export component HomePage {
                             }
                         }
 
-                        Rectangle { height: 1px; background: #23232b; }
+                        Rectangle { height: 1px; background: Theme.current.home_divider; }
 
                         Rectangle {
                             vertical-stretch: 1;
@@ -2167,7 +2170,7 @@ export component HomePage {
                                                 width: 32px;
                                                 height: 32px;
                                                 border-radius: 8px;
-                                                background: cal_prev_touch.has-hover ? #ffffff14 : transparent;
+                                                background: cal_prev_touch.has-hover ? Theme.current.border_soft : transparent;
                                                 animate background { duration: Anim.hover_fast; }
 
                                                 IcChevronLeft {
@@ -2175,7 +2178,7 @@ export component HomePage {
                                                     y: (parent.height - self.height) / 2;
                                                     width: 20px;
                                                     height: 20px;
-                                                    fill: #ffffff;
+                                                    fill: Theme.current.text_bright;
                                                 }
 
                                                 cal_prev_touch := TouchArea {
@@ -2190,7 +2193,7 @@ export component HomePage {
                                                 text: root.cal_title;
                                                 font-size: 16px;
                                                 font-weight: 700;
-                                                color: #ffffff;
+                                                color: Theme.current.text_bright;
                                                 vertical-alignment: center;
                                                 horizontal-alignment: center;
                                                 horizontal-stretch: 1;
@@ -2200,7 +2203,7 @@ export component HomePage {
                                                 width: 32px;
                                                 height: 32px;
                                                 border-radius: 8px;
-                                                background: cal_next_touch.has-hover ? #ffffff14 : transparent;
+                                                background: cal_next_touch.has-hover ? Theme.current.border_soft : transparent;
                                                 animate background { duration: Anim.hover_fast; }
 
                                                 IcChevronRight {
@@ -2208,7 +2211,7 @@ export component HomePage {
                                                     y: (parent.height - self.height) / 2;
                                                     width: 20px;
                                                     height: 20px;
-                                                    fill: #ffffff;
+                                                    fill: Theme.current.text_bright;
                                                 }
 
                                                 cal_next_touch := TouchArea {
@@ -2229,7 +2232,7 @@ export component HomePage {
                                                 text: wd;
                                                 font-size: 11px;
                                                 font-weight: 600;
-                                                color: #6c6c7d;
+                                                color: Theme.current.text_hint;
                                                 horizontal-alignment: center;
                                                 horizontal-stretch: 1;
                                             }
@@ -2284,7 +2287,7 @@ export component HomePage {
                                         if root.cal_day_rows.length == 0: Text {
                                             text: @tr("No episodes on this day.");
                                             font-size: 13px;
-                                            color: #8a8a9a;
+                                            color: Theme.current.text_muted;
                                             horizontal-alignment: center;
                                             width: 100%;
                                         }
@@ -2322,7 +2325,7 @@ export component HomePage {
         // lands under it.
         if !root.narrow: rail := SideNav {
             viewport-width: root.nav-viewport-width;
-            panel-background: #080f19;
+            panel-background: Theme.current.artwork_canvas;
             active: 0;
             safe-top: root.safe-top;
             safe-left: root.safe-left;

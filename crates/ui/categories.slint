@@ -1,3 +1,4 @@
+import { Theme } from "theme.slint";
 import { Button, ScrollView } from "std-widgets.slint";
 import { CategoryRow } from "types.slint";
 import { KbMark } from "kbnav.slint";
@@ -37,7 +38,7 @@ export component CategoryPickerPopup {
     Rectangle {
         width: 100%;
         height: 100%;
-        background: #000000a0;
+        background: Theme.current.scrim_category;
 
         nav_scope := FocusScope {
             width: 100%;
@@ -106,7 +107,7 @@ export component CategoryPickerPopup {
             // Bound the card to a concrete height so its content (and the
             // header's Done button) can never stretch it to full window.
             height: min(parent.height - 40px, 200px);
-            background: #18181c;
+            background: Theme.current.category_panel;
             border-radius: 14px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
@@ -125,7 +126,7 @@ export component CategoryPickerPopup {
                         text: @tr("Assign categories");
                         font-size: 16px;
                         font-weight: 700;
-                        color: #ffffff;
+                        color: Theme.current.text_bright;
                         horizontal-stretch: 1;
                         overflow: elide;
                         vertical-alignment: center;
@@ -145,15 +146,15 @@ export component CategoryPickerPopup {
                 Text {
                     text: root.selected_title;
                     font-size: 11px;
-                    color: #8a8a9a;
+                    color: Theme.current.text_muted;
                     overflow: elide;
                 }
 
-                Rectangle { height: 1px; background: #26262e; }
+                Rectangle { height: 1px; background: Theme.current.popup_divider; }
 
                 if root.category_rows.length == 0: Text {
                     text: @tr("No categories yet — add them in Settings → Categories, then come back to tag this item.");
-                    color: #8a8a9a;
+                    color: Theme.current.text_muted;
                     font-size: 13px;
                     wrap: word-wrap;
                 }
@@ -174,9 +175,9 @@ export component CategoryPickerPopup {
                             col: Math.mod(i, root.chip_cols);
                             height: root.width < 430px ? 44px : 30px;
                             border-radius: root.width < 430px ? 22px : 15px;
-                            background: chip_touch.has-hover ? (root.modal_category_flags[i] ? #7c4df0 : #2b2b35) : (root.modal_category_flags[i] ? #8b5cf6 : #232330);
+                            background: chip_touch.has-hover ? (root.modal_category_flags[i] ? Theme.current.accent_pressed : Theme.current.control_hover) : (root.modal_category_flags[i] ? Theme.current.accent : Theme.current.control);
                             border-width: root.kb_active && root.kb_zone == 0 && root.kb_idx == i ? 2px : 0px;
-                            border-color: #ffffff;
+                            border-color: Theme.current.text_bright;
 
                             HorizontalLayout {
                                 padding-left: 10px;
@@ -194,14 +195,14 @@ export component CategoryPickerPopup {
                                             x: (parent.width - self.width) / 2;
                                             width: 12px;
                                             height: 12px;
-                                            fill: #ffffff;
+                                            fill: Theme.current.text_bright;
                                         }
                                     }
                                 }
 
                                 Text {
                                     text: cat.name;
-                                    color: root.modal_category_flags[i] ? #ffffff : #e6e6ea;
+                                    color: root.modal_category_flags[i] ? Theme.current.on_accent : Theme.current.text_primary;
                                     font-size: 12px;
                                     font-weight: root.modal_category_flags[i] ? 600 : 400;
                                     vertical-alignment: center;

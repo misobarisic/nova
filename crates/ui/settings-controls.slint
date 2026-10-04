@@ -1,3 +1,4 @@
+import { Theme } from "theme.slint";
 import { SearchField } from "searchfield.slint";
 import { IcExtension, IcTag, IcImage, IcDisplay, IcPlay, IcChevronLeft, IcChevronRight, IcSettingsGear, IcSync, IcDelete, IcHome, IcVideoLibrary } from "icons.slint";
 import { KbMark } from "kbnav.slint";
@@ -31,16 +32,16 @@ export component PillButton inherits Rectangle {
     height: 44px;
     border-radius: 8px;
     border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;
-    border-color: #8b5cf6;
-    background: root.destructive ? (touch.has-hover ? #492936 : #30202c) : touch.has-hover
-    ? (primary ? #9165f7 : #28334a)
-    : (primary ? #8b5cf6 : #1b2538);
+    border-color: Theme.current.focus_ring;
+    background: root.destructive ? (touch.has-hover ? Theme.current.destructive_control_hover : Theme.current.destructive_control) : touch.has-hover
+    ? (primary ? Theme.current.accent_hover : Theme.current.settings_control_hover)
+    : (primary ? Theme.current.accent : Theme.current.settings_control);
     animate background { duration: Anim.hover_fast; }
 
     pill_lbl := Text {
         text: label;
         font-size: 13px;
-        color: root.destructive ? #fda4af : (primary ? #ffffff : #bac1d3);
+        color: root.destructive ? Theme.current.text_destructive : (primary ? Theme.current.on_accent : Theme.current.text_settings);
         vertical-alignment: center;
     }
 
@@ -89,7 +90,7 @@ export component ToggleSwitch inherits Rectangle {
     width: 44px;
     height: 44px;
     border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;
-    border-color: #8b5cf6;
+    border-color: Theme.current.focus_ring;
     border-radius: 6px;
 
     Rectangle {
@@ -98,8 +99,8 @@ export component ToggleSwitch inherits Rectangle {
         height: 24px;
         border-radius: 12px;
         border-width: 1px;
-        border-color: checked ? #a89af5 : #ffffff20;
-        background: checked ? #a89af5 : #1b2538;
+        border-color: checked ? Theme.current.accent_soft : Theme.current.border_overlay;
+        background: checked ? Theme.current.accent_soft : Theme.current.settings_control;
         animate background { duration: Anim.hover_fast; }
 
         knob := Rectangle {
@@ -108,7 +109,7 @@ export component ToggleSwitch inherits Rectangle {
             width: 18px;
             height: 18px;
             border-radius: 9px;
-            background: checked ? #14141a : #d9d9e2;
+            background: checked ? Theme.current.toggle_knob_active : Theme.current.toggle_knob;
             animate x { duration: Anim.hover_fast; }
         }
     }
@@ -164,8 +165,8 @@ export component AddonIconButton inherits Rectangle {
     height: 44px;
     border-radius: 16px;
     border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;
-    border-color: #8b5cf6;
-    background: root.destructive ? (touch.has-hover ? #492936 : #30202c) : (touch.has-hover ? #28334a : #1b2538);
+    border-color: Theme.current.focus_ring;
+    background: root.destructive ? (touch.has-hover ? Theme.current.destructive_control_hover : Theme.current.destructive_control) : (touch.has-hover ? Theme.current.settings_control_hover : Theme.current.settings_control);
     animate background { duration: Anim.hover_fast; }
     accessible-role: button;
     accessible-label: root.name;
@@ -224,7 +225,7 @@ export component AddonRowCard inherits Rectangle {
     callback move_up();
     callback move_down();
 
-    background: #111827;
+    background: Theme.current.card;
 
     VerticalLayout {
         padding-top: 12px;
@@ -257,7 +258,7 @@ export component AddonRowCard inherits Rectangle {
                 text: root.title;
                 font-size: 16px;
                 font-weight: 600;
-                color: #ffffff;
+                color: Theme.current.text_bright;
                 horizontal-stretch: 1;
                 vertical-stretch: 1;
                 vertical-alignment: center;
@@ -273,7 +274,7 @@ export component AddonRowCard inherits Rectangle {
                 Text {
                     text: "↑";
                     font-size: 18px;
-                    color: #bac1d3;
+                    color: Theme.current.text_settings;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -287,7 +288,7 @@ export component AddonRowCard inherits Rectangle {
                 Text {
                     text: "↓";
                     font-size: 18px;
-                    color: #bac1d3;
+                    color: Theme.current.text_settings;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -309,7 +310,7 @@ export component AddonRowCard inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     width: 22px;
                     height: 22px;
-                    fill: #bac1d3;
+                    fill: Theme.current.text_settings;
                 }
             }
 
@@ -331,7 +332,7 @@ export component AddonRowCard inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     width: 22px;
                     height: 22px;
-                    fill: #bac1d3;
+                    fill: Theme.current.text_settings;
                 }
             }
 
@@ -345,7 +346,7 @@ export component AddonRowCard inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     width: 22px;
                     height: 22px;
-                    fill: #bac1d3;
+                    fill: Theme.current.text_settings;
                 }
             }
         }
@@ -364,7 +365,7 @@ export component MiniSlider inherits Rectangle {
     callback changed(float);
     height: 44px;
     border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;
-    border-color: #8b5cf6;
+    border-color: Theme.current.focus_ring;
     border-radius: 6px;
 
     property <float> span: Math.max(maximum - minimum, 0.001);
@@ -376,14 +377,14 @@ export component MiniSlider inherits Rectangle {
         y: (parent.height - 4px) / 2;
         height: 4px;
         border-radius: 2px;
-        background: #2e2e38;
+        background: Theme.current.slider_track;
 
         Rectangle {
             x: 0;
             width: root.pct * parent.width;
             height: 100%;
             border-radius: 2px;
-            background: #a89af5;
+            background: Theme.current.accent_soft;
         }
     }
 
@@ -393,7 +394,7 @@ export component MiniSlider inherits Rectangle {
         width: 14px;
         height: 14px;
         border-radius: 7px;
-        background: #a89af5;
+        background: Theme.current.accent_soft;
     }
 
     key_focus := FocusScope {
@@ -454,14 +455,14 @@ export component Segmented inherits HorizontalLayout {
         height: 44px;
         border-radius: 8px;
         border-width: root.enabled && SettingsStyle.keyboard-mode && ((root.focused && root.current_index == i) || segment_focus.has-focus) ? 2px : 0px;
-        border-color: #8b5cf6;
-        background: root.current_index == i ? #443e66 : transparent;
+        border-color: Theme.current.focus_ring;
+        background: root.current_index == i ? Theme.current.selection_fill : transparent;
         animate background { duration: Anim.hover_fast; }
 
         seg_lbl := Text {
             text: opt;
             font-size: 13px;
-            color: root.current_index == i ? #e6e0ff : #bac1d3;
+            color: root.current_index == i ? Theme.current.text_selected : Theme.current.text_settings;
             vertical-alignment: center;
         }
 
@@ -512,56 +513,56 @@ export component SectionHeader inherits HorizontalLayout {
             y: (parent.height - self.height) / 2;
             width: 20px;
             height: 20px;
-            fill: #a89af5;
+            fill: Theme.current.accent_soft;
         }
         if icon-kind == 2: IcTag {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 20px;
             height: 20px;
-            fill: #a89af5;
+            fill: Theme.current.accent_soft;
         }
         if icon-kind == 3: IcImage {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 20px;
             height: 20px;
-            fill: #a89af5;
+            fill: Theme.current.accent_soft;
         }
         if icon-kind == 4: IcDisplay {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 20px;
             height: 20px;
-            fill: #a89af5;
+            fill: Theme.current.accent_soft;
         }
         if icon-kind == 5: IcPlay {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 20px;
             height: 20px;
-            fill: #a89af5;
+            fill: Theme.current.accent_soft;
         }
         if icon-kind == 6: IcSettingsGear {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 20px;
             height: 20px;
-            fill: #a89af5;
+            fill: Theme.current.accent_soft;
         }
         if icon-kind == 7: IcSync {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 20px;
             height: 20px;
-            fill: #a89af5;
+            fill: Theme.current.accent_soft;
         }
         if icon-kind == 8: IcImage {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 20px;
             height: 20px;
-            fill: #a89af5;
+            fill: Theme.current.accent_soft;
         }
     }
 
@@ -570,7 +571,7 @@ export component SectionHeader inherits HorizontalLayout {
         font-size: 16px;
         font-weight: 600;
         letter-spacing: 0px;
-        color: #bac1d3;
+        color: Theme.current.text_settings;
         vertical-alignment: center;
     }
 }
@@ -582,7 +583,7 @@ export component SettingsRow inherits Rectangle {
     in property <string> row-desc: "";
     in property <bool> tinted: false;
     in property <length> row-min-height: 64px;
-    background: #111827;
+    background: Theme.current.card;
 
     property <length> inner-width: Math.max(0px, self.width - 32px);
     property <length> control-width: controls.preferred-width;
@@ -612,7 +613,7 @@ export component SettingsRow inherits Rectangle {
     : Math.max(root.text-height, root.control-height))
     );
 
-    Rectangle { x: 16px; y: parent.height - 1px; width: Math.max(0px, parent.width - 32px); height: 1px; background: #ffffff0c; }
+    Rectangle { x: 16px; y: parent.height - 1px; width: Math.max(0px, parent.width - 32px); height: 1px; background: Theme.current.border_subtle; }
 
     title_col := VerticalLayout {
         x: 16px;
@@ -628,7 +629,7 @@ export component SettingsRow inherits Rectangle {
             text: row-title;
             font-size: 16px;
             font-weight: 600;
-            color: #ffffff;
+            color: Theme.current.text_bright;
             // min-width: 0 lets the column shrink past a long unbreakable token
             // (an addon URL, a slug) without widening the settings page.
             min-width: 0px;
@@ -638,7 +639,7 @@ export component SettingsRow inherits Rectangle {
         if row-desc != "": Text {
             text: row-desc;
             font-size: 14px;
-            color: #bac1d3;
+            color: Theme.current.text_settings;
             min-width: 0px;
             wrap: word-wrap;
         }
@@ -700,13 +701,13 @@ export component ValueBox inherits Rectangle {
     height: 30px;
     border-radius: 8px;
     border-width: 1px;
-    border-color: #ffffff20;
-    background: #111827;
+    border-color: Theme.current.border_overlay;
+    background: Theme.current.card;
 
     Text {
         text: text;
         font-size: 13px;
-        color: #ffffff;
+        color: Theme.current.text_bright;
         vertical-alignment: center;
         horizontal-alignment: center;
     }
@@ -742,8 +743,8 @@ export component SettingsLink inherits Rectangle {
     }
     border-radius: 8px;
     border-width: SettingsStyle.keyboard-mode && (root.focused || link_focus.has-focus) ? 2px : 0px;
-    border-color: #8b5cf6;
-    background: root.selected ? #8b5cf622 : (touch.has-hover && interactive ? #1b2538 : #111827);
+    border-color: Theme.current.focus_ring;
+    background: root.selected ? Theme.current.settings_selected_wash : (touch.has-hover && interactive ? Theme.current.settings_control : Theme.current.card);
     animate background { duration: Anim.hover_fast; }
 
     HorizontalLayout {
@@ -764,68 +765,68 @@ export component SettingsLink inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: 20px;
                 height: 20px;
-                fill: #a89af5;
+                fill: Theme.current.accent_soft;
             }
             if root.icon-kind == 1: IcTag {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 20px;
                 height: 20px;
-                fill: #a89af5;
+                fill: Theme.current.accent_soft;
             }
             if root.icon-kind == 2: IcImage {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 20px;
                 height: 20px;
-                fill: #a89af5;
+                fill: Theme.current.accent_soft;
             }
             if root.icon-kind == 3: IcDisplay {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 20px;
                 height: 20px;
-                fill: #a89af5;
+                fill: Theme.current.accent_soft;
             }
             if root.icon-kind == 4: IcTag {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 20px;
                 height: 20px;
-                fill: #a89af5;
+                fill: Theme.current.accent_soft;
             }
             if root.icon-kind == 5: IcPlay {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 20px;
                 height: 20px;
-                fill: #a89af5;
+                fill: Theme.current.accent_soft;
             }
             if root.icon-kind == 6: IcSettingsGear {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 20px;
                 height: 20px;
-                fill: #a89af5;
+                fill: Theme.current.accent_soft;
             }
-            if root.icon-kind == 13: IcHome { x: 7px; y: 7px; width: 20px; height: 20px; fill: #a89af5; }
-            if root.icon-kind == 6 || root.icon-kind == 10: IcSettingsGear { x: 7px; y: 7px; width: 20px; height: 20px; fill: #a89af5; }
-            if root.icon-kind == 9: IcVideoLibrary { x: 7px; y: 7px; width: 20px; height: 20px; fill: #a89af5; }
-            if root.icon-kind == 11: IcTag { x: 7px; y: 7px; width: 20px; height: 20px; fill: #a89af5; }
-            if root.icon-kind == 12: IcSync { x: 7px; y: 7px; width: 20px; height: 20px; fill: #a89af5; }
+            if root.icon-kind == 13: IcHome { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
+            if root.icon-kind == 6 || root.icon-kind == 10: IcSettingsGear { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
+            if root.icon-kind == 9: IcVideoLibrary { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
+            if root.icon-kind == 11: IcTag { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
+            if root.icon-kind == 12: IcSync { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
             if root.icon-kind == 7: IcSync {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 20px;
                 height: 20px;
-                fill: #a89af5;
+                fill: Theme.current.accent_soft;
             }
             if root.icon-kind == 8: IcImage {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 20px;
                 height: 20px;
-                fill: #a89af5;
+                fill: Theme.current.accent_soft;
             }
         }
 
@@ -839,7 +840,7 @@ export component SettingsLink inherits Rectangle {
                 text: root.title;
                 font-size: 16px;
                 font-weight: 600;
-                color: #ffffff;
+                color: Theme.current.text_bright;
                 wrap: word-wrap;
                 min-width: 0px;
             }
@@ -847,7 +848,7 @@ export component SettingsLink inherits Rectangle {
             if root.subtitle != "": Text {
                 text: root.subtitle;
                 font-size: 14px;
-                color: #bac1d3;
+                color: Theme.current.text_settings;
                 wrap: word-wrap;
                 min-width: 0px;
             }
@@ -862,7 +863,7 @@ export component SettingsLink inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: 18px;
                 height: 18px;
-                fill: #6c6c7a;
+                fill: Theme.current.settings_icon_muted;
             }
         }
     }
@@ -902,7 +903,7 @@ export global SettingsStyle {
     in-out property <int> focus-request: 0;
 }
 export component SettingsCard inherits Rectangle {
-    background: #111827; border-radius: 16px; border-width: 1px; border-color: #ffffff14;
+    background: Theme.current.card; border-radius: 16px; border-width: 1px; border-color: Theme.current.border_soft;
     vertical-stretch: 0; clip: true;
     VerticalLayout { spacing: 0px; @children }
 }
@@ -968,12 +969,12 @@ export component SettingsHeader inherits Rectangle {
             spacing: 12px;
             if !root.overview: Rectangle {
                 width: 44px; height: 44px; border-radius: 22px;
-                background: back_touch.has-hover ? #28334a : #1b2538;
+                background: back_touch.has-hover ? Theme.current.settings_control_hover : Theme.current.settings_control;
                 border-width: back_focus.has-focus && SettingsStyle.keyboard-mode ? 2px : 0px;
-                border-color: #8b5cf6;
+                border-color: Theme.current.focus_ring;
                 accessible-role: button; accessible-label: @tr("Back");
                 forward-focus: back_focus;
-                IcChevronLeft { width: 20px; height: 20px; x: 12px; y: 12px; fill: #bac1d3; }
+                IcChevronLeft { width: 20px; height: 20px; x: 12px; y: 12px; fill: Theme.current.text_settings; }
                 back_focus := FocusScope {
                     key-pressed(e) => {
                         SettingsStyle.keyboard-mode = true;
@@ -982,9 +983,9 @@ export component SettingsHeader inherits Rectangle {
                 }
                 back_touch := TouchArea { width: 100%; height: 100%; mouse-cursor: pointer; clicked => { SettingsStyle.keyboard-mode = false; root.back(); } }
             }
-            Text { text: root.title; font-size: root.overview ? 32px : 24px; font-weight: 700; color: #ffffff; wrap: word-wrap; min-width: 0px; vertical-alignment: center; }
+            Text { text: root.title; font-size: root.overview ? 32px : 24px; font-weight: 700; color: Theme.current.text_bright; wrap: word-wrap; min-width: 0px; vertical-alignment: center; }
         }
-        Text { text: root.introduction; font-size: 14px; color: #bac1d3; wrap: word-wrap; min-width: 0px; }
+        Text { text: root.introduction; font-size: 14px; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
     }
 }
 
@@ -993,7 +994,7 @@ export component SettingsInput inherits SearchField {
     roomy: true;
     show-pointer-focus: false;
     keyboard-mode: SettingsStyle.keyboard-mode;
-    background: #1b2538;
+    background: Theme.current.settings_control;
     property <bool> focus-visible: root.has-focus && SettingsStyle.keyboard-mode;
     changed focus-visible => {
         if (self.focus-visible) {

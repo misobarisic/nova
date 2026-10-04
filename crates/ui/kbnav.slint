@@ -1,3 +1,4 @@
+import { Theme } from "theme.slint";
 // Shared bits for 6-button navigation (arrow keys + Enter + Backspace).
 //
 // Pages keep an explicit keyboard focus (zone + index properties) instead of
@@ -13,7 +14,7 @@ export component KbMark inherits Text {
     in property <bool> active: true;
     text: "▶";
     font-size: 12px;
-    color: on && active ? #8b5cf6 : transparent;
+    color: on && active ? Theme.current.focus_ring : transparent;
     vertical-alignment: center;
     width: on && active ? 18px : 0px;
     horizontal-alignment: center;

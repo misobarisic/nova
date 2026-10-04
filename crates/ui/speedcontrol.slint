@@ -1,3 +1,4 @@
+import { Theme } from "theme.slint";
 // Shared playback-rate control.
 //
 // Settings → Player and the player's own settings panel both edit the same
@@ -38,15 +39,15 @@ component SpeedStepButton inherits Rectangle {
     width: root.roomy ? 44px : 32px;
     height: root.roomy ? 44px : 32px;
     border-radius: 8px;
-    background: step_touch.has-hover ? #2b2b35 : #232330;
+    background: step_touch.has-hover ? Theme.current.control_hover : Theme.current.control;
     border-width: focus.has-focus && root.keyboard-mode ? 2px : 1px;
-    border-color: focus.has-focus && root.keyboard-mode ? #8b5cf6 : #33333d;
+    border-color: focus.has-focus && root.keyboard-mode ? Theme.current.focus_ring : Theme.current.step_border;
     accessible-role: button;
     accessible-label: root.name;
 
     Text {
         text: root.glyph;
-        color: #e6e6ea;
+        color: Theme.current.text_primary;
         font-size: 17px;
         font-weight: 700;
         horizontal-alignment: center;
@@ -81,13 +82,13 @@ component SpeedPreset inherits Rectangle {
     horizontal-stretch: 1;
     height: root.roomy ? 44px : 28px;
     border-radius: 8px;
-    background: root.selected ? #443e66 : (preset_touch.has-hover ? #2b2b35 : #232330);
+    background: root.selected ? Theme.current.selection_fill : (preset_touch.has-hover ? Theme.current.control_hover : Theme.current.control);
     border-width: focus.has-focus && root.keyboard-mode ? 2px : 1px;
-    border-color: root.selected ? #8b5cf6 : #33333d;
+    border-color: root.selected ? Theme.current.accent : Theme.current.step_border;
 
     Text {
         text: root.label;
-        color: root.selected ? #e6e0ff : #e6e6ea;
+        color: root.selected ? Theme.current.text_selected : Theme.current.text_primary;
         font-size: 12px;
         font-weight: 600;
         horizontal-alignment: center;
@@ -168,7 +169,7 @@ export component SpeedControl inherits Rectangle {
                 horizontal-stretch: 1;
                 height: root.roomy ? 44px : 32px;
                 border-width: root.focused || (slider_focus.has-focus && root.keyboard-mode) ? 2px : 0px;
-                border-color: #8b5cf6;
+                border-color: Theme.current.focus_ring;
                 border-radius: 6px;
 
                 property <float> pct: Math.clamp(
@@ -180,14 +181,14 @@ export component SpeedControl inherits Rectangle {
                     y: (parent.height - 4px) / 2;
                     height: 4px;
                     border-radius: 2px;
-                    background: #2e2e38;
+                    background: Theme.current.slider_track;
 
                     Rectangle {
                         x: 0;
                         width: slider.pct * parent.width;
                         height: 100%;
                         border-radius: 2px;
-                        background: #a89af5;
+                        background: Theme.current.accent_soft;
                     }
                 }
 
@@ -197,7 +198,7 @@ export component SpeedControl inherits Rectangle {
                     width: 14px;
                     height: 14px;
                     border-radius: 7px;
-                    background: #a89af5;
+                    background: Theme.current.accent_soft;
                 }
 
                 forward-focus: slider_focus;
@@ -242,7 +243,7 @@ export component SpeedControl inherits Rectangle {
                 width: 52px;
                 height: root.roomy ? 44px : 32px;
                 text: PlaybackSpeed.label(root.speed);
-                color: #e6e6ea;
+                color: Theme.current.text_primary;
                 font-size: 13px;
                 font-weight: 600;
                 vertical-alignment: center;
