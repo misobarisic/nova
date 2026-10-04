@@ -27,6 +27,7 @@ it is stored or synced. Code: `src/app/library.rs`, `src/app/episodes.rs`
 - **Add**: detail-page bookmark. Stores id, type, name, year, poster/backdrop
   URLs, genres, description, plus empty categories, `Auto` status and an
   added timestamp.
+- **Possible duplicates**: adding a different ID with the same name after case/punctuation normalization opens a poster-card dialog. Suggestions include all saved entries of the same media type, irrespective of Library filters; season/cour suffixes remain significant. An identical ID keeps the existing saved/remove behavior. Choose Add anyway, Cancel, or a candidate. Selecting a candidate offers Open details or a move preview. Moving replaces the saved source, preserving categories, manual status and date added, and copies progress only for shared episode IDs or unique meaningful episode titles with compatible years. Generic numbering, repeated titles and missing episode metadata remain unmatched and produce an explicit warning before confirmation. Old history, downloads and tracking links remain attached to their original source; destination progress is never overwritten. The preview is checked again before applying. Library/progress changes use existing sync domains; dialog state is transient.
 - **Remove**: library card menu or the same bookmark. Only the entry is
   deleted — progress, season/episode history and Continue-Home removals are
   kept. Re-adding replaces the stored entry in place and refreshes its added

@@ -465,6 +465,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Library callbacks.
     let b = bridge.clone();
     app.on_add_to_library(move || b.toggle_current_in_library());
+    let b = bridge.clone();
+    app.on_library_duplicate_action(move |index| b.library_duplicate_action(index));
 
     let b = bridge.clone();
     app.on_detail_library_action(move |action| b.detail_library_action(action));

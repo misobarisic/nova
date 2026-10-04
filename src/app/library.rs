@@ -248,6 +248,10 @@ impl Bridge {
 
     /// Detail-page "Add to library / Remove from library" toggle.
     pub(super) fn toggle_current_in_library(&self) {
+        self.toggle_current_in_library_inner(false);
+    }
+
+    fn toggle_current_in_library_inner(&self, allow_duplicate: bool) {
         let (id, type_, name, year, poster_url, background_url, genres, description, currently_in) = {
             let state = self.shared.lock().unwrap();
             let m = match state.modal_item.as_ref() {
@@ -267,6 +271,16 @@ impl Bridge {
             )
         };
 
+        if !currently_in && !allow_duplicate {
+            let candidates = {
+                let state = self.shared.lock().unwrap();
+                possible_library_duplicates(&state.entries, &id, &type_, &name)
+            };
+            if !candidates.is_empty() {
+                self.show_library_duplicates(&id, &candidates);
+                return;
+            }
+        }
         {
             let mut state = self.shared.lock().unwrap();
             if currently_in {
@@ -294,6 +308,185 @@ impl Bridge {
             app.set_in_library(!currently_in);
         }
         self.persist_library();
+        self.apply_library_to_ui();
+        self.sync_modal_category_flags();
+    }
+
+    fn show_library_duplicates(&self, target: &str, entries: &[LibraryEntry]) {
+        let Some(app) = self.app() else { return };
+        let cards = entries
+            .iter()
+            .map(|entry| MediaCard {
+                id: entry.id.clone().into(),
+                title: entry.name.clone().into(),
+                year: entry.year.clone().into(),
+                media_type: text::tr(if entry.type_ == "movie" {
+                    "Movie"
+                } else {
+                    "TV"
+                })
+                .into(),
+                poster_path: entry.poster_url.clone().into(),
+                poster: decoded_cache_get(&sized_cache_key(
+                    &entry.poster_url,
+                    Some(DISPLAY_POSTER_SIDE),
+                ))
+                .map(Image::from_rgba8)
+                .unwrap_or_default(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        app.set_library_duplicate_target(target.into());
+        app.set_library_duplicates(Rc::new(VecModel::from(cards)).into());
+        app.set_library_duplicate_selection(-1);
+        app.set_library_duplicates_open(true);
+        for entry in entries {
+            let weak = self.app.clone();
+            let id = entry.id.clone();
+            let target = target.to_string();
+            let url = entry.poster_url.clone();
+            if url.is_empty() {
+                continue;
+            }
+            net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
+                let Some(pixels) = pixels else { return };
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(app) = weak.upgrade() else { return };
+                    if !app.get_library_duplicates_open()
+                        || app.get_library_duplicate_target().as_str() != target
+                    {
+                        return;
+                    }
+                    let model = app.get_library_duplicates();
+                    let Some(rows) = model.as_any().downcast_ref::<VecModel<MediaCard>>() else {
+                        return;
+                    };
+                    for index in 0..rows.row_count() {
+                        if let Some(mut card) = rows.row_data(index)
+                            && card.id.as_str() == id
+                            && card.poster_path.as_str() == url
+                        {
+                            card.poster = Image::from_rgba8(pixels.clone());
+                            card.is_loaded = true;
+                            rows.set_row_data(index, card);
+                        }
+                    }
+                });
+            });
+        }
+    }
+
+    pub(super) fn library_duplicate_action(&self, index: i32) {
+        let Some(app) = self.app() else { return };
+        if !app.get_library_duplicates_open() {
+            return;
+        }
+        let target = app.get_library_duplicate_target();
+        let mut state = self.shared.lock().unwrap();
+        if state
+            .modal_item
+            .as_ref()
+            .is_none_or(|item| item.id != target.as_str())
+        {
+            app.set_library_duplicates_open(false);
+            return;
+        }
+        let selected = if index >= 0 {
+            index
+        } else {
+            app.get_library_duplicate_selection()
+        };
+        let entry = (selected >= 0)
+            .then(|| app.get_library_duplicates().row_data(selected as usize))
+            .flatten()
+            .and_then(|card| {
+                state
+                    .entries
+                    .iter()
+                    .find(|entry| entry.id == card.id.as_str())
+                    .cloned()
+            });
+        if index == -1 {
+            app.set_library_duplicates_open(false);
+            // A paired device may have saved it while the dialog was open.
+            // Add anyway must never turn into an unintended remove toggle.
+            if state
+                .entries
+                .iter()
+                .any(|entry| entry.id == target.as_str())
+            {
+                app.set_in_library(true);
+                return;
+            }
+            drop(state);
+            self.toggle_current_in_library_inner(true);
+            return;
+        }
+        let Some(entry) = entry else {
+            app.set_library_duplicates_open(false);
+            return;
+        };
+        if index == -2 {
+            app.set_library_duplicates_open(false);
+            drop(state);
+            self.open_library_entry(entry);
+            return;
+        }
+        let item = state.modal_item.as_ref().unwrap();
+        let videos = read_episodes_cache_for(&entry.type_, &entry.id).unwrap_or_default();
+        let (copies, unmatched) = duplicate_progress_copies(&entry, item, &videos, &state.progress);
+        // Metadata/progress may change while the warning is open. Require a
+        // fresh review if the number of transferable records changes.
+        if index >= 0
+            || app.get_library_duplicate_matched() != copies.len() as i32
+            || app.get_library_duplicate_unmatched() != unmatched as i32
+        {
+            app.set_library_duplicate_selection(selected);
+            app.set_library_duplicate_matched(copies.len() as i32);
+            app.set_library_duplicate_unmatched(unmatched as i32);
+            return;
+        }
+        if index != -3 {
+            return;
+        }
+        if state
+            .entries
+            .iter()
+            .any(|entry| entry.id == target.as_str())
+        {
+            app.set_library_duplicates_open(false);
+            app.set_in_library(true);
+            return;
+        }
+        let replacement = LibraryEntry {
+            id: item.id.clone(),
+            type_: item.type_.clone(),
+            name: item.name.clone(),
+            year: item.year.clone(),
+            poster_url: item.poster_url.clone(),
+            background_url: item.background_url.clone(),
+            genres: item.genres.clone(),
+            description: item.description.clone(),
+            categories: entry.categories.clone(),
+            watch_status: entry.watch_status,
+            added_at_secs: entry.added_at_secs,
+        };
+        // Keep old progress intact; unmapped history can still be recovered by
+        // reopening the old source. Never overwrite progress already recorded
+        // for the destination, including explicit unwatched intent.
+        for copy in copies {
+            state
+                .progress
+                .entry(progress_map_key(&copy.series_id, &copy.episode_id))
+                .or_insert(copy);
+        }
+        remove_library_entry(&mut state.entries, &entry.id);
+        upsert_library(&mut state.entries, replacement);
+        drop(state);
+        app.set_library_duplicates_open(false);
+        app.set_in_library(true);
+        self.persist_library();
+        self.persist_and_refresh_progress();
         self.apply_library_to_ui();
         self.sync_modal_category_flags();
     }
@@ -334,6 +527,15 @@ impl Bridge {
     pub(super) fn open_library_item(&self, index: usize) {
         let entry = self.current_library_view().get(index).cloned();
         let Some(e) = entry else { return };
+        self.open_library_entry(e);
+    }
+
+    fn open_library_entry(&self, e: LibraryEntry) {
+        let index = self
+            .current_library_view()
+            .iter()
+            .position(|entry| entry.id == e.id)
+            .unwrap_or(0);
         let app = match self.app() {
             Some(a) => a,
             None => return,
@@ -831,5 +1033,235 @@ mod tests {
             ["b"]
         );
         assert!(order_library_view(entries, "missing", 0).is_empty());
+    }
+}
+
+/// Similar-name suggestions are deliberately independent of library filters.
+/// Preserve season numbers and suffixes: a shared franchise is not a duplicate.
+fn possible_library_duplicates(
+    entries: &[LibraryEntry],
+    id: &str,
+    type_: &str,
+    name: &str,
+) -> Vec<LibraryEntry> {
+    let normalized = |value: &str| {
+        value
+            .chars()
+            .flat_map(char::to_lowercase)
+            .filter(|c| c.is_alphanumeric())
+            .collect::<String>()
+    };
+    let title = normalized(name);
+    if title.is_empty() {
+        return Vec::new();
+    }
+    entries
+        .iter()
+        .filter(|entry| entry.id != id && entry.type_ == type_ && normalized(&entry.name) == title)
+        .cloned()
+        .collect()
+}
+
+/// Only identical native IDs or unique non-placeholder episode titles prove
+/// a transfer. Episode numbers alone are unsafe across split seasons/cours.
+fn duplicate_progress_copies(
+    old: &LibraryEntry,
+    new: &ModalItem,
+    old_videos: &[Video],
+    progress: &HashMap<String, EpisodeProgress>,
+) -> (Vec<EpisodeProgress>, usize) {
+    let title = |value: &str| {
+        value
+            .chars()
+            .flat_map(char::to_lowercase)
+            .filter(|c| c.is_alphanumeric())
+            .collect::<String>()
+    };
+    let meaningful = |video: &Video| {
+        let name = title(&video.label());
+        let mut remainder = name.as_str();
+        while let Some(rest) = ["episode", "ep", "stage", "turn"]
+            .iter()
+            .find_map(|prefix| remainder.strip_prefix(prefix))
+        {
+            let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+            if digits == 0 {
+                break;
+            }
+            remainder = &rest[digits..];
+        }
+        let generic = remainder.is_empty() || name.chars().all(|c| c.is_ascii_digit());
+        (!remainder.is_empty()
+            && !generic
+            && !["unknown", "untitled", "tba", "tbd"].contains(&remainder))
+        .then(|| remainder.to_string())
+    };
+    let mut copies = Vec::new();
+    let mut unmatched = 0;
+    let mut used = HashSet::new();
+    for record in progress.values().filter(|p| p.series_id == old.id) {
+        let native = new
+            .videos
+            .iter()
+            .filter(|v| v.id == record.episode_id)
+            .collect::<Vec<_>>();
+        let matches = if native.len() == 1 {
+            native
+        } else {
+            old_videos
+                .iter()
+                .find(|v| v.id == record.episode_id)
+                .and_then(meaningful)
+                .filter(|key| {
+                    old_videos
+                        .iter()
+                        .filter(|v| meaningful(v).as_ref() == Some(key))
+                        .count()
+                        == 1
+                })
+                .filter(|_| old.year.is_empty() || new.year.is_empty() || old.year == new.year)
+                .map(|key| {
+                    new.videos
+                        .iter()
+                        .filter(|v| meaningful(v).as_ref() == Some(&key))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        if matches.len() != 1
+            || new.videos.iter().filter(|v| v.id == matches[0].id).count() != 1
+            || !used.insert(matches[0].id.clone())
+        {
+            unmatched += 1;
+            continue;
+        }
+        let mut copy = record.clone();
+        copy.series_id = new.id.clone();
+        copy.episode_id = matches[0].id.clone();
+        copies.push(copy);
+    }
+    (copies, unmatched)
+}
+
+#[cfg(test)]
+mod duplicate_tests {
+    use super::*;
+    fn entry(id: &str, name: &str) -> LibraryEntry {
+        serde_json::from_value(serde_json::json!({"id":id,"type_":"series","name":name,"year":"2026","categories":["Favorites"],"added_at_secs":123})).unwrap()
+    }
+    fn video(id: &str, name: &str) -> Video {
+        Video {
+            id: id.into(),
+            name: name.into(),
+            season: Some(1),
+            episode: Some(1),
+            ..Default::default()
+        }
+    }
+    fn modal(videos: Vec<Video>) -> ModalItem {
+        ModalItem {
+            open_token: Arc::new(()),
+            pending_watch_now: None,
+            episodes_loading: false,
+            id: "new".into(),
+            type_: "series".into(),
+            request_id: "new".into(),
+            videos,
+            season_backdrops: HashMap::new(),
+            seasons: vec![1],
+            season_index: 0,
+            episode_page: 0,
+            name: "Example".into(),
+            year: "2026".into(),
+            poster_url: String::new(),
+            background_url: String::new(),
+            description: String::new(),
+            genres: vec![],
+        }
+    }
+    #[test]
+    fn duplicate_suggestions_preserve_seasons_media_types_and_same_id_behavior() {
+        let mut movie = entry("movie", "EXAMPLE!");
+        movie.type_ = "movie".into();
+        let entries = vec![
+            entry("saved", "EXAMPLE!"),
+            entry("new", "Example"),
+            entry("later", "Example Season 2"),
+            movie,
+        ];
+        let found = possible_library_duplicates(&entries, "new", "series", "Example");
+        assert_eq!(
+            found.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            ["saved"]
+        );
+        assert!(possible_library_duplicates(&entries, "x", "series", "!!!").is_empty());
+    }
+    #[test]
+    fn migration_only_copies_unique_real_titles_or_shared_ids_and_keeps_original_history() {
+        let old = entry("old", "Example");
+        let videos = vec![
+            video("old-1", "Episode 1: A New Beginning"),
+            video("old-2", "Episode 2: Episode 2"),
+            video("shared", "Episode 3"),
+            video("old-4", "Repeated Title"),
+            video("old-5", "Missing"),
+        ];
+        let new = modal(vec![
+            video("new-1", "A New Beginning"),
+            video("new-2", "Episode 2"),
+            video("shared", "Episode 3"),
+            video("repeat-a", "Repeated Title"),
+            video("repeat-b", "Repeated Title"),
+        ]);
+        let progress = videos
+            .iter()
+            .map(|v| {
+                (
+                    progress_map_key("old", &v.id),
+                    EpisodeProgress {
+                        series_id: "old".into(),
+                        episode_id: v.id.clone(),
+                        watched: true,
+                        position_secs: 900.0,
+                        duration_secs: 1200.0,
+                        play_count: 3,
+                        updated_at_secs: 123,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let (copies, unmatched) = duplicate_progress_copies(&old, &new, &videos, &progress);
+        assert_eq!(unmatched, 3);
+        assert_eq!(copies.len(), 2);
+        assert!(copies.iter().any(|p| p.episode_id == "new-1"));
+        assert!(copies.iter().any(|p| p.episode_id == "shared"));
+        assert!(copies.iter().all(|p| p.series_id == "new"
+            && p.watched
+            && p.position_secs == 900.0
+            && p.play_count == 3));
+        assert_eq!(progress.len(), 5);
+        let mut remake = new;
+        remake.year = "2030".into();
+        assert_eq!(
+            duplicate_progress_copies(&old, &remake, &videos, &progress)
+                .0
+                .len(),
+            1
+        );
+        let invalid_ids = modal(vec![
+            video("new-1", "A New Beginning"),
+            video("new-1", "Different title"),
+        ]);
+        assert!(
+            duplicate_progress_copies(&old, &invalid_ids, &videos, &progress)
+                .0
+                .is_empty()
+        );
+        let incomplete = modal(vec![]);
+        assert_eq!(
+            duplicate_progress_copies(&old, &incomplete, &videos, &progress).1,
+            5
+        );
     }
 }

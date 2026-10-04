@@ -1,0 +1,108 @@
+import { Theme } from "theme.slint";
+import { Anim } from "anim.slint";
+import { MediaCard } from "types.slint";
+import { PillButton } from "settings-controls.slint";
+import { ScrollView } from "scrollview.slint";
+
+export component LibraryDuplicates inherits Rectangle {
+    in property <[MediaCard]> candidates;
+    in property <int> selection: -1;
+    in property <int> unmatched;
+    in property <int> matched;
+    callback open_details();
+    callback move_entry();
+    callback back_to_candidates();
+    in property <bool> narrow;
+    in property <length> safe-top;
+    in property <length> safe-bottom;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    callback selected(int);
+    callback add_anyway();
+    callback closed();
+    width: 100%; height: 100%;
+    background: Theme.current.scrim_settings;
+    property <float> reveal: 0;
+    init => { root.reveal = 1; modal_focus.focus(); }
+    animate reveal { duration: Anim.transition_slide; easing: ease-out; }
+    property <int> focused_action: 0;
+    changed selection => { root.focused_action = 0; }
+    modal_focus := FocusScope {
+        width: 100%; height: 100%;
+        key-pressed(e) => {
+            if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace { root.closed(); accept }
+            else if e.text == Key.RightArrow || e.text == Key.DownArrow || e.text == Key.Tab {
+                root.focused_action = Math.mod(root.focused_action + 1, (root.selection >= 0 ? 3 : root.candidates.length + 2)); accept
+            } else if e.text == Key.LeftArrow || e.text == Key.UpArrow {
+                root.focused_action = Math.mod(root.focused_action + (root.selection >= 0 ? 2 : root.candidates.length + 1), (root.selection >= 0 ? 3 : root.candidates.length + 2)); accept
+            } else if e.text == Key.Return || e.text == " " {
+                if root.selection >= 0 {
+                    if root.focused_action == 0 { root.open_details(); }
+                    else if root.focused_action == 1 { root.move_entry(); }
+                    else { root.back_to_candidates(); }
+                }
+                else if root.focused_action < root.candidates.length { root.selected(root.focused_action); }
+                else if root.focused_action == root.candidates.length { root.add_anyway(); }
+                else { root.closed(); }
+                accept
+            } else { reject }
+        }
+    }
+    TouchArea { width: 100%; height: 100%; clicked => { root.closed(); } }
+    panel := Rectangle {
+        width: Math.max(1px, Math.min(root.width - root.safe-left - root.safe-right, root.narrow ? root.width : 680px));
+        height: Math.min(root.height - root.safe-top, content.preferred-height + 40px + root.safe-bottom);
+        x: root.narrow ? root.safe-left : (root.width - self.width) / 2;
+        y: root.narrow ? root.height - self.height * root.reveal : (root.height - self.height) / 2;
+        background: Theme.current.card;
+        border-radius: 22px; border-width: 1px; border-color: Theme.current.border_medium;
+        TouchArea { width: 100%; height: 100%; clicked => { } }
+        ScrollView {
+            x: 20px; y: 20px; width: parent.width - 40px;
+            height: Math.max(1px, parent.height - 40px - root.safe-bottom);
+            content := VerticalLayout {
+                spacing: 16px; width: 100%;
+                if root.narrow: Rectangle {
+                    height: 4px;
+                    Rectangle { x: (parent.width - self.width) / 2; width: 44px; height: 4px; border-radius: 2px; background: Theme.current.text_hint; }
+                }
+                Text { text: root.selection >= 0 ? @tr("Existing library entry") : @tr("Possible duplicates"); font-size: 24px; font-weight: 700; color: Theme.current.text_bright; wrap: word-wrap; }
+                Text { text: root.selection >= 0 ? @tr("Open the saved entry, or replace it with the entry you are adding.") : @tr("Your library has entries with a similar name. Choose an existing entry, or add this one separately."); font-size: 14px; color: Theme.current.text_settings; wrap: word-wrap; }
+                if root.selection < 0: Flickable {
+                    height: 276px; content-width: Math.max(self.width, root.candidates.length * 172px); content-height: self.height;
+                    HorizontalLayout {
+                        spacing: 12px; alignment: start;
+                        for card[i] in root.candidates: Rectangle {
+                            accessible-role: button; accessible-label: card.title;
+                            width: 160px; height: 276px; border-radius: 12px;
+                            background: Theme.current.card;
+                            border-width: root.focused_action == i ? 2px : 1px;
+                            border-color: root.focused_action == i ? Theme.current.accent : Theme.current.border_medium;
+                            Image { x: 8px; y: 8px; width: parent.width - 16px; height: 200px; source: card.poster; image-fit: cover; }
+                            VerticalLayout {
+                                x: 8px; y: 216px; width: parent.width - 16px; height: 52px; spacing: 4px;
+                                Text { text: card.title; color: Theme.current.text_bright; font-size: 14px; font-weight: 600; overflow: elide; }
+                                Text { text: card.year + (card.year != "" && card.media_type != "" ? " · " : "") + card.media_type; color: Theme.current.text_settings; font-size: 12px; overflow: elide; }
+                            }
+                            TouchArea { width: 100%; height: 100%; clicked => { root.selected(i); } }
+                        }
+                    }
+                }
+                if root.selection >= 0: VerticalLayout {
+                    spacing: 12px;
+                    Text { text: root.candidates[root.selection].title; font-size: 18px; font-weight: 600; color: Theme.current.text_bright; wrap: word-wrap; }
+                    Text { text: @tr("Moving keeps your categories, library status and date added. Only safely matched episode progress is copied. Any progress already on the new entry is kept."); font-size: 14px; color: Theme.current.text_settings; wrap: word-wrap; }
+                    Text { text: @tr("{n} progress record can be copied" | "{n} progress records can be copied" % root.matched); font-size: 14px; color: Theme.current.text_settings; wrap: word-wrap; }
+                    if root.unmatched > 0: Text { text: @tr("Warning: {n} progress record cannot be matched. It will not appear on the new entry. The old history is kept, but removing the saved entry may leave some data unavailable." | "Warning: {n} progress records cannot be matched. They will not appear on the new entry. The old history is kept, but removing the saved entry may leave some data unavailable." % root.unmatched); font-size: 14px; color: Theme.current.text_bright; wrap: word-wrap; }
+                    Text { text: @tr("Downloads and tracking links stay with the old source. Review tracking on the new entry after moving."); font-size: 14px; color: Theme.current.text_settings; wrap: word-wrap; }
+                    PillButton { label: @tr("Open details"); width: 100%; focused: root.focused_action == 0; clicked => { root.open_details(); } }
+                    PillButton { label: root.unmatched > 0 ? @tr("Move with unmatched progress") : @tr("Move to this entry"); width: 100%; primary: true; focused: root.focused_action == 1; clicked => { root.move_entry(); } }
+                    PillButton { label: @tr("Back"); width: 100%; focused: root.focused_action == 2; clicked => { root.back_to_candidates(); } }
+                }
+                Rectangle { height: 1px; background: Theme.current.border_subtle; }
+                if root.selection < 0: PillButton { label: @tr("Add anyway"); width: 100%; primary: true; focused: root.focused_action == root.candidates.length; clicked => { root.add_anyway(); } }
+                if root.selection < 0: PillButton { label: @tr("Cancel"); width: 100%; focused: root.focused_action == (root.selection >= 0 ? 2 : root.candidates.length + 1); clicked => { root.closed(); } }
+            }
+        }
+    }
+}

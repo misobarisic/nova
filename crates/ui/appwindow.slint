@@ -10,6 +10,7 @@ import { DiscoverPage } from "discover.slint";
 import { HomePage } from "home.slint";
 import { DetailPage } from "detail.slint";
 import { CategoryPickerPopup } from "categories.slint";
+import { LibraryDuplicates } from "library-duplicates.slint";
 import { LibraryPage } from "library.slint";
 import { SettingsPage } from "settings.slint";
 import { PlayerOverlay } from "player.slint";
@@ -332,6 +333,13 @@ export component AppWindow inherits Window {
     // Assign-categories popup: visible while the user picks categories
     // for the current library item.
     in-out property <bool> categories_modal: false;
+    in-out property <bool> library_duplicates_open: false;
+    in-out property <[MediaCard]> library_duplicates;
+    in-out property <string> library_duplicate_target;
+    in-out property <int> library_duplicate_selection: -1;
+    in-out property <int> library_duplicate_matched: 0;
+    in-out property <int> library_duplicate_unmatched: 0;
+    callback library_duplicate_action(int);
     // Number of categories assigned to the current item (badge on the
     // detail-page Categories pill).
     in-out property <int> selected_category_count: 0;
@@ -678,6 +686,10 @@ export component AppWindow inherits Window {
             } else if (root.resume_prompt_visible) {
                 root.resume_cancel();
                 accept
+            } else if (root.library_duplicates_open) {
+                if root.library_duplicate_selection >= 0 { root.library_duplicate_selection = -1; }
+                else { root.library_duplicates_open = false; }
+                accept
             } else if (root.categories_modal) {
                 root.categories_modal = false;
                 accept
@@ -900,7 +912,7 @@ export component AppWindow inherits Window {
         episode_context <=> root.episode_context;
         deep_stream: root.detail_deep_stream;
         system_back_request: root.system_back_request;
-        popup_open: root.categories_modal;
+        popup_open: root.categories_modal || root.library_duplicates_open;
         kb_zone <=> root.detail_kb_zone;
         kb_top <=> root.detail_kb_top;
         kb_tab <=> root.detail_kb_tab;
@@ -916,6 +928,7 @@ export component AppWindow inherits Window {
         touch_menus: root.touch_menus;
 
         back => {
+            root.library_duplicates_open = false;
             root.categories_modal = false;
             root.modal_visible = false;
             root.modal_closed();
@@ -952,6 +965,27 @@ export component AppWindow inherits Window {
 
         toggle_entry_category(name) => { root.toggle_entry_category(name); }
         closed => { root.categories_modal = false; }
+    }
+
+    if root.library_duplicates_open && root.modal_visible && !root.player_open: LibraryDuplicates {
+        candidates: root.library_duplicates;
+        selection: root.library_duplicate_selection;
+        matched: root.library_duplicate_matched;
+        unmatched: root.library_duplicate_unmatched;
+        open_details => { root.library_duplicate_action(-2); }
+        move_entry => { root.library_duplicate_action(-3); }
+        back_to_candidates => { root.library_duplicate_selection = -1; }
+        narrow: root.narrow_ui;
+        safe-top: root.safe-area-insets.top;
+        safe-bottom: root.safe-area-insets.bottom;
+        safe-left: root.safe-area-insets.left;
+        safe-right: root.safe-area-insets.right;
+        selected(i) => { root.library_duplicate_action(i); }
+        add_anyway => { root.library_duplicate_action(-1); }
+        closed => {
+            if root.library_duplicate_selection >= 0 { root.library_duplicate_selection = -1; }
+            else { root.library_duplicates_open = false; }
+        }
     }
 
     // ---- Library page ---------------------------------------------------

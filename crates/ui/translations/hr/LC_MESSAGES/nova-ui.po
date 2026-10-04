@@ -1735,3 +1735,45 @@ msgstr "Povratak zamjenjuje vrijednost ovog uređaja sinkroniziranom vrijednoš�
 
 msgid "No synced value has been received yet. A separate value starts with the current value on this device."
 msgstr "Sinkronizirana vrijednost još nije primljena. Zasebna vrijednost počinje trenutačnom vrijednošću na ovom uređaju."
+
+msgid "Possible duplicates"
+msgstr "Mogući duplikati"
+
+msgid "Existing library entry"
+msgstr "Postojeći unos u zbirci"
+
+msgid "Open the saved entry, or replace it with the entry you are adding."
+msgstr "Otvorite spremljeni unos ili ga zamijenite unosom koji dodajete."
+
+msgid "Your library has entries with a similar name. Choose an existing entry, or add this one separately."
+msgstr "U zbirci postoje unosi sličnog naziva. Odaberite postojeći unos ili dodajte ovaj zasebno."
+
+msgid "Moving keeps your categories, library status and date added. Only safely matched episode progress is copied. Any progress already on the new entry is kept."
+msgstr "Premještanje zadržava kategorije, status i datum dodavanja. Kopira se samo napredak pouzdano povezanih epizoda. Postojeći napredak novog unosa ostaje sačuvan."
+
+msgid "Downloads and tracking links stay with the old source. Review tracking on the new entry after moving."
+msgstr "Preuzimanja i veze za praćenje ostaju uz stari izvor. Nakon premještanja provjerite praćenje novog unosa."
+
+msgid "Open details"
+msgstr "Otvori pojedinosti"
+
+msgid "Move with unmatched progress"
+msgstr "Premjesti uz nepovezani napredak"
+
+msgid "Move to this entry"
+msgstr "Premjesti na ovaj unos"
+
+msgid "Add anyway"
+msgstr "Svejedno dodaj"
+
+msgid "{n} progress record can be copied"
+msgid_plural "{n} progress records can be copied"
+msgstr[0] "Može se kopirati {n} zapis napretka"
+msgstr[1] "Mogu se kopirati {n} zapisa napretka"
+msgstr[2] "Može se kopirati {n} zapisa napretka"
+
+msgid "Warning: {n} progress record cannot be matched. It will not appear on the new entry. The old history is kept, but removing the saved entry may leave some data unavailable."
+msgid_plural "Warning: {n} progress records cannot be matched. They will not appear on the new entry. The old history is kept, but removing the saved entry may leave some data unavailable."
+msgstr[0] "Upozorenje: {n} zapis napretka nije moguće povezati. Neće se prikazivati na novom unosu. Stara povijest ostaje sačuvana, ali uklanjanje spremljenog unosa može učiniti neke podatke nedostupnima."
+msgstr[1] "Upozorenje: {n} zapisa napretka nije moguće povezati. Neće se prikazivati na novom unosu. Stara povijest ostaje sačuvana, ali uklanjanje spremljenog unosa može učiniti neke podatke nedostupnima."
+msgstr[2] "Upozorenje: {n} zapisa napretka nije moguće povezati. Neće se prikazivati na novom unosu. Stara povijest ostaje sačuvana, ali uklanjanje spremljenog unosa može učiniti neke podatke nedostupnima."

@@ -669,6 +669,9 @@ impl Bridge {
             app.set_season_cards(Rc::new(VecModel::<SeasonCard>::from(vec![])).into());
             app.set_episode_rows(Rc::new(VecModel::<EpisodeRow>::from(vec![])).into());
             app.set_categories_modal(false);
+            app.set_library_duplicates_open(false);
+            app.set_library_duplicates(Rc::new(VecModel::<MediaCard>::from(vec![])).into());
+            app.set_library_duplicate_selection(-1);
             app.set_selected_category_count(0);
             app.set_detail_tab(0);
             app.set_episode_filter(SharedString::default());
