@@ -126,9 +126,15 @@ only during a details operation and validates provider ownership.
 
 Host metadata caching allows 256 KiB entries under the same 2 MiB session
 storage cap used by JS; JS storage keeps its 16 KiB entry cap. Successful results
-last one hour; missing/ambiguous results last 30 seconds. Cache keys include
+last 30 days and persist across restarts through the app-injected
+`MetadataCache` backend (128 entries, 8 MiB total, 256 KiB each). Failed refreshes
+retain confirmed mappings for unchanged inputs; explicit conflicts invalidate
+them. Missing/ambiguous results stay session-only for 30 seconds. Cache keys include
 source sequence/availability, requested namespaces, and the addon inventory
-revision. Oversized results remain usable without caching.
+revision. Manifest objects are canonicalized so identical inventories keep
+their revision across restarts. Oversized results remain usable without caching.
+Official Cinemeta candidates also receive bounded live-endpoint thumbnail
+repair before mapping, using the remaining enrichment deadline.
 
 Ordinary addon details also use this service. Only native available episodes
 are retained. Confirmed episode metadata supplies meaningful titles, dates,

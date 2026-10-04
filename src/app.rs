@@ -654,12 +654,10 @@ impl PosterTx {
 static EPISODE_INFLIGHT: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
-/// A queued episode-thumbnail fetch, pinned to the item + season it was
-/// scheduled for (guards against season switches).
+/// A queued episode-thumbnail fetch. Completed pixels are cached by URL;
+/// the debounced render always reads the currently visible episode list.
 struct EpisodeThumbJob {
     url: String,
-    item_id: String,
-    season_index: usize,
     /// Refresh check (not a plain fetch): the URL is already cached, so
     /// fresh bytes download in the background and the pixels swap only
     /// when they actually changed — unchanged art never flashes through

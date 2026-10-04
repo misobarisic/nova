@@ -57,6 +57,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .into(),
     );
     storage::init_at(&app_data_dir());
+    nova_providers::set_metadata_cache(Arc::new(io::ProviderMetadataCache));
     crate::web_log("nova: window created");
 
     // Player scrim: femtovg's gradient fills render as flat fills in this

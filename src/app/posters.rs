@@ -171,8 +171,6 @@ impl Bridge {
                 {
                     jobs.push(EpisodeThumbJob {
                         url: url.clone(),
-                        item_id: m.id.clone(),
-                        season_index: m.season_index,
                         verify,
                     });
                 }
@@ -218,7 +216,7 @@ impl Bridge {
                     if fresh.is_none() {
                         return; // unchanged or failed: cached art is shown
                     }
-                    Bridge::schedule_episode_thumb_render(worker, job.item_id, job.season_index);
+                    Bridge::schedule_episode_thumb_render(worker);
                 });
                 continue;
             }
@@ -232,19 +230,17 @@ impl Bridge {
                 if !loaded {
                     return; // keep the placeholder
                 }
-                Bridge::schedule_episode_thumb_render(worker, job.item_id, job.season_index);
+                Bridge::schedule_episode_thumb_render(worker);
             });
         }
     }
 
     /// Debounced episode-list re-render after thumbnail downloads: at most
-    /// one render is scheduled; it picks up every thumbnail finished so far
-    /// and only fires while the same item + season list is still showing.
-    pub(super) fn schedule_episode_thumb_render(
-        bridge: Bridge,
-        item_id: String,
-        season_index: usize,
-    ) {
+    /// one render is scheduled; it picks up every thumbnail finished so far.
+    /// Render the current list: an older item's pending timer must not swallow
+    /// completions from a newly opened item/season. Rows read pixels by their
+    /// current URLs, so an old download cannot apply another show's artwork.
+    pub(super) fn schedule_episode_thumb_render(bridge: Bridge) {
         if !EPISODE_RENDER_PENDING.swap(true, Ordering::SeqCst) {
             let _ = slint::invoke_from_event_loop(move || {
                 let timer = slint::Timer::default();
@@ -253,19 +249,9 @@ impl Bridge {
                     Duration::from_millis(120),
                     move || {
                         EPISODE_RENDER_PENDING.store(false, Ordering::SeqCst);
-                        let still_on_list = {
-                            let state = bridge.shared.lock().unwrap();
-                            state
-                                .modal_item
-                                .as_ref()
-                                .map(|m| m.id == item_id && m.season_index == season_index)
-                                .unwrap_or(false)
-                        };
-                        if still_on_list
-                            && bridge
-                                .app()
-                                .map(|a| a.get_modal_episodes())
-                                .unwrap_or(false)
+                        if bridge
+                            .app()
+                            .is_some_and(|app| app.get_modal_visible() && app.get_modal_episodes())
                         {
                             bridge.apply_episode_rows();
                         }

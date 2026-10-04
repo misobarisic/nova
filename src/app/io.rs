@@ -127,3 +127,16 @@ pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
     }
     hash
 }
+
+/// Device-local cache of confirmed provider mappings; never synced.
+pub(super) struct ProviderMetadataCache;
+impl nova_providers::MetadataCache for ProviderMetadataCache {
+    fn load(&self) -> Result<Option<String>, nova_providers::ProviderHostError> {
+        storage::try_get_str("provider_metadata_cache:v1")
+            .map_err(|error| nova_providers::ProviderHostError(error.to_string()))
+    }
+    fn save(&self, value: &str) -> Result<(), nova_providers::ProviderHostError> {
+        storage::try_set_str("provider_metadata_cache:v1", value)
+            .map_err(|error| nova_providers::ProviderHostError(error.to_string()))
+    }
+}

@@ -19,9 +19,9 @@ pub use ids::{ExternalId, IdNamespace, IdResolution};
 pub use matching::{MetadataMatch, match_metadata};
 pub use metadata::{
     AddonMetadataTransport, EnrichmentRequest, EnrichmentResult, EpisodeEnrichment, MetadataAddon,
-    MetadataConnection, ProviderDetails, addon_metadata_id, apply_enrichment,
+    MetadataCache, MetadataConnection, ProviderDetails, addon_metadata_id, apply_enrichment,
     configure_metadata_addons, enrich_addon_response, enrich_metadata, metadata_revision,
-    set_metadata_transport,
+    set_metadata_cache, set_metadata_transport,
 };
 pub use models::{
     CatalogRequest, ContentProvider, Episode, ExternalIds, MediaItem, MediaRequest,

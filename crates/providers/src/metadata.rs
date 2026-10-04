@@ -1,4 +1,8 @@
-//! Installed-addon metadata broker. No provider or metadata service is special.
+//! Installed-addon metadata broker and bounded Cinemeta artwork repair.
+mod cache;
+mod cinemeta;
+pub use cache::{MetadataCache, set_metadata_cache};
+const CONFIRMED_CACHE_TTL: u64 = 30 * 24 * 3600;
 use crate::{
     ExternalId, MediaItem, ProviderHost, ProviderHostError, SourceSequence, StremioProvider,
 };
@@ -29,9 +33,17 @@ fn snapshot() -> &'static Mutex<Snapshot> {
     SNAPSHOT.get_or_init(Default::default)
 }
 
+fn inventory_fingerprint(addons: &[MetadataAddon]) -> String {
+    // Manifests contain HashMaps. Their iteration order changes on restart;
+    // canonical JSON keeps the revision stable for identical addon content.
+    let mut value = serde_json::to_value(addons).unwrap_or(Value::Null);
+    value.sort_all_objects();
+    serde_json::to_string(&value).unwrap_or_default()
+}
+
 /// Called with already-cloned enabled/available addons, never while networking.
 pub fn configure_metadata_addons(addons: Vec<MetadataAddon>) {
-    let fingerprint = serde_json::to_string(&addons).unwrap_or_default();
+    let fingerprint = inventory_fingerprint(&addons);
     let mut current = snapshot().lock().unwrap();
     if current.fingerprint != fingerprint {
         // A content-derived revision also invalidates persisted episode aliases
@@ -167,7 +179,7 @@ fn cache_key(revision: u64, caller: &str, request: &EnrichmentRequest) -> String
     let input = serde_json::to_vec(&(revision, caller, request)).unwrap_or_default();
     let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, &input);
     format!(
-        "metadata:v1:{}",
+        "metadata:v2:{}",
         digest
             .as_ref()
             .iter()
@@ -182,11 +194,11 @@ fn now() -> u64 {
         .as_secs()
 }
 fn cached_result(state: &dyn ProviderHost, key: &str) -> Option<EnrichmentResult> {
-    let raw = state.storage_get(key)?;
+    let raw = state.storage_get(key).or_else(|| cache::read(key))?;
     let (at, result): (u64, EnrichmentResult) = serde_json::from_str(&raw).ok()?;
     (now().saturating_sub(at)
         < if result.status == "confirmed" {
-            3600
+            CONFIRMED_CACHE_TTL
         } else {
             30
         })
@@ -197,6 +209,7 @@ fn cache_result(state: &dyn ProviderHost, key: &str, result: &EnrichmentResult) 
         && raw.len() <= 256 * 1024
     {
         let _ = state.storage_set(key, &raw);
+        cache::write(key, result, &raw);
     }
 }
 
@@ -238,8 +251,15 @@ pub(crate) fn enrich_metadata_with_budget(
     if let Some(result) = cached_result(state.as_ref(), &key) {
         return result;
     }
+    let fallback = state
+        .storage_get(&key)
+        .into_iter()
+        .chain(cache::read(&key))
+        .filter_map(|raw| serde_json::from_str::<(u64, EnrichmentResult)>(&raw).ok())
+        .map(|(_, result)| result)
+        .find(|result| result.status == "confirmed");
     let Some(transport) = transport().lock().unwrap().clone() else {
-        return EnrichmentResult::native(request.details);
+        return fallback.unwrap_or_else(|| EnrichmentResult::native(request.details));
     };
     let _guard = NestedGuard::new();
     let mut operation = Operation {
@@ -252,6 +272,11 @@ pub(crate) fn enrich_metadata_with_budget(
     let mut result = enrich_with(request, caller_url, &snapshot.addons, &mut operation);
     if metadata_revision() != snapshot.revision {
         return EnrichmentResult::native(native_details);
+    }
+    if result.status == "missing"
+        && let Some(cached) = fallback
+    {
+        result = cached;
     }
     result.inventory_revision = snapshot.revision;
     cache_result(state.as_ref(), &key, &result);
@@ -395,14 +420,24 @@ fn enrich_with(
             .accepts("meta", &native.media_type, &preview.source_id)
         {
             fetched += 1;
-            if let Some(bytes) =
-                operation.fetch(&addon.meta_url(&native.media_type, &preview.source_id))
-                && let Ok(Some(detail)) = addons::Addon::parse_meta(&bytes)
-                && detail.preview.id == preview.source_id
-                && detail.preview.type_ == native.media_type
+            let detail_url = addon.meta_url(&native.media_type, &preview.source_id);
+            if let Some(bytes) = operation.fetch(&detail_url)
+                && let Ok(mut response) = serde_json::from_slice::<Value>(&bytes)
+                && let Some(meta) = response.get_mut("meta")
             {
-                media = adapter.convert_detail(detail.clone()).0;
-                videos = detail.videos;
+                // Candidate metadata uses the same image repair as direct
+                // Cinemeta details, within this operation's remaining budget.
+                cinemeta::repair_with(&detail_url, meta, |url| operation.fetch(url));
+                let bytes = serde_json::to_vec(&response).unwrap_or(bytes);
+                if let Ok(Some(detail)) = addons::Addon::parse_meta(&bytes)
+                    && detail.preview.id == preview.source_id
+                    && detail.preview.type_ == native.media_type
+                {
+                    media = adapter.convert_detail(detail.clone()).0;
+                    videos = detail.videos;
+                } else {
+                    continue;
+                }
             } else {
                 continue;
             }
@@ -677,6 +712,13 @@ pub fn enrich_addon_response(raw_url: &str, bytes: Vec<u8>) -> Vec<u8> {
     if meta.get("novaConnections").is_some() {
         return bytes;
     }
+    let image_transport = transport().lock().unwrap().clone();
+    if let Some(transport) = image_transport {
+        let _guard = NestedGuard::new();
+        cinemeta::repair(raw_url, meta, transport.as_ref());
+    }
+    let bytes = serde_json::to_vec(&response).unwrap_or(bytes);
+    let meta = &mut response["meta"];
     let Ok(Some(detail)) = addons::Addon::parse_meta(&bytes) else {
         return bytes;
     };
@@ -726,6 +768,33 @@ pub fn enrich_addon_response(raw_url: &str, bytes: Vec<u8>) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::{Episode, ExternalIds, MemoryProviderHost, PluginManifest, PluginRuntime};
+
+    #[test]
+    fn inventory_revision_ignores_manifest_map_iteration_order() {
+        let (mut first, _) = fixture();
+        let mut second = first.clone();
+        for i in 0..20 {
+            first[0]
+                .manifest
+                .extra
+                .insert(format!("field{i}"), json!(i));
+        }
+        for i in (0..20).rev() {
+            second[0]
+                .manifest
+                .extra
+                .insert(format!("field{i}"), json!(i));
+        }
+        assert_eq!(
+            inventory_fingerprint(&first),
+            inventory_fingerprint(&second)
+        );
+        second[0].manifest.version = "changed".into();
+        assert_ne!(
+            inventory_fingerprint(&first),
+            inventory_fingerprint(&second)
+        );
+    }
 
     struct FixtureTransport {
         responses: BTreeMap<String, Value>,
@@ -992,7 +1061,7 @@ mod tests {
         state
             .storage_set(
                 &key,
-                &serde_json::to_string(&(now() - 3601, &result)).unwrap(),
+                &serde_json::to_string(&(now() - CONFIRMED_CACHE_TTL - 1, &result)).unwrap(),
             )
             .unwrap();
         assert!(cached_result(state.as_ref(), &key).is_none());

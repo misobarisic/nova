@@ -445,14 +445,14 @@ impl Bridge {
             mut urls: Vec<String>,
             mut found: Option<MetaItem>,
         ) {
-            if let Some(item) = found {
+            if let Some(mut item) = found {
                 let videos: Vec<Video> = item
                     .videos
                     .iter()
                     .filter(|v| v.season.is_some())
                     .cloned()
                     .collect();
-                write_episodes_cache_for(&modal_type, &id, &videos);
+                item.videos = write_episodes_cache_for(&modal_type, &id, &videos);
                 let bridge2 = bridge.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     bridge2.apply_episode_meta(id, Some(item), refresh, open_token);
@@ -3051,8 +3051,32 @@ pub(crate) fn episodes_key(type_: &str, id: &str) -> String {
 pub(crate) fn read_episodes_cache_for(type_: &str, id: &str) -> Option<Vec<Video>> {
     read_json::<Vec<Video>>(&episodes_key(type_, id))
 }
-pub(crate) fn write_episodes_cache_for(type_: &str, id: &str, videos: &[Video]) {
-    write_json(&episodes_key(type_, id), videos);
+fn retain_episode_artwork(videos: &mut [Video], cached: &[Video]) {
+    let cached = cached
+        .iter()
+        .filter(|video| !video.id.is_empty())
+        .map(|video| (video.id.as_str(), video))
+        .collect::<std::collections::HashMap<_, _>>();
+    for video in videos {
+        if video
+            .thumbnail
+            .as_ref()
+            .is_none_or(|url| url.trim().is_empty())
+            && let Some(previous) = cached.get(video.id.as_str())
+        {
+            // Native IDs are the stable identity; season numbers may have
+            // changed through enrichment. Never transfer artwork by position.
+            video.thumbnail = previous.thumbnail.clone();
+        }
+    }
+}
+pub(crate) fn write_episodes_cache_for(type_: &str, id: &str, videos: &[Video]) -> Vec<Video> {
+    let mut videos = videos.to_vec();
+    if let Some(cached) = read_episodes_cache_for(type_, id) {
+        retain_episode_artwork(&mut videos, &cached);
+    }
+    write_json(&episodes_key(type_, id), &videos);
+    videos
 }
 pub(crate) fn meta_header_key(type_: &str, id: &str) -> String {
     format!("meta_header:{type_}\u{1}{id}")
@@ -3157,5 +3181,46 @@ mod tests {
         // Installed order (B, then A), unknown addon (C) last, arrival order
         // within an addon preserved.
         assert_eq!(ids, vec!["b1", "a1", "a2", "c1"]);
+    }
+}
+
+#[cfg(test)]
+mod episode_artwork_tests {
+    use super::*;
+    #[test]
+    fn episode_artwork_survives_native_only_refresh_without_moving_to_other_ids() {
+        let cached = vec![Video {
+            id: "anikoto:ep:part2-one".into(),
+            season: Some(2),
+            episode: Some(14),
+            thumbnail: Some("https://images.example/14.jpg".into()),
+            ..Default::default()
+        }];
+        let mut fresh = vec![
+            Video {
+                id: cached[0].id.clone(),
+                season: Some(1),
+                episode: Some(1),
+                ..Default::default()
+            },
+            Video {
+                id: "anikoto:ep:different-part-one".into(),
+                season: Some(1),
+                episode: Some(1),
+                ..Default::default()
+            },
+        ];
+        retain_episode_artwork(&mut fresh, &cached);
+        assert_eq!(fresh[0].thumbnail, cached[0].thumbnail);
+        assert_eq!(fresh[0].season, Some(1));
+        assert_eq!(fresh[0].episode, Some(1));
+        assert!(fresh[0].extra.is_empty()); // no stale stream aliases restored
+        assert!(fresh[1].thumbnail.is_none());
+        fresh[0].thumbnail = Some("https://images.example/new.jpg".into());
+        retain_episode_artwork(&mut fresh, &cached);
+        assert_eq!(
+            fresh[0].thumbnail.as_deref(),
+            Some("https://images.example/new.jpg")
+        );
     }
 }
