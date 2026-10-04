@@ -551,7 +551,9 @@ restore; external GLES texture queries are Android-only, and sampler bindings
 use texture-unit indices. Its Linux regression test uses a Mesa surfaceless
 EGL 3.3 context (`libEGL.so.1`): it injects clip/mask/PBO/row-stride state,
 checks a real framebuffer readback, and verifies the host state round trip.
-Run `cargo test -p nova-player --lib clean_draw_and_host_state_round_trip`.
+Run `cargo test -p nova-player --lib --features slint/renderer-femtovg clean_draw_and_host_state_round_trip --locked`.
+The renderer feature supplies image decoding for the UI's embedded assets,
+which the root app normally enables through its desktop feature.
 The Linux PR check runs this test with Mesa software rendering, without a
 display server; the Windows job checks compilation of the production guard.
 The player's Linux D-Bus dependency explicitly enables its `async-io` runtime

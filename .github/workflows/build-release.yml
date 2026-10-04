@@ -90,7 +90,7 @@ jobs:
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
           __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/50_mesa.json
-        run: nix develop .#default --command cargo test -p nova-player --lib clean_draw_and_host_state_round_trip --locked
+        run: nix develop .#default --command cargo test -p nova-player --lib --features slint/renderer-femtovg clean_draw_and_host_state_round_trip --locked
 
   check-windows:
     name: Windows GNU target check
