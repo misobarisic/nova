@@ -176,8 +176,14 @@ impl EnrichmentResult {
 }
 
 fn cache_key(revision: u64, caller: &str, request: &EnrichmentRequest) -> String {
-    let input = serde_json::to_vec(&(revision, caller, request, cinemeta::ARTWORK_MATCH_VERSION))
-        .unwrap_or_default();
+    let input = serde_json::to_vec(&(
+        revision,
+        caller,
+        request,
+        cinemeta::ARTWORK_MATCH_VERSION,
+        crate::sequence::MAPPING_VERSION,
+    ))
+    .unwrap_or_default();
     let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, &input);
     format!(
         "metadata:v2:{}",
@@ -309,6 +315,10 @@ fn enrich_with(
                     released: e.released.clone(),
                 });
         }
+        let identity = crate::sequence::series_identity(&native.title);
+        // Split entries often call their only native cour "season 1". Its
+        // explicit title label describes the parent series' numbering instead.
+        let titled_entry = seasons.len() == 1 && identity.labeled;
         sources = seasons
             .into_iter()
             .map(|(season, episodes)| SourceSequence {
@@ -316,8 +326,12 @@ fn enrich_with(
                 title: native.title.clone(),
                 aliases: native.aliases.clone(),
                 year: native.year.clone(),
-                season: Some(season),
-                part: Some(1),
+                season: Some(if titled_entry && season == 1 {
+                    identity.season
+                } else {
+                    season
+                }),
+                part: Some(if titled_entry { identity.part } else { 1 }),
                 declared_count: None,
                 episodes,
             })
@@ -915,6 +929,128 @@ mod tests {
                 transport,
             },
         )
+    }
+
+    #[test]
+    fn subtitled_season_maps_to_parent_in_split_and_combined_layouts() {
+        for combined in [false, true] {
+            let title = "Solo Leveling Season 2: Arise from the Shadow";
+            let installed = addon("https://v3-cinemeta.strem.io", "tt", true);
+            let endpoint = addons::Addon::new(&installed.url).unwrap();
+            let fixture: Value =
+                serde_json::from_str(include_str!("metadata/fixtures/cinemeta-numbering.json"))
+                    .unwrap();
+            let mut canonical = fixture[if combined { "live" } else { "native" }].clone();
+            // The fixture contains just the second cour. Titles still prove
+            // alignment when the source's siblings are unavailable.
+            canonical["id"] = json!("tt21209876");
+            canonical["type"] = json!("series");
+            canonical["name"] = json!("Solo Leveling");
+            canonical["year"] = json!("2024");
+            let mut req = request();
+            req.details.media.title = title.into();
+            req.details.media.year = Some("2025".into());
+            req.query = None;
+            req.source_sequences.clear();
+            let original_videos = fixture["native"]["videos"].as_array().unwrap();
+            req.details.episodes = original_videos
+                .iter()
+                .enumerate()
+                .map(|(i, v)| Episode {
+                    provider_id: "fixture".into(),
+                    source_id: format!("ep:{}", i + 1),
+                    parent_id: "show".into(),
+                    number: i as u32 + 1,
+                    season: 1,
+                    title: format!("Episode {}: {}", i + 1, v["name"].as_str().unwrap()),
+                    released: v["released"].as_str().map(str::to_owned),
+                    ..Default::default()
+                })
+                .collect();
+            let transport = Arc::new(FixtureTransport {
+                responses: BTreeMap::from([
+                    (
+                        endpoint.catalog_url("series", "search", &[("search", "solo leveling")]),
+                        json!({"metas":[canonical.clone()]}),
+                    ),
+                    (
+                        endpoint.meta_url("series", "tt21209876"),
+                        json!({"meta":canonical}),
+                    ),
+                    (
+                        "https://cinemeta-live.strem.io/meta/series/tt21209876.json".into(),
+                        json!({"meta":fixture["live"].clone()}),
+                    ),
+                ]),
+                calls: Mutex::new(vec![]),
+                check_nested: false,
+            });
+            let result = run(req, &[installed], transport);
+            assert_eq!(result.status, "confirmed");
+            assert_eq!(result.episode_metadata.len(), 13, "combined={combined}");
+            for i in 1..=13 {
+                let native_id = format!("fixture:ep:{i}");
+                let metadata = &result.episode_metadata[&native_id];
+                let (season, number) = if combined { (1, i + 12) } else { (2, i) };
+                assert_eq!(metadata.ids, vec![format!("tt21209876:{season}:{number}")]);
+                assert_eq!(
+                    metadata.thumbnail,
+                    Some(format!(
+                        "https://episodes.metahub.space/tt21209876/1/{}/w780.jpg",
+                        i + 12
+                    ))
+                );
+                assert_eq!(
+                    (metadata.season, metadata.episode),
+                    (Some(season), Some(number))
+                );
+                assert_eq!(
+                    result.details.episodes[i as usize - 1].stable_id(),
+                    native_id
+                );
+                assert_eq!(result.details.episodes[i as usize - 1].number, i);
+            }
+        }
+    }
+
+    #[test]
+    fn single_native_season_uses_explicit_parent_season_even_without_title_anchors() {
+        let (addons, transport) = fixture();
+        let mut responses = transport.responses.clone();
+        let installed = addons[0].clone();
+        let endpoint = addons::Addon::new(&installed.url).unwrap();
+        let mut canonical = responses[&endpoint.meta_url("series", "tt100")]["meta"].clone();
+        canonical["videos"][0]["season"] = json!(2);
+        canonical["videos"][0]["id"] = json!("tt100:2:1");
+        canonical["videos"][0]["released"] = json!("2021-01-01");
+        responses.insert(
+            endpoint.meta_url("series", "tt100"),
+            json!({"meta":canonical}),
+        );
+        responses.insert(
+            endpoint.catalog_url("series", "search", &[("search", "show")]),
+            json!({"metas":[{"id":"tt100","type":"series","name":"Show","year":"2020"}]}),
+        );
+        let mut req = request();
+        req.query = None;
+        req.source_sequences.clear();
+        req.details.media.title = "Show Season 2: A New Arc".into();
+        req.details.media.year = Some("2021".into());
+        req.details.episodes[0].title = "Episode 1".into();
+        let result = run(
+            req,
+            &[installed],
+            Arc::new(FixtureTransport {
+                responses,
+                calls: Mutex::new(vec![]),
+                check_nested: false,
+            }),
+        );
+        assert_eq!(
+            result.episode_metadata["fixture:ep:1"].ids,
+            vec!["tt100:2:1"]
+        );
+        assert_eq!(result.details.episodes[0].season, 1);
     }
 
     #[test]

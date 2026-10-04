@@ -99,7 +99,12 @@ if (match.status !== "confirmed") return [];
 The result includes `sourceEpisodeId`, `sourceMediaId`, and native `number`.
 The same Rust engine supports separate seasons, split/merged cours, unequal
 part lengths, continuous numbering, ongoing declared counts, and unique title
-anchors. It rejects missing parts, numbering gaps, duplicate editions,
+anchors. Explicit season/cour labels before a subtitle (for example,
+`Show Season 2: A New Arc`) retain their season identity while searching the
+parent series name. The later entry may start after the parent series; it must
+still pass episode alignment and identifier/conflict checks. Unlabeled titles
+keep the strict year check. Local mapping cache keys include the matcher version
+so parser improvements replace obsolete results. It rejects missing parts, numbering gaps, duplicate editions,
 conflicting years/titles, specials, and ambiguous mappings. Shortened series
 names need two globally unique positional episode anchors with equal season
 counts and no conflicting anchors to confirm the remaining positions.

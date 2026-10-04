@@ -690,6 +690,52 @@ fn mapped_referer(host: Arc<MappingHost>, lookup: &StreamLookupRequest) -> Optio
 }
 
 #[test]
+fn subtitled_seasons_search_the_family_and_keep_source_sequence_labels() {
+    use base64::Engine;
+    let host = mapping_host(vec![
+        mapping_entry("first", "Mapped Show", 2024, 12),
+        mapping_entry("second", "Mapped Show Season 2: A New Arc", 2025, 13),
+        mapping_entry("third", "Mapped Show 3rd Season: Another Arc", 2026, 10),
+    ]);
+    let provider = provider();
+    let source_id = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode("/watch/second");
+    let details = provider
+        .call(host.clone(), json!({"op":"details", "sourceId":source_id}))
+        .unwrap();
+    assert_eq!(details["mappingQuery"], "mapped show");
+    let sequences: Vec<crate::SourceSequence> = serde_json::from_value(
+        provider
+            .call(
+                host.clone(),
+                json!({"op":"sourceSequences", "source":details["mappingContext"]}),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(sequences.len(), 3);
+    let second = sequences
+        .iter()
+        .find(|s| s.title.contains("Season 2"))
+        .unwrap();
+    assert_eq!((second.season, second.part), (Some(2), Some(1)));
+    assert_eq!(second.declared_count, Some(13));
+    assert!(
+        host.inner
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|u| u.contains("/filter?"))
+            .all(|u| {
+                Url::parse(u)
+                    .unwrap()
+                    .query_pairs()
+                    .any(|(key, value)| key == "keyword" && value == "mapped show")
+            })
+    );
+}
+
+#[test]
 fn merged_metadata_season_aligns_two_native_seasons_at_both_boundaries() {
     let host = mapping_host(vec![
         mapping_entry("asterisk", "The Asterisk War", 2015, 12),

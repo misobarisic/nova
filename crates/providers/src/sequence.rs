@@ -106,12 +106,17 @@ pub(crate) fn start_year(value: Option<&str>) -> Option<u32> {
         .and_then(|m| m.as_str().parse().ok())
 }
 
+// Include alignment changes in durable metadata fingerprints so a confirmed
+// but partial old mapping cannot hide improvements for thirty days.
+pub(crate) const MAPPING_VERSION: u32 = 2;
+
 pub(crate) fn series_identity(value: &str) -> SeriesIdentity {
     static PART: OnceLock<Regex> = OnceLock::new();
     static SEASON: OnceLock<Regex> = OnceLock::new();
     let mut base = normalized_title(value);
     let part_re = PART.get_or_init(|| {
-        Regex::new(r"\s+(?:(?:part|cour)\s+(\d+)|(\d+)(?:st|nd|rd|th)\s+(?:part|cour))$").unwrap()
+        Regex::new(r"\s+(?:(?:part|cour)\s+(\d+)|(\d+)(?:st|nd|rd|th)\s+(?:part|cour))(?:\s|$)")
+            .unwrap()
     });
     let mut part = 1;
     let mut labeled = false;
@@ -124,7 +129,9 @@ pub(crate) fn series_identity(value: &str) -> SeriesIdentity {
         base.truncate(caps.get(0).unwrap().start());
         labeled = true;
     }
-    let season_re = SEASON.get_or_init(|| Regex::new(r"\s+(?:(?:season|series)\s+(\d+)|(\d+)(?:st|nd|rd|th)\s+season|(first|second|third|fourth|fifth|sixth)\s+season|r(\d+)|(ii|iii|iv|v|vi))$").unwrap());
+    // Explicit labels may precede subtitles; shorthand/Roman suffixes stay
+    // end-anchored to avoid stripping numerals belonging to the series name.
+    let season_re = SEASON.get_or_init(|| Regex::new(r"\s+(?:(?:(?:season|series)\s+(\d+)|(\d+)(?:st|nd|rd|th)\s+season|(first|second|third|fourth|fifth|sixth)\s+season)(?:\s|$)|r(\d+)$|(ii|iii|iv|v|vi)$)").unwrap());
     let mut season = 1;
     if let Some(caps) = season_re.captures(&base) {
         season = caps
@@ -620,6 +627,44 @@ pub(crate) fn map_episodes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn season_and_cour_labels_before_subtitles_identify_the_series_family() {
+        for (title, season, part) in [
+            ("Solo Leveling Season 2: Arise from the Shadow", 2, 1),
+            ("Solo Leveling 2nd Season - Arise from the Shadow", 2, 1),
+            ("Solo Leveling Second Season: Arise from the Shadow", 2, 1),
+            ("Solo Leveling Season 2 Part 2: A New Arc", 2, 2),
+            ("Solo Leveling Season 2 2nd Cour: A New Arc", 2, 2),
+        ] {
+            let identity = series_identity(title);
+            assert_eq!(identity.base, "solo leveling", "{title}");
+            assert_eq!((identity.season, identity.part), (season, part), "{title}");
+            assert!(identity.labeled);
+            let source = MediaItem {
+                title: title.into(),
+                media_type: "series".into(),
+                year: Some("2025".into()),
+                ..Default::default()
+            };
+            let mut parent = MediaItem {
+                title: "Solo Leveling".into(),
+                year: Some("2024".into()),
+                ..source.clone()
+            };
+            assert_eq!(candidate_rank(&source, &parent), 2);
+            parent.year = Some("2026".into());
+            assert_eq!(candidate_rank(&source, &parent), 0);
+            parent.year = Some("2024".into());
+            parent.title = "Unrelated Show".into();
+            assert_eq!(candidate_rank(&source, &parent), 0);
+        }
+        // Unmarked subtitles and Roman numerals inside a title keep their
+        // identity; they are not proof that an older series is their parent.
+        for title in ["Solo Leveling: Side Story", "Chapter II of Another Story"] {
+            assert!(!series_identity(title).labeled);
+        }
+    }
 
     #[test]
     fn movie_sequels_require_full_title_or_shared_identity() {

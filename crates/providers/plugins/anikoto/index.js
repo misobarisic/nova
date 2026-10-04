@@ -422,12 +422,14 @@
 
   function seriesIdentity(value) {
     let base = normalizedTitle(value);
-    const part = base.match(/\s+(?:part|cour)\s+(\d+)$/)
-      || base.match(/\s+(\d+)(?:st|nd|rd|th)\s+(?:part|cour)$/);
+    const part = base.match(/\s+(?:part|cour)\s+(\d+)(?:\s|$)/)
+      || base.match(/\s+(\d+)(?:st|nd|rd|th)\s+(?:part|cour)(?:\s|$)/);
     if (part) base = base.slice(0, part.index).trim();
     const season = namedSeason(base);
     const roman = base.match(/\s+(ii|iii|iv|v|vi)$/);
-    base = base.replace(/\s+(?:(?:season|series)\s+\d+|\d+(?:st|nd|rd|th)\s+season|(?:first|second|third|fourth|fifth|sixth)\s+season|r\d+)$/, "");
+    // Explicit season labels can precede a subtitle ("Season 2: ...").
+    // Search the series family rather than requiring that subtitle in catalogs.
+    base = base.replace(/\s+(?:(?:(?:season|series)\s+\d+|\d+(?:st|nd|rd|th)\s+season|(?:first|second|third|fourth|fifth|sixth)\s+season)(?:\s.*)?|r\d+)$/, "");
     if (roman) base = base.slice(0, roman.index).trim();
     return { base, season: season || (roman ? ["i", "ii", "iii", "iv", "v", "vi"].indexOf(roman[1]) + 1 : 1),
       part: part ? Number(part[1]) : 1, labeled: !!season || !!roman || !!part };
@@ -449,7 +451,7 @@
 
   function lookupStreams(request) {
     const lookup = request.lookup || {};
-    const cacheKey = `lookup:v2:${nova.crypto.hmacSha256Base64Url(JSON.stringify(lookup), "anikoto-source-lookup")}`;
+    const cacheKey = `lookup:v3:${nova.crypto.hmacSha256Base64Url(JSON.stringify(lookup), "anikoto-source-lookup")}`;
     let cached;
     try { cached = JSON.parse(nova.storage.get(cacheKey) || "null"); } catch (_) {}
     if (cached && cached.expires > Date.now() && String(cached.path || "").startsWith("/watch/")) {
