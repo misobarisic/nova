@@ -2,7 +2,8 @@ import { SettingsSync, SettingSyncBadge } from "settings-sync.slint";
 import { SettingSyncModal } from "settings-sync-modal.slint";
 import { Theme } from "theme.slint";
 import { TrackingSettings } from "tracking.slint";
-import { ScrollView, Button } from "std-widgets.slint";
+import { Button } from "std-widgets.slint";
+import { ScrollView } from "scrollview.slint";
 import { Dropdown } from "dropdown.slint";
 import { SearchField } from "searchfield.slint";
 import { TrackingAccountRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, LicenseSource } from "types.slint";
@@ -260,7 +261,8 @@ export component SettingsPage {
     property <bool> narrow: root.detail_width < 680px;
     in property <bool> two_pane;
     property <length> usable_width: root.nav-viewport-width - root.rail_w - root.safe-left - root.safe-right - 36px;
-    property <length> combined_width: Math.min(1144px, root.usable_width);
+    property <length> backdrop_scroll_shift: root.two_pane ? 0px : (root.sub_open ? Math.min(0px, root.scroll_y) : root.landing_header_shift);
+    property <length> combined_width: Math.max(0px, root.usable_width);
     property <length> detail_width: root.two_pane ? root.combined_width - 324px : root.combined_width;
     changed two_pane => { if (root.two_pane) { root.sub_open = true; } }
     property <int> focus_request: SettingsStyle.focus-request;
@@ -1355,7 +1357,7 @@ export component SettingsPage {
             clip: true;
             Image {
                 x: 0px;
-                y: root.sub_open ? Math.min(0px, root.scroll_y) : root.landing_header_shift;
+                y: root.backdrop_scroll_shift;
                 width: 100%;
                 height: parent.height;
                 source: @image-url("../../assets/settings-header.svg");
@@ -1537,12 +1539,24 @@ export component SettingsPage {
                         // Cover the scrolling rows between and around the
                         // sticky controls, including the top gutter once the
                         // hero collapses. Keep the scroll viewport unchanged.
-                        Rectangle {
+                        landing_controls_canvas := Rectangle {
                             x: 0px;
                             y: 108px + root.landing_header_shift;
                             width: 100%;
                             height: 124px;
+                            clip: true;
                             background: Theme.current.artwork_canvas;
+                            // Paint the same page-space slice as the canvas:
+                            // an opaque flat mask would cut a notch in its glow.
+                            Image {
+                                visible: !Theme.true_black;
+                                x: settings_backdrop.absolute-position.x - landing_controls_canvas.absolute-position.x;
+                                y: settings_backdrop.absolute-position.y - landing_controls_canvas.absolute-position.y + root.backdrop_scroll_shift;
+                                width: settings_backdrop.width;
+                                height: settings_backdrop.height;
+                                source: @image-url("../../assets/settings-header.svg");
+                                image-fit: fill;
+                            }
                         }
 
                         Rectangle {

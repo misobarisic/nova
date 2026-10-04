@@ -14,7 +14,7 @@ import { Theme } from "theme.slint";
 // (dimmed) while no index is selected. `roomy` selects 44px touch rows,
 // otherwise 32px desktop rows; the closed box is always exactly one row
 // tall so filter rows keep their pinned heights.
-import { ScrollView } from "std-widgets.slint";
+import { ScrollView } from "scrollview.slint";
 
 export component Dropdown inherits Rectangle {
     in property <[string]> model;

@@ -1,7 +1,7 @@
 import { Theme } from "theme.slint";
 import { TrackingSheet } from "tracking.slint";
 import { TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow } from "types.slint";
-import { ScrollView, Spinner } from "std-widgets.slint";
+import { Spinner } from "std-widgets.slint";
 import { SearchField } from "searchfield.slint";
 import { CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem } from "types.slint";
 import { KbMark } from "kbnav.slint";
@@ -1476,9 +1476,6 @@ export component DetailPage {
                 // is otherwise unchanged — touch drags and mouse drags pan,
                 // the wheel scrolls regardless of `interactive`.
                 interactive: root.page_pan_enabled;
-                // The fluent ScrollView came with a scrollbar; this Flickable
-                // has none, so `page_scroll_bar` below draws the same slim
-                // indicator on top of it.
 
                 VerticalLayout {
                     width: 100%;
@@ -2682,19 +2679,6 @@ export component DetailPage {
                     }
                 }
             }
-        }
-
-        // Scroll indicator for the page Flickable above (a raw Flickable
-        // draws none): the slim thumb the fluent ScrollView used to show,
-        // in the app's dark palette. Position readout only — the page pans
-        // by dragging anywhere, so there is nothing to grab here.
-        if det_scroll.content-height > det_scroll.height: page_scroll_bar := Rectangle {
-            width: 3px;
-            height: Math.max(24px, det_scroll.height * det_scroll.height / det_scroll.content-height);
-            x: page.width - self.width - 2px;
-            y: page_body.y + det_scroll.y + (det_scroll.height - self.height) * (-det_scroll.content-y / (det_scroll.content-height - det_scroll.height));
-            border-radius: self.width / 2;
-            background: Theme.current.icon_disabled;
         }
 
         // Hold behind the pill-bar axis lock (see `filters_panned`): the

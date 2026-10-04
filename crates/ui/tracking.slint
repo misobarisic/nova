@@ -1,5 +1,6 @@
 import { Theme } from "theme.slint";
-import { Button, LineEdit, ComboBox, CheckBox, ScrollView } from "std-widgets.slint";
+import { Button, LineEdit, CheckBox } from "std-widgets.slint";
+import { ScrollView } from "scrollview.slint";
 import { PillButton, ToggleSwitch, SettingsStyle, SettingsRow, SettingsInput } from "settings-controls.slint";
 import { SettingSyncBadge } from "settings-sync.slint";
 import { Dropdown } from "dropdown.slint";
@@ -232,7 +233,7 @@ component EntryEditor inherits Rectangle {
             spacing: 6px;
             Text { text: @tr("Progress (explicit decreases are allowed)"); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0; }
             progress := LineEdit { text:root.entry.progress; accessible-label:@tr("Tracker progress"); }
-            status := ComboBox { model:root.entry.dates_writable ? [@tr("Planning"),@tr("Watching"),@tr("Completed"),@tr("On hold"),@tr("Dropped"),@tr("Repeating")] : [@tr("Planning"),@tr("Watching"),@tr("Completed"),@tr("On hold"),@tr("Dropped")]; current-index:root.entry.status; accessible-label:@tr("Tracker status"); }
+            status := Dropdown { accessible-role: combobox; model:root.entry.dates_writable ? [@tr("Planning"),@tr("Watching"),@tr("Completed"),@tr("On hold"),@tr("Dropped"),@tr("Repeating")] : [@tr("Planning"),@tr("Watching"),@tr("Completed"),@tr("On hold"),@tr("Dropped")]; current-index:root.entry.status; accessible-label:@tr("Tracker status"); }
             Text { text:root.entry.score_hint; color:Theme.current.text_secondary; wrap:word-wrap; min-width:0; }
             score := LineEdit { text:root.entry.score; accessible-label:@tr("Tracker score"); }
             started_check := CheckBox { text:@tr("Change start date"); enabled:root.entry.dates_writable; }

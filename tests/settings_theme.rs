@@ -78,6 +78,25 @@ fn theme_search_toggle_resize_and_android_back() {
     key(&app, slint::platform::Key::Return.into());
     assert!(!app.get_true_black());
     assert!(!app.global::<nova::Theme>().get_true_black());
+    // Wide Settings uses the extra width for its detail pane, rather than
+    // leaving a capped column beside unused space. Sticky controls still mask
+    // rows at a fixed size when the independent navigation pane scrolls.
+    let host = ElementHandle::find_by_element_id(&app, "SettingsPage::content_host")
+        .next()
+        .unwrap();
+    let initial_width = host.size().width;
+    app.window().set_size(slint::PhysicalSize::new(2048, 900));
+    settle(&app);
+    let expanded_width = host.size().width;
+    assert!((expanded_width - initial_width - 768.0).abs() < 1.0);
+    let mask = ElementHandle::find_by_element_id(&app, "SettingsPage::landing_controls_canvas")
+        .next()
+        .unwrap();
+    let initial_mask_y = mask.absolute_position().y;
+    app.set_settings_navigation_scroll(-108.0);
+    settle(&app);
+    assert!((initial_mask_y - mask.absolute_position().y - 108.0).abs() < 1.0);
+    assert!((mask.size().height - 124.0).abs() < 1.0);
     app.window().set_size(slint::PhysicalSize::new(390, 844));
     settle(&app);
     app.set_system_back_request(app.get_system_back_request() + 1);
