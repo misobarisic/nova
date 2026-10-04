@@ -133,6 +133,9 @@ struct SearchTarget {
     supports_skip: bool,
     next_skip: usize,
     exhausted: bool,
+    /// All pages received from this source, kept in source order so partial
+    /// fan-out responses can be merged deterministically as they arrive.
+    results: Vec<MetaPreview>,
 }
 
 /// Search selections use stable source identities rather than browse indices.
@@ -250,6 +253,8 @@ struct Shared {
     search_filters: SearchFilters,
     search_targets: Vec<SearchTarget>,
     search_generation: u64,
+    /// Requests still outstanding in the current search or pagination wave.
+    search_pending_requests: usize,
     search_loading_more: bool,
     search_poster_inflight: HashSet<(u64, String, String)>,
     /// Saved library items (My Library), order = insertion order.

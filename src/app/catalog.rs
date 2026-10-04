@@ -1,5 +1,6 @@
 //! Discover catalog: fetching, pagination, prefetching and pickers.
 use super::*;
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 impl Bridge {
     pub(super) fn load_catalog(&self) {
@@ -952,6 +953,7 @@ impl Bridge {
             state.search_targets.clear();
             state.search_previews.clear();
             state.search_poster_inflight.clear();
+            state.search_pending_requests = 0;
             state.search_loading_more = false;
             state.search_generation
         };
@@ -1009,6 +1011,7 @@ impl Bridge {
             state.search = trimmed.clone();
             state.search_previews.clear();
             state.search_targets = filtered_search_targets(&state.installed, &state.search_filters);
+            state.search_pending_requests = 0;
             state.search_loading_more = false;
             state.search_poster_inflight.clear();
             (generation, state.search_targets.len())
@@ -1045,11 +1048,11 @@ impl Bridge {
         append: bool,
     ) {
         let work: Vec<(usize, String, String)> = {
-            let state = self.shared.lock().unwrap();
+            let mut state = self.shared.lock().unwrap();
             if generation != state.search_generation {
                 return;
             }
-            target_indices
+            let work = target_indices
                 .into_iter()
                 .filter_map(|index| {
                     let target = state.search_targets.get(index)?;
@@ -1071,7 +1074,9 @@ impl Bridge {
                         target.type_.clone(),
                     ))
                 })
-                .collect()
+                .collect::<Vec<_>>();
+            state.search_pending_requests = work.len();
+            work
         };
 
         if work.is_empty() {
@@ -1082,12 +1087,8 @@ impl Bridge {
             return;
         }
 
-        let results = Arc::new(Mutex::new(Vec::<(usize, Vec<MetaPreview>)>::new()));
-        let remaining = Arc::new(AtomicUsize::new(work.len()));
         for (target_index, url, type_) in work {
             let bridge = self.clone();
-            let results = results.clone();
-            let remaining = remaining.clone();
             net::fetch_bytes(url, move |result| {
                 let mut metas = result
                     .ok()
@@ -1098,20 +1099,15 @@ impl Bridge {
                         meta.type_ = type_.clone();
                     }
                 }
-                results.lock().unwrap().push((target_index, metas));
-                if remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    let mut pages = std::mem::take(&mut *results.lock().unwrap());
-                    pages.sort_by_key(|(index, _)| *index);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        bridge.apply_search_results(generation, pages, append);
-                    });
-                }
+                let _ = slint::invoke_from_event_loop(move || {
+                    bridge.apply_search_results(generation, vec![(target_index, metas)], append);
+                });
             });
         }
     }
 
-    /// Apply one fan-out page in manifest order, preserving the browse model
-    /// and maintaining independent cursors for catalogs that support skip.
+    /// Apply each completed source page immediately, preserving deterministic
+    /// source ordering and independent cursors for catalogs that support skip.
     fn apply_search_results(
         &self,
         generation: u64,
@@ -1119,56 +1115,46 @@ impl Bridge {
         append: bool,
     ) {
         let Some(app) = self.app() else { return };
-        let (old_previews, ranked_metas, new_count, can_load_more) = {
+        let (old_previews, ranked_metas, new_count, can_load_more, pending) = {
             let mut state = self.shared.lock().unwrap();
             if generation != state.search_generation {
                 return;
             }
             let old_previews = state.search_previews.clone();
 
-            for (index, metas) in &pages {
-                if let Some(target) = state.search_targets.get_mut(*index) {
-                    if metas.is_empty() || !target.supports_skip {
-                        target.exhausted = true;
-                    } else {
-                        target.next_skip += metas.len();
-                    }
-                }
+            for (index, metas) in pages {
+                record_search_source_page(&mut state.search_targets, index, metas);
             }
 
-            let mut seen: HashSet<(String, String)> = state
-                .search_previews
+            let query = state.search.clone();
+            let merged = ranked_search_results(&query, &state.search_targets);
+            let old_keys: HashSet<(String, String)> = old_previews
                 .iter()
                 .map(|meta| (meta.type_.clone(), meta.id.clone()))
                 .collect();
-            let mut new_metas = Vec::new();
-            for (_, metas) in pages {
-                for meta in metas {
-                    if !meta.id.is_empty() && seen.insert((meta.type_.clone(), meta.id.clone())) {
-                        new_metas.push(meta);
-                    }
-                }
-            }
-
-            let new_count = new_metas.len();
-            if append {
-                state.search_previews.extend(new_metas.iter().cloned());
-            } else {
-                state.search_previews = new_metas.clone();
-            }
-            let query = state.search.clone();
-            // Stable sorting leaves the existing add-on/catalog order intact
-            // for equally relevant matches.
-            state
-                .search_previews
-                .sort_by_cached_key(|meta| std::cmp::Reverse(search_relevance_score(&query, meta)));
-            let ranked_metas = state.search_previews.clone();
-            state.search_loading_more = false;
-            let can_load_more = state
-                .search_targets
+            let new_count = merged
                 .iter()
-                .any(|target| target.supports_skip && !target.exhausted);
-            (old_previews, ranked_metas, new_count, can_load_more)
+                .filter(|meta| !old_keys.contains(&(meta.type_.clone(), meta.id.clone())))
+                .count();
+            state.search_previews = merged;
+            let ranked_metas = state.search_previews.clone();
+            state.search_pending_requests = state.search_pending_requests.saturating_sub(1);
+            let pending = state.search_pending_requests;
+            if pending == 0 {
+                state.search_loading_more = false;
+            }
+            let can_load_more = pending == 0
+                && state
+                    .search_targets
+                    .iter()
+                    .any(|target| target.supports_skip && !target.exhausted);
+            (
+                old_previews,
+                ranked_metas,
+                new_count,
+                can_load_more,
+                pending,
+            )
         };
 
         // Rebuild in relevance order while carrying already-decoded posters
@@ -1186,9 +1172,13 @@ impl Bridge {
         let mut poster_jobs = Vec::new();
         for meta in &ranked_metas {
             let key = (meta.type_.clone(), meta.id.clone());
-            let card = old_cards
-                .remove(&key)
-                .unwrap_or_else(|| search_media_card(meta));
+            let mut card = search_media_card(meta);
+            if let Some(old) = old_cards.remove(&key)
+                && old.poster_path == card.poster_path
+            {
+                card.poster = old.poster;
+                card.is_loaded = old.is_loaded;
+            }
             if !card.is_loaded
                 && let Some(poster) = &meta.poster
             {
@@ -1196,28 +1186,28 @@ impl Bridge {
             }
             cards.push(card);
         }
-        app.set_search_results(Rc::new(VecModel::from(cards)).into());
+        update_search_result_model(&app, &old_previews, &ranked_metas, cards);
 
         for (type_, id, poster) in poster_jobs {
             self.fetch_search_card_poster(type_, id, poster, generation);
         }
-        app.set_search_loading(false);
-        app.set_search_loading_more(false);
+        app.set_search_loading(pending > 0 && !append);
+        app.set_search_loading_more(pending > 0 && append);
         app.set_search_can_load_more(can_load_more);
-        if !append {
+        if !append && pending == 0 {
             let query = self.shared.lock().unwrap().search.clone();
             self.remember_search(&query);
         }
         crate::web_log(&format!(
-            "nova: search page applied ({} new items, append={append}, can_load_more={can_load_more})",
-            new_count
+            "nova: search source applied ({} new items, pending={pending}, append={append}, can_load_more={can_load_more})",
+            new_count,
         ));
     }
 
     pub(super) fn load_more_search(&self) {
         let (generation, query, targets) = {
             let mut state = self.shared.lock().unwrap();
-            if state.search_loading_more {
+            if state.search_loading_more || state.search_pending_requests > 0 {
                 return;
             }
             let targets: Vec<usize> = state
@@ -1248,6 +1238,7 @@ impl Bridge {
             state.search_filters = SearchFilters::default();
             state.search_targets.clear();
             state.search_poster_inflight.clear();
+            state.search_pending_requests = 0;
             state.search_loading_more = false;
         }
         if let Some(app) = self.app() {
@@ -1713,6 +1704,7 @@ fn build_search_targets(installed: &[Installed]) -> Vec<SearchTarget> {
                 supports_skip: catalog.supports_extra("skip"),
                 next_skip: 0,
                 exhausted: false,
+                results: Vec::new(),
             });
         }
     }
@@ -1744,15 +1736,94 @@ fn remember_search_query(history: &mut Vec<String>, query: &str) {
     history.truncate(20);
 }
 
+/// Flatten all delivered source pages in declared source order. Stable
+/// deduplication means an item keeps the metadata from its highest-priority
+/// source even when that source responds later.
+fn unique_search_results(targets: &[SearchTarget]) -> Vec<MetaPreview> {
+    let mut seen = HashSet::new();
+    targets
+        .iter()
+        .flat_map(|target| &target.results)
+        .filter(|meta| !meta.id.is_empty() && seen.insert((meta.type_.clone(), meta.id.clone())))
+        .cloned()
+        .collect()
+}
+
+fn update_search_result_model(
+    app: &AppWindow,
+    old_previews: &[MetaPreview],
+    new_previews: &[MetaPreview],
+    cards: Vec<MediaCard>,
+) {
+    let model = app.get_search_results();
+    let Some(model) = model.as_any().downcast_ref::<VecModel<MediaCard>>() else {
+        app.set_search_results(Rc::new(VecModel::from(cards)).into());
+        return;
+    };
+    if model.row_count() != old_previews.len() {
+        app.set_search_results(Rc::new(VecModel::from(cards)).into());
+        return;
+    }
+
+    let mut current_keys: Vec<(String, String)> = old_previews
+        .iter()
+        .map(|meta| (meta.type_.clone(), meta.id.clone()))
+        .collect();
+    for (index, (meta, card)) in new_previews.iter().zip(cards).enumerate() {
+        let key = (meta.type_.clone(), meta.id.clone());
+        if current_keys.get(index) != Some(&key) {
+            if let Some(previous_index) = current_keys
+                .iter()
+                .enumerate()
+                .skip(index + 1)
+                .find_map(|(at, old_key)| (old_key == &key).then_some(at))
+            {
+                let previous_card = model.remove(previous_index);
+                model.insert(index, previous_card);
+                current_keys.remove(previous_index);
+                current_keys.insert(index, key);
+            } else {
+                model.insert(index, card.clone());
+                current_keys.insert(index, key);
+            }
+        }
+        model.set_row_data(index, card);
+    }
+    while current_keys.len() > new_previews.len() {
+        model.remove(current_keys.len() - 1);
+        current_keys.pop();
+    }
+}
+
+fn record_search_source_page(targets: &mut [SearchTarget], index: usize, metas: Vec<MetaPreview>) {
+    let Some(target) = targets.get_mut(index) else {
+        return;
+    };
+    if metas.is_empty() || !target.supports_skip {
+        target.exhausted = true;
+    } else {
+        target.next_skip += metas.len();
+    }
+    target.results.extend(metas);
+}
+
+fn ranked_search_results(query: &str, targets: &[SearchTarget]) -> Vec<MetaPreview> {
+    let mut results = unique_search_results(targets);
+    // Stable sorting preserves declared source and provider result order for
+    // equally relevant rows.
+    results.sort_by_cached_key(|meta| std::cmp::Reverse(search_relevance_score(query, meta)));
+    results
+}
+
 fn search_relevance_score(query: &str, meta: &MetaPreview) -> u32 {
     let title = meta.title();
     let year = meta.year_str();
     search_match_score(query, &title, year.as_deref())
 }
 
-/// Rank exact, prefix, phrase, token and typo-tolerant matches in descending
-/// tiers. The gaps between tiers ensure a fuzzy result cannot outrank an exact
-/// or strong word match just because it has a similar character count.
+/// Rank exact, prefix, phrase, complete-token and typo-tolerant title matches
+/// in descending tiers. Weak partial-token matches remain at the bottom, and
+/// all provider results stay visible regardless of score.
 fn search_match_score(query: &str, title: &str, year: Option<&str>) -> u32 {
     let query = normalize_search_text(query);
     let title = normalize_search_text(title);
@@ -1796,68 +1867,89 @@ fn search_match_score(query: &str, title: &str, year: Option<&str>) -> u32 {
         return 0;
     }
 
-    let mut used_title_tokens = vec![false; title_tokens.len()];
-    let mut matched_positions = Vec::new();
-    let mut exact_hits = 0usize;
-    let mut fuzzy_hits = 0usize;
-    for query_token in &query_tokens {
-        if let Some(index) = title_tokens
-            .iter()
-            .enumerate()
-            .find_map(|(index, title_token)| {
-                (!used_title_tokens[index] && title_token == query_token).then_some(index)
-            })
-        {
-            used_title_tokens[index] = true;
-            matched_positions.push(index);
-            exact_hits += 1;
-            continue;
+    // Match exact tokens first and then the strongest remaining fuzzy pairs.
+    // This is a one-to-one assignment, so one generic title word cannot stand
+    // in for several query words. Short words stay exact-only to avoid noisy
+    // fuzzy hits such as matching unrelated three-letter titles.
+    let mut candidates = Vec::new();
+    for (query_index, query_token) in query_tokens.iter().enumerate() {
+        for (title_index, title_token) in title_tokens.iter().enumerate() {
+            let similarity = if query_token == title_token {
+                1_000
+            } else if query_token.chars().all(char::is_numeric)
+                || query_token.chars().count() < 4
+                || title_token.chars().count() < 4
+            {
+                0
+            } else {
+                normalized_edit_similarity(query_token, title_token)
+            };
+            if similarity == 1_000 || similarity >= 700 {
+                candidates.push((similarity, query_index, title_index));
+            }
         }
+    }
+    candidates.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
 
-        // Exact numeric tokens (especially years) should not fuzzy-match a
-        // neighboring number; typo tolerance is for title words.
-        if query_token.chars().all(|character| character.is_numeric()) {
-            continue;
-        }
-        let best = title_tokens
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !used_title_tokens[*index])
-            .map(|(index, title_token)| {
-                (index, normalized_edit_similarity(query_token, title_token))
-            })
-            .max_by_key(|(_, similarity)| *similarity);
-        if let Some((index, _similarity)) = best.filter(|(_, similarity)| *similarity >= 700) {
-            used_title_tokens[index] = true;
-            matched_positions.push(index);
-            fuzzy_hits += 1;
+    let mut used_query = vec![false; query_tokens.len()];
+    let mut used_title = vec![false; title_tokens.len()];
+    let mut matches = Vec::new();
+    for (similarity, query_index, title_index) in candidates {
+        if !used_query[query_index] && !used_title[title_index] {
+            used_query[query_index] = true;
+            used_title[title_index] = true;
+            matches.push((query_index, title_index, similarity));
         }
     }
 
-    let in_order = matched_positions
-        .windows(2)
-        .filter(|pair| pair[0] < pair[1])
+    let exact_hits = matches
+        .iter()
+        .filter(|(_, _, score)| *score == 1_000)
         .count();
-    let matched = exact_hits + fuzzy_hits;
-    if matched == query_tokens.len() {
+    let fuzzy_hits = matches.len() - exact_hits;
+    if matches.len() == query_tokens.len() {
         if fuzzy_hits == 0 {
-            return 720_000 + in_order.min(20) as u32 * 1_000;
+            return 720_000;
         }
-        return 650_000 + in_order.min(20) as u32 * 1_000 + exact_hits.min(20) as u32 * 500;
-    }
-    if matched > 0 {
-        return 350_000
-            + (matched as u32 * 200_000 / query_tokens.len() as u32)
-            + exact_hits.min(20) as u32 * 500;
+        let average_fuzzy = matches
+            .iter()
+            .filter(|(_, _, score)| *score < 1_000)
+            .map(|(_, _, score)| *score)
+            .sum::<u32>()
+            / fuzzy_hits as u32;
+        return 600_000 + exact_hits.min(20) as u32 * 1_000 + average_fuzzy / 20;
     }
 
-    // Compare the complete query against short title-word windows, so spacing
-    // and small spelling differences (e.g. "spiderman" / "spider man") match.
-    if query.chars().count() < 3 {
+    // Partial matching needs at least two useful tokens and roughly two
+    // thirds of the query. This keeps a shared word from ranking above a
+    // complete typo-tolerant title match.
+    if matches.len() > 1 && matches.len() * 3 >= query_tokens.len() * 2 {
+        return 300_000
+            + (matches.len() as u32 * 100_000 / query_tokens.len() as u32)
+            + exact_hits.min(20) as u32 * 1_000;
+    }
+
+    // Compare the whole query with short title-word windows for joined or
+    // split names (for example "spiderman" / "spider man"). Keep numeric
+    // tokens exact even in this fallback.
+    let numeric_tokens_match = query_tokens
+        .iter()
+        .filter(|token| token.chars().all(char::is_numeric))
+        .all(|query_token| title_tokens.contains(query_token));
+    if query.chars().count() < 3 || !numeric_tokens_match {
         return 0;
     }
     let min_window = query_tokens.len().saturating_sub(1).max(1);
     let max_window = (query_tokens.len() + 1).min(title_tokens.len());
+    if min_window > max_window {
+        return 0;
+    }
     let mut best_similarity = 0;
     for width in min_window..=max_window {
         for start in 0..=title_tokens.len() - width {
@@ -1865,8 +1957,8 @@ fn search_match_score(query: &str, title: &str, year: Option<&str>) -> u32 {
             best_similarity = best_similarity.max(normalized_edit_similarity(&query, &window));
         }
     }
-    if best_similarity >= 650 {
-        100_000 + best_similarity * 100
+    if best_similarity >= 750 {
+        550_000 + best_similarity * 100
     } else {
         0
     }
@@ -1875,7 +1967,11 @@ fn search_match_score(query: &str, title: &str, year: Option<&str>) -> u32 {
 fn normalize_search_text(value: &str) -> String {
     let mut normalized = String::new();
     let mut pending_space = false;
-    for character in value.chars().flat_map(char::to_lowercase) {
+    for character in value
+        .nfd()
+        .flat_map(char::to_lowercase)
+        .filter(|character| !is_combining_mark(*character))
+    {
         if character.is_alphanumeric() {
             if pending_space && !normalized.is_empty() {
                 normalized.push(' ');
@@ -2085,6 +2181,29 @@ pub(super) fn catalog_genres(catalog: &addons::Catalog) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn search_target(id: &str) -> SearchTarget {
+        SearchTarget {
+            addon_url: format!("https://{id}.example/manifest.json"),
+            type_: "movie".into(),
+            catalog_id: id.into(),
+            genre_options: Vec::new(),
+            genre: String::new(),
+            supports_skip: true,
+            next_skip: 0,
+            exhausted: false,
+            results: Vec::new(),
+        }
+    }
+
+    fn search_meta(id: &str, title: &str) -> MetaPreview {
+        MetaPreview {
+            id: id.into(),
+            type_: "movie".into(),
+            name: title.into(),
+            ..Default::default()
+        }
+    }
+
     fn extra(name: &str, options: &[&str]) -> addons::CatalogExtra {
         addons::CatalogExtra {
             name: name.into(),
@@ -2191,10 +2310,72 @@ mod tests {
     }
 
     #[test]
+    fn search_relevance_handles_word_order_spacing_accents_and_weak_partials() {
+        let reordered = search_match_score("wars star", "Star Wars", None);
+        let spacing = search_match_score("spiderman", "Spider Man", None);
+        let accent = search_match_score("Amelie", "Amélie", None);
+        let weak_partial = search_match_score("star wars", "Star Trek", None);
+        let typo = search_match_score("satr wars", "Star Wars", None);
+
+        assert!(reordered > typo);
+        assert!(spacing > typo);
+        assert_eq!(accent, 1_000_000);
+        assert!(typo > weak_partial);
+        assert_eq!(weak_partial, 0);
+    }
+
+    #[test]
     fn search_relevance_uses_year_but_does_not_fuzzy_match_numeric_tokens() {
         let exact_year = search_match_score("Movie 2020", "Movie", Some("2020"));
         let nearby_year = search_match_score("Movie 2021", "Movie", Some("2020"));
         assert!(exact_year > nearby_year);
+    }
+
+    #[test]
+    fn partial_search_results_are_retained_and_stably_deduplicated() {
+        let mut targets = vec![search_target("first"), search_target("second")];
+
+        // The second source responds first. Its unique result is immediately
+        // visible even though the earlier source has not returned yet.
+        record_search_source_page(
+            &mut targets,
+            1,
+            vec![
+                search_meta("shared", "Common duplicate"),
+                search_meta("second", "Common"),
+            ],
+        );
+        let first_delivery = unique_search_results(&targets);
+        assert_eq!(
+            first_delivery
+                .iter()
+                .map(|meta| meta.id.as_str())
+                .collect::<Vec<_>>(),
+            ["shared", "second"]
+        );
+
+        // The preferred source arrives later. Its metadata wins the duplicate,
+        // while both previously and newly delivered unique items remain.
+        record_search_source_page(
+            &mut targets,
+            0,
+            vec![
+                search_meta("shared", "Common"),
+                search_meta("first", "Common"),
+            ],
+        );
+        let complete = ranked_search_results("Common", &targets);
+        assert_eq!(
+            complete
+                .iter()
+                .map(|meta| meta.id.as_str())
+                .collect::<Vec<_>>(),
+            ["shared", "first", "second"]
+        );
+        let unique = unique_search_results(&targets);
+        assert_eq!(unique.len(), 3);
+        assert_eq!(unique[0].title(), "Common");
+        assert_eq!(targets[0].next_skip, 2);
     }
 
     #[test]

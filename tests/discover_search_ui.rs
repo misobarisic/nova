@@ -53,6 +53,8 @@ fn search_results_back_restores_discover_filters_and_browse_model() {
     app.set_genre_combo_idx(2);
     app.set_catalog(Rc::new(VecModel::from((0..30).map(card).collect::<Vec<_>>())).into());
     app.set_search_results(Rc::new(VecModel::from(vec![card(100), card(101)])).into());
+    // Results can already be visible while other search sources are pending.
+    app.set_search_loading(true);
 
     let weak = app.as_weak();
     app.on_search_back_picked(move || {
@@ -111,6 +113,41 @@ fn search_results_back_restores_discover_filters_and_browse_model() {
                     .borrow_mut()
                     .push("search results should not show an item count".into());
             }
+            if !app.get_search_loading()
+                || ElementHandle::find_by_accessible_label(&app, "Movie 100")
+                    .next()
+                    .is_none()
+                || ElementHandle::find_by_accessible_label(&app, "No results for this search.")
+                    .next()
+                    .is_some()
+            {
+                failures2.borrow_mut().push(
+                    "partial search results should stay visible while loading without an empty hint"
+                        .into(),
+                );
+            }
+
+            let delivered = app.get_search_results();
+            app.set_search_results(Rc::new(VecModel::from(Vec::<nova::MediaCard>::new())).into());
+            app.set_search_loading(true);
+            if ElementHandle::find_by_accessible_label(&app, "No results for this search.")
+                .next()
+                .is_some()
+            {
+                failures2
+                    .borrow_mut()
+                    .push("empty hint should stay hidden while sources are pending".into());
+            }
+            app.set_search_loading(false);
+            if ElementHandle::find_by_accessible_label(&app, "No results for this search.")
+                .next()
+                .is_none()
+            {
+                failures2.borrow_mut().push(
+                    "empty hint should appear after all sources finish with no results".into(),
+                );
+            }
+            app.set_search_results(delivered);
 
             let Some(back) = ElementHandle::find_by_accessible_label(&app, "Back").next() else {
                 failures2

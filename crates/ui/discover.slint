@@ -638,7 +638,7 @@ component DiscoverGrid {
                 }
             }
 
-            if root.loading_more: Rectangle {
+            if root.loading_more || (root.loading && root.catalog.length > 0): Rectangle {
                 row: Math.floor(root.catalog.length / root.cols) + 1;
                 col: 0;
                 colspan: root.cols;

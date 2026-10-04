@@ -69,6 +69,7 @@ nova-sync = { path = "crates/sync" }
 nova-tracking = { path = "crates/tracking" }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
+unicode-normalization = "0.1"
 
 # QR encoding for the sync invite ticket (Settings → Sync). Disable default
 # features so we don't pull the `image` crate: we read the module matrix via
