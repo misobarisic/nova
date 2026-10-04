@@ -1339,6 +1339,11 @@ impl Bridge {
         app.set_episode_page_count(page_count(total) as i32);
         app.set_episode_page_start(start as i32);
         app.set_episode_total(total as i32);
+        // Late detail enrichment can supply the mappings needed by an open
+        // move review. Recompute its counts instead of leaving an initial 0.
+        if app.get_library_duplicates_open() && app.get_library_duplicate_selection() >= 0 {
+            self.library_duplicate_action(app.get_library_duplicate_selection());
+        }
     }
 
     /// Main thread: the Episodes tab pager moved to `page` (absolute; clamped
@@ -2502,7 +2507,7 @@ fn stream_response_is_current(state: &Shared, request_id: &str, generation: u64)
             .is_some_and(|modal| modal.request_id == request_id)
 }
 
-fn public_stream_id(id: &str) -> bool {
+pub(crate) fn public_stream_id(id: &str) -> bool {
     if nova_providers::ExternalId::parse(id).is_some() {
         return true;
     }
@@ -2586,14 +2591,24 @@ fn episode_stream_ids(modal: &ModalItem, request_id: &str) -> Vec<String> {
         .videos
         .iter()
         .find(|video| video.id == request_id)
-        .filter(|video| {
-            video
-                .extra
-                .get("novaMetadataRevision")
-                .and_then(serde_json::Value::as_u64)
-                .is_none_or(|revision| revision == nova_providers::metadata_revision())
-        })
-        .and_then(|video| video.extra.get("novaStreamIds"))
+        .map(confirmed_episode_stream_ids)
+        .unwrap_or_default()
+}
+
+/// Metadata's confirmed aliases are shared by stream routing and Library
+/// migration. Old inventory revisions must never become migration evidence.
+pub(crate) fn confirmed_episode_stream_ids(video: &Video) -> Vec<String> {
+    if video
+        .extra
+        .get("novaMetadataRevision")
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|revision| revision != nova_providers::metadata_revision())
+    {
+        return Vec::new();
+    }
+    video
+        .extra
+        .get("novaStreamIds")
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()

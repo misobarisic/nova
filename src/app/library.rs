@@ -1062,8 +1062,8 @@ fn possible_library_duplicates(
         .collect()
 }
 
-/// Only identical native IDs or unique non-placeholder episode titles prove
-/// a transfer. Episode numbers alone are unsafe across split seasons/cours.
+/// Reuse confirmed episode aliases before comparing unique real titles.
+/// Episode numbers alone are unsafe across split seasons/cours.
 fn duplicate_progress_copies(
     old: &LibraryEntry,
     new: &ModalItem,
@@ -1096,21 +1096,47 @@ fn duplicate_progress_copies(
             && !["unknown", "untitled", "tba", "tbd"].contains(&remainder))
         .then(|| remainder.to_string())
     };
+    let start_year = |year: &str| {
+        year.get(..4)
+            .filter(|value| value.bytes().all(|c| c.is_ascii_digit()))
+            .and_then(|value| value.parse::<u32>().ok())
+    };
+    let compatible_years = old.year.is_empty()
+        || new.year.is_empty()
+        || start_year(&old.year).is_none()
+        || start_year(&new.year).is_none()
+        || start_year(&old.year) == start_year(&new.year);
+    let identities = |video: &Video| {
+        std::iter::once(video.id.clone())
+            .chain(
+                confirmed_episode_stream_ids(video)
+                    .into_iter()
+                    .filter(|id| public_stream_id(id)),
+            )
+            .collect::<HashSet<_>>()
+    };
+    let new_identities = new.videos.iter().map(identities).collect::<Vec<_>>();
     let mut copies = Vec::new();
     let mut unmatched = 0;
     let mut used = HashSet::new();
     for record in progress.values().filter(|p| p.series_id == old.id) {
-        let native = new
+        let old_video = old_videos
+            .iter()
+            .find(|video| video.id == record.episode_id);
+        let old_ids = old_video
+            .map(identities)
+            .unwrap_or_else(|| HashSet::from([record.episode_id.clone()]));
+        let confirmed = new
             .videos
             .iter()
-            .filter(|v| v.id == record.episode_id)
+            .zip(&new_identities)
+            .filter(|(_, ids)| !old_ids.is_disjoint(ids))
+            .map(|(video, _)| video)
             .collect::<Vec<_>>();
-        let matches = if native.len() == 1 {
-            native
+        let matches = if !confirmed.is_empty() {
+            confirmed
         } else {
-            old_videos
-                .iter()
-                .find(|v| v.id == record.episode_id)
+            old_video
                 .and_then(meaningful)
                 .filter(|key| {
                     old_videos
@@ -1119,11 +1145,19 @@ fn duplicate_progress_copies(
                         .count()
                         == 1
                 })
-                .filter(|_| old.year.is_empty() || new.year.is_empty() || old.year == new.year)
+                .filter(|_| compatible_years)
                 .map(|key| {
                     new.videos
                         .iter()
-                        .filter(|v| meaningful(v).as_ref() == Some(&key))
+                        .zip(&new_identities)
+                        .filter(|(video, ids)| {
+                            // A matching caption must not overrule a confirmed
+                            // different canonical episode (e.g. another season).
+                            meaningful(video).as_ref() == Some(&key)
+                                && (!old_ids.iter().any(|id| public_stream_id(id))
+                                    || !ids.iter().any(|id| public_stream_id(id)))
+                        })
+                        .map(|(video, _)| video)
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default()
@@ -1196,6 +1230,116 @@ mod duplicate_tests {
         );
         assert!(possible_library_duplicates(&entries, "x", "series", "!!!").is_empty());
     }
+    #[test]
+    fn confirmed_episode_aliases_move_only_the_destination_season_without_old_cache() {
+        let mut old = entry("tt9999999", "The Apothecary Diaries");
+        old.year = "2023–2025".into();
+        let videos = (1..=24)
+            .map(|n| {
+                let mut v = video(&format!("anikoto:episode:{n}"), &format!("Episode {n}"));
+                v.extra.insert(
+                    "novaStreamIds".into(),
+                    serde_json::json!([format!("tt9999999:1:{n}")]),
+                );
+                v
+            })
+            .collect::<Vec<_>>();
+        let mut new = modal(videos);
+        new.year = "2023".into();
+        let progress = (1..=2)
+            .flat_map(|season| {
+                (1..=24).map(move |n| {
+                    let id = format!("tt9999999:{season}:{n}");
+                    (
+                        progress_map_key("tt9999999", &id),
+                        EpisodeProgress {
+                            series_id: "tt9999999".into(),
+                            episode_id: id,
+                            watched: true,
+                            position_secs: 1400.0,
+                            duration_secs: 1440.0,
+                            ..Default::default()
+                        },
+                    )
+                })
+            })
+            .collect::<HashMap<_, _>>();
+        let (copies, unmatched) = duplicate_progress_copies(&old, &new, &[], &progress);
+        assert_eq!((copies.len(), unmatched), (24, 24));
+        assert!(
+            copies
+                .iter()
+                .all(|p| p.watched && p.series_id == "new" && p.episode_id.starts_with("anikoto:"))
+        );
+        // Duplicate claims and obsolete inventory aliases are not evidence.
+        new.videos.push(new.videos[0].clone());
+        assert_eq!(
+            duplicate_progress_copies(&old, &new, &[], &progress)
+                .0
+                .len(),
+            23
+        );
+        for video in &mut new.videos {
+            video.extra.insert(
+                "novaMetadataRevision".into(),
+                serde_json::json!(nova_providers::metadata_revision().wrapping_add(1)),
+            );
+        }
+        assert_eq!(duplicate_progress_copies(&old, &new, &[], &progress).1, 48);
+    }
+
+    #[test]
+    fn year_ranges_allow_real_title_matches_but_canonical_conflicts_do_not() {
+        let mut old = entry("old", "Example");
+        old.year = "2023–2025".into();
+        let old_video = video("tt9999999:2:1", "A New Beginning");
+        let mut new = modal(vec![video("private-new-episode", "A New Beginning")]);
+        new.year = "2023".into();
+        let progress = HashMap::from([(
+            progress_map_key("old", &old_video.id),
+            EpisodeProgress {
+                series_id: "old".into(),
+                episode_id: old_video.id.clone(),
+                watched: true,
+                ..Default::default()
+            },
+        )]);
+        assert_eq!(
+            duplicate_progress_copies(&old, &new, std::slice::from_ref(&old_video), &progress)
+                .0
+                .len(),
+            1
+        );
+        new.videos[0]
+            .extra
+            .insert("novaStreamIds".into(), serde_json::json!(["tt9999999:1:1"]));
+        assert_eq!(
+            duplicate_progress_copies(&old, &new, std::slice::from_ref(&old_video), &progress).1,
+            1
+        );
+        // Confirmed mappings work in the reverse direction too.
+        let mut old_native = video("private-old-episode", "Episode 1");
+        old_native
+            .extra
+            .insert("novaStreamIds".into(), serde_json::json!(["tt9999999:1:1"]));
+        new.videos = vec![video("tt9999999:1:1", "Episode 1")];
+        let progress = HashMap::from([(
+            progress_map_key("old", &old_native.id),
+            EpisodeProgress {
+                series_id: "old".into(),
+                episode_id: old_native.id.clone(),
+                watched: true,
+                ..Default::default()
+            },
+        )]);
+        assert_eq!(
+            duplicate_progress_copies(&old, &new, &[old_native], &progress)
+                .0
+                .len(),
+            1
+        );
+    }
+
     #[test]
     fn migration_only_copies_unique_real_titles_or_shared_ids_and_keeps_original_history() {
         let old = entry("old", "Example");
