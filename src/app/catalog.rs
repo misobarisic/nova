@@ -268,6 +268,21 @@ impl Bridge {
         {
             let mut state = self.shared.lock().unwrap();
             let mut new_metas = metas;
+            let type_ = state
+                .type_defs
+                .get(state.chosen_type)
+                .map(|t| t.type_.as_str())
+                .unwrap_or_default();
+            for meta in &mut new_metas {
+                if meta.type_.is_empty() {
+                    meta.type_ = type_.into();
+                }
+                reuse_discover_poster(
+                    meta,
+                    read_meta_header_for(&meta.type_, &meta.id).as_ref(),
+                    &state.entries,
+                );
+            }
             if append {
                 // Dedup new items against existing previews by id.
                 new_metas.retain(|m| !state.previews.iter().any(|p| p.id == m.id));
@@ -323,6 +338,7 @@ impl Bridge {
                             let url = poster.clone();
                             let weak = app_weak.clone();
                             let gen_counter = gen_counter.clone();
+                            let requested_url = url.clone();
                             net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
                                 let Some(pixels) = pixels else { return };
                                 let _ = slint::invoke_from_event_loop(move || {
@@ -330,6 +346,11 @@ impl Bridge {
                                         return;
                                     }
                                     if let Some(app) = weak.upgrade() {
+                                        if app.get_catalog().row_data(offset + i).is_none_or(
+                                            |row| row.poster_path.as_str() != requested_url,
+                                        ) {
+                                            return;
+                                        }
                                         let img = Image::from_rgba8(pixels);
                                         app.invoke_set_card_poster(
                                             (offset + i) as i32,
@@ -424,22 +445,29 @@ impl Bridge {
                         let url = poster.clone();
                         let weak = app_weak.clone();
                         let gen_counter = gen_counter.clone();
+                        let requested_url = url.clone();
                         net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
                             let Some(pixels) = pixels else { return };
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if generation != gen_counter.load(Ordering::Relaxed) {
-                                    return;
-                                }
-                                if let Some(app) = weak.upgrade() {
-                                    let img = Image::from_rgba8(pixels);
-                                    app.invoke_set_card_poster(index as i32, img.clone());
-                                    if app.get_modal_visible()
-                                        && app.get_selected_index() as usize == index
-                                    {
-                                        app.set_selected_poster(img);
+                            let _ =
+                                slint::invoke_from_event_loop(move || {
+                                    if generation != gen_counter.load(Ordering::Relaxed) {
+                                        return;
                                     }
-                                }
-                            });
+                                    if let Some(app) = weak.upgrade() {
+                                        if app.get_catalog().row_data(index).is_none_or(|row| {
+                                            row.poster_path.as_str() != requested_url
+                                        }) {
+                                            return;
+                                        }
+                                        let img = Image::from_rgba8(pixels);
+                                        app.invoke_set_card_poster(index as i32, img.clone());
+                                        if app.get_modal_visible()
+                                            && app.get_selected_index() as usize == index
+                                        {
+                                            app.set_selected_poster(img);
+                                        }
+                                    }
+                                });
                         });
                     }
                 }
@@ -612,6 +640,20 @@ impl Bridge {
                             // discard it, so pills + synopsis still needed a
                             // network round-trip on open.
                             let header = meta_header_from_item(&item);
+                            if let Some(poster) = item
+                                .preview
+                                .poster
+                                .as_ref()
+                                .filter(|url| !url.trim().is_empty())
+                            {
+                                let bridge = bridge2.clone();
+                                let poster = poster.clone();
+                                let poster_type = type_.clone();
+                                let poster_id = id.clone();
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    bridge.load_discover_poster(poster_type, poster_id, poster);
+                                });
+                            }
                             if merge_meta_header_for(&type_, &id, &header) {
                                 eprintln!("prefetch: cached header for {type_}/{id}");
                             }
@@ -1174,17 +1216,25 @@ impl Bridge {
         let mut poster_jobs = Vec::new();
         for meta in &ranked_metas {
             let key = (meta.type_.clone(), meta.id.clone());
-            let mut card = search_media_card(meta);
+            let mut known = meta.clone();
+            reuse_discover_poster(
+                &mut known,
+                read_meta_header_for(&meta.type_, &meta.id).as_ref(),
+                &self.shared.lock().unwrap().entries,
+            );
+            let mut card = search_media_card(&known);
             if let Some(old) = old_cards.remove(&key)
                 && old.poster_path == card.poster_path
             {
                 card.poster = old.poster;
                 card.is_loaded = old.is_loaded;
             }
-            if !card.is_loaded
-                && let Some(poster) = &meta.poster
-            {
-                poster_jobs.push((meta.type_.clone(), meta.id.clone(), poster.clone()));
+            if !card.is_loaded && !card.poster_path.is_empty() {
+                poster_jobs.push((
+                    meta.type_.clone(),
+                    meta.id.clone(),
+                    card.poster_path.to_string(),
+                ));
             }
             cards.push(card);
         }
@@ -2031,6 +2081,29 @@ fn damerau_levenshtein(left: &[char], right: &[char]) -> usize {
     distances[left.len()][right.len()]
 }
 
+/// A thin catalog can omit artwork that Detail/Library already knows. Prefer
+/// the last metadata header, then the saved entry, retaining the native preview
+/// when neither contains a usable URL. Cache identity includes media type.
+fn reuse_discover_poster(
+    meta: &mut MetaPreview,
+    header: Option<&MetaHeader>,
+    entries: &[LibraryEntry],
+) {
+    let known = header
+        .map(|h| h.poster_url.as_str())
+        .filter(|url| !url.trim().is_empty())
+        .or_else(|| {
+            entries
+                .iter()
+                .find(|entry| entry.id == meta.id && entry.type_ == meta.type_)
+                .map(|entry| entry.poster_url.as_str())
+                .filter(|url| !url.trim().is_empty())
+        });
+    if let Some(url) = known {
+        meta.poster = Some(url.into());
+    }
+}
+
 fn search_media_card(meta: &MetaPreview) -> MediaCard {
     MediaCard {
         id: SharedString::from(&meta.id),
@@ -2199,6 +2272,46 @@ mod tests {
             exhausted: false,
             results: Vec::new(),
         }
+    }
+
+    #[test]
+    fn discover_reuses_detail_and_library_artwork_without_erasing_native_previews() {
+        let mut meta = MetaPreview {
+            id: "provider:show".into(),
+            type_: "series".into(),
+            poster: Some("https://images.example/catalog.jpg".into()),
+            ..Default::default()
+        };
+        let entry: LibraryEntry = serde_json::from_value(serde_json::json!({
+            "id":"provider:show", "type_":"series", "name":"Saved", "poster_url":"https://images.example/library.jpg"
+        })).unwrap();
+        reuse_discover_poster(&mut meta, None, std::slice::from_ref(&entry));
+        assert_eq!(
+            meta.poster.as_deref(),
+            Some("https://images.example/library.jpg")
+        );
+        let header = MetaHeader {
+            poster_url: "https://images.example/detail.jpg".into(),
+            ..Default::default()
+        };
+        reuse_discover_poster(&mut meta, Some(&header), std::slice::from_ref(&entry));
+        assert_eq!(
+            meta.poster.as_deref(),
+            Some("https://images.example/detail.jpg")
+        );
+        meta.poster = None;
+        reuse_discover_poster(&mut meta, Some(&header), &[]);
+        assert_eq!(
+            meta.poster.as_deref(),
+            Some("https://images.example/detail.jpg")
+        );
+        meta.type_ = "movie".into();
+        meta.poster = Some("https://images.example/native.jpg".into());
+        reuse_discover_poster(&mut meta, Some(&MetaHeader::default()), &[entry]);
+        assert_eq!(
+            meta.poster.as_deref(),
+            Some("https://images.example/native.jpg")
+        );
     }
 
     fn search_meta(id: &str, title: &str) -> MetaPreview {

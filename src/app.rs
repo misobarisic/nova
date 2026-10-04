@@ -893,8 +893,11 @@ static CURRENT_TORRENT_SETTINGS: LazyLock<Mutex<TorrentSettings>> =
 /// so descriptions + genre pills still needed a network round-trip on open.
 /// Stored under `meta_header:{type}\x01{id}`; empty slots mean "unknown",
 /// never "known empty". Text merges fill gaps; season artwork accepts fresh URLs.
+/// Poster URLs are recorded only after successful image decoding and reused by Discover.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub(crate) struct MetaHeader {
+    #[serde(default)]
+    poster_url: String,
     #[serde(default)]
     background_url: String,
     #[serde(default)]

@@ -690,6 +690,24 @@ fn mapped_referer(host: Arc<MappingHost>, lookup: &StreamLookupRequest) -> Optio
 }
 
 #[test]
+fn native_episode_placeholders_do_not_duplicate_the_number() {
+    use base64::Engine;
+    let mut entry = mapping_entry("show", "Example", 2026, 4);
+    entry.episodes[0].1 = "Episode 1".into();
+    entry.episodes[1].1 = "Episode 2: Episode 2".into();
+    entry.episodes[2].1 = "".into();
+    entry.episodes[3].1 = "A Real Episode Title".into();
+    let details = provider().call(mapping_host(vec![entry]), json!({"op":"details", "sourceId":base64::engine::general_purpose::URL_SAFE_NO_PAD.encode("/watch/show")})).unwrap();
+    assert_eq!(details["episodes"][0]["title"], "Episode 1");
+    assert_eq!(details["episodes"][1]["title"], "Episode 2");
+    assert_eq!(details["episodes"][2]["title"], "Episode 3");
+    assert_eq!(
+        details["episodes"][3]["title"],
+        "Episode 4: A Real Episode Title"
+    );
+}
+
+#[test]
 fn subtitled_seasons_search_the_family_and_keep_source_sequence_labels() {
     use base64::Engine;
     let host = mapping_host(vec![

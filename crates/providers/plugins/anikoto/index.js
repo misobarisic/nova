@@ -227,7 +227,7 @@
           parent_id: mediaSourceId,
           number,
           season: 1,
-          title: title ? `Episode ${number}: ${title}` : `Episode ${number}`,
+          title: episodeTitle(title) ? `Episode ${number}: ${title}` : `Episode ${number}`,
           released: releaseDate(episode.timestamp),
           thumbnail: null,
         };
@@ -396,7 +396,7 @@
   }
 
   function episodeTitle(value) {
-    const title = normalizedTitle(value).replace(/^(?:episode|ep|stage|turn)\s*\d+(?:\s*\d+)?\s*/, "");
+    const title = normalizedTitle(value).replace(/^(?:(?:episode|ep|stage|turn)\s*\d+(?:\s*\d+)?\s*)+/, "");
     return !title || /^\d+$/.test(title) || /^(?:episode|ep|unknown|untitled|tba|tbd)$/.test(title) ? "" : title;
   }
 

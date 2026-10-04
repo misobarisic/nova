@@ -3,9 +3,10 @@ mod cache;
 mod cinemeta;
 pub use cache::{MetadataCache, set_metadata_cache};
 const CONFIRMED_CACHE_TTL: u64 = 30 * 24 * 3600;
+const PARTIAL_CACHE_TTL: u64 = 5 * 60;
 // Invalidate confirmed results when field selection/provenance changes, without
 // changing the durable store format or any sync wire schema.
-const ENRICHMENT_VERSION: u32 = 1;
+const ENRICHMENT_VERSION: u32 = 2;
 use crate::{
     ExternalId, MediaItem, ProviderHost, ProviderHostError, SourceSequence, StremioProvider,
 };
@@ -207,13 +208,34 @@ fn now() -> u64 {
 fn cached_result(state: &dyn ProviderHost, key: &str) -> Option<EnrichmentResult> {
     let raw = state.storage_get(key).or_else(|| cache::read(key))?;
     let (at, result): (u64, EnrichmentResult) = serde_json::from_str(&raw).ok()?;
-    (now().saturating_sub(at)
-        < if result.status == "confirmed" {
-            CONFIRMED_CACHE_TTL
-        } else {
-            30
-        })
-    .then_some(result)
+    (now().saturating_sub(at) < cache_ttl(&result)).then_some(result)
+}
+fn cache_ttl(result: &EnrichmentResult) -> u64 {
+    if result.status != "confirmed" {
+        return 30;
+    }
+    // A confirmed identity can still have unpublished episode data. Keep the
+    // durable mapping, but revisit sparse details on the next fetch instead
+    // of freezing generic titles/missing images for thirty days.
+    if result.details.episodes.iter().any(|episode| {
+        result
+            .episode_metadata
+            .get(&episode.stable_id())
+            .is_none_or(|mapping| {
+                mapping
+                    .title
+                    .as_deref()
+                    .is_none_or(|title| crate::sequence::episode_title(title).is_empty())
+                    || mapping
+                        .thumbnail
+                        .as_deref()
+                        .is_none_or(|url| url.trim().is_empty())
+            })
+    }) {
+        PARTIAL_CACHE_TTL
+    } else {
+        CONFIRMED_CACHE_TTL
+    }
 }
 fn cache_result(state: &dyn ProviderHost, key: &str, result: &EnrichmentResult) {
     if let Ok(raw) = serde_json::to_string(&(now(), result))
@@ -228,6 +250,7 @@ struct Operation {
     start: Instant,
     budget: Duration,
     calls: usize,
+    detail_calls: usize,
     visited: BTreeSet<String>,
     transport: Arc<dyn AddonMetadataTransport>,
 }
@@ -276,6 +299,7 @@ pub(crate) fn enrich_metadata_with_budget(
     let mut operation = Operation {
         start: Instant::now(),
         calls: 0,
+        detail_calls: 0,
         budget: budget.min(Duration::from_secs(5)),
         visited: BTreeSet::new(),
         transport,
@@ -341,14 +365,13 @@ fn enrich_with(
             })
             .collect();
     }
-    let mut candidates: Vec<(MetadataAddon, MediaItem, u32)> = Vec::new();
+    let mut candidates: Vec<MetadataCandidate> = Vec::new();
     let mut mapped_videos = BTreeMap::new();
     let mut connected_media = BTreeMap::new();
     let mut searched = false;
     // Expand connections through explicit identifiers only. Each round may
     // discover IDs another enabled metadata addon accepts; never generate IDs.
     let mut completed = BTreeSet::new();
-    let mut fetched = 0;
     loop {
         for installed in addons
             .iter()
@@ -361,18 +384,23 @@ fn enrich_with(
                 if installed.manifest.accepts("meta", &native.media_type, &id)
                     && !candidates
                         .iter()
-                        .any(|(a, m, _)| a.url == installed.url && m.source_id == id)
+                        .any(|c| c.addon.url == installed.url && c.preview.source_id == id)
                 {
                     let mut item = result.details.media.clone();
                     item.source_id = id;
-                    candidates.push((installed.clone(), item, 3));
+                    candidates.push(MetadataCandidate {
+                        addon: installed.clone(),
+                        preview: item,
+                        rank: 3,
+                        response: None,
+                    });
                 }
             }
             let _ = addon;
         }
-        let Some((installed, preview, rank)) = candidates
+        let Some(candidate) = candidates
             .iter()
-            .find(|(a, m, _)| !completed.contains(&(a.url.clone(), m.source_id.clone())))
+            .find(|c| !completed.contains(&(c.addon.url.clone(), c.preview.source_id.clone())))
             .cloned()
         else {
             if !searched {
@@ -383,16 +411,20 @@ fn enrich_with(
                     caller_url,
                     addons,
                     &result.connections,
+                    &sources,
                     operation,
                 ));
                 continue;
             }
             break;
         };
+        let MetadataCandidate {
+            addon: installed,
+            preview,
+            rank,
+            response,
+        } = candidate;
         completed.insert((installed.url.clone(), preview.source_id.clone()));
-        if fetched >= 6 {
-            break;
-        }
         let Ok(addon) = addons::Addon::new(&installed.url) else {
             continue;
         };
@@ -403,16 +435,15 @@ fn enrich_with(
             .manifest
             .accepts("meta", &native.media_type, &preview.source_id)
         {
-            fetched += 1;
             let detail_url = addon.meta_url(&native.media_type, &preview.source_id);
-            if let Some(bytes) = operation.fetch(&detail_url)
-                && let Ok(mut response) = serde_json::from_slice::<Value>(&bytes)
+            if let Some(mut response) =
+                response.or_else(|| candidate_response(&installed, &preview, operation))
                 && let Some(meta) = response.get_mut("meta")
             {
                 // Candidate metadata uses the same image repair as direct
                 // Cinemeta details, within this operation's remaining budget.
                 cinemeta::repair_with(&detail_url, meta, |url| operation.fetch(url));
-                let bytes = serde_json::to_vec(&response).unwrap_or(bytes);
+                let bytes = serde_json::to_vec(&response).unwrap_or_default();
                 if let Ok(Some(detail)) = addons::Addon::parse_meta(&bytes)
                     && detail.preview.id == preview.source_id
                     && detail.preview.type_ == native.media_type
@@ -566,6 +597,47 @@ fn enrich_with(
     result
 }
 
+#[derive(Clone)]
+struct MetadataCandidate {
+    addon: MetadataAddon,
+    preview: MediaItem,
+    rank: u32,
+    response: Option<Value>,
+}
+
+fn candidate_response(
+    installed: &MetadataAddon,
+    preview: &MediaItem,
+    operation: &mut Operation,
+) -> Option<Value> {
+    if operation.detail_calls >= 6 {
+        return None;
+    }
+    let addon = addons::Addon::new(&installed.url).ok()?;
+    if !installed
+        .manifest
+        .accepts("meta", &preview.media_type, &preview.source_id)
+    {
+        return None;
+    }
+    operation.detail_calls += 1;
+    let bytes = operation.fetch(&addon.meta_url(&preview.media_type, &preview.source_id))?;
+    let response: Value = serde_json::from_slice(&bytes).ok()?;
+    if let Some(detail) = addons::Addon::parse_meta(&bytes).ok()? {
+        if detail.preview.id != preview.source_id || detail.preview.type_ != preview.media_type {
+            return None;
+        }
+    } else {
+        // Stremio's empty response is a completed lookup with no detail, not
+        // a transport failure. Do not interpret error payloads as absence.
+        let object = response.as_object()?;
+        if !object.is_empty() && !(object.len() == 1 && object.get("meta") == Some(&Value::Null)) {
+            return None;
+        }
+    }
+    Some(response)
+}
+
 /// Prefer verified external IDs before spending the optional deadline on
 /// title searches. Already connected addons need no speculative second match.
 fn search_candidates(
@@ -574,8 +646,9 @@ fn search_candidates(
     caller_url: &str,
     addons: &[MetadataAddon],
     known: &[MetadataConnection],
+    sources: &[SourceSequence],
     operation: &mut Operation,
-) -> Vec<(MetadataAddon, MediaItem, u32)> {
+) -> Vec<MetadataCandidate> {
     let mut candidates = Vec::new();
     for installed in addons.iter().filter(|a| a.url != caller_url) {
         if known
@@ -626,11 +699,55 @@ fn search_candidates(
         found.sort_by_key(|(rank, _)| std::cmp::Reverse(*rank));
         let mut seen = BTreeSet::new();
         found.retain(|(_, item)| seen.insert(item.source_id.clone()));
-        // A provider's best rank must identify one entry, not an arbitrary remake.
-        if let Some((rank, item)) = found.first()
-            && found.get(1).is_none_or(|(other, _)| other < rank)
-        {
-            candidates.push((installed.clone(), item.clone(), *rank));
+        let Some((rank, _)) = found.first() else {
+            continue;
+        };
+        let best = found
+            .iter()
+            .take_while(|(other, _)| other == rank)
+            .collect::<Vec<_>>();
+        if best.len() == 1 {
+            candidates.push(MetadataCandidate {
+                addon: installed.clone(),
+                preview: best[0].1.clone(),
+                rank: *rank,
+                response: None,
+            });
+        } else if *rank == 1 && best.len() <= 6_usize.saturating_sub(operation.detail_calls) {
+            // Short family titles can tie with picture dramas or spinoffs.
+            // Evaluate every competitor before choosing: failed/malformed detail
+            // responses leave the tie unresolved, regardless of catalog order.
+            let mut proven = Vec::new();
+            let mut complete = true;
+            for (_, preview) in best {
+                let Some(response) = candidate_response(installed, preview, operation) else {
+                    complete = false;
+                    break;
+                };
+                let bytes = serde_json::to_vec(&response).unwrap_or_default();
+                let detail = match addons::Addon::parse_meta(&bytes) {
+                    Ok(Some(detail)) => detail,
+                    Ok(None) => continue,
+                    Err(_) => {
+                        complete = false;
+                        break;
+                    }
+                };
+                let media = adapter.convert_detail(detail.clone()).0;
+                if !crate::matching::ids_conflict(native, &media)
+                    && crate::sequence::map_episodes(&media, &detail.videos, sources).len() >= 2
+                {
+                    proven.push(MetadataCandidate {
+                        addon: installed.clone(),
+                        preview: preview.clone(),
+                        rank: *rank,
+                        response: Some(response),
+                    });
+                }
+            }
+            if complete && proven.len() == 1 {
+                candidates.extend(proven);
+            }
         }
     }
     candidates
@@ -1002,11 +1119,228 @@ mod tests {
             &mut Operation {
                 start: Instant::now(),
                 calls: 0,
+                detail_calls: 0,
                 budget: Duration::from_secs(5),
                 visited: BTreeSet::new(),
                 transport,
             },
         )
+    }
+
+    #[test]
+    fn weak_catalog_ties_require_one_proven_parent_and_complete_competitor_responses() {
+        for reverse in [false, true] {
+            for rival in [
+                "unrelated",
+                "matching",
+                "unavailable",
+                "wrong-id",
+                "empty",
+                "null",
+                "error",
+                "malformed",
+            ] {
+                let installed = addon("https://metadata.example", "tt", true);
+                let endpoint = addons::Addon::new(&installed.url).unwrap();
+                let mut request = request();
+                request.details.media.title = "Code Geass: Lelouch of the Rebellion R2".into();
+                request.details.media.aliases = vec!["Code Geass: Hangyaku no Lelouch R2".into()];
+                request.details.media.year = Some("2008".into());
+                request.query = Some("code geass lelouch of the rebellion".into());
+                request.details.episodes = (1..=2)
+                    .map(|n| Episode {
+                        provider_id: "fixture".into(),
+                        source_id: format!("ep:{n}"),
+                        parent_id: "show".into(),
+                        season: 1,
+                        number: n,
+                        title: format!("Distinct story {n}"),
+                        ..Default::default()
+                    })
+                    .collect();
+                request.source_sequences.clear();
+                let mut previews = vec![
+                    json!({"id":"tt100", "type":"series", "name":"Code Geass", "releaseInfo":"2006–2008"}),
+                    json!({"id":"tt200", "type":"series", "name":"Code Geass: Hangyaku no Lelouch R2 Picture Drama", "releaseInfo":"2008"}),
+                ];
+                if reverse {
+                    previews.reverse();
+                }
+                let videos = |id: &str, matching: bool| {
+                    (1..=2).map(|n| json!({
+                    "id":format!("{id}:2:{n}"), "season":2, "episode":n,
+                    "title": if matching { format!("Distinct story {n}") } else { format!("Picture story {n}") },
+                    "released":"2008-05-01", "thumbnail":format!("https://images.example/{n}.jpg")
+                })).collect::<Vec<_>>()
+                };
+                let mut responses = BTreeMap::from([
+                    (
+                        endpoint.catalog_url(
+                            "series",
+                            "search",
+                            &[("search", request.query.as_deref().unwrap())],
+                        ),
+                        json!({"metas":previews}),
+                    ),
+                    (
+                        endpoint.meta_url("series", "tt100"),
+                        json!({"meta":{
+                            "id":"tt100", "type":"series", "name":"Code Geass", "releaseInfo":"2006–2008", "videos":videos("tt100", true)
+                        }}),
+                    ),
+                ]);
+                if ["empty", "null", "error", "malformed"].contains(&rival) {
+                    responses.insert(
+                        endpoint.meta_url("series", "tt200"),
+                        match rival {
+                            "empty" => json!({}),
+                            "null" => json!({"meta":null}),
+                            "error" => json!({"error":"temporary failure"}),
+                            _ => json!({"meta":{"id":null,"type":"series"}}),
+                        },
+                    );
+                } else if rival != "unavailable" {
+                    responses.insert(endpoint.meta_url("series", "tt200"), json!({"meta":{
+                        "id":if rival == "wrong-id" { "tt999" } else { "tt200" }, "type":"series",
+                        "name":"Code Geass: Hangyaku no Lelouch R2 Picture Drama", "releaseInfo":"2008",
+                        "videos":videos("tt200", rival == "matching")
+                    }}));
+                }
+                let transport = Arc::new(FixtureTransport {
+                    responses,
+                    calls: Mutex::new(vec![]),
+                    check_nested: false,
+                });
+                let result = run(request, &[installed], transport.clone());
+                if ["unrelated", "empty", "null"].contains(&rival) {
+                    assert_eq!(result.connections.len(), 1);
+                    assert_eq!(result.connections[0].media_id, "tt100");
+                    assert_eq!(result.episode_metadata.len(), 2);
+                    assert_eq!(result.episode_metadata["fixture:ep:1"].season, Some(2));
+                    assert!(
+                        result
+                            .episode_metadata
+                            .values()
+                            .all(|m| m.thumbnail.is_some())
+                    );
+                } else {
+                    assert!(result.connections.is_empty(), "{reverse} {rival}");
+                    assert!(result.episode_metadata.is_empty());
+                }
+                let parent_requests = transport
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|url| url.contains("/meta/series/tt100"))
+                    .count();
+                assert!(parent_requests <= 1);
+                if ["unrelated", "empty", "null"].contains(&rival) {
+                    assert_eq!(parent_requests, 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn weak_ties_larger_than_detail_budget_remain_unresolved() {
+        let installed = addon("https://metadata.example", "tt", true);
+        let endpoint = addons::Addon::new(&installed.url).unwrap();
+        let mut request = request();
+        request.details.media.title = "Show: Main Story Season 2".into();
+        request.details.media.year = Some("2021".into());
+        request.query = Some("show main story".into());
+        let previews = (1..=7)
+            .map(|n| {
+                json!({"id":format!("tt{n}"),
+            "type":"series", "name":format!("Show: Main Story Edition {n}"),
+            "releaseInfo":"2020"})
+            })
+            .collect::<Vec<_>>();
+        let transport = Arc::new(FixtureTransport {
+            responses: BTreeMap::from([(
+                endpoint.catalog_url("series", "search", &[("search", "show main story")]),
+                json!({"metas":previews}),
+            )]),
+            calls: Mutex::new(vec![]),
+            check_nested: false,
+        });
+        let result = run(request, &[installed], transport.clone());
+        assert!(result.connections.is_empty());
+        assert!(result.episode_metadata.is_empty());
+        assert_eq!(transport.calls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn ongoing_native_entry_receives_metadata_without_adding_unavailable_episodes() {
+        let installed = addon("https://metadata.example", "tt", true);
+        let endpoint = addons::Addon::new(&installed.url).unwrap();
+        let mut request = request();
+        request.details.media.title = "Example Season 3".into();
+        request.details.media.year = Some("2026".into());
+        request.query = Some("example".into());
+        request.details.episodes = (1..=2)
+            .map(|n| Episode {
+                provider_id: "fixture".into(),
+                source_id: format!("ep:{n}"),
+                parent_id: "show".into(),
+                season: 1,
+                number: n,
+                title: format!("Episode {n}: Episode {n}"),
+                ..Default::default()
+            })
+            .collect();
+        request.source_sequences.clear();
+        let videos = (1..=12)
+            .map(|n| {
+                json!({"id":format!("tt100:3:{n}"),"season":3,"episode":n,
+            "title":format!("Real title {n}"),"released":"2026-10-04",
+            "thumbnail":format!("https://images.example/{n}.jpg"),"overview":"Episode description"})
+            })
+            .collect::<Vec<_>>();
+        let transport = Arc::new(FixtureTransport {
+            responses: BTreeMap::from([
+                (
+                    endpoint.catalog_url("series", "search", &[("search", "example")]),
+                    json!({"metas":[{"id":"tt100","type":"series","name":"Example","releaseInfo":"2024–2026"}]}),
+                ),
+                (
+                    endpoint.meta_url("series", "tt100"),
+                    json!({"meta":{"id":"tt100","type":"series","name":"Example","releaseInfo":"2024–2026","videos":videos}}),
+                ),
+            ]),
+            calls: Mutex::new(vec![]),
+            check_nested: false,
+        });
+        let result = run(request, &[installed], transport);
+        assert_eq!(result.episode_metadata.len(), 2);
+        assert_eq!(result.details.episodes.len(), 2);
+        let mut meta =
+            json!({"id":"native-show","videos":[{"id":"fixture:ep:1"},{"id":"fixture:ep:2"}]});
+        // Applying enrichment also leaves native playback identities untouched.
+        apply_enrichment(&mut meta, &result);
+        assert_eq!(meta["id"], "native-show");
+        assert_eq!(meta["videos"].as_array().unwrap().len(), 2);
+        assert_eq!(meta["videos"][0]["id"], "fixture:ep:1");
+        assert_eq!(meta["videos"][0]["season"], 3);
+        assert_eq!(meta["videos"][0]["name"], "Real title 1");
+        assert_eq!(meta["videos"][0]["novaStreamIds"], json!(["tt100:3:1"]));
+        assert!(meta["videos"][0]["thumbnail"].is_string());
+        assert_eq!(result.episode_metadata["fixture:ep:1"].season, Some(3));
+        assert_eq!(
+            result.episode_metadata["fixture:ep:1"].title.as_deref(),
+            Some("Real title 1")
+        );
+        assert_eq!(
+            result.episode_metadata["fixture:ep:1"].overview.as_deref(),
+            Some("Episode description")
+        );
+        assert!(
+            result
+                .episode_metadata
+                .values()
+                .all(|m| m.thumbnail.is_some())
+        );
     }
 
     #[test]
@@ -1384,6 +1718,63 @@ mod tests {
     }
 
     #[test]
+    fn sparse_confirmed_metadata_expires_early_without_discarding_durable_aliases() {
+        let state = MemoryProviderHost::new();
+        let (addons, transport) = fixture();
+        let complete = run(request(), &addons, transport);
+        let key = "partial-expiration-test";
+        for missing in ["title", "generic-title", "thumbnail", "mapping"] {
+            let mut partial = complete.clone();
+            match missing {
+                "title" => {
+                    partial
+                        .episode_metadata
+                        .get_mut("fixture:ep:1")
+                        .unwrap()
+                        .title = None
+                }
+                "generic-title" => {
+                    partial
+                        .episode_metadata
+                        .get_mut("fixture:ep:1")
+                        .unwrap()
+                        .title = Some("Episode 1".into())
+                }
+                "thumbnail" => {
+                    partial
+                        .episode_metadata
+                        .get_mut("fixture:ep:1")
+                        .unwrap()
+                        .thumbnail = Some(" ".into())
+                }
+                _ => partial.episode_metadata.clear(),
+            }
+            let raw = serde_json::to_string(&(now() - PARTIAL_CACHE_TTL - 1, &partial)).unwrap();
+            state.storage_set(key, &raw).unwrap();
+            assert!(cached_result(state.as_ref(), key).is_none(), "{missing}");
+            assert_eq!(state.storage_get(key), Some(raw));
+            assert_eq!(partial.connections[0].media_id, "tt100");
+        }
+        // Published episode fields return the same identity to the long-lived
+        // cache; movies with no episodes also keep the existing lifetime.
+        state
+            .storage_set(
+                key,
+                &serde_json::to_string(&(now() - PARTIAL_CACHE_TTL - 1, &complete)).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            cached_result(state.as_ref(), key).unwrap().episode_metadata["fixture:ep:1"]
+                .title
+                .as_deref(),
+            Some("Opening")
+        );
+        let mut movie = complete;
+        movie.details.episodes.clear();
+        assert_eq!(cache_ttl(&movie), CONFIRMED_CACHE_TTL);
+    }
+
+    #[test]
     fn session_cache_supports_large_entries_expiry_and_availability_fingerprints() {
         let state = MemoryProviderHost::new();
         let (addons, transport) = fixture();
@@ -1500,6 +1891,7 @@ mod tests {
         let mut operation = Operation {
             start: Instant::now(),
             calls: 0,
+            detail_calls: 0,
             budget: Duration::from_secs(5),
             visited: BTreeSet::new(),
             transport: transport.clone(),

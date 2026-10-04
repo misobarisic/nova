@@ -86,7 +86,7 @@ pub(crate) fn episode_title(value: &str) -> String {
     static PREFIX: OnceLock<Regex> = OnceLock::new();
     let normalized = normalized_title(value);
     let title = PREFIX
-        .get_or_init(|| Regex::new(r"^(?:episode|ep|stage|turn)\s*\d+(?:\s*\d+)?\s*").unwrap())
+        .get_or_init(|| Regex::new(r"^(?:(?:episode|ep|stage|turn)\s*\d+(?:\s*\d+)?\s*)+").unwrap())
         .replace(&normalized, "")
         .into_owned();
     if title.is_empty()
@@ -108,7 +108,7 @@ pub(crate) fn start_year(value: Option<&str>) -> Option<u32> {
 
 // Include alignment changes in durable metadata fingerprints so a confirmed
 // but partial old mapping cannot hide improvements for thirty days.
-pub(crate) const MAPPING_VERSION: u32 = 2;
+pub(crate) const MAPPING_VERSION: u32 = 3;
 
 pub(crate) fn series_identity(value: &str) -> SeriesIdentity {
     static PART: OnceLock<Regex> = OnceLock::new();
@@ -428,10 +428,30 @@ fn resolve(lookup: &StreamLookupRequest, candidates: &[Candidate<'_>]) -> Episod
         add(c, n, 800, true);
     }
     for c in candidates {
-        if lookup.season_episode_count.is_some() && c.count != lookup.season_episode_count {
+        let same_start = !source_year.zip(c.year()).is_some_and(|(a, b)| a != b);
+        // A provider may list only the aired prefix of an ongoing season.
+        // Exact family and explicit season/part evidence permit those available
+        // episodes; this must not become an offset guess for split cours,
+        // continuous numbering, holes or contradictory declared totals.
+        let available_prefix = c.base_relation == 2
+            && c.identity.season == lookup.season
+            && c.identity.part == 1
+            && !candidates.iter().any(|other| {
+                other.base_relation == 2
+                    && (other.identity.season, other.identity.part)
+                        > (c.identity.season, c.identity.part)
+            })
+            && (c.identity.labeled || (lookup.season == 1 && same_start))
+            && c.count == Some(c.episode_index.len() as u32)
+            && c.count
+                .zip(lookup.season_episode_count)
+                .is_some_and(|(n, total)| n < total);
+        if lookup.season_episode_count.is_some()
+            && c.count != lookup.season_episode_count
+            && !available_prefix
+        {
             continue;
         }
-        let same_start = !source_year.zip(c.year()).is_some_and(|(a, b)| a != b);
         let mut number = lookup.episode;
         let mut continuous = false;
         if lookup.season == 1 {
@@ -627,6 +647,101 @@ pub(crate) fn map_episodes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ongoing_source() -> SourceSequence {
+        SourceSequence {
+            media_id: "native-season-three".into(),
+            title: "Example Season 3".into(),
+            year: Some("2026".into()),
+            season: Some(3),
+            declared_count: Some(2),
+            episodes: (1..=2)
+                .map(|n| SequenceEpisode {
+                    id: format!("native-{n}"),
+                    number: n,
+                    title: format!("Episode {n}: Episode {n}"),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn ongoing_lookup(episode: u32) -> StreamLookupRequest {
+        StreamLookupRequest {
+            media_id: "external-parent".into(),
+            media_type: "series".into(),
+            title: "Example".into(),
+            year: Some("2024".into()),
+            season: 3,
+            episode,
+            absolute_episode: Some(24 + episode),
+            season_episode_count: Some(12),
+            series_episode_count: Some(36),
+            episode_title: Some("Headman".into()),
+            released: Some("2026-09-27".into()),
+        }
+    }
+
+    #[test]
+    fn ongoing_season_maps_only_available_prefix_and_ignores_duplicate_placeholders() {
+        assert_eq!(episode_title("Episode 1: Episode 1"), "");
+        assert_eq!(episode_title("Episode 1: Episode 1: Headman"), "headman");
+        let source = ongoing_source();
+        for n in 1..=2 {
+            assert_eq!(
+                resolve_episode(&ongoing_lookup(n), std::slice::from_ref(&source))
+                    .source_episode_id,
+                Some(format!("native-{n}"))
+            );
+        }
+        assert_eq!(
+            resolve_episode(&ongoing_lookup(3), &[source]).status,
+            "missing"
+        );
+    }
+
+    #[test]
+    fn available_prefix_does_not_guess_gaps_parts_completed_seasons_or_conflicting_titles() {
+        let original = ongoing_source();
+        let lookup = ongoing_lookup(1);
+        for case in 0..7 {
+            let mut source = original.clone();
+            let mut sources = vec![];
+            match case {
+                0 => {
+                    source.episodes[1].number = 3;
+                }
+                1 => {
+                    source.part = Some(2);
+                }
+                2 => {
+                    source.season = Some(2);
+                }
+                3 => {
+                    source.declared_count = Some(6);
+                }
+                4 => {
+                    source.episodes[0].title = "A conflicting title".into();
+                }
+                5 => {
+                    source.year = Some("2027".into());
+                }
+                _ => {
+                    let mut later = source.clone();
+                    later.title = "Example Season 4".into();
+                    later.season = Some(4);
+                    sources.push(later);
+                }
+            }
+            sources.push(source);
+            assert_eq!(
+                resolve_episode(&lookup, &sources).status,
+                "missing",
+                "case {case}"
+            );
+        }
+    }
 
     #[test]
     fn season_and_cour_labels_before_subtitles_identify_the_series_family() {

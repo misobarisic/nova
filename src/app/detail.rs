@@ -610,6 +610,9 @@ impl Bridge {
             }
             let header = (m.genres.clone(), m.description.clone(), m.year.clone());
             let header_cache = MetaHeader {
+                poster_url: read_meta_header_for(&m.type_, &m.id)
+                    .map(|header| header.poster_url)
+                    .unwrap_or_default(),
                 background_url: m.background_url.clone(),
                 description: m.description.clone(),
                 genres: m.genres.clone(),
@@ -3095,6 +3098,9 @@ pub(crate) fn meta_header_from_item(item: &MetaItem) -> MetaHeader {
     preview.extra.extend(item.extra.clone());
     tracking::remember_source(&preview);
     MetaHeader {
+        // Persist only decoded poster URLs (published by the image pipeline).
+        // A metadata URL alone may still return 404 or fail to decode.
+        poster_url: String::new(),
         background_url: item.preview.background.clone().unwrap_or_default(),
         description: item.preview.description.clone().unwrap_or_default(),
         genres: item.preview.genres.clone(),
@@ -3120,7 +3126,8 @@ pub(crate) fn header_text_cached(type_: &str, id: &str) -> bool {
 /// text slots and updating supplied season-art URLs. Returns true when the
 /// stored value changed (or was created with non-empty content).
 pub(crate) fn merge_meta_header_for(type_: &str, id: &str, fresh: &MetaHeader) -> bool {
-    if fresh.background_url.is_empty()
+    if fresh.poster_url.is_empty()
+        && fresh.background_url.is_empty()
         && fresh.description.is_empty()
         && fresh.genres.is_empty()
         && fresh.year.is_empty()
@@ -3137,6 +3144,10 @@ pub(crate) fn merge_meta_header_for(type_: &str, id: &str, fresh: &MetaHeader) -
             cached.season_backdrops.insert(season, url.clone());
             touched = true;
         }
+    }
+    if !fresh.poster_url.trim().is_empty() && cached.poster_url != fresh.poster_url {
+        cached.poster_url = fresh.poster_url.clone();
+        touched = true;
     }
     if !fresh.background_url.trim().is_empty() && cached.background_url != fresh.background_url {
         cached.background_url = fresh.background_url.clone();
@@ -3163,6 +3174,21 @@ pub(crate) fn merge_meta_header_for(type_: &str, id: &str, fresh: &MetaHeader) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_headers_add_poster_urls_without_breaking_older_storage() {
+        let old: MetaHeader =
+            serde_json::from_str(r#"{"background_url":"https://images.example/backdrop.jpg"}"#)
+                .unwrap();
+        assert!(old.poster_url.is_empty());
+        let fresh = MetaHeader {
+            poster_url: "https://images.example/poster.jpg".into(),
+            ..old
+        };
+        let restored: MetaHeader =
+            serde_json::from_str(&serde_json::to_string(&fresh).unwrap()).unwrap();
+        assert_eq!(restored, fresh);
+    }
 
     #[test]
     fn metadata_response_must_match_requested_id_and_type() {

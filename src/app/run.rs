@@ -167,11 +167,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     if let Some(display) = display_pixels(&job.url, Some(DISPLAY_POSTER_SIDE)) {
-                        {
-                            let mut cache = cache_clone.lock().unwrap();
-                            cache.insert((job.generation, job.index), display.clone());
-                        }
-
+                        let cache_clone = cache_clone.clone();
                         let app_weak = app_weak.clone();
                         let catalog_gen = catalog_gen.clone();
 
@@ -181,6 +177,21 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 return;
                             }
                             if let Some(app) = app_weak.upgrade() {
+                                let model = if job.library {
+                                    app.get_library()
+                                } else {
+                                    app.get_catalog()
+                                };
+                                if model
+                                    .row_data(job.index)
+                                    .is_none_or(|row| row.poster_path.as_str() != job.url)
+                                {
+                                    return;
+                                }
+                                cache_clone
+                                    .lock()
+                                    .unwrap()
+                                    .insert((job.generation, job.index), display.clone());
                                 let img = Image::from_rgba8(display);
                                 if job.library {
                                     app.invoke_set_library_poster(job.index as i32, img);

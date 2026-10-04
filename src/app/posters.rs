@@ -18,7 +18,138 @@ fn fetch_home_card_art(
     });
 }
 
+// Resolve by current metadata identity, never by a row index captured before
+// search ranking or catalog replacement. Preview URLs survive scroll unloading.
+fn poster_indices(previews: &mut [MetaPreview], type_: &str, id: &str, url: &str) -> Vec<usize> {
+    previews
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(index, preview)| {
+            if preview.type_ == type_ && preview.id == id {
+                preview.poster = Some(url.into());
+                Some(index)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+fn paint_poster_rows(
+    model: &slint::ModelRc<MediaCard>,
+    indices: &[usize],
+    id: &str,
+    url: &str,
+    image: &Image,
+) {
+    let Some(rows) = model.as_any().downcast_ref::<VecModel<MediaCard>>() else {
+        return;
+    };
+    for &index in indices {
+        if let Some(mut row) = rows.row_data(index)
+            && row.id.as_str() == id
+        {
+            row.poster_path = url.into();
+            row.poster = image.clone();
+            row.is_loaded = true;
+            rows.set_row_data(index, row);
+        }
+    }
+}
+
 impl Bridge {
+    /// Prefetch can discover an image missing/broken in the catalog preview.
+    /// Decode only for currently visible models needing art, independent of
+    /// their row order; full metadata prefetch remains controlled by settings.
+    pub(super) fn load_discover_poster(&self, type_: String, id: String, url: String) {
+        let Some(app) = self.app() else { return };
+        let needed = [app.get_catalog(), app.get_search_results()]
+            .iter()
+            .any(|model| {
+                (0..model.row_count()).any(|i| {
+                    model
+                        .row_data(i)
+                        .is_some_and(|row| row.id.as_str() == id && !row.is_loaded)
+                })
+            });
+        if !needed {
+            return;
+        }
+        let bridge = self.clone();
+        let poster_url = url.clone();
+        net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
+            if let Some(pixels) = pixels {
+                let _ = slint::invoke_from_event_loop(move || {
+                    bridge.publish_discover_poster(&type_, &id, &poster_url, &pixels);
+                });
+            }
+        });
+    }
+
+    /// Successful Detail/prefetch art must reach browse, search and saved rows,
+    /// including their URL so a scroll unload/reload cannot restore the old one.
+    pub(super) fn publish_discover_poster(
+        &self,
+        type_: &str,
+        id: &str,
+        url: &str,
+        pixels: &SharedPixelBuffer<Rgba8Pixel>,
+    ) {
+        let Some(app) = self.app() else { return };
+        merge_meta_header_for(
+            type_,
+            id,
+            &MetaHeader {
+                poster_url: url.into(),
+                ..Default::default()
+            },
+        );
+        let (browse, search, library) = {
+            let mut state = self.shared.lock().unwrap();
+            let browse = poster_indices(&mut state.previews, type_, id, url);
+            let search = poster_indices(&mut state.search_previews, type_, id, url);
+            let library = state
+                .entries
+                .iter()
+                .any(|entry| entry.id == id && entry.type_ == type_);
+            (browse, search, library)
+        };
+        let image = Image::from_rgba8(pixels.clone());
+        paint_poster_rows(&app.get_catalog(), &browse, id, url, &image);
+        paint_poster_rows(&app.get_search_results(), &search, id, url, &image);
+        if library {
+            self.persist_poster_for(id, url);
+            let model = app.get_library();
+            let indices = (0..model.row_count())
+                .filter(|&i| model.row_data(i).is_some_and(|row| row.id.as_str() == id))
+                .collect::<Vec<_>>();
+            paint_poster_rows(&model, &indices, id, url, &image);
+        }
+        #[cfg(feature = "desktop")]
+        for index in browse {
+            let generation = self.catalog_gen.load(Ordering::Relaxed);
+            self.poster_cache
+                .lock()
+                .unwrap()
+                .remove(&(generation, index));
+        }
+    }
+
+    fn detail_poster_stale(&self, id: &str, url: &str) -> bool {
+        let desired = self
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .filter(|item| item.id == id)
+            .map(|item| item.poster_url.clone());
+        desired.is_some_and(|desired| {
+            desired != url
+                && decoded_cache_get(&sized_cache_key(&desired, Some(DISPLAY_POSTER_SIDE)))
+                    .is_some()
+        })
+    }
+
     /// Search results have their own generation and model, so their posters
     /// use the shared image decoder but never the browse-grid poster queue.
     pub(super) fn fetch_search_card_poster(
@@ -41,6 +172,7 @@ impl Bridge {
 
         let app_weak = self.app.clone();
         let bridge = self.clone();
+        let requested_url = url.clone();
         net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
             let _ = slint::invoke_from_event_loop(move || {
                 let index = {
@@ -58,6 +190,9 @@ impl Bridge {
                     }
                 };
                 if let (Some(pixels), Some(index), Some(app)) = (pixels, index, app_weak.upgrade())
+                    && app.get_search_results().row_data(index).is_some_and(|row| {
+                        row.id.as_str() == id && row.poster_path.as_str() == requested_url
+                    })
                 {
                     app.invoke_set_search_card_poster(index as i32, Image::from_rgba8(pixels));
                 }
@@ -88,6 +223,7 @@ impl Bridge {
             let app_weak = app.as_weak();
             let gen_counter = self.catalog_gen.clone();
             let generation = gen_counter.load(Ordering::Relaxed);
+            let requested_url = url.clone();
             net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
                 let Some(pixels) = pixels else {
                     return;
@@ -97,6 +233,17 @@ impl Bridge {
                         return;
                     }
                     if let Some(app) = app_weak.upgrade() {
+                        let model = if library {
+                            app.get_library()
+                        } else {
+                            app.get_catalog()
+                        };
+                        if model
+                            .row_data(index)
+                            .is_none_or(|row| row.poster_path.as_str() != requested_url)
+                        {
+                            return;
+                        }
                         let img = Image::from_rgba8(pixels);
                         if library {
                             app.invoke_set_library_poster(index as i32, img.clone());
@@ -562,18 +709,33 @@ impl Bridge {
 
     /// Load the detail page poster off the UI thread so opening an item is
     /// instant even when the cached image still needs decoding (or the poster
-    /// must be downloaded). The update is dropped if the detail page closed
-    /// or switched to another item meanwhile.
+    /// must be downloaded). Successful art also updates matching grid rows;
+    /// only the detail-view update is dropped after closing or switching items.
     pub(super) fn load_detail_poster(&self, url: String, item_id: String) {
+        let media_type = self
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .filter(|item| item.id == item_id)
+            .map(|item| item.type_.clone());
+        let poster_url = url.clone();
         let bridge = self.clone();
         net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
             let Some(pixels) = pixels else {
                 return; // keep the placeholder
             };
             let _ = slint::invoke_from_event_loop(move || {
+                if bridge.detail_poster_stale(&item_id, &poster_url) {
+                    return;
+                }
                 let Some(app) = bridge.app() else {
                     return;
                 };
+                if let Some(type_) = &media_type {
+                    bridge.publish_discover_poster(type_, &item_id, &poster_url, &pixels);
+                }
                 if !app.get_modal_visible() {
                     return;
                 }
@@ -595,20 +757,34 @@ impl Bridge {
     /// Refresh the detail-page poster without flashing: fresh bytes download
     /// in the background and the image repaints only when the pixels
     /// actually changed (identical art keeps the currently shown poster).
-    /// The update is dropped if the detail page closed or switched to
-    /// another item meanwhile.
+    /// Matching grid rows also receive changed art after Detail closes;
+    /// the detail-view update still checks the currently selected item.
     pub(super) fn refresh_detail_poster(&self, url: String, item_id: String) {
+        let media_type = self
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .filter(|item| item.id == item_id)
+            .map(|item| item.type_.clone());
+        let poster_url = url.clone();
         let bridge = self.clone();
         refresh_image_if_changed(url, Some(DISPLAY_POSTER_SIDE), move |fresh| {
             let Some(pixels) = fresh else {
                 return; // unchanged or failed: keep showing the current art
             };
             let _ = slint::invoke_from_event_loop(move || {
+                if bridge.detail_poster_stale(&item_id, &poster_url) {
+                    return;
+                }
                 // Grids bake poster Images into their row models: push the
                 // fresh art there too, or the library/catalog card would
                 // keep stale pixels until a rebuild or restart. Runs even
                 // when the modal already closed (keyed by id, not by view).
-                bridge.push_poster_to_grids(&item_id, &pixels);
+                if let Some(type_) = &media_type {
+                    bridge.publish_discover_poster(type_, &item_id, &poster_url, &pixels);
+                }
                 let Some(app) = bridge.app() else {
                     return;
                 };
@@ -628,50 +804,6 @@ impl Bridge {
                 }
             });
         });
-    }
-
-    /// Push fresh poster pixels into any grid card showing `item_id`
-    /// (Discover catalog + Library): row models bake `Image` values, so
-    /// without this a refreshed poster would only appear after a grid
-    /// rebuild or restart. Desktop also drops the matching `PosterStore`
-    /// entries so later repaints can't resurrect the stale art. Main thread
-    /// only (touches the Slint models).
-    pub(super) fn push_poster_to_grids(
-        &self,
-        item_id: &str,
-        pixels: &SharedPixelBuffer<Rgba8Pixel>,
-    ) {
-        let Some(app) = self.app() else {
-            return;
-        };
-        let img = Image::from_rgba8(pixels.clone());
-        for library in [false, true] {
-            let model = if library {
-                app.get_library()
-            } else {
-                app.get_catalog()
-            };
-            let len = model.row_count();
-            for i in 0..len {
-                let matches = model
-                    .row_data(i)
-                    .map(|card: MediaCard| card.id.as_str() == item_id)
-                    .unwrap_or(false);
-                if !matches {
-                    continue;
-                }
-                if library {
-                    app.invoke_set_library_poster(i as i32, img.clone());
-                } else {
-                    app.invoke_set_card_poster(i as i32, img.clone());
-                }
-                #[cfg(feature = "desktop")]
-                {
-                    let generation = self.catalog_gen.load(Ordering::Relaxed);
-                    self.poster_cache.lock().unwrap().remove(&(generation, i));
-                }
-            }
-        }
     }
 
     /// Refresh the detail-page backdrop without flashing (same contract as
@@ -710,4 +842,73 @@ pub(crate) fn set_active_cache_settings(settings: CacheSettings) {
     // shared through `nova-config` (read by the media/player crates).
     nova_media::cache::set_decoded_cache_budget(settings.lru_cache_mb);
     set_cache_settings(settings);
+}
+
+#[cfg(test)]
+mod discover_artwork_tests {
+    use super::*;
+    #[test]
+    fn published_posters_follow_type_and_current_identity_and_survive_unloading() {
+        let mut previews = vec![
+            MetaPreview {
+                id: "show".into(),
+                type_: "movie".into(),
+                ..Default::default()
+            },
+            MetaPreview {
+                id: "show".into(),
+                type_: "series".into(),
+                ..Default::default()
+            },
+            MetaPreview {
+                id: "other".into(),
+                type_: "series".into(),
+                ..Default::default()
+            },
+        ];
+        let rows = Rc::new(VecModel::from(vec![
+            MediaCard {
+                id: "show".into(),
+                ..Default::default()
+            },
+            MediaCard {
+                id: "show".into(),
+                ..Default::default()
+            },
+            MediaCard {
+                id: "other".into(),
+                ..Default::default()
+            },
+        ]));
+        let model: slint::ModelRc<MediaCard> = rows.clone().into();
+        let image = Image::from_rgba8(SharedPixelBuffer::new(1, 1));
+        let url = "https://images.example/detail.jpg";
+        let indices = poster_indices(&mut previews, "series", "show", url);
+        assert_eq!(indices, [1]);
+        paint_poster_rows(&model, &indices, "show", url, &image);
+        assert!(!rows.row_data(0).unwrap().is_loaded);
+        assert!(!rows.row_data(2).unwrap().is_loaded);
+        let mut painted = rows.row_data(1).unwrap();
+        assert!(painted.is_loaded);
+        assert_eq!(painted.poster.size().width, 1);
+        assert_eq!(painted.poster_path.as_str(), url);
+        painted.poster = Image::default();
+        painted.is_loaded = false;
+        rows.set_row_data(1, painted);
+        assert_eq!(rows.row_data(1).unwrap().poster_path.as_str(), url);
+        assert_eq!(previews[1].poster.as_deref(), Some(url));
+        // A reordered model cannot let an old numeric index paint a new title.
+        rows.set_row_data(
+            1,
+            MediaCard {
+                id: "other".into(),
+                ..Default::default()
+            },
+        );
+        paint_poster_rows(&model, &indices, "show", url, &image);
+        assert!(!rows.row_data(1).unwrap().is_loaded);
+        previews.swap(1, 2);
+        let indices = poster_indices(&mut previews, "series", "show", url);
+        assert_eq!(indices, [2]);
+    }
 }
