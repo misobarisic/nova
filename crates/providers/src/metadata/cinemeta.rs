@@ -152,28 +152,31 @@ pub(super) fn repair_with(
     }
     // One optional bounded request, rather than probing every image. Failure
     // leaves the original response usable, including offline/cached artwork.
-    let Some(bytes) = fetch(&format!(
+    let live = fetch(&format!(
         "https://cinemeta-live.strem.io/meta/series/{id}.json"
-    )) else {
-        if let Some((_, result)) = cached {
-            restore_images(meta, &result, &id);
+    ))
+    .filter(|bytes| bytes.len() <= RESPONSE_LIMIT)
+    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+    .and_then(|response| response.get("meta").cloned())
+    .filter(|meta| meta.get("id").and_then(Value::as_str) == Some(&id));
+    let Some(live) = live else {
+        // Malformed, oversized or unrelated success responses are failures
+        // too. They must not undo already confirmed artwork after TTL expiry.
+        if let Some((_, result)) = &cached {
+            restore_images(meta, result, &id);
         }
         return;
     };
-    if bytes.len() > RESPONSE_LIMIT {
-        return;
+    let mut episode_metadata = apply_images(meta, &live, &id);
+    if let Some((_, result)) = &cached {
+        restore_missing_images(meta, result, &episode_metadata, &id);
     }
-    let Ok(response) = serde_json::from_slice::<Value>(&bytes) else {
-        return;
-    };
-    let Some(live) = response
-        .get("meta")
-        .filter(|m| m.get("id").and_then(Value::as_str) == Some(&id))
-    else {
-        return;
-    };
-    let episode_metadata = apply_images(meta, live, &id);
     if !episode_metadata.is_empty() {
+        if let Some((_, result)) = cached {
+            for (key, old) in result.episode_metadata {
+                episode_metadata.entry(key).or_insert(old);
+            }
+        }
         let result = EnrichmentResult {
             status: "confirmed".into(),
             episode_metadata,
@@ -185,6 +188,19 @@ pub(super) fn repair_with(
             super::cache::write(&key, &result, &raw);
         }
     }
+}
+
+fn restore_missing_images(
+    meta: &mut Value,
+    cached: &EnrichmentResult,
+    fresh: &BTreeMap<String, EpisodeEnrichment>,
+    id: &str,
+) {
+    let mut fallback = cached.clone();
+    fallback
+        .episode_metadata
+        .retain(|key, _| !fresh.contains_key(key));
+    restore_images(meta, &fallback, id);
 }
 
 fn artwork_key(raw_url: &str, videos: &[Value]) -> String {
@@ -575,6 +591,35 @@ mod tests {
         changed["released"] = json!("2020-07-09");
         assert_ne!(key, artwork_key("source", &[changed]));
         assert_ne!(key, artwork_key("source", &[original.clone(), original]));
+    }
+
+    #[test]
+    fn cached_images_fill_partial_refreshes_without_overwriting_new_matches() {
+        let mut meta = json!({"videos": [video(2, 1, "Promise"), video(2, 2, "Arrival")]});
+        let old = apply_images(
+            &mut meta,
+            &json!({"videos": [video(1, 26, "Promise"), video(1, 27, "Arrival")]}),
+            "tt5607616",
+        );
+        let old_arrival = meta["videos"][1]["thumbnail"].clone();
+        let cached = EnrichmentResult {
+            status: "confirmed".into(),
+            episode_metadata: old,
+            inventory_revision: 0,
+            details: Default::default(),
+            connections: vec![],
+        };
+        let mut refreshed = json!({"videos": [video(2, 1, "Promise"), video(2, 2, "Arrival")]});
+        let fresh = apply_images(
+            &mut refreshed,
+            &json!({"videos": [video(3, 5, "Promise")]}),
+            "tt5607616",
+        );
+        let new_promise = refreshed["videos"][0]["thumbnail"].clone();
+        restore_missing_images(&mut refreshed, &cached, &fresh, "tt5607616");
+        assert_eq!(refreshed["videos"][0]["thumbnail"], new_promise);
+        assert_eq!(refreshed["videos"][1]["thumbnail"], old_arrival);
+        assert_eq!(refreshed["videos"][0]["id"], "tt5607616:2:1");
     }
 
     #[test]

@@ -3,6 +3,7 @@ use super::*;
 
 const HOME_SHOWCASE_PER_CATALOG: usize = 5;
 const HOME_SHOWCASE_CACHE_KEY: &str = "home:showcase:v1";
+const HOME_SHOWCASE_RETRY_DELAY: Duration = Duration::from_secs(30);
 type HomeShowcaseBatch = (HomeCatalogSource, Option<Vec<MetaPreview>>);
 
 /// Device-local catalog results, keyed by the complete configured selection.
@@ -30,7 +31,14 @@ impl HomeShowcaseCache {
                         .catalogs
                         .iter()
                         .find(|cached| &cached.source == source)?;
-                    Some((index, cached.previews.clone()))
+                    let mut previews = cached.previews.clone();
+                    for preview in &mut previews {
+                        preview.extra.insert(
+                            "novaSourceUrl".into(),
+                            serde_json::Value::String(source.addon_url.clone()),
+                        );
+                    }
+                    Some((index, previews))
                 })
                 .collect(),
         )
@@ -48,6 +56,7 @@ impl HomeShowcaseCache {
                 continue;
             };
             let mut seen = HashSet::new();
+            let previous = self.catalogs.iter().find(|cached| cached.source == source);
             let previews = previews
                 .into_iter()
                 .filter(|preview| {
@@ -56,6 +65,23 @@ impl HomeShowcaseCache {
                         && seen.insert((preview.type_.clone(), preview.id.clone()))
                 })
                 .take(limit)
+                .map(|mut preview| {
+                    if let Some(old) = previous.and_then(|cached| {
+                        cached
+                            .previews
+                            .iter()
+                            .find(|old| old.id == preview.id && old.type_ == preview.type_)
+                    }) {
+                        let fresh = preview;
+                        preview = old.clone();
+                        merge_home_showcase_preview(&mut preview, &fresh);
+                    }
+                    preview.extra.insert(
+                        "novaSourceUrl".into(),
+                        serde_json::Value::String(source.addon_url.clone()),
+                    );
+                    preview
+                })
                 .collect();
             let cached = HomeShowcaseCatalog { source, previews };
             if let Some(index) = self
@@ -68,6 +94,185 @@ impl HomeShowcaseCache {
                 self.catalogs.push(cached);
             }
         }
+    }
+
+    fn enrich(&mut self, requested: &MetaPreview, preview: &MetaPreview) {
+        for catalog in &mut self.catalogs {
+            if nova_providers::ExternalId::parse(&requested.id).is_none()
+                && requested
+                    .extra
+                    .get("novaSourceUrl")
+                    .and_then(serde_json::Value::as_str)
+                    != Some(catalog.source.addon_url.as_str())
+            {
+                continue;
+            }
+            for cached in &mut catalog.previews {
+                if cached.id == preview.id && cached.type_ == preview.type_ {
+                    merge_home_showcase_preview(cached, preview);
+                }
+            }
+        }
+    }
+}
+
+/// A sparse catalog or failed optional enrichment must not erase known fields.
+/// Supplied nonempty values still replace old values on a successful refresh.
+fn merge_home_showcase_preview(preview: &mut MetaPreview, fresh: &MetaPreview) {
+    if !fresh.name.trim().is_empty() {
+        preview.name.clone_from(&fresh.name);
+    }
+    for (field, value) in [
+        (&mut preview.title_legacy, &fresh.title_legacy),
+        (&mut preview.poster, &fresh.poster),
+        (&mut preview.background, &fresh.background),
+        (&mut preview.description, &fresh.description),
+        (&mut preview.runtime, &fresh.runtime),
+        (&mut preview.logo, &fresh.logo),
+    ] {
+        if value
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            field.clone_from(value);
+        }
+    }
+    if !fresh.genres.is_empty() {
+        preview.genres.clone_from(&fresh.genres);
+    }
+    for (field, value) in [
+        (&mut preview.release_info, &fresh.release_info),
+        (&mut preview.imdb_rating, &fresh.imdb_rating),
+    ] {
+        if value.as_ref().is_some_and(usable_home_metadata_value) {
+            field.clone_from(value);
+        }
+    }
+    for (key, value) in &fresh.extra {
+        // A detail response may have been supplied by another metadata addon;
+        // the catalog's ownership remains the authority for private IDs.
+        if usable_home_metadata_value(value)
+            && (key != "novaSourceUrl" || !preview.extra.contains_key(key))
+        {
+            preview.extra.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+fn usable_home_metadata_value(value: &serde_json::Value) -> bool {
+    !value.is_null() && value.as_str().is_none_or(|value| !value.trim().is_empty())
+}
+
+fn home_showcase_art_urls(preview: &MetaPreview) -> Vec<String> {
+    let mut urls = Vec::new();
+    for url in [&preview.background, &preview.poster].into_iter().flatten() {
+        let url = url.trim();
+        if !url.is_empty() && !urls.iter().any(|existing| existing == url) {
+            urls.push(url.to_owned());
+        }
+    }
+    urls
+}
+
+fn home_showcase_meta_urls(state: &Shared, preview: &MetaPreview) -> Vec<String> {
+    let owner = preview
+        .extra
+        .get("novaSourceUrl")
+        .and_then(serde_json::Value::as_str);
+    let global_id = nova_providers::ExternalId::parse(&preview.id).is_some();
+    let mut candidates = state
+        .installed
+        .iter()
+        .filter(|addon| {
+            addon.enabled && addon.available
+            && addon.manifest.accepts("meta", &preview.type_, &preview.id)
+            // Opaque catalog IDs belong to their originating provider. A
+            // wildcard manifest is not evidence of shared identity.
+            && (global_id || owner == Some(addon.url.as_str()))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|addon| owner != Some(addon.url.as_str()));
+    candidates
+        .into_iter()
+        .take(4)
+        .filter_map(|installed| {
+            Addon::new(&installed.url)
+                .ok()
+                .map(|addon| addon.meta_url(&preview.type_, &preview.id))
+        })
+        .collect()
+}
+
+fn home_showcase_needs_metadata(preview: &MetaPreview) -> bool {
+    [&preview.background, &preview.description]
+        .into_iter()
+        .any(|value| value.as_deref().is_none_or(|value| value.trim().is_empty()))
+}
+
+fn home_showcase_same_identity(left: &MetaPreview, right: &MetaPreview) -> bool {
+    left.id == right.id
+        && left.type_ == right.type_
+        && (nova_providers::ExternalId::parse(&left.id).is_some()
+            || left.extra.get("novaSourceUrl") == right.extra.get("novaSourceUrl"))
+}
+
+fn restore_home_showcase_header(preview: &mut MetaPreview) {
+    let Some(header) = read_meta_header_for(&preview.type_, &preview.id) else {
+        return;
+    };
+    let fresh = preview.clone();
+    preview.background = Some(header.background_url);
+    preview.description = Some(header.description);
+    preview.genres = header.genres;
+    if !header.year.is_empty() {
+        preview.release_info = Some(serde_json::Value::String(header.year));
+    }
+    // The latest catalog's supplied values take precedence over header caches.
+    merge_home_showcase_preview(preview, &fresh);
+}
+
+impl HomeShowcaseArtwork {
+    fn request(&mut self, preview: &MetaPreview, now: std::time::Instant) -> Option<String> {
+        if self.loading_url.is_some() {
+            return None;
+        }
+        let urls = home_showcase_art_urls(preview);
+        // A cached poster can paint while an uncached backdrop is fetched.
+        if self.backdrop.is_none() {
+            for url in &urls {
+                if let Some(pixels) = decoded_cache_get(url) {
+                    self.backdrop = Some(pixels);
+                    self.backdrop_url.clone_from(url);
+                    self.backdrop_done = true;
+                    break;
+                }
+            }
+        }
+        for url in urls {
+            if self.backdrop.is_some() && self.backdrop_url == url {
+                return None;
+            }
+            if self
+                .failed_urls
+                .get(&url)
+                .is_some_and(|at| now.saturating_duration_since(*at) < HOME_SHOWCASE_RETRY_DELAY)
+            {
+                continue;
+            }
+            if let Some(pixels) = decoded_cache_get(&url) {
+                self.backdrop = Some(pixels);
+                self.backdrop_url = url;
+                self.backdrop_done = true;
+                return None;
+            }
+            self.backdrop_done = self.backdrop.is_some();
+            self.loading_url = Some(url.clone());
+            return Some(url);
+        }
+        // No available image must never stall the carousel. A later visit or
+        // rotation can retry failed URLs once their cooldown has elapsed.
+        self.backdrop_done = true;
+        None
     }
 }
 
@@ -203,6 +408,15 @@ impl Bridge {
         };
         if refresh {
             self.refresh_home_showcase();
+        } else {
+            let (index, generation) = {
+                let state = self.shared.lock().unwrap();
+                (
+                    state.home_showcase_index,
+                    state.home_showcase_list_generation,
+                )
+            };
+            self.ensure_home_showcase_art(index, generation);
         }
     }
 
@@ -241,7 +455,7 @@ impl Bridge {
                     let index = home_showcase_refreshed_index(&state, &previews, 1);
                     let backdrop = previews
                         .get(index)
-                        .and_then(|preview| preview.background.clone());
+                        .and_then(|preview| home_showcase_art_urls(preview).into_iter().next());
                     state.home_showcase_refresh = Some(previews);
                     backdrop
                 }
@@ -311,7 +525,9 @@ impl Bridge {
             app.set_home_featured_description(SharedString::from(
                 first.description.as_deref().unwrap_or_default(),
             ));
-            let backdrop = first.background.as_deref().and_then(decoded_cache_get);
+            let backdrop = home_showcase_art_urls(&first)
+                .iter()
+                .find_map(|url| decoded_cache_get(url));
             app.set_home_featured_backdrop(backdrop.map(Image::from_rgba8).unwrap_or_default());
             app.set_home_featured_index(0);
             app.set_home_featured_count(count as i32);
@@ -321,38 +537,176 @@ impl Bridge {
         self.ensure_home_showcase_art(0, generation);
     }
 
+    /// Catalog previews are intentionally sparse. Hydrate only the current
+    /// and prefetched slide through the same metadata path as Detail, without
+    /// blocking native artwork or depending on Discover's prefetch preference.
+    fn ensure_home_showcase_metadata(&self, index: usize, generation: u64) {
+        let revision = nova_providers::metadata_revision();
+        let request = {
+            let mut state = self.shared.lock().unwrap();
+            if generation != state.home_showcase_list_generation {
+                return;
+            }
+            let Some(preview) = state.home_showcase.get(index).cloned() else {
+                return;
+            };
+            if !home_showcase_needs_metadata(&preview) {
+                return;
+            }
+            if state
+                .home_showcase_artwork
+                .values()
+                .filter(|artwork| artwork.metadata_loading)
+                .count()
+                >= 2
+            {
+                return;
+            }
+            let urls = home_showcase_meta_urls(&state, &preview);
+            let artwork = state.home_showcase_artwork.entry(index).or_default();
+            if artwork.metadata_loading
+                || (artwork.metadata_revision == Some(revision)
+                    && artwork
+                        .metadata_retry_at
+                        .is_none_or(|at| at.elapsed() < HOME_SHOWCASE_RETRY_DELAY))
+            {
+                return;
+            }
+            artwork.metadata_revision = Some(revision);
+            artwork.metadata_retry_at = None;
+            if urls.is_empty() {
+                return;
+            }
+            artwork.metadata_loading = true;
+            (preview, urls.into())
+        };
+        self.fetch_home_showcase_metadata(index, generation, revision, request.0, request.1);
+    }
+
+    fn fetch_home_showcase_metadata(
+        &self,
+        index: usize,
+        generation: u64,
+        revision: u64,
+        preview: MetaPreview,
+        mut urls: VecDeque<String>,
+    ) {
+        let Some(url) = urls.pop_front() else {
+            return;
+        };
+        let bridge = self.clone();
+        net::fetch_bytes(url, move |result| {
+            let item = result
+                .ok()
+                .and_then(|bytes| Addon::parse_meta(&bytes).ok().flatten())
+                .filter(|item| meta_matches_request(item, &preview.type_, &preview.id));
+            let _ = slint::invoke_from_event_loop(move || {
+                bridge.finish_home_showcase_metadata(
+                    index, generation, revision, preview, urls, item,
+                );
+            });
+        });
+    }
+
+    fn finish_home_showcase_metadata(
+        &self,
+        index: usize,
+        generation: u64,
+        revision: u64,
+        requested: MetaPreview,
+        urls: VecDeque<String>,
+        item: Option<MetaItem>,
+    ) {
+        {
+            let mut state = self.shared.lock().unwrap();
+            if generation != state.home_showcase_list_generation
+                || state
+                    .home_showcase
+                    .get(index)
+                    .is_none_or(|preview| !home_showcase_same_identity(preview, &requested))
+            {
+                return;
+            }
+            let artwork = state.home_showcase_artwork.entry(index).or_default();
+            if revision != nova_providers::metadata_revision() {
+                artwork.metadata_loading = false;
+                artwork.metadata_revision = None;
+                drop(state);
+                self.ensure_home_showcase_metadata(index, generation);
+                return;
+            }
+            if item.is_none() && !urls.is_empty() {
+                drop(state);
+                self.fetch_home_showcase_metadata(index, generation, revision, requested, urls);
+                return;
+            }
+            artwork.metadata_loading = false;
+            artwork.metadata_retry_at = item
+                .as_ref()
+                .is_none_or(|item| home_showcase_needs_metadata(&item.preview))
+                .then(std::time::Instant::now);
+            if let Some(item) = &item {
+                let previous = serde_json::to_value(&state.home_showcase[index]).ok();
+                merge_home_showcase_preview(&mut state.home_showcase[index], &item.preview);
+                let changed = previous != serde_json::to_value(&state.home_showcase[index]).ok();
+                if let Some(refresh) = &mut state.home_showcase_refresh {
+                    for preview in refresh {
+                        if home_showcase_same_identity(preview, &requested) {
+                            merge_home_showcase_preview(preview, &item.preview);
+                        }
+                    }
+                }
+                if changed
+                    && state.home_showcase_index == index
+                    && state.home_showcase_pending_index.is_none()
+                {
+                    state.home_showcase_pending_index = Some(index);
+                }
+            }
+        }
+        if let Some(item) = item {
+            // Share successful metadata with Detail/Library and keep the richer
+            // Home snapshot across restarts and later sparse catalog refreshes.
+            let header = meta_header_from_item(&item);
+            merge_meta_header_for(&requested.type_, &requested.id, &header);
+            if !item.videos.is_empty() {
+                write_episodes_cache_for(&requested.type_, &requested.id, &item.videos);
+            }
+            let mut cached =
+                read_json::<HomeShowcaseCache>(HOME_SHOWCASE_CACHE_KEY).unwrap_or_default();
+            cached.enrich(&requested, &item.preview);
+            write_json(HOME_SHOWCASE_CACHE_KEY, &cached);
+        }
+        self.ensure_home_showcase_art(index, generation);
+        let (current, count) = {
+            let state = self.shared.lock().unwrap();
+            (
+                state
+                    .home_showcase_pending_index
+                    .unwrap_or(state.home_showcase_index),
+                state.home_showcase.len(),
+            )
+        };
+        if count > 0 {
+            self.ensure_home_showcase_metadata(current, generation);
+            self.ensure_home_showcase_metadata((current + 1) % count, generation);
+        }
+    }
+
     /// Begin loading the requested slide's art, while keeping the currently
     /// displayed slide intact. The next slide is prefetched after every commit.
     fn ensure_home_showcase_art(&self, index: usize, generation: u64) {
+        self.ensure_home_showcase_metadata(index, generation);
         let (backdrop, ready) = {
             let mut state = self.shared.lock().unwrap();
             if generation != state.home_showcase_list_generation {
                 return;
             }
-            let Some(preview) = state.home_showcase.get(index) else {
+            let Some(preview) = state.home_showcase.get(index).cloned() else {
                 return;
             };
-            let backdrop_url = preview.background.clone().unwrap_or_default();
             let artwork = state.home_showcase_artwork.entry(index).or_default();
-            if !artwork.backdrop_done
-                && !backdrop_url.is_empty()
-                && let Some(pixels) = decoded_cache_get(&backdrop_url)
-            {
-                artwork.backdrop = Some(pixels);
-                artwork.backdrop_done = true;
-            }
-            if backdrop_url.is_empty() {
-                artwork.backdrop_done = true;
-            }
-            let backdrop = if !backdrop_url.is_empty()
-                && !artwork.backdrop_done
-                && !artwork.backdrop_loading
-            {
-                artwork.backdrop_loading = true;
-                Some(backdrop_url)
-            } else {
-                None
-            };
+            let backdrop = artwork.request(&preview, std::time::Instant::now());
             (backdrop, artwork.backdrop_done)
         };
 
@@ -372,9 +726,9 @@ impl Bridge {
         let bridge = self.clone();
         // Keep the add-on-provided source resolution for the large hero rather
         // than using the smaller detail-banner derivative.
-        net::fetch_image(url, None, move |pixels| {
+        net::fetch_image(url.clone(), None, move |pixels| {
             let _ = slint::invoke_from_event_loop(move || {
-                bridge.finish_home_showcase_artwork(index, generation, pixels);
+                bridge.finish_home_showcase_artwork(index, generation, url, pixels);
             });
         });
     }
@@ -383,25 +737,40 @@ impl Bridge {
         &self,
         index: usize,
         generation: u64,
+        url: String,
         pixels: Option<SharedPixelBuffer<Rgba8Pixel>>,
     ) {
-        let should_commit = {
+        {
             let mut state = self.shared.lock().unwrap();
             if generation != state.home_showcase_list_generation {
                 return;
             }
-            let pending = state.home_showcase_pending_index == Some(index);
+            let Some(preview) = state.home_showcase.get(index) else {
+                return;
+            };
+            let valid_url = home_showcase_art_urls(preview).contains(&url);
             let Some(artwork) = state.home_showcase_artwork.get_mut(&index) else {
                 return;
             };
-            artwork.backdrop_loading = false;
-            artwork.backdrop_done = true;
-            artwork.backdrop = pixels;
-            pending && artwork.backdrop_done
-        };
-        if should_commit {
-            self.commit_home_showcase_index(index, generation);
+            if artwork.loading_url.as_deref() != Some(&url) {
+                return;
+            }
+            artwork.loading_url = None;
+            if valid_url {
+                if let Some(pixels) = pixels {
+                    artwork.backdrop = Some(pixels);
+                    artwork.backdrop_url = url.clone();
+                    artwork.failed_urls.remove(&url);
+                    artwork.backdrop_done = true;
+                } else {
+                    artwork.failed_urls.insert(url, std::time::Instant::now());
+                }
+            }
+            if state.home_showcase_index == index && state.home_showcase_pending_index.is_none() {
+                state.home_showcase_pending_index = Some(index);
+            }
         }
+        self.ensure_home_showcase_art(index, generation);
     }
 
     fn commit_home_showcase_index(&self, index: usize, generation: u64) {
@@ -1157,25 +1526,35 @@ impl Bridge {
 /// Swap the list at a navigation boundary, reusing completed art by URL. A
 /// separate list generation rejects artwork callbacks whose indices belonged
 /// to the old list, without cancelling metadata refreshes or valid old art.
-fn replace_home_showcase_list(state: &mut Shared, previews: Vec<MetaPreview>, index: usize) {
+fn replace_home_showcase_list(state: &mut Shared, mut previews: Vec<MetaPreview>, index: usize) {
+    for preview in &mut previews {
+        restore_home_showcase_header(preview);
+    }
     let mut cached_art = HashMap::new();
-    for (old_index, artwork) in std::mem::take(&mut state.home_showcase_artwork) {
-        if artwork.backdrop_done
-            && artwork.backdrop.is_some()
-            && let Some(url) = state
-                .home_showcase
-                .get(old_index)
-                .and_then(|preview| preview.background.clone())
-        {
-            cached_art.insert(url, artwork);
+    for artwork in std::mem::take(&mut state.home_showcase_artwork).into_values() {
+        if artwork.backdrop_done && artwork.backdrop.is_some() && !artwork.backdrop_url.is_empty() {
+            // Request state belongs to an identity/list generation, not to a
+            // shared image URL. Reuse only successful pixels on replacement.
+            cached_art.insert(artwork.backdrop_url.clone(), artwork.backdrop);
         }
     }
     state.home_showcase_artwork = previews
         .iter()
         .enumerate()
         .filter_map(|(index, preview)| {
-            let artwork = cached_art.remove(preview.background.as_deref()?);
-            artwork.map(|artwork| (index, artwork))
+            home_showcase_art_urls(preview).into_iter().find_map(|url| {
+                cached_art.get(&url).cloned().flatten().map(|backdrop| {
+                    (
+                        index,
+                        HomeShowcaseArtwork {
+                            backdrop: Some(backdrop),
+                            backdrop_url: url,
+                            backdrop_done: true,
+                            ..Default::default()
+                        },
+                    )
+                })
+            })
         })
         .collect();
     state.home_showcase_index = index.min(previews.len().saturating_sub(1));
@@ -1199,7 +1578,7 @@ fn home_showcase_refreshed_index(state: &Shared, previews: &[MetaPreview], delta
         .and_then(|current| {
             previews
                 .iter()
-                .position(|preview| preview.id == current.id && preview.type_ == current.type_)
+                .position(|preview| home_showcase_same_identity(preview, current))
         })
         .unwrap_or(base);
     (base as i64 + delta as i64).rem_euclid(previews.len() as i64) as usize
@@ -1217,7 +1596,17 @@ fn merge_home_showcase_results(mut batches: Vec<(usize, Vec<MetaPreview>)>) -> V
             if preview.id.is_empty() || preview.title().trim().is_empty() {
                 continue;
             }
-            if seen.insert((preview.type_.clone(), preview.id.clone())) {
+            let owner = nova_providers::ExternalId::parse(&preview.id)
+                .is_none()
+                .then(|| {
+                    preview
+                        .extra
+                        .get("novaSourceUrl")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned()
+                });
+            if seen.insert((preview.type_.clone(), preview.id.clone(), owner)) {
                 merged.push(preview);
                 added += 1;
                 if added == HOME_SHOWCASE_PER_CATALOG {
@@ -1564,6 +1953,170 @@ mod tests {
     }
 
     #[test]
+    fn featured_private_identity_keeps_catalog_ownership_on_refresh() {
+        let mut first = showcase_preview("private-show");
+        first
+            .extra
+            .insert("novaSourceUrl".into(), "https://first.example".into());
+        let mut second = first.clone();
+        second
+            .extra
+            .insert("novaSourceUrl".into(), "https://second.example".into());
+        assert!(!home_showcase_same_identity(&first, &second));
+        let state = Shared {
+            home_showcase: vec![first.clone()],
+            ..Default::default()
+        };
+        let refresh = vec![second.clone(), first.clone(), showcase_preview("next")];
+        assert_eq!(home_showcase_refreshed_index(&state, &refresh, 1), 2);
+        merge_home_showcase_preview(&mut first, &second);
+        assert_eq!(first.extra["novaSourceUrl"], "https://first.example");
+        first.id = "tt1234567".into();
+        second.id.clone_from(&first.id);
+        assert!(home_showcase_same_identity(&first, &second));
+    }
+
+    #[test]
+    fn featured_sparse_refresh_preserves_enrichment_and_accepts_new_artwork() {
+        let source = showcase_source("popular", "");
+        let selected = std::slice::from_ref(&source);
+        let mut cached = HomeShowcaseCache::default();
+        let mut native = showcase_preview("vendor:show");
+        native.poster = Some("https://images.example/native.jpg".into());
+        cached.update(selected, vec![(source.clone(), Some(vec![native.clone()]))]);
+        let mut detailed = native.clone();
+        detailed.background = Some("https://images.example/backdrop.jpg".into());
+        detailed.description = Some("Detail synopsis".into());
+        detailed.release_info = Some(serde_json::json!(2025));
+        detailed.runtime = Some("24 min".into());
+        let requested = cached.previews(selected)[0].clone();
+        cached.enrich(&requested, &detailed);
+        native.poster = Some("https://images.example/new-poster.jpg".into());
+        native.background = Some("  ".into());
+        native.description = Some(String::new());
+        cached.update(selected, vec![(source.clone(), Some(vec![native]))]);
+        let previews = cached.previews(selected);
+        assert_eq!(
+            previews[0].poster.as_deref(),
+            Some("https://images.example/new-poster.jpg")
+        );
+        assert_eq!(previews[0].background, detailed.background);
+        assert_eq!(previews[0].description, detailed.description);
+        assert_eq!(previews[0].release_info, detailed.release_info);
+        assert_eq!(previews[0].runtime, detailed.runtime);
+        let restarted: HomeShowcaseCache =
+            serde_json::from_str(&serde_json::to_string(&cached).unwrap()).unwrap();
+        assert_eq!(
+            restarted.previews(selected)[0].background,
+            detailed.background
+        );
+        assert_eq!(previews[0].extra["novaSourceUrl"], source.addon_url);
+    }
+
+    #[test]
+    fn featured_artwork_falls_back_and_retries_without_losing_successful_pixels() {
+        let mut preview = showcase_preview("any-provider:show");
+        preview.poster = Some("https://images.example/fallback.jpg".into());
+        preview.background = Some("  ".into());
+        assert_eq!(
+            home_showcase_art_urls(&preview),
+            ["https://images.example/fallback.jpg"]
+        );
+        let mut artwork = HomeShowcaseArtwork::default();
+        let now = std::time::Instant::now();
+        assert_eq!(
+            artwork.request(&preview, now).as_deref(),
+            Some("https://images.example/fallback.jpg")
+        );
+        assert!(!artwork.backdrop_done);
+        assert!(
+            artwork.request(&preview, now).is_none(),
+            "in-flight downloads are not duplicated"
+        );
+        artwork.loading_url = None;
+        artwork.backdrop = Some(SharedPixelBuffer::new(2, 2));
+        artwork.backdrop_url = preview.poster.clone().unwrap();
+        artwork.backdrop_done = true;
+        preview.background = Some("https://images.example/upgrade.jpg".into());
+        assert_eq!(artwork.request(&preview, now), preview.background);
+        assert!(
+            artwork.backdrop_done && artwork.backdrop.is_some(),
+            "poster stays usable during an upgrade"
+        );
+        artwork.loading_url = None;
+        artwork
+            .failed_urls
+            .insert(preview.background.clone().unwrap(), now);
+        assert!(
+            artwork
+                .request(&preview, now + Duration::from_secs(1))
+                .is_none()
+        );
+        assert_eq!(artwork.backdrop_url, preview.poster.clone().unwrap());
+        assert_eq!(
+            artwork.request(&preview, now + HOME_SHOWCASE_RETRY_DELAY),
+            preview.background
+        );
+
+        let mut unavailable = HomeShowcaseArtwork::default();
+        unavailable
+            .failed_urls
+            .insert(preview.background.clone().unwrap(), now);
+        unavailable
+            .failed_urls
+            .insert(preview.poster.clone().unwrap(), now);
+        assert!(unavailable.request(&preview, now).is_none());
+        assert!(
+            unavailable.backdrop_done,
+            "failed images never stop navigation"
+        );
+        assert_eq!(
+            unavailable.request(&preview, now + HOME_SHOWCASE_RETRY_DELAY),
+            preview.background
+        );
+        preview.poster.clone_from(&preview.background);
+        assert_eq!(home_showcase_art_urls(&preview).len(), 1);
+    }
+
+    #[test]
+    fn featured_metadata_uses_catalog_ownership_and_manifest_restrictions() {
+        fn installed(url: &str, prefix: &str) -> Installed {
+            Installed {
+                url: url.into(), label: url.into(), enabled: true, available: true,
+                configure_ok: None, generation: 1,
+                manifest: serde_json::from_value(serde_json::json!({
+                    "id":url, "name":"Provider", "version":"1", "types":["series"],
+                    "resources":["meta"], "idPrefixes": if prefix.is_empty() { vec![] } else { vec![prefix] }
+                })).unwrap(),
+            }
+        }
+        let owner = "https://owner.example";
+        let mut state = Shared {
+            installed: vec![
+                installed("https://wildcard.example", ""),
+                installed(owner, ""),
+            ],
+            ..Default::default()
+        };
+        let mut preview = showcase_preview("opaque:123");
+        preview
+            .extra
+            .insert("novaSourceUrl".into(), serde_json::json!(owner));
+        let urls = home_showcase_meta_urls(&state, &preview);
+        assert_eq!(
+            urls,
+            [Addon::new(owner).unwrap().meta_url("series", &preview.id)]
+        );
+        preview.id = "tt123".into();
+        assert_eq!(home_showcase_meta_urls(&state, &preview).len(), 2);
+        assert!(home_showcase_meta_urls(&state, &preview)[0].starts_with(owner));
+        state.installed[1].available = false;
+        assert_eq!(home_showcase_meta_urls(&state, &preview).len(), 1);
+        state.installed[0].enabled = false;
+        assert!(home_showcase_meta_urls(&state, &preview).is_empty());
+    }
+
+    #[test]
     fn featured_catalog_errors_are_distinct_from_successful_empty_catalogs() {
         for bytes in [
             br#"{}"#.as_slice(),
@@ -1688,8 +2241,9 @@ mod tests {
                 0,
                 HomeShowcaseArtwork {
                     backdrop: Some(pixels),
+                    backdrop_url: "https://images.example/old.jpg".into(),
                     backdrop_done: true,
-                    backdrop_loading: false,
+                    ..Default::default()
                 },
             )]),
             ..Default::default()
@@ -1824,7 +2378,7 @@ mod tests {
         assert_eq!(app.get_home_featured_index(), 2);
         assert_eq!(app.get_home_featured_count(), 3);
         assert!(!app.get_home_featured_refresh_pending());
-        bridge.finish_home_showcase_artwork(0, old_art_generation, None);
+        bridge.finish_home_showcase_artwork(0, old_art_generation, String::new(), None);
         assert_eq!(
             app.get_home_featured_title(),
             "fresh-b",
@@ -1911,6 +2465,99 @@ mod tests {
                 .id,
             "single"
         );
+
+        // Any poster-only catalog paints immediately without enrichment. A
+        // successful detail later upgrades the visible slide, survives sparse
+        // catalog refreshes, and rejects stale artwork/metadata completions.
+        fn featured_image_size(app: &AppWindow) -> (u32, u32) {
+            let size = app.get_home_featured_backdrop().size();
+            (size.width, size.height)
+        }
+        let mut native = showcase_preview("poster-only:one");
+        native
+            .extra
+            .insert("novaSourceUrl".into(), serde_json::json!(source.addon_url));
+        native.poster = Some("https://images.example/home-native-fixture.jpg".into());
+        decoded_cache_insert(
+            native.poster.as_ref().unwrap(),
+            SharedPixelBuffer::new(2, 2),
+        );
+        let mut cached = HomeShowcaseCache::default();
+        cached.update(
+            std::slice::from_ref(&source),
+            vec![(source.clone(), Some(vec![native.clone()]))],
+        );
+        write_json(HOME_SHOWCASE_CACHE_KEY, &cached);
+        bridge.install_home_showcase(cached.previews(std::slice::from_ref(&source)));
+        assert_eq!(featured_image_size(&app), (2, 2));
+        let current_generation = bridge.shared.lock().unwrap().home_showcase_list_generation;
+        let mut detail = MetaItem {
+            preview: native.clone(),
+            ..Default::default()
+        };
+        detail.preview.background = Some("https://images.example/home-detail-fixture.jpg".into());
+        detail.preview.description = Some("Fetched through the shared detail pipeline".into());
+        decoded_cache_insert(
+            detail.preview.background.as_ref().unwrap(),
+            SharedPixelBuffer::new(3, 2),
+        );
+        bridge.finish_home_showcase_metadata(
+            0,
+            current_generation,
+            nova_providers::metadata_revision(),
+            native.clone(),
+            VecDeque::new(),
+            Some(detail.clone()),
+        );
+        assert_eq!(featured_image_size(&app), (3, 2));
+        assert_eq!(
+            app.get_home_featured_description(),
+            detail.preview.description.clone().unwrap()
+        );
+        bridge.finish_home_showcase_artwork(
+            0,
+            current_generation,
+            native.poster.clone().unwrap(),
+            None,
+        );
+        assert_eq!(
+            featured_image_size(&app),
+            (3, 2),
+            "obsolete URL completions cannot clear an upgraded image"
+        );
+        let cached = read_json::<HomeShowcaseCache>(HOME_SHOWCASE_CACHE_KEY).unwrap();
+        assert_eq!(
+            cached.previews(std::slice::from_ref(&source))[0].background,
+            detail.preview.background
+        );
+        let header = read_meta_header_for("series", &native.id).unwrap();
+        assert_eq!(
+            header.background_url,
+            detail.preview.background.clone().unwrap()
+        );
+        let mut replacement = MetaItem {
+            preview: native.clone(),
+            ..Default::default()
+        };
+        replacement.preview.background = Some("https://images.example/new-header.jpg".into());
+        merge_meta_header_for("series", &native.id, &meta_header_from_item(&replacement));
+        assert_eq!(
+            read_meta_header_for("series", &native.id)
+                .unwrap()
+                .background_url,
+            replacement.preview.background.unwrap()
+        );
+        bridge.install_home_showcase(vec![showcase_preview("replacement")]);
+        bridge.finish_home_showcase_metadata(
+            0,
+            current_generation,
+            nova_providers::metadata_revision(),
+            native,
+            VecDeque::new(),
+            Some(detail),
+        );
+        assert_eq!(app.get_home_featured_title(), "replacement");
+        assert_eq!(featured_image_size(&app), (0, 0));
     }
 
     fn progress(

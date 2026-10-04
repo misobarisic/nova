@@ -78,6 +78,51 @@ mod rewrite_cache_tests {
         buf
     }
 
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn artwork_download_retries_transient_http_errors_before_decoding() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            time::{Duration, Instant},
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/art.png", listener.local_addr().unwrap());
+        let bytes = png_bytes();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            for (status, body) in [("503 Service Unavailable", Vec::new()), ("200 OK", bytes)] {
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "expected image retry");
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("image fixture: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                let mut request = [0; 2048];
+                let received = stream.read(&mut request).unwrap();
+                assert!(received > 0, "expected an image GET request");
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+            }
+        });
+        let image = download_image_fresh(&url, None).expect("second response provides artwork");
+        assert_eq!((image.pixels.width(), image.pixels.height()), (8, 8));
+        server.join().unwrap();
+    }
+
     fn jpeg_settings() -> CacheSettings {
         CacheSettings {
             enabled: true,

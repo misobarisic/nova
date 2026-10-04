@@ -216,13 +216,18 @@ struct StreamUi {
 }
 
 /// Decoded artwork retained for an item in Home's small featured carousel.
-/// `*_done` also covers a missing URL or a failed fetch, so one bad image does
-/// not stall automatic rotation.
+/// Failed URLs are cooled down rather than becoming permanent session misses.
+/// Existing pixels stay visible while richer metadata/artwork is loaded.
 #[derive(Default)]
 struct HomeShowcaseArtwork {
     backdrop: Option<SharedPixelBuffer<Rgba8Pixel>>,
+    backdrop_url: String,
     backdrop_done: bool,
-    backdrop_loading: bool,
+    loading_url: Option<String>,
+    failed_urls: HashMap<String, std::time::Instant>,
+    metadata_loading: bool,
+    metadata_revision: Option<u64>,
+    metadata_retry_at: Option<std::time::Instant>,
 }
 
 #[derive(Default)]

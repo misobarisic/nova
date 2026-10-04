@@ -3,6 +3,9 @@ mod cache;
 mod cinemeta;
 pub use cache::{MetadataCache, set_metadata_cache};
 const CONFIRMED_CACHE_TTL: u64 = 30 * 24 * 3600;
+// Invalidate confirmed results when field selection/provenance changes, without
+// changing the durable store format or any sync wire schema.
+const ENRICHMENT_VERSION: u32 = 1;
 use crate::{
     ExternalId, MediaItem, ProviderHost, ProviderHostError, SourceSequence, StremioProvider,
 };
@@ -182,6 +185,7 @@ fn cache_key(revision: u64, caller: &str, request: &EnrichmentRequest) -> String
         request,
         cinemeta::ARTWORK_MATCH_VERSION,
         crate::sequence::MAPPING_VERSION,
+        ENRICHMENT_VERSION,
     ))
     .unwrap_or_default();
     let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, &input);
@@ -337,57 +341,10 @@ fn enrich_with(
             })
             .collect();
     }
-    let mut candidates = Vec::new();
-    for installed in addons.iter().filter(|a| a.url != caller_url) {
-        let Ok(addon) = addons::Addon::new(&installed.url) else {
-            continue;
-        };
-        let adapter = StremioProvider::new(addon.clone(), installed.manifest.clone());
-        let mut found = Vec::new();
-        for catalog in installed.manifest.search_catalogs(&native.media_type) {
-            if catalog
-                .extra
-                .iter()
-                .any(|extra| extra.is_required && extra.name != "search" && extra.name != "skip")
-            {
-                continue;
-            }
-            if operation.calls >= 26 {
-                break;
-            }
-            let Some(bytes) = operation.fetch(&addon.catalog_url(
-                &native.media_type,
-                &catalog.id,
-                &[("search", &query)],
-            )) else {
-                continue;
-            };
-            for preview in addons::Addon::parse_catalog(&bytes)
-                .unwrap_or_default()
-                .into_iter()
-                .take(100)
-            {
-                let mut preview = preview;
-                if preview.type_.is_empty() {
-                    preview.type_ = native.media_type.clone();
-                }
-                let item = adapter.convert_preview(preview);
-                let rank = crate::sequence::candidate_rank(&native, &item);
-                if rank > 0 {
-                    found.push((rank, item));
-                }
-            }
-        }
-        found.sort_by_key(|(rank, _)| std::cmp::Reverse(*rank));
-        let mut seen = BTreeSet::new();
-        found.retain(|(_, item)| seen.insert(item.source_id.clone()));
-        // A provider's best rank must identify one entry, not an arbitrary remake.
-        if let Some((rank, item)) = found.first()
-            && found.get(1).is_none_or(|(other, _)| other < rank)
-        {
-            candidates.push((installed.clone(), item.clone(), *rank));
-        }
-    }
+    let mut candidates: Vec<(MetadataAddon, MediaItem, u32)> = Vec::new();
+    let mut mapped_videos = BTreeMap::new();
+    let mut connected_media = BTreeMap::new();
+    let mut searched = false;
     // Expand connections through explicit identifiers only. Each round may
     // discover IDs another enabled metadata addon accepts; never generate IDs.
     let mut completed = BTreeSet::new();
@@ -418,6 +375,18 @@ fn enrich_with(
             .find(|(a, m, _)| !completed.contains(&(a.url.clone(), m.source_id.clone())))
             .cloned()
         else {
+            if !searched {
+                searched = true;
+                candidates.extend(search_candidates(
+                    &native,
+                    &query,
+                    caller_url,
+                    addons,
+                    &result.connections,
+                    operation,
+                ));
+                continue;
+            }
             break;
         };
         completed.insert((installed.url.clone(), preview.source_id.clone()));
@@ -477,6 +446,10 @@ fn enrich_with(
             }
             .into(),
         };
+        connected_media.insert(
+            (connection.addon_id.clone(), connection.media_id.clone()),
+            media.clone(),
+        );
         merge_media(&mut result.details.media, &media);
         for (native_id, target_id) in mappings {
             // Only enrich this entry's available episodes, not related parts.
@@ -495,26 +468,16 @@ fn enrich_with(
                 continue;
             }
             let enrichment = result.episode_metadata.entry(native_id).or_default();
-            if !enrichment.ids.contains(&target_id) {
-                enrichment.ids.push(target_id);
+            if !enrichment
+                .ids
+                .iter()
+                .zip(&enrichment.connections)
+                .any(|(id, existing)| id == &target_id && existing.addon_id == connection.addon_id)
+            {
+                enrichment.ids.push(target_id.clone());
                 enrichment.connections.push(connection.clone());
             }
-            if enrichment.season.is_none() {
-                enrichment.season = video.season;
-                enrichment.episode = video.episode_number();
-                let title = video.label();
-                enrichment.title =
-                    (!crate::sequence::episode_title(&title).is_empty()).then_some(title);
-                enrichment.released = video.released.clone();
-                enrichment.thumbnail = video.thumbnail.clone();
-                enrichment.overview = video.overview.clone().or_else(|| {
-                    video
-                        .extra
-                        .get("description")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                });
-            }
+            mapped_videos.insert((connection.addon_id.clone(), target_id), video.clone());
         }
         result.connections.push(connection);
     }
@@ -533,18 +496,58 @@ fn enrich_with(
             .zip(mapping.connections.iter().cloned())
             .filter(|(_, c)| !connection_conflicts(c, &result.details.media))
             .collect::<Vec<_>>();
-        mapping.ids = accepted.iter().map(|(id, _)| id.clone()).collect();
-        mapping.connections = accepted.into_iter().map(|(_, c)| c).collect();
+        let mut seen = BTreeSet::new();
+        let distinct = accepted
+            .iter()
+            .filter(|(id, _)| seen.insert(id.clone()))
+            .collect::<Vec<_>>();
+        mapping.ids = distinct.iter().map(|(id, _)| id.clone()).collect();
+        mapping.connections = distinct.into_iter().map(|(_, c)| c.clone()).collect();
+        // Select fields only after conflicting connections have been removed.
+        // Numbering comes from the first accepted mapping; later confirmed
+        // sources can fill missing text/art instead of being blocked by it.
+        for (id, connection) in accepted {
+            let Some(video) = mapped_videos.get(&(connection.addon_id, id)) else {
+                continue;
+            };
+            if mapping.season.is_none() {
+                mapping.season = video.season;
+                mapping.episode = video.episode_number();
+            }
+            let title = video.label();
+            merge_optional_text(
+                &mut mapping.title,
+                &(!crate::sequence::episode_title(&title).is_empty()).then_some(title),
+            );
+            merge_optional_text(&mut mapping.released, &video.released);
+            merge_optional_text(&mut mapping.thumbnail, &video.thumbnail);
+            let mut overview = video.overview.clone();
+            merge_optional_text(
+                &mut overview,
+                &video
+                    .extra
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            );
+            merge_optional_text(&mut mapping.overview, &overview);
+        }
     }
     result.episode_metadata.retain(|_, m| !m.ids.is_empty());
-    if !result.connections.is_empty()
-        && result
-            .connections
-            .iter()
-            .all(|c| c.basis == "conflicting-identifiers")
-    {
+    if !result.connections.is_empty() {
         let ids = result.details.media.external_ids.clone();
         result.details.media = native;
+        for connection in result
+            .connections
+            .iter()
+            .filter(|connection| connection.basis != "conflicting-identifiers")
+        {
+            if let Some(media) =
+                connected_media.get(&(connection.addon_id.clone(), connection.media_id.clone()))
+            {
+                merge_media(&mut result.details.media, media);
+            }
+        }
         result.details.media.external_ids = ids;
     }
     result.status = if result.connections.is_empty() {
@@ -561,6 +564,76 @@ fn enrich_with(
     .into();
 
     result
+}
+
+/// Prefer verified external IDs before spending the optional deadline on
+/// title searches. Already connected addons need no speculative second match.
+fn search_candidates(
+    native: &MediaItem,
+    query: &str,
+    caller_url: &str,
+    addons: &[MetadataAddon],
+    known: &[MetadataConnection],
+    operation: &mut Operation,
+) -> Vec<(MetadataAddon, MediaItem, u32)> {
+    let mut candidates = Vec::new();
+    for installed in addons.iter().filter(|a| a.url != caller_url) {
+        if known
+            .iter()
+            .any(|connection| connection.addon_id == addon_metadata_id(&installed.url))
+        {
+            continue;
+        }
+        let Ok(addon) = addons::Addon::new(&installed.url) else {
+            continue;
+        };
+        let adapter = StremioProvider::new(addon.clone(), installed.manifest.clone());
+        let mut found = Vec::new();
+        for catalog in installed.manifest.search_catalogs(&native.media_type) {
+            if catalog
+                .extra
+                .iter()
+                .any(|extra| extra.is_required && extra.name != "search" && extra.name != "skip")
+            {
+                continue;
+            }
+            if operation.calls >= 26 {
+                break;
+            }
+            let Some(bytes) = operation.fetch(&addon.catalog_url(
+                &native.media_type,
+                &catalog.id,
+                &[("search", query)],
+            )) else {
+                continue;
+            };
+            for preview in addons::Addon::parse_catalog(&bytes)
+                .unwrap_or_default()
+                .into_iter()
+                .take(100)
+            {
+                let mut preview = preview;
+                if preview.type_.is_empty() {
+                    preview.type_ = native.media_type.clone();
+                }
+                let item = adapter.convert_preview(preview);
+                let rank = crate::sequence::candidate_rank(native, &item);
+                if rank > 0 {
+                    found.push((rank, item));
+                }
+            }
+        }
+        found.sort_by_key(|(rank, _)| std::cmp::Reverse(*rank));
+        let mut seen = BTreeSet::new();
+        found.retain(|(_, item)| seen.insert(item.source_id.clone()));
+        // A provider's best rank must identify one entry, not an arbitrary remake.
+        if let Some((rank, item)) = found.first()
+            && found.get(1).is_none_or(|(other, _)| other < rank)
+        {
+            candidates.push((installed.clone(), item.clone(), *rank));
+        }
+    }
+    candidates
 }
 
 fn connection_conflicts(connection: &MetadataConnection, media: &MediaItem) -> bool {
@@ -627,16 +700,14 @@ pub(crate) fn merge_media(media: &mut MediaItem, canonical: &MediaItem) {
         .anilist
         .take()
         .or_else(|| canonical.external_ids.anilist.clone());
-    media.year = media.year.take().or_else(|| canonical.year.clone());
-    media.poster = media.poster.take().or_else(|| canonical.poster.clone());
-    media.background = media
-        .background
-        .take()
-        .or_else(|| canonical.background.clone());
-    media.description = media
-        .description
-        .take()
-        .or_else(|| canonical.description.clone());
+    for (field, fallback) in [
+        (&mut media.year, &canonical.year),
+        (&mut media.poster, &canonical.poster),
+        (&mut media.background, &canonical.background),
+        (&mut media.description, &canonical.description),
+    ] {
+        merge_optional_text(field, fallback);
+    }
     if media.genres.is_empty() {
         media.genres = canonical.genres.clone();
     }
@@ -661,6 +732,13 @@ pub(crate) fn merge_media(media: &mut MediaItem, canonical: &MediaItem) {
             }
         }
     }
+}
+
+fn merge_optional_text(value: &mut Option<String>, fallback: &Option<String>) {
+    *value = value
+        .take()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| fallback.clone().filter(|value| !value.trim().is_empty()));
 }
 
 pub(crate) fn valid_alias(id: &str) -> bool {
@@ -1078,6 +1156,140 @@ mod tests {
         assert_eq!(calls.len(), 3);
         assert!(calls.iter().any(|u| u.contains("/catalog/series/search/")));
         assert!(calls.iter().any(|u| u.contains("mal:27")));
+    }
+
+    #[test]
+    fn explicit_ids_are_resolved_before_optional_title_searches() {
+        let (installed, transport) = fixture();
+        let mut native = request();
+        native.details.media.external_ids.mal = Some("27".into());
+        let result = run(native, &installed, transport.clone());
+        assert_eq!(result.status, "confirmed");
+        assert_eq!(result.episode_metadata["fixture:ep:1"].ids, ["tt100:1:1"]);
+        let calls = transport.calls.lock().unwrap();
+        assert!(calls[0].contains("/meta/series/mal:27.json"));
+        assert!(
+            calls.iter().all(|url| !url.contains("/catalog/")),
+            "known ID connections do not spend the deadline on redundant searches"
+        );
+    }
+
+    #[test]
+    fn later_confirmed_addons_fill_empty_artwork_and_descriptions() {
+        let (installed, transport) = fixture();
+        let first = addons::Addon::new(&installed[0].url).unwrap();
+        let second = addons::Addon::new(&installed[1].url).unwrap();
+        let mut responses = transport.responses.clone();
+        let initial = &mut responses
+            .get_mut(&first.meta_url("series", "tt100"))
+            .unwrap()["meta"];
+        initial["poster"] = json!(" ");
+        initial["background"] = json!("");
+        initial["videos"][0]["thumbnail"] = json!(" ");
+        initial["videos"][0]["overview"] = json!("");
+        let later = &mut responses
+            .get_mut(&second.meta_url("series", "mal:27"))
+            .unwrap()["meta"];
+        later["poster"] = json!("https://images.example/later-poster.jpg");
+        later["background"] = json!("https://images.example/later-background.jpg");
+        later["videos"] = json!([{"id":"mal:27:1", "season":1, "episode":1, "name":"Opening", "thumbnail":"https://images.example/later-episode.jpg", "overview":"Later episode synopsis"}]);
+        let mut request = request();
+        request.details.media.poster = Some("\n".into());
+        request.details.media.background = Some(String::new());
+        request.details.media.description = Some("  ".into());
+        let result = run(
+            request,
+            &installed,
+            Arc::new(FixtureTransport {
+                responses,
+                calls: Mutex::new(vec![]),
+                check_nested: false,
+            }),
+        );
+        assert_eq!(result.status, "confirmed");
+        assert_eq!(result.details.media.stable_id(), "fixture:show");
+        assert_eq!(
+            result.details.media.poster.as_deref(),
+            Some("https://images.example/later-poster.jpg")
+        );
+        assert_eq!(
+            result.details.media.background.as_deref(),
+            Some("https://images.example/later-background.jpg")
+        );
+        assert_eq!(
+            result.details.media.description.as_deref(),
+            Some("Canonical description")
+        );
+        let mapping = &result.episode_metadata["fixture:ep:1"];
+        assert_eq!(mapping.ids, ["tt100:1:1", "mal:27:1"]);
+        assert_eq!((mapping.season, mapping.episode), (Some(1), Some(1)));
+        assert_eq!(
+            mapping.thumbnail.as_deref(),
+            Some("https://images.example/later-episode.jpg")
+        );
+        assert_eq!(mapping.overview.as_deref(), Some("Later episode synopsis"));
+    }
+
+    #[test]
+    fn conflicting_sources_cannot_supply_fields_or_hide_valid_duplicate_aliases() {
+        let (mut installed, transport) = fixture();
+        installed.truncate(1);
+        let conflict = addon("https://conflict.example", "tt", true);
+        let second = addons::Addon::new(&conflict.url).unwrap();
+        let third = addon("https://clean.example", "tt", true);
+        let endpoint = addons::Addon::new(&third.url).unwrap();
+        let mut responses = transport.responses.clone();
+        let conflicted = json!({"id":"tt100", "type":"series", "name":"Show", "year":"2020", "mal_id":28, "description":"Conflicting synopsis", "videos":[{"id":"tt100:1:1", "season":1, "episode":1, "name":"Opening", "thumbnail":"https://images.example/conflicting-episode.jpg"}]});
+        responses.insert(
+            second.catalog_url("series", "search", &[("search", "Show")]),
+            json!({"metas":[conflicted.clone()]}),
+        );
+        responses.insert(
+            second.meta_url("series", "tt100"),
+            json!({"meta":conflicted}),
+        );
+        let clean = json!({"id":"tt100", "type":"series", "name":"Show", "year":"2020", "description":"Verified synopsis", "background":"https://images.example/verified-bg.jpg", "videos":[{"id":"tt100:1:1", "season":1, "episode":1, "name":"Opening", "thumbnail":"https://images.example/verified-episode.jpg"}]});
+        responses.insert(
+            endpoint.catalog_url("series", "search", &[("search", "Show")]),
+            json!({"metas":[clean.clone()]}),
+        );
+        responses.insert(endpoint.meta_url("series", "tt100"), json!({"meta":clean}));
+        installed.push(conflict);
+        installed.push(third.clone());
+        let result = run(
+            request(),
+            &installed,
+            Arc::new(FixtureTransport {
+                responses,
+                calls: Mutex::new(vec![]),
+                check_nested: false,
+            }),
+        );
+        assert_eq!(result.status, "confirmed");
+        assert!(
+            result
+                .connections
+                .iter()
+                .any(|connection| connection.basis == "conflicting-identifiers")
+        );
+        assert_eq!(
+            result.details.media.description.as_deref(),
+            Some("Verified synopsis")
+        );
+        assert_eq!(
+            result.details.media.background.as_deref(),
+            Some("https://images.example/verified-bg.jpg")
+        );
+        let mapping = &result.episode_metadata["fixture:ep:1"];
+        assert_eq!(mapping.ids, ["tt100:1:1"]);
+        assert_eq!(
+            mapping.connections[0].addon_id,
+            addon_metadata_id(&third.url)
+        );
+        assert_eq!(
+            mapping.thumbnail.as_deref(),
+            Some("https://images.example/verified-episode.jpg")
+        );
     }
 
     #[test]

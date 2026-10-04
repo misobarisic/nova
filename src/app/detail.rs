@@ -470,6 +470,7 @@ impl Bridge {
             net::fetch_bytes(url, move |result| {
                 if let Ok(bytes) = result
                     && let Ok(Some(item)) = Addon::parse_meta(&bytes)
+                    && meta_matches_request(&item, &modal_type, &id)
                     && item.videos.iter().any(|v| v.season.is_some())
                 {
                     found = Some(item);
@@ -3101,6 +3102,12 @@ pub(crate) fn meta_header_from_item(item: &MetaItem) -> MetaHeader {
         season_backdrops: item.season_backdrops(),
     }
 }
+
+/// An HTTP success is not enough: a buggy endpoint may return a different
+/// title or media type. Never cache/apply that response under the requested ID.
+pub(crate) fn meta_matches_request(item: &MetaItem, type_: &str, id: &str) -> bool {
+    item.preview.id == id && item.preview.type_ == type_
+}
 /// Whether the header cache holds usable text (description or genres) for
 /// `(type_, id)`. Used to decide prefetch skips: episodes alone aren't
 /// enough, or pills + synopsis would still need a network round-trip.
@@ -3131,7 +3138,7 @@ pub(crate) fn merge_meta_header_for(type_: &str, id: &str, fresh: &MetaHeader) -
             touched = true;
         }
     }
-    if cached.background_url.is_empty() && !fresh.background_url.is_empty() {
+    if !fresh.background_url.trim().is_empty() && cached.background_url != fresh.background_url {
         cached.background_url = fresh.background_url.clone();
         touched = true;
     }
@@ -3156,6 +3163,17 @@ pub(crate) fn merge_meta_header_for(type_: &str, id: &str, fresh: &MetaHeader) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_response_must_match_requested_id_and_type() {
+        let item: MetaItem = serde_json::from_value(serde_json::json!({
+            "id":"provider:show", "type":"series", "name":"Native title"
+        }))
+        .unwrap();
+        assert!(meta_matches_request(&item, "series", "provider:show"));
+        assert!(!meta_matches_request(&item, "series", "provider:other"));
+        assert!(!meta_matches_request(&item, "movie", "provider:show"));
+    }
 
     fn row(addon: &str, id: &str) -> StreamUi {
         StreamUi {

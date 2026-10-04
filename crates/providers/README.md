@@ -111,8 +111,10 @@ counts and no conflicting anchors to confirm the remaining positions.
 
 ### Installed addons as the enrichment network
 
-Rust searches enabled, available addon catalogs declaring search support and
-fetches candidate details through ordinary catalog/meta endpoints. Confirmed
+Rust resolves explicit external IDs first, then searches remaining enabled,
+available addon catalogs declaring search support and fetches candidate details
+through ordinary catalog/meta endpoints. Already connected addons skip redundant
+title searches. Confirmed
 identifiers can find further compatible metadata addons, connecting IMDb,
 TMDB, MAL, and AniList when the installed sources provide those IDs. `targets`
 expresses the desired connection namespaces; it does not synthesize IDs or
@@ -138,6 +140,11 @@ them. Missing/ambiguous results stay session-only for 30 seconds. Cache keys inc
 source sequence/availability, requested namespaces, and the addon inventory
 revision. Manifest objects are canonicalized so identical inventories keep
 their revision across restarts. Oversized results remain usable without caching.
+Field-selection implementation versions also participate in the fingerprint.
+Empty strings do not block fallback. Display fields are selected after conflict
+filtering, and another accepted provider may fill missing episode art/text.
+Duplicate episode aliases retain per-addon provenance until that filtering,
+then collapse to one outbound alias. Native IDs and availability stay intact.
 Official Cinemeta candidates also receive bounded live-endpoint thumbnail
 repair before mapping, using the remaining enrichment deadline. It requires
 one-to-one normalized-title matches within the same IMDb series and matching

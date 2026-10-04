@@ -606,7 +606,7 @@ impl Bridge {
                         );
                     }
                     Ok(bytes) => match Addon::parse_meta(&bytes) {
-                        Ok(Some(item)) => {
+                        Ok(Some(item)) if meta_matches_request(&item, &type_, &id) => {
                             // Cache the header (background/description/genres/
                             // year) alongside episodes: the prefetch used to
                             // discard it, so pills + synopsis still needed a
@@ -642,7 +642,7 @@ impl Bridge {
                                 pair_done = true;
                             }
                         }
-                        Ok(None) => {
+                        Ok(_) => {
                             eprintln!("prefetch: addon returned None for {type_}/{id}");
                         }
                         Err(e) => {

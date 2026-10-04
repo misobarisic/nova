@@ -15,8 +15,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, Weak};
-#[cfg(not(target_os = "android"))]
-use std::time::Duration;
 
 /// Set the decoded-image LRU byte budget (mirrors `lru_cache_mb`).
 pub fn set_decoded_cache_budget(mb: u32) {
@@ -396,7 +394,7 @@ pub struct FreshImage {
 pub fn download_image_fresh(url: &str, max_side: Option<u32>) -> Option<FreshImage> {
     // Always downloads: unlike `original_bytes`, the disk cache is
     // deliberately not consulted, so same-URL art changes are detected.
-    let bytes = HTTP_CLIENT.get(url).send().ok()?.bytes().ok()?.to_vec();
+    let bytes = addons::http_get_blocking(url).ok()?;
     let pixels = decode_image_bytes(&bytes).ok()?;
     let pixels = match max_side {
         Some(m) => downscale_for_display(&pixels, m),
@@ -821,18 +819,6 @@ pub fn rewrite_cache_dir_to_format(dir: &Path, settings: &CacheSettings) -> usiz
     rewrite_cache_dir_with_progress(dir, settings, &AtomicBool::new(false), |_| {}).converted
 }
 
-#[cfg(not(target_os = "android"))]
-/// Shared blocking HTTP client: connection pooling across poster downloads
-/// (a fresh client per request, as before, skips pooling and churns a
-/// runtime per image). Desktop only.
-#[cfg(not(target_os = "android"))]
-static HTTP_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .expect("http client builds")
-});
-
 /// Original (full-resolution) bytes for `url`: disk cache hit, else
 /// download once and store original or compressed source bytes according to
 /// settings. Validation prevents corrupt disk entries from blocking refetches.
@@ -846,7 +832,9 @@ fn original_bytes(url: &str) -> Option<Vec<u8>> {
     {
         return Some(bytes);
     }
-    let bytes = HTTP_CLIENT.get(url).send().ok()?.bytes().ok()?;
+    // Share the pooled addon client and Android's retry/status policy instead
+    // of treating a transient server error as permanently missing artwork.
+    let bytes = addons::http_get_blocking(url).ok()?;
     if cache_images {
         write_cached_poster(url, &bytes);
         if let Some(stored) = read_poster_bytes(&poster_cache_dir(), url) {
