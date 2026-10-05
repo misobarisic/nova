@@ -170,7 +170,7 @@ the tracking actor owns local state, shared plaintext credentials and authentica
 | `nova-download` | `crates/download` | Durable stream-job model, manifest helpers, cancellation, and progressive/resumable HTTP file transfers. |
 | `nova-player` | `crates/player` | In-window mpv player (desktop + Android), per-stream HTTP header and external subtitle arrays through `libmpv2-sys`, and external launch: the *video* app (`open_external` — desktop target app, Android video-MIME `ACTION_VIEW` for stream fallback) and the system *browser* (`open_browser` — `xdg-open`, or on Android `ACTION_VIEW` marked `BROWSABLE` + `FLAG_ACTIVITY_NEW_TASK` so only web-link handlers can claim it, for links like addon config pages); Android JNI glue. |
 | `nova-torrent` | `crates/torrent` | Embedded BitTorrent (librqbit); resolves `infoHash` → loopback HTTP URL for mpv. The root manifest pins the merged `librqbit-utp` Windows UDP receive-error fix until it is released. |
-| `nova-sync` | `crates/sync` | Cross-device sync over iroh (generic record store + ALPN protocols); emits structured `tracing` events/spans, with subscriber setup owned by the root app. |
+| `nova-sync` | `crates/sync` | Cross-device sync over iroh (generic record store + ALPN protocols, zstd-compressed frames); emits structured `tracing` events/spans, with subscriber setup owned by the root app. |
 | `addons` | `crates/addons` | Stremio addon protocol: URL builders + response parsers; optional blocking HTTP client (`client` feature). |
 
 ---
@@ -495,8 +495,8 @@ Correctness and recovery work is tracked in
 - Anti-entropy: each peer exchanges a **per-domain hash** of its version map, then full version maps only for domains that differ, then just the records the other lacks or has stale. One bidirectional QUIC stream per exchange (`protocol.rs`); an unchanged domain transfers no digest at all.
 - **Connection reuse:** the dialer keeps one connection per peer and opens a fresh bi stream per pass; the accept handler serves streams for the connection's lifetime. A closed/failed connection is evicted and redialed (`lib.rs`).
 - **Recovery/cadence:** periodic wakes honor monotonic per-peer backoff; explicit `sync_now` and completed network refreshes reset backoff for one bounded, coalesced pass. Overlapping network refreshes coalesce, and recovery wakes only after iroh refresh finishes. Interval/foreground changes recompute the pending periodic deadline immediately (`lib.rs`).
-- Sync frames are **postcard** inside a codec byte with optional **deflate** (`frame.rs`, `flate2`/miniz_oxide); pairing and removal keep raw postcard. postcard is non-self-describing, so schema changes require an ALPN bump. Current ALPNs:
-  - `nova/sync/3` (`ALPN`) — record exchange (per-domain digest hashes + compressed frames)
+- Sync frames are **postcard** inside a codec byte with optional **zstd level 3** (`frame.rs`, shared zstd dependency); pairing and removal keep raw postcard. postcard is non-self-describing, so schema changes require an ALPN bump. Current ALPNs:
+  - `nova/sync/3` (`ALPN`) — record exchange (per-domain digest hashes + compressed frames). During testing the compressed codec changed from DEFLATE (1) to zstd (2) without an ALPN bump; old compressed frames are rejected and both devices must update. Bodies from 256 bytes compress only when smaller; output and decoder windows are capped at 32 MiB. Encoders disclose the known postcard length to reduce small-frame workspace; declared oversized content is rejected before decompression.
   - `nova/pair/2` (`PAIR_ALPN`) — invite-ticket pairing
   - `nova/remove/1` (`REMOVE_ALPN`) — one-shot "you were removed" notice
 
@@ -512,7 +512,7 @@ Correctness and recovery work is tracked in
 | `progress.rs` | Convergent activity/watch/unwatch registers embedded in progress JSON and action-clock validation. |
 | `merge.rs` | `Version`, `Record`, `resolve` (LWW + tombstone tie-break). |
 | `hlc.rs` | Hybrid logical clock (tick/observe, forward-drift cap). |
-| `frame.rs` | Length-prefixed postcard framing (raw + codec byte with deflate). |
+| `frame.rs` | Length-prefixed postcard framing (raw + codec byte with zstd, checksums and bounded output/window memory). |
 
 ### Domains (app side, `src/app/sync.rs`)
 `library`, `progress`, `addons` (one record per addon URL plus a whole-value
@@ -753,7 +753,7 @@ Copying frames can cost additional memory bandwidth, especially at 4K.
 | Torrent behavior | `crates/torrent/src/lib.rs`, `src/app/playback.rs`; root `Cargo.toml` / `Cargo.lock` pin upstream uTP fix ([PR #4](https://github.com/ikatson/librqbit-utp/pull/4)) so Windows datagram errors 10040/10052/10054 do not kill the shared dispatcher; TCP and uTP remain enabled. |
 | Stream downloads / desktop action popup vs touch sheet | `crates/download/src/lib.rs`, `src/app/downloads.rs`, `crates/torrent/src/lib.rs`, `crates/ui/detail.slint` (`StreamList`, shared action model), `tests/{stream_downloads_ui,desktop_action_menus}.rs` |
 | HTTP / images / Android blanks after successful decoding | `crates/media/src/net.rs` (platform transports), `crates/media/src/cache.rs` (actual resized pixel dimensions, shared encoding, per-entry locks, at most two encoders, atomic writes, maintenance), `crates/media/src/cache_tests.rs` (pixel-layout regression), `src/app/posters.rs`; sync transfers URLs, while each device decodes its own images |
-| Sync protocol / peers / pairing | `crates/sync/src/{lib,protocol,pair,store,merge}.rs`, `src/app/sync.rs`, `docs/sync-followons.md` |
+| Sync protocol / frame compression / peers / pairing | `crates/sync/src/{lib,protocol,frame,pair,store,merge}.rs`, `src/app/sync.rs`, `docs/sync-followons.md` |
 | Sync hardening / settings reset investigation | `docs/sync-hardening-plan.md` (findings, phased implementation, regression matrix, migration decisions) |
 | Offline mutations / projection replay / progress convergence | `crates/sync/src/{local,store,progress}.rs`, `src/app/{io,sync}.rs`, `crates/sync/tests/{local_mutations,store_persistence}.rs` |
 | Sync invite QR / Android camera scan | `src/app/qr.rs`, `src/app/android_qr.rs`, `android/java/dev/misob/nova/QrScanActivity.java`, `crates/ui/settings.slint`, `src/app/run.rs` |

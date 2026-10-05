@@ -5344,7 +5344,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
- "flate2",
  "iroh",
  "nova-config",
  "nova-storage",
@@ -5353,6 +5352,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "zstd",
 ]
 
 [[package]]

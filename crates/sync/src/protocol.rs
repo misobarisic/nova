@@ -1,7 +1,7 @@
 //! Wire protocol and the responder/initiator exchange.
 //!
 //! A sync is one bidirectional QUIC stream carrying length-prefixed postcard
-//! frames (deflate-compressed, see [`crate::frame`]):
+//! frames (zstd-compressed, see [`crate::frame`]):
 //!
 //! 1. Each side sends [`Wire::Hello`] with a per-domain *hash* of its version
 //!    map (no values). Domains whose hash the peer also reports are provably in

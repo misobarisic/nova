@@ -25,9 +25,9 @@ serde = { version = "1", features = ["derive"] }
 postcard = { version = "1", features = ["alloc"] }
 # Frame bodies (`Hello` digests, record batches) are postcard, which is compact
 # but not redundant-free: repeated keys, a per-record device id and JSON record
-# values still deflate well. `rust_backend` (miniz_oxide) is pure Rust, so it
-# cross-compiles to Android and is already in the lock via other crates.
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# values still compress well. Share the zstd implementation already used by
+# local metadata storage; Android builds compile it through the NDK.
+zstd = { version = "0.13", default-features = false }
 # Digest hashing for the exchange short-circuit (domain -> version-map hash).
 # Already in the lock via iroh, so this adds no new compiled crate.
 blake3 = "1"

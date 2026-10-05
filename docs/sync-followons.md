@@ -155,8 +155,11 @@ as requested).
   `peers` domain is inherently asymmetric (each device stores every peer but
   itself), so it always differs and is always exchanged — it is tiny.
 - **Compressed frames (done).** Sync frames carry a codec byte and are
-  deflate-compressed above 256 bytes (`flate2`/miniz_oxide, pure Rust, Android
-  safe); pairing/removal keep raw postcard so their wire schema is untouched.
+  zstd level 3 compressed from 256 bytes (shared with metadata storage, Android
+  builds use the NDK). Compression is used only when smaller, with checksums
+  and 32 MiB decoded-output/window limits. The testing-only switch reserves
+  retired DEFLATE codec 1 and uses zstd codec 2, retaining `nova/sync/3`; both
+  peers must update. Pairing/removal keep raw postcard.
 - **Connection reuse (done).** The dialer keeps one iroh connection per device
   and opens a fresh bi stream per pass; the accept handler serves streams for
   the connection's lifetime. This drops a QUIC handshake per peer per pass and
@@ -175,7 +178,7 @@ as requested).
   Two reasons it was not built: (1) a naive balanced binary Merkle tree reshapes
   on every insert, so it must be an insertion-stable **prefix trie / Merkle
   search tree** to keep incremental hashing; (2) the win is bounded — the digest
-  is already small for a personal library, and per-domain hashes + deflate cover
+  is already small for a personal library, and per-domain hashes + zstd cover
   the common idle case. Decide with measurements first (`NOVA_SYNC_DEBUG` logs
   digest/record bytes and changed-vs-skipped passes): build it only if
   changed-pass digests prove material (e.g. a very large watch history over
