@@ -21,7 +21,7 @@ pub use metadata::{
     AddonMetadataTransport, EnrichmentRequest, EnrichmentResult, EpisodeEnrichment, MetadataAddon,
     MetadataCache, MetadataConnection, ProviderDetails, addon_metadata_id, apply_enrichment,
     configure_metadata_addons, enrich_addon_response, enrich_metadata, metadata_revision,
-    set_metadata_cache, set_metadata_transport,
+    reconcile_episode_metadata, set_metadata_cache, set_metadata_transport,
 };
 pub use models::{
     CatalogRequest, ContentProvider, Episode, ExternalIds, MediaItem, MediaRequest,

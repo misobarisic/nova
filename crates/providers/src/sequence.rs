@@ -108,7 +108,7 @@ pub(crate) fn start_year(value: Option<&str>) -> Option<u32> {
 
 // Include alignment changes in durable metadata fingerprints so a confirmed
 // but partial old mapping cannot hide improvements for thirty days.
-pub(crate) const MAPPING_VERSION: u32 = 4;
+pub(crate) const MAPPING_VERSION: u32 = 5;
 
 pub(crate) fn series_identity(value: &str) -> SeriesIdentity {
     static PART: OnceLock<Regex> = OnceLock::new();
@@ -366,6 +366,7 @@ fn aligned_episode<'a>(
 }
 
 fn resolve(lookup: &StreamLookupRequest, candidates: &[Candidate<'_>]) -> EpisodeResolution {
+    let identity = series_identity(&lookup.title);
     if lookup.media_type != "series"
         || !(1..=100).contains(&lookup.season)
         || !(1..=10_000).contains(&lookup.episode)
@@ -373,15 +374,34 @@ fn resolve(lookup: &StreamLookupRequest, candidates: &[Candidate<'_>]) -> Episod
         || lookup
             .season_episode_count
             .is_some_and(|n| n < lookup.episode)
-        || series_identity(&lookup.title).base.is_empty()
+        || identity.base.is_empty()
     {
         return EpisodeResolution::empty("missing");
     }
+    // A separately cataloged "Show Season 2" commonly numbers its own
+    // episodes as season 1. Use its explicit title label only when the
+    // complete regular-episode counts prove this is a single-season entry.
+    // This changes alignment context, never playback or library identities.
+    let relative_season = lookup.season == 1
+        && identity.labeled
+        && identity.season > 1
+        && lookup.absolute_episode == Some(lookup.episode)
+        && lookup.season_episode_count.is_some()
+        && lookup.season_episode_count == lookup.series_episode_count;
+    let target_season = if relative_season {
+        identity.season
+    } else {
+        lookup.season
+    };
     let source_year = start_year(lookup.year.as_deref());
     let release_year = start_year(lookup.released.as_deref());
     let expected_episode = episode_title(lookup.episode_title.as_deref().unwrap_or_default());
     let eligible = |c: &Candidate<'_>| {
-        !source_year.zip(c.year()).is_some_and(|(a, b)| b < a)
+        (!relative_season
+            || (c.base_relation == 2
+                && c.identity.season == target_season
+                && c.identity.part == identity.part))
+            && !source_year.zip(c.year()).is_some_and(|(a, b)| b < a)
             && !release_year.zip(c.year()).is_some_and(|(a, b)| b > a)
     };
     let mut matches: BTreeMap<String, (u32, String, u32)> = BTreeMap::new();
@@ -434,14 +454,14 @@ fn resolve(lookup: &StreamLookupRequest, candidates: &[Candidate<'_>]) -> Episod
         // episodes; this must not become an offset guess for split cours,
         // continuous numbering, holes or contradictory declared totals.
         let available_prefix = c.base_relation == 2
-            && c.identity.season == lookup.season
+            && c.identity.season == target_season
             && c.identity.part == 1
             && !candidates.iter().any(|other| {
                 other.base_relation == 2
                     && (other.identity.season, other.identity.part)
                         > (c.identity.season, c.identity.part)
             })
-            && (c.identity.labeled || (lookup.season == 1 && same_start))
+            && (c.identity.labeled || (target_season == 1 && same_start))
             // A source can declare a shorter first cour while only its aired
             // prefix has servers. Candidate counts already prove contiguous
             // available rows and a declared total at least that large.
@@ -457,14 +477,14 @@ fn resolve(lookup: &StreamLookupRequest, candidates: &[Candidate<'_>]) -> Episod
         }
         let mut number = lookup.episode;
         let mut continuous = false;
-        if lookup.season == 1 {
+        if target_season == 1 {
             if !same_start
                 || (source_year.is_none()
                     && release_year.zip(c.year()).is_some_and(|(a, b)| a != b))
             {
                 continue;
             }
-        } else if c.identity.season != lookup.season {
+        } else if c.identity.season != target_season {
             if c.relation != 2
                 || lookup.absolute_episode.is_none_or(|n| n <= lookup.episode)
                 || !same_start
@@ -478,7 +498,7 @@ fn resolve(lookup: &StreamLookupRequest, candidates: &[Candidate<'_>]) -> Episod
             && c.episode(number)
                 .is_some_and(|e| episode_title(&e.title) == expected_episode);
         let confirmed = !continuous
-            && c.confirmed_season == Some(lookup.season)
+            && c.confirmed_season == Some(target_season)
             && c.count == lookup.season_episode_count;
         if c.relation < 2
             && c.base_relation < 2
@@ -727,6 +747,121 @@ mod tests {
         );
         lookup.episode = 13;
         assert_eq!(resolve_episode(&lookup, &[source]).status, "missing");
+    }
+
+    #[test]
+    fn standalone_later_season_maps_relative_numbering_to_available_source_episodes() {
+        let mut source = ongoing_source();
+        source.title = "Example Season 2".into();
+        source.season = Some(2);
+        source.declared_count = Some(1);
+        source.episodes.truncate(1);
+        let mut lookup = ongoing_lookup(1);
+        lookup.title = source.title.clone();
+        lookup.year = Some("2026-".into());
+        lookup.season = 1;
+        lookup.absolute_episode = Some(1);
+        lookup.season_episode_count = Some(26);
+        lookup.series_episode_count = Some(26);
+        lookup.episode_title = Some("The Battle Begins".into());
+        assert_eq!(
+            resolve_episode(&lookup, std::slice::from_ref(&source)).source_episode_id,
+            Some("native-1".into())
+        );
+        // Metadata may describe the entire upcoming season. Only an episode
+        // that is currently available at the source can receive a stream ID.
+        lookup.episode = 2;
+        lookup.absolute_episode = Some(2);
+        assert_eq!(resolve_episode(&lookup, &[source]).status, "missing");
+    }
+
+    #[test]
+    fn standalone_relative_season_does_not_guess_across_multiple_seasons_or_editions() {
+        let mut source = ongoing_source();
+        source.title = "Example Season 2".into();
+        source.season = Some(2);
+        source.episodes.truncate(1);
+        let mut lookup = ongoing_lookup(1);
+        lookup.title = source.title.clone();
+        lookup.year = source.year.clone();
+        lookup.season = 1;
+        lookup.absolute_episode = Some(1);
+        lookup.season_episode_count = Some(26);
+        lookup.series_episode_count = Some(26);
+        for case in 0..9 {
+            let mut target = lookup.clone();
+            let mut candidate = source.clone();
+            match case {
+                0 => target.series_episode_count = Some(52),
+                1 => target.series_episode_count = None,
+                2 => target.absolute_episode = Some(27),
+                3 => candidate.year = Some("2025".into()),
+                4 => candidate.part = Some(2),
+                5 => candidate.season = Some(1),
+                6 => candidate.episodes[0].title = "A conflicting title".into(),
+                7 => {
+                    candidate.part = Some(2);
+                    candidate.declared_count = Some(26);
+                }
+                _ => {
+                    target.season = 2;
+                    candidate.season = Some(3);
+                }
+            }
+            assert_eq!(
+                resolve_episode(&target, &[candidate]).status,
+                "missing",
+                "case {case}"
+            );
+        }
+        let mut duplicate = source.clone();
+        duplicate.media_id = "another-edition".into();
+        duplicate.episodes[0].id = "another-episode".into();
+        assert_eq!(
+            resolve_episode(&lookup, &[source, duplicate]).status,
+            "ambiguous"
+        );
+    }
+
+    #[test]
+    fn standalone_season_labels_share_forward_and_reverse_alignment() {
+        for (title, season) in [
+            ("Example Season 2", 2),
+            ("Example 3rd Season: A New Arc", 3),
+            ("Example Fourth Season", 4),
+            ("Example R2", 2),
+            ("Example III", 3),
+        ] {
+            let mut source = ongoing_source();
+            source.title = title.into();
+            source.season = Some(season);
+            source.declared_count = Some(13);
+            source.episodes.truncate(1);
+            let media = MediaItem {
+                source_id: "external-season".into(),
+                media_type: "series".into(),
+                title: title.into(),
+                year: source.year.clone(),
+                ..Default::default()
+            };
+            let videos = (1..=26)
+                .map(|n| addons::Video {
+                    id: format!("external-{n}"),
+                    title: format!("Episode {n}"),
+                    season: Some(1),
+                    episode: Some(n),
+                    released: Some("2026-10-03".into()),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                map_episodes(&media, &videos, &[source]),
+                BTreeMap::from([("native-1".into(), "external-1".into())]),
+                "{title}"
+            );
+            assert_eq!(videos[0].season, Some(1));
+            assert_eq!(videos[0].id, "external-1");
+        }
     }
 
     #[test]

@@ -46,6 +46,45 @@ resized dimensions. This fix needs no ID migration, metadata remapping or
 image-cache clearing. Regression coverage checks pixel storage against the
 reported dimensions for portrait, landscape, narrow and already-small images.
 
+## Synced series opening whole-series streams
+
+A separate cold-cache issue affected saved Kitsu entries. AIOMetadata accepts
+`kitsu:1415` for Code Geass but returns `tt0994314`, explicitly declaring
+`_kitsuId: "1415"`. The strict response-ID guard rejected those valid episode
+lists. Desktop's local episode cache hid the failure; a synced Android install
+without that cache fell back to streams for the whole series.
+
+The shared Stremio transport now retains the requested ID when the response's
+explicit, nonconflicting catalog aliases prove both identities and its media
+type matches. This applies to Kitsu, IMDb, MAL, AniList and typed TMDB aliases,
+including common underscored fields. It preserves canonical catalog evidence
+in the existing `novaExternalIds` extension and leaves episode IDs, saved IDs
+and watch progress unchanged. Opaque unrelated IDs, conflicting aliases and
+wrong media types still fail validation. Normalization also runs inside nested
+broker requests before the recursion guard skips optional enrichment.
+
+An empty or seasonless episode cache is treated as missing when opening Detail,
+so fresh metadata gets its first episode-picker population rather than keeping
+an accidental stream fallback. No library migration or cache clearing is needed.
+
+## Standalone season entries with relative numbering
+
+AIOMetadata's `kitsu:50024` entry is titled `Black Clover Season 2`, but its
+26 episode rows use season 1. AniKoto has a separately labelled Season 2 entry
+with its first episode available. The source search found that entry; the
+shared mapper rejected its available prefix because it compared the metadata's
+relative season number directly with the source's explicit season label.
+
+The mapper now uses an explicit later-season title as alignment context when
+regular episode counts prove a single-season entry and its absolute numbering
+starts at episode 1. Source family, season, part, release context and ambiguity
+checks still apply. Only available source episodes map; saved IDs and displayed
+metadata numbering remain unchanged. The same rule serves forward stream
+lookup and reverse metadata enrichment. Matcher fingerprints and AniKoto's
+session lookup cache are versioned to discard older confirmations. A live
+lookup of the unchanged Season 2 episode-1 request returned three source options
+after the correction.
+
 ## Pipeline and ownership
 
 | Stage | Implementation | Contract |
@@ -53,7 +92,7 @@ reported dimensions for portrait, landscape, narrow and already-small images.
 | Installed sources | `src/app/addon_mgr.rs`, `crates/providers/src/metadata.rs` | Enabled, available addon manifests form an immutable metadata snapshot. Its canonicalized fingerprint invalidates aliases/cache results when inventory changes. |
 | Catalog | `src/app/{catalog,home}.rs`, `crates/providers/src/registry.rs`, provider JS | Catalog responses may omit optional fields. Bundled JS is converted to the same `MetaPreview` contract as ordinary addons. Home retains the originating catalog URL for opaque-ID ownership. |
 | Home hydration | `src/app/home.rs` | Native/cached artwork paints immediately. Missing header fields load through ordinary meta endpoints, with at most two detail chains active and four endpoint candidates per chain. Originating providers are preferred; opaque IDs are sent only to their owner. Recognized global IDs may fall back to other accepting manifests. |
-| Detail and prefetch | `src/app/{detail,catalog}.rs` | Detail paints cached content first and refreshes metadata on workers for series and movies; movie metadata runs independently of stream discovery. Responses must match both requested ID and media type before being cached/applied. Discover browse/search reuse the last decoded Detail poster or a saved Library poster; enabled metadata prefetch also decodes newly discovered posters for missing grid art. Discover's prefetch preference does not disable Home hydration or Library prefetch. |
+| Detail and prefetch | `src/app/{detail,catalog}.rs` | Detail paints cached content first and refreshes metadata on workers for series and movies; movie metadata runs independently of stream discovery. Responses must match both requested ID and media type before being cached/applied; transport normalization accepts a returned canonical ID only when explicit, nonconflicting aliases prove the requested identity. Empty or seasonless caches do not count as a visible episode picker. Discover browse/search reuse the last decoded Detail poster or a saved Library poster; enabled metadata prefetch also decodes newly discovered posters for missing grid art. Discover's prefetch preference does not disable Home hydration or Library prefetch. |
 | Library mapping refresh | `src/app/{library,catalog,addon_mgr}.rs` | Opening Library fills missing episode/header metadata through the same enrichment broker as Detail; movies need header metadata only. Complete cached entries keep their cache. Missing/failed posters independently run mapping and retain the enriched native header/episode aliases, even if old metadata caches are populated. Displayed sort/filter order gets priority. Shared prefetch state coalesces queued requests and retries missing metadata after five minutes on success, one minute on failure, or a changed addon inventory. An open Library retries when manifests become available. Native saved/playback IDs and watch history remain intact. |
 | Grid artwork repair | `src/app/{posters,catalog,run}.rs` | Missing or failed posters in Discover browse/search, My Library and Home retry enabled metadata endpoints through the same enrichment transport as Detail, independently of episode prefetch or cached episodes/header text. Episodes with an unusable poster do not stop recovery: try the next endpoint. Follow current nonconflicting broker connections to alternate IDs only at their owning enabled metadata addons, keeping the original Library/playback ID. A visited-endpoint budget (16) prevents alias cycles. Pending manifests do not spend cooldowns; when manifests become usable, only queued missing URLs or confirmed download failures retry. Unloaded rows do not trigger speculative enrichment. A distinct cached poster is tried before metadata endpoints. Library visits skip loaded posters and coalesce pending image loads. For saved native identities, also cache the enriched header/episode aliases and update the existing Continue/Upcoming publication path. Clearing image cache then failing to download a saved URL invokes this repair, including inside Detail. Persist and publish only decoded replacement URLs to matching grids and a matching Detail view. |
 | Optional enrichment | `crates/providers/src/metadata.rs`, `crates/media/src/net.rs` | Resolve explicit external IDs first, expand discovered IDs, then search remaining addon catalogs by normalized title/family. Already connected addons need no speculative title search. Candidate detail responses must preserve requested identity. Tied weak family matches are evaluated together within the six-detail budget; exactly one must prove at least two available episode mappings, and every competitor must answer successfully (an empty Stremio detail response counts as no candidate; errors do not). Exact-title/remake ties remain unresolved. |
@@ -122,6 +161,9 @@ The remaining architectural improvements are:
 
 ## Regression coverage
 
+- `src/app/detail.rs::series_open_tests`: Discover and Library opens with missing, empty and populated caches; an explicitly aliased canonical response shows episodes, preserves watched progress and fetches streams only after an episode is selected.
+- `crates/providers/src/stremio.rs::identity_tests`: proven Kitsu/MAL/AniList/TMDB response aliases preserve native requests and episode IDs; unproven/conflicting aliases, unrelated IDs and wrong media types are rejected.
+
 - `src/app/posters.rs::discover_artwork_tests`: missing artwork with episode prefetch disabled, shared recovery cooldowns, stale identity/URL rejection, and a headless HTTP fixture proving that cached episodes and an unusable first-source image do not prevent posters from reaching all grids without opening Detail. Its Library case keeps a healthy cached entry free of metadata requests, then clears the image cache to expose an expired saved URL and uses the real enrichment broker to publish alternate artwork and persist current episode aliases without opening Detail. Additional cases prove unloaded rows do not start repair, repeated Library visits coalesce pending image downloads, a decoded cached alternative avoids metadata requests, and confirmed failures retry once manifests become usable. A separate movie case proves that entering Detail refreshes otherwise healthy cached metadata/artwork; typed Detail-only failed-URL guards reject stale completions.
 - `src/app/catalog.rs::tests`: typed prefetch coalescing, elapsed retry windows and changed addon inventories.
 
@@ -134,7 +176,8 @@ The remaining architectural improvements are:
 - `crates/providers/src/metadata.rs::tests`: ID-first lookup, blank-field
   fallback, later-provider episode artwork, conflict-safe display fields and
   duplicate-alias provenance, weak-family search ties and failed competitors, ongoing-season metadata without fabricated availability, short refresh lifetimes for incomplete episode fields, bounded discovery and cache invalidation.
-- `crates/providers/src/sequence.rs::tests`: available prefixes, duplicate placeholders, holes, split parts, wrong seasons/years and conflicting titles.
+- `crates/providers/src/sequence.rs::tests`: available prefixes, duplicate placeholders, standalone later seasons numbered as season 1, shared forward/reverse alignment, holes, split parts, wrong seasons/years and conflicting titles.
+- `crates/providers/src/registry_tests.rs`: the complete AniKoto lookup path resolves a standalone Season 2 entry's S1 E1 to the available native episode, preserves the caller's identity and rejects the unavailable next episode.
 - `crates/providers/src/metadata/cinemeta.rs::tests`: shifted numbering, special
   classification, date/title ambiguity, stable identities and partial refreshes.
 - `crates/media/src/cache_tests.rs`: corrupt-cache recovery, atomic/format
@@ -142,3 +185,32 @@ The remaining architectural improvements are:
   posters), sized images and an HTTP 503 → successful PNG download.
 - Existing Home headless tests cover card layout, featured crossfade/rotation,
   paging gestures and carousel behavior independently of external servers.
+
+## Episode coverage across main-series refreshes
+
+The shared broker supplements regular episodes only when another enabled addon
+explicitly identifies the same IMDb or TMDB TV parent. Coverage reconciliation
+uses IDs, confirmed aliases and unambiguous episode alignment, rather than
+assuming an absent season label means new content. A 24-episode first season
+and two 12-episode seasons describe the same coverage; the second layout must
+not add duplicate cards. An incomplete existing season can gain missing episodes
+once its common prefix is confirmed. Donor seasons require contiguous numbering
+from episode one; standalone season/cour entries, bundled native lists and
+specials are not expanded. Conflicting identity claims are excluded.
+
+`metadata/coverage.rs` also reconciles fresh `MetaItem` data against the existing
+app episode cache. Saved episode IDs and display numbering anchor watch progress,
+while fresh native IDs become confirmed stream aliases with source ownership.
+Shorter/empty responses retain known regular episodes instead of deleting them;
+meaningful text, artwork and release dates still refresh. Ambiguous additions
+are withheld, and stale routing aliases are stripped after inventory changes.
+No progress records or sync schemas are rewritten.
+
+Detail, Home hydration and prefetch use the same cache writer and merged list.
+The existing episode cache provides continuity when a metadata response changes
+its fingerprint or when a primary provider starts supplying a season previously
+added from another provider. Confirmed supplemental mappings remain in the
+bounded local metadata cache with a five-minute refresh lifetime; partial donor
+refreshes merge episode by episode. The enrichment version invalidates older
+merge results without clearing episode lists or watch history. An ongoing donor
+also prevents an older provider's ended status from freezing the combined list.

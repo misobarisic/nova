@@ -140,6 +140,7 @@ impl ProviderHost for EnrichedFixtureHost {
             }
         }
         crate::EnrichmentResult {
+            supplemental_seasons: vec![],
             inventory_revision: crate::metadata_revision(),
             status: "confirmed".into(),
             details,
@@ -705,6 +706,55 @@ fn native_episode_placeholders_do_not_duplicate_the_number() {
         details["episodes"][3]["title"],
         "Episode 4: A Real Episode Title"
     );
+}
+
+#[test]
+fn standalone_season_one_numbering_resolves_the_named_later_season_source() {
+    let host = mapping_host(vec![
+        mapping_entry("first", "Black Clover", 2017, 170),
+        mapping_entry("second", "Black Clover Season 2", 2026, 1),
+    ]);
+    let mut lookup = mapping_lookup("Black Clover Season 2", 1, 1);
+    lookup.media_id = "kitsu:50024".into();
+    lookup.year = Some("2026-".into());
+    lookup.season_episode_count = Some(26);
+    lookup.series_episode_count = Some(26);
+    lookup.episode_title = Some("The Battle Begins".into());
+    lookup.released = Some("2026-10-03T11:00:00.000Z".into());
+    assert_eq!(
+        mapped_referer(host.clone(), &lookup),
+        Some("https://anikototv.to/watch/second/ep-1".into())
+    );
+    assert_eq!(lookup.media_id, "kitsu:50024");
+    assert_eq!(lookup.season, 1);
+    lookup.episode = 2;
+    lookup.absolute_episode = Some(2);
+    lookup.episode_title = Some("Episode 2".into());
+    assert_eq!(mapped_referer(host, &lookup), None);
+}
+
+#[test]
+fn main_series_later_season_uses_its_available_native_source() {
+    let host = mapping_host(vec![
+        mapping_entry("first", "Black Clover", 2017, 170),
+        mapping_entry("second", "Black Clover Season 2", 2026, 1),
+    ]);
+    let mut lookup = mapping_lookup("Black Clover", 2, 1);
+    lookup.media_id = "tt7441658".into();
+    lookup.year = Some("2017-".into());
+    lookup.season_episode_count = Some(13);
+    lookup.series_episode_count = Some(183);
+    lookup.absolute_episode = Some(171);
+    lookup.episode_title = Some("The Battle Begins".into());
+    lookup.released = Some("2026-10-03T11:00:00.000Z".into());
+    assert_eq!(
+        mapped_referer(host.clone(), &lookup),
+        Some("https://anikototv.to/watch/second/ep-1".into())
+    );
+    lookup.episode = 2;
+    lookup.absolute_episode = Some(172);
+    lookup.episode_title = Some("Episode 2".into());
+    assert_eq!(mapped_referer(host, &lookup), None);
 }
 
 #[test]

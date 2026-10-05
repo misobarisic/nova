@@ -146,6 +146,7 @@ mod tests {
     }
     fn confirmed() -> String {
         let result = EnrichmentResult {
+            supplemental_seasons: vec![],
             inventory_revision: 7,
             status: "confirmed".into(),
             details: Default::default(),

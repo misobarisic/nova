@@ -322,14 +322,23 @@ pub fn normalize_external_ids(
         ids.typed.extend(typed);
     }
     let namespaces = [
-        (IdNamespace::Imdb, &["imdb_id", "imdbId", "imdb"][..]),
+        (
+            IdNamespace::Imdb,
+            &["imdb_id", "imdbId", "_imdbId", "imdb"][..],
+        ),
         (
             IdNamespace::MalAnime,
-            &["mal_id", "malId", "mal", "myanimelist_id"][..],
+            &["mal_id", "malId", "_malId", "mal", "myanimelist_id"][..],
         ),
         (
             IdNamespace::AnilistAnime,
-            &["anilist_id", "anilistId", "anilist", "aniListId"][..],
+            &[
+                "anilist_id",
+                "anilistId",
+                "_anilistId",
+                "anilist",
+                "aniListId",
+            ][..],
         ),
         (IdNamespace::TmdbTv, &["tmdb_tv_id", "tmdbTvId"][..]),
         (
@@ -359,7 +368,7 @@ pub fn normalize_external_ids(
         "movie" => Some(IdNamespace::TmdbMovie),
         _ => None,
     };
-    for name in ["tmdb_id", "tmdbId", "tmdb"] {
+    for name in ["tmdb_id", "tmdbId", "_tmdbId", "tmdb"] {
         if let Some(value) = fields.get(name).and_then(value_string)
             && value.len() <= 512
         {
@@ -401,6 +410,104 @@ pub fn normalize_external_ids(
     ids
 }
 
+fn kitsu_number(value: &str) -> Option<u32> {
+    let value = value.strip_prefix("kitsu:").unwrap_or(value);
+    if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    value
+        .parse::<u32>()
+        .ok()
+        .filter(|n| *n > 0 && *n <= i32::MAX as u32)
+}
+
+/// Some metadata endpoints accept one catalog ID and return another. Keep
+/// the requested source identity only when explicit aliases prove both IDs,
+/// without using a title match or changing any episode/playback identity.
+pub(crate) fn normalize_detail_request_identity(raw_url: &str, meta: &mut Value) -> bool {
+    use crate::{ExternalId, IdResolution};
+    let Ok(url) = url::Url::parse(raw_url) else {
+        return false;
+    };
+    let Some(mut segments) = url.path_segments() else {
+        return false;
+    };
+    let Some(file) = segments.next_back() else {
+        return false;
+    };
+    let Some(media_type) = segments.next_back() else {
+        return false;
+    };
+    if segments.next_back() != Some("meta") {
+        return false;
+    }
+    let Some(encoded_id) = file.strip_suffix(".json") else {
+        return false;
+    };
+    let Ok(requested_id) = percent_encoding::percent_decode_str(encoded_id).decode_utf8() else {
+        return false;
+    };
+    let Some(original_id) = meta.get("id").and_then(Value::as_str).map(str::to_owned) else {
+        return false;
+    };
+    if original_id == requested_id || meta.get("type").and_then(Value::as_str) != Some(media_type) {
+        return false;
+    }
+    let Some(object) = meta.as_object() else {
+        return false;
+    };
+    let fields = object.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let ids = normalize_external_ids(&fields, &original_id, media_type);
+    let mut kitsu_ids = std::collections::BTreeSet::new();
+    for name in ["kitsu_id", "kitsuId", "_kitsuId", "kitsu"] {
+        if let Some(value) = object
+            .get(name)
+            .and_then(value_string)
+            .and_then(|v| kitsu_number(&v))
+        {
+            kitsu_ids.insert(value);
+        }
+    }
+    if let Some(value) = object
+        .get("externalIds")
+        .and_then(|v| v.get("kitsu"))
+        .and_then(value_string)
+        .and_then(|v| kitsu_number(&v))
+    {
+        kitsu_ids.insert(value);
+    }
+    if original_id.starts_with("kitsu:")
+        && let Some(value) = kitsu_number(&original_id)
+    {
+        kitsu_ids.insert(value);
+    }
+    let proven = |id: &str| {
+        if let Some(id) = ExternalId::parse(id) {
+            matches!(ids.resolve_id(id.namespace()), IdResolution::Unique(found) if found == id)
+        } else {
+            id.strip_prefix("kitsu:")
+                .and_then(kitsu_number)
+                .is_some_and(|n| kitsu_ids.len() == 1 && kitsu_ids.contains(&n))
+        }
+    };
+    if !proven(&requested_id) || !proven(&original_id) {
+        return false;
+    }
+    // Preserve a canonical ID even if the response only supplied it as `id`.
+    // This uses the existing typed extension, with no new storage/wire schema.
+    if ExternalId::parse(&original_id).is_some() {
+        let typed = serde_json::to_value(
+            ids.typed
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+        )
+        .unwrap();
+        meta["novaExternalIds"] = typed;
+    }
+    meta["id"] = Value::String(requested_id.into_owned());
+    true
+}
+
 fn string_values(fields: &std::collections::HashMap<String, Value>, names: &[&str]) -> Vec<String> {
     names
         .iter()
@@ -433,6 +540,58 @@ mod identity_tests {
     use super::*;
     use crate::{ExternalId, IdNamespace, IdResolution};
     use serde_json::json;
+
+    #[test]
+    fn canonical_detail_response_keeps_proven_requested_identity_and_episode_ids() {
+        for (requested, field, value) in [
+            ("kitsu:1415", "_kitsuId", json!("1415")),
+            ("mal:1575", "_malId", json!(1575)),
+            ("anilist:1575", "anilist_id", json!("1575")),
+            ("tmdb:tv:31724", "_tmdbId", json!("31724")),
+        ] {
+            let mut meta = json!({"id":"tt0994314", "type":"series", "videos":[{"id":"tt0994314:1:1", "season":1, "episode":1}]});
+            meta[field] = value;
+            assert!(normalize_detail_request_identity(
+                &format!("https://metadata.example/meta/series/{requested}.json"),
+                &mut meta
+            ));
+            assert_eq!(meta["id"], requested);
+            assert_eq!(meta["videos"][0]["id"], "tt0994314:1:1");
+            let ids: Vec<ExternalId> =
+                serde_json::from_value(meta["novaExternalIds"].clone()).unwrap();
+            assert!(ids.contains(&ExternalId::Imdb("tt0994314".into())));
+        }
+    }
+
+    #[test]
+    fn canonical_detail_response_rejects_unproven_conflicting_or_wrong_type_ids() {
+        let valid =
+            json!({"id":"tt0994314", "type":"series", "_kitsuId":"1415", "imdb_id":"tt0994314"});
+        for (requested, change) in [
+            ("kitsu:11209", json!({})),
+            ("kitsu:1415", json!({"kitsu_id":"11209"})),
+            ("kitsu:1415", json!({"imdb_id":"tt5607616"})),
+            ("kitsu:1415", json!({"type":"movie"})),
+            ("kitsu:1415", json!({"id":"opaque:other"})),
+            ("provider:1415", json!({})),
+        ] {
+            let mut meta = valid.clone();
+            meta.as_object_mut()
+                .unwrap()
+                .extend(change.as_object().unwrap().clone());
+            let before = meta.clone();
+            assert!(!normalize_detail_request_identity(
+                &format!("https://metadata.example/meta/series/{requested}.json"),
+                &mut meta
+            ));
+            assert_eq!(meta, before);
+        }
+        let mut meta = valid;
+        assert!(!normalize_detail_request_identity(
+            "https://metadata.example/catalog/series/kitsu:1415.json",
+            &mut meta
+        ));
+    }
 
     fn fields(value: Value) -> std::collections::HashMap<String, Value> {
         serde_json::from_value(value).unwrap()

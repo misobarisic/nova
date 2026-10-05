@@ -451,7 +451,7 @@
 
   function lookupStreams(request) {
     const lookup = request.lookup || {};
-    const cacheKey = `lookup:v4:${nova.crypto.hmacSha256Base64Url(JSON.stringify(lookup), "anikoto-source-lookup")}`;
+    const cacheKey = `lookup:v5:${nova.crypto.hmacSha256Base64Url(JSON.stringify(lookup), "anikoto-source-lookup")}`;
     let cached;
     try { cached = JSON.parse(nova.storage.get(cacheKey) || "null"); } catch (_) {}
     if (cached && cached.expires > Date.now() && String(cached.path || "").startsWith("/watch/")) {

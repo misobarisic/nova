@@ -452,7 +452,9 @@ impl Bridge {
         };
         // Fast path: if this item's episode list was fetched before, show the
         // cached version instantly while the background refresh below runs.
-        let had_cache = if let Some(cached) = read_episodes_cache_for(&modal_type, &id) {
+        let had_cache = if let Some(cached) = read_episodes_cache_for(&modal_type, &id)
+            .filter(|videos| !ordered_seasons(videos).is_empty())
+        {
             let still_open = {
                 let state = self.shared.lock().unwrap();
                 state
@@ -516,13 +518,7 @@ impl Bridge {
             mut found: Option<MetaItem>,
         ) {
             if let Some(mut item) = found {
-                let videos: Vec<Video> = item
-                    .videos
-                    .iter()
-                    .filter(|v| v.season.is_some())
-                    .cloned()
-                    .collect();
-                item.videos = write_episodes_cache_for(&modal_type, &id, &videos);
+                item.videos = write_episode_meta_cache_for(&modal_type, &id, &item);
                 let bridge2 = bridge.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     bridge2.apply_episode_meta(id, Some(item), refresh, open_token);
@@ -916,7 +912,8 @@ impl Bridge {
                 // list when we have one, otherwise fall back to the plain
                 // streams behaviour.
                 eprintln!("nova: detail refresh {modal_type}/{id}: no meta addon answered");
-                let had_cache = read_episodes_cache_for(&modal_type, &id).is_some();
+                let had_cache = read_episodes_cache_for(&modal_type, &id)
+                    .is_some_and(|videos| !ordered_seasons(&videos).is_empty());
                 if !had_cache {
                     self.start_stream_search(id);
                 }
@@ -3163,6 +3160,25 @@ fn retain_episode_artwork(videos: &mut [Video], cached: &[Video]) {
         }
     }
 }
+/// Save and return the same reconciled list consumed by Detail, prefetch and
+/// Home. The stable cache key supplies the baseline across provider refreshes;
+/// the complete parent response is required to prove cross-ID episode matches.
+pub(crate) fn write_episode_meta_cache_for(type_: &str, id: &str, item: &MetaItem) -> Vec<Video> {
+    if !meta_matches_request(item, type_, id) {
+        return vec![];
+    }
+    // Detail, Home and prefetch may finish on different workers. Their
+    // read/reconcile/write must be one transaction so a sparse late reply
+    // cannot overwrite coverage discovered by a concurrent full response.
+    static RECONCILE: Mutex<()> = Mutex::new(());
+    let _guard = RECONCILE.lock().unwrap();
+    let mut item = item.clone();
+    item.videos.retain(|v| v.season.is_some());
+    let known = read_episodes_cache_for(type_, id).unwrap_or_default();
+    let videos = nova_providers::reconcile_episode_metadata(&item, &known);
+    write_episodes_cache_for(type_, id, &videos)
+}
+
 pub(crate) fn write_episodes_cache_for(type_: &str, id: &str, videos: &[Video]) -> Vec<Video> {
     let mut videos = videos.to_vec();
     if let Some(cached) = read_episodes_cache_for(type_, id) {
@@ -3354,6 +3370,364 @@ mod episode_artwork_tests {
         assert_eq!(
             fresh[0].thumbnail.as_deref(),
             Some("https://images.example/new.jpg")
+        );
+    }
+}
+
+#[cfg(all(test, feature = "desktop"))]
+mod series_open_tests {
+    use super::*;
+
+    #[test]
+    fn coverage_cache_preserves_progress_streams_and_home_counts_across_restart() {
+        const ROOT: &str = "NOVA_COVERAGE_CACHE_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-coverage-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            for phase in ["seed", "refresh", "restore"] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .env(ROOT, &root).env("NOVA_COVERAGE_PHASE", phase)
+                    .args(["--exact", "app::detail::series_open_tests::coverage_cache_preserves_progress_streams_and_home_counts_across_restart", "--nocapture"])
+                    .output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{phase}: {}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            fs::remove_dir_all(root).unwrap();
+            return;
+        };
+        storage::init_at(&PathBuf::from(root));
+        let phase = std::env::var("NOVA_COVERAGE_PHASE").unwrap();
+        if phase == "seed" {
+            let mut episodes = vec![Video {
+                id: "tt100:1:1".into(),
+                season: Some(1),
+                episode: Some(1),
+                name: "Opening".into(),
+                ..Default::default()
+            }];
+            episodes.extend((1..=13).map(|n| Video {
+                id: format!("kitsu:20:{n}"),
+                season: Some(2),
+                episode: Some(n),
+                name: format!("Story {n}"),
+                released: Some(format!("2020-10-{n:02}")),
+                extra: std::collections::HashMap::from([(
+                    "novaSourceUrl".into(),
+                    serde_json::json!("https://donor.example"),
+                )]),
+                ..Default::default()
+            }));
+            write_episodes_cache_for("series", "tt100", &episodes);
+            let mut progress = HashMap::new();
+            Bridge::set_episode_watched_locked(&mut progress, "tt100", "tt100:1:1", true);
+            for n in 1..=12 {
+                Bridge::set_episode_watched_locked(
+                    &mut progress,
+                    "tt100",
+                    &format!("kitsu:20:{n}"),
+                    true,
+                );
+            }
+            progress.insert(
+                progress_map_key("tt100", "kitsu:20:13"),
+                EpisodeProgress {
+                    series_id: "tt100".into(),
+                    episode_id: "kitsu:20:13".into(),
+                    position_secs: 300.0,
+                    duration_secs: 1400.0,
+                    ..Default::default()
+                },
+            );
+            write_json("test:coverage:progress", &progress);
+            return;
+        }
+        let progress: HashMap<String, EpisodeProgress> =
+            read_json("test:coverage:progress").unwrap();
+        if phase == "refresh" {
+            let item: MetaItem = serde_json::from_value(serde_json::json!({"id":"tt100", "type":"series", "name":"Example", "year":"2020",
+                "novaMetadataRevision": nova_providers::metadata_revision(), "novaSourceUrl":"https://primary.example", "videos":[
+                    {"id":"tt100:1:1", "season":1, "episode":1, "name":"Opening"},
+                    {"id":"tt100:2:1", "season":2, "episode":1, "name":"Story 1", "released":"2020-10-01"}
+                ]})).unwrap();
+            let videos = write_episode_meta_cache_for("series", "tt100", &item);
+            assert_eq!(videos.len(), 14);
+            assert_eq!(videos[1].id, "kitsu:20:1");
+            let aliases = confirmed_episode_stream_ids(&videos[1]);
+            assert!(aliases.contains(&"tt100:2:1".into()));
+            let addon = Installed { url: "https://streams.example".into(), label: "Streams".into(), enabled: true, available: true,
+                configure_ok: None, generation: 0, manifest: serde_json::from_value(serde_json::json!({"id":"streams", "name":"Streams", "version":"1", "types":["series"], "resources":["stream"], "idPrefixes":["tt"]})).unwrap() };
+            let url = stream_endpoint_owned(
+                &addon,
+                "series",
+                &videos[1].id,
+                None,
+                &aliases,
+                Some("https://donor.example"),
+            )
+            .unwrap();
+            assert!(url.ends_with("/stream/series/tt100:2:1.json"));
+        }
+        let cached = read_episodes_cache_for("series", "tt100").unwrap();
+        assert_eq!(cached.len(), 14);
+        assert_eq!(
+            library_episode_counts("tt100", &cached, &progress),
+            (13, 14)
+        );
+        let next = next_episode_to_watch("tt100", &cached, &progress).unwrap();
+        assert_eq!(next.id, "kitsu:20:13");
+        assert_eq!(
+            progress[&progress_map_key("tt100", &next.id)].position_secs,
+            300.0
+        );
+        assert_eq!(
+            read_json::<HashMap<String, EpisodeProgress>>("test:coverage:progress")
+                .unwrap()
+                .len(),
+            progress.len()
+        );
+    }
+
+    #[test]
+    fn aliased_series_opens_episodes_and_fetches_streams_only_after_selection() {
+        const ROOT: &str = "NOVA_SERIES_OPEN_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-series-open-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            for mode in ["missing", "empty", "populated"] {
+                for origin in ["discover", "library"] {
+                    let child_root = root.join(mode).join(origin);
+                    let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .env(ROOT, &child_root)
+                    .env("XDG_CACHE_HOME", child_root.join("cache"))
+                    .env("NOVA_SERIES_OPEN_CACHE", mode)
+                    .env("NOVA_SERIES_OPEN_ORIGIN", origin)
+                    .args(["--exact", "app::detail::series_open_tests::aliased_series_opens_episodes_and_fetches_streams_only_after_selection", "--nocapture"])
+                    .output().unwrap();
+                    assert!(
+                        output.status.success(),
+                        "mode={mode} origin={origin} {}\n{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+            }
+            fs::remove_dir_all(root).unwrap();
+            return;
+        };
+        use std::io::{Read, Write};
+        let root = PathBuf::from(root);
+        let mode = std::env::var("NOVA_SERIES_OPEN_CACHE").unwrap();
+        let library = std::env::var("NOVA_SERIES_OPEN_ORIGIN").unwrap() == "library";
+        storage::init_at(&root);
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let videos = vec![
+            Video {
+                id: "tt0994314:1:1".into(),
+                season: Some(1),
+                episode: Some(1),
+                name: "Opening".into(),
+                ..Default::default()
+            },
+            Video {
+                id: "tt0994314:1:2".into(),
+                season: Some(1),
+                episode: Some(2),
+                name: "Arrival".into(),
+                ..Default::default()
+            },
+        ];
+        if mode != "missing" {
+            write_episodes_cache_for(
+                "series",
+                "kitsu:1415",
+                if mode == "empty" { &[] } else { &videos },
+            );
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let meta_body = serde_json::to_vec(&serde_json::json!({"meta":{
+            "id":"tt0994314", "type":"series", "name":"Saved series", "_kitsuId":"1415", "imdb_id":"tt0994314", "status":"Ended", "videos": videos
+        }})).unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let requests = Arc::new(Mutex::new(vec![]));
+        let seen = requests.clone();
+        let done = stop.clone();
+        let server = thread::spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                let (mut socket, _) = match listener.accept() {
+                    Ok(value) => value,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) => panic!("{error}"),
+                };
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut bytes = [0; 4096];
+                let size = socket.read(&mut bytes).unwrap();
+                let path = String::from_utf8_lossy(&bytes[..size])
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap()
+                    .to_owned();
+                seen.lock().unwrap().push(path.clone());
+                let body = if path.contains("/meta/") {
+                    meta_body.as_slice()
+                } else {
+                    br#"{"streams":[]}"#.as_slice()
+                };
+                write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                socket.write_all(body).unwrap();
+            }
+        });
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(Mutex::new(PosterStore::new(1))),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let manifest: Manifest = serde_json::from_value(serde_json::json!({"id":"metadata", "name":"Metadata", "version":"1", "types":["series"], "resources":["meta", "stream"], "idPrefixes":["kitsu:", "tt"]})).unwrap();
+        bridge.shared.lock().unwrap().installed = vec![Installed {
+            url: base.clone(),
+            label: "Metadata".into(),
+            enabled: true,
+            available: true,
+            configure_ok: None,
+            generation: 0,
+            manifest: manifest.clone(),
+        }];
+        net::init_metadata_transport();
+        nova_providers::configure_metadata_addons(vec![nova_providers::MetadataAddon {
+            url: base,
+            manifest,
+        }]);
+        let progress_key = progress_map_key("kitsu:1415", "tt0994314:1:1");
+        bridge.shared.lock().unwrap().progress.insert(
+            progress_key.clone(),
+            EpisodeProgress {
+                series_id: "kitsu:1415".into(),
+                episode_id: "tt0994314:1:1".into(),
+                watched: true,
+                ..Default::default()
+            },
+        );
+        if library {
+            bridge.shared.lock().unwrap().entries.push(LibraryEntry {
+                id: "kitsu:1415".into(),
+                type_: "series".into(),
+                name: "Saved series".into(),
+                year: String::new(),
+                poster_url: String::new(),
+                background_url: String::new(),
+                genres: vec![],
+                description: String::new(),
+                categories: vec![],
+                watch_status: WatchStatus::Auto,
+                added_at_secs: 0,
+            });
+            bridge.open_library_item(0);
+        } else {
+            bridge.open_preview(
+                MetaPreview {
+                    id: "kitsu:1415".into(),
+                    type_: "series".into(),
+                    name: "Saved series".into(),
+                    ..Default::default()
+                },
+                0,
+                false,
+                None,
+                false,
+            );
+        }
+        let started = std::time::Instant::now();
+        let picked = Rc::new(std::cell::Cell::new(false));
+        let selected = picked.clone();
+        let timer_bridge = bridge.clone();
+        let seen = requests.clone();
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(20),
+            move || {
+                assert!(
+                    started.elapsed() < Duration::from_secs(10),
+                    "series never returned to its episode list"
+                );
+                let app = timer_bridge.app().unwrap();
+                let ready = timer_bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .modal_item
+                    .as_ref()
+                    .is_some_and(|m| !m.episodes_loading);
+                if !selected.get() && ready {
+                    assert!(
+                        app.get_modal_episodes(),
+                        "a normal series open must show episodes"
+                    );
+                    assert_eq!(app.get_episode_rows().row_count(), 2);
+                    assert!(
+                        seen.lock()
+                            .unwrap()
+                            .iter()
+                            .all(|path: &String| !path.contains("/stream/")),
+                        "metadata refresh must not fetch whole-series streams"
+                    );
+                    selected.set(true);
+                    timer_bridge.episode_picked(0);
+                } else if selected.get() && !app.get_streams_searching() {
+                    slint::quit_event_loop().unwrap();
+                }
+            },
+        );
+        app.run().unwrap();
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        assert!(picked.get());
+        assert!(bridge.shared.lock().unwrap().progress[&progress_key].watched);
+        assert_eq!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .unwrap()
+                .id,
+            "kitsu:1415"
+        );
+        let paths = requests.lock().unwrap();
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|p| p.contains("/stream/"))
+                .collect::<Vec<_>>(),
+            vec![&"/stream/series/tt0994314:1:1.json".to_string()]
+        );
+        assert_eq!(
+            read_episodes_cache_for("series", "kitsu:1415").unwrap()[0].id,
+            "tt0994314:1:1"
         );
     }
 }

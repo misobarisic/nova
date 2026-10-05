@@ -1,12 +1,14 @@
 //! Installed-addon metadata broker and bounded Cinemeta artwork repair.
 mod cache;
 mod cinemeta;
+mod coverage;
 pub use cache::{MetadataCache, set_metadata_cache};
+pub use coverage::reconcile_episode_metadata;
 const CONFIRMED_CACHE_TTL: u64 = 30 * 24 * 3600;
 const PARTIAL_CACHE_TTL: u64 = 5 * 60;
 // Invalidate confirmed results when field selection/provenance changes, without
 // changing the durable store format or any sync wire schema.
-const ENRICHMENT_VERSION: u32 = 2;
+const ENRICHMENT_VERSION: u32 = 4;
 use crate::{
     ExternalId, MediaItem, ProviderHost, ProviderHostError, SourceSequence, StremioProvider,
 };
@@ -158,6 +160,14 @@ pub struct EpisodeEnrichment {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SupplementalSeason {
+    pub connection: MetadataConnection,
+    pub videos: Vec<addons::Video>,
+    pub status: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EnrichmentResult {
     #[serde(default)]
     pub inventory_revision: u64,
@@ -165,6 +175,8 @@ pub struct EnrichmentResult {
     pub details: ProviderDetails,
     pub connections: Vec<MetadataConnection>,
     pub episode_metadata: BTreeMap<String, EpisodeEnrichment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supplemental_seasons: Vec<SupplementalSeason>,
 }
 
 impl EnrichmentResult {
@@ -175,6 +187,7 @@ impl EnrichmentResult {
             details,
             connections: vec![],
             episode_metadata: BTreeMap::new(),
+            supplemental_seasons: vec![],
         }
     }
 }
@@ -217,21 +230,23 @@ fn cache_ttl(result: &EnrichmentResult) -> u64 {
     // A confirmed identity can still have unpublished episode data. Keep the
     // durable mapping, but revisit sparse details on the next fetch instead
     // of freezing generic titles/missing images for thirty days.
-    if result.details.episodes.iter().any(|episode| {
-        result
-            .episode_metadata
-            .get(&episode.stable_id())
-            .is_none_or(|mapping| {
-                mapping
-                    .title
-                    .as_deref()
-                    .is_none_or(|title| crate::sequence::episode_title(title).is_empty())
-                    || mapping
-                        .thumbnail
+    if !result.supplemental_seasons.is_empty()
+        || result.details.episodes.iter().any(|episode| {
+            result
+                .episode_metadata
+                .get(&episode.stable_id())
+                .is_none_or(|mapping| {
+                    mapping
+                        .title
                         .as_deref()
-                        .is_none_or(|url| url.trim().is_empty())
-            })
-    }) {
+                        .is_none_or(|title| crate::sequence::episode_title(title).is_empty())
+                        || mapping
+                            .thumbnail
+                            .as_deref()
+                            .is_none_or(|url| url.trim().is_empty())
+                })
+        })
+    {
         PARTIAL_CACHE_TTL
     } else {
         CONFIRMED_CACHE_TTL
@@ -308,14 +323,70 @@ pub(crate) fn enrich_metadata_with_budget(
     if metadata_revision() != snapshot.revision {
         return EnrichmentResult::native(native_details);
     }
-    if result.status == "missing"
-        && let Some(cached) = fallback
-    {
-        result = cached;
+    if let Some(cached) = fallback {
+        if result.status == "missing" {
+            result = cached;
+        } else {
+            retain_cached_seasons(&mut result, &cached);
+        }
     }
     result.inventory_revision = snapshot.revision;
     cache_result(state.as_ref(), &key, &result);
     result
+}
+
+fn retain_cached_seasons(result: &mut EnrichmentResult, cached: &EnrichmentResult) {
+    // A timed-out donor refresh must not hide a previously confirmed season.
+    // Inventory changes use another key; contradictory IDs still invalidate it.
+    let inventory = snapshot().lock().unwrap().clone();
+    for season in &cached.supplemental_seasons {
+        if connection_conflicts(&season.connection, &result.details.media) {
+            continue;
+        }
+        let number = season.videos.first().and_then(|v| v.season);
+        if let Some(fresh) = result
+            .supplemental_seasons
+            .iter_mut()
+            .find(|fresh| fresh.videos.first().and_then(|v| v.season) == number)
+        {
+            let tagged = |season: &SupplementalSeason| {
+                let owner = inventory
+                    .addons
+                    .iter()
+                    .find(|a| addon_metadata_id(&a.url) == season.connection.addon_id);
+                season
+                    .videos
+                    .iter()
+                    .map(|v| {
+                        let mut v = v.clone();
+                        if let Some(owner) = owner {
+                            v.extra
+                                .entry("novaSourceUrl".into())
+                                .or_insert(json!(owner.url));
+                            v.extra
+                                .entry("novaConnections".into())
+                                .or_insert(json!([season.connection]));
+                            v.extra
+                                .entry("novaStreamIds".into())
+                                .or_insert(json!([v.id]));
+                            v.extra
+                                .insert("novaMetadataRevision".into(), json!(inventory.revision));
+                        }
+                        v
+                    })
+                    .collect::<Vec<_>>()
+            };
+            fresh.videos = coverage::merge(
+                &result.details.media,
+                &tagged(season),
+                &tagged(fresh),
+                Some(inventory.revision),
+                None,
+            );
+        } else {
+            result.supplemental_seasons.push(season.clone());
+        }
+    }
 }
 
 fn enrich_with(
@@ -431,6 +502,7 @@ fn enrich_with(
         let adapter = StremioProvider::new(addon.clone(), installed.manifest.clone());
         let mut media = preview.clone();
         let mut videos = vec![];
+        let mut series_status = None;
         if installed
             .manifest
             .accepts("meta", &native.media_type, &preview.source_id)
@@ -443,6 +515,10 @@ fn enrich_with(
                 // Candidate metadata uses the same image repair as direct
                 // Cinemeta details, within this operation's remaining budget.
                 cinemeta::repair_with(&detail_url, meta, |url| operation.fetch(url));
+                series_status = meta
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 let bytes = serde_json::to_vec(&response).unwrap_or_default();
                 if let Ok(Some(detail)) = addons::Addon::parse_meta(&bytes)
                     && detail.preview.id == preview.source_id
@@ -510,6 +586,13 @@ fn enrich_with(
             }
             mapped_videos.insert((connection.addon_id.clone(), target_id), video.clone());
         }
+        for videos in missing_seasons(&native, &result.details.episodes, &media, &videos) {
+            result.supplemental_seasons.push(SupplementalSeason {
+                connection: connection.clone(),
+                videos,
+                status: series_status.clone(),
+            });
+        }
         result.connections.push(connection);
     }
     // Independent catalog matches can disagree. Retain their claims for
@@ -519,6 +602,27 @@ fn enrich_with(
             connection.basis = "conflicting-identifiers".into();
         }
     }
+    result
+        .supplemental_seasons
+        .retain(|season| !connection_conflicts(&season.connection, &result.details.media));
+    // Multiple providers may expose the same missing season. Preserve their
+    // configured priority, and never mix numbering or IDs within a season.
+    let mut supplied = BTreeSet::new();
+    let mut ids = result
+        .details
+        .episodes
+        .iter()
+        .map(|e| e.stable_id())
+        .collect::<BTreeSet<_>>();
+    result.supplemental_seasons.retain(|season| {
+        let number = season.videos[0].season;
+        if supplied.contains(&number) || season.videos.iter().any(|v| ids.contains(&v.id)) {
+            return false;
+        }
+        supplied.insert(number);
+        ids.extend(season.videos.iter().map(|v| v.id.clone()));
+        true
+    });
     for mapping in result.episode_metadata.values_mut() {
         let accepted = mapping
             .ids
@@ -858,6 +962,41 @@ fn merge_optional_text(value: &mut Option<String>, fallback: &Option<String>) {
         .or_else(|| fallback.clone().filter(|value| !value.trim().is_empty()));
 }
 
+// Only explicit parent-series identity can supply missing episode coverage. A
+// title match can enrich existing episodes, but must not invent a continuation.
+fn missing_seasons(
+    native: &MediaItem,
+    episodes: &[crate::Episode],
+    donor: &MediaItem,
+    videos: &[addons::Video],
+) -> Vec<Vec<addons::Video>> {
+    if !native.provider_id.is_empty()
+        || native.media_type != "series"
+        || donor.media_type != "series"
+        || crate::sequence::series_identity(&native.title).labeled
+        || crate::sequence::series_identity(&donor.title).labeled
+        || !episodes.iter().any(|e| e.season > 0)
+        || !all_ids(native).iter().any(|id| {
+            matches!(id, ExternalId::Imdb(_) | ExternalId::TmdbTv(_)) && all_ids(donor).contains(id)
+        })
+    {
+        return vec![];
+    }
+    let known = episodes
+        .iter()
+        .map(|e| addons::Video {
+            id: e.stable_id(),
+            name: e.title.clone(),
+            season: Some(e.season),
+            episode: Some(e.number),
+            released: e.released.clone(),
+            thumbnail: e.thumbnail.clone(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    coverage::missing(native, &known, videos)
+}
+
 pub(crate) fn valid_alias(id: &str) -> bool {
     !id.is_empty() && id.len() <= 1024 && !id.chars().any(char::is_control)
 }
@@ -865,6 +1004,15 @@ pub(crate) fn valid_alias(id: &str) -> bool {
 /// Apply an enrichment result to the ordinary addon response. The native
 /// media/video IDs remain unchanged, including for providers with private IDs.
 pub fn apply_enrichment(meta: &mut Value, result: &EnrichmentResult) {
+    let inventory = snapshot().lock().unwrap().addons.clone();
+    apply_enrichment_with_inventory(meta, result, &inventory);
+}
+
+fn apply_enrichment_with_inventory(
+    meta: &mut Value,
+    result: &EnrichmentResult,
+    inventory: &[MetadataAddon],
+) {
     let preview = crate::registry::media_preview(result.details.media.clone());
     if let (Some(meta), Some(preview)) = (meta.as_object_mut(), preview.as_object()) {
         for (key, value) in preview {
@@ -877,17 +1025,65 @@ pub fn apply_enrichment(meta: &mut Value, result: &EnrichmentResult) {
             "novaMetadataRevision".into(),
             json!(result.inventory_revision),
         );
+        let preserve_numbering = coverage::main_series(&result.details.media);
+        let mut added_status = None;
         if let Some(videos) = meta.get_mut("videos").and_then(Value::as_array_mut) {
+            let mut positions = videos
+                .iter()
+                .filter_map(|v| {
+                    Some((
+                        v["season"].as_u64()?,
+                        v["episode"].as_u64().or_else(|| v["number"].as_u64())?,
+                    ))
+                })
+                .collect::<BTreeSet<_>>();
+            let mut ids = videos
+                .iter()
+                .filter_map(|v| v["id"].as_str().map(str::to_owned))
+                .collect::<BTreeSet<_>>();
+            for season in &result.supplemental_seasons {
+                let Some(owner) = inventory
+                    .iter()
+                    .find(|a| addon_metadata_id(&a.url) == season.connection.addon_id)
+                else {
+                    continue;
+                };
+                for video in &season.videos {
+                    let position = (
+                        u64::from(video.season.unwrap_or(0)),
+                        u64::from(video.episode_number().unwrap_or(0)),
+                    );
+                    if ids.contains(&video.id) || !positions.insert(position) {
+                        continue;
+                    }
+                    let mut value = serde_json::to_value(video).unwrap();
+                    if value.get("novaSourceUrl").is_none() {
+                        value["novaSourceUrl"] = json!(owner.url);
+                        value["novaConnections"] = json!([season.connection]);
+                        value["novaStreamIds"] = json!([video.id]);
+                        value["novaMetadataRevision"] = json!(result.inventory_revision);
+                    }
+                    ids.insert(video.id.clone());
+                    videos.push(value);
+                }
+                if season
+                    .status
+                    .as_deref()
+                    .is_some_and(|s| !s.eq_ignore_ascii_case("ended"))
+                {
+                    added_status = season.status.clone();
+                }
+            }
             for video in videos {
                 let id = video["id"].as_str().unwrap_or_default();
                 if let Some(mapping) = result.episode_metadata.get(id) {
                     video["novaMetadataRevision"] = json!(result.inventory_revision);
                     video["novaStreamIds"] = json!(mapping.ids);
                     video["novaConnections"] = json!(mapping.connections);
-                    if let Some(season) = mapping.season {
+                    if !preserve_numbering && let Some(season) = mapping.season {
                         video["season"] = json!(season);
                     }
-                    if let Some(number) = mapping.episode {
+                    if !preserve_numbering && let Some(number) = mapping.episode {
                         video["episode"] = json!(number);
                         video["number"] = json!(number);
                     }
@@ -904,23 +1100,28 @@ pub fn apply_enrichment(meta: &mut Value, result: &EnrichmentResult) {
                 }
             }
         }
+        if let Some(status) = added_status {
+            meta.insert("status".into(), json!(status));
+        }
     }
 }
 
 /// Enrich ordinary installed-addon details through the same broker as JS.
 /// Candidate fetches carry the thread-local guard and cannot recursively enrich.
 pub fn enrich_addon_response(raw_url: &str, bytes: Vec<u8>) -> Vec<u8> {
-    if nested() {
-        return bytes;
-    }
     let Ok(mut response) = serde_json::from_slice::<Value>(&bytes) else {
         return bytes;
     };
     let Some(meta) = response.get_mut("meta").filter(|m| m.is_object()) else {
         return bytes;
     };
-    if meta.get("novaConnections").is_some() {
-        return bytes;
+    let normalized = crate::stremio::normalize_detail_request_identity(raw_url, meta);
+    if nested() || meta.get("novaConnections").is_some() {
+        return if normalized {
+            serde_json::to_vec(&response).unwrap_or(bytes)
+        } else {
+            bytes
+        };
     }
     let image_transport = transport().lock().unwrap().clone();
     if let Some(transport) = image_transport {
@@ -968,7 +1169,9 @@ pub fn enrich_addon_response(raw_url: &str, bytes: Vec<u8>) -> Vec<u8> {
     meta["novaSourceUrl"] = json!(installed.url);
     if let Some(videos) = meta["videos"].as_array_mut() {
         for video in videos {
-            video["novaSourceUrl"] = json!(installed.url);
+            if video.get("novaSourceUrl").is_none() {
+                video["novaSourceUrl"] = json!(installed.url);
+            }
         }
     }
     serde_json::to_vec(&response).unwrap_or(bytes)
@@ -1125,6 +1328,178 @@ mod tests {
                 transport,
             },
         )
+    }
+
+    #[test]
+    fn confirmed_parent_adds_missing_seasons_without_replacing_saved_episode_ids() {
+        let installed = addon("https://seasons.example", "tt", false);
+        let url = addons::Addon::new(&installed.url)
+            .unwrap()
+            .meta_url("series", "tt100");
+        let mut req = request();
+        req.details.media.provider_id.clear();
+        req.details.media.source_id = "tt100".into();
+        req.details.media.external_ids.imdb = Some("tt100".into());
+        req.details.episodes[0].provider_id.clear();
+        req.details.episodes[0].source_id = "tt100:1:1".into();
+        req.source_sequences.clear();
+        let donor = json!({"meta":{"id":"tt100","type":"series","name":"Show","status":"Continuing","videos":[
+            {"id":"kitsu:10:1","season":1,"episode":1,"name":"Opening"},
+            {"id":"kitsu:20:1","season":2,"episode":1,"name":"Return","thumbnail":"https://images.example/return.jpg"},
+            {"id":"kitsu:20:2","season":2,"episode":2,"name":"Tomorrow"}
+        ]}});
+        let transport = Arc::new(FixtureTransport {
+            responses: BTreeMap::from([(url, donor)]),
+            calls: Default::default(),
+            check_nested: false,
+        });
+        let result = run(req.clone(), std::slice::from_ref(&installed), transport);
+        assert_eq!(result.supplemental_seasons.len(), 1);
+        assert_eq!(result.supplemental_seasons[0].videos.len(), 2);
+        let mut meta = json!({"id":"tt100","type":"series","status":"Ended","videos":[{"id":"tt100:1:1","season":1,"episode":1}]});
+        apply_enrichment_with_inventory(&mut meta, &result, std::slice::from_ref(&installed));
+        assert_eq!(meta["videos"].as_array().unwrap().len(), 3);
+        assert_eq!(meta["videos"][0]["id"], "tt100:1:1");
+        assert_eq!(meta["videos"][1]["id"], "kitsu:20:1");
+        assert_eq!(meta["videos"][1]["season"], 2);
+        assert_eq!(meta["videos"][1]["novaSourceUrl"], installed.url);
+        assert_eq!(meta["videos"][1]["novaStreamIds"], json!(["kitsu:20:1"]));
+        assert_eq!(meta["status"], "Continuing");
+        apply_enrichment_with_inventory(&mut meta, &result, std::slice::from_ref(&installed));
+        assert_eq!(meta["videos"].as_array().unwrap().len(), 3);
+        let mut partial = EnrichmentResult::native(req.details.clone());
+        partial.status = "confirmed".into();
+        retain_cached_seasons(&mut partial, &result);
+        assert_eq!(partial.supplemental_seasons.len(), 1);
+        retain_cached_seasons(&mut partial, &result);
+        assert_eq!(partial.supplemental_seasons.len(), 1);
+        partial.supplemental_seasons.clear();
+        partial
+            .details
+            .media
+            .external_ids
+            .typed
+            .push(ExternalId::Imdb("tt999".into()));
+        retain_cached_seasons(&mut partial, &result);
+        assert!(partial.supplemental_seasons.is_empty());
+        let native = req.details.media;
+        let episodes = req.details.episodes;
+        let donor = MediaItem {
+            provider_id: "addon".into(),
+            ..native.clone()
+        };
+        let mut videos = vec![addons::Video {
+            id: "kitsu:10:1".into(),
+            season: Some(1),
+            episode: Some(1),
+            name: "Opening".into(),
+            ..Default::default()
+        }];
+        videos.extend(result.supplemental_seasons[0].videos.clone());
+        assert_eq!(
+            missing_seasons(&native, &episodes, &donor, &videos).len(),
+            1
+        );
+        for bad in [
+            MediaItem {
+                title: "Show Season 2".into(),
+                ..donor.clone()
+            },
+            MediaItem {
+                media_type: "movie".into(),
+                ..donor.clone()
+            },
+            MediaItem {
+                external_ids: ExternalIds::default(),
+                ..donor.clone()
+            },
+        ] {
+            assert!(missing_seasons(&native, &episodes, &bad, &videos).is_empty());
+        }
+        assert!(
+            missing_seasons(
+                &MediaItem {
+                    provider_id: "bundled".into(),
+                    ..native.clone()
+                },
+                &episodes,
+                &donor,
+                &videos
+            )
+            .is_empty()
+        );
+        assert!(
+            missing_seasons(
+                &MediaItem {
+                    title: "Show Season 1".into(),
+                    ..native.clone()
+                },
+                &episodes,
+                &donor,
+                &videos
+            )
+            .is_empty()
+        );
+        assert!(missing_seasons(&native, &episodes, &donor, &videos[1..]).is_empty());
+        let mut repeated = videos.clone();
+        repeated[2].id = repeated[1].id.clone();
+        assert!(missing_seasons(&native, &episodes, &donor, &repeated).is_empty());
+        let mut collision = videos.clone();
+        collision[1].id = episodes[0].stable_id();
+        assert!(missing_seasons(&native, &episodes, &donor, &collision).is_empty());
+    }
+
+    #[test]
+    fn partial_primary_seasons_gain_only_missing_coverage_and_cache_refreshes_cannot_shrink_it() {
+        let installed = addon("https://seasons.example", "tt", false);
+        let endpoint = addons::Addon::new(&installed.url).unwrap();
+        let mut req = request();
+        req.details.media.provider_id.clear();
+        req.details.media.source_id = "tt100".into();
+        req.details.media.external_ids.imdb = Some("tt100".into());
+        req.details.episodes[0].provider_id.clear();
+        req.details.episodes[0].source_id = "tt100:1:1".into();
+        req.details.episodes.push(Episode {
+            source_id: "tt100:2:1".into(),
+            season: 2,
+            number: 1,
+            title: "Return".into(),
+            ..Default::default()
+        });
+        req.source_sequences.clear();
+        let transport = Arc::new(FixtureTransport {
+            responses: BTreeMap::from([(
+                endpoint.meta_url("series", "tt100"),
+                json!({"meta":{
+                "id":"tt100", "type":"series", "name":"Show", "status":"Continuing", "videos":[
+                    {"id":"kitsu:10:1", "season":1, "episode":1, "name":"Opening"},
+                    {"id":"kitsu:20:1", "season":2, "episode":1, "name":"Return"},
+                    {"id":"kitsu:20:2", "season":2, "episode":2, "name":"Tomorrow"},
+                    {"id":"kitsu:20:3", "season":2, "episode":3, "name":"Finale"}
+                ]}}),
+            )]),
+            calls: Default::default(),
+            check_nested: false,
+        });
+        let result = run(req, std::slice::from_ref(&installed), transport);
+        assert_eq!(result.supplemental_seasons.len(), 1);
+        assert_eq!(result.supplemental_seasons[0].videos.len(), 2);
+        assert_eq!(result.supplemental_seasons[0].videos[0].id, "kitsu:20:2");
+        let mut meta = json!({"id":"tt100", "type":"series", "videos":[{"id":"tt100:1:1", "season":1, "episode":1}, {"id":"tt100:2:1", "season":2, "episode":1}]});
+        apply_enrichment_with_inventory(&mut meta, &result, std::slice::from_ref(&installed));
+        assert_eq!(meta["videos"].as_array().unwrap().len(), 4);
+        assert_eq!(meta["videos"][1]["id"], "tt100:2:1");
+        let mut partial = result.clone();
+        partial.supplemental_seasons[0].videos.truncate(1);
+        partial.supplemental_seasons[0].videos[0].overview = Some("Fresh details".into());
+        retain_cached_seasons(&mut partial, &result);
+        assert_eq!(partial.supplemental_seasons[0].videos.len(), 2);
+        assert_eq!(
+            partial.supplemental_seasons[0].videos[0]
+                .overview
+                .as_deref(),
+            Some("Fresh details")
+        );
     }
 
     #[test]

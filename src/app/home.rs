@@ -670,7 +670,7 @@ impl Bridge {
             let header = meta_header_from_item(&item);
             merge_meta_header_for(&requested.type_, &requested.id, &header);
             if !item.videos.is_empty() {
-                write_episodes_cache_for(&requested.type_, &requested.id, &item.videos);
+                write_episode_meta_cache_for(&requested.type_, &requested.id, &item);
             }
             let mut cached =
                 read_json::<HomeShowcaseCache>(HOME_SHOWCASE_CACHE_KEY).unwrap_or_default();

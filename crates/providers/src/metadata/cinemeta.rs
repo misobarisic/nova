@@ -23,7 +23,7 @@ pub(super) const ARTWORK_MATCH_VERSION: u32 = 2;
 type EpisodeKey = (bool, String, Option<i64>);
 type ArtworkIndex<'a> = BTreeMap<(bool, String), Vec<(usize, &'a Value)>>;
 
-fn release_day(value: &str) -> Option<i64> {
+pub(super) fn release_day(value: &str) -> Option<i64> {
     let date = value.get(..10)?;
     if !date.bytes().enumerate().all(|(i, b)| {
         if i == 4 || i == 7 {
@@ -178,6 +178,7 @@ pub(super) fn repair_with(
             }
         }
         let result = EnrichmentResult {
+            supplemental_seasons: vec![],
             status: "confirmed".into(),
             episode_metadata,
             inventory_revision: 0,
@@ -576,6 +577,7 @@ mod tests {
             "tt5607616",
         );
         let result = EnrichmentResult {
+            supplemental_seasons: vec![],
             status: "confirmed".into(),
             episode_metadata: mappings,
             inventory_revision: 0,
@@ -603,6 +605,7 @@ mod tests {
         );
         let old_arrival = meta["videos"][1]["thumbnail"].clone();
         let cached = EnrichmentResult {
+            supplemental_seasons: vec![],
             status: "confirmed".into(),
             episode_metadata: old,
             inventory_revision: 0,

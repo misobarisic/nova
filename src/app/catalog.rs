@@ -758,16 +758,10 @@ impl Bridge {
             self.persist_backdrop_for(id, &header.background_url);
         }
         self.persist_header_for(id, &header.genres, &header.description, &header.year, false);
-        let videos: Vec<Video> = item
-            .videos
-            .iter()
-            .filter(|v| v.season.is_some())
-            .cloned()
-            .collect();
-        if !videos.is_empty() {
-            write_episodes_cache_for(type_, id, &videos);
+        if item.videos.is_empty() {
+            return 0;
         }
-        videos.len()
+        write_episode_meta_cache_for(type_, id, item).len()
     }
 
     fn finish_metadata_prefetch(&self, type_: &str, id: &str, success: bool) {

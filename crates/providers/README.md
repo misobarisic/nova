@@ -104,7 +104,11 @@ anchors. Explicit season/cour labels before a subtitle (for example,
 parent series name. The later entry may start after the parent series; it must
 still pass episode alignment and identifier/conflict checks. Unlabeled titles
 keep the strict year check. Local mapping cache keys include the matcher version
-so parser improvements replace obsolete results. It rejects missing parts, numbering gaps, duplicate editions,
+so parser improvements replace obsolete results. A standalone later-season
+entry may number its own episodes as season 1; its explicit title label supplies
+alignment context only when complete regular counts prove a single season and
+absolute numbering starts at episode 1. Native IDs and metadata numbering stay
+unchanged, and only available source episodes map. It rejects missing parts, numbering gaps, duplicate editions,
 conflicting years/titles, specials, and ambiguous mappings. Shortened series
 names need two globally unique positional episode anchors with equal season
 counts and no conflicting anchors to confirm the remaining positions.
@@ -153,8 +157,14 @@ titles tolerate missing/differing dates; repeated titles require a unique air-da
 match within one calendar day, including month/year boundaries. The
 matcher version is part of cache keys so matching fixes invalidate obsolete results.
 
-Ordinary addon details also use this service. Only native available episodes
-are retained. Confirmed episode metadata supplies meaningful titles, dates,
+Ordinary addon details also use this service. Bundled and standalone entries
+retain native availability. Main series may add confirmed regular episode
+coverage from another enabled addon identifying the same IMDb/TMDB TV parent.
+`metadata/coverage.rs` uses ID/alias/alignment evidence to reconcile partial
+seasons and alternative numbering without duplicate cards. Existing saved
+episode IDs and numbering are retained when sources change or return shorter
+lists; refreshed source IDs become owned stream aliases. The app reuses its
+existing episode cache as the baseline for Detail, Home and prefetch. Confirmed episode metadata supplies meaningful titles, dates,
 artwork, descriptions, and canonical season/episode numbers. Aliases are stored
 as `novaStreamIds` with `novaConnections` and `novaMetadataRevision`; typed show
 claims use `novaExternalIds`. The inventory revision prevents obsolete cached
