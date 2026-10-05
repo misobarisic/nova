@@ -38,7 +38,7 @@ impl Coordinator {
         self.cache
             .insert_release(service, details.clone(), now_secs());
         if let Ok(raw) = serde_json::to_string(&self.cache) {
-            let _ = storage::try_set_str(CATALOG_CACHE_KEY, &raw);
+            let _ = storage::try_set_cached_str(CATALOG_CACHE_KEY, &raw);
         }
         Ok(details)
     }

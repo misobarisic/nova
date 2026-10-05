@@ -19,12 +19,13 @@ On Android, the application ID is `dev.misob.nova`. Android controls the actual 
 
 | Location | Contents |
 | --- | --- |
-| `<data>/nova.redb` | Persistent database for Nova's settings and app state. |
+| `<data>/nova.redb` | Persistent database for settings, app state and local metadata. Metadata cache records use adaptive zstd level 3 compression; user state stays JSON. |
 | `<data>/downloads/` | Downloaded episodes managed by Nova's download coordinator. |
 | `<cache>/posters/` | Poster image files fetched from the network. |
-| `<cache>/episodes/` | Cached episode lists on desktop. |
 | `<cache>/torrents/` | Default torrent workspace and DHT state. If a custom torrent directory is configured, torrent data uses that directory instead. |
 | Android `<files>/fonts/` | Subtitle font extracted for mpv. |
+
+Episode lists, detail headers, addon manifests and provider mappings live in `nova.redb` on both platforms, so Android counts them under Data rather than Cache. Existing plain metadata migrates on its next cache write; compression does not immediately reclaim previously allocated database space. Poster image files are already encoded images and are not compressed again.
 
 Here, `<data>` and `<cache>` mean the platform's durable data and cache paths in the table above. Nova may recreate cache contents after deletion; deleting `nova.redb` removes locally stored app state. Synced records may be restored after the app syncs again.
 

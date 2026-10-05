@@ -171,7 +171,11 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
             ]
         }
         _ => {
-            storage::try_set_str(key, raw)?;
+            if metadata_cache_key(key) {
+                storage::try_set_cached_str(key, raw)?;
+            } else {
+                storage::try_set_str(key, raw)?;
+            }
             return Ok(());
         }
     };

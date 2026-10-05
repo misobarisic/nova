@@ -5,11 +5,15 @@
 //! internally). Startup opens the database explicitly. Fallible APIs preserve
 //! missing-vs-failed outcomes; convenience wrappers record diagnostic failures.
 
-use redb::{Database, ReadableDatabase, TableDefinition};
+mod codec;
+
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 const KV: TableDefinition<&str, &str> = TableDefinition::new("kv");
+const CACHE: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata_cache_v1");
 
 static DB_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
 static DB: OnceLock<Result<Database, Error>> = OnceLock::new();
@@ -88,7 +92,25 @@ pub fn get_str(key: &str) -> Option<String> {
 }
 
 pub fn try_get_str(key: &str) -> Result<Option<String>, Error> {
-    let txn = database()?.begin_read().map_err(transaction)?;
+    read_from(database()?, key).map(|v| v.map(|(value, _)| value))
+}
+
+fn read_from(db: &Database, key: &str) -> Result<Option<(String, bool)>, Error> {
+    let txn = db.begin_read().map_err(transaction)?;
+    read_in(&txn, key)
+}
+
+fn read_in(txn: &redb::ReadTransaction, key: &str) -> Result<Option<(String, bool)>, Error> {
+    match txn.open_table(CACHE) {
+        Ok(table) => {
+            if let Some(value) = table.get(key).map_err(transaction)? {
+                // A corrupt new row must not silently fall back to stale data.
+                return codec::decode(value.value()).map(|v| Some((v, true)));
+            }
+        }
+        Err(redb::TableError::TableDoesNotExist(_)) => {}
+        Err(e) => return Err(transaction(e)),
+    }
     let table = match txn.open_table(KV) {
         Ok(table) => table,
         Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
@@ -97,7 +119,7 @@ pub fn try_get_str(key: &str) -> Result<Option<String>, Error> {
     Ok(table
         .get(key)
         .map_err(transaction)?
-        .map(|g| g.value().to_string()))
+        .map(|g| (g.value().to_string(), false)))
 }
 
 pub fn set_str(key: &str, value: &str) {
@@ -107,6 +129,16 @@ pub fn set_str(key: &str, value: &str) {
 }
 pub fn try_set_str(key: &str, value: &str) -> Result<(), Error> {
     try_write_batch(&[(key.to_string(), Some(value.to_string()))])
+}
+
+/// Store local metadata as versioned binary values, compressing worthwhile
+/// records with zstd level 3. Reads retain the string/JSON API. A legacy row is
+/// moved atomically on its next cache write, even if its content is unchanged.
+/// Oversized values keep the existing plain format rather than becoming unreadable.
+pub fn try_set_cached_str(key: &str, value: &str) -> Result<(), Error> {
+    write_to(database()?, &[(key.into(), Some(value.into()))], true)?;
+    clear_transaction_error();
+    Ok(())
 }
 
 pub fn remove(key: &str) {
@@ -124,18 +156,12 @@ pub fn write_batch(entries: &[(String, Option<String>)]) {
     }
 }
 pub fn try_write_batch(entries: &[(String, Option<String>)]) -> Result<(), Error> {
-    let txn = database()?.begin_write().map_err(transaction)?;
-    {
-        let mut table = txn.open_table(KV).map_err(transaction)?;
-        for (key, value) in entries {
-            let result = match value {
-                Some(value) => table.insert(key.as_str(), value.as_str()).map(|_| ()),
-                None => table.remove(key.as_str()).map(|_| ()),
-            };
-            result.map_err(transaction)?;
-        }
-    }
-    txn.commit().map_err(transaction)?;
+    write_to(database()?, entries, false)?;
+    clear_transaction_error();
+    Ok(())
+}
+
+fn clear_transaction_error() {
     let mut error = LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner());
     if error
         .as_ref()
@@ -143,7 +169,118 @@ pub fn try_write_batch(entries: &[(String, Option<String>)]) -> Result<(), Error
     {
         *error = None;
     }
-    Ok(())
+}
+
+fn unchanged(old: Option<&(String, bool)>, value: Option<&str>, cached: bool) -> bool {
+    match (old, value) {
+        (None, None) => true,
+        (Some((old, location)), Some(value)) => {
+            *location == cached && codec::equivalent(old, value)
+        }
+        _ => false,
+    }
+}
+
+fn write_to(
+    db: &Database,
+    entries: &[(String, Option<String>)],
+    cached: bool,
+) -> Result<bool, Error> {
+    // Resolve repeated keys to their final atomic value before comparison.
+    let entries = entries
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_deref()))
+        .collect::<BTreeMap<_, _>>();
+    let mut changes = Vec::new();
+    let mut needs_write = false;
+    let read = db.begin_read().map_err(transaction)?;
+    for (key, value) in entries {
+        let location = cached && value.is_some_and(|v| v.len() <= codec::MAX_BYTES);
+        // Explicit removal remains possible even for a corrupt compressed row.
+        let same = if value.is_none() {
+            let plain = match read.open_table(KV) {
+                Ok(t) => t.get(key).map_err(transaction)?.is_some(),
+                Err(redb::TableError::TableDoesNotExist(_)) => false,
+                Err(e) => return Err(transaction(e)),
+            };
+            let encoded = match read.open_table(CACHE) {
+                Ok(t) => t.get(key).map_err(transaction)?.is_some(),
+                Err(redb::TableError::TableDoesNotExist(_)) => false,
+                Err(e) => return Err(transaction(e)),
+            };
+            !plain && !encoded
+        } else {
+            unchanged(read_in(&read, key)?.as_ref(), value, location)
+        };
+        needs_write |= !same;
+        changes.push((key, value, location));
+    }
+    drop(read);
+    if !needs_write {
+        return Ok(false); // No write transaction, dirty pages or fsync.
+    }
+    // Recheck the entire final batch under the writer, including rows which
+    // matched the read snapshot: concurrent workers can change those too.
+    // Prepare compression before holding the writer lock.
+    let changes = changes
+        .into_iter()
+        .map(|(key, value, location)| {
+            let encoded = if location {
+                Some(codec::encode(value.unwrap())?)
+            } else {
+                None
+            };
+            Ok((key, value, encoded))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let txn = db.begin_write().map_err(transaction)?;
+    let mut changed = false;
+    {
+        let mut table = txn.open_table(KV).map_err(transaction)?;
+        let mut cache = txn.open_table(CACHE).map_err(transaction)?;
+        for (key, value, encoded) in changes {
+            // Recheck while owning the writer: another worker may have
+            // persisted an equivalent response during compression.
+            let old = if value.is_some() {
+                if let Some(v) = cache.get(key).map_err(transaction)? {
+                    Some((codec::decode(v.value())?, true))
+                } else {
+                    table
+                        .get(key)
+                        .map_err(transaction)?
+                        .map(|v| (v.value().to_string(), false))
+                }
+            } else {
+                None
+            };
+            if value.is_some() && unchanged(old.as_ref(), value, encoded.is_some()) {
+                continue;
+            }
+            match value {
+                Some(value) => {
+                    if let Some(encoded) = encoded {
+                        cache.insert(key, encoded.as_slice()).map_err(transaction)?;
+                        table.remove(key).map_err(transaction)?;
+                    } else {
+                        table.insert(key, value).map_err(transaction)?;
+                        cache.remove(key).map_err(transaction)?;
+                    }
+                    changed = true;
+                }
+                None => {
+                    let a = table.remove(key).map_err(transaction)?.is_some();
+                    let b = cache.remove(key).map_err(transaction)?.is_some();
+                    changed |= a || b;
+                }
+            }
+        }
+    }
+    if changed {
+        txn.commit().map_err(transaction)?;
+    } else {
+        txn.abort().map_err(transaction)?;
+    }
+    Ok(changed)
 }
 
 /// All `(key, value)` pairs whose key starts with `prefix`, in key order.
@@ -157,21 +294,184 @@ pub fn scan_prefix(prefix: &str) -> Vec<(String, String)> {
     }
 }
 pub fn try_scan_prefix(prefix: &str) -> Result<Vec<(String, String)>, Error> {
-    let txn = database()?.begin_read().map_err(transaction)?;
-    let table = match txn.open_table(KV) {
-        Ok(table) => table,
-        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-        Err(e) => return Err(transaction(e)),
-    };
-    let range = table.range(prefix..).map_err(transaction)?;
-    let mut out = Vec::new();
-    for entry in range {
-        let (key, value) = entry.map_err(transaction)?;
-        let key = key.value();
-        if !key.starts_with(prefix) {
-            break;
+    scan_from(database()?, prefix)
+}
+
+fn scan_from(db: &Database, prefix: &str) -> Result<Vec<(String, String)>, Error> {
+    let txn = db.begin_read().map_err(transaction)?;
+    let mut out = BTreeMap::new();
+    match txn.open_table(KV) {
+        Ok(table) => {
+            for entry in table.range(prefix..).map_err(transaction)? {
+                let (key, value) = entry.map_err(transaction)?;
+                if !key.value().starts_with(prefix) {
+                    break;
+                }
+                out.insert(key.value().to_string(), value.value().to_string());
+            }
         }
-        out.push((key.to_string(), value.value().to_string()));
+        Err(redb::TableError::TableDoesNotExist(_)) => {}
+        Err(e) => return Err(transaction(e)),
     }
-    Ok(out)
+    match txn.open_table(CACHE) {
+        Ok(table) => {
+            for entry in table.range(prefix..).map_err(transaction)? {
+                let (key, value) = entry.map_err(transaction)?;
+                if !key.value().starts_with(prefix) {
+                    break;
+                }
+                out.insert(key.value().to_string(), codec::decode(value.value())?);
+            }
+        }
+        Err(redb::TableError::TableDoesNotExist(_)) => {}
+        Err(e) => return Err(transaction(e)),
+    }
+    Ok(out.into_iter().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write(db: &Database, key: &str, value: &str, cached: bool) -> bool {
+        write_to(db, &[(key.into(), Some(value.into()))], cached).unwrap()
+    }
+
+    #[test]
+    fn legacy_migration_is_atomic_and_equivalent_writes_leave_file_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.redb");
+        let db = Database::create(&path).unwrap();
+        let value =
+            serde_json::json!({"episodes": vec!["artwork"; 1000], "version": 1}).to_string();
+        assert!(write(&db, "episodes:old", &value, false));
+        assert!(!read_from(&db, "episodes:old").unwrap().unwrap().1);
+        assert!(write(&db, "episodes:old", &value, true));
+        assert!(read_from(&db, "episodes:old").unwrap().unwrap().1);
+        assert!(
+            db.begin_read()
+                .unwrap()
+                .open_table(KV)
+                .unwrap()
+                .get("episodes:old")
+                .unwrap()
+                .is_none()
+        );
+        let before = std::fs::read(&path).unwrap();
+        let reordered = serde_json::to_string_pretty(
+            &serde_json::from_str::<serde_json::Value>(&value).unwrap(),
+        )
+        .unwrap();
+        assert!(!write(&db, "episodes:old", &reordered, true));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        drop(db);
+        let db = Database::open(&path).unwrap();
+        assert_eq!(read_from(&db, "episodes:old").unwrap().unwrap().0, value);
+        assert!(write_to(&db, &[("episodes:old".into(), None)], false).unwrap());
+        assert!(read_from(&db, "episodes:old").unwrap().is_none());
+    }
+
+    #[test]
+    fn state_stays_plain_and_batch_compares_final_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::create(dir.path().join("test.redb")).unwrap();
+        assert!(write(&db, "settings", r#"{"a":1,"b":2}"#, false));
+        assert!(!read_from(&db, "settings").unwrap().unwrap().1);
+        assert!(
+            !write_to(
+                &db,
+                &[
+                    ("settings".into(), Some("temporary".into())),
+                    ("settings".into(), Some(r#"{"b":2,"a":1}"#.into())),
+                    ("missing".into(), None),
+                ],
+                false
+            )
+            .unwrap()
+        );
+        assert!(write(&db, "settings", r#"{"a":2,"b":2}"#, false));
+        assert_eq!(
+            read_from(&db, "settings").unwrap().unwrap().0,
+            r#"{"a":2,"b":2}"#
+        );
+    }
+
+    #[test]
+    fn prefix_scan_merges_tables_in_key_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::create(dir.path().join("test.redb")).unwrap();
+        write(&db, "cache:b", "new", true);
+        write(&db, "cache:a", "legacy", false);
+        write(&db, "other", "excluded", true);
+        assert_eq!(
+            scan_from(&db, "cache:").unwrap(),
+            vec![
+                ("cache:a".into(), "legacy".into()),
+                ("cache:b".into(), "new".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn corrupt_cache_is_not_overwritten_or_hidden_by_legacy_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::create(dir.path().join("test.redb")).unwrap();
+        let txn = db.begin_write().unwrap();
+        {
+            txn.open_table(KV)
+                .unwrap()
+                .insert("cache:bad", "stale")
+                .unwrap();
+            txn.open_table(CACHE)
+                .unwrap()
+                .insert("cache:bad", b"broken".as_slice())
+                .unwrap();
+        }
+        txn.commit().unwrap();
+        assert_eq!(
+            read_from(&db, "cache:bad").unwrap_err().kind,
+            ErrorKind::Schema
+        );
+        assert!(scan_from(&db, "cache:").is_err());
+        assert!(
+            write_to(
+                &db,
+                &[("cache:bad".into(), Some("replacement".into()))],
+                true
+            )
+            .is_err()
+        );
+        assert!(write_to(&db, &[("cache:bad".into(), None)], false).unwrap());
+        assert!(read_from(&db, "cache:bad").unwrap().is_none());
+    }
+
+    #[test]
+    fn concurrent_equivalent_cache_writes_commit_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = std::sync::Arc::new(Database::create(dir.path().join("test.redb")).unwrap());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let workers = (0..8)
+            .map(|_| {
+                let db = db.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    write(
+                        &db,
+                        "episodes:concurrent",
+                        &"episode metadata".repeat(1000),
+                        true,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            workers
+                .into_iter()
+                .map(|w| w.join().unwrap())
+                .filter(|changed| *changed)
+                .count(),
+            1
+        );
+    }
 }

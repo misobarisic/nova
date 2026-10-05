@@ -21,6 +21,18 @@ pub(crate) fn writable_key(key: &str) -> bool {
         .is_some_and(|keys| keys.contains(key))
 }
 
+/// Only local metadata is eligible; user state and sync wire values retain
+/// their existing JSON representation and publication paths.
+pub(crate) fn metadata_cache_key(key: &str) -> bool {
+    key.starts_with("episodes:")
+        || key.starts_with("meta_header:")
+        || key.starts_with("manifest:")
+        || matches!(
+            key,
+            "provider_metadata_cache:v1" | "home:showcase:v1" | "tracking:catalog_cache:v1"
+        )
+}
+
 pub(crate) fn read_json_result<T: serde::de::DeserializeOwned>(
     key: &str,
 ) -> Result<Option<T>, storage::Error> {
@@ -136,7 +148,39 @@ impl nova_providers::MetadataCache for ProviderMetadataCache {
             .map_err(|error| nova_providers::ProviderHostError(error.to_string()))
     }
     fn save(&self, value: &str) -> Result<(), nova_providers::ProviderHostError> {
-        storage::try_set_str("provider_metadata_cache:v1", value)
+        storage::try_set_cached_str("provider_metadata_cache:v1", value)
             .map_err(|error| nova_providers::ProviderHostError(error.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod cache_policy_tests {
+    use super::metadata_cache_key;
+
+    #[test]
+    fn compression_is_limited_to_local_metadata() {
+        for key in [
+            "episodes:series\u{1}tt123",
+            "meta_header:anime\u{1}kitsu:1",
+            "manifest:https://addon",
+            "provider_metadata_cache:v1",
+            "home:showcase:v1",
+            "tracking:catalog_cache:v1",
+        ] {
+            assert!(metadata_cache_key(key), "{key}");
+        }
+        for key in [
+            "settings",
+            "library",
+            "episode_progress",
+            "downloads:v1",
+            "addons",
+            "sync:records",
+            "srec:8:settingslanguage",
+            "tracking:credentials:mal:v1",
+            "tracking:source:series",
+        ] {
+            assert!(!metadata_cache_key(key), "{key}");
+        }
     }
 }
