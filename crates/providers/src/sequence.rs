@@ -108,7 +108,7 @@ pub(crate) fn start_year(value: Option<&str>) -> Option<u32> {
 
 // Include alignment changes in durable metadata fingerprints so a confirmed
 // but partial old mapping cannot hide improvements for thirty days.
-pub(crate) const MAPPING_VERSION: u32 = 3;
+pub(crate) const MAPPING_VERSION: u32 = 4;
 
 pub(crate) fn series_identity(value: &str) -> SeriesIdentity {
     static PART: OnceLock<Regex> = OnceLock::new();
@@ -442,7 +442,10 @@ fn resolve(lookup: &StreamLookupRequest, candidates: &[Candidate<'_>]) -> Episod
                         > (c.identity.season, c.identity.part)
             })
             && (c.identity.labeled || (lookup.season == 1 && same_start))
-            && c.count == Some(c.episode_index.len() as u32)
+            // A source can declare a shorter first cour while only its aired
+            // prefix has servers. Candidate counts already prove contiguous
+            // available rows and a declared total at least that large.
+            && c.count.is_some()
             && c.count
                 .zip(lookup.season_episode_count)
                 .is_some_and(|(n, total)| n < total);
@@ -702,6 +705,31 @@ mod tests {
     }
 
     #[test]
+    fn available_first_cour_maps_into_a_longer_canonical_season() {
+        let mut source = ongoing_source();
+        source.title = "The Apothecary Diaries Season 3".into();
+        source.year = Some("2026".into());
+        source.declared_count = Some(12);
+        source.episodes.truncate(1);
+        let mut lookup = ongoing_lookup(1);
+        lookup.title = "The Apothecary Diaries".into();
+        lookup.year = Some("2023–".into());
+        lookup.season_episode_count = Some(24);
+        lookup.episode_title = Some("Locusts".into());
+        assert_eq!(
+            resolve_episode(&lookup, std::slice::from_ref(&source)).source_episode_id,
+            Some("native-1".into())
+        );
+        lookup.episode = 2;
+        assert_eq!(
+            resolve_episode(&lookup, std::slice::from_ref(&source)).status,
+            "missing"
+        );
+        lookup.episode = 13;
+        assert_eq!(resolve_episode(&lookup, &[source]).status, "missing");
+    }
+
+    #[test]
     fn available_prefix_does_not_guess_gaps_parts_completed_seasons_or_conflicting_titles() {
         let original = ongoing_source();
         let lookup = ongoing_lookup(1);
@@ -719,7 +747,7 @@ mod tests {
                     source.season = Some(2);
                 }
                 3 => {
-                    source.declared_count = Some(6);
+                    source.declared_count = Some(24);
                 }
                 4 => {
                     source.episodes[0].title = "A conflicting title".into();

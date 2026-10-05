@@ -262,6 +262,8 @@ struct Shared {
     search_pending_requests: usize,
     search_loading_more: bool,
     search_poster_inflight: HashSet<(u64, String, String)>,
+    /// Cooldown prevents failed saved artwork from flooding metadata requests.
+    library_artwork_recovery: HashMap<(String, String, String), std::time::Instant>,
     /// Saved library items (My Library), order = insertion order.
     entries: Vec<LibraryEntry>,
     /// Current image-cache settings (mirrored from the KV store).

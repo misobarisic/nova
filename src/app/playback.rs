@@ -94,6 +94,8 @@ impl Bridge {
         self.rebuild_continue_list();
         self.rebuild_upcoming_list();
         self.apply_home_to_ui();
+        self.dispatch_continue_posters();
+        self.dispatch_upcoming_posters();
     }
 
     /// Resolve a torrent stream row to a playable loopback URL and open it in

@@ -56,22 +56,66 @@ fn paint_poster_rows(
     }
 }
 
+fn requested_poster_indices(model: &slint::ModelRc<MediaCard>, id: &str, url: &str) -> Vec<usize> {
+    (0..model.row_count())
+        .filter(|&index| {
+            model
+                .row_data(index)
+                .is_some_and(|card| card.id.as_str() == id && card.poster_path.as_str() == url)
+        })
+        .collect()
+}
+
+fn artwork_recovery_target(
+    state: &mut Shared,
+    id: &str,
+    failed_url: &str,
+) -> Option<(String, String)> {
+    let entry = state.entries.iter().find(|entry| entry.id == id)?;
+    if entry.poster_url != failed_url {
+        return None;
+    }
+    let target = (entry.type_.clone(), entry.id.clone());
+    let key = (target.0.clone(), target.1.clone(), failed_url.into());
+    let now = std::time::Instant::now();
+    if state
+        .library_artwork_recovery
+        .get(&key)
+        .is_some_and(|last| now.duration_since(*last) < Duration::from_secs(60))
+    {
+        return None;
+    }
+    state.library_artwork_recovery.insert(key, now);
+    Some(target)
+}
+
 impl Bridge {
     /// Prefetch can discover an image missing/broken in the catalog preview.
     /// Decode only for currently visible models needing art, independent of
     /// their row order; full metadata prefetch remains controlled by settings.
     pub(super) fn load_discover_poster(&self, type_: String, id: String, url: String) {
         let Some(app) = self.app() else { return };
-        let needed = [app.get_catalog(), app.get_search_results()]
+        let needed = [
+            app.get_catalog(),
+            app.get_search_results(),
+            app.get_library(),
+        ]
+        .iter()
+        .any(|model| {
+            (0..model.row_count()).any(|i| {
+                model
+                    .row_data(i)
+                    .is_some_and(|row| row.id.as_str() == id && !row.is_loaded)
+            })
+        });
+        let saved = self
+            .shared
+            .lock()
+            .unwrap()
+            .entries
             .iter()
-            .any(|model| {
-                (0..model.row_count()).any(|i| {
-                    model
-                        .row_data(i)
-                        .is_some_and(|row| row.id.as_str() == id && !row.is_loaded)
-                })
-            });
-        if !needed {
+            .any(|entry| entry.type_ == type_ && entry.id == id && entry.poster_url != url);
+        if !needed && !saved {
             return;
         }
         let bridge = self.clone();
@@ -117,12 +161,24 @@ impl Bridge {
         paint_poster_rows(&app.get_catalog(), &browse, id, url, &image);
         paint_poster_rows(&app.get_search_results(), &search, id, url, &image);
         if library {
+            let changed = self
+                .shared
+                .lock()
+                .unwrap()
+                .entries
+                .iter()
+                .any(|entry| entry.id == id && entry.type_ == type_ && entry.poster_url != url);
             self.persist_poster_for(id, url);
             let model = app.get_library();
             let indices = (0..model.row_count())
                 .filter(|&i| model.row_data(i).is_some_and(|row| row.id.as_str() == id))
                 .collect::<Vec<_>>();
             paint_poster_rows(&model, &indices, id, url, &image);
+            if changed {
+                self.apply_home_to_ui();
+                self.dispatch_continue_posters();
+                self.dispatch_upcoming_posters();
+            }
         }
         #[cfg(feature = "desktop")]
         for index in browse {
@@ -459,34 +515,50 @@ impl Bridge {
     /// decode quickly, misses are downloaded once and file-cached. Updates
     /// are dropped if the card changed/vanished while the fetch ran.
     pub(super) fn dispatch_library_posters(&self, entries: &[LibraryEntry]) {
-        let app_weak = self.app.clone();
-        for (index, entry) in entries.iter().enumerate() {
+        for entry in entries {
             if entry.poster_url.is_empty() {
+                self.recover_library_artwork(&entry.id, "");
                 continue;
             }
             let url = entry.poster_url.clone();
             let id = entry.id.clone();
-            let weak = app_weak.clone();
-            net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
-                let Some(pixels) = pixels else {
-                    return; // keep the placeholder
-                };
+            let bridge = self.clone();
+            net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
                 let _ = slint::invoke_from_event_loop(move || {
-                    let Some(app) = weak.upgrade() else {
-                        return;
-                    };
+                    let Some(app) = bridge.app() else { return };
                     let model = app.get_library();
-                    // Guard: card still present, still this item and not
-                    // already filled by another race.
-                    let matches = model
-                        .row_data(index)
-                        .map(|card: MediaCard| !card.is_loaded && card.id == id.as_str());
-                    if matches == Some(true) {
-                        app.invoke_set_library_poster(index as i32, Image::from_rgba8(pixels));
+                    // Filtering/progress refreshes can reorder the model while
+                    // decoding. Resolve the current row, and reject old URLs.
+                    let indices = requested_poster_indices(&model, &id, &url);
+                    if let Some(pixels) = pixels {
+                        paint_poster_rows(&model, &indices, &id, &url, &Image::from_rgba8(pixels));
+                    } else {
+                        bridge.recover_library_artwork(&id, &url);
                     }
                 });
             });
         }
+    }
+
+    /// Old saved URLs can expire even when episodes/header text are cached.
+    /// Keep native IDs; ask the same metadata pipeline used by Detail for art.
+    fn recover_library_artwork(&self, id: &str, failed_url: &str) {
+        let target = {
+            let mut state = self.shared.lock().unwrap();
+            let Some(target) = artwork_recovery_target(&mut state, id, failed_url) else {
+                return;
+            };
+            target
+        };
+        // Reuse a previously decoded replacement immediately; also refresh
+        // metadata so a stale cached URL doesn't block recovery.
+        if let Some(header) = read_meta_header_for(&target.0, &target.1)
+            && !header.poster_url.is_empty()
+            && header.poster_url != failed_url
+        {
+            self.load_discover_poster(target.0.clone(), target.1.clone(), header.poster_url);
+        }
+        self.prefetch_meta_pairs(vec![target]);
     }
 
     /// Fetch the Home card's selected thumbnail/poster off the UI thread.
@@ -506,9 +578,8 @@ impl Bridge {
             .iter()
             .enumerate()
             .filter(|(_, row)| {
-                !row.art_url.is_empty()
-                    && decoded_cache_get(&sized_cache_key(&row.art_url, Some(DISPLAY_POSTER_SIDE)))
-                        .is_none()
+                decoded_cache_get(&sized_cache_key(&row.art_url, Some(DISPLAY_POSTER_SIDE)))
+                    .is_none()
             })
             .map(|(index, row)| {
                 let fallback = fallbacks.get(row.id.as_str()).cloned().unwrap_or_default();
@@ -516,16 +587,22 @@ impl Bridge {
             })
             .collect();
         let app_weak = self.app.clone();
-        for (index, id, url, fallback) in items {
+        for (_index, id, url, fallback) in items {
             let weak = app_weak.clone();
+            let bridge = self.clone();
+            let failed_poster = fallback.clone();
             fetch_home_card_art(url.to_string(), fallback, move |pixels| {
-                let Some(pixels) = pixels else { return };
                 let _ = slint::invoke_from_event_loop(move || {
+                    let Some(pixels) = pixels else {
+                        bridge.recover_library_artwork(id.as_str(), &failed_poster);
+                        return;
+                    };
                     let Some(app) = weak.upgrade() else { return };
                     let model = app.get_home_continue();
-                    if let Some(mut row) = model.row_data(index)
-                        && row.id == id
-                        && row.art_url == url
+                    if let Some((index, mut row)) = model
+                        .iter()
+                        .enumerate()
+                        .find(|(_, row)| row.id == id && row.art_url == url)
                     {
                         row.poster = Image::from_rgba8(
                             decoded_cache_get(&sized_cache_key(&url, Some(DISPLAY_POSTER_SIDE)))
@@ -555,9 +632,8 @@ impl Bridge {
             .iter()
             .enumerate()
             .filter(|(_, row)| {
-                !row.art_url.is_empty()
-                    && decoded_cache_get(&sized_cache_key(&row.art_url, Some(DISPLAY_POSTER_SIDE)))
-                        .is_none()
+                decoded_cache_get(&sized_cache_key(&row.art_url, Some(DISPLAY_POSTER_SIDE)))
+                    .is_none()
             })
             .map(|(index, row)| {
                 let fallback = fallbacks.get(row.id.as_str()).cloned().unwrap_or_default();
@@ -565,16 +641,22 @@ impl Bridge {
             })
             .collect();
         let app_weak = self.app.clone();
-        for (index, id, url, fallback) in items {
+        for (_index, id, url, fallback) in items {
             let weak = app_weak.clone();
+            let bridge = self.clone();
+            let failed_poster = fallback.clone();
             fetch_home_card_art(url.to_string(), fallback, move |pixels| {
-                let Some(pixels) = pixels else { return };
                 let _ = slint::invoke_from_event_loop(move || {
+                    let Some(pixels) = pixels else {
+                        bridge.recover_library_artwork(id.as_str(), &failed_poster);
+                        return;
+                    };
                     let Some(app) = weak.upgrade() else { return };
                     let model = app.get_home_upcoming();
-                    if let Some(mut row) = model.row_data(index)
-                        && row.id == id
-                        && row.art_url == url
+                    if let Some((index, mut row)) = model
+                        .iter()
+                        .enumerate()
+                        .find(|(_, row)| row.id == id && row.art_url == url)
                     {
                         let image = Image::from_rgba8(
                             decoded_cache_get(&sized_cache_key(&url, Some(DISPLAY_POSTER_SIDE)))
@@ -847,6 +929,76 @@ pub(crate) fn set_active_cache_settings(settings: CacheSettings) {
 #[cfg(test)]
 mod discover_artwork_tests {
     use super::*;
+    #[test]
+    fn old_saved_artwork_recovers_once_without_replacing_native_identity() {
+        let mut state = Shared::default();
+        state.entries.push(LibraryEntry {
+            id: "native:old-show".into(),
+            type_: "series".into(),
+            poster_url: "https://old.example/expired.jpg".into(),
+            name: String::new(),
+            year: String::new(),
+            background_url: String::new(),
+            genres: vec![],
+            description: String::new(),
+            categories: vec![],
+            watch_status: WatchStatus::Auto,
+            added_at_secs: 0,
+        });
+        let old = state.entries[0].poster_url.clone();
+        assert_eq!(
+            artwork_recovery_target(&mut state, "native:old-show", &old),
+            Some(("series".into(), "native:old-show".into()))
+        );
+        // Library and Home can fail together; share one metadata request.
+        assert!(artwork_recovery_target(&mut state, "native:old-show", &old).is_none());
+        // A temporary offline failure can retry on a later page refresh.
+        state
+            .library_artwork_recovery
+            .values_mut()
+            .for_each(|last| {
+                *last -= Duration::from_secs(61);
+            });
+        assert!(artwork_recovery_target(&mut state, "native:old-show", &old).is_some());
+        state.entries[0].poster_url = "https://new.example/poster.jpg".into();
+        assert!(artwork_recovery_target(&mut state, "native:old-show", &old).is_none());
+        assert!(artwork_recovery_target(&mut state, "removed", &old).is_none());
+    }
+
+    #[test]
+    fn saved_artwork_completion_follows_reordered_rows_and_rejects_expired_url() {
+        let rows = Rc::new(VecModel::from(vec![
+            MediaCard {
+                id: "other".into(),
+                poster_path: "old".into(),
+                ..Default::default()
+            },
+            MediaCard {
+                id: "saved".into(),
+                poster_path: "new".into(),
+                ..Default::default()
+            },
+            MediaCard {
+                id: "saved".into(),
+                poster_path: "old".into(),
+                ..Default::default()
+            },
+        ]));
+        let model: slint::ModelRc<MediaCard> = rows.clone().into();
+        let indices = requested_poster_indices(&model, "saved", "old");
+        assert_eq!(indices, vec![2]);
+        paint_poster_rows(
+            &model,
+            &indices,
+            "saved",
+            "old",
+            &Image::from_rgba8(SharedPixelBuffer::new(1, 1)),
+        );
+        assert!(!rows.row_data(0).unwrap().is_loaded);
+        assert!(!rows.row_data(1).unwrap().is_loaded);
+        assert!(rows.row_data(2).unwrap().is_loaded);
+    }
+
     #[test]
     fn published_posters_follow_type_and_current_identity_and_survive_unloading() {
         let mut previews = vec![
