@@ -1022,6 +1022,9 @@ impl Bridge {
         set_active_cache_settings(settings.clone());
         write_settings(&settings);
         self.settings_to_ui();
+        self.apply_home_to_ui();
+        self.dispatch_continue_posters();
+        self.dispatch_upcoming_posters();
     }
 }
 

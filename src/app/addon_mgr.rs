@@ -664,8 +664,10 @@ impl Bridge {
         self.refresh_search_filters();
         self.apply_home_catalog_rows();
         self.invalidate_home_showcase();
+        self.invalidate_home_catalog_rows();
         if app.get_show_home() {
             self.ensure_home_showcase_loaded();
+            self.ensure_home_catalog_rows_loaded();
         }
 
         if load && has_grid_source {

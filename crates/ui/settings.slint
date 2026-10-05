@@ -40,13 +40,16 @@ export component SettingsPage {
     in-out property <[LicenseSource]> license_sources: [];
     in-out property <[CategoryRow]> category_rows: [];
     in-out property <[HomeCatalogRow]> home_catalog_rows: [];
+    in-out property <[HomeCatalogRow]> home_row_catalog_rows: [];
     in-out property <bool> home_continue_enabled: true;
     in-out property <bool> home_upcoming_enabled: true;
+    in-out property <bool> home_episode_artwork: true;
     in-out property <[string]> home_catalog_candidate_names: [];
     in-out property <int> home_catalog_candidate_index: -1;
     in-out property <[string]> home_catalog_genre_names: [];
     in-out property <int> home_catalog_genre_index: 0;
     in-out property <bool> home_catalog_add_open: false;
+    in-out property <int> home_catalog_add_target: 0;
     in property <int> system_back_request: 0;
     property <int> last_system_back_request: -1;
     property <bool> input_focused: false && root.kb_active;
@@ -170,9 +173,11 @@ export component SettingsPage {
     callback category_added(string);
     callback category_removed(int);
     callback home_catalog_add_requested();
+    callback home_row_catalog_add_requested();
     callback home_catalog_candidate_picked(int);
     callback home_catalog_added(int, int);
     callback home_catalog_removed(int);
+    callback home_row_catalog_removed(int);
     // Playback rate ± one 0.05 step (Settings → Player). The backend
     // quantizes it and writes the property back.
     callback playback_speed_stepped(int);
@@ -587,9 +592,9 @@ export component SettingsPage {
     // on Enter (Left/Right no-op); row 1 opens text edit mode.
     function kb_torrent_n() -> int { return root.torrent_enabled ? 6 : 1; }
 
-    // Continue + Upcoming switches, one remove action per configured entry,
-    // then the final Add catalog row.
-    function kb_home_n() -> int { return root.home_catalog_rows.length + 3; }
+    // Continue + Upcoming + artwork switches, then the featured and poster
+    // catalog remove/add actions.
+    function kb_home_n() -> int { return root.home_catalog_rows.length + root.home_row_catalog_rows.length + 5; }
 
     function kb_home_activate() {
         if (root.kb_home == 0) {
@@ -598,10 +603,17 @@ export component SettingsPage {
         } else if (root.kb_home == 1) {
             root.home_upcoming_enabled = !root.home_upcoming_enabled;
             root.schedule_setting("home_upcoming_enabled");
-        } else if (root.kb_home < root.home_catalog_rows.length + 2) {
-            root.home_catalog_removed(root.kb_home - 2);
-        } else {
+        } else if (root.kb_home == 2) {
+            root.home_episode_artwork = !root.home_episode_artwork;
+            root.schedule_setting("home_episode_artwork");
+        } else if (root.kb_home < root.home_catalog_rows.length + 3) {
+            root.home_catalog_removed(root.kb_home - 3);
+        } else if (root.kb_home == root.home_catalog_rows.length + 3) {
             root.home_catalog_add_requested();
+        } else if (root.kb_home < root.home_catalog_rows.length + root.home_row_catalog_rows.length + 4) {
+            root.home_row_catalog_removed(root.kb_home - root.home_catalog_rows.length - 4);
+        } else {
+            root.home_row_catalog_add_requested();
         }
     }
 
@@ -1302,6 +1314,7 @@ export component SettingsPage {
     changed downloads_rows => { root.kb_clamp_all(); }
     changed category_rows => { root.kb_clamp_all(); }
     changed home_catalog_rows => { root.kb_clamp_all(); }
+    changed home_row_catalog_rows => { root.kb_clamp_all(); }
     changed cache_enabled => {
         if (root.kb_hr >= root.kb_cache_n()) {
             root.kb_hr = root.kb_cache_n() - 1;
@@ -3834,6 +3847,25 @@ export component SettingsPage {
                                                     }
                                                 }
                                             }
+
+                                            SettingsRow {
+                                                setting-key: "home_episode_artwork";
+                                                row-title: @tr("Episode artwork on Home");
+                                                row-desc: @tr("Use episode thumbnails in Continue Watching and Upcoming. Turn off to use show posters.");
+
+                                                KbMark { on: root.kb_zone == 16 && root.kb_home == 2; active: root.kb_active; }
+                                                ToggleSwitch {
+                                                    name: @tr("Episode artwork on Home");
+                                                    checked <=> root.home_episode_artwork;
+                                                    focused: root.kb_zone == 16 && root.kb_home == 2 && root.kb_active;
+                                                    toggled => {
+                                                        root.kb_active = SettingsStyle.keyboard-mode;
+                                                        root.kb_zone = 16;
+                                                        root.kb_home = 2;
+                                                        root.schedule_setting("home_episode_artwork");
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
 
@@ -3844,7 +3876,7 @@ export component SettingsPage {
 
                                     Text {
                                         width: 100%;
-                                        text: @tr("Add catalogs with an optional genre filter. Each selection contributes up to five titles.");
+                                        text: @tr("Choose addon catalogs and optional genres for the rotating banner. Each selection contributes up to five titles.");
                                         font-size: 14px;
                                         color: Theme.current.text_settings;
                                         wrap: word-wrap;
@@ -3887,11 +3919,11 @@ export component SettingsPage {
                                                     label: @tr("Remove");
                                                     destructive: true;
                                                     roomy: true;
-                                                    focused: root.kb_zone == 16 && root.kb_home == i + 2 && root.kb_active;
+                                                    focused: root.kb_zone == 16 && root.kb_home == i + 3 && root.kb_active;
                                                     clicked => {
                                                         root.kb_active = SettingsStyle.keyboard-mode;
                                                         root.kb_zone = 16;
-                                                        root.kb_home = i + 2;
+                                                        root.kb_home = i + 3;
                                                         root.home_catalog_removed(i);
                                                     }
                                                 }
@@ -3903,12 +3935,87 @@ export component SettingsPage {
                                         label: @tr("Add catalog");
                                         primary: true;
                                         roomy: true;
-                                        focused: root.kb_zone == 16 && root.kb_home == root.home_catalog_rows.length + 2 && root.kb_active;
+                                        focused: root.kb_zone == 16 && root.kb_home == root.home_catalog_rows.length + 3 && root.kb_active;
                                         clicked => {
                                             root.kb_active = SettingsStyle.keyboard-mode;
                                             root.kb_zone = 16;
-                                            root.kb_home = root.home_catalog_rows.length + 2;
+                                            root.kb_home = root.home_catalog_rows.length + 3;
                                             root.home_catalog_add_requested();
+                                        }
+                                    }
+
+                                    SectionHeader {
+                                        icon-kind: 4;
+                                        label: @tr("CATALOG ROWS");
+                                    }
+
+                                    Text {
+                                        width: 100%;
+                                        text: @tr("Choose addon catalogs to show as poster rows below Upcoming. Each catalog can show up to 20 titles.");
+                                        font-size: 14px;
+                                        color: Theme.current.text_settings;
+                                        wrap: word-wrap;
+                                    }
+
+                                    Rectangle {
+                                        background: Theme.current.card;
+                                        border-radius: 16px;
+                                        border-width: 1px;
+                                        border-color: Theme.current.border_soft;
+                                        clip: true;
+
+                                        VerticalLayout {
+                                            spacing: 0px;
+
+                                            if root.home_row_catalog_rows.length == 0: Rectangle {
+                                                background: Theme.current.card;
+                                                min-height: 64px;
+
+                                                Text {
+                                                    x: 16px;
+                                                    y: (parent.height - self.height) / 2;
+                                                    width: parent.width - 32px;
+                                                    text: @tr("No Home catalog rows selected. Add one to choose its genre.");
+                                                    font-size: 14px;
+                                                    color: Theme.current.text_settings;
+                                                    wrap: word-wrap;
+                                                }
+                                            }
+
+                                            for home_row[i] in root.home_row_catalog_rows: SettingsRow {
+                                                tinted: Math.mod(i, 2) == 0;
+                                                setting-key: "home_row_sources";
+                                                row-title: home_row.title;
+                                                row-desc: home_row.addon + " · " + home_row.media_type
+                                                + " · " + (home_row.genre == "" ? @tr("All genres") : home_row.genre)
+                                                + (home_row.available ? (home_row.enabled ? "" : " · " + @tr("Addon disabled")) : " · " + @tr("Unavailable addon"));
+
+                                                home_row_catalog_remove := PillButton {
+                                                    label: @tr("Remove");
+                                                    destructive: true;
+                                                    roomy: true;
+                                                    focused: root.kb_zone == 16 && root.kb_home == root.home_catalog_rows.length + i + 4 && root.kb_active;
+                                                    clicked => {
+                                                        root.kb_active = SettingsStyle.keyboard-mode;
+                                                        root.kb_zone = 16;
+                                                        root.kb_home = root.home_catalog_rows.length + i + 4;
+                                                        root.home_row_catalog_removed(i);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    home_row_catalog_add := PillButton {
+                                        label: @tr("Add catalog row");
+                                        primary: true;
+                                        roomy: true;
+                                        focused: root.kb_zone == 16 && root.kb_home == root.home_catalog_rows.length + root.home_row_catalog_rows.length + 4 && root.kb_active;
+                                        clicked => {
+                                            root.kb_active = SettingsStyle.keyboard-mode;
+                                            root.kb_zone = 16;
+                                            root.kb_home = root.home_catalog_rows.length + root.home_row_catalog_rows.length + 4;
+                                            root.home_row_catalog_add_requested();
                                         }
                                     }
                                 }
@@ -4231,7 +4338,7 @@ export component SettingsPage {
                     spacing: 10px;
 
                     Text {
-                        text: @tr("Add featured catalog");
+                        text: root.home_catalog_add_target == 0 ? @tr("Add featured catalog") : @tr("Add Home catalog row");
                         font-size: 17px;
                         font-weight: 700;
                         color: Theme.current.text_bright;
@@ -4239,7 +4346,9 @@ export component SettingsPage {
 
                     Text {
                         width: 100%;
-                        text: @tr("Choose a catalog and optional genre to feature on Home.");
+                        text: root.home_catalog_add_target == 0
+                            ? @tr("Choose a catalog and optional genre for the rotating Home banner.")
+                            : @tr("Choose a catalog and optional genre to show below Upcoming on Home.");
                         font-size: 14px;
                         color: Theme.current.text_settings;
                         wrap: word-wrap;

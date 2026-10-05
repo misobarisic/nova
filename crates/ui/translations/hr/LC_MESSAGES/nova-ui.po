@@ -73,6 +73,9 @@ msgstr "Početna"
 msgid "Featured titles and catalog sources"
 msgstr "Izdvojeni naslovi i izvori kataloga"
 
+msgid "Featured titles and catalog rows"
+msgstr "Izdvojeni naslovi i retci kataloga"
+
 msgid "HOME ROWS"
 msgstr "REDOVI POČETNE STRANICE"
 
@@ -82,11 +85,20 @@ msgstr "Prikažite redak „Nastavak gledanja” na Početnoj stranici."
 msgid "Show the Upcoming row on Home."
 msgstr "Prikažite redak „Uskoro” na Početnoj stranici."
 
+msgid "Episode artwork on Home"
+msgstr "Slike epizoda na Početnoj stranici"
+
+msgid "Use episode thumbnails in Continue Watching and Upcoming. Turn off to use show posters."
+msgstr "Prikažite minijature epizoda u redcima „Nastavak gledanja” i „Uskoro”. Isključite za prikaz plakata serija."
+
+msgid "Episode artwork"
+msgstr "Slike epizoda"
+
 msgid "FEATURED SHOWCASE"
 msgstr "ISTAKNUTI NASLOVI"
 
-msgid "Add catalogs with an optional genre filter. Each selection contributes up to five titles."
-msgstr "Dodajte kataloge uz neobavezni filtar žanra. Svaki odabir daje do pet naslova."
+msgid "Choose addon catalogs and optional genres for the rotating banner. Each selection contributes up to five titles."
+msgstr "Odaberite kataloge dodataka i neobavezne žanrove za rotirajući baner. Svaki odabir daje do pet naslova."
 
 msgid "No featured catalogs selected. Add one to choose its genre."
 msgstr "Nema odabranih kataloga za isticanje. Dodajte katalog i odaberite njegov žanr."
@@ -99,6 +111,30 @@ msgstr "Dodavanje kataloga za isticanje"
 
 msgid "Choose a catalog and optional genre to feature on Home."
 msgstr "Odaberite katalog i po želji žanr za isticanje na Početnoj."
+
+msgid "CATALOG ROWS"
+msgstr "REDOVI KATALOGA"
+
+msgid "Continue watching Upcoming Home sections featured catalogs catalog rows poster rows Add catalog Remove"
+msgstr "Nastavak gledanja Uskoro odjeljci Početna istaknuti katalozi redci kataloga posteri Dodaj katalog Ukloni"
+
+msgid "Choose addon catalogs to show as poster rows below Upcoming. Each catalog can show up to 20 titles."
+msgstr "Odaberite kataloge dodataka za prikaz redaka s posterima ispod odjeljka „Uskoro”. Svaki katalog može prikazati do 20 naslova."
+
+msgid "No Home catalog rows selected. Add one to choose its genre."
+msgstr "Nema odabranih redaka kataloga za Početnu. Dodajte katalog i odaberite njegov žanr."
+
+msgid "Add catalog row"
+msgstr "Dodaj redak kataloga"
+
+msgid "Add Home catalog row"
+msgstr "Dodavanje retka kataloga na Početnu"
+
+msgid "Choose a catalog and optional genre for the rotating Home banner."
+msgstr "Odaberite katalog i neobavezni žanr za rotirajući baner Početne."
+
+msgid "Choose a catalog and optional genre to show below Upcoming on Home."
+msgstr "Odaberite katalog i neobavezni žanr za prikaz ispod odjeljka „Uskoro” na Početnoj."
 
 msgid "Select catalog"
 msgstr "Odaberite katalog"

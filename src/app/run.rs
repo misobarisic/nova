@@ -528,6 +528,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_upcoming_picked(move |i| b.upcoming_picked(i as usize));
 
+    let b = bridge.clone();
+    app.on_home_catalog_card_picked(move |i| b.home_catalog_card_picked(i as usize));
+
     // Home → Upcoming calendar (month view in the "see all" subpage).
     let b = bridge.clone();
     app.on_upcoming_cal_open(move || b.upcoming_cal_open());
@@ -678,6 +681,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_home_catalog_add_requested(move || b.home_catalog_add_requested());
 
     let b = bridge.clone();
+    app.on_home_row_catalog_add_requested(move || b.home_row_catalog_add_requested());
+
+    let b = bridge.clone();
     app.on_home_catalog_candidate_picked(move |i| b.home_catalog_candidate_picked(i));
 
     let b = bridge.clone();
@@ -685,6 +691,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let b = bridge.clone();
     app.on_home_catalog_removed(move |i| b.home_catalog_removed(i as usize));
+
+    let b = bridge.clone();
+    app.on_home_row_catalog_removed(move |i| b.home_row_catalog_removed(i as usize));
 
     let b = bridge.clone();
     app.on_toggle_entry_category(move |name| b.toggle_entry_category(&name));
@@ -769,6 +778,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.apply_home_to_ui();
     bridge.dispatch_continue_posters();
     bridge.dispatch_upcoming_posters();
+    bridge.dispatch_home_catalog_posters();
 
     // Settings: restore the image-cache preferences and mirror them to the
     // Settings page (also used by the cache encode pipeline).
@@ -783,6 +793,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // frame, then refresh in the background. Pending manifests do not block
     // cached titles; their completion retries the corresponding live fetch.
     bridge.refresh_home_showcase();
+    bridge.refresh_home_catalog_rows();
 
     // Torrent settings: restore + mirror into the runtime cache read by the
     // engine and the player-close cleanup path.

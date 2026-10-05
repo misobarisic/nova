@@ -95,6 +95,26 @@ export struct HomeCatalogRow {
     enabled: bool,
 }
 
+/// One non-empty catalog rail on the Home landing page.
+export struct HomeCatalogSection {
+    title: string,
+    first_card: int,
+    card_count: int,
+}
+
+/// Poster and footer data for one item in a Home catalog rail.
+export struct HomeCatalogCard {
+    section_index: int,
+    flat_index: int,
+    id: string,
+    media_type: string,
+    title: string,
+    year: string,
+    poster_url: string,
+    poster: image,
+    is_loaded: bool,
+}
+
 /// One trusted peer device shown in the Settings → Sync list.
 export struct LicenseSource {
     label: string,

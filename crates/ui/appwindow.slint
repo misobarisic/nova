@@ -25,7 +25,7 @@ export { NavState } from "sidenav.slint";
 // Shared structs used by the property declarations below; they are exported
 // from types.slint, so the generated Rust module (`slint::include_modules!`)
 // exposes them to the backend.
-import { TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, MediaCard, StreamRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, TrackRow, SeasonCard, ContinueRow, UpcomingRow, CalCell, SheetItem, DownloadRow, LicenseSource } from "types.slint";
+import { TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, MediaCard, StreamRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, SyncPeer, SyncInvite, TrackRow, SeasonCard, ContinueRow, UpcomingRow, CalCell, SheetItem, DownloadRow, LicenseSource } from "types.slint";
 
 // AppWindow owns every property / callback the backend drives (all the
 // `set_*`, `get_*`, `on_*` and `invoke_*` calls in desktop.rs / web.rs) and
@@ -175,6 +175,8 @@ export component AppWindow inherits Window {
     // --- Home (landing page, Continue Watching) ------------------------
     in-out property <[ContinueRow]> home_continue: [];
     in-out property <[UpcomingRow]> home_upcoming: [];
+    in-out property <[HomeCatalogSection]> home_catalog_sections: [];
+    in-out property <[HomeCatalogCard]> home_catalog_cards: [];
     // Independent catalog-driven feature at the top of Home. Rust keeps its
     // selected preview and fetches the active backdrop on demand.
     in-out property <string> home_featured_title: "";
@@ -307,13 +309,16 @@ export component AppWindow inherits Window {
     in-out property <[CategoryRow]> category_rows: [];
     in-out property <string> category_input: "";
     in-out property <[HomeCatalogRow]> home_catalog_rows: [];
+    in-out property <[HomeCatalogRow]> home_row_catalog_rows: [];
     in-out property <bool> home_continue_enabled: true;
     in-out property <bool> home_upcoming_enabled: true;
+    in-out property <bool> home_episode_artwork: true;
     in-out property <[string]> home_catalog_candidate_names: [];
     in-out property <int> home_catalog_candidate_index: -1;
     in-out property <[string]> home_catalog_genre_names: [];
     in-out property <int> home_catalog_genre_index: 0;
     in-out property <bool> home_catalog_add_open: false;
+    in-out property <int> home_catalog_add_target: 0;
     in-out property <string> home_catalog_add_error: "";
     // Library filter: empty string = show all, otherwise filter by category.
     in-out property <string> library_filter_category: "";
@@ -622,9 +627,12 @@ export component AppWindow inherits Window {
     callback category_added(string);
     callback category_removed(int);
     callback home_catalog_add_requested();
+    callback home_row_catalog_add_requested();
     callback home_catalog_candidate_picked(int);
     callback home_catalog_added(int, int);
     callback home_catalog_removed(int);
+    callback home_row_catalog_removed(int);
+    callback home_catalog_card_picked(int);
     callback category_renamed(int, string);
     callback toggle_entry_category(string);
     callback library_filter_picked(string);
@@ -783,6 +791,8 @@ export component AppWindow inherits Window {
         nav-viewport-width: root.width;
         continue_rows <=> root.home_continue;
         upcoming_rows <=> root.home_upcoming;
+        catalog_sections: root.home_catalog_sections;
+        catalog_cards: root.home_catalog_cards;
         cal_cells <=> root.home_cal_cells;
         cal_title <=> root.home_cal_title;
         cal_day_rows <=> root.home_cal_day;
@@ -829,6 +839,7 @@ export component AppWindow inherits Window {
         continue_remove(i) => { root.continue_remove(i); }
         continue_enter(i) => { root.continue_enter(i); }
         upcoming_picked(i) => { root.upcoming_picked(i); }
+        catalog_card_picked(i) => { root.home_catalog_card_picked(i); }
         upcoming_cal_open => { root.upcoming_cal_open(); }
         upcoming_cal_close => { root.upcoming_cal_close(); }
         upcoming_cal_month(d) => { root.upcoming_cal_month(d); }
@@ -1065,13 +1076,16 @@ export component AppWindow inherits Window {
         category_rows <=> root.category_rows;
         category_input <=> root.category_input;
         home_catalog_rows <=> root.home_catalog_rows;
+        home_row_catalog_rows <=> root.home_row_catalog_rows;
         home_continue_enabled <=> root.home_continue_enabled;
         home_upcoming_enabled <=> root.home_upcoming_enabled;
+        home_episode_artwork <=> root.home_episode_artwork;
         home_catalog_candidate_names <=> root.home_catalog_candidate_names;
         home_catalog_candidate_index <=> root.home_catalog_candidate_index;
         home_catalog_genre_names <=> root.home_catalog_genre_names;
         home_catalog_genre_index <=> root.home_catalog_genre_index;
         home_catalog_add_open <=> root.home_catalog_add_open;
+        home_catalog_add_target <=> root.home_catalog_add_target;
         system_back_request: root.system_back_request;
         home_catalog_add_error <=> root.home_catalog_add_error;
         cache_images <=> root.cache_images;
@@ -1159,9 +1173,11 @@ export component AppWindow inherits Window {
         category_added(n) => { root.category_added(n); }
         category_removed(i) => { root.category_removed(i); }
         home_catalog_add_requested => { root.home_catalog_add_requested(); }
+        home_row_catalog_add_requested => { root.home_row_catalog_add_requested(); }
         home_catalog_candidate_picked(i) => { root.home_catalog_candidate_picked(i); }
         home_catalog_added(c, g) => { root.home_catalog_added(c, g); }
         home_catalog_removed(i) => { root.home_catalog_removed(i); }
+        home_row_catalog_removed(i) => { root.home_row_catalog_removed(i); }
         save_settings => { root.save_settings(); }
         settings_edited(field) => { root.settings_edited(field); }
         clear_cache => { root.clear_cache(); }

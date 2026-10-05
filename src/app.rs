@@ -16,8 +16,8 @@ use std::time::Duration;
 use crate::download::DownloadJob;
 use crate::{
     AddonRow, AppWindow, CalCell, CategoryRow, ContinueRow, DownloadRow, EpisodeRow,
-    HomeCatalogRow, LicenseSource, MediaCard, SeasonCard, SheetItem, StreamRow, SyncInvite,
-    SyncPeer, UpcomingRow,
+    HomeCatalogCard, HomeCatalogRow, HomeCatalogSection, LicenseSource, MediaCard, SeasonCard,
+    SheetItem, StreamRow, SyncInvite, SyncPeer, UpcomingRow,
 };
 
 pub(crate) const OPEN_SOURCE_LICENSE_CATALOG: &str =
@@ -237,6 +237,12 @@ struct MetadataPrefetch {
     retry_at: Option<std::time::Instant>,
 }
 
+#[derive(Clone)]
+struct HomeCatalogGroup {
+    title: String,
+    previews: Vec<MetaPreview>,
+}
+
 #[derive(Default)]
 struct Shared {
     installed: Vec<Installed>,
@@ -320,6 +326,12 @@ struct Shared {
     /// Home → Upcoming entries, rebuilt alongside (`continue_list`):
     /// unaired episodes of caught-up library series, air-date first.
     upcoming_list: Vec<UpcomingEntry>,
+    /// Catalog poster rails configured separately from the featured banner.
+    home_catalog_row_groups: Vec<HomeCatalogGroup>,
+    home_catalog_row_sources: Vec<HomeCatalogSource>,
+    /// Flattened in the same order as the Home UI cards for click resolution.
+    home_catalog_row_items: Vec<MetaPreview>,
+    home_catalog_rows_loaded: bool,
     /// Selected catalog previews for Home's independent featured showcase.
     home_showcase: Vec<MetaPreview>,
     home_showcase_sources: Vec<HomeCatalogSource>,
@@ -705,6 +717,8 @@ struct Bridge {
     catalog_gen: Arc<AtomicU64>,
     /// Stale-response guard for the independent Home showcase fetches.
     home_showcase_gen: Arc<AtomicU64>,
+    /// Stale-response guard for Home's additional catalog poster rails.
+    home_catalog_rows_gen: Arc<AtomicU64>,
     // Native-only poster worker pipeline (dual-priority channels, see
     // `PosterTx`). Android fetches each grid poster via net::fetch_image instead.
     #[cfg(feature = "desktop")]

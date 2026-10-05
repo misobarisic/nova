@@ -80,6 +80,11 @@ fn artwork_request_current(state: &Shared, type_: &str, id: &str, failed_url: &s
                     && preview.id == id
                     && preview.poster.as_deref().unwrap_or_default() == failed_url
             })
+        || state.home_catalog_row_items.iter().any(|preview| {
+            preview.type_ == type_
+                && preview.id == id
+                && preview.poster.as_deref().unwrap_or_default() == failed_url
+        })
         || state.modal_item.as_ref().is_some_and(|item| {
             item.type_ == type_ && item.id == id && item.poster_url == failed_url
         });
@@ -164,7 +169,10 @@ impl Bridge {
                     .row_data(i)
                     .is_some_and(|row| row.id.as_str() == id && !row.is_loaded)
             })
-        });
+        }) || app
+            .get_home_catalog_cards()
+            .iter()
+            .any(|card| card.media_type == type_ && card.id == id && card.poster_url == url);
         let saved = self
             .shared
             .lock()
@@ -237,6 +245,15 @@ impl Bridge {
         }
         paint_poster_rows(&app.get_catalog(), &browse, id, url, &image);
         paint_poster_rows(&app.get_search_results(), &search, id, url, &image);
+        let home_cards = app.get_home_catalog_cards();
+        for (index, mut card) in home_cards.iter().enumerate() {
+            if card.id == id && card.media_type == type_ {
+                card.poster_url = url.into();
+                card.poster = image.clone();
+                card.is_loaded = true;
+                home_cards.set_row_data(index, card);
+            }
+        }
         if library {
             let changed = self
                 .shared
@@ -950,6 +967,53 @@ impl Bridge {
                             row.is_loaded = true;
                             day_model.set_row_data(day_index, row);
                         }
+                    }
+                });
+            });
+        }
+    }
+
+    /// Fetch and paint the currently selected Home catalog rows. Each
+    /// completion checks its current flattened index, identity and URL so a
+    /// settings change or a newer catalog response cannot paint stale art.
+    pub(super) fn dispatch_home_catalog_posters(&self) {
+        let Some(app) = self.app() else { return };
+        let requests = app
+            .get_home_catalog_cards()
+            .iter()
+            .enumerate()
+            .filter(|(_, card)| !card.is_loaded)
+            .map(|(index, card)| {
+                (
+                    index,
+                    card.media_type.to_string(),
+                    card.id.to_string(),
+                    card.poster_url.to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (index, type_, id, url) in requests {
+            if url.is_empty() {
+                self.recover_missing_artwork(&type_, &id, "");
+                continue;
+            }
+            let bridge = self.clone();
+            let requested_url = url.clone();
+            net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(app) = bridge.app() else { return };
+                    let model = app.get_home_catalog_cards();
+                    let current = model.row_data(index).is_some_and(|card| {
+                        card.id == id
+                            && card.media_type == type_
+                            && card.poster_url == requested_url
+                    });
+                    if let Some(pixels) = pixels {
+                        if current {
+                            bridge.publish_discover_poster(&type_, &id, &requested_url, &pixels);
+                        }
+                    } else if current {
+                        bridge.recover_missing_artwork(&type_, &id, &requested_url);
                     }
                 });
             });

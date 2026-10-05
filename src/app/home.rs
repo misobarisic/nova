@@ -3,6 +3,8 @@ use super::*;
 
 const HOME_SHOWCASE_PER_CATALOG: usize = 5;
 const HOME_SHOWCASE_CACHE_KEY: &str = "home:showcase:v1";
+const HOME_CATALOG_ROWS_PER_CATALOG: usize = 20;
+const HOME_CATALOG_ROWS_CACHE_KEY: &str = "home:catalog-rows:v1";
 const HOME_SHOWCASE_RETRY_DELAY: Duration = Duration::from_secs(30);
 type HomeShowcaseBatch = (HomeCatalogSource, Option<Vec<MetaPreview>>);
 
@@ -45,12 +47,20 @@ impl HomeShowcaseCache {
     }
 
     fn update(&mut self, selected: &[HomeCatalogSource], batches: Vec<HomeShowcaseBatch>) {
+        self.update_with_limit(selected, batches, HOME_SHOWCASE_PER_CATALOG);
+    }
+
+    fn update_with_limit(
+        &mut self,
+        selected: &[HomeCatalogSource],
+        batches: Vec<HomeShowcaseBatch>,
+        per_catalog: usize,
+    ) {
         self.catalogs
             .retain(|cached| selected.contains(&cached.source));
-        // Keep enough candidates to fill five slots after deduplication with
-        // every earlier selected catalog, without persisting entire pages.
-        let limit =
-            HOME_SHOWCASE_PER_CATALOG * selected.iter().collect::<HashSet<_>>().len().max(1);
+        // Keep enough candidates to fill each selected rail after
+        // deduplication, without persisting entire addon catalog pages.
+        let limit = per_catalog * selected.iter().collect::<HashSet<_>>().len().max(1);
         for (source, previews) in batches {
             let Some(previews) = previews.filter(|_| selected.contains(&source)) else {
                 continue;
@@ -293,6 +303,65 @@ fn home_showcase_sources(state: &Shared) -> Vec<HomeCatalogSource> {
         .collect()
 }
 
+/// All selected poster-rail sources, including unavailable addons so their
+/// local cached results remain visible while a manifest cannot be fetched.
+fn home_catalog_row_sources(state: &Shared) -> Vec<HomeCatalogSource> {
+    let mut seen = HashSet::new();
+    state
+        .cache_settings
+        .home_row_sources
+        .iter()
+        .filter(|source| seen.insert((*source).clone()))
+        .cloned()
+        .collect()
+}
+
+fn home_catalog_row_groups(
+    cache: &HomeShowcaseCache,
+    sources: &[HomeCatalogSource],
+    installed: &[Installed],
+) -> Vec<HomeCatalogGroup> {
+    sources
+        .iter()
+        .filter_map(|source| {
+            let cached = cache
+                .catalogs
+                .iter()
+                .find(|catalog| &catalog.source == source)?;
+            let addon = installed.iter().find(|addon| addon.url == source.addon_url);
+            let title = addon
+                .and_then(|addon| {
+                    addon
+                        .manifest
+                        .catalog_for(&source.type_, &source.catalog_id)
+                })
+                .map(|catalog| catalog.name.clone())
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| source.catalog_id.clone());
+            let previews = cached
+                .previews
+                .iter()
+                .take(HOME_CATALOG_ROWS_PER_CATALOG)
+                .cloned()
+                .map(|mut preview| {
+                    preview.extra.insert(
+                        "novaSourceUrl".into(),
+                        serde_json::Value::String(source.addon_url.clone()),
+                    );
+                    restore_home_showcase_header(&mut preview);
+                    if let Some(header) = read_meta_header_for(&preview.type_, &preview.id)
+                        && !header.poster_url.trim().is_empty()
+                    {
+                        preview.poster = Some(header.poster_url);
+                    }
+                    preview
+                })
+                .collect();
+            Some(HomeCatalogGroup { title, previews })
+        })
+        .collect()
+}
+
 fn parse_home_showcase_catalog(bytes: &[u8], type_: &str) -> Option<Vec<MetaPreview>> {
     // A 200 response carrying an addon error or an empty stub is a failed
     // refresh, rather than proof that a previously cached catalog is empty.
@@ -418,6 +487,185 @@ impl Bridge {
             };
             self.ensure_home_showcase_art(index, generation);
         }
+    }
+
+    /// Restore cached poster rails immediately, then refresh each configured
+    /// addon catalog in the background. This cache is independent of the
+    /// rotating banner because the rows can contain larger first pages.
+    pub(super) fn refresh_home_catalog_rows(&self) {
+        let generation = self.home_catalog_rows_gen.fetch_add(1, Ordering::Relaxed) + 1;
+        let (selected, sources, targets, restore, installed) = {
+            let mut state = self.shared.lock().unwrap();
+            let was_loaded = state.home_catalog_rows_loaded;
+            state.home_catalog_rows_loaded = true;
+            let sources = home_catalog_row_sources(&state);
+            let restore = !was_loaded
+                || state.home_catalog_row_sources != sources
+                || (state.home_catalog_row_groups.is_empty() && !sources.is_empty());
+            if restore {
+                state.home_catalog_row_sources = sources.clone();
+            }
+            let targets = sources
+                .iter()
+                .filter_map(|source| {
+                    let addon = state.installed.iter().find(|addon| {
+                        addon.url == source.addon_url && addon.enabled && addon.available
+                    })?;
+                    addon
+                        .manifest
+                        .catalog_for(&source.type_, &source.catalog_id)?;
+                    let addon = Addon::new(&addon.url).ok()?;
+                    let extra = if source.genre.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![("genre", source.genre.as_str())]
+                    };
+                    Some((
+                        source.clone(),
+                        addon.catalog_url(&source.type_, &source.catalog_id, &extra),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            (
+                state.cache_settings.home_row_sources.clone(),
+                sources,
+                targets,
+                restore,
+                state.installed.clone(),
+            )
+        };
+
+        let mut cached =
+            read_json::<HomeShowcaseCache>(HOME_CATALOG_ROWS_CACHE_KEY).unwrap_or_default();
+        let before = serde_json::to_value(&cached.catalogs).ok();
+        cached.update_with_limit(&selected, Vec::new(), HOME_CATALOG_ROWS_PER_CATALOG);
+        if before != serde_json::to_value(&cached.catalogs).ok() {
+            write_json(HOME_CATALOG_ROWS_CACHE_KEY, &cached);
+        }
+        if restore || sources.is_empty() {
+            let groups = home_catalog_row_groups(&cached, &sources, &installed);
+            self.install_home_catalog_rows(groups);
+        }
+        if targets.is_empty() {
+            return;
+        }
+
+        let results = Arc::new(Mutex::new(Vec::<HomeShowcaseBatch>::new()));
+        let remaining = Arc::new(AtomicUsize::new(targets.len()));
+        for (source, url) in targets {
+            let bridge = self.clone();
+            let results = results.clone();
+            let remaining = remaining.clone();
+            let sources = sources.clone();
+            net::fetch_bytes(url, move |result| {
+                let previews = result
+                    .ok()
+                    .and_then(|bytes| parse_home_showcase_catalog(&bytes, &source.type_));
+                results.lock().unwrap().push((source, previews));
+                if remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
+                    let batches = std::mem::take(&mut *results.lock().unwrap());
+                    let _ = slint::invoke_from_event_loop(move || {
+                        bridge.finish_home_catalog_rows_refresh(generation, sources, batches);
+                    });
+                }
+            });
+        }
+    }
+
+    pub(super) fn invalidate_home_catalog_rows(&self) {
+        self.home_catalog_rows_gen.fetch_add(1, Ordering::Relaxed);
+        let mut state = self.shared.lock().unwrap();
+        state.home_catalog_rows_loaded = false;
+    }
+
+    pub(super) fn ensure_home_catalog_rows_loaded(&self) {
+        let refresh = {
+            let state = self.shared.lock().unwrap();
+            !state.home_catalog_rows_loaded
+                || home_catalog_row_sources(&state) != state.home_catalog_row_sources
+        };
+        if refresh {
+            self.refresh_home_catalog_rows();
+        } else {
+            self.dispatch_home_catalog_posters();
+        }
+    }
+
+    fn finish_home_catalog_rows_refresh(
+        &self,
+        generation: u64,
+        sources: Vec<HomeCatalogSource>,
+        batches: Vec<HomeShowcaseBatch>,
+    ) {
+        if generation != self.home_catalog_rows_gen.load(Ordering::Relaxed) {
+            return;
+        }
+        let (selected, installed) = {
+            let state = self.shared.lock().unwrap();
+            if home_catalog_row_sources(&state) != sources {
+                return;
+            }
+            (
+                state.cache_settings.home_row_sources.clone(),
+                state.installed.clone(),
+            )
+        };
+        let mut cached =
+            read_json::<HomeShowcaseCache>(HOME_CATALOG_ROWS_CACHE_KEY).unwrap_or_default();
+        cached.update_with_limit(&selected, batches, HOME_CATALOG_ROWS_PER_CATALOG);
+        write_json(HOME_CATALOG_ROWS_CACHE_KEY, &cached);
+        self.install_home_catalog_rows(home_catalog_row_groups(&cached, &sources, &installed));
+    }
+
+    fn install_home_catalog_rows(&self, groups: Vec<HomeCatalogGroup>) {
+        let Some(app) = self.app() else { return };
+        let mut sections = Vec::new();
+        let mut cards = Vec::new();
+        let mut items = Vec::new();
+        let groups = groups
+            .into_iter()
+            .filter(|group| !group.previews.is_empty())
+            .collect::<Vec<_>>();
+        for group in &groups {
+            let section_index = sections.len() as i32;
+            sections.push(HomeCatalogSection {
+                title: SharedString::from(&group.title),
+                first_card: cards.len() as i32,
+                card_count: group.previews.len() as i32,
+            });
+            for preview in &group.previews {
+                let flat_index = items.len();
+                let poster_url = preview.poster.as_deref().unwrap_or_default();
+                let pixels = (!poster_url.is_empty())
+                    .then(|| {
+                        decoded_cache_get(&sized_cache_key(poster_url, Some(DISPLAY_POSTER_SIDE)))
+                    })
+                    .flatten();
+                cards.push(HomeCatalogCard {
+                    section_index,
+                    flat_index: flat_index as i32,
+                    id: SharedString::from(&preview.id),
+                    media_type: SharedString::from(&preview.type_),
+                    title: SharedString::from(preview.title()),
+                    year: SharedString::from(preview.year_str().unwrap_or_default()),
+                    poster_url: SharedString::from(poster_url),
+                    poster: pixels
+                        .as_ref()
+                        .map(|pixels| Image::from_rgba8(pixels.clone()))
+                        .unwrap_or_default(),
+                    is_loaded: pixels.is_some(),
+                });
+                items.push(preview.clone());
+            }
+        }
+        {
+            let mut state = self.shared.lock().unwrap();
+            state.home_catalog_row_groups = groups;
+            state.home_catalog_row_items = items;
+        }
+        app.set_home_catalog_sections(Rc::new(VecModel::from(sections)).into());
+        app.set_home_catalog_cards(Rc::new(VecModel::from(cards)).into());
+        self.dispatch_home_catalog_posters();
     }
 
     fn finish_home_showcase_refresh(
@@ -872,6 +1120,19 @@ impl Bridge {
         self.open_home_showcase(true);
     }
 
+    pub(super) fn home_catalog_card_picked(&self, index: usize) {
+        let preview = self
+            .shared
+            .lock()
+            .unwrap()
+            .home_catalog_row_items
+            .get(index)
+            .cloned();
+        if let Some(preview) = preview {
+            self.open_preview(preview, 0, false, None, false);
+        }
+    }
+
     fn open_home_showcase(&self, watch_now: bool) {
         let preview = {
             let state = self.shared.lock().unwrap();
@@ -988,14 +1249,14 @@ impl Bridge {
     /// entries for title/poster and the episode cache for the label).
     /// Posters paint instantly when already decoded, otherwise dispatch.
     pub(super) fn current_continue_rows(&self) -> Vec<ContinueRow> {
-        let (entries, progress, list, enabled, show_unwatched_thumbs) = {
+        let (entries, progress, list, enabled, episode_artwork) = {
             let state = self.shared.lock().unwrap();
             (
                 state.entries.clone(),
                 state.progress.clone(),
                 state.continue_list.clone(),
                 state.cache_settings.home_continue_enabled,
-                state.cache_settings.show_unwatched_thumbs,
+                state.cache_settings.home_episode_artwork,
             )
         };
         if !enabled {
@@ -1024,11 +1285,7 @@ impl Bridge {
                     };
                     continue_badge(started, &c.episode_id, &episodes, is_watched)
                 };
-                // Respect the unwatched-thumbnail preference while still
-                // allowing artwork for episodes the user has already started.
-                let show_thumbnail = show_unwatched_thumbs
-                    || record.is_some_and(|p| p.watched || p.position_secs > 0.0);
-                let art_url = home_card_art_url(&e.poster_url, video, show_thumbnail);
+                let art_url = home_card_art_url(&e.poster_url, video, episode_artwork);
                 let (poster, is_loaded) = home_card_image(&art_url, &e.poster_url);
                 Some(ContinueRow {
                     id: SharedString::from(&c.series_id),
@@ -1185,14 +1442,14 @@ impl Bridge {
     /// Upcoming list, so filtered views (the calendar's selected day) still
     /// resolve picks.
     pub(super) fn current_upcoming_rows(&self) -> Vec<UpcomingRow> {
-        let (entries, list, date_relative, enabled, show_unwatched_thumbs) = {
+        let (entries, list, date_relative, enabled, episode_artwork) = {
             let state = self.shared.lock().unwrap();
             (
                 state.entries.clone(),
                 state.upcoming_list.clone(),
                 state.cache_settings.date_relative,
                 state.cache_settings.home_upcoming_enabled,
-                state.cache_settings.show_unwatched_thumbs,
+                state.cache_settings.home_episode_artwork,
             )
         };
         if !enabled {
@@ -1200,7 +1457,7 @@ impl Bridge {
         }
         list.iter()
             .enumerate()
-            .filter_map(|(i, u)| upcoming_row(&entries, u, i, date_relative, show_unwatched_thumbs))
+            .filter_map(|(i, u)| upcoming_row(&entries, u, i, date_relative, episode_artwork))
             .collect()
     }
 
@@ -1208,14 +1465,14 @@ impl Bridge {
     /// as [`Self::current_upcoming_rows`]; `index` still positions into the
     /// full Upcoming list, so card taps resolve through `upcoming_picked`.
     pub(super) fn current_upcoming_day_rows(&self, day: i64) -> Vec<UpcomingRow> {
-        let (entries, list, date_relative, enabled, show_unwatched_thumbs) = {
+        let (entries, list, date_relative, enabled, episode_artwork) = {
             let state = self.shared.lock().unwrap();
             (
                 state.entries.clone(),
                 state.upcoming_list.clone(),
                 state.cache_settings.date_relative,
                 state.cache_settings.home_upcoming_enabled,
-                state.cache_settings.show_unwatched_thumbs,
+                state.cache_settings.home_episode_artwork,
             )
         };
         if !enabled {
@@ -1224,7 +1481,7 @@ impl Bridge {
         list.iter()
             .enumerate()
             .filter(|(_, u)| u.air_days == day)
-            .filter_map(|(i, u)| upcoming_row(&entries, u, i, date_relative, show_unwatched_thumbs))
+            .filter_map(|(i, u)| upcoming_row(&entries, u, i, date_relative, episode_artwork))
             .collect()
     }
 
@@ -1405,6 +1662,7 @@ impl Bridge {
         self.dispatch_continue_posters();
         self.dispatch_upcoming_posters();
         self.ensure_home_showcase_loaded();
+        self.ensure_home_catalog_rows_loaded();
     }
 
     // ---- Upcoming calendar -------------------------------------------
@@ -1618,12 +1876,12 @@ fn merge_home_showcase_results(mut batches: Vec<(usize, Vec<MetaPreview>)>) -> V
     merged
 }
 
-/// Use an episode thumbnail when allowed, otherwise the library poster.
+/// Use an episode thumbnail when enabled and available, otherwise the series poster.
 /// The selected URL travels with the model so late image loads cannot replace
 /// a card whose episode changed while the same series stayed in its slot.
-fn home_card_art_url(poster_url: &str, video: Option<&Video>, show_thumbnail: bool) -> String {
+fn home_card_art_url(poster_url: &str, video: Option<&Video>, episode_artwork: bool) -> String {
     video
-        .filter(|_| show_thumbnail)
+        .filter(|_| episode_artwork)
         .and_then(|v| v.thumbnail.as_deref())
         .map(str::trim)
         .filter(|url| !url.is_empty())
@@ -1666,7 +1924,7 @@ fn upcoming_row(
     u: &UpcomingEntry,
     index: usize,
     date_relative: bool,
-    show_thumbnail: bool,
+    episode_artwork: bool,
 ) -> Option<UpcomingRow> {
     let e = entries.iter().find(|e| e.id == u.series_id)?;
     let episodes = read_episodes_cache_for(&u.type_, &u.series_id).unwrap_or_default();
@@ -1677,7 +1935,7 @@ fn upcoming_row(
         .as_deref()
         .and_then(|d| Bridge::format_human_date(d, date_relative))
         .unwrap_or_default();
-    let art_url = home_card_art_url(&e.poster_url, Some(v), show_thumbnail);
+    let art_url = home_card_art_url(&e.poster_url, Some(v), episode_artwork);
     let (poster, is_loaded) = home_card_image(&art_url, &e.poster_url);
     Some(UpcomingRow {
         id: SharedString::from(&u.series_id),

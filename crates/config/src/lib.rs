@@ -90,10 +90,9 @@ pub struct DownloadSettings {
     pub auto_delete_watched: bool,
 }
 
-/// One catalog and optional genre selected for the synced Home featured
-/// showcase. Identity uses the addon install URL plus protocol type, catalog
-/// id and genre; the display name is deliberately not persisted because
-/// manifests can rename it.
+/// One catalog and optional genre selected for a synced Home banner or poster
+/// rail. Identity uses the addon install URL plus protocol type, catalog id
+/// and genre; the display name is not persisted because manifests can rename it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HomeCatalogSource {
@@ -337,6 +336,10 @@ pub struct CacheSettings {
     /// addon is available and enabled there.
     #[serde(default)]
     pub home_catalog_sources: Vec<HomeCatalogSource>,
+    /// Additional addon catalogs shown as poster rails below Upcoming on
+    /// Home. Synced with settings; each device fetches from its own addons.
+    #[serde(default)]
+    pub home_row_sources: Vec<HomeCatalogSource>,
     /// Show the Continue Watching row on Home. Synced with the rest of the
     /// general settings; older settings snapshots keep the existing visible
     /// behavior.
@@ -346,6 +349,11 @@ pub struct CacheSettings {
     /// settings; older settings snapshots keep the existing visible behavior.
     #[serde(default = "default_true")]
     pub home_upcoming_enabled: bool,
+    /// Prefer episode thumbnails over series posters in Home's Continue
+    /// Watching and Upcoming rows. Synced with other general settings and
+    /// defaults to the existing episode-art behavior.
+    #[serde(default = "default_true")]
+    pub home_episode_artwork: bool,
     /// Minimum grid columns for My Library (same scheme).
     #[serde(default = "default_min_cols")]
     pub library_min_cols: u32,
@@ -424,8 +432,10 @@ impl Default for CacheSettings {
             discover_min_cols: 2,
             discover_catalog_addon_names: true,
             home_catalog_sources: Vec::new(),
+            home_row_sources: Vec::new(),
             home_continue_enabled: true,
             home_upcoming_enabled: true,
+            home_episode_artwork: true,
             library_min_cols: 2,
             android_hwdec: AndroidHwdec::HwPlus,
             player_external: false,
