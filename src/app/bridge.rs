@@ -16,8 +16,7 @@ pub(super) fn install_global_bridge(bridge: &Bridge) {
 }
 
 /// Run `f` with the process bridge, if one is installed.
-// On desktop only the install side is used (no JNI entry point).
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+// Desktop poster failures and Android JNI callbacks share this event-loop bridge.
 pub(super) fn with_global_bridge<R>(f: impl FnOnce(&Bridge) -> R) -> Option<R> {
     BRIDGE.lock().unwrap().as_ref().map(f)
 }

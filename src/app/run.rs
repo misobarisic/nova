@@ -207,6 +207,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         });
+                    } else if !job.library {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            bridge::with_global_bridge(|bridge| {
+                                bridge.recover_catalog_artwork(job.generation, job.index, &job.url);
+                            });
+                        });
                     }
                 }
             });

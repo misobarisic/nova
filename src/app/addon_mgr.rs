@@ -548,10 +548,16 @@ impl Bridge {
     /// Rebuild picker lists from the chosen addon's manifest and reload.
     pub(super) fn refresh_all(&self, load: bool) {
         self.publish_metadata_addons();
+        self.retry_pending_artwork();
         let app = match self.app() {
             Some(a) => a,
             None => return,
         };
+        if app.get_show_library() {
+            // Fill missing metadata when a Library was opened before its
+            // manifests were ready. Complete cached entries remain untouched.
+            self.prefetch_library_meta();
+        }
 
         let mut state = self.shared.lock().unwrap();
 

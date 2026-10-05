@@ -21,6 +21,25 @@ mod image_cache_tests {
     }
 
     #[test]
+    fn display_resize_keeps_dimensions_consistent_with_pixel_storage() {
+        // TVDB's 680×1000 posters previously produced a 326×479 image in a
+        // buffer labelled 326×480. Skia rejects that undersized pixel data.
+        for (w, h) in [(680, 1000), (1000, 680), (813, 1446), (1, 2000), (300, 450)] {
+            let pixels = downscale_for_display(&solid_rgba(w, h), DISPLAY_POSTER_SIDE);
+            assert_eq!(
+                pixels.as_bytes().len(),
+                pixels.width() as usize * pixels.height() as usize * 4,
+                "invalid display buffer for {w}×{h}"
+            );
+            assert!(pixels.width() <= DISPLAY_POSTER_SIDE);
+            assert!(pixels.height() <= DISPLAY_POSTER_SIDE);
+            if w.max(h) <= DISPLAY_POSTER_SIDE {
+                assert_eq!((pixels.width(), pixels.height()), (w, h));
+            }
+        }
+    }
+
+    #[test]
     fn encode_disabled_is_passthrough() {
         let settings = CacheSettings {
             enabled: false,

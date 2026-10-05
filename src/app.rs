@@ -230,6 +230,13 @@ struct HomeShowcaseArtwork {
     metadata_retry_at: Option<std::time::Instant>,
 }
 
+struct MetadataPrefetch {
+    revision: u64,
+    /// None while queued or fetching; repeated Library visits must not
+    /// start another chain before the first one has completed.
+    retry_at: Option<std::time::Instant>,
+}
+
 #[derive(Default)]
 struct Shared {
     installed: Vec<Installed>,
@@ -263,7 +270,12 @@ struct Shared {
     search_loading_more: bool,
     search_poster_inflight: HashSet<(u64, String, String)>,
     /// Cooldown prevents failed saved artwork from flooding metadata requests.
-    library_artwork_recovery: HashMap<(String, String, String), std::time::Instant>,
+    artwork_recovery: HashMap<(String, String, String), std::time::Instant>,
+    /// Confirmed missing/failed URLs awaiting usable addon manifests.
+    pending_artwork_recovery: HashSet<(String, String, String)>,
+    library_poster_inflight: HashSet<(String, String, String)>,
+    /// Session-only refresh state, independent of legacy header/episode caches.
+    metadata_prefetch: HashMap<(String, String), MetadataPrefetch>,
     /// Saved library items (My Library), order = insertion order.
     entries: Vec<LibraryEntry>,
     /// Current image-cache settings (mirrored from the KV store).

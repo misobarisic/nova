@@ -2,6 +2,30 @@
 use super::*;
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
+fn reserve_metadata_prefetch(
+    state: &mut Shared,
+    type_: &str,
+    id: &str,
+    revision: u64,
+    now: std::time::Instant,
+) -> bool {
+    let key = (type_.to_owned(), id.to_owned());
+    if state.metadata_prefetch.get(&key).is_some_and(|previous| {
+        previous.retry_at.is_none()
+            || (previous.revision == revision && previous.retry_at.is_some_and(|at| now < at))
+    }) {
+        return false;
+    }
+    state.metadata_prefetch.insert(
+        key,
+        MetadataPrefetch {
+            revision,
+            retry_at: None,
+        },
+    );
+    true
+}
+
 impl Bridge {
     pub(super) fn load_catalog(&self) {
         // Reset pagination state for a fresh catalog selection.
@@ -338,10 +362,18 @@ impl Bridge {
                             let url = poster.clone();
                             let weak = app_weak.clone();
                             let gen_counter = gen_counter.clone();
+                            let bridge = self.clone();
                             let requested_url = url.clone();
                             net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
-                                let Some(pixels) = pixels else { return };
                                 let _ = slint::invoke_from_event_loop(move || {
+                                    let Some(pixels) = pixels else {
+                                        bridge.recover_catalog_artwork(
+                                            generation,
+                                            offset + i,
+                                            &requested_url,
+                                        );
+                                        return;
+                                    };
                                     if generation != gen_counter.load(Ordering::Relaxed) {
                                         return;
                                     }
@@ -387,6 +419,19 @@ impl Bridge {
                     crate::web_log(&format!(
                         "nova: memory posters-cached={cached} cards={total}"
                     ));
+                }
+                for meta in &new_metas {
+                    if meta
+                        .poster
+                        .as_deref()
+                        .is_none_or(|url| url.trim().is_empty())
+                    {
+                        self.recover_missing_artwork(
+                            &meta.type_,
+                            &meta.id,
+                            meta.poster.as_deref().unwrap_or_default(),
+                        );
+                    }
                 }
             } else {
                 // Replace mode (original behaviour).
@@ -438,40 +483,26 @@ impl Bridge {
 
                 #[cfg(not(feature = "desktop"))]
                 {
-                    let app_weak = self.app.clone();
-                    let gen_counter = self.catalog_gen.clone();
-                    for (index, m) in new_metas.iter().enumerate() {
-                        let Some(poster) = &m.poster else { continue };
-                        let url = poster.clone();
-                        let weak = app_weak.clone();
-                        let gen_counter = gen_counter.clone();
-                        let requested_url = url.clone();
-                        net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
-                            let Some(pixels) = pixels else { return };
-                            let _ =
-                                slint::invoke_from_event_loop(move || {
-                                    if generation != gen_counter.load(Ordering::Relaxed) {
-                                        return;
-                                    }
-                                    if let Some(app) = weak.upgrade() {
-                                        if app.get_catalog().row_data(index).is_none_or(|row| {
-                                            row.poster_path.as_str() != requested_url
-                                        }) {
-                                            return;
-                                        }
-                                        let img = Image::from_rgba8(pixels);
-                                        app.invoke_set_card_poster(index as i32, img.clone());
-                                        if app.get_modal_visible()
-                                            && app.get_selected_index() as usize == index
-                                        {
-                                            app.set_selected_poster(img);
-                                        }
-                                    }
-                                });
-                        });
+                    for (index, meta) in new_metas.iter().enumerate() {
+                        if let Some(poster) = &meta.poster {
+                            self.fetch_card_poster(false, index, poster.clone());
+                        }
                     }
                 }
 
+                for meta in &new_metas {
+                    if meta
+                        .poster
+                        .as_deref()
+                        .is_none_or(|url| url.trim().is_empty())
+                    {
+                        self.recover_missing_artwork(
+                            &meta.type_,
+                            &meta.id,
+                            meta.poster.as_deref().unwrap_or_default(),
+                        );
+                    }
+                }
                 if active_cache_settings().prefetch_metadata {
                     self.prefetch_background_meta(&new_metas, generation);
                 }
@@ -552,7 +583,7 @@ impl Bridge {
         self.prefetch_meta_pairs(candidates);
     }
 
-    /// Prefetch episode metadata for a list of `(type_, id)` series in the
+    /// Prefetch metadata for a list of `(type_, id)` entries in the
     /// background, writing results to the disk cache so `prepare_episodes`
     /// renders instantly. Shared by the catalog grid and the library page.
     pub(super) fn prefetch_meta_pairs(&self, pairs: Vec<(String, String)>) {
@@ -565,7 +596,7 @@ impl Bridge {
             state
                 .installed
                 .iter()
-                .filter(|a| a.enabled && a.manifest.has_meta())
+                .filter(|a| a.enabled && a.available && a.manifest.has_meta())
                 .cloned()
                 .collect()
         };
@@ -578,21 +609,43 @@ impl Bridge {
         // Work items: one (type_, id) pair with the meta URLs of every
         // meta-capable addon, tried in order. Fetched sequentially via
         // fetch-continuations.
+        let revision = nova_providers::metadata_revision();
         let work: Vec<(String, String, Vec<String>)> = pairs
             .iter()
-            .map(|(type_, id)| {
+            .filter_map(|(type_, id)| {
                 let urls: Vec<String> = installed
                     .iter()
                     .filter(|cand| cand.manifest.accepts("meta", type_, id))
                     .filter_map(|cand| Addon::new(&cand.url).ok())
                     .map(|a| a.meta_url(type_, id))
                     .collect();
-                (type_.clone(), id.clone(), urls)
+                // Pending manifests and unsupported identities must not
+                // consume the retry window before a fetch is possible.
+                if urls.is_empty()
+                    || !reserve_metadata_prefetch(
+                        &mut self.shared.lock().unwrap(),
+                        type_,
+                        id,
+                        revision,
+                        std::time::Instant::now(),
+                    )
+                {
+                    return None;
+                }
+                Some((type_.clone(), id.clone(), urls))
             })
             .collect();
+        if work.is_empty() {
+            return;
+        }
 
         let bridge = self.clone();
-        fn run(bridge: Bridge, mut work: VecDeque<(String, String, Vec<String>)>, mut cached: u32) {
+        fn run(
+            bridge: Bridge,
+            mut work: VecDeque<(String, String, Vec<String>)>,
+            mut cached: u32,
+            revision: u64,
+        ) {
             // Next pair?
             let Some((type_, id, mut urls)) = work.pop_front() else {
                 let msg = text::prefetch_done(cached as usize);
@@ -600,6 +653,13 @@ impl Bridge {
                 let _ = slint::invoke_from_event_loop(move || {
                     // Newly cached episode lists feed badges/checks/Home.
                     bridge.refresh_library_progress_ui();
+                    if nova_providers::metadata_revision() != revision
+                        && bridge.app().is_some_and(|app| app.get_show_library())
+                    {
+                        // A manifest may have changed while the old snapshot
+                        // was fetching. Revisit those pairs with the new broker.
+                        bridge.prefetch_library_meta();
+                    }
                 });
                 return;
             };
@@ -609,17 +669,19 @@ impl Bridge {
                 if state
                     .modal_item
                     .as_ref()
-                    .map(|m| m.id == id)
+                    .map(|m| m.id == id && m.type_ == type_)
                     .unwrap_or(false)
                 {
                     drop(state);
-                    run(bridge, work, cached);
+                    bridge.finish_metadata_prefetch(&type_, &id, false);
+                    run(bridge, work, cached, revision);
                     return;
                 }
             }
             if urls.is_empty() {
                 eprintln!("prefetch: no addon provided episodes for {type_}/{id}");
-                run(bridge, work, cached);
+                bridge.finish_metadata_prefetch(&type_, &id, false);
+                run(bridge, work, cached, revision);
                 return;
             }
             let url = urls.remove(0);
@@ -639,7 +701,6 @@ impl Bridge {
                             // year) alongside episodes: the prefetch used to
                             // discard it, so pills + synopsis still needed a
                             // network round-trip on open.
-                            let header = meta_header_from_item(&item);
                             if let Some(poster) = item
                                 .preview
                                 .poster
@@ -654,35 +715,13 @@ impl Bridge {
                                     bridge.load_discover_poster(poster_type, poster_id, poster);
                                 });
                             }
-                            if merge_meta_header_for(&type_, &id, &header) {
-                                eprintln!("prefetch: cached header for {type_}/{id}");
-                            }
-                            // Backfill saved library entries so Library
-                            // reopens (and restarts) paint instantly.
-                            if !header.background_url.is_empty() {
-                                bridge2.persist_backdrop_for(&id, &header.background_url);
-                            }
-                            bridge2.persist_header_for(
-                                &id,
-                                &header.genres,
-                                &header.description,
-                                &header.year,
-                                false,
-                            );
-                            let videos: Vec<Video> = item
-                                .videos
-                                .into_iter()
-                                .filter(|v| v.season.is_some())
-                                .collect();
-                            if !videos.is_empty() {
-                                eprintln!(
-                                    "prefetch: cached {} episodes for {type_}/{id}",
-                                    videos.len()
-                                );
-                                write_episodes_cache_for(&type_, &id, &videos);
+                            if bridge2.cache_background_meta(&type_, &id, &item) > 0 {
                                 cached += 1;
                                 pair_done = true;
                             }
+                            // Movies need the same identity/artwork enrichment
+                            // even though they have no season episode list.
+                            pair_done |= type_ == "movie";
                         }
                         Ok(_) => {
                             eprintln!("prefetch: addon returned None for {type_}/{id}");
@@ -693,42 +732,90 @@ impl Bridge {
                     },
                 }
                 if pair_done {
-                    run(bridge2, work, cached);
+                    bridge2.finish_metadata_prefetch(&type_, &id, true);
+                    run(bridge2, work, cached, revision);
                 } else {
                     // Try the next addon URL for this pair.
                     work.push_front((type_, id, urls));
-                    run(bridge2, work, cached);
+                    run(bridge2, work, cached, revision);
                 }
             });
         }
 
-        run(bridge, work.into(), 0);
+        run(bridge, work.into(), 0, revision);
     }
 
-    /// Prefetch episode metadata for saved library series/anime entries, so
-    /// opening them from My Library is instant. Runs when the library page is
-    /// shown (and the prefetch setting is on); already-cached items are
-    /// skipped. Library entries store their own `type_`, so no catalog-type
-    /// resolution is needed here.
+    /// Both missing-metadata prefetch and failed-image repair receive enriched
+    /// native responses. Keep their mappings instead of discarding everything
+    /// except the poster, so Library recovery does not require opening Detail.
+    pub(super) fn cache_background_meta(&self, type_: &str, id: &str, item: &MetaItem) -> usize {
+        if !meta_matches_request(item, type_, id) {
+            return 0;
+        }
+        let header = meta_header_from_item(item);
+        merge_meta_header_for(type_, id, &header);
+        if !header.background_url.is_empty() {
+            self.persist_backdrop_for(id, &header.background_url);
+        }
+        self.persist_header_for(id, &header.genres, &header.description, &header.year, false);
+        let videos: Vec<Video> = item
+            .videos
+            .iter()
+            .filter(|v| v.season.is_some())
+            .cloned()
+            .collect();
+        if !videos.is_empty() {
+            write_episodes_cache_for(type_, id, &videos);
+        }
+        videos.len()
+    }
+
+    fn finish_metadata_prefetch(&self, type_: &str, id: &str, success: bool) {
+        if let Some(prefetch) = self
+            .shared
+            .lock()
+            .unwrap()
+            .metadata_prefetch
+            .get_mut(&(type_.into(), id.into()))
+        {
+            prefetch.retry_at = Some(
+                std::time::Instant::now() + Duration::from_secs(if success { 5 * 60 } else { 60 }),
+            );
+        }
+    }
+
+    /// Fill missing Library metadata through Detail's enrichment transport.
+    /// Complete cached entries keep their cache; failed/missing images trigger
+    /// their own repair path, which also saves any newly confirmed mappings.
     pub(super) fn prefetch_library_meta(&self) {
-        let entries = {
+        let mut entries = {
             let state = self.shared.lock().unwrap();
             state.entries.clone()
         };
+        if let Some(app) = self.app() {
+            let order: HashMap<_, _> = app
+                .get_library()
+                .iter()
+                .enumerate()
+                .map(|(index, row)| (row.id.to_string(), index))
+                .collect();
+            // Follow the displayed filter/sort order rather than old insertion
+            // order, so the cards the user is viewing get their mappings first.
+            entries.sort_by_key(|entry| order.get(&entry.id).copied().unwrap_or(usize::MAX));
+        }
         let pairs: Vec<(String, String)> = entries
             .iter()
             .filter_map(|e| {
-                if e.id.is_empty() || e.type_.is_empty() || e.type_ == "movie" {
+                if e.id.is_empty() || e.type_.is_empty() {
                     return None;
                 }
-                // Skip only when episodes are cached and header text is
-                // available (persisted on the entry or in the header cache).
-                // Otherwise the open still needs a meta round-trip for pills
-                // + synopsis.
-                let entry_has_text = !e.description.is_empty() || !e.genres.is_empty();
-                if read_episodes_cache_for(&e.type_, &e.id).is_some()
-                    && (entry_has_text || header_text_cached(&e.type_, &e.id))
-                {
+                let has_text = !e.description.is_empty()
+                    || !e.genres.is_empty()
+                    || header_text_cached(&e.type_, &e.id);
+                let has_episodes = e.type_ == "movie"
+                    || read_episodes_cache_for(&e.type_, &e.id)
+                        .is_some_and(|videos| !videos.is_empty());
+                if has_text && has_episodes {
                     return None;
                 }
                 Some((e.type_.clone(), e.id.clone()))
@@ -1229,7 +1316,7 @@ impl Bridge {
                 card.poster = old.poster;
                 card.is_loaded = old.is_loaded;
             }
-            if !card.is_loaded && !card.poster_path.is_empty() {
+            if !card.is_loaded {
                 poster_jobs.push((
                     meta.type_.clone(),
                     meta.id.clone(),
@@ -2259,6 +2346,53 @@ pub(super) fn catalog_genres(catalog: &addons::Catalog) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn library_metadata_retries_follow_inventory_and_coalesce_pending_work() {
+        let mut state = Shared::default();
+        let now = std::time::Instant::now();
+        assert!(reserve_metadata_prefetch(
+            &mut state, "series", "saved", 1, now
+        ));
+        // Neither elapsed time nor a changed inventory may duplicate a job
+        // which is already queued/fetching for this typed identity.
+        assert!(!reserve_metadata_prefetch(
+            &mut state,
+            "series",
+            "saved",
+            1,
+            now + Duration::from_secs(600)
+        ));
+        assert!(!reserve_metadata_prefetch(
+            &mut state, "series", "saved", 2, now
+        ));
+        state
+            .metadata_prefetch
+            .get_mut(&("series".into(), "saved".into()))
+            .unwrap()
+            .retry_at = Some(now + Duration::from_secs(60));
+        assert!(!reserve_metadata_prefetch(
+            &mut state, "series", "saved", 1, now
+        ));
+        assert!(reserve_metadata_prefetch(
+            &mut state, "series", "saved", 2, now
+        ));
+        state
+            .metadata_prefetch
+            .get_mut(&("series".into(), "saved".into()))
+            .unwrap()
+            .retry_at = Some(now + Duration::from_secs(60));
+        assert!(reserve_metadata_prefetch(
+            &mut state,
+            "series",
+            "saved",
+            2,
+            now + Duration::from_secs(60)
+        ));
+        assert!(reserve_metadata_prefetch(
+            &mut state, "movie", "saved", 2, now
+        ));
+    }
 
     fn search_target(id: &str) -> SearchTarget {
         SearchTarget {

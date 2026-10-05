@@ -78,17 +78,19 @@ pub fn downscale_for_display(
     if longest <= max_side || longest == 0 {
         return pixels.clone();
     }
-    let scale = max_side as f32 / longest as f32;
-    let (nw, nh) = (
-        ((w as f32 * scale).round() as u32).max(1),
-        ((h as f32 * scale).round() as u32).max(1),
-    );
     let raw = match image::RgbaImage::from_raw(w, h, pixels.as_bytes().to_vec()) {
         Some(raw) => raw,
         None => return pixels.clone(),
     };
-    let resized =
-        image::DynamicImage::ImageRgba8(raw).resize(nw, nh, image::imageops::FilterType::Triangle);
+    // Fit once, then use the image's actual dimensions. Fitting a second
+    // time into pre-rounded bounds can drop a row/column; labelling those
+    // bytes with the larger bounds makes Skia reject an otherwise valid image.
+    let resized = image::DynamicImage::ImageRgba8(raw).resize(
+        max_side,
+        max_side,
+        image::imageops::FilterType::Triangle,
+    );
+    let (nw, nh) = (resized.width(), resized.height());
     SharedPixelBuffer::clone_from_slice(resized.as_bytes(), nw, nh)
 }
 

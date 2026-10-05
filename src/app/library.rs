@@ -676,7 +676,8 @@ impl Bridge {
         self.restore_detail_snapshot(&e.id);
 
         if e.type_ == "movie" {
-            self.start_stream_search(e.id);
+            self.start_stream_search(e.id.clone());
+            self.refresh_movie_meta(e.id);
         } else {
             self.prepare_episodes(e.id, e.type_);
         }
@@ -688,10 +689,12 @@ impl Bridge {
             app.set_show_library(true);
             app.set_show_settings(false);
         }
-        // Prefetch episode metadata for saved series/anime so opening them
-        // from My Library is instant. Unlike the Discover prefetch, this is
-        // not gated by the "Prefetch episode metadata" setting: My Library is
-        // the user's own curated list, so it should always be ready.
+        // Retry startup/scroll failures from disk or network on each visit.
+        self.apply_library_to_ui();
+        // Fill missing metadata. Failed posters separately recover mappings
+        // even when the entry already has cached episodes and header text.
+        // Unlike Discover, this is not gated by "Prefetch episode metadata":
+        // My Library is the user's own curated list and should be ready.
         self.prefetch_library_meta();
     }
 

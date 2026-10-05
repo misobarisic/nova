@@ -66,27 +66,84 @@ fn requested_poster_indices(model: &slint::ModelRc<MediaCard>, id: &str, url: &s
         .collect()
 }
 
-fn artwork_recovery_target(
+fn artwork_request_current(state: &Shared, type_: &str, id: &str, failed_url: &str) -> bool {
+    let current = state
+        .entries
+        .iter()
+        .any(|entry| entry.type_ == type_ && entry.id == id && entry.poster_url == failed_url)
+        || state
+            .previews
+            .iter()
+            .chain(&state.search_previews)
+            .any(|preview| {
+                preview.type_ == type_
+                    && preview.id == id
+                    && preview.poster.as_deref().unwrap_or_default() == failed_url
+            })
+        || state.modal_item.as_ref().is_some_and(|item| {
+            item.type_ == type_ && item.id == id && item.poster_url == failed_url
+        });
+    current && !type_.is_empty() && !id.is_empty()
+}
+
+fn grid_artwork_recovery_target(
     state: &mut Shared,
+    type_: &str,
     id: &str,
     failed_url: &str,
 ) -> Option<(String, String)> {
-    let entry = state.entries.iter().find(|entry| entry.id == id)?;
-    if entry.poster_url != failed_url {
+    if !artwork_request_current(state, type_, id, failed_url) {
         return None;
     }
-    let target = (entry.type_.clone(), entry.id.clone());
+    let target = (type_.to_owned(), id.to_owned());
     let key = (target.0.clone(), target.1.clone(), failed_url.into());
     let now = std::time::Instant::now();
     if state
-        .library_artwork_recovery
+        .artwork_recovery
         .get(&key)
         .is_some_and(|last| now.duration_since(*last) < Duration::from_secs(60))
     {
         return None;
     }
-    state.library_artwork_recovery.insert(key, now);
+    state.artwork_recovery.insert(key, now);
     Some(target)
+}
+
+/// Only the broker's current, conflict-free connection can cross native IDs.
+fn mapped_poster_endpoints(
+    item: &MetaItem,
+    type_: &str,
+    installed: &[Installed],
+) -> Vec<(String, String)> {
+    let extra = |key: &str| item.extra.get(key).or_else(|| item.preview.extra.get(key));
+    if extra("novaMetadataRevision").and_then(serde_json::Value::as_u64)
+        != Some(nova_providers::metadata_revision())
+    {
+        return vec![];
+    }
+    extra("novaConnections")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(6)
+        .filter_map(|value| {
+            let connection: nova_providers::MetadataConnection =
+                serde_json::from_value(value.clone()).ok()?;
+            if connection.basis == "conflicting-identifiers" || connection.media_id.is_empty() {
+                return None;
+            }
+            let addon = installed.iter().find(|addon| {
+                addon.enabled
+                    && addon.available
+                    && nova_providers::addon_metadata_id(&addon.url) == connection.addon_id
+                    && addon.manifest.accepts("meta", type_, &connection.media_id)
+            })?;
+            let endpoint = Addon::new(&addon.url)
+                .ok()?
+                .meta_url(type_, &connection.media_id);
+            Some((endpoint, connection.media_id))
+        })
+        .collect()
 }
 
 impl Bridge {
@@ -158,6 +215,26 @@ impl Bridge {
             (browse, search, library)
         };
         let image = Image::from_rgba8(pixels.clone());
+        let update_detail = {
+            let mut state = self.shared.lock().unwrap();
+            state.modal_item.as_mut().is_some_and(|item| {
+                if item.id != id
+                    || item.type_ != type_
+                    || (item.poster_url != url
+                        && decoded_cache_contains(&sized_cache_key(
+                            &item.poster_url,
+                            Some(DISPLAY_POSTER_SIDE),
+                        )))
+                {
+                    return false;
+                }
+                item.poster_url = url.into();
+                true
+            })
+        };
+        if update_detail && app.get_modal_visible() {
+            app.set_selected_poster(image.clone());
+        }
         paint_poster_rows(&app.get_catalog(), &browse, id, url, &image);
         paint_poster_rows(&app.get_search_results(), &search, id, url, &image);
         if library {
@@ -215,6 +292,10 @@ impl Bridge {
         url: String,
         generation: u64,
     ) {
+        if url.is_empty() {
+            self.recover_missing_artwork(&type_, &id, "");
+            return;
+        }
         {
             let mut state = self.shared.lock().unwrap();
             if state.search_generation != generation
@@ -245,12 +326,16 @@ impl Bridge {
                         None
                     }
                 };
-                if let (Some(pixels), Some(index), Some(app)) = (pixels, index, app_weak.upgrade())
+                if let (Some(index), Some(app)) = (index, app_weak.upgrade())
                     && app.get_search_results().row_data(index).is_some_and(|row| {
                         row.id.as_str() == id && row.poster_path.as_str() == requested_url
                     })
                 {
-                    app.invoke_set_search_card_poster(index as i32, Image::from_rgba8(pixels));
+                    if let Some(pixels) = pixels {
+                        app.invoke_set_search_card_poster(index as i32, Image::from_rgba8(pixels));
+                    } else {
+                        bridge.recover_missing_artwork(&type_, &id, &requested_url);
+                    }
                 }
             });
         });
@@ -279,12 +364,16 @@ impl Bridge {
             let app_weak = app.as_weak();
             let gen_counter = self.catalog_gen.clone();
             let generation = gen_counter.load(Ordering::Relaxed);
+            let bridge = self.clone();
             let requested_url = url.clone();
             net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
-                let Some(pixels) = pixels else {
-                    return;
-                };
                 let _ = slint::invoke_from_event_loop(move || {
+                    let Some(pixels) = pixels else {
+                        if !library {
+                            bridge.recover_catalog_artwork(generation, index, &requested_url);
+                        }
+                        return;
+                    };
                     if generation != gen_counter.load(Ordering::Relaxed) {
                         return;
                     }
@@ -515,16 +604,44 @@ impl Bridge {
     /// decode quickly, misses are downloaded once and file-cached. Updates
     /// are dropped if the card changed/vanished while the fetch ran.
     pub(super) fn dispatch_library_posters(&self, entries: &[LibraryEntry]) {
+        let Some(app) = self.app() else { return };
+        let model = app.get_library();
         for entry in entries {
+            if model.iter().any(|row| {
+                row.id.as_str() == entry.id
+                    && row.poster_path.as_str() == entry.poster_url
+                    && row.is_loaded
+            }) {
+                continue;
+            }
             if entry.poster_url.is_empty() {
                 self.recover_library_artwork(&entry.id, "");
                 continue;
             }
             let url = entry.poster_url.clone();
             let id = entry.id.clone();
+            let key = (entry.type_.clone(), id.clone(), url.clone());
+            if !self
+                .shared
+                .lock()
+                .unwrap()
+                .library_poster_inflight
+                .insert(key.clone())
+            {
+                continue;
+            }
             let bridge = self.clone();
             net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
                 let _ = slint::invoke_from_event_loop(move || {
+                    let mut state = bridge.shared.lock().unwrap();
+                    state.library_poster_inflight.remove(&key);
+                    let current = state.entries.iter().any(|entry| {
+                        entry.type_ == key.0 && entry.id == id && entry.poster_url == url
+                    });
+                    drop(state);
+                    if !current {
+                        return;
+                    }
                     let Some(app) = bridge.app() else { return };
                     let model = app.get_library();
                     // Filtering/progress refreshes can reorder the model while
@@ -543,22 +660,177 @@ impl Bridge {
     /// Old saved URLs can expire even when episodes/header text are cached.
     /// Keep native IDs; ask the same metadata pipeline used by Detail for art.
     fn recover_library_artwork(&self, id: &str, failed_url: &str) {
+        let type_ = self
+            .shared
+            .lock()
+            .unwrap()
+            .entries
+            .iter()
+            .find(|entry| entry.id == id && entry.poster_url == failed_url)
+            .map(|entry| entry.type_.clone());
+        if let Some(type_) = type_ {
+            self.recover_missing_artwork(&type_, id, failed_url);
+        }
+    }
+
+    pub(super) fn recover_missing_artwork(&self, type_: &str, id: &str, failed_url: &str) {
         let target = {
             let mut state = self.shared.lock().unwrap();
-            let Some(target) = artwork_recovery_target(&mut state, id, failed_url) else {
+            if !artwork_request_current(&state, type_, id, failed_url) {
                 return;
-            };
-            target
+            }
+            // A pending manifest is not a failed metadata request. Don't spend
+            // the cooldown before any source can service this native identity.
+            if !state.installed.iter().any(|addon| {
+                addon.enabled && addon.available && addon.manifest.accepts("meta", type_, id)
+            }) {
+                if state.installed.is_empty()
+                    || state
+                        .installed
+                        .iter()
+                        .any(|addon| addon.enabled && !addon.available)
+                {
+                    state.pending_artwork_recovery.insert((
+                        type_.into(),
+                        id.into(),
+                        failed_url.into(),
+                    ));
+                }
+                return;
+            }
+            state
+                .pending_artwork_recovery
+                .remove(&(type_.into(), id.into(), failed_url.into()));
+            grid_artwork_recovery_target(&mut state, type_, id, failed_url)
         };
-        // Reuse a previously decoded replacement immediately; also refresh
-        // metadata so a stale cached URL doesn't block recovery.
-        if let Some(header) = read_meta_header_for(&target.0, &target.1)
-            && !header.poster_url.is_empty()
-            && header.poster_url != failed_url
-        {
-            self.load_discover_poster(target.0.clone(), target.1.clone(), header.poster_url);
+        if let Some(target) = target {
+            self.recover_artwork_target(target, failed_url);
         }
-        self.prefetch_meta_pairs(vec![target]);
+    }
+
+    /// Only retry observed failures/missing URLs. An unloaded row may simply
+    /// be decoding or outside the viewport; neither needs metadata recovery.
+    pub(super) fn retry_pending_artwork(&self) {
+        let targets = std::mem::take(&mut self.shared.lock().unwrap().pending_artwork_recovery);
+        for (type_, id, url) in targets {
+            self.recover_missing_artwork(&type_, &id, &url);
+        }
+    }
+
+    /// A catalog worker's numeric slot is only valid for its original request.
+    pub(super) fn recover_catalog_artwork(&self, generation: u64, index: usize, failed_url: &str) {
+        if self.catalog_gen.load(Ordering::Relaxed) != generation {
+            return;
+        }
+        let target = self
+            .shared
+            .lock()
+            .unwrap()
+            .previews
+            .get(index)
+            .filter(|preview| preview.poster.as_deref().unwrap_or_default() == failed_url)
+            .map(|preview| (preview.type_.clone(), preview.id.clone()));
+        if let Some((type_, id)) = target {
+            self.recover_missing_artwork(&type_, &id, failed_url);
+        }
+    }
+
+    /// Artwork is essential grid content, independent of episode prefetch.
+    /// Do not stop at the first metadata response: its image may also be bad.
+    fn recover_artwork_target(&self, (type_, id): (String, String), failed_url: &str) {
+        let urls = self
+            .shared
+            .lock()
+            .unwrap()
+            .installed
+            .iter()
+            .filter(|addon| {
+                addon.enabled && addon.available && addon.manifest.accepts("meta", &type_, &id)
+            })
+            .filter_map(|addon| Addon::new(&addon.url).ok())
+            .map(|addon| (addon.meta_url(&type_, &id), id.clone()))
+            .collect();
+        fn next(
+            bridge: Bridge,
+            type_: String,
+            id: String,
+            mut urls: VecDeque<(String, String)>,
+            mut tried: HashSet<String>,
+        ) {
+            let job = loop {
+                let Some((url, expected_id)) = urls.pop_front() else {
+                    return;
+                };
+                if tried.len() >= 16 {
+                    return;
+                }
+                if tried.insert(url.clone()) {
+                    break (url, expected_id);
+                }
+            };
+            net::fetch_bytes(job.0, move |result| {
+                let item = result
+                    .ok()
+                    .and_then(|bytes| Addon::parse_meta(&bytes).ok().flatten())
+                    .filter(|item| meta_matches_request(item, &type_, &job.1));
+                if let Some(item) = &item {
+                    let saved = bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .entries
+                        .iter()
+                        .any(|entry| entry.type_ == type_ && entry.id == id);
+                    if saved && bridge.cache_background_meta(&type_, &id, item) > 0 {
+                        let bridge = bridge.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            bridge.refresh_library_progress_ui()
+                        });
+                    }
+                    let mapped = mapped_poster_endpoints(
+                        item,
+                        &type_,
+                        &bridge.shared.lock().unwrap().installed,
+                    );
+                    urls.extend(mapped.into_iter().filter(|(url, _)| !tried.contains(url)));
+                }
+                let poster = item
+                    .and_then(|item| item.preview.poster)
+                    .filter(|poster| !poster.trim().is_empty());
+                let Some(poster) = poster else {
+                    next(bridge, type_, id, urls, tried);
+                    return;
+                };
+                net::fetch_image(poster.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
+                    if let Some(pixels) = pixels {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            bridge.publish_discover_poster(&type_, &id, &poster, &pixels);
+                        });
+                    } else {
+                        next(bridge, type_, id, urls, tried);
+                    }
+                });
+            });
+        }
+        let cached = read_meta_header_for(&type_, &id)
+            .map(|header| header.poster_url)
+            .filter(|url| !url.is_empty() && url != failed_url);
+        if let Some(url) = cached {
+            // A previously decoded alternative can fix the card without any
+            // metadata request. Never retry the URL that just failed here.
+            let bridge = self.clone();
+            net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
+                if let Some(pixels) = pixels {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        bridge.publish_discover_poster(&type_, &id, &url, &pixels);
+                    });
+                } else {
+                    next(bridge, type_, id, urls, HashSet::new());
+                }
+            });
+        } else {
+            next(self.clone(), type_, id, urls, HashSet::new());
+        }
     }
 
     /// Fetch the Home card's selected thumbnail/poster off the UI thread.
@@ -805,10 +1077,13 @@ impl Bridge {
         let poster_url = url.clone();
         let bridge = self.clone();
         net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
-            let Some(pixels) = pixels else {
-                return; // keep the placeholder
-            };
             let _ = slint::invoke_from_event_loop(move || {
+                let Some(pixels) = pixels else {
+                    if let Some(type_) = &media_type {
+                        bridge.recover_missing_artwork(type_, &item_id, &poster_url);
+                    }
+                    return;
+                };
                 if bridge.detail_poster_stale(&item_id, &poster_url) {
                     return;
                 }
@@ -854,7 +1129,17 @@ impl Bridge {
         let bridge = self.clone();
         refresh_image_if_changed(url, Some(DISPLAY_POSTER_SIDE), move |fresh| {
             let Some(pixels) = fresh else {
-                return; // unchanged or failed: keep showing the current art
+                // None also means unchanged. Only a missing decoded image
+                // needs recovery, such as an expired URL after clearing cache.
+                if !decoded_cache_contains(&sized_cache_key(&poster_url, Some(DISPLAY_POSTER_SIDE)))
+                {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(type_) = &media_type {
+                            bridge.recover_missing_artwork(type_, &item_id, &poster_url);
+                        }
+                    });
+                }
+                return;
             };
             let _ = slint::invoke_from_event_loop(move || {
                 if bridge.detail_poster_stale(&item_id, &poster_url) {
@@ -929,6 +1214,613 @@ pub(crate) fn set_active_cache_settings(settings: CacheSettings) {
 #[cfg(test)]
 mod discover_artwork_tests {
     use super::*;
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn artwork_recovery_and_detail_refresh() {
+        // Isolate process-wide Slint, storage and image caches from other tests.
+        const ROOT: &str = "NOVA_GRID_ARTWORK_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-grid-artwork-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            for mode in ["0", "1", "2", "3", "4", "5"] {
+                let child_root = root.join(mode);
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .env(ROOT, &child_root)
+                    .env("XDG_CACHE_HOME", child_root.join("cache"))
+                    .env("NOVA_ARTWORK_MAP_TEST", mode)
+                    .args([
+                        "--exact",
+                        "app::posters::discover_artwork_tests::artwork_recovery_and_detail_refresh",
+                        "--nocapture",
+                    ])
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "mode={mode} {}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            fs::remove_dir_all(root).unwrap();
+            return;
+        };
+        use std::io::{Read, Write};
+        let root = PathBuf::from(root);
+        let mode = std::env::var("NOVA_ARTWORK_MAP_TEST").unwrap();
+        let detail = mode == "3";
+        let cached_alternative = mode == "4";
+        let pending_failure = mode == "5";
+        let library = mode == "2" || detail || cached_alternative || pending_failure;
+        let media_type = if detail { "movie" } else { "series" };
+        let mapped = mode != "0";
+        storage::init_at(&root);
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let good = format!("{base}/good.png");
+        let old = format!("{base}/old.png");
+        let mut png = std::io::Cursor::new(vec![]);
+        image::DynamicImage::new_rgba8(1, 1)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = png.into_inner();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop = done.clone();
+        let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen = requests.clone();
+        let server_base = base.clone();
+        let server = thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                let (mut socket, _) = match listener.accept() {
+                    Ok(value) => value,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) => panic!("{error}"),
+                };
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut bytes = [0; 4096];
+                let size = socket.read(&mut bytes).unwrap();
+                let path = String::from_utf8_lossy(&bytes[..size])
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap()
+                    .to_string();
+                seen.lock().unwrap().push(path.clone());
+                let (status, content, body) = if path.ends_with(".json") {
+                    let art = if path.starts_with("/first/") {
+                        "bad.png"
+                    } else {
+                        "good.png"
+                    };
+                    let id = if mapped && path.starts_with("/second/") {
+                        "tt5095466"
+                    } else {
+                        "saved"
+                    };
+                    let mut meta = serde_json::json!({"id":id, "type":media_type, "name":"Saved", "poster":format!("{server_base}/{art}"),
+                        "videos":[{"id":format!("{id}:1:1"), "season":1, "episode":1, "name":"Cached episode"}]});
+                    if library {
+                        // No invented broker connection: the real transport
+                        // must confirm and apply the native-to-IMDb mapping.
+                        meta["year"] = serde_json::json!("2020");
+                        meta["videos"] = serde_json::json!([
+                            {"id":format!("{id}:1:1"), "season":1, "episode":1, "name":"Opening", "released":"2020-01-01", "thumbnail":format!("{server_base}/good.png")},
+                            {"id":format!("{id}:1:2"), "season":1, "episode":2, "name":"Arrival", "released":"2020-01-08", "thumbnail":format!("{server_base}/good.png")}
+                        ]);
+                        if detail {
+                            meta["videos"] = serde_json::json!([]);
+                        }
+                        if path.starts_with("/first/") {
+                            meta["poster"] = serde_json::Value::Null;
+                            meta["imdb_id"] = serde_json::json!("tt5095466");
+                        }
+                    } else if mapped && path.starts_with("/first/") {
+                        meta["novaMetadataRevision"] =
+                            serde_json::json!(nova_providers::metadata_revision());
+                        meta["novaConnections"] = serde_json::json!([{
+                            "addonId":nova_providers::addon_metadata_id(&format!("{server_base}/second")),
+                            "mediaId":"tt5095466", "ids":[], "basis":"exact-title-year"
+                        }]);
+                    }
+                    (
+                        "200 OK",
+                        "application/json",
+                        serde_json::to_vec(&serde_json::json!({"meta":meta})).unwrap(),
+                    )
+                } else if path == "/good.png" {
+                    ("200 OK", "image/png", png.clone())
+                } else {
+                    ("404 Not Found", "text/plain", vec![])
+                };
+                write!(socket, "HTTP/1.1 {status}\r\nContent-Type: {content}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                socket.write_all(&body).unwrap();
+            }
+        });
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(Mutex::new(PosterStore::new(1))),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let preview = MetaPreview {
+            id: "saved".into(),
+            type_: media_type.into(),
+            name: "Saved".into(),
+            ..Default::default()
+        };
+        let card = MediaCard {
+            id: "saved".into(),
+            ..Default::default()
+        };
+        app.set_library(Rc::new(VecModel::from(vec![card.clone()])).into());
+        app.set_search_results(Rc::new(VecModel::from(vec![card])).into());
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.cache_settings.prefetch_metadata = false;
+            state.search_previews = vec![preview.clone()];
+            state.entries.push(LibraryEntry {
+                id: "saved".into(),
+                type_: media_type.into(),
+                name: "Saved".into(),
+                year: String::new(),
+                poster_url: if library { old.clone() } else { String::new() },
+                background_url: String::new(),
+                genres: vec![],
+                description: "Cached text".into(),
+                categories: vec![],
+                watch_status: WatchStatus::Auto,
+                added_at_secs: 0,
+            });
+            state.installed = ["first", "second"].map(|path| Installed { url:format!("{base}/{path}"), label:path.into(), enabled:true,
+                configure_ok:None, available:true, generation:0,
+                manifest:serde_json::from_value(serde_json::json!({"id":path, "name":path, "version":"1", "types":[media_type],
+                    "resources":[{"name":"meta", "types":[media_type], "idPrefixes": if mapped && path == "second" { vec!["tt"] } else { vec!["saved"] }}], "catalogs":[]})).unwrap()
+            }).to_vec();
+        }
+        write_episodes_cache_for(
+            media_type,
+            "saved",
+            &[Video {
+                id: "saved:1:1".into(),
+                season: Some(1),
+                episode: Some(1),
+                ..Default::default()
+            }],
+        );
+        assert!(read_episodes_cache_for(media_type, "saved").is_some());
+        let installed = std::mem::take(&mut bridge.shared.lock().unwrap().installed);
+        bridge.recover_missing_artwork(media_type, "saved", "");
+        assert!(
+            bridge.shared.lock().unwrap().artwork_recovery.is_empty(),
+            "pending manifests must not spend cooldowns"
+        );
+        bridge.shared.lock().unwrap().installed = installed;
+        if library {
+            let pixel = SharedPixelBuffer::<Rgba8Pixel>::new(1, 1);
+            decoded_cache_insert(
+                &sized_cache_key(&old, Some(DISPLAY_POSTER_SIDE)),
+                pixel.clone(),
+            );
+            app.set_library(
+                Rc::new(VecModel::from(vec![MediaCard {
+                    id: "saved".into(),
+                    poster_path: old.clone().into(),
+                    poster: Image::from_rgba8(pixel),
+                    is_loaded: true,
+                    ..Default::default()
+                }]))
+                .into(),
+            );
+            write_meta_header_for(
+                media_type,
+                "saved",
+                &MetaHeader {
+                    poster_url: old.clone(),
+                    description: "Cached description".into(),
+                    ..Default::default()
+                },
+            );
+            // Unloaded rows with a valid URL may just be waiting for decode.
+            // Becoming available must not start speculative metadata repair.
+            let mut preview = preview;
+            preview.poster = Some(old.clone());
+            let unloaded = Rc::new(VecModel::from(vec![MediaCard {
+                id: "saved".into(),
+                poster_path: old.clone().into(),
+                ..Default::default()
+            }]));
+            app.set_search_results(unloaded.clone().into());
+            app.set_catalog(unloaded.into());
+            {
+                let mut state = bridge.shared.lock().unwrap();
+                state.search_previews = vec![preview.clone()];
+                state.previews = vec![preview];
+            }
+            bridge.retry_pending_artwork();
+            bridge.retry_pending_artwork();
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .pending_artwork_recovery
+                    .is_empty()
+            );
+            assert!(bridge.shared.lock().unwrap().artwork_recovery.is_empty());
+            net::init_metadata_transport();
+            nova_providers::configure_metadata_addons(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .installed
+                    .iter()
+                    .map(|addon| nova_providers::MetadataAddon {
+                        url: addon.url.clone(),
+                        manifest: addon.manifest.clone(),
+                    })
+                    .collect(),
+            );
+            let pending = std::mem::take(&mut bridge.shared.lock().unwrap().installed);
+            bridge.prefetch_library_meta();
+            assert!(bridge.shared.lock().unwrap().metadata_prefetch.is_empty());
+            bridge.shared.lock().unwrap().installed = pending;
+            bridge.show_library_page();
+            // Complete cached entries must not trigger metadata/mapping work.
+            bridge.prefetch_library_meta();
+            assert!(bridge.shared.lock().unwrap().metadata_prefetch.is_empty());
+            assert!(bridge.shared.lock().unwrap().artwork_recovery.is_empty());
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .library_poster_inflight
+                    .is_empty()
+            );
+            assert!(app.get_library().row_data(0).unwrap().is_loaded);
+            if detail {
+                // A healthy movie still rechecks metadata when explicitly
+                // opened, while Library itself stays on its cached content.
+                bridge.open_library_item(0);
+            } else {
+                if cached_alternative {
+                    write_meta_header_for(
+                        media_type,
+                        "saved",
+                        &MetaHeader {
+                            poster_url: good.clone(),
+                            description: "Cached description".into(),
+                            ..Default::default()
+                        },
+                    );
+                }
+                if pending_failure {
+                    for addon in &mut bridge.shared.lock().unwrap().installed {
+                        addon.available = false;
+                    }
+                }
+                // The saved URL stays unchanged. Clearing the image cache
+                // exposes that it has expired, which must trigger mapping.
+                decoded_cache_clear();
+                app.set_library(
+                    Rc::new(VecModel::from(vec![MediaCard {
+                        id: "saved".into(),
+                        poster_path: old.clone().into(),
+                        ..Default::default()
+                    }]))
+                    .into(),
+                );
+                bridge.show_library_page();
+                bridge.show_library_page();
+                assert_eq!(
+                    bridge.shared.lock().unwrap().library_poster_inflight.len(),
+                    1
+                );
+            }
+        } else {
+            bridge.apply_catalog(0, vec![preview], false);
+        }
+        let weak = app.as_weak();
+        let started = std::time::Instant::now();
+        let expected_poster = good.clone();
+        let retry_bridge = bridge.clone();
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(20),
+            move || {
+                if pending_failure {
+                    let retry = {
+                        let mut state = retry_bridge.shared.lock().unwrap();
+                        if state.pending_artwork_recovery.is_empty() {
+                            false
+                        } else {
+                            assert!(state.artwork_recovery.is_empty());
+                            for addon in &mut state.installed {
+                                addon.available = true;
+                            }
+                            true
+                        }
+                    };
+                    if retry {
+                        retry_bridge.retry_pending_artwork();
+                    }
+                }
+                if weak
+                    .upgrade()
+                    .unwrap()
+                    .get_catalog()
+                    .row_data(0)
+                    .unwrap()
+                    .poster_path
+                    .as_str()
+                    == expected_poster
+                    || started.elapsed() > Duration::from_secs(10)
+                {
+                    slint::quit_event_loop().unwrap();
+                }
+            },
+        );
+        app.run().unwrap();
+        done.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        assert_eq!(app.get_modal_visible(), detail);
+        if detail {
+            assert_eq!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .modal_item
+                    .as_ref()
+                    .unwrap()
+                    .poster_url,
+                good
+            );
+            assert!(app.get_selected_poster().size().width > 0);
+        }
+        for model in [
+            app.get_catalog(),
+            app.get_search_results(),
+            app.get_library(),
+        ] {
+            let row = model.row_data(0).unwrap();
+            assert!(row.is_loaded);
+            assert_eq!(row.id.as_str(), "saved");
+            assert_eq!(row.poster_path.as_str(), good);
+        }
+        assert_eq!(bridge.shared.lock().unwrap().entries[0].poster_url, good);
+        assert_eq!(
+            read_meta_header_for(media_type, "saved")
+                .unwrap()
+                .poster_url,
+            good
+        );
+        assert!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .pending_artwork_recovery
+                .is_empty()
+                || !library
+        );
+        assert!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .library_poster_inflight
+                .is_empty()
+        );
+        if library && !detail {
+            assert_eq!(
+                requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|path| path.as_str() == "/old.png")
+                    .count(),
+                1
+            );
+        }
+        if library && !detail && !cached_alternative {
+            let videos = read_episodes_cache_for(media_type, "saved").unwrap();
+            assert_eq!(videos.len(), 2);
+            assert_eq!(videos[0].id, "saved:1:1");
+            assert_eq!(
+                videos[0].extra["novaStreamIds"],
+                serde_json::json!(["tt5095466:1:1"])
+            );
+            assert_eq!(
+                videos[0].extra["novaMetadataRevision"].as_u64(),
+                Some(nova_providers::metadata_revision())
+            );
+            assert_eq!(bridge.shared.lock().unwrap().artwork_recovery.len(), 1);
+            assert_eq!(
+                requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|path| path.starts_with("/first/meta/"))
+                    .count(),
+                1,
+                "revisiting Library must not duplicate in-flight metadata work"
+            );
+        }
+        if !detail {
+            let expired = if library { "/old.png" } else { "/bad.png" };
+            assert!(requests.lock().unwrap().iter().any(|path| path == expired));
+        }
+        if cached_alternative {
+            assert!(
+                requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|path| !path.contains("/meta/")),
+                "a working cached alternative must avoid metadata requests"
+            );
+        } else {
+            assert!(
+                requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|path| path.starts_with("/second/meta/"))
+            );
+        }
+    }
+
+    #[test]
+    fn alternate_poster_source_requires_current_nonconflicting_owned_mapping() {
+        let addon = Installed { url:"https://metadata.example".into(), label:"Metadata".into(), enabled:true,
+            configure_ok:None, available:true, generation:0,
+            manifest:serde_json::from_value(serde_json::json!({"id":"meta", "name":"Meta", "version":"1", "types":["series"],
+                "resources":[{"name":"meta", "types":["series"], "idPrefixes":["tt"]}], "catalogs":[]})).unwrap() };
+        let revision = nova_providers::metadata_revision();
+        let mut item = MetaItem::default();
+        item.extra
+            .insert("novaMetadataRevision".into(), serde_json::json!(revision));
+        item.extra.insert("novaConnections".into(), serde_json::json!([{
+            "addonId":nova_providers::addon_metadata_id(&addon.url), "mediaId":"tt5095466", "ids":[], "basis":"exact-title-year"
+        }]));
+        assert_eq!(
+            mapped_poster_endpoints(&item, "series", std::slice::from_ref(&addon)),
+            vec![(
+                "https://metadata.example/meta/series/tt5095466.json".into(),
+                "tt5095466".into()
+            )]
+        );
+        item.extra.get_mut("novaConnections").unwrap()[0]["basis"] =
+            serde_json::json!("conflicting-identifiers");
+        assert!(mapped_poster_endpoints(&item, "series", std::slice::from_ref(&addon)).is_empty());
+        item.extra.get_mut("novaConnections").unwrap()[0]["basis"] =
+            serde_json::json!("exact-title-year");
+        item.extra.insert(
+            "novaMetadataRevision".into(),
+            serde_json::json!(revision ^ 1),
+        );
+        assert!(mapped_poster_endpoints(&item, "series", std::slice::from_ref(&addon)).is_empty());
+        item.extra
+            .insert("novaMetadataRevision".into(), serde_json::json!(revision));
+        let mut disabled = addon.clone();
+        disabled.enabled = false;
+        assert!(mapped_poster_endpoints(&item, "series", &[disabled]).is_empty());
+        item.extra.get_mut("novaConnections").unwrap()[0]["addonId"] =
+            serde_json::json!("unrelated-owner");
+        assert!(mapped_poster_endpoints(&item, "series", &[addon]).is_empty());
+    }
+
+    #[test]
+    fn detail_only_poster_failure_respects_current_typed_identity_and_url() {
+        let mut state = Shared {
+            modal_item: Some(ModalItem {
+                open_token: Arc::new(()),
+                pending_watch_now: None,
+                episodes_loading: false,
+                id: "detail-only".into(),
+                type_: "movie".into(),
+                request_id: "detail-only".into(),
+                videos: vec![],
+                season_backdrops: HashMap::new(),
+                seasons: vec![],
+                season_index: 0,
+                episode_page: 0,
+                name: "Detail".into(),
+                year: String::new(),
+                poster_url: "https://images.example/expired.jpg".into(),
+                background_url: String::new(),
+                description: String::new(),
+                genres: vec![],
+            }),
+            ..Default::default()
+        };
+        assert!(
+            grid_artwork_recovery_target(
+                &mut state,
+                "series",
+                "detail-only",
+                "https://images.example/expired.jpg"
+            )
+            .is_none()
+        );
+        assert!(
+            grid_artwork_recovery_target(
+                &mut state,
+                "movie",
+                "detail-only",
+                "https://images.example/older.jpg"
+            )
+            .is_none()
+        );
+        assert!(
+            grid_artwork_recovery_target(
+                &mut state,
+                "movie",
+                "detail-only",
+                "https://images.example/expired.jpg"
+            )
+            .is_some()
+        );
+        state.modal_item.as_mut().unwrap().poster_url = "https://images.example/current.jpg".into();
+        assert!(
+            grid_artwork_recovery_target(
+                &mut state,
+                "movie",
+                "detail-only",
+                "https://images.example/expired.jpg"
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn grids_recover_artwork_without_library_membership_or_episode_prefetch() {
+        let mut state = Shared::default();
+        state.cache_settings.prefetch_metadata = false;
+        state.previews.push(MetaPreview {
+            id: "provider:show".into(),
+            type_: "series".into(),
+            poster: None,
+            ..Default::default()
+        });
+        assert_eq!(
+            grid_artwork_recovery_target(&mut state, "series", "provider:show", ""),
+            Some(("series".into(), "provider:show".into()))
+        );
+        // Search and browse share the request cooldown.
+        state.search_previews = state.previews.clone();
+        assert!(grid_artwork_recovery_target(&mut state, "series", "provider:show", "").is_none());
+        assert!(grid_artwork_recovery_target(&mut state, "movie", "provider:show", "").is_none());
+        state.search_previews[0].poster = Some("broken".into());
+        assert!(
+            grid_artwork_recovery_target(&mut state, "series", "provider:show", "broken").is_some()
+        );
+        state.previews.clear();
+        state.search_previews[0].poster = Some("fresh".into());
+        state.artwork_recovery.clear();
+        assert!(
+            grid_artwork_recovery_target(&mut state, "series", "provider:show", "broken").is_none()
+        );
+    }
+
     #[test]
     fn old_saved_artwork_recovers_once_without_replacing_native_identity() {
         let mut state = Shared::default();
@@ -947,22 +1839,25 @@ mod discover_artwork_tests {
         });
         let old = state.entries[0].poster_url.clone();
         assert_eq!(
-            artwork_recovery_target(&mut state, "native:old-show", &old),
+            grid_artwork_recovery_target(&mut state, "series", "native:old-show", &old),
             Some(("series".into(), "native:old-show".into()))
         );
         // Library and Home can fail together; share one metadata request.
-        assert!(artwork_recovery_target(&mut state, "native:old-show", &old).is_none());
+        assert!(
+            grid_artwork_recovery_target(&mut state, "series", "native:old-show", &old).is_none()
+        );
         // A temporary offline failure can retry on a later page refresh.
-        state
-            .library_artwork_recovery
-            .values_mut()
-            .for_each(|last| {
-                *last -= Duration::from_secs(61);
-            });
-        assert!(artwork_recovery_target(&mut state, "native:old-show", &old).is_some());
+        state.artwork_recovery.values_mut().for_each(|last| {
+            *last -= Duration::from_secs(61);
+        });
+        assert!(
+            grid_artwork_recovery_target(&mut state, "series", "native:old-show", &old).is_some()
+        );
         state.entries[0].poster_url = "https://new.example/poster.jpg".into();
-        assert!(artwork_recovery_target(&mut state, "native:old-show", &old).is_none());
-        assert!(artwork_recovery_target(&mut state, "removed", &old).is_none());
+        assert!(
+            grid_artwork_recovery_target(&mut state, "series", "native:old-show", &old).is_none()
+        );
+        assert!(grid_artwork_recovery_target(&mut state, "series", "removed", &old).is_none());
     }
 
     #[test]

@@ -167,16 +167,22 @@ impl Bridge {
             self.sync_modal_category_flags();
         }
 
-        let (item_id, modal_type, backdrop_url, header) = {
+        let (item_id, modal_type, poster_url, backdrop_url, header) = {
             let state = self.shared.lock().unwrap();
             let m = state.modal_item.as_ref().unwrap();
             (
                 m.id.clone(),
                 m.type_.clone(),
+                m.poster_url.clone(),
                 m.background_url.clone(),
                 (m.genres.clone(), m.description.clone(), m.year.clone()),
             )
         };
+        if app.get_selected_poster().size().width == 0 && !poster_url.is_empty() {
+            // Search/featured entries and Android do not share the desktop
+            // browse worker's fast path. Reuse/decode their cached poster too.
+            self.load_detail_poster(poster_url, item_id.clone());
+        }
         // Sync fast path (mirrors episode thumbnails): paint the cached
         // backdrop immediately on reentry instead of flashing through the
         // placeholder + an async round-trip. Misses fall back to the async
@@ -200,12 +206,76 @@ impl Bridge {
         if modal_type == "movie" {
             self.cancel_watch_now();
             // Movies keep the direct behaviour: fetch streams right away.
-            self.start_stream_search(item_id);
+            self.start_stream_search(item_id.clone());
+            self.refresh_movie_meta(item_id);
         } else {
             // Series-like: list seasons/episodes first and only fetch
             // streams once an episode is picked.
             self.prepare_episodes(item_id, modal_type);
         }
+    }
+
+    /// Movies also recheck metadata behind cached content; stream discovery
+    /// remains independent so refreshing artwork never delays playback.
+    pub(super) fn refresh_movie_meta(&self, id: String) {
+        let (open_token, urls) = {
+            let state = self.shared.lock().unwrap();
+            let Some(item) = state
+                .modal_item
+                .as_ref()
+                .filter(|item| item.id == id && item.type_ == "movie")
+            else {
+                return;
+            };
+            let urls = state
+                .installed
+                .iter()
+                .filter(|addon| {
+                    addon.enabled && addon.available && addon.manifest.accepts("meta", "movie", &id)
+                })
+                .filter_map(|addon| Addon::new(&addon.url).ok())
+                .map(|addon| addon.meta_url("movie", &id))
+                .collect::<VecDeque<_>>();
+            (item.open_token.clone(), urls)
+        };
+        fn next(bridge: Bridge, id: String, open_token: Arc<()>, mut urls: VecDeque<String>) {
+            let Some(url) = urls.pop_front() else { return };
+            net::fetch_bytes(url, move |result| {
+                let found = result
+                    .ok()
+                    .and_then(|bytes| Addon::parse_meta(&bytes).ok().flatten())
+                    .filter(|item| meta_matches_request(item, "movie", &id));
+                let Some(item) = found else {
+                    next(bridge, id, open_token, urls);
+                    return;
+                };
+                bridge.cache_background_meta("movie", &id, &item);
+                let _ = slint::invoke_from_event_loop(move || {
+                    let still_open = bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .modal_item
+                        .as_ref()
+                        .is_some_and(|modal| {
+                            modal.id == id
+                                && modal.type_ == "movie"
+                                && Arc::ptr_eq(&modal.open_token, &open_token)
+                        });
+                    if still_open && bridge.app().is_some_and(|app| app.get_modal_visible()) {
+                        bridge.upgrade_detail_meta(&id, &item, true, true);
+                    } else if let Some(poster) = item
+                        .preview
+                        .poster
+                        .as_ref()
+                        .filter(|url| !url.trim().is_empty())
+                    {
+                        bridge.load_discover_poster("movie".into(), id.clone(), poster.clone());
+                    }
+                });
+            });
+        }
+        next(self.clone(), id, open_token, urls);
     }
 
     /// Fetch and display streams for `request_id` (a movie id, or the
@@ -493,7 +563,8 @@ impl Bridge {
                 Some(m) if m.id == id => m,
                 _ => return false,
             };
-            if !m.background_url.is_empty()
+            if !m.poster_url.is_empty()
+                && !m.background_url.is_empty()
                 && !m.description.is_empty()
                 && !m.genres.is_empty()
                 && !m.year.is_empty()
@@ -512,6 +583,10 @@ impl Bridge {
             _ => return false,
         };
         let mut touched = false;
+        if m.poster_url.is_empty() && !cached.poster_url.is_empty() {
+            m.poster_url = cached.poster_url.clone();
+            touched = true;
+        }
         for (season, url) in cached.season_backdrops {
             if let std::collections::hash_map::Entry::Vacant(entry) =
                 m.season_backdrops.entry(season)
@@ -660,9 +735,8 @@ impl Bridge {
             }
         }
         if let Some(url) = poster_to_load {
-            // Save the updated poster URL so library reopens (and restarts)
-            // paint the grid + detail header from the entry without waiting.
-            self.persist_poster_for(id, &url);
+            // The image pipeline persists the replacement only after decoding.
+            // A failed fresh URL must not replace a usable saved poster.
             // Refresh check, not an evict-then-load: the shown poster stays
             // painted while fresh bytes download, repainting only on a real
             // pixel change — no placeholder flash for identical art.
