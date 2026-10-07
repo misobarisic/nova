@@ -1,4 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1024">
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">
+  <!-- Keep both raster dimensions substantial: colorizing a thin texture and
+       stretching it across the banner can expose rendering artifacts. -->
   <defs>
     <linearGradient id="shade" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#080f19" stop-opacity="0.06"/>

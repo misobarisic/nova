@@ -268,7 +268,7 @@ export component SettingsPage {
     property <length> usable_width: root.nav-viewport-width - root.rail_w - root.safe-left - root.safe-right - 36px;
     property <length> backdrop_scroll_shift: root.two_pane ? 0px : (root.sub_open ? Math.min(0px, root.scroll_y) : root.landing_header_shift);
     property <length> combined_width: Math.max(0px, root.usable_width);
-    property <length> detail_width: root.two_pane ? root.combined_width - 324px : root.combined_width;
+    property <length> detail_width: root.two_pane ? root.combined_width - 364px : root.combined_width;
     changed two_pane => { if (root.two_pane) { root.sub_open = true; } }
     property <int> focus_request: SettingsStyle.focus-request;
     property <bool> native_keyboard_mode: SettingsStyle.keyboard-mode;
@@ -1476,7 +1476,7 @@ export component SettingsPage {
 
                 // ---- Landing menu (section list) ---------------------
                 landing_layer := Rectangle {
-                    width: root.two_pane ? 300px : content_host.width;
+                    width: root.two_pane ? 340px : content_host.width;
                     height: 100%;
                     // Push transition: slides left and dims while a subpage
                     // slides in over it; reverses on back.
@@ -1613,7 +1613,7 @@ export component SettingsPage {
                 sub_layer := Rectangle {
                     width: root.detail_width;
                     height: 100%;
-                    x: root.sub_open ? (root.two_pane ? 324px : 0px) : content_host.width;
+                    x: root.sub_open ? (root.two_pane ? 364px : 0px) : content_host.width;
                     opacity: root.sub_open ? 1.0 : 0.0;
                     animate x { duration: Anim.transition_slide; easing: ease-out; }
                     animate opacity { duration: Anim.transition_fade; }
