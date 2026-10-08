@@ -1259,6 +1259,8 @@ export component DetailPage {
 
         // Keep the artwork edge-to-edge behind the floating controls. The
         // scrims protect text while preserving the bright upper-right artwork.
+        // Square masks with baked palette colours avoid thin-texture sampling
+        // and offscreen colorization artifacts on resize or page recreation.
         backdrop_art := Image {
             x: 0px;
             // A small parallax lift, capped so the backdrop cannot slide
@@ -1275,8 +1277,7 @@ export component DetailPage {
             y: 0px;
             width: 100%;
             height: root.narrow ? 620px + root.safe-top : 800px;
-            source: @image-url("../../assets/detail-bottom-scrim.svg");
-            colorize: Theme.current.scrim_artwork;
+            source: Theme.true_black ? @image-url("../../assets/detail-bottom-scrim-black.svg") : @image-url("../../assets/detail-bottom-scrim.svg");
             image-fit: fill;
         }
         if !root.narrow: Image {
@@ -1284,8 +1285,7 @@ export component DetailPage {
             y: 0px;
             width: 100%;
             height: 800px;
-            source: @image-url("../../assets/detail-side-scrim.svg");
-            colorize: Theme.current.scrim_artwork;
+            source: Theme.true_black ? @image-url("../../assets/detail-side-scrim-black.svg") : @image-url("../../assets/detail-side-scrim.svg");
             image-fit: fill;
         }
 
