@@ -1,0 +1,34 @@
+// Shared by the numeric settings sliders and playback-speed control. The
+// Settings page yields its vertical pan for the entire slider gesture.
+export global SliderGesture {
+    in-out property <bool> active: false;
+    in-out property <bool> hovered: false;
+}
+
+export component SliderTouchArea inherits TouchArea {
+    private property <bool> owns-gesture: false;
+
+    function release() {
+        if (root.owns-gesture) {
+            root.owns-gesture = false;
+            SliderGesture.active = false;
+        }
+    }
+
+    pointer-event(event) => {
+        if ((event.kind == PointerEventKind.down && event.button == PointerEventButton.left)
+            || (event.kind == PointerEventKind.move && (root.pressed || event.touch-finger-id != 0))) {
+            // Touch moves may arrive before the Flickable's delayed press.
+            // Claim early, before vertical finger wobble can steal the slider.
+            root.owns-gesture = true;
+            SliderGesture.active = true;
+        } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+            root.release();
+        }
+    }
+    changed pressed => { if (!root.pressed) { root.release(); } }
+    // Yield before a mouse press too: otherwise a quick diagonal drag can
+    // reach the Flickable's capture threshold before its delayed press arrives.
+    changed has-hover => { SliderGesture.hovered = root.has-hover; }
+    changed enabled => { if (!root.enabled) { root.release(); } }
+}

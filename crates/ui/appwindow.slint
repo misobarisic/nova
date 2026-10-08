@@ -201,7 +201,7 @@ export component AppWindow inherits Window {
     in-out property <int> home_cal_epoch: -1;
     in-out property <bool> home_cal_open: false;
     // Home subpage stack: 0 = landing carousels, 1 = all Continue Watching,
-    // 2 = all Upcoming. Owned here so the chosen view (and its scroll)
+    // 2 = all Upcoming, 3 + section index = catalog grid. Owned here so the chosen view (and its scroll)
     // survives the detail modal destroying/recreating HomePage.
     in-out property <int> home_view: 0;
     // Touch-driven platform (Android): card menus open as bottom sheets

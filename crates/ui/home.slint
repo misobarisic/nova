@@ -486,6 +486,8 @@ component HomeCatalogPosterCard inherits Rectangle {
     in property <HomeCatalogCard> entry;
     in property <length> card-width;
     in property <bool> focused: false;
+    in property <bool> reveal: true;
+    in property <duration> reveal-delay: 0ms;
     in property <bool> tappable: true;
     in property <bool> touch_menus: false;
     callback pointer_pressed();
@@ -495,123 +497,132 @@ component HomeCatalogPosterCard inherits Rectangle {
 
     width: card-width;
     height: card-width * 3 / 2 + 54px;
-    lift := Rectangle {
+    reveal_layer := Rectangle {
         width: 100%;
         height: 100%;
-        y: (touch.has-hover && !touch.pressed && !root.touch_menus) ? -6px : 0px;
-        animate y { duration: Anim.hover_lift; easing: ease-in-out; }
-        border-radius: 10px;
-        background: Theme.current.card;
-        border-width: root.focused ? 2px : 1px;
-        border-color: root.focused ? Theme.current.focus_ring : Theme.current.border_soft;
-        clip: true;
+        opacity: root.reveal ? 1.0 : 0.0;
+        y: root.reveal ? 0px : 12px;
+        animate opacity { duration: Anim.transition_fade; delay: root.reveal-delay; }
+        animate y { duration: Anim.transition_slide; delay: root.reveal-delay; }
 
-        VerticalLayout {
-            spacing: 0px;
-            Rectangle {
-                height: root.card-width * 3 / 2;
-                background: Theme.current.home_artwork_placeholder;
-                clip: true;
-                if root.entry.is_loaded: Image {
-                    source: root.entry.poster;
-                    image-fit: cover;
-                    width: 100%;
-                    height: 100%;
+        lift := Rectangle {
+            width: 100%;
+            height: 100%;
+            y: (touch.has-hover && !touch.pressed && !root.touch_menus) ? -6px : 0px;
+            animate y { duration: Anim.hover_lift; easing: ease-in-out; }
+            border-radius: 10px;
+            background: Theme.current.card;
+            border-width: root.focused ? 2px : 1px;
+            border-color: root.focused ? Theme.current.focus_ring : Theme.current.border_soft;
+            clip: true;
+
+            VerticalLayout {
+                spacing: 0px;
+                Rectangle {
+                    height: root.card-width * 3 / 2;
+                    background: Theme.current.home_artwork_placeholder;
+                    clip: true;
+                    if root.entry.is_loaded: Image {
+                        source: root.entry.poster;
+                        image-fit: cover;
+                        width: 100%;
+                        height: 100%;
+                    }
+                    if !root.entry.is_loaded: Text {
+                        text: "🎬";
+                        font-size: 34px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
                 }
-                if !root.entry.is_loaded: Text {
-                    text: "🎬";
-                    font-size: 34px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-            Rectangle {
-                height: 54px;
-                background: Theme.current.card;
-                Text {
-                    x: 8px;
-                    y: 5px;
-                    width: parent.width - 16px;
-                    height: 30px;
-                    text: root.entry.title;
-                    color: Theme.current.text_home_title;
-                    font-size: 12px;
-                    font-weight: 600;
-                    vertical-alignment: top;
-                    wrap: word-wrap;
-                    overflow: elide;
-                }
-                Text {
-                    x: 8px;
-                    y: 35px;
-                    width: parent.width - 16px;
-                    height: 14px;
-                    text: root.entry.year;
-                    color: Theme.current.text_home_date;
-                    font-size: 10px;
-                    vertical-alignment: center;
-                    overflow: elide;
+                Rectangle {
+                    height: 54px;
+                    background: Theme.current.card;
+                    Text {
+                        x: 8px;
+                        y: 5px;
+                        width: parent.width - 16px;
+                        height: 30px;
+                        text: root.entry.title;
+                        color: Theme.current.text_home_title;
+                        font-size: 12px;
+                        font-weight: 600;
+                        vertical-alignment: top;
+                        wrap: word-wrap;
+                        overflow: elide;
+                    }
+                    Text {
+                        x: 8px;
+                        y: 35px;
+                        width: parent.width - 16px;
+                        height: 14px;
+                        text: root.entry.year;
+                        color: Theme.current.text_home_date;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
                 }
             }
         }
-    }
 
-    touch := TouchArea {
-        enabled: root.tappable;
-        width: 100%;
-        height: 100%;
-        mouse-cursor: pointer;
-        property <bool> dragged: false;
-        property <bool> hint_live: false;
-        property <bool> hint_held: false;
-        property <length> hint_x: 0px;
-        property <length> hint_y: 0px;
-        function hint_stop() {
-            touch.hint_live = false;
-            if (touch.hint_held) {
-                touch.hint_held = false;
-                root.pan_release();
-            }
-        }
-        pointer-event(ev) => {
-            if (ev.kind == PointerEventKind.down) {
-                root.pointer_pressed();
-                touch.hint_x = touch.mouse-x;
-                touch.hint_y = touch.mouse-y;
-                touch.hint_live = true;
-                touch.dragged = false;
-            } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
-                touch.hint_stop();
-            } else if (ev.kind == PointerEventKind.move) {
-                if (!(touch.pressed || ev.touch-finger-id != 0)) {
-                    touch.hint_stop();
-                    return;
+        touch := TouchArea {
+            enabled: root.tappable;
+            width: 100%;
+            height: 100%;
+            mouse-cursor: pointer;
+            property <bool> dragged: false;
+            property <bool> hint_live: false;
+            property <bool> hint_held: false;
+            property <length> hint_x: 0px;
+            property <length> hint_y: 0px;
+            function hint_stop() {
+                touch.hint_live = false;
+                if (touch.hint_held) {
+                    touch.hint_held = false;
+                    root.pan_release();
                 }
-                if (!touch.hint_live) {
+            }
+            pointer-event(ev) => {
+                if (ev.kind == PointerEventKind.down) {
+                    root.pointer_pressed();
                     touch.hint_x = touch.mouse-x;
                     touch.hint_y = touch.mouse-y;
                     touch.hint_live = true;
-                }
-                let dx = touch.mouse-x - touch.hint_x;
-                let dy = touch.mouse-y - touch.hint_y;
-                if (Math.abs(dy) > 8px && Math.abs(dy) > Math.abs(dx)) {
+                    touch.dragged = false;
+                } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
                     touch.hint_stop();
-                } else {
-                    touch.hint_held = true;
-                    root.pan_hint();
+                } else if (ev.kind == PointerEventKind.move) {
+                    if (!(touch.pressed || ev.touch-finger-id != 0)) {
+                        touch.hint_stop();
+                        return;
+                    }
+                    if (!touch.hint_live) {
+                        touch.hint_x = touch.mouse-x;
+                        touch.hint_y = touch.mouse-y;
+                        touch.hint_live = true;
+                    }
+                    let dx = touch.mouse-x - touch.hint_x;
+                    let dy = touch.mouse-y - touch.hint_y;
+                    if (Math.abs(dy) > 8px && Math.abs(dy) > Math.abs(dx)) {
+                        touch.hint_stop();
+                    } else {
+                        touch.hint_held = true;
+                        root.pan_hint();
+                    }
                 }
             }
-        }
-        changed pressed => { if (!self.pressed) { touch.hint_stop(); } }
-        moved => {
-            if (Math.abs(touch.mouse-x - touch.pressed-x)
-                + Math.abs(touch.mouse-y - touch.pressed-y) > 12px) {
-                touch.dragged = true;
+            changed pressed => { if (!self.pressed) { touch.hint_stop(); } }
+            moved => {
+                if (Math.abs(touch.mouse-x - touch.pressed-x)
+                    + Math.abs(touch.mouse-y - touch.pressed-y) > 12px) {
+                    touch.dragged = true;
+                }
             }
-        }
-        clicked => {
-            if (!touch.dragged) { root.picked(); }
-            touch.dragged = false;
+            clicked => {
+                if (!touch.dragged) { root.picked(); }
+                touch.dragged = false;
+            }
         }
     }
 }
@@ -1260,7 +1271,7 @@ export component HomePage {
     in property <int> featured_count;
     in property <int> featured_revision;
     in property <bool> featured_refresh_pending;
-    // 0 = landing carousels, 1 = all Continue, 2 = all Upcoming.
+    // 0 = landing, 1 = all Continue, 2 = all Upcoming, 3 + section index = catalog grid.
     in-out property <int> view: 0;
     in property <int> system_back_request: 0;
     property <int> last_system_back_request: -1;
@@ -1462,6 +1473,12 @@ export component HomePage {
     // Number of cards in the list the keyboard cursor is on (Continue on the
     // landing, whichever grid the subpage shows).
     function active_len() -> int {
+        if (root.view >= 3) {
+            return root.catalog_sections[root.view - 3].card_count;
+        }
+        if (root.view == 0 && root.kb_zone == 3) {
+            return root.catalog_cards.length;
+        }
         if (root.view == 2) {
             return root.upcoming_rows.length;
         }
@@ -1595,7 +1612,9 @@ export component HomePage {
             root.upcoming_cal_activate();
         } else if (root.view != 0) {
             if (root.kb_idx >= 0 && root.kb_idx < root.active_len()) {
-                if (root.view == 2) {
+                if (root.view >= 3) {
+                    root.catalog_card_picked(root.catalog_cards[root.catalog_sections[root.view - 3].first_card + root.kb_idx].flat_index);
+                } else if (root.view == 2) {
                     root.upcoming_picked(root.kb_idx);
                 } else {
                     root.continue_picked(root.kb_idx);
@@ -1688,13 +1707,14 @@ export component HomePage {
 
     function kb_follow_grid() {
         // The calendar replaces the grid: nothing grid-shaped to follow.
-        if (root.cal_open) {
+        if (root.view == 2 && root.cal_open) {
             return;
         }
         if (sub_scroll.content-height == 0px) {
             return;
         }
-        let stride = root.view == 2 ? root.row_stride_up : root.row_stride;
+        let stride = root.view >= 3 ? root.grid_item_width * 3 / 2 + 54px + root.item-gap
+            : root.view == 2 ? root.row_stride_up : root.row_stride;
         let top = root.grid_top + Math.floor(root.kb_idx / root.grid_cols) * stride;
         // The back bar is outside this viewport; only the hover inset belongs
         // to the scroll content before the first row.
@@ -1731,6 +1751,13 @@ export component HomePage {
         root.kb_follow();
     }
     changed upcoming_rows => {
+        root.kb_clamp_idx();
+        root.kb_follow();
+    }
+    changed catalog_sections => {
+        if (root.view >= 3 && root.view - 3 >= root.catalog_sections.length) {
+            root.view = 0;
+        }
         root.kb_clamp_idx();
         root.kb_follow();
     }
@@ -2106,10 +2133,10 @@ export component HomePage {
                                 // Additional addon catalogs keep the same
                                 // horizontal poster-rail presentation and sit
                                 // after Upcoming on the landing page.
-                                for section in root.catalog_sections: catalog_section := VerticalLayout {
+                                for section[s] in root.catalog_sections: catalog_section := VerticalLayout {
                                     width: 100%;
                                     spacing: 0px;
-                                    property <int> focused_card: root.kb_active && root.kb_zone == 3
+                                    property <int> focused_card: root.view == 0 && root.kb_active && root.kb_zone == 3
                                         && root.kb_idx >= section.first_card
                                         && root.kb_idx < section.first_card + section.card_count
                                         ? root.kb_idx - section.first_card : -1;
@@ -2121,19 +2148,10 @@ export component HomePage {
                                         }
                                     }
 
-                                    Rectangle {
-                                        width: 100%;
-                                        height: Math.max(36px, section_title.preferred-height);
-                                        section_title := Text {
-                                            x: 4px;
-                                            y: (parent.height - self.height) / 2;
-                                            width: parent.width - 8px;
-                                            text: section.title;
-                                            font-size: 22px;
-                                            font-weight: 700;
-                                            color: Theme.current.text_bright;
-                                            wrap: word-wrap;
-                                        }
+                                    SectionHeader {
+                                        title: section.title;
+                                        count: section.card_count;
+                                        open_all => { root.open_subpage(3 + s); }
                                     }
 
                                     Rectangle {
@@ -2245,7 +2263,8 @@ export component HomePage {
                             }
 
                             Text {
-                                text: root.view == 2 ? @tr("Upcoming") : @tr("Continue Watching");
+                                text: root.view >= 3 ? root.catalog_sections[root.view - 3].title
+                                    : root.view == 2 ? @tr("Upcoming") : @tr("Continue Watching");
                                 font-size: 22px;
                                 font-weight: 700;
                                 color: Theme.current.text_bright;
@@ -2258,7 +2277,7 @@ export component HomePage {
                             }
 
                             Text {
-                                text: "(" + (root.view == 2 ? root.upcoming_rows.length : root.continue_rows.length) + ")";
+                                text: "(" + root.active_len() + ")";
                                 font-size: 14px;
                                 color: Theme.current.text_hint;
                                 vertical-alignment: center;
@@ -2393,6 +2412,35 @@ export component HomePage {
                                                         root.kb_idx = i;
                                                         root.upcoming_picked(i);
                                                     }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // ---- All titles in the selected catalog ----
+                                    if root.view >= 3: HorizontalLayout {
+                                        width: 100%;
+                                        alignment: center;
+
+                                        GridLayout {
+                                            width: root.grid_cols * (root.grid_item_width + root.item-gap) - root.item-gap;
+                                            spacing: root.item-gap;
+
+                                            for i in root.catalog_sections[root.view - 3].card_count: HomeCatalogPosterCard {
+                                                row: Math.floor(i / root.grid_cols);
+                                                col: Math.mod(i, root.grid_cols);
+                                                entry: root.catalog_cards[root.catalog_sections[root.view - 3].first_card + i];
+                                                card-width: root.grid_item_width;
+                                                touch_menus: root.touch_menus;
+                                                focused: root.kb_active && root.kb_zone == 1 && root.kb_idx == i;
+                                                reveal: root.sub_revealed;
+                                                reveal-delay: root.stagger ? i * 30ms : 0ms;
+                                                pointer_pressed => { root.kb_active = false; }
+                                                picked => {
+                                                    root.kb_active = false;
+                                                    root.kb_zone = 1;
+                                                    root.kb_idx = i;
+                                                    root.catalog_card_picked(root.catalog_cards[root.catalog_sections[root.view - 3].first_card + i].flat_index);
                                                 }
                                             }
                                         }

@@ -1,5 +1,6 @@
 import { SettingsSync, SettingSyncBadge } from "settings-sync.slint";
 import { Theme } from "theme.slint";
+import { SliderTouchArea } from "slider-touch.slint";
 import { SearchField } from "searchfield.slint";
 import { IcExtension, IcTag, IcImage, IcDisplay, IcPlay, IcChevronLeft, IcChevronRight, IcSettingsGear, IcSync, IcDelete, IcHome, IcVideoLibrary } from "icons.slint";
 import { KbMark } from "kbnav.slint";
@@ -407,7 +408,7 @@ export component MiniSlider inherits Rectangle {
             if e.text == Key.LeftArrow || e.text == Key.RightArrow { root.value = Math.clamp(root.value + (e.text == Key.RightArrow ? root.step : -root.step), root.minimum, root.maximum); root.changed(root.value); accept } else { reject }
         }
     }
-    TouchArea {
+    slider_touch := SliderTouchArea {
         enabled: root.enabled;
         width: 100%;
         height: 100%;

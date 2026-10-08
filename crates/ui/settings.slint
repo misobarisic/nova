@@ -13,6 +13,7 @@ import { SideNav, NavMetrics } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
 import { Anim } from "anim.slint";
 import { SpeedControl } from "speedcontrol.slint";
+import { SliderGesture } from "slider-touch.slint";
 
 import { PillButton, ToggleSwitch, AddonIconButton, AddonRowCard, MiniSlider, Segmented, SectionHeader, SettingsRow, ValueBox, SettingsLink, SettingsStyle, SettingsDestinations, NumericSetting, SettingsCard, SettingsHeader } from "settings-controls.slint";
 
@@ -246,7 +247,7 @@ export component SettingsPage {
     // Subpage transitions: `open` drives the slide; `sel` (which section's
     // content is built) is cleared only after the slide-out finishes so the
     // outgoing page stays visible during the animation.
-    // One-shot: after a subpage is built, snap its ScrollView back to the top
+    // One-shot: after a subpage is built, restore its Flickable scroll offset
     // (the field is fresh but the viewport may carry the previous offset).
     reset_timer := Timer {
         interval: 1ms;
@@ -269,7 +270,12 @@ export component SettingsPage {
     property <length> backdrop_scroll_shift: root.two_pane ? 0px : (root.sub_open ? Math.min(0px, root.scroll_y) : root.landing_header_shift);
     property <length> combined_width: Math.max(0px, root.usable_width);
     property <length> detail_width: root.two_pane ? root.combined_width - 364px : root.combined_width;
-    changed two_pane => { if (root.two_pane) { root.sub_open = true; } }
+    changed two_pane => {
+        SliderGesture.active = false; SliderGesture.hovered = false;
+        if (root.two_pane) { root.sub_open = true; }
+    }
+    changed sel => { SliderGesture.active = false; SliderGesture.hovered = false; }
+    changed sub_open => { SliderGesture.active = false; SliderGesture.hovered = false; }
     property <int> focus_request: SettingsStyle.focus-request;
     property <bool> native_keyboard_mode: SettingsStyle.keyboard-mode;
     changed native_keyboard_mode => { root.kb_active = self.native_keyboard_mode; }
@@ -282,12 +288,13 @@ export component SettingsPage {
             } else {
                 let top = SettingsStyle.focus-y - set_scroll.absolute-position.y;
                 if (top < 0px) { set_scroll.content-y -= top; }
-                else if (top + SettingsStyle.focus-height > set_scroll.visible-height) { set_scroll.content-y -= top + SettingsStyle.focus-height - set_scroll.visible-height; }
+                else if (top + SettingsStyle.focus-height > set_scroll.height) { set_scroll.content-y -= top + SettingsStyle.focus-height - set_scroll.height; }
             }
         }
     }
     changed kb_active => { SettingsStyle.keyboard-mode = root.kb_active; }
     changed narrow => {
+        SliderGesture.active = false; SliderGesture.hovered = false;
         // These editors swap instances between stacked and wide layouts.
         // Keep a surviving focus target when a touch-focused input is removed;
         // keyboard edit timers can still focus the replacement field.
@@ -654,7 +661,7 @@ export component SettingsPage {
     function reveal_detail_control(y: length, h: length) {
         let top = y - set_scroll.absolute-position.y;
         if (top < 0px) { set_scroll.content-y -= top; }
-        else if (top + h > set_scroll.visible-height) { set_scroll.content-y -= top + h - set_scroll.visible-height; }
+        else if (top + h > set_scroll.height) { set_scroll.content-y -= top + h - set_scroll.height; }
     }
     function navigation_top_inset() -> length {
         // Once the hero has collapsed, the search field and shortcut row stay
@@ -1383,6 +1390,7 @@ export component SettingsPage {
             width: 100%;
             height: 100%;
             init => {
+                SliderGesture.active = false; SliderGesture.hovered = false;
                 self.focus();
                 if (root.two_pane) { root.sub_open = true; }
                 root.last_system_back_request = root.system_back_request;
@@ -1630,13 +1638,13 @@ export component SettingsPage {
                         // children, so without width/height the view would
                         // take its content's full preferred height, overflow
                         // (clipped) and never scroll — fatal on short phones.
-                        set_scroll := ScrollView {
+                        set_scroll := Flickable {
                             width: 100%;
                             vertical-stretch: 1;
-                            // Touch devices scroll by dragging (there is no
-                            // wheel): the fluent-style ScrollView disables
-                            // drag-pan by default, so opt in explicitly.
-                            mouse-drag-pan-enabled: true;
+                            // ScrollView hides interactive; a raw Flickable lets
+                            // sliders keep vertical wobble from stealing a drag.
+                            interactive: !SliderGesture.active;
+                            mouse-drag-pan-enabled: !SliderGesture.hovered;
                             // One-way mirror, see DiscoverPage: Flickable
                             // drops viewport bindings on press, so mirror
                             // explicitly.

@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { SliderTouchArea } from "slider-touch.slint";
 // Shared playback-rate control.
 //
 // Settings → Player and the player's own settings panel both edit the same
@@ -208,7 +209,7 @@ export component SpeedControl inherits Rectangle {
                         if e.text == Key.LeftArrow || e.text == Key.RightArrow { root.request_step(e.text == Key.RightArrow ? 1 : -1); accept } else { reject }
                     }
                 }
-                track_touch := TouchArea {
+                track_touch := SliderTouchArea {
                     width: 100%;
                     height: 100%;
                     mouse-cursor: pointer;
