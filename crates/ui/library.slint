@@ -80,7 +80,7 @@ export component LibraryPage {
     in property <int> system_back_request: 0;
     property <int> last_system_back_request: -1;
 
-    property <length> item-gap: root.list_view ? 12px : 14px;
+    property <length> item-gap: Theme.card_spacing;
     // Fluid poster grid: phones keep two columns by default; wide screens
     // add columns. List mode shares the same model, actions and scroll math.
     property <length> min-card: 160px;
@@ -634,7 +634,7 @@ export component LibraryPage {
                                 width: 100%;
                                 height: 100%;
                                 background: Theme.current.card;
-                                border-radius: 10px;
+                                border-radius: Theme.card_corner_radius;
                                 border-width: root.kb_active && root.kb_zone == 2 && root.kb_idx == i ? 2px : 1px;
                                 border-color: root.kb_active && root.kb_zone == 2 && root.kb_idx == i ? Theme.current.accent : Theme.current.border_card;
                                 clip: true;
@@ -645,7 +645,7 @@ export component LibraryPage {
                                     x: 1px; y: 1px;
                                     width: root.list_view ? 92px : parent.width - 2px;
                                     height: root.list_view ? parent.height - 2px : root.item-width * 3 / 2;
-                                    border-radius: 9px;
+                                    border-radius: Math.max(0px, Theme.card_corner_radius - 1px);
                                     clip: true;
                                     background: Theme.current.home_artwork_placeholder;
                                     if card.is_loaded: Image {

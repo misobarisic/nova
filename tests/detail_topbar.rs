@@ -65,6 +65,9 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
         let app = weak.upgrade().unwrap();
         app.set_in_library(!app.get_in_library());
     });
+    let watches = Rc::new(RefCell::new(0));
+    let recorded_watches = watches.clone();
+    app.on_watch_now(move || *recorded_watches.borrow_mut() += 1);
     let tracking = Rc::new(RefCell::new(0));
     let recorded_tracking = tracking.clone();
     app.on_tracking_show(move || *recorded_tracking.borrow_mut() += 1);
@@ -108,12 +111,33 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
             ElementHandle::find_by_element_type_name(&app, "TopIconButton").count(),
             3
         );
+        for label in [
+            "Start watching S1 E1",
+            "Continue watching S12 E123",
+            "Nastavite gledati S12 E123",
+        ] {
+            app.set_detail_watch_label(label.into());
+            settle();
+            let action = element(&app, "DetailPage::watch_action_button");
+            assert_eq!(action.accessible_label().as_deref(), Some(label));
+            let p = action.absolute_position();
+            assert!(p.x >= 0.0 && p.x + action.size().width <= width as f32);
+            assert!(
+                action
+                    .query_descendants()
+                    .match_type_name("IcPlay")
+                    .find_first()
+                    .is_some()
+            );
+        }
+        click(&app, element(&app, "DetailPage::watch_hero"));
         let sync = element(&app, "DetailPage::tracking_button");
         let options = element(&app, "DetailPage::library_options_button");
         assert!((sync.absolute_position().y - options.absolute_position().y).abs() < 0.5);
         assert!(sync.absolute_position().x + sync.size().width <= options.absolute_position().x);
         assert!(options.absolute_position().x + options.size().width <= width as f32);
     }
+    assert_eq!(*watches.borrow(), 4);
     app.window().set_size(slint::PhysicalSize::new(390, 1600));
     settle();
     click(&app, element(&app, "DetailPage::tracking_button"));

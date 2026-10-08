@@ -562,7 +562,7 @@ component DiscoverGrid {
                         width: 100%;
                         height: 100%;
                         background: Theme.current.card;
-                        border-radius: 10px;
+                        border-radius: Theme.card_corner_radius;
                         border-width: root.kb_active && root.kb_zone == 3 && root.kb_idx == i ? 2px : 1px;
                         clip: true;
                         border-color: root.kb_active && root.kb_zone == 3 && root.kb_idx == i
@@ -580,7 +580,7 @@ component DiscoverGrid {
 
                             Rectangle {
                                 height: root.item-width * 3 / 2;
-                                border-radius: 10px;
+                                border-radius: Theme.card_corner_radius;
                                 clip: true;
                                 background: Theme.current.home_artwork_placeholder;
 
@@ -736,7 +736,7 @@ export component DiscoverPage {
     in-out property <string> empty_hint: @tr("No addons installed yet — add one in Settings → Addons.");
     in-out property <string> searchable_hint: "";
 
-    property <length> item-gap: 14px;
+    property <length> item-gap: Theme.card_spacing;
     // Match Library's fluid 160–230px poster grid; capped rows align left.
     property <length> min-card: 160px;
     property <length> max-card: 230px;

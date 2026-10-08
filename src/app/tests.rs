@@ -140,6 +140,39 @@ mod episode_helpers_tests {
     }
 
     #[test]
+    fn watch_action_resumes_the_latest_episode_and_then_offers_the_next_release() {
+        let mut eps = vec![
+            video("s:1:1", Some(1), Some(1), "One"),
+            video("s:1:2", Some(1), Some(2), "Two"),
+            video("s:2:1", Some(2), Some(1), "Three"),
+        ];
+        for e in &mut eps {
+            e.released = Some("2020-01-01".into());
+        }
+        let mut map = HashMap::new();
+        assert_eq!(
+            episode_se_label(watch_now_episode("s", &eps, &map).unwrap()),
+            "S1 E1"
+        );
+        let mut resume = prog("s", "s:2:1", false, 10);
+        resume.position_secs = 300.0;
+        resume.duration_secs = 1400.0;
+        map.insert(progress_map_key("s", "s:2:1"), resume);
+        assert_eq!(watch_now_episode("s", &eps, &map).unwrap().id, "s:2:1");
+        // Explicit dateless progress still resumes; a known future date does not.
+        eps[2].released = None;
+        assert_eq!(watch_now_episode("s", &eps, &map).unwrap().id, "s:2:1");
+        eps[2].released = Some("2999-01-01".into());
+        assert_eq!(watch_now_episode("s", &eps, &map).unwrap().id, "s:1:1");
+        eps[2].released = Some("2020-01-01".into());
+        map.insert(progress_map_key("s", "s:2:1"), prog("s", "s:2:1", true, 11));
+        map.insert(progress_map_key("s", "s:1:1"), prog("s", "s:1:1", true, 12));
+        assert_eq!(watch_now_episode("s", &eps, &map).unwrap().id, "s:1:2");
+        map.insert(progress_map_key("s", "s:1:2"), prog("s", "s:1:2", true, 13));
+        assert!(watch_now_episode("s", &eps, &map).is_none());
+    }
+
+    #[test]
     fn next_episode_skips_dateless() {
         let mut eps = vec![
             video("s:1:1", Some(1), Some(1), "One"),

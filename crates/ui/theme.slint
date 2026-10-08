@@ -189,6 +189,9 @@ export struct ThemePalette {
 export global Theme {
     // Replace this value on the UI thread; component bindings update live.
     in-out property <bool> true_black: false;
+    // Shared media/detail card geometry; zero gives square artwork and containers.
+    in-out property <length> card_corner_radius: 10px;
+    in-out property <length> card_spacing: 8px;
     out property <brush> black_season_scrim: @linear-gradient(180deg, transparent, #000000c0);
     in-out property <ThemePalette> current: self.standard;
     out property <ThemePalette> standard: {

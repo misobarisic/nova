@@ -148,6 +148,8 @@ impl Bridge {
                 EpisodeStartBehavior::Ask => 2,
             });
             app.set_true_black(settings.true_black);
+            app.set_card_corner_radius(settings.card_corner_radius.min(24) as f32);
+            app.set_card_spacing(settings.card_spacing.min(32) as f32);
             app.set_animations(settings.animations);
             app.set_anim_transitions(settings.anim_transitions);
             app.set_anim_hover(settings.anim_hover);
@@ -295,6 +297,8 @@ impl Bridge {
                 },
                 sync_overrides: state.cache_settings.sync_overrides.clone(),
                 true_black: app.get_true_black(),
+                card_corner_radius: app.get_card_corner_radius().round().clamp(0.0, 24.0) as u32,
+                card_spacing: app.get_card_spacing().round().clamp(0.0, 32.0) as u32,
                 animations: app.get_animations(),
                 anim_transitions: app.get_anim_transitions(),
                 anim_hover: app.get_anim_hover(),
@@ -307,6 +311,8 @@ impl Bridge {
         // autosave (no need to reopen the page).
         app.set_discover_min_cols(settings.discover_min_cols as i32);
         app.set_library_min_cols(settings.library_min_cols as i32);
+        app.set_card_corner_radius(settings.card_corner_radius as f32);
+        app.set_card_spacing(settings.card_spacing as f32);
         {
             let mut state = self.shared.lock().unwrap();
             state.cache_settings = settings.clone();
@@ -1014,6 +1020,33 @@ mod tests {
         app.set_true_black(false);
         bridge.settings_to_ui();
         assert!(app.get_true_black(), "stored theme is restored on reload");
+        app.set_card_corner_radius(0.0);
+        app.invoke_settings_edited("card_corner_radius".into());
+        app.set_card_spacing(32.0);
+        app.invoke_settings_edited("card_spacing".into());
+        bridge.persist_settings();
+        assert_eq!(read_settings().card_corner_radius, 0);
+        assert_eq!(read_settings().card_spacing, 32);
+        for (field, value) in [("card_corner_radius", "0"), ("card_spacing", "32")] {
+            assert_eq!(
+                owner
+                    .lock()
+                    .unwrap()
+                    .record(DOMAIN_SETTINGS, field)
+                    .unwrap()
+                    .value
+                    .as_deref(),
+                Some(value),
+                "card geometry is a synced theme preference"
+            );
+        }
+        app.set_card_corner_radius(24.0);
+        app.set_card_spacing(0.0);
+        bridge.settings_to_ui();
+        assert_eq!(app.get_card_corner_radius(), 0.0);
+        assert_eq!(app.get_card_spacing(), 32.0);
+        assert_eq!(app.global::<crate::Theme>().get_card_corner_radius(), 0.0);
+        assert_eq!(app.global::<crate::Theme>().get_card_spacing(), 32.0);
         // A local override leaves the shared record and its clock unchanged,
         // including when another member of the coupled cache group is edited.
         app.set_cache_quality(80.0);

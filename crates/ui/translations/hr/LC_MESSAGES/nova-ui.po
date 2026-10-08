@@ -1834,3 +1834,22 @@ msgstr "Odaberite ugrađeni katalog ili katalog dodatka i neobavezni žanr za Po
 
 msgid "All built-in catalogs are already added. Enable an addon for more catalogs."
 msgstr "Svi ugrađeni katalozi već su dodani. Omogućite dodatak za više kataloga."
+
+# Theme card geometry and reset.
+msgid "Card corner radius"
+msgstr "Polumjer kutova kartica"
+
+msgid "Adjust media, season and episode card corners. Set to 0 for square corners."
+msgstr "Prilagodite kutove kartica naslova, sezona i epizoda. Postavite na 0 za ravne kutove."
+
+msgid "Restore theme defaults"
+msgstr "Vratite zadanu temu"
+
+msgid "Card spacing"
+msgstr "Razmak kartica"
+
+msgid "Space between cards in rows and grids."
+msgstr "Razmak između kartica u redovima i mrežama."
+
+msgid "Start watching"
+msgstr "Počnite gledati"

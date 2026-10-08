@@ -441,6 +441,9 @@ pub fn tr(english: &'static str) -> &'static str {
         "Specials" => "Specijali",
         "Episode" => "Epizoda",
         "Resume" => "Nastavite",
+        "Start watching" => "Počnite gledati",
+        "Continue watching" => "Nastavite gledati",
+        "Choose an episode" => "Odaberite epizodu",
         "Connecting…" => "Povezivanje…",
         // ---- Library buckets and watch statuses ------------------------
         // Display only: the stored value stays the English identifier (the
@@ -1085,6 +1088,20 @@ pub fn cache_rewrite_status(
     }
 }
 
+/// Primary detail action, with the episode selected by the same playback policy.
+pub fn watch_action(episode: &str, continuing: bool) -> String {
+    let action = tr(if continuing {
+        "Continue watching"
+    } else {
+        "Start watching"
+    });
+    if episode.is_empty() {
+        action.into()
+    } else {
+        format!("{action} {episode}")
+    }
+}
+
 /// Readable values for setting-scope comparisons; identifiers remain untranslated.
 pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
     if let Some(enabled) = value.as_bool() {
@@ -1097,6 +1114,7 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
     match field {
         "lru_cache_mb" | "torrent_max_mb" => format!("{number} MB"),
         "quality" => format!("{}%", value),
+        "card_corner_radius" | "card_spacing" => format!("{number} px"),
         "playback_speed" => format!("{}×", value),
         "torrent_down_limit" if value.as_f64() == Some(0.0) => tr("Unlimited").into(),
         "torrent_down_limit" => format!("{number} KB/s"),
@@ -1203,6 +1221,12 @@ mod tests {
     fn croatian_translates_and_english_is_the_source() {
         with_language(Language::English, || {
             assert_eq!(tr("Queued"), "Queued");
+            assert_eq!(watch_action("S1 E1", false), "Start watching S1 E1");
+            assert_eq!(watch_action("S1 E4", true), "Continue watching S1 E4");
+            assert_eq!(
+                setting_sync_value("card_spacing", &serde_json::json!(8)),
+                "8 px"
+            );
             assert_eq!(downloading_files(3), "Downloading 3 file(s)");
             assert_eq!(season_label(2), "Season 2");
             assert_eq!(files_label(1), "1 file");
@@ -1211,6 +1235,8 @@ mod tests {
         });
         with_language(Language::Croatian, || {
             assert_eq!(tr("Queued"), "Čeka");
+            assert_eq!(watch_action("S1 E1", false), "Počnite gledati S1 E1");
+            assert_eq!(watch_action("S1 E4", true), "Nastavite gledati S1 E4");
             assert_eq!(tr("Downloaded"), "Preuzeto");
             assert_eq!(tr("Plan to Watch"), "Za pogledati");
             assert_eq!(season_label(0), "Specijali");

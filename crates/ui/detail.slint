@@ -7,7 +7,7 @@ import { SearchField } from "searchfield.slint";
 import { CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem } from "types.slint";
 import { KbMark } from "kbnav.slint";
 import { MenuSheet } from "menusheet.slint";
-import { IcBookmark, IcAdd, IcMoreHoriz, IcSync, IcCheck, IcChevronLeft, IcChevronRight, IcSchedule, IcSearch, IcClose } from "icons.slint";
+import { IcPlay, IcBookmark, IcAdd, IcMoreHoriz, IcSync, IcCheck, IcChevronLeft, IcChevronRight, IcSchedule, IcSearch, IcClose } from "icons.slint";
 import { Anim } from "anim.slint";
 
 // One filter pill in the horizontal addon bar above the stream list.
@@ -456,7 +456,7 @@ component StreamList {
         VerticalLayout {
             width: 100%;
             min-width: 0px;
-            spacing: 14px;
+            spacing: Theme.card_spacing;
 
             if root.page_count > 1: HorizontalLayout {
                 width: 100%;
@@ -492,7 +492,7 @@ component StreamList {
                             + ((st.is_download && st.download_action != 4) ? 4px : 0px)),
                 );
                 background: st.is_download ? Theme.current.stream_download : Theme.current.stream_card;
-                border-radius: 8px;
+                border-radius: Theme.card_corner_radius;
                 border-width: root.kb_active && root.kb_focus == i + root.page_start ? 2px : 0px;
                 border-color: Theme.current.focus_ring;
                 clip: true;
@@ -767,6 +767,7 @@ export component DetailPage {
     in-out property <int> episode_page_start: 0;
     in-out property <int> episode_total: 0;
     in-out property <string> episode_context: "";
+    in property <string> watch_label: @tr("Start watching");
     // Set by AppWindow when the streams view was entered directly (Home
     // Continue deep-link) without visiting the episode list — see kb_back.
     in property <bool> deep_stream: false;
@@ -792,7 +793,7 @@ export component DetailPage {
 
     // Episode grid columns: 1 in narrow windows, otherwise scaled to the
     // available content width after page padding, capped at 4.
-    property <int> ep_cols: root.narrow ? 1 : Math.min(4, Math.max(2, Math.floor((root.episode_content_w - 12px) / 320px)));
+    property <int> ep_cols: root.narrow ? 1 : Math.min(4, Math.max(2, Math.floor((root.episode_content_w + root.card-gap) / (320px + root.card-gap))));
     // Equal-width episode cards: grid columns start at each cell's
     // preferred width (full unwrapped text even when wrapped — see Text
     // docs), so without an explicit cell width columns track content
@@ -801,15 +802,16 @@ export component DetailPage {
     // Must use root.width here: referencing the content layout's own
     // width feeds back through the ScrollView and binding-loops.
     property <length> episode_content_w: root.width - (root.narrow ? 40px + root.safe-left + root.safe-right : 128px + root.safe-left + root.safe-right);
-    property <length> ep_card_w: (root.episode_content_w - (root.ep_cols - 1) * 12px) / root.ep_cols;
+    property <length> card-gap: Theme.card_spacing;
+    property <length> ep_card_w: (root.episode_content_w - (root.ep_cols - 1) * root.card-gap) / root.ep_cols;
     // Phones keep seasons in one horizontal rail with the next card
     // peeking in. On wide windows the grid grows from a 180px minimum card;
     // cards are capped (same centered-cap scheme as the Discover grid), so the
     // wall never turns into a few giant banners on desktop.
     property <length> min-season: 180px;
     property <length> max-season: 240px;
-    property <int> season_cols: root.narrow ? 2 : Math.min(5, Math.max(3, Math.floor((root.episode_content_w + 12px) / (root.min-season + 12px))));
-    property <length> season_card_w: root.narrow ? Math.min(180px, Math.max(120px, (root.width - 40px - root.safe-left - root.safe-right) / 2.2)) : Math.min(root.max-season, (root.episode_content_w - (root.season_cols - 1) * 12px) / root.season_cols);
+    property <int> season_cols: root.narrow ? 2 : Math.min(5, Math.max(3, Math.floor((root.episode_content_w + root.card-gap) / (root.min-season + root.card-gap))));
+    property <length> season_card_w: root.narrow ? Math.min(180px, Math.max(120px, (root.width - 40px - root.safe-left - root.safe-right) / 2.2)) : Math.min(root.max-season, (root.episode_content_w - (root.season_cols - 1) * root.card-gap) / root.season_cols);
     // Columns actually used (partial last row still packs left).
     property <int> season_grid_cols: Math.min(root.season_cols, root.season_cards.length);
     // Series flow when an addon listed seasons; movies have none.
@@ -1598,7 +1600,7 @@ export component DetailPage {
                                 HorizontalLayout {
                                     spacing: 12px;
                                     if !root.has_episodes: Rectangle { horizontal-stretch: 1; }
-                                    if root.has_episodes: Rectangle {
+                                    if root.has_episodes: watch_action_button := Rectangle {
                                         horizontal-stretch: 1;
                                         min-width: 0px;
                                         height: root.narrow ? 56px : 62px;
@@ -1606,13 +1608,30 @@ export component DetailPage {
                                         background: watch_hero.has-hover ? Theme.current.primary_button_hover : Theme.current.primary_button;
                                         border-width: 1px;
                                         border-color: root.kb_active && root.kb_zone == 2 && !root.hero_library_focused ? Theme.current.text_bright : Theme.current.primary_button_border;
-                                        Text {
-                                            text: @tr("▶  Watch Now");
-                                            color: Theme.current.text_bright;
-                                            font-size: root.narrow ? 17px : 21px;
-                                            font-weight: 600;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
+                                        accessible-role: button;
+                                        accessible-label: root.watch_label;
+                                        HorizontalLayout {
+                                            padding-left: root.narrow ? 12px : 20px;
+                                            padding-right: root.narrow ? 12px : 20px;
+                                            spacing: 8px; alignment: center;
+                                            Rectangle {
+                                                width: 20px; height: 100%; horizontal-stretch: 0;
+                                                IcPlay {
+                                                    y: (parent.height - self.height) / 2;
+                                                    width: 20px; height: 20px;
+                                                    fill: Theme.current.on_accent;
+                                                }
+                                            }
+                                            Text {
+                                                text: root.watch_label;
+                                                color: Theme.current.on_accent;
+                                                font-size: root.narrow ? 14px : 18px;
+                                                font-weight: 600;
+                                                min-width: 0px; horizontal-stretch: 1;
+                                                wrap: word-wrap; max-lines: 2; overflow: elide;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
                                         }
                                         watch_hero := TouchArea {
                                             mouse-cursor: pointer;
@@ -1732,7 +1751,7 @@ export component DetailPage {
                                         col: 0;
                                         width: root.narrow ? root.width - 40px - root.safe-left - root.safe-right : (root.width - 128px - root.safe-left - root.safe-right - 24px) * 0.44;
                                         height: root.narrow ? 120px : 190px;
-                                        border-radius: 18px;
+                                        border-radius: Theme.card_corner_radius;
                                         clip: true;
                                         background: Theme.current.season_card;
                                         Image {
@@ -1758,7 +1777,7 @@ export component DetailPage {
                                     col: root.narrow ? 0 : 1;
                                     width: root.synopsis_width;
                                     background: Theme.current.season_caption;
-                                    border-radius: 18px;
+                                    border-radius: Theme.card_corner_radius;
                                     border-width: 1px;
                                     border-color: Theme.current.hover_overlay;
                                     VerticalLayout {
@@ -1912,7 +1931,7 @@ export component DetailPage {
                                     // Android and let the page wiggle sideways.
                                     season_picker := Rectangle {
                                         width: 100%;
-                                        height: root.season_cards.length == 0 ? 0px : (root.narrow ? root.season_card_w * 9 / 16 : Math.ceil(root.season_cards.length / root.season_cols) * (root.season_card_w * 9 / 16 + 12px) - 12px);
+                                        height: root.season_cards.length == 0 ? 0px : (root.narrow ? root.season_card_w * 9 / 16 : Math.ceil(root.season_cards.length / root.season_cols) * (root.season_card_w * 9 / 16 + root.card-gap) - root.card-gap);
                                         property <int> selected_index: root.season_combo_idx;
                                         changed selected_index => { season_flick.reveal_selected(); }
 
@@ -1940,7 +1959,7 @@ export component DetailPage {
                                                     self.content-x = 0px;
                                                     return;
                                                 }
-                                                let left = Math.max(0, root.season_combo_idx) * (root.season_card_w + 12px);
+                                                let left = Math.max(0, root.season_combo_idx) * (root.season_card_w + root.card-gap);
                                                 let right = left + root.season_card_w;
                                                 let target = left + self.content-x < 0px ? -left :
                                                     right + self.content-x > self.width ? self.width - right : self.content-x;
@@ -1954,9 +1973,9 @@ export component DetailPage {
                                             season_grid := GridLayout {
                                                 // The narrow row has its own scrollable width;
                                                 // desktop keeps the centered capped grid.
-                                                width: Math.max(0px, (root.narrow ? root.season_cards.length : root.season_grid_cols) * (root.season_card_w + 12px) - 12px);
+                                                width: Math.max(0px, (root.narrow ? root.season_cards.length : root.season_grid_cols) * (root.season_card_w + root.card-gap) - root.card-gap);
                                                 height: season_picker.height;
-                                                spacing: 12px;
+                                                spacing: root.card-gap;
 
                                                 for s[i] in root.season_cards: Rectangle {
                                                     row: root.narrow ? 0 : Math.floor(i / root.season_cols);
@@ -1967,7 +1986,7 @@ export component DetailPage {
                                                     width: root.season_card_w;
                                                     // Cinematic 16:9 cards.
                                                     height: root.season_card_w * 9 / 16;
-                                                    border-radius: 8px;
+                                                    border-radius: Theme.card_corner_radius;
                                                     clip: true;
                                                     background: Theme.current.episode_placeholder;
                                                     border-width: root.season_combo_idx == i ? 2px : 0px;
@@ -2273,7 +2292,7 @@ export component DetailPage {
                                     }
 
                                     GridLayout {
-                                        spacing: 12px;
+                                        spacing: root.card-gap;
 
                                         for e[i] in root.episode_rows: ep_card := Rectangle {
                                             row: Math.floor(i / root.ep_cols);
@@ -2295,7 +2314,7 @@ export component DetailPage {
                                             // row's thumbnails).
                                             clip: true;
                                             background: Theme.current.episode_card;
-                                            border-radius: 16px;
+                                            border-radius: Theme.card_corner_radius;
                                             border-width: root.kb_active && root.kb_zone == 3 && root.kb_ci == 2 && root.kb_ep == i ? 2px : 1px;
                                             border-color: root.kb_active && root.kb_zone == 3 && root.kb_ci == 2 && root.kb_ep == i ? Theme.current.focus_ring : Theme.current.border_card;
 

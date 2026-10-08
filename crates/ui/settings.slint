@@ -99,6 +99,8 @@ export component SettingsPage {
     in-out property <int> episode_start_index: 1;
     // Look and feel (Settings → Look and feel): master + per-category switches.
     in-out property <bool> true_black: false;
+    in-out property <float> card_corner_radius: 10;
+    in-out property <float> card_spacing: 8;
     in-out property <bool> animations: true;
     in-out property <bool> anim_transitions: true;
     in-out property <bool> anim_hover: true;
@@ -230,6 +232,29 @@ export component SettingsPage {
     }
     function schedule_setting(field: string) { root.settings_edited(field); }
 
+    function restore_theme_defaults() {
+        // Apply all controls before autosaving so each sync choice sees the
+        // complete reset, including when a field has a device-local override.
+        root.true_black = false;
+        root.card_corner_radius = 10;
+        root.card_spacing = 8;
+        root.schedule_setting("true_black");
+        root.schedule_setting("card_corner_radius");
+        root.schedule_setting("card_spacing");
+    }
+    function kb_theme_step(direction: int) {
+        if (root.kb_theme == 0) {
+            root.true_black = !root.true_black;
+            root.schedule_setting("true_black");
+        } else if (root.kb_theme == 1) {
+            root.card_corner_radius = Math.max(0, Math.min(24, root.card_corner_radius + direction));
+            root.schedule_setting("card_corner_radius");
+        } else if (root.kb_theme == 2) {
+            root.card_spacing = Math.max(0, Math.min(32, root.card_spacing + direction));
+            root.schedule_setting("card_spacing");
+        }
+    }
+
     // Nested "Downloaded episodes" list (Settings → Downloads) entrance. A
     // subpage swap inside the already-open subpage layer would otherwise pop
     // in with no transition, so the list slides/fades in on open (same
@@ -333,7 +358,7 @@ export component SettingsPage {
     // [field, add], 4 category rows, 5 image-cache rows, 6 display rows,
     // 7 torrent rows, 9 player rows, 10 look-and-feel rows, 11 sync rows,
     // 12 downloads rows, 14 license source links, 15 About → Licenses button,
-    // 16 Home catalog rows.
+    // 16 Home catalog rows, 17 Theme rows.
     // Left/Right moves between rows/zones; Enter activates; Backspace returns to the
     // landing (or Home at the landing). Text fields use edit mode (0 none, 1
     // addon url, 2 category, 3 torrent dir): Enter focuses the field, Enter
@@ -351,6 +376,7 @@ export component SettingsPage {
     property <int> kb_tr: 0; // torrent rows 0..5 (only 0 when streaming is off)
     property <int> kb_pr: 0; // player rows (see kb_player_n)
     property <int> kb_anr: 0; // look-and-feel rows 0..4
+    property <int> kb_theme: 0; // true black, corner radius, spacing, restore defaults
     property <int> kb_dl: 0; // downloads rows 0 delete-after-watched, 1 episodes
     property <int> kb_dlr: 0; // downloaded-episodes list row
     property <int> kb_about_idx: 0; // source row on Settings → About → Licenses
@@ -718,7 +744,11 @@ export component SettingsPage {
     }
 
     function kb_up() {
-        if (root.kb_zone == 17) { root.kb_zone = 0; return; }
+        if (root.kb_zone == 17) {
+            if (root.kb_theme > 0) { root.kb_theme -= 1; }
+            else { root.kb_zone = 0; }
+            return;
+        }
         if (root.kb_zone == 16) {
             if (root.kb_home > 0) {
                 root.kb_home -= 1;
@@ -824,7 +854,9 @@ export component SettingsPage {
     }
 
     function kb_down() {
-        if (root.kb_zone == 15) {
+        if (root.kb_zone == 17) {
+            root.kb_theme = Math.min(3, root.kb_theme + 1);
+        } else if (root.kb_zone == 15) {
             root.kb_nudge(-150px);
         } else if (root.kb_zone == 16) {
             if (root.kb_home + 1 < root.kb_home_n()) {
@@ -1156,8 +1188,7 @@ export component SettingsPage {
         } else if (root.kb_zone == 10) {
             root.kb_anim_flip(root.kb_anr);
         } else if (root.kb_zone == 17) {
-            root.true_black = !root.true_black;
-            root.schedule_setting("true_black");
+            root.kb_theme_step(-1);
         } else if (root.kb_zone == 16) {
             root.kb_home = Math.max(0, root.kb_home - 1);
         }
@@ -1217,8 +1248,7 @@ export component SettingsPage {
         } else if (root.kb_zone == 10) {
             root.kb_anim_flip(root.kb_anr);
         } else if (root.kb_zone == 17) {
-            root.true_black = !root.true_black;
-            root.schedule_setting("true_black");
+            root.kb_theme_step(1);
         } else if (root.kb_zone == 16) {
             root.kb_home = Math.min(root.kb_home_n() - 1, root.kb_home + 1);
         }
@@ -1309,8 +1339,8 @@ export component SettingsPage {
         } else if (root.kb_zone == 10) {
             root.kb_anim_flip(root.kb_anr);
         } else if (root.kb_zone == 17) {
-            root.true_black = !root.true_black;
-            root.schedule_setting("true_black");
+            if (root.kb_theme == 3) { root.restore_theme_defaults(); }
+            else if (root.kb_theme == 0) { root.kb_theme_step(1); }
         } else if (root.kb_zone == 16) {
             root.kb_home_activate();
         }
@@ -3149,14 +3179,60 @@ export component SettingsPage {
                                         ToggleSwitch {
                                             name: @tr("True black");
                                             checked <=> root.true_black;
-                                            focused: root.kb_zone == 17 && root.kb_active;
+                                            focused: root.kb_zone == 17 && root.kb_theme == 0 && root.kb_active;
                                             toggled => {
                                                 root.kb_active = SettingsStyle.keyboard-mode;
                                                 root.kb_zone = 17;
+                                                root.kb_theme = 0;
                                                 root.schedule_setting("true_black");
                                             }
                                         }
                                     } }
+                                    SettingsCard { SettingsRow {
+                                        setting-key: "card_corner_radius";
+                                        row-title: @tr("Card corner radius");
+                                        row-desc: @tr("Adjust media, season and episode card corners. Set to 0 for square corners.");
+                                        NumericSetting {
+                                            value <=> root.card_corner_radius;
+                                            minimum: 0; maximum: 24; step: 1; suffix: " px";
+                                            focused: root.kb_zone == 17 && root.kb_theme == 1 && root.kb_active;
+                                            changed(v) => {
+                                                root.kb_active = SettingsStyle.keyboard-mode;
+                                                root.kb_zone = 17;
+                                                root.kb_theme = 1;
+                                                root.schedule_setting("card_corner_radius");
+                                            }
+                                        }
+                                    } }
+                                    SettingsCard { SettingsRow {
+                                        setting-key: "card_spacing";
+                                        row-title: @tr("Card spacing");
+                                        row-desc: @tr("Space between cards in rows and grids.");
+                                        NumericSetting {
+                                            value <=> root.card_spacing;
+                                            minimum: 0; maximum: 32; step: 1; suffix: " px";
+                                            focused: root.kb_zone == 17 && root.kb_theme == 2 && root.kb_active;
+                                            changed(v) => {
+                                                root.kb_active = SettingsStyle.keyboard-mode;
+                                                root.kb_zone = 17;
+                                                root.kb_theme = 2;
+                                                root.schedule_setting("card_spacing");
+                                            }
+                                        }
+                                    } }
+                                    HorizontalLayout {
+                                        alignment: start;
+                                        PillButton {
+                                            label: @tr("Restore theme defaults");
+                                            focused: root.kb_zone == 17 && root.kb_theme == 3 && root.kb_active;
+                                            clicked => {
+                                                root.kb_active = SettingsStyle.keyboard-mode;
+                                                root.kb_zone = 17;
+                                                root.kb_theme = 3;
+                                                root.restore_theme_defaults();
+                                            }
+                                        }
+                                    }
                                 }
 
                                 if root.sel == 6: VerticalLayout {

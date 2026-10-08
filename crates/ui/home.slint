@@ -252,7 +252,7 @@ component ContinueCard inherits Rectangle {
             width: 100%;
             height: 100%;
             background: Theme.current.card;
-            border-radius: 10px;
+            border-radius: Theme.card_corner_radius;
             border-width: root.focused ? 2px : 0px;
             border-color: Theme.current.focus_ring;
 
@@ -267,7 +267,7 @@ component ContinueCard inherits Rectangle {
                 spacing: 0px;
                 continue_artwork := Rectangle {
                     height: root.card-width * 3 / 2;
-                    border-radius: 10px;
+                    border-radius: Theme.card_corner_radius;
                     clip: true;
                     background: Theme.current.home_artwork_placeholder;
                     if root.entry.is_loaded: Image { source: root.entry.poster; image-fit: cover; width: 100%; height: 100%; }
@@ -434,7 +434,7 @@ component UpcomingCard inherits Rectangle {
             width: 100%;
             height: 100%;
             background: Theme.current.card;
-            border-radius: 10px;
+            border-radius: Theme.card_corner_radius;
             border-width: root.focused ? 2px : 0px;
             border-color: Theme.current.focus_ring;
 
@@ -447,7 +447,7 @@ component UpcomingCard inherits Rectangle {
                 spacing: 0px;
                 upcoming_artwork := Rectangle {
                     height: root.card-width * 3 / 2;
-                    border-radius: 10px; clip: true; background: Theme.current.home_artwork_placeholder;
+                    border-radius: Theme.card_corner_radius; clip: true; background: Theme.current.home_artwork_placeholder;
                     if root.entry.is_loaded: Image { source: root.entry.poster; image-fit: cover; width: 100%; height: 100%; }
                     if !root.entry.is_loaded: Text { text: "🎬"; font-size: 34px; horizontal-alignment: center; vertical-alignment: center; }
                     if root.entry.ep_no != "": HomeEpisodeBadge {
@@ -511,7 +511,7 @@ component HomeCatalogPosterCard inherits Rectangle {
             height: 100%;
             y: (touch.has-hover && !touch.pressed && !root.touch_menus) ? -6px : 0px;
             animate y { duration: Anim.hover_lift; easing: ease-in-out; }
-            border-radius: 10px;
+            border-radius: Theme.card_corner_radius;
             background: Theme.current.card;
             border-width: root.focused ? 2px : 1px;
             border-color: root.focused ? Theme.current.focus_ring : Theme.current.border_soft;
@@ -1284,7 +1284,7 @@ export component HomePage {
     in property <int> system_back_request: 0;
     property <int> last_system_back_request: -1;
 
-    property <length> item-gap: 18px;
+    property <length> item-gap: Theme.card_spacing;
     // Same fluid scheme as Library: column count from a 160px minimum
     // card (always ≥ 2), live card width stretched to fill the row
     // (capped), grid centered when capped. Used by the subpage grids.

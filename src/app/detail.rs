@@ -119,6 +119,7 @@ impl Bridge {
         app.set_modal_visible(true);
         // Reset any leftover episode-picker state from a previous item.
         app.set_modal_episodes(false);
+        app.set_detail_watch_label(text::tr("Start watching").into());
         app.set_detail_deep_stream(false);
         app.set_episode_context(SharedString::default());
         app.set_season_names(Rc::new(VecModel::<SharedString>::from(vec![])).into());
@@ -1403,6 +1404,7 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
+        self.refresh_watch_action();
         let all = self.current_episode_rows();
         let total = all.len();
         // Clamp the stored page: the filter/season may have shrunk the list
@@ -2035,6 +2037,33 @@ impl Bridge {
         self.refresh_episode_rows();
     }
 
+    /// Keep the advertised episode identical to the primary action's target,
+    /// independent of the selected season, text filter or episode page.
+    pub(super) fn refresh_watch_action(&self) {
+        let label = {
+            let state = self.shared.lock().unwrap();
+            let Some(modal) = state.modal_item.as_ref() else {
+                return;
+            };
+            if let Some(video) = watch_now_episode(&modal.id, &modal.videos, &state.progress) {
+                let continuing = modal.videos.iter().any(|v| {
+                    state
+                        .progress
+                        .get(&progress_map_key(&modal.id, &v.id))
+                        .is_some_and(|p| p.watched || p.position_secs > 0.0 || p.play_count > 0)
+                });
+                text::watch_action(&episode_se_label(video), continuing)
+            } else if modal.episodes_loading {
+                text::tr("Start watching").into()
+            } else {
+                text::tr("Choose an episode").into()
+            }
+        };
+        if let Some(app) = self.app() {
+            app.set_detail_watch_label(label.into());
+        }
+    }
+
     /// Both Watch Now entry points share the same episode selection; streams
     /// remain a manual choice so quality/addon preferences are respected.
     pub(super) fn watch_now(&self) {
@@ -2072,14 +2101,13 @@ impl Bridge {
             let Some(origin) = modal.pending_watch_now else {
                 return;
             };
-            let target = next_episode_to_watch(&modal.id, &modal.videos, &state.progress).and_then(
-                |video| {
+            let target =
+                watch_now_episode(&modal.id, &modal.videos, &state.progress).and_then(|video| {
                     let season = video.season?;
                     let row = Self::filtered_row_index(&modal.videos, season, "", &video.id)?;
                     let season_index = modal.seasons.iter().position(|&s| s == season)?;
                     Some((season_index, row))
-                },
-            );
+                });
             if target.is_none() && modal.episodes_loading {
                 return;
             }
@@ -2503,6 +2531,7 @@ impl Bridge {
     /// decoded artwork and current list delegates wherever the row shape is
     /// unchanged.
     pub(super) fn refresh_detail_language_text(&self) {
+        self.refresh_watch_action();
         let Some(app) = self.app() else { return };
         if !app.get_modal_visible() {
             return;

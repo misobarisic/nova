@@ -254,6 +254,8 @@ export component AppWindow inherits Window {
     // --- Settings (animations) ----------------------------------------
     // Master + per-category animation switches (Settings → Look and feel).
     in-out property <bool> true_black: false;
+    in-out property <float> card_corner_radius: 10;
+    in-out property <float> card_spacing: 8;
     in-out property <bool> animations: true;
     in-out property <bool> anim_transitions: true;
     in-out property <bool> anim_hover: true;
@@ -386,6 +388,7 @@ export component AppWindow inherits Window {
     in-out property <int> stream_page_start: 0;
     in-out property <int> stream_total: 0;
     in-out property <string> episode_context: "";
+    in-out property <string> detail_watch_label: @tr("Start watching");
     // True while the streams view was entered directly (Home Continue
     // deep-link) without visiting the episode list: system back then closes
     // the modal instead of revealing the skipped list.
@@ -930,6 +933,7 @@ export component AppWindow inherits Window {
         episode_page_start <=> root.episode_page_start;
         episode_total <=> root.episode_total;
         episode_context <=> root.episode_context;
+        watch_label: root.detail_watch_label;
         deep_stream: root.detail_deep_stream;
         system_back_request: root.system_back_request;
         popup_open: root.categories_modal || root.library_duplicates_open;
@@ -1119,6 +1123,8 @@ export component AppWindow inherits Window {
         episode_start_index <=> root.episode_start_index;
         is_android: root.is_android;
         true_black <=> root.true_black;
+        card_corner_radius <=> root.card_corner_radius;
+        card_spacing <=> root.card_spacing;
         animations <=> root.animations;
         anim_transitions <=> root.anim_transitions;
         anim_hover <=> root.anim_hover;

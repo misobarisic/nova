@@ -427,9 +427,23 @@ pub struct CacheSettings {
     /// Pure black backgrounds (Settings → Theme), synced unless overridden.
     #[serde(default)]
     pub true_black: bool,
+    /// Corner radius in logical pixels for media and detail cards. Synced unless overridden.
+    #[serde(default = "default_card_corner_radius")]
+    pub card_corner_radius: u32,
+    /// Space in logical pixels between media/detail cards. Synced unless overridden.
+    #[serde(default = "default_card_spacing")]
+    pub card_spacing: u32,
     /// Device-local overrides, retaining a shared baseline for unseeded fields.
     #[serde(default)]
     pub sync_overrides: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+const fn default_card_corner_radius() -> u32 {
+    10
+}
+
+const fn default_card_spacing() -> u32 {
+    8
 }
 
 impl Default for CacheSettings {
@@ -470,6 +484,8 @@ impl Default for CacheSettings {
             anim_nav_slide: true,
             language: Language::English,
             true_black: false,
+            card_corner_radius: default_card_corner_radius(),
+            card_spacing: default_card_spacing(),
             sync_overrides: Default::default(),
         }
     }
@@ -865,6 +881,20 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(restored.quality, 95);
         assert_eq!(restored.sync_overrides["quality"], 60);
+    }
+
+    #[test]
+    fn card_theme_defaults_migrate_older_settings_and_preserve_square_zero_gap() {
+        let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
+        let mut settings: CacheSettings = serde_json::from_str(older).unwrap();
+        assert_eq!(settings.card_corner_radius, 10);
+        assert_eq!(settings.card_spacing, 8);
+        settings.card_corner_radius = 0;
+        settings.card_spacing = 0;
+        let restored: CacheSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.card_corner_radius, 0);
+        assert_eq!(restored.card_spacing, 0);
     }
 
     #[test]

@@ -67,6 +67,8 @@ pub fn apply_theme(app: &AppWindow, true_black: bool) {
         palette.border_card = slint::Color::from_argb_u8(32, 255, 255, 255);
         palette.border_subtle = slint::Color::from_argb_u8(24, 255, 255, 255);
     }
+    theme.set_card_corner_radius(app.get_card_corner_radius().round().clamp(0.0, 24.0));
+    theme.set_card_spacing(app.get_card_spacing().round().clamp(0.0, 32.0));
     theme.set_true_black(true_black);
     theme.set_current(palette);
 }

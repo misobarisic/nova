@@ -97,6 +97,51 @@ fn theme_search_toggle_resize_and_android_back() {
     settle(&app);
     assert!((initial_mask_y - mask.absolute_position().y - 108.0).abs() < 1.0);
     assert!((mask.size().height - 124.0).abs() < 1.0);
+    // Both numeric controls are keyboard-reachable and feed the mounted
+    // theme immediately. Zero must produce genuinely square cards/no gaps.
+    key(&app, slint::platform::Key::DownArrow.into());
+    for _ in 0..10 {
+        key(&app, slint::platform::Key::LeftArrow.into());
+    }
+    assert_eq!(app.get_card_corner_radius(), 0.0);
+    assert_eq!(app.global::<nova::Theme>().get_card_corner_radius(), 0.0);
+    key(&app, slint::platform::Key::DownArrow.into());
+    for _ in 0..8 {
+        key(&app, slint::platform::Key::LeftArrow.into());
+    }
+    assert_eq!(app.get_card_spacing(), 0.0);
+    assert_eq!(app.global::<nova::Theme>().get_card_spacing(), 0.0);
+    assert!(edits.borrow().iter().any(|f| f == "card_corner_radius"));
+    assert!(edits.borrow().iter().any(|f| f == "card_spacing"));
+
+    // Reset covers the full Theme section and remains contained at phone
+    // widths, even after a live resize. Keep an unrelated preference intact.
+    app.set_animations(false);
+    app.set_true_black(true);
+    nova_ui::apply_theme(&app, true);
+    for width in [320, 390, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 900));
+        settle(&app);
+        let reset = ElementHandle::find_by_accessible_label(&app, "Restore theme defaults")
+            .last()
+            .unwrap();
+        let p = reset.absolute_position();
+        assert!(p.x >= 0.0 && p.x + reset.size().width <= width as f32);
+    }
+    key(&app, slint::platform::Key::DownArrow.into());
+    key(&app, slint::platform::Key::Return.into());
+    assert!(!app.get_true_black());
+    assert!(!app.global::<nova::Theme>().get_true_black());
+    assert_eq!(app.get_card_corner_radius(), 10.0);
+    assert_eq!(app.get_card_spacing(), 8.0);
+    assert_eq!(app.global::<nova::Theme>().get_card_corner_radius(), 10.0);
+    assert_eq!(app.global::<nova::Theme>().get_card_spacing(), 8.0);
+    assert!(!app.get_animations());
+    assert_eq!(
+        &edits.borrow()[edits.borrow().len() - 3..],
+        ["true_black", "card_corner_radius", "card_spacing"]
+    );
+
     app.window().set_size(slint::PhysicalSize::new(390, 844));
     settle(&app);
     app.set_system_back_request(app.get_system_back_request() + 1);

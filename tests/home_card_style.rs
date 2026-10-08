@@ -108,10 +108,10 @@ fn home_card_geometry_menus_and_footer_flick_remain_usable() {
     for width in [320, 360, 390, 480, 620] {
         app.window().set_size(slint::PhysicalSize::new(width, 1600));
         idle(400);
-        // These dimensions are from the pre-restyle cards: 18px page insets,
-        // 18px row gaps and the original 2.5-stride card-width calculation.
+        // Keep the safe 18px page insets and carousel peek while using the
+        // tighter default 8px card gap.
         let viewport = width as f32 - 36.0;
-        let expected_width = ((viewport + 18.0) / 2.5 - 18.0).max(96.0);
+        let expected_width = ((viewport + 8.0) / 2.5 - 8.0).max(96.0);
         for (kind, footer, title, status) in [
             ("ContinueCard", 76.0, "continue_title", "continue_status"),
             ("UpcomingCard", 88.0, "upcoming_title", "upcoming_date"),
@@ -134,13 +134,13 @@ fn home_card_geometry_menus_and_footer_flick_remain_usable() {
             }
             let stride = cards[1].absolute_position().x - cards[0].absolute_position().x;
             assert!(
-                (stride - expected_width - 18.0).abs() < 0.5,
-                "preserve row spacing"
+                (stride - expected_width - 8.0).abs() < 0.5,
+                "use tighter default spacing"
             );
             let visible = 2.0 + (viewport - 2.0 * stride) / expected_width;
             assert!(
                 (2.35..2.5).contains(&visible),
-                "preserve the card size from the original roughly 2.45-card layout"
+                "retain the carousel peek with tighter spacing"
             );
         }
         let cards = elements(&app, "ContinueCard");
@@ -158,6 +158,19 @@ fn home_card_geometry_menus_and_footer_flick_remain_usable() {
                 .find_first()
                 .is_none()
         );
+    }
+
+    // Changing the theme spacing must invalidate both card width and stride
+    // in already-mounted carousels, including the zero-gap endpoint.
+    for gap in [0.0, 24.0, 8.0] {
+        app.set_card_spacing(gap);
+        nova_ui::apply_theme(&app, false);
+        idle(400);
+        let cards = elements(&app, "ContinueCard");
+        let stride = cards[1].absolute_position().x - cards[0].absolute_position().x;
+        let expected_width = ((620.0 - 36.0 + gap) / 2.5 - gap).max(96.0);
+        assert!((cards[0].size().width - expected_width).abs() < 0.5);
+        assert!((stride - expected_width - gap).abs() < 0.5);
     }
 
     // Artwork fills the window even with a status bar and landscape cutouts;
@@ -188,7 +201,7 @@ fn home_card_geometry_menus_and_footer_flick_remain_usable() {
     }
     let card = &elements(&app, "ContinueCard")[0];
     assert!((card.absolute_position().x - 30.0).abs() < 0.5);
-    assert!((card.size().width - ((390.0 - 36.0 - 20.0 + 18.0) / 2.5 - 18.0)).abs() < 0.5);
+    assert!((card.size().width - ((390.0 - 36.0 - 20.0 + 8.0) / 2.5 - 8.0)).abs() < 0.5);
     // Keyboard follow includes the new content padding, otherwise the focused
     // card's right edge would still be clipped by exactly that inset.
     let card_width = card.size().width;
@@ -206,7 +219,7 @@ fn home_card_geometry_menus_and_footer_flick_remain_usable() {
         } else {
             app.get_home_upcoming_x()
         };
-        let left = 30.0 + 3.0 * (card_width + 18.0) + offset;
+        let left = 30.0 + 3.0 * (card_width + 8.0) + offset;
         assert!(left >= -0.5 && left + card_width <= 390.5);
         if zone == 1 {
             app.set_home_kb_idx(0);

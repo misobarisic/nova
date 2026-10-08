@@ -249,6 +249,27 @@ pub(crate) fn next_episode_to_watch<'a>(
     }
     None
 }
+/// The primary detail action resumes the latest unfinished episode before
+/// offering the next released one. Explicit progress also permits dateless
+/// episodes; a future air date still prevents an automatic offer.
+pub(crate) fn watch_now_episode<'a>(
+    series_id: &str,
+    episodes: &'a [Video],
+    map: &HashMap<String, EpisodeProgress>,
+) -> Option<&'a Video> {
+    let today = today_days();
+    episodes
+        .iter()
+        .filter(|v| v.season.is_some() && episode_is_out(v, today))
+        .filter_map(|v| {
+            let p = map.get(&progress_map_key(series_id, &v.id))?;
+            resumable_position(p.position_secs, p.duration_secs, p.watched).then_some((v, p))
+        })
+        .max_by_key(|(v, p)| (p.updated_at_secs, v.id.as_str()))
+        .map(|(v, _)| v)
+        .or_else(|| next_episode_to_watch(series_id, episodes, map))
+}
+
 /// Split a series' episode list for the Home → Upcoming caught-up check:
 /// future (index, air days) pairs plus available / available-watched tallies.
 /// Dateless episodes are skipped entirely (unknown schedule — they neither

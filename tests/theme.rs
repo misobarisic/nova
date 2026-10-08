@@ -15,6 +15,7 @@ slint::slint! {
     export component ThemeHarness inherits Window {
         width: 480px;
         height: 360px;
+        out property <length> card_radius: card.border-radius;
         out property <brush> card_fill: card.background;
         out property <brush> card_border: card.border-color;
         out property <brush> button_fill: button.background;
@@ -44,6 +45,11 @@ fn existing_theme_defaults_and_live_palette_replacement_reach_shared_controls() 
     harness.global::<Anim>().set_hover(false);
     let theme = harness.global::<Theme>();
     let original = theme.get_current();
+    assert_eq!(harness.get_card_radius(), 10.0);
+    for radius in [0.0, 24.0, 10.0] {
+        theme.set_card_corner_radius(radius);
+        assert_eq!(harness.get_card_radius(), radius);
+    }
 
     assert_eq!(
         harness.get_card_fill(),
