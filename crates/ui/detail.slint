@@ -1528,6 +1528,7 @@ export component DetailPage {
                                 alignment: start;
                                 detail_title := TitleArtwork {
                                     title: root.selected_title; logo: root.selected_logo;
+                                    title-alignment: root.narrow ? Theme.hero_title_alignment : 0;
                                     width: 100%; logo-height: root.narrow ? 88px : 136px;
                                     font-size: root.narrow ? 34px : (root.width >= 1200px ? 64px : 44px);
                                     max-lines: 3;

@@ -8,6 +8,8 @@ export component TitleArtwork inherits Rectangle {
     in property <length> font-size: 44px;
     in property <length> logo-height: 100px;
     in property <int> max-lines: 2;
+    // 0 = left, 1 = center, 2 = right.
+    in property <int> title-alignment: 0;
     property <bool> has-logo: root.logo.width > 0 && root.logo.height > 0;
     height: root.has-logo
         ? Math.min(root.logo-height, root.width * root.logo.height / Math.max(1, root.logo.width))
@@ -15,7 +17,9 @@ export component TitleArtwork inherits Rectangle {
     min-width: 0px;
 
     if root.has-logo: title_logo := Image {
-        x: 0px; y: 0px;
+        x: root.title-alignment == 2 ? root.width - self.width
+            : root.title-alignment == 1 ? (root.width - self.width) / 2 : 0px;
+        y: 0px;
         width: Math.min(root.width, root.height * root.logo.width / Math.max(1, root.logo.height));
         height: 100%;
         source: root.logo;
@@ -27,6 +31,7 @@ export component TitleArtwork inherits Rectangle {
         visible: !root.has-logo;
         width: 100%;
         text: root.title;
+        horizontal-alignment: root.title-alignment == 2 ? right : root.title-alignment == 1 ? center : left;
         font-size: root.font-size;
         font-weight: 800;
         color: Theme.current.text_bright;

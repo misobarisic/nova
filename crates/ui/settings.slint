@@ -106,6 +106,7 @@ export component SettingsPage {
     in-out property <float> status_bar_gradient: 80;
     in-out property <int> home_backdrop_size: 1;
     in-out property <int> detail_backdrop_size: 1;
+    in-out property <int> hero_title_alignment: 1;
     in-out property <bool> animations: true;
     in-out property <bool> anim_transitions: true;
     in-out property <bool> anim_hover: true;
@@ -262,12 +263,14 @@ export component SettingsPage {
         root.status_bar_gradient = 80;
         root.home_backdrop_size = 1;
         root.detail_backdrop_size = 1;
+        root.hero_title_alignment = 1;
         root.schedule_setting("true_black");
         root.schedule_setting("card_corner_radius");
         root.schedule_setting("card_spacing");
         root.schedule_setting("status_bar_gradient");
         root.schedule_setting("home_backdrop_size");
         root.schedule_setting("detail_backdrop_size");
+        root.schedule_setting("hero_title_alignment");
     }
     function kb_theme_step(direction: int) {
         if (root.kb_theme == 0) {
@@ -293,6 +296,9 @@ export component SettingsPage {
         } else if (root.kb_theme == 5) {
             root.detail_backdrop_size = Math.max(0, Math.min(2, root.detail_backdrop_size + direction));
             root.schedule_setting("detail_backdrop_size");
+        } else if (root.kb_theme == 6) {
+            root.hero_title_alignment = Math.max(0, Math.min(2, root.hero_title_alignment + direction));
+            root.schedule_setting("hero_title_alignment");
         }
     }
 
@@ -417,7 +423,7 @@ export component SettingsPage {
     property <int> kb_tr: 0; // torrent rows 0..5 (only 0 when streaming is off)
     property <int> kb_pr: 0; // player rows (see kb_player_n)
     property <int> kb_anr: 0; // look-and-feel rows 0..4
-    property <int> kb_theme: 0; // true black, radius, spacing, status fade, Home/Detail size, reset
+    property <int> kb_theme: 0; // true black, radius, spacing, status fade, Home/Detail size, title alignment, reset
     property <int> kb_dl: 0; // downloads rows 0 delete-after-watched, 1 episodes
     property <int> kb_dlr: 0; // downloaded-episodes list row
     property <int> kb_about_idx: 0; // source row on Settings → About → Licenses
@@ -896,7 +902,7 @@ export component SettingsPage {
 
     function kb_down() {
         if (root.kb_zone == 17) {
-            root.kb_theme = Math.min(6, root.kb_theme + 1);
+            root.kb_theme = Math.min(7, root.kb_theme + 1);
         } else if (root.kb_zone == 15) {
             root.kb_nudge(-150px);
         } else if (root.kb_zone == 16) {
@@ -1380,7 +1386,7 @@ export component SettingsPage {
         } else if (root.kb_zone == 10) {
             root.kb_anim_flip(root.kb_anr);
         } else if (root.kb_zone == 17) {
-            if (root.kb_theme == 6) { root.restore_theme_defaults(); }
+            if (root.kb_theme == 7) { root.restore_theme_defaults(); }
             else if (root.kb_theme == 0) { root.kb_theme_step(1); }
         } else if (root.kb_zone == 16) {
             root.kb_home_activate();
@@ -3327,15 +3333,30 @@ export component SettingsPage {
                                             }
                                         }
                                     } }
+                                    SettingsCard { SettingsRow {
+                                        setting-key: "hero_title_alignment";
+                                        row-title: @tr("Title alignment");
+                                        row-desc: @tr("Align titles on narrow Home and Detail screens, plus Home featured metadata.");
+                                        Segmented {
+                                            labels: [@tr("Left"), @tr("Center"), @tr("Right")];
+                                            current_index <=> root.hero_title_alignment;
+                                            focused: root.kb_zone == 17 && root.kb_theme == 6 && root.kb_active;
+                                            picked(i) => {
+                                                root.kb_active = SettingsStyle.keyboard-mode;
+                                                root.kb_zone = 17; root.kb_theme = 6;
+                                                root.schedule_setting("hero_title_alignment");
+                                            }
+                                        }
+                                    } }
                                     HorizontalLayout {
                                         alignment: start;
                                         PillButton {
                                             label: @tr("Restore theme defaults");
-                                            focused: root.kb_zone == 17 && root.kb_theme == 6 && root.kb_active;
+                                            focused: root.kb_zone == 17 && root.kb_theme == 7 && root.kb_active;
                                             clicked => {
                                                 root.kb_active = SettingsStyle.keyboard-mode;
                                                 root.kb_zone = 17;
-                                                root.kb_theme = 6;
+                                                root.kb_theme = 7;
                                                 root.restore_theme_defaults();
                                             }
                                         }

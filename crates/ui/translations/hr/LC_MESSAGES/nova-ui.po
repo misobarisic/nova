@@ -1925,3 +1925,18 @@ msgstr "Prostrano"
 
 msgid "Choose how much space sits between cards. Compact is the default."
 msgstr "Odaberite razmak između kartica. Kompaktno je zadana vrijednost."
+
+msgid "Title alignment"
+msgstr "Poravnanje naslova"
+
+msgid "Align titles on narrow Home and Detail screens, plus Home featured metadata."
+msgstr "Poravnajte naslove na uskim zaslonima početne stranice i detalja te metapodatke istaknutog prikaza početne stranice."
+
+msgid "Left"
+msgstr "Lijevo"
+
+msgid "Center"
+msgstr "Sredina"
+
+msgid "Right"
+msgstr "Desno"

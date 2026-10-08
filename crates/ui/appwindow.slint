@@ -260,6 +260,7 @@ export component AppWindow inherits Window {
     in-out property <float> status_bar_gradient: 80;
     in-out property <int> home_backdrop_size: 1;
     in-out property <int> detail_backdrop_size: 1;
+    in-out property <int> hero_title_alignment: 1;
     in-out property <bool> animations: true;
     in-out property <bool> anim_transitions: true;
     in-out property <bool> anim_hover: true;
@@ -1133,6 +1134,7 @@ export component AppWindow inherits Window {
         status_bar_gradient <=> root.status_bar_gradient;
         home_backdrop_size <=> root.home_backdrop_size;
         detail_backdrop_size <=> root.detail_backdrop_size;
+        hero_title_alignment <=> root.hero_title_alignment;
         animations <=> root.animations;
         anim_transitions <=> root.anim_transitions;
         anim_hover <=> root.anim_hover;

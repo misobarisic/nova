@@ -444,6 +444,9 @@ pub fn tr(english: &'static str) -> &'static str {
         "Start" => "Počnite",
         "Continue" => "Nastavite",
         "Choose an episode" => "Odaberite epizodu",
+        "Left" => "Lijevo",
+        "Center" => "Sredina",
+        "Right" => "Desno",
         "Small" => "Malo",
         "Medium" => "Srednje",
         "Large" => "Veliko",
@@ -1121,6 +1124,11 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         .map(|n| n.to_string())
         .unwrap_or_else(|| value.to_string());
     match field {
+        "hero_title_alignment" => match value.as_str() {
+            Some("left") => tr("Left").into(),
+            Some("right") => tr("Right").into(),
+            _ => tr("Center").into(),
+        },
         "home_backdrop_size" | "detail_backdrop_size" => match value.as_str() {
             Some("small") => tr("Small").into(),
             Some("large") => tr("Large").into(),

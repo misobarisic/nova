@@ -153,6 +153,7 @@ impl Bridge {
             app.set_status_bar_gradient(settings.status_bar_gradient.min(100) as f32);
             app.set_home_backdrop_size(settings.home_backdrop_size.index());
             app.set_detail_backdrop_size(settings.detail_backdrop_size.index());
+            app.set_hero_title_alignment(settings.hero_title_alignment.index());
             app.set_animations(settings.animations);
             app.set_anim_transitions(settings.anim_transitions);
             app.set_anim_hover(settings.anim_hover);
@@ -305,6 +306,9 @@ impl Bridge {
                 status_bar_gradient: app.get_status_bar_gradient().round().clamp(0.0, 100.0) as u32,
                 home_backdrop_size: BackdropSize::from_index(app.get_home_backdrop_size()),
                 detail_backdrop_size: BackdropSize::from_index(app.get_detail_backdrop_size()),
+                hero_title_alignment: nova_config::HeroTitleAlignment::from_index(
+                    app.get_hero_title_alignment(),
+                ),
                 animations: app.get_animations(),
                 anim_transitions: app.get_anim_transitions(),
                 anim_hover: app.get_anim_hover(),
@@ -322,6 +326,7 @@ impl Bridge {
         app.set_status_bar_gradient(settings.status_bar_gradient as f32);
         app.set_home_backdrop_size(settings.home_backdrop_size.index());
         app.set_detail_backdrop_size(settings.detail_backdrop_size.index());
+        app.set_hero_title_alignment(settings.hero_title_alignment.index());
         {
             let mut state = self.shared.lock().unwrap();
             state.cache_settings = settings.clone();

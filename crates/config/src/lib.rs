@@ -67,6 +67,34 @@ impl BackdropSize {
     }
 }
 
+/// Horizontal title logo/text alignment on narrow Home and Detail layouts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeroTitleAlignment {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+impl HeroTitleAlignment {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            0 => Self::Left,
+            2 => Self::Right,
+            _ => Self::Center,
+        }
+    }
+
+    pub fn index(self) -> i32 {
+        match self {
+            Self::Left => 0,
+            Self::Center => 1,
+            Self::Right => 2,
+        }
+    }
+}
+
 /// Default torrent cache cap in MB (20 GiB).
 fn default_torrent_max_mb() -> u64 {
     20480
@@ -468,6 +496,9 @@ pub struct CacheSettings {
     pub home_backdrop_size: BackdropSize,
     #[serde(default)]
     pub detail_backdrop_size: BackdropSize,
+    /// Narrow Home/Detail title alignment, synced unless overridden.
+    #[serde(default)]
+    pub hero_title_alignment: HeroTitleAlignment,
     /// Device-local overrides, retaining a shared baseline for unseeded fields.
     #[serde(default)]
     pub sync_overrides: std::collections::BTreeMap<String, serde_json::Value>,
@@ -528,6 +559,7 @@ impl Default for CacheSettings {
             status_bar_gradient: default_status_bar_gradient(),
             home_backdrop_size: BackdropSize::default(),
             detail_backdrop_size: BackdropSize::default(),
+            hero_title_alignment: HeroTitleAlignment::default(),
             sync_overrides: Default::default(),
         }
     }

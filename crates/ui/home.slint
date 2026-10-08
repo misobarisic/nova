@@ -949,6 +949,7 @@ component FeaturedCaption inherits VerticalLayout {
 
     caption_title := TitleArtwork {
         title: root.slide.title; logo: root.slide.logo;
+        title-alignment: root.narrow ? Theme.hero_title_alignment : 0;
         width: 100%;
         logo-height: root.narrow ? 76px : 112px;
         font-size: root.narrow ? (root.banner_width < 400px ? 30px : 36px)
@@ -961,7 +962,9 @@ component FeaturedCaption inherits VerticalLayout {
     }
     caption_metadata := HorizontalLayout {
         width: 100%; height: root.narrow ? 26px : 30px;
-        spacing: root.narrow ? 10px : 16px; alignment: start;
+        spacing: root.narrow ? 10px : 16px;
+        alignment: !root.narrow || Theme.hero_title_alignment == 0 ? start
+            : Theme.hero_title_alignment == 2 ? end : center;
         if root.slide.media_type != "": FeaturedBadge { label: root.media_label(); narrow: root.narrow; }
         if root.slide.rating != "": FeaturedBadge { label: root.slide.rating; icon: 1; narrow: root.narrow; }
         if root.slide.release_info != "": FeaturedBadge { label: root.slide.release_info; icon: 3; narrow: root.narrow; }
