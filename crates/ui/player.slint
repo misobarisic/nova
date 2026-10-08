@@ -8,8 +8,9 @@ import {
 } from "icons.slint";
 import { Anim } from "anim.slint";
 import { SpeedControl, PlaybackSpeed } from "speedcontrol.slint";
+import { SliderGesture } from "slider-touch.slint";
 
-// 40×40 rounded-square hit-target that tints on hover and hosts any icon.
+// Rounded player control with the same purple selected surface as menus.
 component IconBtn inherits Rectangle {
     in property <bool> active: false;
     // 6-button nav highlight.
@@ -25,7 +26,8 @@ component IconBtn inherits Rectangle {
     border-radius: 10px;
     border-width: focused ? 2px : 0px;
     border-color: Theme.current.focus_ring;
-    background: (root.active || touch.has-hover) ? Theme.current.player_control_hover : root.base;
+    background: root.active ? Theme.current.selection_fill
+        : touch.has-hover ? Theme.current.player_control_hover : root.base;
     touch := TouchArea {
         width: 100%;
         height: 100%;
@@ -35,87 +37,71 @@ component IconBtn inherits Rectangle {
     @children
 }
 
-// One row of the Miru-style track menu: [icon] label …… value [✓ / >].
+// Shared category/track row: measured title, optional secondary text, and a
+// soft selected surface. Only categories get a chevron; tracks are direct picks.
 component MenuRow inherits Rectangle {
-    in property <int> icon_kind: 0;   // 0 = none, 1 = music note, 2 = captions
+    in property <int> icon_kind: 0; // 0 none, 1 audio, 2 captions, 3 speed, 4 decoder
     in property <string> label;
     in property <string> value;
     in property <bool> selected: false;
-    // 6-button nav highlight.
     in property <bool> focused: false;
+    in property <bool> submenu: false;
     callback activate();
 
-    height: 44px;
-    border-radius: 8px;
-    background: root.focused ? Theme.current.accent : (row_t.has-hover ? Theme.current.border_card : transparent);
+    property <length> label_x: root.icon_kind == 0 ? 14px : 50px;
+    property <length> label_h: Math.min(40px, row_label.preferred-height);
+    property <length> text_h: root.label_h + (root.value != "" ? 20px : 0px);
+    height: Math.max(60px, root.text_h + 20px);
+    border-radius: 10px;
+    border-width: root.focused ? 2px : 0px;
+    border-color: Theme.current.focus_ring;
+    background: root.selected ? Theme.current.selection_fill
+        : row_t.has-hover ? Theme.current.control_hover : transparent;
 
-    HorizontalLayout {
-        padding-left: 16px;
-        padding-right: 12px;
-        spacing: 12px;
-
-        Rectangle {
-            width: 22px;
-            height: 100%;
-
-            if icon_kind == 1: IcMusic {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                fill: Theme.current.text_bright;
-            }
-            if icon_kind == 2: IcCaptions {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 20px;
-                height: 20px;
-                fill: Theme.current.text_bright;
-            }
+    icon_host := Rectangle {
+        x: 14px; width: 24px; height: 100%;
+        if root.icon_kind == 1: IcMusic {
+            width: 22px; height: 22px; y: (parent.height - self.height) / 2;
+            fill: Theme.current.accent_soft;
         }
-
-        Text {
-            text: label;
-            color: Theme.current.text_bright;
-            font-size: 14px;
-            vertical-alignment: center;
-            overflow: elide;
-            horizontal-stretch: 1;
+        if root.icon_kind == 2: IcCaptions {
+            width: 22px; height: 22px; y: (parent.height - self.height) / 2;
+            fill: Theme.current.accent_soft;
         }
-
-        if value != "": Text {
-            text: value;
-            color: Theme.current.text_player_muted;
-            font-size: 13px;
-            vertical-alignment: center;
+        if root.icon_kind == 3: IcPlay {
+            width: 22px; height: 22px; y: (parent.height - self.height) / 2;
+            fill: Theme.current.accent_soft;
         }
-
-        Rectangle {
-            width: 16px;
-            height: 100%;
-
-            if selected: IcCheck {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 16px;
-                height: 16px;
-                fill: Theme.current.text_bright;
-            }
-            if !selected: IcChevronRight {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 16px;
-                height: 16px;
-                fill: Theme.current.player_secondary;
-            }
+        if root.icon_kind == 4: IcSettingsGear {
+            width: 22px; height: 22px; y: (parent.height - self.height) / 2;
+            fill: Theme.current.accent_soft;
         }
     }
-
+    row_label := Text {
+        x: root.label_x; y: (root.height - root.text_h) / 2;
+        width: Math.max(0px, root.width - root.label_x - 40px);
+        height: root.label_h;
+        text: root.label; color: Theme.current.text_bright;
+        font-size: 14px; font-weight: 600;
+        wrap: word-wrap; overflow: elide;
+    }
+    if root.value != "": Text {
+        x: root.label_x; y: row_label.y + root.label_h + 4px;
+        width: row_label.width; height: 16px;
+        text: root.value; color: Theme.current.text_secondary;
+        font-size: 12px; overflow: elide;
+    }
+    if root.selected: IcCheck {
+        x: root.width - 30px; y: (root.height - self.height) / 2;
+        width: 18px; height: 18px; fill: Theme.current.accent_soft;
+    }
+    if root.submenu && !root.selected: IcChevronRight {
+        x: root.width - 28px; y: (root.height - self.height) / 2;
+        width: 16px; height: 16px; fill: Theme.current.text_muted;
+    }
     row_t := TouchArea {
-        width: 100%;
-        height: 100%;
-        mouse-cursor: pointer;
-        clicked => { activate(); }
+        width: 100%; height: 100%; mouse-cursor: pointer;
+        clicked => { root.activate(); }
     }
 }
 
@@ -134,7 +120,7 @@ component TrackMenu inherits Rectangle {
     width: Math.min(340px, self.max_w);
     height: menu_scroll.height;
     background: Theme.current.player_menu;
-    border-radius: 10px;
+    border-radius: 16px;
     border-width: 1px;
     border-color: Theme.current.player_menu_border;
     drop-shadow-blur: 24px;
@@ -152,7 +138,8 @@ component TrackMenu inherits Rectangle {
         mouse-drag-pan-enabled: true;
 
         menu_col := VerticalLayout {
-            spacing: 2px;
+            padding: 8px;
+            spacing: 4px;
 
             if with_off_row: MenuRow {
                 label: @tr("Off");
@@ -185,12 +172,23 @@ component TrackMenu inherits Rectangle {
 }
 
 // Player settings panel (opened by the gear button in the bottom control
-// row): a dimmed backdrop with a centered card whose rows open submenus.
+// row): an anchored card on wide screens and a centered card on narrow ones.
 // Holds the hardware-decoder picker (Android) plus the subtitle and audio
 // track pickers. On narrow layouts the track pickers live here to save
 // control-row space; on wide layouts they duplicate the quick buttons so
 // the panel is available on every platform. Long row lists scroll.
 component SettingsMenu inherits Rectangle {
+    in property <bool> narrow;
+    in property <length> anchor_x;
+    in property <length> anchor_y;
+    in property <length> safe_top;
+    in property <length> safe_left;
+    in property <length> safe_right;
+    // Very short landscape windows use the centered layout to retain room.
+    property <bool> anchored: !root.narrow && root.height >= 320px;
+    property <length> top_inset: root.safe_top + 16px;
+    property <length> card_limit: Math.max(0px, root.anchored
+        ? root.anchor_y - root.top_inset - 24px : root.height - root.top_inset - 16px);
     // Current submenu: 0 = root, 1 = hardware decoding (Android), 2 =
     // subtitles, 3 = audio, 4 = playback speed. Two-way bound to PlayerOverlay
     // so the keyboard handler can drive it.
@@ -236,11 +234,11 @@ component SettingsMenu inherits Rectangle {
         if (root.page == 4) {
             return @tr("Playback speed");
         }
-        return @tr("Player settings");
+        return @tr("Playback settings");
     }
 
-    // Dim backdrop; tapping outside the card dismisses the modal.
-    Rectangle { width: 100%; height: 100%; background: Theme.current.scrim_player_feedback; }
+    // Compact layouts dim the video; both layouts dismiss on an outside tap.
+    Rectangle { width: 100%; height: 100%; background: root.anchored ? transparent : Theme.current.scrim_player_feedback; }
     backdrop_touch := TouchArea {
         width: 100%;
         height: 100%;
@@ -248,12 +246,17 @@ component SettingsMenu inherits Rectangle {
     }
 
     card := Rectangle {
-        width: Math.min(300px, root.width - 48px);
+        width: Math.max(0px, Math.min(root.anchored ? 400px : 380px,
+            root.width - root.safe_left - root.safe_right - 32px));
         height: card_col.preferred-height;
-        x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2;
+        x: root.anchored
+            ? Math.clamp(root.anchor_x - self.width, 16px + root.safe_left,
+                Math.max(16px + root.safe_left, root.width - root.safe_right - 16px - self.width))
+            : root.safe_left + (root.width - root.safe_left - root.safe_right - self.width) / 2;
+        y: root.anchored ? Math.max(root.top_inset, root.anchor_y - 24px - self.height)
+            : root.top_inset + Math.max(0px, (root.height - root.top_inset - 16px - self.height) / 2);
         background: Theme.current.player_menu;
-        border-radius: 12px;
+        border-radius: 16px;
         border-width: 1px;
         border-color: Theme.current.player_menu_border;
         drop-shadow-blur: 24px;
@@ -263,13 +266,13 @@ component SettingsMenu inherits Rectangle {
         TouchArea { width: 100%; height: 100%; }
 
         card_col := VerticalLayout {
-            padding: 8px;
-            spacing: 2px;
+            padding: 16px;
+            spacing: 12px;
             alignment: start;
 
             // ---- Header: title + back (submenu) / close ----
             Rectangle {
-                height: 36px;
+                height: 44px;
 
                 HorizontalLayout {
                     padding-left: 4px;
@@ -277,8 +280,10 @@ component SettingsMenu inherits Rectangle {
                     spacing: 6px;
 
                     if root.page != 0: Rectangle {
-                        width: 28px;
-                        height: 28px;
+                        width: 40px;
+                        height: 40px;
+                        border-radius: 20px;
+                        background: back_touch.has-hover ? Theme.current.control_hover : Theme.current.control;
 
                         back_touch := TouchArea {
                             width: 100%;
@@ -298,7 +303,7 @@ component SettingsMenu inherits Rectangle {
                     Text {
                         text: root.page_title();
                         color: Theme.current.text_bright;
-                        font-size: 14px;
+                        font-size: 18px;
                         font-weight: 600;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
@@ -315,8 +320,10 @@ component SettingsMenu inherits Rectangle {
                     }
 
                     Rectangle {
-                        width: 28px;
-                        height: 28px;
+                        width: 40px;
+                        height: 40px;
+                        border-radius: 20px;
+                        background: close_touch.has-hover ? Theme.current.control_hover : Theme.current.control;
 
                         close_touch := TouchArea {
                             width: 100%;
@@ -335,34 +342,40 @@ component SettingsMenu inherits Rectangle {
                 }
             }
 
+            Rectangle { height: 1px; background: Theme.current.border_soft; }
+
             // ---- Rows for the current page (scrolls when the list is long) ----
-            ScrollView {
+            Flickable {
                 width: 100%;
                 vertical-stretch: 0;
-                height: Math.min(pages_col.preferred-height, root.height - 140px);
-                mouse-drag-pan-enabled: true;
+                height: Math.max(0px, Math.min(pages_col.preferred-height, root.card_limit - 101px));
+                interactive: !SliderGesture.active;
+                mouse-drag-pan-enabled: !SliderGesture.hovered;
 
                 pages_col := VerticalLayout {
                     width: 100%;
-                    spacing: 2px;
+                    spacing: 4px;
 
                     // Root categories.
                     if root.page == 0: VerticalLayout {
                         width: 100%;
-                        spacing: 2px;
+                        spacing: 4px;
                         MenuRow {
+                            icon_kind: 2; submenu: true;
                             label: @tr("Subtitles");
                             value: root.sub_label;
                             focused: root.focused_idx == 0;
                             activate => { root.page = 2; }
                         }
                         MenuRow {
+                            icon_kind: 1; submenu: true;
                             label: @tr("Audio");
                             value: root.audio_label;
                             focused: root.focused_idx == 1;
                             activate => { root.page = 3; }
                         }
                         if root.is_android: MenuRow {
+                            icon_kind: 4; submenu: true;
                             label: @tr("Hardware decoding");
                             value: root.hwdec_label != "" ? root.hwdec_label : "…";
                             focused: root.focused_idx == 2;
@@ -370,6 +383,7 @@ component SettingsMenu inherits Rectangle {
                         }
                         // Same value as Settings → Player (per device).
                         MenuRow {
+                            icon_kind: 3; submenu: true;
                             label: @tr("Playback speed");
                             value: PlaybackSpeed.label(root.playback_speed);
                             focused: root.focused_idx == (root.is_android ? 3 : 2);
@@ -380,7 +394,7 @@ component SettingsMenu inherits Rectangle {
                     // Decoder submenu.
                     if root.page == 1: VerticalLayout {
                         width: 100%;
-                        spacing: 2px;
+                        spacing: 4px;
                         MenuRow {
                             label: "HW+";
                             value: @tr("zero-copy");
@@ -407,7 +421,7 @@ component SettingsMenu inherits Rectangle {
                     // Subtitles submenu: Off + one row per track.
                     if root.page == 2: VerticalLayout {
                         width: 100%;
-                        spacing: 2px;
+                        spacing: 4px;
                         MenuRow {
                             icon_kind: 2;
                             label: @tr("Off");
@@ -427,7 +441,7 @@ component SettingsMenu inherits Rectangle {
                     // Audio submenu: one row per track.
                     if root.page == 3: VerticalLayout {
                         width: 100%;
-                        spacing: 2px;
+                        spacing: 4px;
                         if root.audio_tracks.length == 0: Rectangle {
                             height: 44px;
 
@@ -453,24 +467,21 @@ component SettingsMenu inherits Rectangle {
                     // (the same control Settings → Player shows). Up/Down
                     // arrow keys step it; the slider is what takes focus.
                     if root.page == 4: VerticalLayout {
-                        width: 100%;
-                        spacing: 2px;
-
-                        Rectangle {
-                            // Slider row + preset row.
-                            height: 76px;
-
-                            HorizontalLayout {
-                                padding-left: 16px;
-                                padding-right: 12px;
-
-                                speed_ctl := SpeedControl {
-                                    speed <=> root.playback_speed;
-                                    focused: root.focused_idx == 0;
-                                    changed(v) => { root.speed_changed(v); }
-                                    stepped(d) => { root.speed_stepped(d); }
-                                }
-                            }
+                        width: 100%; spacing: 16px;
+                        padding-top: 8px; padding-bottom: 8px;
+                        Text {
+                            text: PlaybackSpeed.label(root.playback_speed);
+                            color: Theme.current.text_bright;
+                            font-size: 28px; font-weight: 600;
+                            horizontal-alignment: center;
+                        }
+                        speed_ctl := SpeedControl {
+                            speed <=> root.playback_speed;
+                            roomy: true;
+                            show_readout: false;
+                            focused: root.focused_idx == 0;
+                            changed(v) => { root.speed_changed(v); }
+                            stepped(d) => { root.speed_stepped(d); }
                         }
                     }
                 }
@@ -1077,14 +1088,6 @@ export component PlayerOverlay {
             image-fit: cover;
         }
 
-        // Slight darkening over the loading poster so the centered status
-        // text stays legible on bright artwork.
-        if !root.playback_started && root.player_poster.width > 0: Rectangle {
-            width: 100%;
-            height: 100%;
-            background: Theme.current.player_control;
-        }
-
         // Center status while loading / on error (opaque bg still up).
         if !root.playback_started && root.player_status != "": VerticalLayout {
             width: 100%;
@@ -1244,7 +1247,7 @@ export component PlayerOverlay {
             y: 16px + safe-top;
             width: 40px;
             height: 40px;
-            border-radius: 10px;
+            border-radius: 20px;
             border-width: root.kb_active && root.kb_idx == 0 && root.open_popup == 0 ? 2px : 0px;
             border-color: Theme.current.focus_ring;
             // A dark base keeps the white X readable over bright video;
@@ -1961,6 +1964,10 @@ export component PlayerOverlay {
         // on every platform, plus the Android decoder submenu. On narrow
         // layouts the track pickers live here instead of the control row.
         if root.open_popup == 4: SettingsMenu {
+            narrow: root.narrow;
+            anchor_x: settings_gear.absolute-position.x - root.absolute-position.x + settings_gear.width;
+            anchor_y: settings_gear.absolute-position.y - root.absolute-position.y;
+            safe_top: root.safe-top; safe_left: root.safe-left; safe_right: root.safe-right;
             page <=> root.settings_page;
             focused_idx: root.kb_active ? root.kb_menu : -1;
             selected_index: root.decoder_selected;

@@ -114,6 +114,8 @@ component SpeedPreset inherits Rectangle {
 }
 
 export component SpeedControl inherits Rectangle {
+    // Hosts with a prominent rate heading can omit the compact inline readout.
+    in property <bool> show_readout: true;
     /// Shared rate (two-way bound to `AppWindow.playback_speed` by the host).
     in-out property <float> speed: 1.0;
     /// Keyboard focus ring, drawn on the slider (the host adjusts it with
@@ -240,7 +242,7 @@ export component SpeedControl inherits Rectangle {
                 clicked => { root.request_step(1); }
             }
 
-            Text {
+            if root.show_readout: Text {
                 width: 52px;
                 height: root.roomy ? 44px : 32px;
                 text: PlaybackSpeed.label(root.speed);

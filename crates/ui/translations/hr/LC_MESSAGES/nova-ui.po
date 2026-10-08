@@ -373,6 +373,9 @@ msgstr "Brzina reprodukcije"
 msgid "Player settings"
 msgstr "Postavke reproduktora"
 
+msgid "Playback settings"
+msgstr "Postavke reprodukcije"
+
 msgid "zero-copy"
 msgstr "bez kopiranja"
 
