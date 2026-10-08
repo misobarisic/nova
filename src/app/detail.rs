@@ -2047,7 +2047,7 @@ impl Bridge {
                 return;
             };
             if watch_now_episode(&modal.id, &modal.videos, &state.progress).is_some() {
-                watch_action_label(&modal.id, &modal.videos, &state.progress)
+                watch_action_label(&modal.id, Some(&modal.videos), &state.progress)
             } else if modal.episodes_loading {
                 text::tr("Start watching").into()
             } else {

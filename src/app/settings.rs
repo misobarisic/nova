@@ -151,6 +151,8 @@ impl Bridge {
             app.set_card_corner_radius(settings.card_corner_radius.min(24) as f32);
             app.set_card_spacing(settings.card_spacing.min(32) as f32);
             app.set_status_bar_gradient(settings.status_bar_gradient.min(100) as f32);
+            app.set_home_backdrop_size(settings.home_backdrop_size.index());
+            app.set_detail_backdrop_size(settings.detail_backdrop_size.index());
             app.set_animations(settings.animations);
             app.set_anim_transitions(settings.anim_transitions);
             app.set_anim_hover(settings.anim_hover);
@@ -301,6 +303,8 @@ impl Bridge {
                 card_corner_radius: app.get_card_corner_radius().round().clamp(0.0, 24.0) as u32,
                 card_spacing: app.get_card_spacing().round().clamp(0.0, 32.0) as u32,
                 status_bar_gradient: app.get_status_bar_gradient().round().clamp(0.0, 100.0) as u32,
+                home_backdrop_size: BackdropSize::from_index(app.get_home_backdrop_size()),
+                detail_backdrop_size: BackdropSize::from_index(app.get_detail_backdrop_size()),
                 animations: app.get_animations(),
                 anim_transitions: app.get_anim_transitions(),
                 anim_hover: app.get_anim_hover(),
@@ -316,6 +320,8 @@ impl Bridge {
         app.set_card_corner_radius(settings.card_corner_radius as f32);
         app.set_card_spacing(settings.card_spacing as f32);
         app.set_status_bar_gradient(settings.status_bar_gradient as f32);
+        app.set_home_backdrop_size(settings.home_backdrop_size.index());
+        app.set_detail_backdrop_size(settings.detail_backdrop_size.index());
         {
             let mut state = self.shared.lock().unwrap();
             state.cache_settings = settings.clone();

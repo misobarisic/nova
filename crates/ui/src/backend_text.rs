@@ -444,6 +444,9 @@ pub fn tr(english: &'static str) -> &'static str {
         "Start watching" => "Počnite gledati",
         "Continue watching" => "Nastavite gledati",
         "Choose an episode" => "Odaberite epizodu",
+        "Small" => "Malo",
+        "Medium" => "Srednje",
+        "Large" => "Veliko",
         "Connecting…" => "Povezivanje…",
         // ---- Library buckets and watch statuses ------------------------
         // Display only: the stored value stays the English identifier (the
@@ -1112,6 +1115,11 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         .map(|n| n.to_string())
         .unwrap_or_else(|| value.to_string());
     match field {
+        "home_backdrop_size" | "detail_backdrop_size" => match value.as_str() {
+            Some("small") => tr("Small").into(),
+            Some("large") => tr("Large").into(),
+            _ => tr("Medium").into(),
+        },
         "lru_cache_mb" | "torrent_max_mb" => format!("{number} MB"),
         "quality" | "status_bar_gradient" => format!("{}%", value),
         "card_corner_radius" | "card_spacing" => format!("{number} px"),

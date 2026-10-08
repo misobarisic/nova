@@ -1859,3 +1859,24 @@ msgstr "Razmak između kartica u redovima i mrežama."
 
 msgid "Start watching"
 msgstr "Počnite gledati"
+
+msgid "Home backdrop size"
+msgstr "Veličina pozadine početne stranice"
+
+msgid "Detail backdrop size"
+msgstr "Veličina pozadine detalja"
+
+msgid "Choose how tall the featured artwork is. Sizes adapt to screen width."
+msgstr "Odaberite visinu istaknutog prikaza. Veličine se prilagođavaju širini zaslona."
+
+msgid "Choose how tall the Detail artwork is. Sizes adapt to screen width."
+msgstr "Odaberite visinu prikaza detalja. Veličine se prilagođavaju širini zaslona."
+
+msgid "Small"
+msgstr "Malo"
+
+msgid "Medium"
+msgstr "Srednje"
+
+msgid "Large"
+msgstr "Veliko"

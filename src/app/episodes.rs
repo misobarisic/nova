@@ -274,7 +274,7 @@ pub(crate) fn watch_now_episode<'a>(
 /// metadata can omit the episode suffix until its episode cache is hydrated.
 pub(crate) fn watch_action_label(
     series_id: &str,
-    episodes: &[Video],
+    episodes: Option<&[Video]>,
     map: &HashMap<String, EpisodeProgress>,
 ) -> String {
     let prefix = format!("{series_id}\u{1}");
@@ -282,9 +282,11 @@ pub(crate) fn watch_action_label(
         key.starts_with(&prefix)
             && (progress.watched || progress.position_secs > 0.0 || progress.play_count > 0)
     });
-    let episode = watch_now_episode(series_id, episodes, map)
-        .map(episode_se_label)
-        .unwrap_or_default();
+    let target = episodes.and_then(|videos| watch_now_episode(series_id, videos, map));
+    if target.is_none() && episodes.is_some() {
+        return text::tr("Choose an episode").into();
+    }
+    let episode = target.map(episode_se_label).unwrap_or_default();
     text::watch_action(&episode, continuing)
 }
 

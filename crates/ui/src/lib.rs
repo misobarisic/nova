@@ -70,6 +70,8 @@ pub fn apply_theme(app: &AppWindow, true_black: bool) {
     theme.set_card_corner_radius(app.get_card_corner_radius().round().clamp(0.0, 24.0));
     theme.set_card_spacing(app.get_card_spacing().round().clamp(0.0, 32.0));
     theme.set_status_bar_gradient(app.get_status_bar_gradient().round().clamp(0.0, 100.0));
+    theme.set_home_backdrop_size(app.get_home_backdrop_size().clamp(0, 2));
+    theme.set_detail_backdrop_size(app.get_detail_backdrop_size().clamp(0, 2));
     theme.set_true_black(true_black);
     theme.set_current(palette);
 }

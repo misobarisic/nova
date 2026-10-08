@@ -39,6 +39,34 @@ pub enum EpisodeStartBehavior {
     Ask,
 }
 
+/// Responsive artwork height presets shared by narrow and wide layouts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackdropSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl BackdropSize {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            0 => Self::Small,
+            2 => Self::Large,
+            _ => Self::Medium,
+        }
+    }
+
+    pub fn index(self) -> i32 {
+        match self {
+            Self::Small => 0,
+            Self::Medium => 1,
+            Self::Large => 2,
+        }
+    }
+}
+
 /// Default torrent cache cap in MB (20 GiB).
 fn default_torrent_max_mb() -> u64 {
     20480
@@ -436,6 +464,10 @@ pub struct CacheSettings {
     /// Dark top artwork fade strength in percent; zero disables it.
     #[serde(default = "default_status_bar_gradient")]
     pub status_bar_gradient: u32,
+    #[serde(default)]
+    pub home_backdrop_size: BackdropSize,
+    #[serde(default)]
+    pub detail_backdrop_size: BackdropSize,
     /// Device-local overrides, retaining a shared baseline for unseeded fields.
     #[serde(default)]
     pub sync_overrides: std::collections::BTreeMap<String, serde_json::Value>,
@@ -494,6 +526,8 @@ impl Default for CacheSettings {
             card_corner_radius: default_card_corner_radius(),
             card_spacing: default_card_spacing(),
             status_bar_gradient: default_status_bar_gradient(),
+            home_backdrop_size: BackdropSize::default(),
+            detail_backdrop_size: BackdropSize::default(),
             sync_overrides: Default::default(),
         }
     }

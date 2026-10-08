@@ -724,6 +724,12 @@ export component DetailPage {
     property <length> overview_width: root.width - (root.narrow ? 40px : 128px) - root.safe-left - root.safe-right;
     property <length> synopsis_width: root.narrow ? root.overview_width : (root.overview_width - 24px) * 0.56;
     property <length> hero_text_width: root.narrow ? root.overview_width : Math.min(650px, root.overview_width * 0.55);
+    property <length> backdrop_height: (root.narrow
+        ? (Theme.detail_backdrop_size == 0 ? 420px : Theme.detail_backdrop_size == 2 ? 720px : 560px)
+        : (Theme.detail_backdrop_size == 0 ? 560px : Theme.detail_backdrop_size == 2 ? 920px : 740px)) + root.safe-top;
+    property <length> hero_top_spacing: root.narrow
+        ? (Theme.detail_backdrop_size == 0 ? 140px : Theme.detail_backdrop_size == 2 ? 390px : 250px)
+        : (Theme.detail_backdrop_size == 0 ? 20px : Theme.detail_backdrop_size == 2 ? 180px : 50px);
     in-out property <[string]> selected_genre_list: [];
     // Tab bar: 0 = Overview, 3 = Episodes (1/2 are stubs — Stremio addons
     // provide no Characters/Artwork data).
@@ -1249,12 +1255,12 @@ export component DetailPage {
 
         // Fade both artwork and its black backing to the page canvas. Leaving
         // the backing opaque creates a black band above the coloured scrim.
-        property <float> backdrop_fade: Math.min(1, Math.max(0, -det_scroll.content-y / (root.narrow ? 360px : 520px)));
+        property <float> backdrop_fade: Math.min(1, Math.max(0, -det_scroll.content-y / ((root.backdrop_height - root.safe-top) * (root.narrow ? 0.643 : 0.703))));
         Rectangle {
             x: 0px;
             y: 0px;
             width: 100%;
-            height: root.narrow ? 560px + root.safe-top : 740px;
+            height: root.backdrop_height;
             background: Theme.current.artwork_backdrop;
             opacity: 1 - page.backdrop_fade;
         }
@@ -1271,14 +1277,14 @@ export component DetailPage {
             source: root.selected_backdrop.width > 0 ? root.selected_backdrop : root.selected_poster;
             image-fit: cover;
             width: 100%;
-            height: root.narrow ? 560px + root.safe-top : 740px;
+            height: root.backdrop_height;
             opacity: 1 - page.backdrop_fade;
         }
         Image {
             x: 0px;
             y: 0px;
             width: 100%;
-            height: root.narrow ? 620px + root.safe-top : 800px;
+            height: root.backdrop_height + 60px;
             source: Theme.true_black ? @image-url("../../assets/detail-bottom-scrim-black.svg") : @image-url("../../assets/detail-bottom-scrim.svg");
             image-fit: fill;
         }
@@ -1286,7 +1292,7 @@ export component DetailPage {
             x: 0px;
             y: 0px;
             width: 100%;
-            height: 800px;
+            height: root.backdrop_height + 60px;
             source: Theme.true_black ? @image-url("../../assets/detail-side-scrim-black.svg") : @image-url("../../assets/detail-side-scrim.svg");
             image-fit: fill;
         }
@@ -1511,7 +1517,7 @@ export component DetailPage {
                     VerticalLayout {
                         width: 100%;
                         spacing: root.narrow ? 14px : 18px;
-                        padding-top: root.narrow ? 250px : 50px;
+                        padding-top: root.hero_top_spacing;
                         padding-bottom: 16px;
                         alignment: start;
 

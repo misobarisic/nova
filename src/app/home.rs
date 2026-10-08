@@ -1231,9 +1231,13 @@ impl Bridge {
     pub(super) fn refresh_home_watch_action(&self) {
         let preview = self.shared.lock().unwrap().home_showcase_displayed.clone();
         let label = if let Some(preview) = preview {
-            let videos = read_episodes_cache_for(&preview.type_, &preview.id).unwrap_or_default();
+            let videos = if preview.type_ == "movie" {
+                None
+            } else {
+                read_episodes_cache_for(&preview.type_, &preview.id)
+            };
             let state = self.shared.lock().unwrap();
-            watch_action_label(&preview.id, &videos, &state.progress)
+            watch_action_label(&preview.id, videos.as_deref(), &state.progress)
         } else {
             text::tr("Start watching").into()
         };

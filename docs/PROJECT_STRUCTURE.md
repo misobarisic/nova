@@ -292,15 +292,29 @@ accent/status colors. Artwork/player ramps remain image alpha masks, tinted
 through `Image.colorize`; Settings' header glow is hidden in true-black mode.
 Settings → Theme persists `true_black`, `card_corner_radius` (0–24 logical px,
 default 10), `card_spacing` (0–32 logical px, default 8), and
-`status_bar_gradient` (0–100%, default 80), synced by default
+`status_bar_gradient` (0–100%, default 80), and independent
+`home_backdrop_size` / `detail_backdrop_size` (`BackdropSize`: Small, Medium,
+Large; default Medium), synced by default
 with device overrides. Radius applies to Home/Discover/Library artwork cards,
 Detail artwork/synopsis/stream/season/episode cards and Settings cards; spacing
 drives media grids/carousels and Detail season/episode geometry, including
 keyboard reveal calculations, plus stream list spacing. Restore theme defaults
-resets all four fields while retaining device override choices. On narrow Home
+resets all six fields while retaining device override choices. On narrow Home
 and Detail, a fixed `assets/status-bar-scrim.svg` overlay darkens the status-bar
 region and fades out below it; 0 disables it. Home places it outside its scroll
 layout, while Detail paints it above artwork and below controls.
+Backdrop presets resize artwork and its scrims live; Home retains a measured
+caption/actions minimum to avoid clipping, and Detail also adjusts hero top
+spacing and scroll-fade distance. Home artwork targets are shorter than Detail\nfor the same preset; long captions can increase Home's content minimum.\nDetail's Medium preset preserves its previous geometry.
+
+| Backdrop preset | Home narrow height (width multiplier, min–max px) | Home wide height | Detail narrow / wide artwork height | Detail narrow / wide hero top spacing |
+|---|---|---|---|---|
+| Small | 0.85×, 280–360 | 0.30×, 320–480 | 420 / 560 px | 140 / 20 px |
+| Medium | 1.05×, 340–480 | 0.42×, 420–640 | 560 / 740 px | 250 / 50 px |
+| Large | 1.45×, 440–620 | 0.55×, 540–840 | 720 / 920 px | 390 / 180 px |
+
+Top safe-area insets are added to artwork heights; Detail scrims extend another
+60 px to meet the page canvas.
 `tests/theme.rs` covers default colors, live palette/radius replacement, black surfaces,
 outlined secondary buttons, unchanged control geometry and full restoration.
 
@@ -377,6 +391,10 @@ label from `episodes.rs::watch_action_label`, with that same target’s
 season/episode when known. Home publishes `home_featured_watch_label` through
 AppWindow/HomePage; sparse previews show the action without an episode suffix
 until metadata hydrates the episode cache, and movies have no episode suffix.
+Known episode lists with no eligible target show Choose an episode on both
+Home and Detail. The featured action width and pager stacking depend only on
+viewport space (200 px narrow / 300 px wide minimum before stacking,
+280 px / 340 px button caps), so label changes never resize the button.
 Caught-up Detail titles offer Choose an episode. Labels refresh with metadata,
 local/remote progress and language; Home also refreshes on displayed slide changes.
 Stream choice remains manual; if no eligible episode exists, the episode picker
@@ -423,7 +441,7 @@ and Settings displays a persistence warning. Keys used by the app:
 
 | Key | Content |
 |---|---|
-| `settings` | `CacheSettings` JSON (image cache + display + player backend/decoder + playback rate). Display’s `language` and Theme’s `true_black`, `card_corner_radius`, `card_spacing` and `status_bar_gradient` sync by default and support device overrides. Display's `discover_catalog_addon_names` defaults on and syncs as a settings field; hiding prefixes changes only dropdown labels, not catalog identity. Home's selected catalog/genre list and `home_episode_artwork` preference also sync as settings fields; episode artwork supports device overrides. Player backend choice (`player_external`, `desktop_external_app`), decoder (`android_hwdec`), episode start behavior (`episode_start_behavior`), and playback rate (`playback_speed`, 0.5–2.0×) are device-local. `sync_overrides` is a device-local map of override fields to fallback shared values; local values stay in the existing fields. General-setting publication masks overridden fields (including members of the coupled cache group), incoming records update their shared baselines while preserving effective values, and override removal replaces the map rather than reviving absent keys through unknown-field preservation. |
+| `settings` | `CacheSettings` JSON (image cache + display + player backend/decoder + playback rate). Display’s `language` and Theme’s `true_black`, `card_corner_radius`, `card_spacing`, `status_bar_gradient`, `home_backdrop_size` and `detail_backdrop_size` sync by default and support device overrides. Display's `discover_catalog_addon_names` defaults on and syncs as a settings field; hiding prefixes changes only dropdown labels, not catalog identity. Home's selected catalog/genre list and `home_episode_artwork` preference also sync as settings fields; episode artwork supports device overrides. Player backend choice (`player_external`, `desktop_external_app`), decoder (`android_hwdec`), episode start behavior (`episode_start_behavior`), and playback rate (`playback_speed`, 0.5–2.0×) are device-local. `sync_overrides` is a device-local map of override fields to fallback shared values; local values stay in the existing fields. General-setting publication masks overridden fields (including members of the coupled cache group), incoming records update their shared baselines while preserving effective values, and override removal replaces the map rather than reviving absent keys through unknown-field preservation. |
 | `library` | `Vec<LibraryEntry>` JSON. |
 | `addons` | `Vec<AddonStore>` JSON (desired addons, including entries with unavailable manifests). Configure-page reachability is device-local. |
 | `provider_metadata_cache:v1` | Device-local confirmed provider mappings and episode artwork (`metadata/cache.rs`), bounded to 128 entries / 8 MiB / 256 KiB per entry; never synced. Corrupt storage is preserved. |
@@ -741,7 +759,7 @@ Copying frames can cost additional memory bandwidth, especially at 4K.
 | Task | Start here |
 |---|---|
 | Setting sync labels / per-device overrides / value comparison | `src/app/settings_sync.rs`, `src/app/sync.rs`, `crates/ui/settings-sync{,-modal}.slint`, `tests/settings_scopes.rs` |
-| Change theme colours / card corners / spacing / status-bar gradient / true-black mode / effects | `crates/ui/theme.slint` (`ThemePalette`, `Theme.standard`, `Theme.current`), `crates/ui/src/lib.rs::apply_theme`, `crates/ui/appwindow.slint` (Rust re-exports), `tests/theme.rs`, `tests/settings_theme.rs`; Theme (ID 14, `settings:theme`) changes canvases/navigation/artwork fades, card radius/spacing and the narrow Home/Detail status-bar gradient live, with a complete theme reset; preferences sync by default with optional device overrides, retaining artwork and accent/status colours; neutral cards and controls become black with subtle outlines |
+| Change theme colours / card corners / spacing / backdrop sizes / status-bar gradient / true-black mode / effects | `crates/ui/theme.slint` (`ThemePalette`, `Theme.standard`, `Theme.current`), `crates/ui/src/lib.rs::apply_theme`, `crates/ui/appwindow.slint` (Rust re-exports), `tests/theme.rs`, `tests/settings_theme.rs`; Theme (ID 14, `settings:theme`) changes canvases/navigation/artwork fades, card radius/spacing and the narrow Home/Detail status-bar gradient live, with a complete theme reset; preferences sync by default with optional device overrides, retaining artwork and accent/status colours; neutral cards and controls become black with subtle outlines |
 | Add a Settings option / destination / slider gesture handling | `crates/ui/settings.slint`, `crates/ui/settings-controls.slint` (`SettingsDestinations` and shared controls), `crates/ui/slider-touch.slint`, `tests/settings_slider_drag.rs`, `src/app/settings.rs`, `src/app/run.rs`, `crates/config/src/lib.rs` |
 | Settings search / two-pane navigation / overview touch scroll / cache progress | `crates/ui/{settings,settings-controls,appwindow}.slint` (`settings_backdrop` paints edge-to-edge headers; `landing_header_shift` keeps touch viewport geometry fixed), `crates/ui/src/lib.rs` (pure matcher), `src/app/settings.rs` (job ownership), `crates/ui/src/backend_text.rs` (maintenance text) |
 | Settings edit loss / sync recovery | `src/app/settings.rs` (`capture_settings`, `wire_settings_autosave`, regression test), `crates/sync/src/lib.rs` (`peer_connection`, worker/cadence/recovery), `docs/sync-hardening-plan.md` |

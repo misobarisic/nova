@@ -76,8 +76,8 @@ pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
 use crate::net;
 use crate::storage;
 use nova_config::{
-    AndroidHwdec, CacheImageFormat, CacheSettings, DesktopExternalApp, DownloadSettings,
-    EpisodeStartBehavior, HomeCatalogSource, HomeRow, HomeRowSource, Language,
+    AndroidHwdec, BackdropSize, CacheImageFormat, CacheSettings, DesktopExternalApp,
+    DownloadSettings, EpisodeStartBehavior, HomeCatalogSource, HomeRow, HomeRowSource, Language,
     active_cache_settings, app_cache_dir, app_data_dir, now_secs, poster_cache_dir,
     set_cache_settings,
 };

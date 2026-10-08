@@ -784,10 +784,9 @@ component FeaturedActionButton inherits Rectangle {
     in property <string> label;
     in property <bool> narrow;
     in property <bool> compact;
-    out property <length> content_width: action_label.preferred-width + 28px;
     callback picked();
 
-    width: root.content_width + (root.compact ? 24px : 36px);
+    width: root.narrow ? 280px : 340px;
     height: root.narrow ? 46px : 52px;
     border-radius: root.narrow ? 18px : 22px;
     background: action_touch.has-hover
@@ -830,7 +829,7 @@ component FeaturedActions inherits Rectangle {
     in property <bool> compact;
     in property <length> available-width: 100000px;
     callback watch_now();
-    width: Math.min(root.available-width, watch_button.content_width + (root.compact ? 24px : 36px));
+    width: Math.min(root.available-width, root.narrow ? 280px : 340px);
     height: root.narrow ? 46px : 52px;
     watch_button := FeaturedActionButton {
         x: 0px; y: 0px; width: 100%;
@@ -1087,11 +1086,18 @@ component FeaturedShowcase inherits Rectangle {
     property <length> left_inset: (root.narrow ? 18px : 32px) + root.safe-left;
     property <length> right_inset: (root.narrow ? 18px : 32px) + root.safe-right;
     property <length> pager_width: root.count > 1 ? (root.narrow ? 134px : 152px) : 0px;
+    property <length> controls_width: root.width - root.left_inset - root.right_inset;
     property <bool> controls_stacked: root.count > 1
-        && featured_actions.width + root.pager_width + 12px > root.width - root.left_inset - root.right_inset;
+        && (root.narrow ? 200px : 300px) + root.pager_width + 12px > root.controls_width;
     property <length> controls_height: featured_actions.height + (root.controls_stacked ? 50px : 0px);
-    height: Math.max(root.narrow ? Math.min(560px, Math.max(360px, root.width * 1.05)) + root.safe-top
-            : Math.min(640px, Math.max(420px, root.width * 0.42)) + root.safe-top,
+    property <length> artwork_height: root.narrow
+        ? (Theme.home_backdrop_size == 0 ? Math.min(360px, Math.max(280px, root.width * 0.85))
+            : Theme.home_backdrop_size == 2 ? Math.min(620px, Math.max(440px, root.width * 1.45))
+            : Math.min(480px, Math.max(340px, root.width * 1.05)))
+        : (Theme.home_backdrop_size == 0 ? Math.min(480px, Math.max(320px, root.width * 0.30))
+            : Theme.home_backdrop_size == 2 ? Math.min(840px, Math.max(540px, root.width * 0.55))
+            : Math.min(640px, Math.max(420px, root.width * 0.42)));
+    height: Math.max(root.artwork_height + root.safe-top,
         Math.max(current_caption.height, root.fading ? previous_caption.height : 0px)
             + root.controls_height + 110px + root.safe-top);
     border-radius: 0px;
@@ -1236,7 +1242,7 @@ component FeaturedShowcase inherits Rectangle {
     featured_actions := FeaturedActions {
         watch_label: root.watch_label;
         narrow: root.narrow; compact: root.width < 400px;
-        available-width: Math.max(0px, root.width - root.left_inset - root.right_inset);
+        available-width: Math.max(0px, root.controls_width - (root.count > 1 && !root.controls_stacked ? root.pager_width + 12px : 0px));
         x: root.left_inset; y: root.height - root.controls_height - 24px;
         watch_now => { root.watch_now(); }
     }
