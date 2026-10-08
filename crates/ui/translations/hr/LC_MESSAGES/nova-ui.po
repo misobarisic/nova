@@ -1880,3 +1880,15 @@ msgstr "Srednje"
 
 msgid "Large"
 msgstr "Veliko"
+
+msgid "Square"
+msgstr "Ravno"
+
+msgid "None"
+msgstr "Bez"
+
+msgid "Choose card corner rounding in pixels. Square means 0."
+msgstr "Odaberite zaobljenost kutova kartica u pikselima. Ravno znači 0."
+
+msgid "Choose the gap between cards in pixels. None means 0."
+msgstr "Odaberite razmak između kartica u pikselima. Bez znači 0."

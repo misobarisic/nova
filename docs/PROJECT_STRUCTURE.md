@@ -295,7 +295,11 @@ default 10), `card_spacing` (0–32 logical px, default 8), and
 `status_bar_gradient` (0–100%, default 80), and independent
 `home_backdrop_size` / `detail_backdrop_size` (`BackdropSize`: Small, Medium,
 Large; default Medium), synced by default
-with device overrides. Radius applies to Home/Discover/Library artwork cards,
+with device overrides. Radius and spacing use five preset buttons instead of
+sliders: radius 0 / 4 / 10 / 16 / 24 px (Square = 0), spacing
+0 / 4 / 8 / 16 / 32 px (None = 0). Older custom values remain effective until
+a preset is chosen; Left/Right steps to the adjacent lower/higher preset.
+Radius applies to Home/Discover/Library artwork cards,
 Detail artwork/synopsis/stream/season/episode cards and Settings cards; spacing
 drives media grids/carousels and Detail season/episode geometry, including
 keyboard reveal calculations, plus stream list spacing. Restore theme defaults

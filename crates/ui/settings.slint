@@ -256,10 +256,15 @@ export component SettingsPage {
             root.true_black = !root.true_black;
             root.schedule_setting("true_black");
         } else if (root.kb_theme == 1) {
-            root.card_corner_radius = Math.max(0, Math.min(24, root.card_corner_radius + direction));
+            // Step to the adjacent preset, including from older custom values.
+            root.card_corner_radius = direction < 0
+                ? (root.card_corner_radius > 16 ? 16 : root.card_corner_radius > 10 ? 10 : root.card_corner_radius > 4 ? 4 : 0)
+                : (root.card_corner_radius < 4 ? 4 : root.card_corner_radius < 10 ? 10 : root.card_corner_radius < 16 ? 16 : 24);
             root.schedule_setting("card_corner_radius");
         } else if (root.kb_theme == 2) {
-            root.card_spacing = Math.max(0, Math.min(32, root.card_spacing + direction));
+            root.card_spacing = direction < 0
+                ? (root.card_spacing > 16 ? 16 : root.card_spacing > 8 ? 8 : root.card_spacing > 4 ? 4 : 0)
+                : (root.card_spacing < 4 ? 4 : root.card_spacing < 8 ? 8 : root.card_spacing < 16 ? 16 : 32);
             root.schedule_setting("card_spacing");
         } else if (root.kb_theme == 3) {
             root.status_bar_gradient = Math.max(0, Math.min(100, root.status_bar_gradient + direction));
@@ -3209,12 +3214,13 @@ export component SettingsPage {
                                     SettingsCard { SettingsRow {
                                         setting-key: "card_corner_radius";
                                         row-title: @tr("Card corner radius");
-                                        row-desc: @tr("Adjust media, season and episode card corners. Set to 0 for square corners.");
-                                        NumericSetting {
-                                            value <=> root.card_corner_radius;
-                                            minimum: 0; maximum: 24; step: 1; suffix: " px";
+                                        row-desc: @tr("Choose card corner rounding in pixels. Square means 0.");
+                                        Segmented {
+                                            labels: [@tr("Square"), "4", "10", "16", "24"];
+                                            current_index: root.card_corner_radius == 0 ? 0 : root.card_corner_radius == 4 ? 1 : root.card_corner_radius == 10 ? 2 : root.card_corner_radius == 16 ? 3 : root.card_corner_radius == 24 ? 4 : -1;
                                             focused: root.kb_zone == 17 && root.kb_theme == 1 && root.kb_active;
-                                            changed(v) => {
+                                            picked(i) => {
+                                                root.card_corner_radius = [0, 4, 10, 16, 24][i];
                                                 root.kb_active = SettingsStyle.keyboard-mode;
                                                 root.kb_zone = 17;
                                                 root.kb_theme = 1;
@@ -3225,12 +3231,13 @@ export component SettingsPage {
                                     SettingsCard { SettingsRow {
                                         setting-key: "card_spacing";
                                         row-title: @tr("Card spacing");
-                                        row-desc: @tr("Space between cards in rows and grids.");
-                                        NumericSetting {
-                                            value <=> root.card_spacing;
-                                            minimum: 0; maximum: 32; step: 1; suffix: " px";
+                                        row-desc: @tr("Choose the gap between cards in pixels. None means 0.");
+                                        Segmented {
+                                            labels: [@tr("None"), "4", "8", "16", "32"];
+                                            current_index: root.card_spacing == 0 ? 0 : root.card_spacing == 4 ? 1 : root.card_spacing == 8 ? 2 : root.card_spacing == 16 ? 3 : root.card_spacing == 32 ? 4 : -1;
                                             focused: root.kb_zone == 17 && root.kb_theme == 2 && root.kb_active;
-                                            changed(v) => {
+                                            picked(i) => {
+                                                root.card_spacing = [0, 4, 8, 16, 32][i];
                                                 root.kb_active = SettingsStyle.keyboard-mode;
                                                 root.kb_zone = 17;
                                                 root.kb_theme = 2;

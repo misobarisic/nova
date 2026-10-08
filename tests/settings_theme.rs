@@ -97,7 +97,7 @@ fn theme_search_toggle_resize_and_android_back() {
     settle(&app);
     assert!((initial_mask_y - mask.absolute_position().y - 108.0).abs() < 1.0);
     assert!((mask.size().height - 124.0).abs() < 1.0);
-    // Both numeric controls are keyboard-reachable and feed the mounted
+    // Both preset controls are keyboard-reachable and feed the mounted
     // theme immediately. Zero must produce genuinely square cards/no gaps.
     key(&app, slint::platform::Key::DownArrow.into());
     for _ in 0..10 {
