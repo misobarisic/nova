@@ -1294,6 +1294,8 @@ export component DetailPage {
         // Fixed above the artwork but below controls, so parallax/scrolling
         // never exposes a bright patch behind the system status icons.
         if root.narrow: Image {
+            // Slint centers a shorter image unless its position is explicit.
+            x: 0px; y: 0px;
             width: 100%; height: root.safe-top + 64px;
             source: @image-url("../../assets/status-bar-scrim.svg");
             image-fit: fill;

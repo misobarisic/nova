@@ -2679,6 +2679,8 @@ export component HomePage {
         // Fixed outside the layout and scroll view, so bright artwork cannot
         // scroll out from under the status icons. Images do not capture input.
         if root.narrow && root.view == 0: Image {
+            // Slint centers a shorter image unless its position is explicit.
+            x: 0px; y: 0px;
             width: 100%; height: root.safe-top + 64px;
             source: @image-url("../../assets/status-bar-scrim.svg");
             image-fit: fill;
