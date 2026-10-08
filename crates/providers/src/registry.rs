@@ -504,6 +504,7 @@ pub(crate) fn media_preview(media: MediaItem) -> Value {
     for (field, value) in [
         ("poster", media.poster),
         ("background", media.background),
+        ("logo", media.logo),
         ("description", media.description),
     ] {
         if let Some(value) = value.filter(|value| !value.is_empty()) {

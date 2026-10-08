@@ -1094,6 +1094,46 @@ impl Bridge {
         }
     }
 
+    /// Full-fidelity decoding avoids the opaque JPEG poster derivative.
+    /// Guard both opening identity and URL: late logos cannot repaint a
+    /// different show or overwrite a newer metadata response.
+    pub(super) fn load_current_detail_logo(&self) {
+        let Some(app) = self.app() else { return };
+        let request = self
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .map(|item| (item.open_token.clone(), item.logo_url.clone()));
+        let Some((token, url)) = request else { return };
+        let cached = transparent_title_logo(decoded_cache_get(&url));
+        app.set_selected_logo(cached.map(Image::from_rgba8).unwrap_or_default());
+        if url.is_empty() || app.get_selected_logo().size().width > 0 {
+            return;
+        }
+        let bridge = self.clone();
+        net::fetch_image(url.clone(), None, move |pixels| {
+            let pixels = transparent_title_logo(pixels);
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(app) = bridge.app() else { return };
+                let valid = app.get_modal_visible()
+                    && bridge
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .modal_item
+                        .as_ref()
+                        .is_some_and(|item| {
+                            Arc::ptr_eq(&item.open_token, &token) && item.logo_url == url
+                        });
+                if valid {
+                    app.set_selected_logo(pixels.map(Image::from_rgba8).unwrap_or_default());
+                }
+            });
+        });
+    }
+
     /// Load the detail page backdrop off the UI thread (same guards as the
     /// poster path). Missing/failed backdrops simply keep the gradient
     /// placeholder.
@@ -1811,6 +1851,7 @@ mod discover_artwork_tests {
                 year: String::new(),
                 poster_url: "https://images.example/expired.jpg".into(),
                 background_url: String::new(),
+                logo_url: String::new(),
                 description: String::new(),
                 genres: vec![],
             }),
@@ -2021,5 +2062,35 @@ mod discover_artwork_tests {
         previews.swap(1, 2);
         let indices = poster_indices(&mut previews, "series", "show", url);
         assert_eq!(indices, [2]);
+    }
+}
+
+/// An opaque supplied logo would create a rectangular background in the hero.
+/// Keep the readable text fallback when the source has no transparent pixels.
+pub(super) fn transparent_title_logo(
+    pixels: Option<SharedPixelBuffer<Rgba8Pixel>>,
+) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+    pixels.filter(|pixels| {
+        pixels
+            .as_bytes()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[3] < 255)
+    })
+}
+
+#[cfg(test)]
+mod title_logo_tests {
+    use super::*;
+
+    #[test]
+    fn only_transparent_art_replaces_the_text_title() {
+        let mut pixels = SharedPixelBuffer::<Rgba8Pixel>::new(2, 1);
+        pixels.make_mut_bytes().fill(255);
+        assert!(transparent_title_logo(Some(pixels.clone())).is_none());
+        pixels.make_mut_bytes()[3] = 0;
+        assert!(transparent_title_logo(Some(pixels)).is_some());
+        assert!(transparent_title_logo(None).is_none());
     }
 }

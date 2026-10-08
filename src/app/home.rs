@@ -214,7 +214,7 @@ fn home_showcase_meta_urls(state: &Shared, preview: &MetaPreview) -> Vec<String>
 }
 
 fn home_showcase_needs_metadata(preview: &MetaPreview) -> bool {
-    [&preview.background, &preview.description]
+    [&preview.background, &preview.description, &preview.logo]
         .into_iter()
         .any(|value| value.as_deref().is_none_or(|value| value.trim().is_empty()))
 }
@@ -232,6 +232,7 @@ fn restore_home_showcase_header(preview: &mut MetaPreview) {
     };
     let fresh = preview.clone();
     preview.background = Some(header.background_url);
+    preview.logo = Some(header.logo_url);
     preview.description = Some(header.description);
     preview.genres = header.genres;
     if !header.year.is_empty() {
@@ -754,6 +755,7 @@ impl Bridge {
             if let Some(app) = self.app() {
                 app.set_home_featured_refresh_pending(false);
                 app.set_home_featured_title(SharedString::default());
+                app.set_home_featured_logo(Image::default());
                 app.set_home_featured_type(SharedString::default());
                 app.set_home_featured_rating(SharedString::default());
                 app.set_home_featured_runtime(SharedString::default());
@@ -773,6 +775,11 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_home_featured_refresh_pending(false);
             app.set_home_featured_title(SharedString::from(first.title()));
+            app.set_home_featured_logo(
+                transparent_title_logo(first.logo.as_deref().and_then(decoded_cache_get))
+                    .map(Image::from_rgba8)
+                    .unwrap_or_default(),
+            );
             app.set_home_featured_type(SharedString::from(&first.type_));
             app.set_home_featured_rating(SharedString::from(Self::showcase_rating(&first)));
             app.set_home_featured_runtime(SharedString::from(
@@ -963,6 +970,7 @@ impl Bridge {
     /// displayed slide intact. The next slide is prefetched after every commit.
     fn ensure_home_showcase_art(&self, index: usize, generation: u64) {
         self.ensure_home_showcase_metadata(index, generation);
+        self.ensure_home_showcase_logo(index, generation);
         let (backdrop, ready) = {
             let mut state = self.shared.lock().unwrap();
             if generation != state.home_showcase_list_generation {
@@ -986,6 +994,78 @@ impl Bridge {
         if let Some(url) = backdrop {
             self.fetch_home_showcase_artwork(index, generation, url);
         }
+    }
+
+    /// Optional logo fetches never delay navigation or backdrop readiness.
+    fn ensure_home_showcase_logo(&self, index: usize, generation: u64) {
+        let request = {
+            let mut state = self.shared.lock().unwrap();
+            if generation != state.home_showcase_list_generation {
+                return;
+            }
+            let Some(url) = state
+                .home_showcase
+                .get(index)
+                .and_then(|preview| preview.logo.as_deref())
+                .filter(|url| !url.trim().is_empty())
+                .map(str::to_owned)
+            else {
+                return;
+            };
+            let artwork = state.home_showcase_artwork.entry(index).or_default();
+            if artwork.logo_url != url {
+                artwork.logo_url = url.clone();
+                artwork.logo = None;
+                artwork.logo_loading = false;
+                artwork.logo_failed_at = None;
+            }
+            if artwork.logo.is_some()
+                || artwork.logo_loading
+                || artwork
+                    .logo_failed_at
+                    .is_some_and(|at| at.elapsed() < HOME_SHOWCASE_RETRY_DELAY)
+            {
+                return;
+            }
+            if let Some(pixels) = transparent_title_logo(decoded_cache_get(&url)) {
+                artwork.logo = Some(pixels);
+                return;
+            }
+            artwork.logo_loading = true;
+            url
+        };
+        let bridge = self.clone();
+        net::fetch_image(request.clone(), None, move |pixels| {
+            let pixels = transparent_title_logo(pixels);
+            let _ = slint::invoke_from_event_loop(move || {
+                let mut state = bridge.shared.lock().unwrap();
+                if state.home_showcase_list_generation != generation
+                    || state
+                        .home_showcase
+                        .get(index)
+                        .and_then(|preview| preview.logo.as_deref())
+                        != Some(request.as_str())
+                {
+                    return;
+                }
+                let artwork = state.home_showcase_artwork.entry(index).or_default();
+                if artwork.logo_url != request {
+                    return;
+                }
+                artwork.logo_loading = false;
+                artwork.logo_failed_at = pixels.is_none().then(std::time::Instant::now);
+                artwork.logo = pixels.clone();
+                let displayed = state.home_showcase_index == index
+                    && state.home_showcase_pending_index.is_none();
+                drop(state);
+                if displayed && let Some(app) = bridge.app() {
+                    app.set_home_featured_logo(pixels.map(Image::from_rgba8).unwrap_or_default());
+                    app.set_home_featured_revision(
+                        app.get_home_featured_revision().wrapping_add(1),
+                    );
+                }
+            });
+        });
     }
 
     fn fetch_home_showcase_artwork(&self, index: usize, generation: u64, url: String) {
@@ -1040,7 +1120,7 @@ impl Bridge {
     }
 
     fn commit_home_showcase_index(&self, index: usize, generation: u64) {
-        let (preview, backdrop, count) = {
+        let (preview, backdrop, logo, count) = {
             let mut state = self.shared.lock().unwrap();
             if generation != state.home_showcase_list_generation {
                 return;
@@ -1058,15 +1138,17 @@ impl Bridge {
                 return;
             };
             let backdrop = artwork.backdrop.clone();
+            let logo = artwork.logo.clone();
             let count = state.home_showcase.len();
             state.home_showcase_index = index;
             state.home_showcase_pending_index = None;
             state.home_showcase_displayed = Some(preview.clone());
-            (preview, backdrop, count)
+            (preview, backdrop, logo, count)
         };
 
         if let Some(app) = self.app() {
             app.set_home_featured_title(SharedString::from(preview.title()));
+            app.set_home_featured_logo(logo.map(Image::from_rgba8).unwrap_or_default());
             app.set_home_featured_type(SharedString::from(&preview.type_));
             app.set_home_featured_rating(SharedString::from(Self::showcase_rating(&preview)));
             app.set_home_featured_runtime(SharedString::from(
@@ -1273,7 +1355,9 @@ impl Bridge {
                 state.entries.clone(),
                 state.progress.clone(),
                 state.continue_list.clone(),
-                state.cache_settings.home_row_enabled(&HomeRowSource::ContinueWatching),
+                state
+                    .cache_settings
+                    .home_row_enabled(&HomeRowSource::ContinueWatching),
                 state.cache_settings.home_episode_artwork,
             )
         };
@@ -1517,7 +1601,9 @@ impl Bridge {
                 state.entries.clone(),
                 state.upcoming_list.clone(),
                 state.cache_settings.date_relative,
-                state.cache_settings.home_row_enabled(&HomeRowSource::Upcoming),
+                state
+                    .cache_settings
+                    .home_row_enabled(&HomeRowSource::Upcoming),
                 state.cache_settings.home_episode_artwork,
             )
         };
@@ -1540,7 +1626,9 @@ impl Bridge {
                 state.entries.clone(),
                 state.upcoming_list.clone(),
                 state.cache_settings.date_relative,
-                state.cache_settings.home_row_enabled(&HomeRowSource::Upcoming),
+                state
+                    .cache_settings
+                    .home_row_enabled(&HomeRowSource::Upcoming),
                 state.cache_settings.home_episode_artwork,
             )
         };

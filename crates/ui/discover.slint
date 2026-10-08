@@ -8,7 +8,7 @@ import { Dropdown } from "dropdown.slint";
 import { SearchField } from "searchfield.slint";
 import { Theme } from "theme.slint";
 import { Anim } from "anim.slint";
-import { IcChevronLeft, IcChevronRight, IcDelete, IcSearch } from "icons.slint";
+import { IcChevronLeft, IcChevronRight, IcDelete, IcSearch, IcImage, IcExtension } from "icons.slint";
 
 // Browse and temporary search filters share the same dropdown rail. It keeps
 // readable widths on phones and leaves vertical drags to the enclosing page.
@@ -53,11 +53,11 @@ component DiscoverFilters inherits Flickable {
         spacing: 8px;
         alignment: start;
 
-        if root.addon_names.length > 0: KbMark { on: root.kb_enabled && root.kb_zone == 1; active: root.kb_active; }
         if root.addon_names.length > 0: Dropdown {
             width: 180px;
             roomy: true;
-            pill: true;
+            prominent: true;
+            border-color: self.kb_focused ? Theme.current.focus_ring : Theme.current.control_border;
             rail-gesture: true;
             accessible-role: button;
             accessible-label: root.search_controls ? @tr("Search addon") : @tr("Addon");
@@ -71,11 +71,11 @@ component DiscoverFilters inherits Flickable {
             pan_hint => { root.filters_panned(); }
             pan_release => { root.filters_pan_released(); }
         }
-        KbMark { on: root.kb_enabled && root.kb_zone == 2 && root.kb_ctl == 0; active: root.kb_active; }
         Dropdown {
             width: 110px;
             roomy: true;
-            pill: true;
+            prominent: true;
+            border-color: self.kb_focused ? Theme.current.focus_ring : Theme.current.control_border;
             rail-gesture: true;
             accessible-role: button;
             accessible-label: root.search_controls ? @tr("Search type") : @tr("Type");
@@ -89,11 +89,11 @@ component DiscoverFilters inherits Flickable {
             pan_hint => { root.filters_panned(); }
             pan_release => { root.filters_pan_released(); }
         }
-        KbMark { on: root.kb_enabled && root.kb_zone == 2 && root.kb_ctl == 1; active: root.kb_active; }
         Dropdown {
             width: 220px;
             roomy: true;
-            pill: true;
+            prominent: true;
+            border-color: self.kb_focused ? Theme.current.focus_ring : Theme.current.control_border;
             rail-gesture: true;
             accessible-role: button;
             accessible-label: root.search_controls ? @tr("Search catalog") : @tr("Catalog");
@@ -108,11 +108,11 @@ component DiscoverFilters inherits Flickable {
             pan_hint => { root.filters_panned(); }
             pan_release => { root.filters_pan_released(); }
         }
-        if root.genre_names.length > 1: KbMark { on: root.kb_enabled && root.kb_zone == 2 && root.kb_ctl == 2; active: root.kb_active; }
         if root.genre_names.length > 1: Dropdown {
             width: 140px;
             roomy: true;
-            pill: true;
+            prominent: true;
+            border-color: self.kb_focused ? Theme.current.focus_ring : Theme.current.control_border;
             rail-gesture: true;
             accessible-role: button;
             accessible-label: root.search_controls ? @tr("Search genre") : @tr("Genre");
@@ -232,7 +232,7 @@ component DiscoverHeader {
             }
             results_title := Text {
                 text: root.results_open ? @tr("Search results") : @tr("Search");
-                font-size: root.results_open ? (root.narrow ? 25px : 32px) : (root.narrow ? 32px : 26px);
+                font-size: root.narrow ? 28px : 32px;
                 font-weight: 700;
                 color: Theme.current.text_bright;
                 vertical-alignment: center;
@@ -243,26 +243,26 @@ component DiscoverHeader {
         }
 
         discover_hero := Rectangle {
-            height: root.results_open || root.search_filters_open ? 0px : Math.max(44px, hero_title.preferred-height) + 14px + hero_description.preferred-height;
+            height: root.results_open || root.search_filters_open ? 0px : Math.max(44px, hero_title.preferred-height) + 8px + hero_description.preferred-height;
             visible: !root.results_open && !root.search_filters_open;
             hero_title := Text {
                 x: 0px; y: 0px;
                 width: 100%;
                 height: Math.max(44px, self.preferred-height);
                 text: @tr("Discover");
-                font-size: root.narrow ? 25px : 32px;
+                font-size: root.narrow ? 28px : 32px;
                 font-weight: 700;
                 color: Theme.current.text_bright;
                 vertical-alignment: center;
                 wrap: word-wrap;
             }
             hero_description := Text {
-                y: hero_title.height + 14px;
+                y: hero_title.height + 8px;
                 width: 100%;
                 height: self.preferred-height;
                 text: @tr("Find your next movie, show, or anime.");
                 font-size: 14px;
-                color: Theme.current.text_home_metadata;
+                color: Theme.current.text_secondary;
                 wrap: word-wrap;
             }
         }
@@ -280,6 +280,9 @@ component DiscoverHeader {
                 search-icon: true;
                 roomy: true;
                 prominent: true;
+                background: Theme.current.settings_control;
+                border-radius: 16px;
+                border-color: self.has-focus ? Theme.current.focus_ring : Theme.current.control_border;
                 enabled: root.searchable;
                 text <=> root.search_text;
                 focus_changed(focused) => {
@@ -338,19 +341,19 @@ component DiscoverHeader {
 
         history_panel := Rectangle {
             width: 100%;
-            height: root.show_history ? 54px + Math.min(5, root.search_history.length) * 40px : 0px;
+            height: root.show_history ? 64px + Math.min(5, root.search_history.length) * 44px : 0px;
             opacity: root.show_history ? 1.0 : 0.0;
             clip: true;
             animate height { duration: Anim.transition_slide; easing: ease-in-out; }
             animate opacity { duration: Anim.transition_fade; }
             vertical-stretch: 0;
             background: Theme.current.card;
-            border-radius: 14px;
+            border-radius: 16px;
             border-width: 1px;
             border-color: Theme.current.border_card;
             VerticalLayout {
-                padding: 10px;
-                spacing: 6px;
+                padding: 12px;
+                spacing: 8px;
                 HorizontalLayout {
                     height: 28px;
                     Text {
@@ -363,7 +366,7 @@ component DiscoverHeader {
                     }
                     Rectangle {
                         width: clear_label.preferred-width + 16px;
-                        height: 28px;
+                        height: 32px;
                         border-radius: 8px;
                         background: clear_history_touch.has-hover ? Theme.current.hover_overlay : transparent;
                         accessible-role: button;
@@ -387,7 +390,7 @@ component DiscoverHeader {
                         width: 100%;
                         spacing: 0px;
                         for query in root.search_history: Rectangle {
-                            height: 40px;
+                            height: 44px;
                             border-radius: 8px;
                             background: history_touch.has-hover ? Theme.current.selection_wash : transparent;
                             HorizontalLayout {
@@ -415,7 +418,7 @@ component DiscoverHeader {
                                     vertical-alignment: center;
                                 }
                                 Rectangle {
-                                    width: 30px;
+                                    width: 44px;
                                     height: 100%;
                                     border-radius: 8px;
                                     background: remove_touch.has-hover ? Theme.current.hover_overlay : transparent;
@@ -447,7 +450,7 @@ component DiscoverHeader {
                             history_touch := TouchArea {
                                 x: 0;
                                 y: 0;
-                                width: parent.width - 74px;
+                                width: parent.width - 88px;
                                 height: 100%;
                                 mouse-cursor: pointer;
                                 accessible-role: button;
@@ -532,8 +535,8 @@ component DiscoverGrid {
                 width: root.item-width;
                 // Poster keeps a true 2:3 ratio at any column count, so
                 // narrow (e.g. 3-across phone) cards shrink in height too
-                // instead of stretching tall. +50px title/year footer.
-                height: root.item-width * 3 / 2 + 50px;
+                // instead of stretching tall. The caption reserves two title lines.
+                height: root.item-width * 3 / 2 + 72px;
                 // Each delegate owns its one-shot reveal. Model row updates
                 // (especially posters) must never reset/cancel a page-wide
                 // reveal timer and strand this card at zero opacity.
@@ -562,7 +565,10 @@ component DiscoverGrid {
                         border-radius: 10px;
                         border-width: root.kb_active && root.kb_zone == 3 && root.kb_idx == i ? 2px : 1px;
                         clip: true;
-                        border-color: root.kb_active && root.kb_zone == 3 && root.kb_idx == i ? Theme.current.accent : Theme.current.border_card;
+                        border-color: root.kb_active && root.kb_zone == 3 && root.kb_idx == i
+                            ? Theme.current.focus_ring : (touch.has-hover && !root.touch_menus ? Theme.current.border_medium : Theme.current.border_soft);
+                        accessible-role: button;
+                        accessible-label: card.title;
 
                         // Touch hover can remain latched after a scroll;
                         // keep the lift exclusive to a released pointer.
@@ -585,38 +591,37 @@ component DiscoverGrid {
                                     height: 100%;
                                 }
 
-                                if !card.is_loaded: Text {
-                                    text: "🎬";
-                                    font-size: 34px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                                Rectangle {
-                                    y: parent.height - 50px;
-                                    height: 50px;
-                                    background: @linear-gradient(180deg, transparent, Theme.current.card);
+                                if !card.is_loaded: IcImage {
+                                    width: Math.min(40px, parent.width * 0.3);
+                                    height: self.width;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    fill: Theme.current.text_hint;
                                 }
                             }
 
-                            VerticalLayout {
-                                padding-left: 9px;
-                                padding-right: 9px;
-                                padding-top: 6px;
-                                spacing: 4px;
-
-                                Text {
-                                    text: card.title;
-                                    color: Theme.current.text_primary;
-                                    font-size: 13px;
-                                    font-weight: 600;
-                                    overflow: elide;
-                                }
-
-                                Text {
-                                    text: card.year;
-                                    color: Theme.current.text_home_metadata;
-                                    font-size: 11px;
-                                    overflow: elide;
+                            Rectangle {
+                                height: 72px;
+                                VerticalLayout {
+                                    padding-left: 10px; padding-right: 10px;
+                                    padding-top: 8px; padding-bottom: 8px;
+                                    spacing: 4px; alignment: start;
+                                    Text {
+                                        text: card.title;
+                                        color: Theme.current.text_bright;
+                                        font-size: root.item-width < 130px ? 12px : 14px;
+                                        font-weight: 600;
+                                        height: self.preferred-height;
+                                        min-width: 0px; wrap: word-wrap; max-lines: 2;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: card.year;
+                                        color: Theme.current.text_secondary;
+                                        font-size: 11px;
+                                        height: self.preferred-height;
+                                        overflow: elide;
+                                    }
                                 }
                             }
                         }
@@ -662,26 +667,28 @@ component DiscoverGrid {
             }
         }
 
-        if root.catalog.length == 0 && !root.loading: VerticalLayout {
-            width: 100%;
-            // Inside scrolling content stretches are meaningless — a
-            // fixed body keeps the hint visible below the filters.
-            min-height: 320px;
-            alignment: center;
-
-            Text {
-                text: "🔌";
-                font-size: 42px;
-                horizontal-alignment: center;
-            }
-
-            Text {
-                text: root.empty_hint;
-                font-size: 14px;
-                color: Theme.current.text_secondary;
-                horizontal-alignment: center;
-                wrap: word-wrap;
-                min-width: 0px;
+        if root.catalog.length == 0 && !root.loading: empty_panel := Rectangle {
+            width: 100%; height: Math.max(220px, empty_message.preferred-height + 136px);
+            background: Theme.current.card;
+            border-radius: 16px; border-width: 1px; border-color: Theme.current.border_soft;
+            VerticalLayout {
+                padding: 24px; spacing: 16px; alignment: center;
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 64px; height: 64px; border-radius: 32px;
+                        background: Theme.current.selection_wash;
+                        IcExtension { width: 28px; height: 28px; x: 18px; y: 18px; fill: Theme.current.accent_soft; }
+                    }
+                }
+                empty_message := Text {
+                    text: root.empty_hint;
+                    font-size: 14px;
+                    color: Theme.current.text_secondary;
+                    height: self.preferred-height;
+                    horizontal-alignment: center;
+                    wrap: word-wrap; min-width: 0px;
+                }
             }
         }
     }
@@ -830,6 +837,7 @@ export component DiscoverPage {
     property <length> sv_header_height: 0px;
     property <length> sv_hero_height: 0px;
     property <length> header_shift: Math.max(-root.sv_hero_height, Math.min(0px, root.display_scroll_y));
+    property <length> backdrop_height: Math.max(144px, root.sv_hero_height + root.safe-top + 36px);
     property <length> header_cover: root.sv_header_height + root.header_shift;
     property <bool> transition_cover: false;
     property <bool> page_pan_enabled: true;
@@ -1049,10 +1057,10 @@ export component DiscoverPage {
         }
     }
 
-    // Row stride follows the card height (2:3 poster + 50px footer, see
+    // Row stride follows the card height (2:3 poster + 72px footer, see
     // the grid below) plus the item gap, matching the preload math below.
     // It changes with the column count, so it stays a live property.
-    property <length> row_stride: root.item-width * 3 / 2 + 50px + root.item-gap;
+    property <length> row_stride: root.item-width * 3 / 2 + 72px + root.item-gap;
     // Keep the focused card on screen. Reads the live scroll
     // metrics (sv_*) and steers through scroll_y: each mounted scroll
     // mirrors its viewport into scroll_y and applies scroll_y back via
@@ -1127,6 +1135,12 @@ export component DiscoverPage {
         width: 100%;
         height: 100%;
         background: Theme.current.artwork_canvas;
+        // Shared canvas artwork moves with the hero. Drawing it only once
+        // avoids subpixel seams at the clipped header's edges.
+        if !Theme.true_black: Image {
+            width: 100%; height: root.backdrop_height; y: root.header_shift;
+            source: @image-url("../../assets/settings-header.svg"); image-fit: fill;
+        }
 
     // 6-button scope: covers the page without intercepting the mouse.
     nav_scope := FocusScope {
@@ -1326,7 +1340,10 @@ export component DiscoverPage {
                 y: root.header_shift;
                 width: 100%;
                 height: fix_header.preferred-height;
-                background: Theme.current.artwork_canvas;
+                // Until the hero has collapsed, the grid starts below this
+                // overlay. Once cards can pass underneath, an opaque canvas
+                // keeps the pinned controls legible.
+                background: root.display_scroll_y < -root.sv_hero_height ? Theme.current.artwork_canvas : transparent;
                 TouchArea {}
                 fix_header := DiscoverHeader {
                     height: self.preferred-height;
@@ -1539,7 +1556,10 @@ export component DiscoverPage {
             y: root.header_shift;
             width: 100%;
             height: and_header.preferred-height;
-            background: Theme.current.artwork_canvas;
+            // Until the hero has collapsed, the grid starts below this
+            // overlay. Once cards can pass underneath, an opaque canvas
+            // keeps the pinned controls legible.
+            background: root.display_scroll_y < -root.sv_hero_height ? Theme.current.artwork_canvas : transparent;
             TouchArea {}
             and_header := DiscoverHeader {
                 height: self.preferred-height;

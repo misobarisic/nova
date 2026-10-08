@@ -1,0 +1,37 @@
+import { Theme } from "theme.slint";
+
+// Title logos are optional decoration. Text remains the title and the fallback
+// while artwork is missing/loading; the image has the same accessible label.
+export component TitleArtwork inherits Rectangle {
+    in property <string> title;
+    in property <image> logo;
+    in property <length> font-size: 44px;
+    in property <length> logo-height: 100px;
+    in property <int> max-lines: 2;
+    property <bool> has-logo: root.logo.width > 0 && root.logo.height > 0;
+    height: root.has-logo
+        ? Math.min(root.logo-height, root.width * root.logo.height / Math.max(1, root.logo.width))
+        : title_text.preferred-height;
+    min-width: 0px;
+
+    if root.has-logo: title_logo := Image {
+        x: 0px; y: 0px;
+        width: Math.min(root.width, root.height * root.logo.width / Math.max(1, root.logo.height));
+        height: 100%;
+        source: root.logo;
+        image-fit: contain;
+        accessible-label: root.title;
+    }
+    title_text := Text {
+        x: 0px; y: 0px;
+        visible: !root.has-logo;
+        width: 100%;
+        text: root.title;
+        font-size: root.font-size;
+        font-weight: 800;
+        color: Theme.current.text_bright;
+        max-lines: root.max-lines;
+        wrap: word-wrap;
+        overflow: elide;
+    }
+}

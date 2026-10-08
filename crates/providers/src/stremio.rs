@@ -59,6 +59,7 @@ impl StremioProvider {
             year,
             poster: preview.poster,
             background: preview.background,
+            logo: preview.logo,
             description: preview.description,
             genres: preview.genres,
             external_ids,

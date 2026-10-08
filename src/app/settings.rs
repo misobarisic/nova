@@ -411,10 +411,7 @@ impl Bridge {
         candidates
     }
 
-    fn home_picker_candidates(
-        &self,
-        home_row: bool,
-    ) -> Vec<(HomeRowSource, String, Vec<String>)> {
+    fn home_picker_candidates(&self, home_row: bool) -> Vec<(HomeRowSource, String, Vec<String>)> {
         let mut candidates = Vec::new();
         if home_row {
             let configured = self

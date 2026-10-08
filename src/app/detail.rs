@@ -86,6 +86,7 @@ impl Bridge {
                 year: preview.year_str().unwrap_or_default(),
                 poster_url: preview.poster.clone().unwrap_or_default(),
                 background_url: preview.background.clone().unwrap_or_default(),
+                logo_url: preview.logo.clone().unwrap_or_default(),
                 description: preview.description.clone().unwrap_or_default(),
                 genres: preview.genres.clone(),
             });
@@ -195,6 +196,7 @@ impl Bridge {
                 self.load_detail_backdrop(backdrop_url.clone(), item_id.clone());
             }
         }
+        self.load_current_detail_logo();
         // Backfill the persisted library URL so library reopens (and
         // restarts) can start the image load without a meta fetch.
         self.persist_backdrop_for(&item_id, &backdrop_url);
@@ -561,6 +563,7 @@ impl Bridge {
             };
             if !m.poster_url.is_empty()
                 && !m.background_url.is_empty()
+                && !m.logo_url.is_empty()
                 && !m.description.is_empty()
                 && !m.genres.is_empty()
                 && !m.year.is_empty()
@@ -593,6 +596,10 @@ impl Bridge {
         }
         if m.background_url.is_empty() && !cached.background_url.is_empty() {
             m.background_url = cached.background_url.clone();
+            touched = true;
+        }
+        if m.logo_url.is_empty() && !cached.logo_url.is_empty() {
+            m.logo_url = cached.logo_url.clone();
             touched = true;
         }
         if m.description.is_empty() && !cached.description.is_empty() {
@@ -644,6 +651,15 @@ impl Bridge {
                 m.background_url = bg.clone();
                 backdrop_to_load = Some(bg.clone());
             }
+            if let Some(logo) = item
+                .preview
+                .logo
+                .as_deref()
+                .filter(|url| !url.trim().is_empty())
+            {
+                // Logo upgrades remain independent of finished-show text policy.
+                m.logo_url = logo.to_string();
+            }
             if let Some(desc) = &item.preview.description
                 && !desc.is_empty()
                 && (m.description.is_empty() || overwrite)
@@ -685,6 +701,7 @@ impl Bridge {
                     .map(|header| header.poster_url)
                     .unwrap_or_default(),
                 background_url: m.background_url.clone(),
+                logo_url: m.logo_url.clone(),
                 description: m.description.clone(),
                 genres: m.genres.clone(),
                 year: m.year.clone(),
@@ -730,6 +747,7 @@ impl Bridge {
                 }
             }
         }
+        self.load_current_detail_logo();
         if let Some(url) = poster_to_load {
             // The image pipeline persists the replacement only after decoding.
             // A failed fresh URL must not replace a usable saved poster.
@@ -2823,6 +2841,7 @@ mod source_lookup_tests {
             year: "2006–2008".into(),
             poster_url: String::new(),
             background_url: String::new(),
+            logo_url: String::new(),
             description: String::new(),
             genres: Vec::new(),
         }
@@ -3207,6 +3226,7 @@ pub(crate) fn meta_header_from_item(item: &MetaItem) -> MetaHeader {
         // A metadata URL alone may still return 404 or fail to decode.
         poster_url: String::new(),
         background_url: item.preview.background.clone().unwrap_or_default(),
+        logo_url: item.preview.logo.clone().unwrap_or_default(),
         description: item.preview.description.clone().unwrap_or_default(),
         genres: item.preview.genres.clone(),
         year: item.preview.year_str().unwrap_or_default(),
@@ -3233,6 +3253,7 @@ pub(crate) fn header_text_cached(type_: &str, id: &str) -> bool {
 pub(crate) fn merge_meta_header_for(type_: &str, id: &str, fresh: &MetaHeader) -> bool {
     if fresh.poster_url.is_empty()
         && fresh.background_url.is_empty()
+        && fresh.logo_url.is_empty()
         && fresh.description.is_empty()
         && fresh.genres.is_empty()
         && fresh.year.is_empty()
@@ -3256,6 +3277,10 @@ pub(crate) fn merge_meta_header_for(type_: &str, id: &str, fresh: &MetaHeader) -
     }
     if !fresh.background_url.trim().is_empty() && cached.background_url != fresh.background_url {
         cached.background_url = fresh.background_url.clone();
+        touched = true;
+    }
+    if !fresh.logo_url.trim().is_empty() && cached.logo_url != fresh.logo_url {
+        cached.logo_url = fresh.logo_url.clone();
         touched = true;
     }
     if cached.description.is_empty() && !fresh.description.is_empty() {
@@ -3286,8 +3311,10 @@ mod tests {
             serde_json::from_str(r#"{"background_url":"https://images.example/backdrop.jpg"}"#)
                 .unwrap();
         assert!(old.poster_url.is_empty());
+        assert!(old.logo_url.is_empty());
         let fresh = MetaHeader {
             poster_url: "https://images.example/poster.jpg".into(),
+            logo_url: "https://images.example/title-logo.png".into(),
             ..old
         };
         let restored: MetaHeader =

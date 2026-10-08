@@ -529,6 +529,20 @@ pub fn encode_for_cache(
 
     let mut out: Vec<u8> = Vec::new();
     match settings.format {
+        CacheImageFormat::Jpeg if img.to_rgba8().pixels().any(|pixel| pixel.0[3] < 255) => {
+            // Transparent title artwork must survive a JPEG cache preference.
+            // PNG also keeps its alpha intact during maintenance re-encoding.
+            let rgba = img.to_rgba8();
+            let encoder = image::codecs::png::PngEncoder::new(&mut out);
+            image::ImageEncoder::write_image(
+                encoder,
+                rgba.as_raw(),
+                rgba.width(),
+                rgba.height(),
+                image::ExtendedColorType::Rgba8,
+            )
+            .ok()?;
+        }
         CacheImageFormat::Jpeg => {
             let rgb = img.to_rgb8();
             let enc =

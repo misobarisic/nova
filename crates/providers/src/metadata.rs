@@ -925,6 +925,7 @@ pub(crate) fn merge_media(media: &mut MediaItem, canonical: &MediaItem) {
         (&mut media.year, &canonical.year),
         (&mut media.poster, &canonical.poster),
         (&mut media.background, &canonical.background),
+        (&mut media.logo, &canonical.logo),
         (&mut media.description, &canonical.description),
     ] {
         merge_optional_text(field, fallback);
@@ -1901,6 +1902,7 @@ mod tests {
             .unwrap()["meta"];
         later["poster"] = json!("https://images.example/later-poster.jpg");
         later["background"] = json!("https://images.example/later-background.jpg");
+        later["logo"] = json!("https://images.example/title-logo.png");
         later["videos"] = json!([{"id":"mal:27:1", "season":1, "episode":1, "name":"Opening", "thumbnail":"https://images.example/later-episode.jpg", "overview":"Later episode synopsis"}]);
         let mut request = request();
         request.details.media.poster = Some("\n".into());
@@ -1925,6 +1927,13 @@ mod tests {
             result.details.media.background.as_deref(),
             Some("https://images.example/later-background.jpg")
         );
+        assert_eq!(
+            result.details.media.logo.as_deref(),
+            Some("https://images.example/title-logo.png")
+        );
+        let mut restored = json!({"id":"tt100", "type":"series"});
+        apply_enrichment_with_inventory(&mut restored, &result, &[]);
+        assert_eq!(restored["logo"], "https://images.example/title-logo.png");
         assert_eq!(
             result.details.media.description.as_deref(),
             Some("Canonical description")

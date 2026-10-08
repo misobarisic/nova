@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { TitleArtwork } from "title-artwork.slint";
 import { ScrollView } from "scrollview.slint";
 import { ContinueRow, UpcomingRow, HomeCatalogSection, HomeCatalogCard, CalCell, SheetItem } from "types.slint";
 import { MenuSheet } from "menusheet.slint";
@@ -924,6 +925,7 @@ struct FeaturedSlideData {
     tagline: string,
     description: string,
     backdrop: image,
+    logo: image,
 }
 
 // Kept separate from the controls so only title-specific content crossfades.
@@ -941,12 +943,12 @@ component FeaturedCaption inherits VerticalLayout {
         return root.slide.media_type;
     }
 
-    caption_title := Text {
-        text: root.slide.title; width: 100%; height: self.preferred-height; max-lines: 2;
+    caption_title := TitleArtwork {
+        title: root.slide.title; logo: root.slide.logo;
+        width: 100%;
+        logo-height: root.narrow ? 76px : 112px;
         font-size: root.narrow ? (root.banner_width < 400px ? 30px : 36px)
             : Math.min(52px, Math.max(34px, root.banner_width * 0.04));
-        font-weight: 800; color: Theme.current.text_bright; horizontal-alignment: left;
-        wrap: word-wrap; overflow: elide; min-width: 0px;
     }
     if root.slide.tagline != "": caption_tagline := Text {
         text: root.slide.tagline; width: 100%; height: self.preferred-height; max-lines: 2;
@@ -978,6 +980,7 @@ component FeaturedShowcase inherits Rectangle {
     in property <string> tagline;
     in property <string> description;
     in property <image> backdrop;
+    in property <image> logo;
     in property <int> index;
     in property <int> count;
     // Backend advances this only after the full incoming payload is published.
@@ -1022,6 +1025,7 @@ component FeaturedShowcase inherits Rectangle {
             tagline: root.tagline,
             description: root.description,
             backdrop: root.backdrop,
+            logo: root.logo,
         };
         if (!root.initialized || !root.motion_enabled) {
             root.displayed_slide = incoming;
@@ -1264,6 +1268,7 @@ export component HomePage {
     in-out property <string> home_empty_hint: @tr("Nothing to continue — start watching a show or movie and it will show up here.");
     in property <bool> continue_enabled: true;
     in property <string> featured_title;
+    in property <image> featured_logo;
     in property <string> featured_type;
     in property <string> featured_rating;
     in property <string> featured_runtime;
@@ -1961,6 +1966,7 @@ export component HomePage {
 
                             if root.featured_count > 0: FeaturedShowcase {
                                 title: root.featured_title;
+                                logo: root.featured_logo;
                                 media_type: root.featured_type;
                                 rating: root.featured_rating;
                                 runtime: root.featured_runtime;
@@ -2016,162 +2022,164 @@ export component HomePage {
 
                                 GridLayout {
                                     width: 100%; spacing: 0px;
-                                    continue_section := VerticalLayout {
+                                    continue_section := Rectangle {
                                         row: root.catalog_position(-1) >= 0 ? root.catalog_position(-1) : root.catalog_order.length; col: 0;
                                         visible: root.catalog_position(-1) >= 0;
-                                        min-height: 0px; max-height: self.visible ? 100000px : 0px;
-                                        width: 100%; spacing: 16px;
-                                        padding-bottom: self.visible ? 24px : 0px;
+                                        height: self.visible ? continue_content.preferred-height : 0px;
+                                        width: 100%;
                                         changed y => { root.continue_top = self.y; }
-                                        // ---- Continue Watching --------------------
-                                        if root.continue_rows.length > 0: SectionHeader {
-                                            title: @tr("Continue Watching");
-                                            count: root.continue_rows.length;
-                                            open_all => { root.open_subpage(1); }
-                                        }
+                                        continue_content := VerticalLayout {
+                                            width: 100%; spacing: 16px; padding-bottom: 24px;
+                                            // ---- Continue Watching --------------------
+                                            if root.continue_rows.length > 0: SectionHeader {
+                                                title: @tr("Continue Watching");
+                                                count: root.continue_rows.length;
+                                                open_all => { root.open_subpage(1); }
+                                            }
 
 
-                                        // Horizontal carousel: the inner Flickable owns
-                                        // dragging and native momentum, like the stream
-                                        // filter pills. Cards report early axis hints so
-                                        // the vertical page does not steal the gesture.
-                                        continue_rail_host := Rectangle {
-                                            visible: root.continue_rows.length > 0;
-                                            width: 100%;
-                                            height: root.rail_h + 8px;
+                                            // Horizontal carousel: the inner Flickable owns
+                                            // dragging and native momentum, like the stream
+                                            // filter pills. Cards report early axis hints so
+                                            // the vertical page does not steal the gesture.
+                                            continue_rail_host := Rectangle {
+                                                visible: root.continue_rows.length > 0;
+                                                width: 100%;
+                                                height: root.rail_h + 8px;
 
-                                            rail_continue := Flickable {
-                                                // Bleed the scroll clip to the screen edges while
-                                                // the first card keeps the section's safe inset.
-                                                x: -18px - (root.narrow ? root.safe-left : 0px);
-                                                width: content_host.width;
-                                                height: 100%;
-                                                interactive: root.view == 0;
-                                                mouse-drag-pan-enabled: true;
-                                                content-width: c_row.width;
-                                                content-height: self.height;
-                                                init => { self.content-x = root.continue_x; }
-                                                changed content-x => {
-                                                    root.continue_x = self.content-x;
-                                                    if (!root.kb_active && root.view == 0) { root.rail_panned(); }
-                                                }
+                                                rail_continue := Flickable {
+                                                    // Bleed the scroll clip to the screen edges while
+                                                    // the first card keeps the section's safe inset.
+                                                    x: -18px - (root.narrow ? root.safe-left : 0px);
+                                                    width: content_host.width;
+                                                    height: 100%;
+                                                    interactive: root.view == 0;
+                                                    mouse-drag-pan-enabled: true;
+                                                    content-width: c_row.width;
+                                                    content-height: self.height;
+                                                    init => { self.content-x = root.continue_x; }
+                                                    changed content-x => {
+                                                        root.continue_x = self.content-x;
+                                                        if (!root.kb_active && root.view == 0) { root.rail_panned(); }
+                                                    }
 
-                                                c_row := HorizontalLayout {
-                                                    y: 8px;
-                                                    height: root.rail_h;
-                                                    width: self.preferred-width;
-                                                    padding-left: 18px + (root.narrow ? root.safe-left : 0px);
-                                                    padding-right: 18px + root.safe-right;
-                                                    spacing: root.item-gap;
+                                                    c_row := HorizontalLayout {
+                                                        y: 8px;
+                                                        height: root.rail_h;
+                                                        width: self.preferred-width;
+                                                        padding-left: 18px + (root.narrow ? root.safe-left : 0px);
+                                                        padding-right: 18px + root.safe-right;
+                                                        spacing: root.item-gap;
 
-                                                    for c[i] in root.continue_rows: ContinueCard {
-                                                        entry: c;
-                                                        card-width: root.rail_item_width;
-                                                        tappable: root.view == 0;
-                                                        rail-gesture: root.view == 0;
-                                                        touch_menus: root.touch_menus;
-                                                        focused: root.kb_active && root.kb_zone == 1 && root.kb_idx == i;
-                                                        pointer_pressed => { root.kb_active = false; }
-                                                        picked => {
-                                                            root.kb_active = false;
-                                                            root.kb_zone = 1;
-                                                            root.kb_idx = i;
-                                                            root.continue_picked(i);
+                                                        for c[i] in root.continue_rows: ContinueCard {
+                                                            entry: c;
+                                                            card-width: root.rail_item_width;
+                                                            tappable: root.view == 0;
+                                                            rail-gesture: root.view == 0;
+                                                            touch_menus: root.touch_menus;
+                                                            focused: root.kb_active && root.kb_zone == 1 && root.kb_idx == i;
+                                                            pointer_pressed => { root.kb_active = false; }
+                                                            picked => {
+                                                                root.kb_active = false;
+                                                                root.kb_zone = 1;
+                                                                root.kb_idx = i;
+                                                                root.continue_picked(i);
+                                                            }
+                                                            menu_requested => {
+                                                                if (root.touch_menus) { root.open_continue_menu(i); }
+                                                            }
+                                                            enter_requested => { root.continue_enter(i); }
+                                                            remove_requested => { root.continue_remove(i); }
+                                                            pan_hint => {
+                                                                root.kb_active = false;
+                                                                root.rail_panned();
+                                                            }
+                                                            pan_release => { root.rail_pan_released(); }
                                                         }
-                                                        menu_requested => {
-                                                            if (root.touch_menus) { root.open_continue_menu(i); }
-                                                        }
-                                                        enter_requested => { root.continue_enter(i); }
-                                                        remove_requested => { root.continue_remove(i); }
-                                                        pan_hint => {
-                                                            root.kb_active = false;
-                                                            root.rail_panned();
-                                                        }
-                                                        pan_release => { root.rail_pan_released(); }
                                                     }
                                                 }
                                             }
-                                        }
 
+                                        }
                                     }
-                                    upcoming_section := VerticalLayout {
+                                    upcoming_section := Rectangle {
                                         row: root.catalog_position(-2) >= 0 ? root.catalog_position(-2) : root.catalog_order.length + 1; col: 0;
                                         visible: root.catalog_position(-2) >= 0;
-                                        min-height: 0px; max-height: self.visible ? 100000px : 0px;
-                                        width: 100%; spacing: 16px;
-                                        padding-bottom: self.visible ? 24px : 0px;
+                                        height: self.visible ? upcoming_content.preferred-height : 0px;
+                                        width: 100%;
                                         changed y => { root.upcoming_top = self.y; }
-                                        // ---- Upcoming (caught-up series, unaired) --
-                                        if root.upcoming_rows.length > 0: SectionHeader {
-                                            title: @tr("Upcoming Episodes");
-                                            count: root.upcoming_rows.length;
-                                            open_all => { root.open_subpage(2); }
-                                        }
+                                        upcoming_content := VerticalLayout {
+                                            width: 100%; spacing: 16px; padding-bottom: 24px;
+                                            // ---- Upcoming (caught-up series, unaired) --
+                                            if root.upcoming_rows.length > 0: SectionHeader {
+                                                title: @tr("Upcoming Episodes");
+                                                count: root.upcoming_rows.length;
+                                                open_all => { root.open_subpage(2); }
+                                            }
 
 
-                                        upcoming_rail_host := Rectangle {
-                                            visible: root.upcoming_rows.length > 0;
-                                            width: 100%;
-                                            height: root.rail_h_up + 8px;
+                                            upcoming_rail_host := Rectangle {
+                                                visible: root.upcoming_rows.length > 0;
+                                                width: 100%;
+                                                height: root.rail_h_up + 8px;
 
-                                            rail_upcoming := Flickable {
-                                                // Bleed the scroll clip to the screen edges while
-                                                // the first card keeps the section's safe inset.
-                                                x: -18px - (root.narrow ? root.safe-left : 0px);
-                                                width: content_host.width;
-                                                height: 100%;
-                                                interactive: root.view == 0;
-                                                mouse-drag-pan-enabled: true;
-                                                content-width: u_row.width;
-                                                content-height: self.height;
-                                                init => { self.content-x = root.upcoming_x; }
-                                                changed content-x => {
-                                                    root.upcoming_x = self.content-x;
-                                                    if (!root.kb_active && root.view == 0) { root.rail_panned(); }
-                                                }
+                                                rail_upcoming := Flickable {
+                                                    // Bleed the scroll clip to the screen edges while
+                                                    // the first card keeps the section's safe inset.
+                                                    x: -18px - (root.narrow ? root.safe-left : 0px);
+                                                    width: content_host.width;
+                                                    height: 100%;
+                                                    interactive: root.view == 0;
+                                                    mouse-drag-pan-enabled: true;
+                                                    content-width: u_row.width;
+                                                    content-height: self.height;
+                                                    init => { self.content-x = root.upcoming_x; }
+                                                    changed content-x => {
+                                                        root.upcoming_x = self.content-x;
+                                                        if (!root.kb_active && root.view == 0) { root.rail_panned(); }
+                                                    }
 
-                                                u_row := HorizontalLayout {
-                                                    y: 8px;
-                                                    height: root.rail_h_up;
-                                                    width: self.preferred-width;
-                                                    padding-left: 18px + (root.narrow ? root.safe-left : 0px);
-                                                    padding-right: 18px + root.safe-right;
-                                                    spacing: root.item-gap;
+                                                    u_row := HorizontalLayout {
+                                                        y: 8px;
+                                                        height: root.rail_h_up;
+                                                        width: self.preferred-width;
+                                                        padding-left: 18px + (root.narrow ? root.safe-left : 0px);
+                                                        padding-right: 18px + root.safe-right;
+                                                        spacing: root.item-gap;
 
-                                                    for u[i] in root.upcoming_rows: UpcomingCard {
-                                                        entry: u;
-                                                        card-width: root.rail_item_width;
-                                                        tappable: root.view == 0;
-                                                        rail-gesture: root.view == 0;
-                                                        touch_menus: root.touch_menus;
-                                                        focused: root.kb_active && root.kb_zone == 2 && root.kb_up_idx == i;
-                                                        pointer_pressed => { root.kb_active = false; }
-                                                        picked => {
-                                                            root.kb_active = false;
-                                                            root.kb_zone = 2;
-                                                            root.kb_up_idx = i;
-                                                            root.upcoming_picked(i);
+                                                        for u[i] in root.upcoming_rows: UpcomingCard {
+                                                            entry: u;
+                                                            card-width: root.rail_item_width;
+                                                            tappable: root.view == 0;
+                                                            rail-gesture: root.view == 0;
+                                                            touch_menus: root.touch_menus;
+                                                            focused: root.kb_active && root.kb_zone == 2 && root.kb_up_idx == i;
+                                                            pointer_pressed => { root.kb_active = false; }
+                                                            picked => {
+                                                                root.kb_active = false;
+                                                                root.kb_zone = 2;
+                                                                root.kb_up_idx = i;
+                                                                root.upcoming_picked(i);
+                                                            }
+                                                            menu_requested => { root.open_upcoming_menu(i); }
+                                                            pan_hint => {
+                                                                root.kb_active = false;
+                                                                root.rail_panned();
+                                                            }
+                                                            pan_release => { root.rail_pan_released(); }
                                                         }
-                                                        menu_requested => { root.open_upcoming_menu(i); }
-                                                        pan_hint => {
-                                                            root.kb_active = false;
-                                                            root.rail_panned();
-                                                        }
-                                                        pan_release => { root.rail_pan_released(); }
                                                     }
                                                 }
                                             }
-                                        }
 
+                                        }
                                     }
                                     // Addon rows share the configured order with built-ins.
-                                    for section[s] in root.catalog_sections: catalog_section := VerticalLayout {
+                                    for section[s] in root.catalog_sections: catalog_section := Rectangle {
                                         row: root.catalog_position(s) >= 0 ? root.catalog_position(s) : root.catalog_order.length + 2 + s; col: 0;
                                         visible: root.catalog_position(s) >= 0;
-                                        min-height: 0px; max-height: self.visible ? 100000px : 0px;
+                                        height: self.visible ? catalog_content.preferred-height : 0px;
                                         width: 100%;
-                                        spacing: 16px;
-                                        padding-bottom: self.visible ? 24px : 0px;
                                         property <int> focused_card: root.view == 0 && root.kb_active && root.kb_zone == 3
                                             && root.kb_idx >= section.first_card
                                             && root.kb_idx < section.first_card + section.card_count
@@ -2185,53 +2193,56 @@ export component HomePage {
                                             }
                                         }
 
-                                        SectionHeader {
-                                            title: section.title;
-                                            count: section.card_count;
-                                            open_all => { root.open_subpage(3 + s); }
-                                        }
+                                        catalog_content := VerticalLayout {
+                                            width: 100%; spacing: 16px; padding-bottom: 24px;
+                                            SectionHeader {
+                                                title: section.title;
+                                                count: section.card_count;
+                                                open_all => { root.open_subpage(3 + s); }
+                                            }
 
-                                        Rectangle {
-                                            width: 100%;
-                                            height: root.catalog_rail_h + 8px;
-                                            catalog_rail := Flickable {
-                                                x: -18px - (root.narrow ? root.safe-left : 0px);
-                                                width: content_host.width;
-                                                height: 100%;
-                                                interactive: root.view == 0;
-                                                mouse-drag-pan-enabled: true;
-                                                content-width: catalog_items.width;
-                                                content-height: self.height;
-                                                changed content-x => {
-                                                    if (!root.kb_active && root.view == 0) { root.rail_panned(); }
-                                                }
+                                            Rectangle {
+                                                width: 100%;
+                                                height: root.catalog_rail_h + 8px;
+                                                catalog_rail := Flickable {
+                                                    x: -18px - (root.narrow ? root.safe-left : 0px);
+                                                    width: content_host.width;
+                                                    height: 100%;
+                                                    interactive: root.view == 0;
+                                                    mouse-drag-pan-enabled: true;
+                                                    content-width: catalog_items.width;
+                                                    content-height: self.height;
+                                                    changed content-x => {
+                                                        if (!root.kb_active && root.view == 0) { root.rail_panned(); }
+                                                    }
 
-                                                catalog_items := HorizontalLayout {
-                                                    y: 8px;
-                                                    height: root.catalog_rail_h;
-                                                    width: self.preferred-width;
-                                                    padding-left: 18px + (root.narrow ? root.safe-left : 0px);
-                                                    padding-right: 18px + root.safe-right;
-                                                    spacing: root.item-gap;
+                                                    catalog_items := HorizontalLayout {
+                                                        y: 8px;
+                                                        height: root.catalog_rail_h;
+                                                        width: self.preferred-width;
+                                                        padding-left: 18px + (root.narrow ? root.safe-left : 0px);
+                                                        padding-right: 18px + root.safe-right;
+                                                        spacing: root.item-gap;
 
-                                                    // Repeat only this section's contiguous range: invisible
-                                                    // cards still reserve space in a HorizontalLayout.
-                                                    for i in section.card_count: HomeCatalogPosterCard {
-                                                        entry: root.catalog_cards[section.first_card + i];
-                                                        tappable: root.view == 0;
-                                                        touch_menus: root.touch_menus;
-                                                        pointer_pressed => { root.kb_active = false; }
-                                                        card-width: root.rail_item_width;
-                                                        focused: root.kb_active && root.kb_zone == 3 && root.kb_idx == section.first_card + i;
-                                                        picked => {
-                                                            root.kb_active = false;
-                                                            root.catalog_card_picked(root.catalog_cards[section.first_card + i].flat_index);
+                                                        // Repeat only this section's contiguous range: invisible
+                                                        // cards still reserve space in a HorizontalLayout.
+                                                        for i in section.card_count: HomeCatalogPosterCard {
+                                                            entry: root.catalog_cards[section.first_card + i];
+                                                            tappable: root.view == 0;
+                                                            touch_menus: root.touch_menus;
+                                                            pointer_pressed => { root.kb_active = false; }
+                                                            card-width: root.rail_item_width;
+                                                            focused: root.kb_active && root.kb_zone == 3 && root.kb_idx == section.first_card + i;
+                                                            picked => {
+                                                                root.kb_active = false;
+                                                                root.catalog_card_picked(root.catalog_cards[section.first_card + i].flat_index);
+                                                            }
+                                                            pan_hint => {
+                                                                root.kb_active = false;
+                                                                root.rail_panned();
+                                                            }
+                                                            pan_release => { root.rail_pan_released(); }
                                                         }
-                                                        pan_hint => {
-                                                            root.kb_active = false;
-                                                            root.rail_panned();
-                                                        }
-                                                        pan_release => { root.rail_pan_released(); }
                                                     }
                                                 }
                                             }

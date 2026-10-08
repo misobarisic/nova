@@ -15,6 +15,7 @@ import { Theme } from "theme.slint";
 // otherwise 32px desktop rows; the closed box is always exactly one row
 // tall so filter rows keep their pinned heights.
 import { ScrollView } from "scrollview.slint";
+import { IcChevronDown } from "icons.slint";
 
 export component Dropdown inherits Rectangle {
     in property <[string]> model;
@@ -28,6 +29,10 @@ export component Dropdown inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> roomy: false;
     in property <bool> pill: false;
+    // Page-level catalog selectors use the same navy surface and rounded
+    // popup treatment as Settings and the player; compact callers retain
+    // their existing geometry.
+    in property <bool> prominent: false;
     // Opt-in for dropdowns hosted in a horizontal filter rail. Report the
     // early gesture axis before the enclosing page can capture vertical pan.
     in property <bool> rail-gesture: false;
@@ -47,10 +52,12 @@ export component Dropdown inherits Rectangle {
     property <string> shown-text: root.has_selection ? root.text_at(root.current-index) : root.placeholder-text;
 
     height: root.item-h;
-    border-radius: root.pill ? 22px : 6px;
+    border-radius: root.prominent ? 12px : (root.pill ? 22px : 6px);
     border-width: 1px;
     border-color: Theme.current.control_border;
-    background: touch.has-hover && root.enabled ? Theme.current.input_hover : Theme.current.popup;
+    background: root.prominent
+        ? (touch.has-hover && root.enabled ? Theme.current.settings_control_hover : Theme.current.settings_control)
+        : (touch.has-hover && root.enabled ? Theme.current.input_hover : Theme.current.popup);
 
     HorizontalLayout {
         padding-left: 12px;
@@ -60,17 +67,21 @@ export component Dropdown inherits Rectangle {
         Text {
             text: root.shown-text;
             color: root.has_selection ? Theme.current.text_primary : Theme.current.text_muted;
-            font-size: 13px;
+            font-size: root.prominent ? 14px : 13px;
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
         }
 
-        Text {
+        if !root.prominent: Text {
             text: "▾";
             color: Theme.current.text_muted;
             font-size: 12px;
             vertical-alignment: center;
+        }
+        if root.prominent: Rectangle {
+            width: 18px; height: 100%;
+            IcChevronDown { width: 18px; height: 18px; y: (parent.height - self.height) / 2; fill: Theme.current.text_secondary; }
         }
     }
 
@@ -133,9 +144,9 @@ export component Dropdown inherits Rectangle {
     popup := PopupWindow {
         forward-focus: popup_scope;
         x: 0;
-        y: -4px;
+        y: root.prominent ? root.height + 6px : -4px;
         width: root.width;
-        height: root.shown * root.item-h + 8px;
+        height: root.shown * root.item-h + (root.prominent ? 16px : 8px);
         close-policy: close-on-click-outside;
 
         popup_scope := FocusScope {
@@ -157,10 +168,10 @@ export component Dropdown inherits Rectangle {
             Rectangle {
                 width: 100%;
                 height: 100%;
-                background: Theme.current.popup;
+                background: root.prominent ? Theme.current.card : Theme.current.popup;
                 border-width: 1px;
                 border-color: Theme.current.control_border;
-                border-radius: 6px;
+                border-radius: root.prominent ? 16px : 6px;
                 clip: true;
 
                 ScrollView {
@@ -172,14 +183,14 @@ export component Dropdown inherits Rectangle {
 
                     VerticalLayout {
                         width: 100%;
-                        padding: 4px;
+                        padding: root.prominent ? 8px : 4px;
                         spacing: 0px;
                         alignment: start;
 
                         for value[index] in root.model: Rectangle {
                             width: 100%;
                             height: root.item-h;
-                            border-radius: 4px;
+                            border-radius: root.prominent ? 10px : 4px;
                             background: index == root.current-index ? Theme.current.selection_wash : (item_touch.has-hover ? Theme.current.control_hover : transparent);
 
                             HorizontalLayout {
@@ -188,8 +199,8 @@ export component Dropdown inherits Rectangle {
 
                                 Text {
                                     text: root.text_at(index);
-                                    color: Theme.current.text_primary;
-                                    font-size: 13px;
+                                    color: root.prominent && index == root.current-index ? Theme.current.accent_soft : Theme.current.text_primary;
+                                    font-size: root.prominent ? 14px : 13px;
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;
                                     overflow: elide;

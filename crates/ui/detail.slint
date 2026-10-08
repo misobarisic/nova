@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { TitleArtwork } from "title-artwork.slint";
 import { TrackingSheet } from "tracking.slint";
 import { TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow } from "types.slint";
 import { Spinner } from "std-widgets.slint";
@@ -714,6 +715,7 @@ export component DetailPage {
 
     in-out property <image> selected_poster;
     in-out property <image> selected_backdrop;
+    in property <image> selected_logo;
     in-out property <string> selected_title: "";
     in-out property <string> selected_year: "";
     in-out property <string> selected_description: "";
@@ -1505,13 +1507,11 @@ export component DetailPage {
                                 width: root.hero_text_width;
                                 spacing: root.narrow ? 14px : 18px;
                                 alignment: start;
-                                Text {
-                                    text: root.selected_title;
+                                detail_title := TitleArtwork {
+                                    title: root.selected_title; logo: root.selected_logo;
+                                    width: 100%; logo-height: root.narrow ? 88px : 136px;
                                     font-size: root.narrow ? 34px : (root.width >= 1200px ? 64px : 44px);
-                                    font-weight: 800;
-                                    color: Theme.current.text_bright;
-                                    wrap: word-wrap;
-                                    min-width: 0px;
+                                    max-lines: 3;
                                 }
                                 if root.selected_year != "": Text {
                                     text: root.selected_year;

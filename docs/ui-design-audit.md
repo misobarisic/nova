@@ -60,8 +60,10 @@ review. Some differences are intentional and are recorded after the findings.
 - **Partially resolved 2026-10-04 — The initial theme palette centralizes colors
   and effects.** `crates/ui/theme.slint` defines `Theme.current` for Home,
   Detail, Settings, tracking, the player and shared controls, preserving their
-  existing shades and alpha values. Library and Discover page bodies remain
-  deferred until their redesigns. Typography and geometry remain local.
+  existing shades and alpha values. Discover now uses those shared surfaces,
+  the Settings header glow, rounded navy search/filter controls and Home-style
+  cards (2026-10-08). Library page bodies remain deferred until their redesign.
+  Typography and geometry remain local.
 - **Medium — Page backgrounds differ.** Settings uses `#0b0b0e`; the main
   browsing pages and Detail use `#0f0f12`. Decide whether these are surface
   levels or separate page themes.

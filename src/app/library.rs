@@ -562,6 +562,7 @@ impl Bridge {
                 // "" and are upgraded by the meta fetch below. Same for
                 // genres/description (persisted since the header-text fix).
                 background_url: e.background_url.clone(),
+                logo_url: String::new(),
                 description: e.description.clone(),
                 genres: e.genres.clone(),
             });
@@ -617,6 +618,7 @@ impl Bridge {
                 self.load_detail_backdrop(paint_background.clone(), e.id.clone());
             }
         }
+        self.load_current_detail_logo();
         // Header text paints synchronously from the persisted snapshot (or
         // prefetched header cache) so pills + synopsis don't wait for (or
         // flash in after) the meta fetch. Older entries with empty snapshots
@@ -1212,6 +1214,7 @@ mod duplicate_tests {
             year: "2026".into(),
             poster_url: String::new(),
             background_url: String::new(),
+            logo_url: String::new(),
             description: String::new(),
             genres: vec![],
         }

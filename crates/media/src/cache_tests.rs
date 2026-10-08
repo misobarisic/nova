@@ -70,8 +70,34 @@ mod image_cache_tests {
             downscale: true,
             ..CacheSettings::default()
         };
-        let bytes = encode_for_cache(&settings, &solid_rgba(40, 30)).expect("jpeg bytes");
+        let mut pixels = solid_rgba(40, 30);
+        for pixel in pixels.make_mut_bytes().as_chunks_mut::<4>().0 {
+            pixel[3] = 255;
+        }
+        let bytes = encode_for_cache(&settings, &pixels).expect("jpeg bytes");
         assert!(bytes.starts_with(&[0xFF, 0xD8, 0xFF]));
+    }
+    #[test]
+    fn transparent_title_art_survives_cache_encoding_and_reencoding() {
+        for format in [CacheImageFormat::Jpeg, CacheImageFormat::Webp] {
+            let settings = CacheSettings {
+                enabled: true,
+                format,
+                downscale: false,
+                ..CacheSettings::default()
+            };
+            let mut pixels = solid_rgba(3, 1);
+            pixels.make_mut_bytes()[3] = 0;
+            pixels.make_mut_bytes()[7] = 128;
+            pixels.make_mut_bytes()[11] = 255;
+            let encoded = encode_for_cache(&settings, &pixels).unwrap();
+            let decoded = decode_image_bytes(&encoded).unwrap();
+            let reencoded = encode_for_cache(&settings, &decoded).unwrap();
+            let redecoded = decode_image_bytes(&reencoded).unwrap();
+            assert_eq!(redecoded.as_bytes()[3], 0);
+            assert_eq!(redecoded.as_bytes()[7], 128);
+            assert_eq!(redecoded.as_bytes()[11], 255);
+        }
     }
 }
 

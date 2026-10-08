@@ -77,8 +77,9 @@ use crate::net;
 use crate::storage;
 use nova_config::{
     AndroidHwdec, CacheImageFormat, CacheSettings, DesktopExternalApp, DownloadSettings,
-    EpisodeStartBehavior, HomeCatalogSource, HomeRow, HomeRowSource, Language, active_cache_settings,
-    app_cache_dir, app_data_dir, now_secs, poster_cache_dir, set_cache_settings,
+    EpisodeStartBehavior, HomeCatalogSource, HomeRow, HomeRowSource, Language,
+    active_cache_settings, app_cache_dir, app_data_dir, now_secs, poster_cache_dir,
+    set_cache_settings,
 };
 // Everything from the image-cache subsystem now lives in `nova-media`.
 use nova_media::cache::*;
@@ -222,6 +223,10 @@ struct StreamUi {
 struct HomeShowcaseArtwork {
     backdrop: Option<SharedPixelBuffer<Rgba8Pixel>>,
     backdrop_url: String,
+    logo: Option<SharedPixelBuffer<Rgba8Pixel>>,
+    logo_url: String,
+    logo_loading: bool,
+    logo_failed_at: Option<std::time::Instant>,
     backdrop_done: bool,
     loading_url: Option<String>,
     failed_urls: HashMap<String, std::time::Instant>,
@@ -449,6 +454,8 @@ struct ModalItem {
     poster_url: String,
     /// Wide backdrop URL (`background` in the addon protocol; may be empty).
     background_url: String,
+    /// Transparent show/movie title artwork; empty keeps the text heading.
+    logo_url: String,
     /// Item description (`description` in the addon protocol; may be empty).
     description: String,
     /// Genre list (`genres` in the addon protocol; may be empty).
@@ -929,6 +936,8 @@ pub(crate) struct MetaHeader {
     poster_url: String,
     #[serde(default)]
     background_url: String,
+    #[serde(default)]
+    logo_url: String,
     #[serde(default)]
     description: String,
     #[serde(default)]

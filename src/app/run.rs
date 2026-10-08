@@ -68,7 +68,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         const H: usize = 220;
         let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(H as u32, H as u32);
-        for (y, row) in buf.make_mut_slice().chunks_exact_mut(H).enumerate() {
+        for (y, row) in buf
+            .make_mut_slice()
+            .as_chunks_mut::<H>()
+            .0
+            .iter_mut()
+            .enumerate()
+        {
             let t = y as f32 / (H - 1) as f32;
             row.fill(Rgba8Pixel::new(0, 0, 0, (175.0 * t * t) as u8));
         }
