@@ -182,7 +182,7 @@ export component AppWindow inherits Window {
     // Independent catalog-driven feature at the top of Home. Rust keeps its
     // selected preview and fetches the active backdrop on demand.
     in-out property <string> home_featured_title: "";
-    in-out property <string> home_featured_watch_label: @tr("Start watching");
+    in-out property <string> home_featured_watch_label: @tr("Start");
     in-out property <image> home_featured_logo;
     in-out property <string> home_featured_type: "";
     in-out property <string> home_featured_rating: "";
@@ -392,7 +392,7 @@ export component AppWindow inherits Window {
     in-out property <int> stream_page_start: 0;
     in-out property <int> stream_total: 0;
     in-out property <string> episode_context: "";
-    in-out property <string> detail_watch_label: @tr("Start watching");
+    in-out property <string> detail_watch_label: @tr("Start");
     // True while the streams view was entered directly (Home Continue
     // deep-link) without visiting the episode list: system back then closes
     // the modal instead of revealing the skipped list.

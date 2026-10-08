@@ -1857,8 +1857,11 @@ msgstr "Razmak kartica"
 msgid "Space between cards in rows and grids."
 msgstr "Razmak između kartica u redovima i mrežama."
 
-msgid "Start watching"
-msgstr "Počnite gledati"
+msgid "Start"
+msgstr "Počnite"
+
+msgid "Continue"
+msgstr "Nastavite"
 
 msgid "Home backdrop size"
 msgstr "Veličina pozadine početne stranice"

@@ -111,11 +111,7 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
             ElementHandle::find_by_element_type_name(&app, "TopIconButton").count(),
             3
         );
-        for label in [
-            "Start watching S1 E1",
-            "Continue watching S12 E123",
-            "Nastavite gledati S12 E123",
-        ] {
+        for label in ["Start S1 E1", "Continue S12 E123", "Nastavite S12 E123"] {
             app.set_detail_watch_label(label.into());
             settle();
             let action = element(&app, "DetailPage::watch_action_button");

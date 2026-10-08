@@ -1239,7 +1239,7 @@ impl Bridge {
             let state = self.shared.lock().unwrap();
             watch_action_label(&preview.id, videos.as_deref(), &state.progress)
         } else {
-            text::tr("Start watching").into()
+            text::tr("Start").into()
         };
         if let Some(app) = self.app() {
             app.set_home_featured_watch_label(label.into());

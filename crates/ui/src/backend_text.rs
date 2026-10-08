@@ -441,8 +441,8 @@ pub fn tr(english: &'static str) -> &'static str {
         "Specials" => "Specijali",
         "Episode" => "Epizoda",
         "Resume" => "Nastavite",
-        "Start watching" => "Počnite gledati",
-        "Continue watching" => "Nastavite gledati",
+        "Start" => "Počnite",
+        "Continue" => "Nastavite",
         "Choose an episode" => "Odaberite epizodu",
         "Small" => "Malo",
         "Medium" => "Srednje",
@@ -1101,13 +1101,9 @@ pub fn cache_rewrite_status(
     }
 }
 
-/// Primary detail action, with the episode selected by the same playback policy.
+/// Shared Home and Detail action, with the episode selected by the playback policy.
 pub fn watch_action(episode: &str, continuing: bool) -> String {
-    let action = tr(if continuing {
-        "Continue watching"
-    } else {
-        "Start watching"
-    });
+    let action = tr(if continuing { "Continue" } else { "Start" });
     if episode.is_empty() {
         action.into()
     } else {
@@ -1254,8 +1250,8 @@ mod tests {
     fn croatian_translates_and_english_is_the_source() {
         with_language(Language::English, || {
             assert_eq!(tr("Queued"), "Queued");
-            assert_eq!(watch_action("S1 E1", false), "Start watching S1 E1");
-            assert_eq!(watch_action("S1 E4", true), "Continue watching S1 E4");
+            assert_eq!(watch_action("S1 E1", false), "Start S1 E1");
+            assert_eq!(watch_action("S1 E4", true), "Continue S1 E4");
             assert_eq!(
                 setting_sync_value("card_spacing", &serde_json::json!(8)),
                 "Compact"
@@ -1268,8 +1264,8 @@ mod tests {
         });
         with_language(Language::Croatian, || {
             assert_eq!(tr("Queued"), "Čeka");
-            assert_eq!(watch_action("S1 E1", false), "Počnite gledati S1 E1");
-            assert_eq!(watch_action("S1 E4", true), "Nastavite gledati S1 E4");
+            assert_eq!(watch_action("S1 E1", false), "Počnite S1 E1");
+            assert_eq!(watch_action("S1 E4", true), "Nastavite S1 E4");
             assert_eq!(tr("Downloaded"), "Preuzeto");
             assert_eq!(tr("Plan to Watch"), "Za pogledati");
             assert_eq!(season_label(0), "Specijali");

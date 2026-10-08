@@ -95,7 +95,7 @@ fn home_showcase_swipes_between_titles() {
             press(&app, p);
             release(&app, p);
         };
-        tap_control("Start watching");
+        tap_control("Start");
         assert_eq!(*watches.borrow(), 1);
         assert_eq!(*picks.borrow(), 1, "playback must not also open details");
         tap_control("Next featured title");

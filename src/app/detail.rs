@@ -119,7 +119,7 @@ impl Bridge {
         app.set_modal_visible(true);
         // Reset any leftover episode-picker state from a previous item.
         app.set_modal_episodes(false);
-        app.set_detail_watch_label(text::tr("Start watching").into());
+        app.set_detail_watch_label(text::tr("Start").into());
         app.set_detail_deep_stream(false);
         app.set_episode_context(SharedString::default());
         app.set_season_names(Rc::new(VecModel::<SharedString>::from(vec![])).into());
@@ -2049,7 +2049,7 @@ impl Bridge {
             if watch_now_episode(&modal.id, &modal.videos, &state.progress).is_some() {
                 watch_action_label(&modal.id, Some(&modal.videos), &state.progress)
             } else if modal.episodes_loading {
-                text::tr("Start watching").into()
+                text::tr("Start").into()
             } else {
                 text::tr("Choose an episode").into()
             }
