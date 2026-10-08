@@ -179,6 +179,7 @@ export component SettingsPage {
     callback home_catalog_added(int, int);
     callback home_catalog_removed(int);
     callback home_row_catalog_removed(int);
+    callback home_row_catalog_action(int, int);
     // Playback rate ± one 0.05 step (Settings → Player). The backend
     // quantizes it and writes the property back.
     callback playback_speed_stepped(int);
@@ -599,28 +600,26 @@ export component SettingsPage {
     // on Enter (Left/Right no-op); row 1 opens text edit mode.
     function kb_torrent_n() -> int { return root.torrent_enabled ? 6 : 1; }
 
-    // Continue + Upcoming + artwork switches, then the featured and poster
-    // catalog remove/add actions.
-    function kb_home_n() -> int { return root.home_catalog_rows.length + root.home_row_catalog_rows.length + 5; }
+    // Four actions per Home catalog, followed by add, artwork, and featured.
+    function kb_home_n() -> int { return root.home_row_catalog_rows.length * 4 + root.home_catalog_rows.length + 3; }
 
     function kb_home_activate() {
-        if (root.kb_home == 0) {
-            root.home_continue_enabled = !root.home_continue_enabled;
-            root.schedule_setting("home_continue_enabled");
-        } else if (root.kb_home == 1) {
-            root.home_upcoming_enabled = !root.home_upcoming_enabled;
-            root.schedule_setting("home_upcoming_enabled");
-        } else if (root.kb_home == 2) {
+        let rows_end = root.home_row_catalog_rows.length * 4;
+        if (root.kb_home < rows_end) {
+            let index = Math.floor(root.kb_home / 4);
+            let action = Math.mod(root.kb_home, 4);
+            if (action == 1 && index > 0) { root.kb_home -= 4; }
+            if (action == 2 && index + 1 < root.home_row_catalog_rows.length) { root.kb_home += 4; }
+            root.home_row_catalog_action(index, action);
+        } else if (root.kb_home == rows_end) {
+            root.home_row_catalog_add_requested();
+        } else if (root.kb_home == rows_end + 1) {
             root.home_episode_artwork = !root.home_episode_artwork;
             root.schedule_setting("home_episode_artwork");
-        } else if (root.kb_home < root.home_catalog_rows.length + 3) {
-            root.home_catalog_removed(root.kb_home - 3);
-        } else if (root.kb_home == root.home_catalog_rows.length + 3) {
-            root.home_catalog_add_requested();
-        } else if (root.kb_home < root.home_catalog_rows.length + root.home_row_catalog_rows.length + 4) {
-            root.home_row_catalog_removed(root.kb_home - root.home_catalog_rows.length - 4);
+        } else if (root.kb_home < rows_end + root.home_catalog_rows.length + 2) {
+            root.home_catalog_removed(root.kb_home - rows_end - 2);
         } else {
-            root.home_row_catalog_add_requested();
+            root.home_catalog_add_requested();
         }
     }
 
@@ -1160,7 +1159,7 @@ export component SettingsPage {
             root.true_black = !root.true_black;
             root.schedule_setting("true_black");
         } else if (root.kb_zone == 16) {
-            root.kb_home_activate();
+            root.kb_home = Math.max(0, root.kb_home - 1);
         }
     }
 
@@ -1221,7 +1220,7 @@ export component SettingsPage {
             root.true_black = !root.true_black;
             root.schedule_setting("true_black");
         } else if (root.kb_zone == 16) {
-            root.kb_home_activate();
+            root.kb_home = Math.min(root.kb_home_n() - 1, root.kb_home + 1);
         }
     }
 
@@ -3802,80 +3801,104 @@ export component SettingsPage {
                                     vertical-stretch: 0;
                                     spacing: 18px;
 
-                                    SectionHeader {
-                                        icon-kind: 4;
-                                        label: @tr("HOME ROWS");
+                                    SectionHeader { icon-kind: 4; label: @tr("HOME CATALOGS"); }
+                                    Text {
+                                        width: 100%; wrap: word-wrap;
+                                        text: @tr("Built-in and addon catalogs appear in this order on Home. Hide, move or remove any catalog.");
+                                        font-size: 14px; color: Theme.current.text_settings;
                                     }
-
-                                    Rectangle {
+                                    if root.home_row_catalog_rows.length == 0: Text {
+                                        width: 100%; wrap: word-wrap;
+                                        text: @tr("No Home catalogs selected. Add a built-in or addon catalog.");
+                                        font-size: 14px; color: Theme.current.text_settings;
+                                    }
+                                    for home_row[i] in root.home_row_catalog_rows: Rectangle {
                                         background: Theme.current.card;
-                                        border-radius: 16px;
-                                        border-width: 1px;
+                                        border-radius: 16px; border-width: 1px;
                                         border-color: Theme.current.border_soft;
                                         clip: true;
-
                                         VerticalLayout {
                                             spacing: 0px;
-
                                             SettingsRow {
-                                                setting-key: "home_continue_enabled";
-                                                row-title: @tr("Continue Watching");
-                                                row-desc: @tr("Show the Continue Watching row on Home.");
-
-                                                KbMark { on: root.kb_zone == 16 && root.kb_home == 0; active: root.kb_active; }
+                                                setting-key: "home_rows";
+                                                row-title: home_row.title;
+                                                row-desc: home_row.builtin ? @tr("Built-in")
+                                                    : home_row.addon + " · " + home_row.media_type
+                                                        + " · " + (home_row.genre == "" ? @tr("All genres") : home_row.genre)
+                                                        + (home_row.available ? (home_row.enabled ? "" : " · " + @tr("Addon disabled")) : " · " + @tr("Unavailable addon"));
+                                            }
+                                            HorizontalLayout {
+                                                padding-left: 16px; padding-right: 16px;
+                                                padding-bottom: 12px; spacing: 8px;
                                                 ToggleSwitch {
-                                                    name: @tr("Continue Watching");
-                                                    checked <=> root.home_continue_enabled;
-                                                    focused: root.kb_zone == 16 && root.kb_home == 0 && root.kb_active;
+                                                    name: home_row.title;
+                                                    checked: home_row.visible;
+                                                    focused: root.kb_zone == 16 && root.kb_home == i * 4 && root.kb_active;
                                                     toggled => {
                                                         root.kb_active = SettingsStyle.keyboard-mode;
-                                                        root.kb_zone = 16;
-                                                        root.kb_home = 0;
-                                                        root.schedule_setting("home_continue_enabled");
+                                                        root.kb_zone = 16; root.kb_home = i * 4;
+                                                        root.home_row_catalog_action(i, 0);
                                                     }
                                                 }
-                                            }
-
-                                            SettingsRow {
-                                                tinted: true;
-                                                setting-key: "home_upcoming_enabled";
-                                                row-title: @tr("Upcoming");
-                                                row-desc: @tr("Show the Upcoming row on Home.");
-
-                                                KbMark { on: root.kb_zone == 16 && root.kb_home == 1; active: root.kb_active; }
-                                                ToggleSwitch {
-                                                    name: @tr("Upcoming");
-                                                    checked <=> root.home_upcoming_enabled;
-                                                    focused: root.kb_zone == 16 && root.kb_home == 1 && root.kb_active;
-                                                    toggled => {
+                                                Rectangle { horizontal-stretch: 1; }
+                                                PillButton {
+                                                    label: "↑"; accessible-label: @tr("Move up");
+                                                    btn_min_width: 44px; compact: true;
+                                                    enabled: i > 0;
+                                                    focused: root.kb_zone == 16 && root.kb_home == i * 4 + 1 && root.kb_active;
+                                                    clicked => {
                                                         root.kb_active = SettingsStyle.keyboard-mode;
-                                                        root.kb_zone = 16;
-                                                        root.kb_home = 1;
-                                                        root.schedule_setting("home_upcoming_enabled");
+                                                        root.kb_zone = 16; root.kb_home = (i - 1) * 4 + 1;
+                                                        root.home_row_catalog_action(i, 1);
                                                     }
                                                 }
-                                            }
-
-                                            SettingsRow {
-                                                setting-key: "home_episode_artwork";
-                                                row-title: @tr("Episode artwork on Home");
-                                                row-desc: @tr("Use episode thumbnails in Continue Watching and Upcoming. Turn off to use show posters.");
-
-                                                KbMark { on: root.kb_zone == 16 && root.kb_home == 2; active: root.kb_active; }
-                                                ToggleSwitch {
-                                                    name: @tr("Episode artwork on Home");
-                                                    checked <=> root.home_episode_artwork;
-                                                    focused: root.kb_zone == 16 && root.kb_home == 2 && root.kb_active;
-                                                    toggled => {
+                                                PillButton {
+                                                    label: "↓"; accessible-label: @tr("Move down");
+                                                    btn_min_width: 44px; compact: true;
+                                                    enabled: i + 1 < root.home_row_catalog_rows.length;
+                                                    focused: root.kb_zone == 16 && root.kb_home == i * 4 + 2 && root.kb_active;
+                                                    clicked => {
                                                         root.kb_active = SettingsStyle.keyboard-mode;
-                                                        root.kb_zone = 16;
-                                                        root.kb_home = 2;
-                                                        root.schedule_setting("home_episode_artwork");
+                                                        root.kb_zone = 16; root.kb_home = (i + 1) * 4 + 2;
+                                                        root.home_row_catalog_action(i, 2);
+                                                    }
+                                                }
+                                                PillButton {
+                                                    label: @tr("Remove"); destructive: true; compact: true;
+                                                    focused: root.kb_zone == 16 && root.kb_home == i * 4 + 3 && root.kb_active;
+                                                    clicked => {
+                                                        root.kb_active = SettingsStyle.keyboard-mode;
+                                                        root.kb_zone = 16; root.kb_home = i * 4 + 3;
+                                                        root.home_row_catalog_action(i, 3);
                                                     }
                                                 }
                                             }
                                         }
                                     }
+                                    PillButton {
+                                        label: @tr("Add catalog"); primary: true; roomy: true;
+                                        focused: root.kb_zone == 16 && root.kb_home == root.home_row_catalog_rows.length * 4 && root.kb_active;
+                                        clicked => {
+                                            root.kb_active = SettingsStyle.keyboard-mode;
+                                            root.kb_zone = 16; root.kb_home = root.home_row_catalog_rows.length * 4;
+                                            root.home_row_catalog_add_requested();
+                                        }
+                                    }
+                                    SettingsCard { SettingsRow {
+                                        setting-key: "home_episode_artwork";
+                                        row-title: @tr("Episode artwork on Home");
+                                        row-desc: @tr("Use episode thumbnails in Continue Watching and Upcoming. Turn off to use show posters.");
+                                        ToggleSwitch {
+                                            name: @tr("Episode artwork on Home");
+                                            checked <=> root.home_episode_artwork;
+                                            focused: root.kb_zone == 16 && root.kb_home == root.home_row_catalog_rows.length * 4 + 1 && root.kb_active;
+                                            toggled => {
+                                                root.kb_active = SettingsStyle.keyboard-mode;
+                                                root.kb_zone = 16; root.kb_home = root.home_row_catalog_rows.length * 4 + 1;
+                                                root.schedule_setting("home_episode_artwork");
+                                            }
+                                        }
+                                    } }
 
                                     SectionHeader {
                                         icon-kind: 4;
@@ -3927,11 +3950,11 @@ export component SettingsPage {
                                                     label: @tr("Remove");
                                                     destructive: true;
                                                     roomy: true;
-                                                    focused: root.kb_zone == 16 && root.kb_home == i + 3 && root.kb_active;
+                                                    focused: root.kb_zone == 16 && root.kb_home == root.home_row_catalog_rows.length * 4 + i + 2 && root.kb_active;
                                                     clicked => {
                                                         root.kb_active = SettingsStyle.keyboard-mode;
                                                         root.kb_zone = 16;
-                                                        root.kb_home = i + 3;
+                                                        root.kb_home = root.home_row_catalog_rows.length * 4 + i + 2;
                                                         root.home_catalog_removed(i);
                                                     }
                                                 }
@@ -3943,89 +3966,15 @@ export component SettingsPage {
                                         label: @tr("Add catalog");
                                         primary: true;
                                         roomy: true;
-                                        focused: root.kb_zone == 16 && root.kb_home == root.home_catalog_rows.length + 3 && root.kb_active;
+                                        focused: root.kb_zone == 16 && root.kb_home == root.home_row_catalog_rows.length * 4 + root.home_catalog_rows.length + 2 && root.kb_active;
                                         clicked => {
                                             root.kb_active = SettingsStyle.keyboard-mode;
                                             root.kb_zone = 16;
-                                            root.kb_home = root.home_catalog_rows.length + 3;
+                                            root.kb_home = root.home_row_catalog_rows.length * 4 + root.home_catalog_rows.length + 2;
                                             root.home_catalog_add_requested();
                                         }
                                     }
 
-                                    SectionHeader {
-                                        icon-kind: 4;
-                                        label: @tr("CATALOG ROWS");
-                                    }
-
-                                    Text {
-                                        width: 100%;
-                                        text: @tr("Choose addon catalogs to show as poster rows below Upcoming. Each catalog can show up to 20 titles.");
-                                        font-size: 14px;
-                                        color: Theme.current.text_settings;
-                                        wrap: word-wrap;
-                                    }
-
-                                    Rectangle {
-                                        background: Theme.current.card;
-                                        border-radius: 16px;
-                                        border-width: 1px;
-                                        border-color: Theme.current.border_soft;
-                                        clip: true;
-
-                                        VerticalLayout {
-                                            spacing: 0px;
-
-                                            if root.home_row_catalog_rows.length == 0: Rectangle {
-                                                background: Theme.current.card;
-                                                min-height: 64px;
-
-                                                Text {
-                                                    x: 16px;
-                                                    y: (parent.height - self.height) / 2;
-                                                    width: parent.width - 32px;
-                                                    text: @tr("No Home catalog rows selected. Add one to choose its genre.");
-                                                    font-size: 14px;
-                                                    color: Theme.current.text_settings;
-                                                    wrap: word-wrap;
-                                                }
-                                            }
-
-                                            for home_row[i] in root.home_row_catalog_rows: SettingsRow {
-                                                tinted: Math.mod(i, 2) == 0;
-                                                setting-key: "home_row_sources";
-                                                row-title: home_row.title;
-                                                row-desc: home_row.addon + " · " + home_row.media_type
-                                                + " · " + (home_row.genre == "" ? @tr("All genres") : home_row.genre)
-                                                + (home_row.available ? (home_row.enabled ? "" : " · " + @tr("Addon disabled")) : " · " + @tr("Unavailable addon"));
-
-                                                home_row_catalog_remove := PillButton {
-                                                    label: @tr("Remove");
-                                                    destructive: true;
-                                                    roomy: true;
-                                                    focused: root.kb_zone == 16 && root.kb_home == root.home_catalog_rows.length + i + 4 && root.kb_active;
-                                                    clicked => {
-                                                        root.kb_active = SettingsStyle.keyboard-mode;
-                                                        root.kb_zone = 16;
-                                                        root.kb_home = root.home_catalog_rows.length + i + 4;
-                                                        root.home_row_catalog_removed(i);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    home_row_catalog_add := PillButton {
-                                        label: @tr("Add catalog row");
-                                        primary: true;
-                                        roomy: true;
-                                        focused: root.kb_zone == 16 && root.kb_home == root.home_catalog_rows.length + root.home_row_catalog_rows.length + 4 && root.kb_active;
-                                        clicked => {
-                                            root.kb_active = SettingsStyle.keyboard-mode;
-                                            root.kb_zone = 16;
-                                            root.kb_home = root.home_catalog_rows.length + root.home_row_catalog_rows.length + 4;
-                                            root.home_row_catalog_add_requested();
-                                        }
-                                    }
                                 }
 
                                 if root.sel == 8: VerticalLayout {
@@ -4346,7 +4295,7 @@ export component SettingsPage {
                     spacing: 10px;
 
                     Text {
-                        text: root.home_catalog_add_target == 0 ? @tr("Add featured catalog") : @tr("Add Home catalog row");
+                        text: root.home_catalog_add_target == 0 ? @tr("Add featured catalog") : @tr("Add Home catalog");
                         font-size: 17px;
                         font-weight: 700;
                         color: Theme.current.text_bright;
@@ -4356,7 +4305,7 @@ export component SettingsPage {
                         width: 100%;
                         text: root.home_catalog_add_target == 0
                             ? @tr("Choose a catalog and optional genre for the rotating Home banner.")
-                            : @tr("Choose a catalog and optional genre to show below Upcoming on Home.");
+                            : @tr("Choose a built-in catalog or an addon catalog and optional genre for Home.");
                         font-size: 14px;
                         color: Theme.current.text_settings;
                         wrap: word-wrap;
@@ -4392,14 +4341,16 @@ export component SettingsPage {
                         model: root.home_catalog_genre_names;
                         current-index <=> root.home_catalog_genre_index;
                         placeholder-text: @tr("All genres");
-                        enabled: root.home_catalog_candidate_names.length > 0;
+                        enabled: root.home_catalog_genre_names.length > 1;
                         roomy: true;
                         selected(_) => { root.home_catalog_add_error = ""; }
                     }
 
                     if root.home_catalog_candidate_names.length == 0: Text {
                         width: 100%;
-                        text: @tr("No enabled addon catalogs are available. Enable an addon with catalogs first.");
+                        text: root.home_catalog_add_target == 0
+                            ? @tr("No enabled addon catalogs are available. Enable an addon with catalogs first.")
+                            : @tr("All built-in catalogs are already added. Enable an addon for more catalogs.");
                         font-size: 14px;
                         color: Theme.current.text_removal_warning;
                         wrap: word-wrap;

@@ -54,6 +54,8 @@ fn home_catalogs_are_added_with_a_genre_and_removed_individually() {
             genre: "Action".into(),
             available: true,
             enabled: true,
+            builtin: false,
+            visible: true,
         }]))
         .into(),
     );

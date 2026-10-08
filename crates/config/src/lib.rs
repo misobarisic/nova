@@ -105,6 +105,22 @@ pub struct HomeCatalogSource {
     pub genre: String,
 }
 
+/// One built-in or addon catalog in the ordered Home landing layout.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "catalog", rename_all = "snake_case")]
+pub enum HomeRowSource {
+    ContinueWatching,
+    Upcoming,
+    Addon(HomeCatalogSource),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HomeRow {
+    pub source: HomeRowSource,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Image-cache settings
 // ---------------------------------------------------------------------------
@@ -340,6 +356,10 @@ pub struct CacheSettings {
     /// Home. Synced with settings; each device fetches from its own addons.
     #[serde(default)]
     pub home_row_sources: Vec<HomeCatalogSource>,
+    /// Ordered built-in and addon catalogs. None lazily migrates legacy
+    /// selections; Some(empty) intentionally means no Home catalogs.
+    #[serde(default)]
+    pub home_rows: Option<Vec<HomeRow>>,
     /// Show the Continue Watching row on Home. Synced with the rest of the
     /// general settings; older settings snapshots keep the existing visible
     /// behavior.
@@ -433,6 +453,7 @@ impl Default for CacheSettings {
             discover_catalog_addon_names: true,
             home_catalog_sources: Vec::new(),
             home_row_sources: Vec::new(),
+            home_rows: None,
             home_continue_enabled: true,
             home_upcoming_enabled: true,
             home_episode_artwork: true,
@@ -455,6 +476,67 @@ impl Default for CacheSettings {
 }
 
 impl CacheSettings {
+    /// Preserve the old order and hidden built-ins until the first layout edit.
+    pub fn effective_home_rows(&self) -> Vec<HomeRow> {
+        let rows = self.home_rows.clone().unwrap_or_else(|| {
+            let mut rows = vec![
+                HomeRow {
+                    source: HomeRowSource::ContinueWatching,
+                    enabled: self.home_continue_enabled,
+                },
+                HomeRow {
+                    source: HomeRowSource::Upcoming,
+                    enabled: self.home_upcoming_enabled,
+                },
+            ];
+            rows.extend(self.home_row_sources.iter().cloned().map(|source| HomeRow {
+                source: HomeRowSource::Addon(source),
+                enabled: true,
+            }));
+            rows
+        });
+        let mut seen = std::collections::HashSet::new();
+        rows.into_iter()
+            .filter(|row| seen.insert(row.source.clone()))
+            .collect()
+    }
+
+    pub fn home_row_enabled(&self, source: &HomeRowSource) -> bool {
+        self.effective_home_rows()
+            .iter()
+            .any(|row| &row.source == source && row.enabled)
+    }
+
+    /// Keep legacy fields as a compatibility projection for older settings.
+    pub fn set_home_rows(&mut self, rows: Vec<HomeRow>) {
+        self.home_rows = Some(rows);
+        let rows = self.effective_home_rows();
+        self.home_continue_enabled = rows
+            .iter()
+            .any(|row| row.source == HomeRowSource::ContinueWatching && row.enabled);
+        self.home_upcoming_enabled = rows
+            .iter()
+            .any(|row| row.source == HomeRowSource::Upcoming && row.enabled);
+        self.home_row_sources = rows
+            .iter()
+            .filter_map(|row| match &row.source {
+                HomeRowSource::Addon(source) => Some(source.clone()),
+                _ => None,
+            })
+            .collect();
+        self.home_rows = Some(rows);
+    }
+
+    pub fn home_addon_sources(&self, enabled_only: bool) -> Vec<HomeCatalogSource> {
+        self.effective_home_rows()
+            .into_iter()
+            .filter_map(|row| match row.source {
+                HomeRowSource::Addon(source) if !enabled_only || row.enabled => Some(source),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Stable key describing the active encoding config; the cache sidecar
     /// stores it so entries are lazily re-encoded when it changes.
     pub fn config_key(&self) -> String {

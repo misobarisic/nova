@@ -132,8 +132,10 @@ impl Bridge {
             app.set_cache_lazy_reencode(settings.lazy_reencode);
             app.set_discover_min_cols(settings.discover_min_cols as i32);
             app.set_discover_catalog_addon_names(settings.discover_catalog_addon_names);
-            app.set_home_continue_enabled(settings.home_continue_enabled);
-            app.set_home_upcoming_enabled(settings.home_upcoming_enabled);
+            app.set_home_continue_enabled(
+                settings.home_row_enabled(&HomeRowSource::ContinueWatching),
+            );
+            app.set_home_upcoming_enabled(settings.home_row_enabled(&HomeRowSource::Upcoming));
             app.set_home_episode_artwork(settings.home_episode_artwork);
             app.set_library_min_cols(settings.library_min_cols as i32);
             app.set_android_hwdec_index(settings.android_hwdec.index());
@@ -273,6 +275,7 @@ impl Bridge {
                 categories: state.cache_settings.categories.clone(),
                 home_catalog_sources: state.cache_settings.home_catalog_sources.clone(),
                 home_row_sources: state.cache_settings.home_row_sources.clone(),
+                home_rows: state.cache_settings.home_rows.clone(),
                 home_continue_enabled: app.get_home_continue_enabled(),
                 home_upcoming_enabled: app.get_home_upcoming_enabled(),
                 home_episode_artwork: app.get_home_episode_artwork(),
@@ -335,9 +338,9 @@ impl Bridge {
     fn home_catalog_choices(&self, home_row: bool) -> Vec<(HomeCatalogSource, HomeCatalogRow)> {
         let state = self.shared.lock().unwrap();
         let sources = if home_row {
-            &state.cache_settings.home_row_sources
+            state.cache_settings.home_addon_sources(false)
         } else {
-            &state.cache_settings.home_catalog_sources
+            state.cache_settings.home_catalog_sources.clone()
         };
         sources
             .iter()
@@ -370,6 +373,8 @@ impl Bridge {
                         genre: SharedString::from(&source.genre),
                         available,
                         enabled,
+                        builtin: false,
+                        visible: true,
                     },
                 )
             })
@@ -406,6 +411,39 @@ impl Bridge {
         candidates
     }
 
+    fn home_picker_candidates(
+        &self,
+        home_row: bool,
+    ) -> Vec<(HomeRowSource, String, Vec<String>)> {
+        let mut candidates = Vec::new();
+        if home_row {
+            let configured = self
+                .shared
+                .lock()
+                .unwrap()
+                .cache_settings
+                .effective_home_rows();
+            for (source, label) in [
+                (HomeRowSource::ContinueWatching, "Continue Watching"),
+                (HomeRowSource::Upcoming, "Upcoming"),
+            ] {
+                if !configured.iter().any(|row| row.source == source) {
+                    candidates.push((
+                        source,
+                        format!("{} — {}", text::tr("Built-in"), text::tr(label)),
+                        Vec::new(),
+                    ));
+                }
+            }
+        }
+        candidates.extend(
+            self.home_catalog_candidates()
+                .into_iter()
+                .map(|(source, name, genres)| (HomeRowSource::Addon(source), name, genres)),
+        );
+        candidates
+    }
+
     pub(super) fn apply_home_catalog_rows(&self) {
         if let Some(app) = self.app() {
             let featured = self
@@ -413,10 +451,40 @@ impl Bridge {
                 .into_iter()
                 .map(|(_, row)| row)
                 .collect::<Vec<_>>();
-            let home_rows = self
-                .home_catalog_choices(true)
+            let choices = self.home_catalog_choices(true);
+            let configured = self
+                .shared
+                .lock()
+                .unwrap()
+                .cache_settings
+                .effective_home_rows();
+            let home_rows = configured
                 .into_iter()
-                .map(|(_, row)| row)
+                .map(|entry| match entry.source {
+                    HomeRowSource::ContinueWatching | HomeRowSource::Upcoming => HomeCatalogRow {
+                        title: text::tr(if entry.source == HomeRowSource::ContinueWatching {
+                            "Continue Watching"
+                        } else {
+                            "Upcoming"
+                        })
+                        .into(),
+                        addon: text::tr("Built-in").into(),
+                        available: true,
+                        enabled: true,
+                        builtin: true,
+                        visible: entry.enabled,
+                        ..Default::default()
+                    },
+                    HomeRowSource::Addon(source) => {
+                        let mut row = choices
+                            .iter()
+                            .find(|(choice, _)| choice == &source)
+                            .map(|(_, row)| row.clone())
+                            .unwrap_or_default();
+                        row.visible = entry.enabled;
+                        row
+                    }
+                })
                 .collect::<Vec<_>>();
             app.set_home_catalog_rows(Rc::new(VecModel::from(featured)).into());
             app.set_home_row_catalog_rows(Rc::new(VecModel::from(home_rows)).into());
@@ -432,7 +500,7 @@ impl Bridge {
     }
 
     fn home_catalog_picker_requested(&self, target: i32) {
-        let candidates = self.home_catalog_candidates();
+        let candidates = self.home_picker_candidates(target == 1);
         if let Some(app) = self.app() {
             app.set_home_catalog_add_target(target);
             let names = candidates
@@ -464,7 +532,10 @@ impl Bridge {
     }
 
     pub(super) fn home_catalog_candidate_picked(&self, index: i32) {
-        let candidates = self.home_catalog_candidates();
+        let home_row = self
+            .app()
+            .is_some_and(|app| app.get_home_catalog_add_target() == 1);
+        let candidates = self.home_picker_candidates(home_row);
         let Some((_, _, genres)) = usize::try_from(index)
             .ok()
             .and_then(|index| candidates.get(index))
@@ -496,8 +567,8 @@ impl Bridge {
         let home_row = self
             .app()
             .is_some_and(|app| app.get_home_catalog_add_target() == 1);
-        let candidates = self.home_catalog_candidates();
-        let Some((mut source, _, genres)) = usize::try_from(candidate_index)
+        let candidates = self.home_picker_candidates(home_row);
+        let Some((mut kind, _, genres)) = usize::try_from(candidate_index)
             .ok()
             .and_then(|index| candidates.get(index).cloned())
         else {
@@ -510,18 +581,45 @@ impl Bridge {
             else {
                 return;
             };
+            let HomeRowSource::Addon(source) = &mut kind else {
+                return;
+            };
             source.genre = genre.clone();
         } else if genre_index < 0 {
             return;
         }
 
+        if home_row {
+            let mut rows = self
+                .shared
+                .lock()
+                .unwrap()
+                .cache_settings
+                .effective_home_rows();
+            if rows.iter().any(|row| row.source == kind) {
+                if let Some(app) = self.app() {
+                    app.set_home_catalog_add_error(
+                        text::tr("This catalog and genre are already added.").into(),
+                    );
+                }
+                return;
+            }
+            rows.push(HomeRow {
+                source: kind,
+                enabled: true,
+            });
+            self.save_home_rows(rows);
+            if let Some(app) = self.app() {
+                app.set_home_catalog_add_open(false);
+            }
+            return;
+        }
+        let HomeRowSource::Addon(source) = kind else {
+            return;
+        };
         let (settings, duplicate) = {
             let mut state = self.shared.lock().unwrap();
-            let selected = if home_row {
-                &mut state.cache_settings.home_row_sources
-            } else {
-                &mut state.cache_settings.home_catalog_sources
-            };
+            let selected = &mut state.cache_settings.home_catalog_sources;
             let duplicate = selected.contains(&source);
             if !duplicate {
                 selected.push(source);
@@ -539,13 +637,8 @@ impl Bridge {
         set_active_cache_settings(settings.clone());
         write_settings(&settings);
         self.apply_home_catalog_rows();
-        if home_row {
-            self.invalidate_home_catalog_rows();
-            self.refresh_home_catalog_rows();
-        } else {
-            self.invalidate_home_showcase();
-            self.refresh_home_showcase();
-        }
+        self.invalidate_home_showcase();
+        self.refresh_home_showcase();
         if let Some(app) = self.app() {
             app.set_home_catalog_add_open(false);
             app.set_persistence_failed(storage::last_error().is_some());
@@ -575,28 +668,49 @@ impl Bridge {
         }
     }
 
-    pub(super) fn home_row_catalog_removed(&self, index: usize) {
-        let choices = self.home_catalog_choices(true);
-        let Some((source, _)) = choices.get(index) else {
-            return;
-        };
-        let source = source.clone();
+    fn save_home_rows(&self, rows: Vec<HomeRow>) {
+        allow_setting_field("home_rows");
         let settings = {
             let mut state = self.shared.lock().unwrap();
-            state
-                .cache_settings
-                .home_row_sources
-                .retain(|saved| saved != &source);
+            state.cache_settings.set_home_rows(rows);
             state.cache_settings.clone()
         };
         set_active_cache_settings(settings.clone());
         write_settings(&settings);
-        self.apply_home_catalog_rows();
-        self.invalidate_home_catalog_rows();
-        self.refresh_home_catalog_rows();
-        if let Some(app) = self.app() {
-            app.set_persistence_failed(storage::last_error().is_some());
+        if !applying() {
+            notify_setting_choice("home_rows", &settings);
         }
+        self.settings_to_ui();
+        self.invalidate_home_catalog_rows();
+        self.apply_home_to_ui();
+    }
+
+    pub(super) fn home_row_catalog_removed(&self, index: usize) {
+        self.home_row_catalog_action(index, 3);
+    }
+
+    /// One action vocabulary for built-in and addon rows: visibility, up,
+    /// down, remove. Bounds checks also cover stale callbacks after a sync.
+    pub(super) fn home_row_catalog_action(&self, index: usize, action: i32) {
+        let mut rows = self
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .effective_home_rows();
+        if index >= rows.len() {
+            return;
+        }
+        match action {
+            0 => rows[index].enabled = !rows[index].enabled,
+            1 if index > 0 => rows.swap(index, index - 1),
+            2 if index + 1 < rows.len() => rows.swap(index, index + 1),
+            3 => {
+                rows.remove(index);
+            }
+            _ => return,
+        }
+        self.save_home_rows(rows);
     }
 
     /// Persist current memory, never stale controls captured by a timer.

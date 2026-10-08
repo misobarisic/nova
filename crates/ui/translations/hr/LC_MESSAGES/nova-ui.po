@@ -1816,3 +1816,21 @@ msgid_plural "Warning: {n} progress records cannot be matched. They will not app
 msgstr[0] "Upozorenje: {n} zapis napretka nije moguće povezati. Neće se prikazivati na novom unosu. Stara povijest ostaje sačuvana, ali uklanjanje spremljenog unosa može učiniti neke podatke nedostupnima."
 msgstr[1] "Upozorenje: {n} zapisa napretka nije moguće povezati. Neće se prikazivati na novom unosu. Stara povijest ostaje sačuvana, ali uklanjanje spremljenog unosa može učiniti neke podatke nedostupnima."
 msgstr[2] "Upozorenje: {n} zapisa napretka nije moguće povezati. Neće se prikazivati na novom unosu. Stara povijest ostaje sačuvana, ali uklanjanje spremljenog unosa može učiniti neke podatke nedostupnima."
+
+msgid "HOME CATALOGS"
+msgstr "KATALOZI POČETNE STRANICE"
+
+msgid "Built-in and addon catalogs appear in this order on Home. Hide, move or remove any catalog."
+msgstr "Ugrađeni katalozi i katalozi dodataka prikazuju se ovim redoslijedom na Početnoj stranici. Sakrijte, premjestite ili uklonite bilo koji katalog."
+
+msgid "No Home catalogs selected. Add a built-in or addon catalog."
+msgstr "Nema odabranih kataloga za Početnu stranicu. Dodajte ugrađeni katalog ili katalog dodatka."
+
+msgid "Add Home catalog"
+msgstr "Dodaj katalog na Početnu stranicu"
+
+msgid "Choose a built-in catalog or an addon catalog and optional genre for Home."
+msgstr "Odaberite ugrađeni katalog ili katalog dodatka i neobavezni žanr za Početnu stranicu."
+
+msgid "All built-in catalogs are already added. Enable an addon for more catalogs."
+msgstr "Svi ugrađeni katalozi već su dodani. Omogućite dodatak za više kataloga."

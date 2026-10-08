@@ -176,6 +176,7 @@ export component AppWindow inherits Window {
     in-out property <[ContinueRow]> home_continue: [];
     in-out property <[UpcomingRow]> home_upcoming: [];
     in-out property <[HomeCatalogSection]> home_catalog_sections: [];
+    in-out property <[int]> home_catalog_order: [-1, -2];
     in-out property <[HomeCatalogCard]> home_catalog_cards: [];
     // Independent catalog-driven feature at the top of Home. Rust keeps its
     // selected preview and fetches the active backdrop on demand.
@@ -632,6 +633,7 @@ export component AppWindow inherits Window {
     callback home_catalog_added(int, int);
     callback home_catalog_removed(int);
     callback home_row_catalog_removed(int);
+    callback home_row_catalog_action(int, int);
     callback home_catalog_card_picked(int);
     callback category_renamed(int, string);
     callback toggle_entry_category(string);
@@ -792,6 +794,7 @@ export component AppWindow inherits Window {
         continue_rows <=> root.home_continue;
         upcoming_rows <=> root.home_upcoming;
         catalog_sections: root.home_catalog_sections;
+        catalog_order: root.home_catalog_order;
         catalog_cards: root.home_catalog_cards;
         cal_cells <=> root.home_cal_cells;
         cal_title <=> root.home_cal_title;
@@ -1178,6 +1181,7 @@ export component AppWindow inherits Window {
         home_catalog_added(c, g) => { root.home_catalog_added(c, g); }
         home_catalog_removed(i) => { root.home_catalog_removed(i); }
         home_row_catalog_removed(i) => { root.home_row_catalog_removed(i); }
+        home_row_catalog_action(i, action) => { root.home_row_catalog_action(i, action); }
         save_settings => { root.save_settings(); }
         settings_edited(field) => { root.settings_edited(field); }
         clear_cache => { root.clear_cache(); }

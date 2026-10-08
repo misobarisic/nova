@@ -77,8 +77,8 @@ use crate::net;
 use crate::storage;
 use nova_config::{
     AndroidHwdec, CacheImageFormat, CacheSettings, DesktopExternalApp, DownloadSettings,
-    EpisodeStartBehavior, HomeCatalogSource, Language, active_cache_settings, app_cache_dir,
-    app_data_dir, now_secs, poster_cache_dir, set_cache_settings,
+    EpisodeStartBehavior, HomeCatalogSource, HomeRow, HomeRowSource, Language, active_cache_settings,
+    app_cache_dir, app_data_dir, now_secs, poster_cache_dir, set_cache_settings,
 };
 // Everything from the image-cache subsystem now lives in `nova-media`.
 use nova_media::cache::*;
@@ -239,6 +239,7 @@ struct MetadataPrefetch {
 
 #[derive(Clone)]
 struct HomeCatalogGroup {
+    source: HomeCatalogSource,
     title: String,
     previews: Vec<MetaPreview>,
 }

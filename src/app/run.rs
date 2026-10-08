@@ -697,6 +697,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_home_row_catalog_removed(move |i| b.home_row_catalog_removed(i as usize));
 
     let b = bridge.clone();
+    app.on_home_row_catalog_action(move |i, action| b.home_row_catalog_action(i as usize, action));
+
+    let b = bridge.clone();
     app.on_toggle_entry_category(move |name| b.toggle_entry_category(&name));
 
     let b = bridge.clone();

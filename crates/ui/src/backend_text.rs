@@ -1100,7 +1100,7 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         "playback_speed" => format!("{}×", value),
         "torrent_down_limit" if value.as_f64() == Some(0.0) => tr("Unlimited").into(),
         "torrent_down_limit" => format!("{number} KB/s"),
-        "home_catalog_sources" => {
+        "home_catalog_sources" | "home_row_sources" | "home_rows" => {
             let count = value.as_array().map_or(0, Vec::len);
             let word = if croatian() {
                 plural(count as u64, "katalog", "kataloga", "kataloga")

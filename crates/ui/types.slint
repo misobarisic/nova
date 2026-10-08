@@ -83,8 +83,10 @@ export struct CategoryRow {
     name: string,
 }
 
-/// One configured addon catalog/genre source in Settings → Home.
+/// One built-in or addon catalog choice in Settings → Home.
 export struct HomeCatalogRow {
+    builtin: bool,
+    visible: bool,
     title: string,
     addon: string,
     media_type: string,

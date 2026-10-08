@@ -306,14 +306,7 @@ fn home_showcase_sources(state: &Shared) -> Vec<HomeCatalogSource> {
 /// All selected poster-rail sources, including unavailable addons so their
 /// local cached results remain visible while a manifest cannot be fetched.
 fn home_catalog_row_sources(state: &Shared) -> Vec<HomeCatalogSource> {
-    let mut seen = HashSet::new();
-    state
-        .cache_settings
-        .home_row_sources
-        .iter()
-        .filter(|source| seen.insert((*source).clone()))
-        .cloned()
-        .collect()
+    state.cache_settings.home_addon_sources(true)
 }
 
 fn home_catalog_row_groups(
@@ -357,7 +350,11 @@ fn home_catalog_row_groups(
                     preview
                 })
                 .collect();
-            Some(HomeCatalogGroup { title, previews })
+            Some(HomeCatalogGroup {
+                source: source.clone(),
+                title,
+                previews,
+            })
         })
         .collect()
 }
@@ -527,7 +524,7 @@ impl Bridge {
                 })
                 .collect::<Vec<_>>();
             (
-                state.cache_settings.home_row_sources.clone(),
+                state.cache_settings.home_addon_sources(false),
                 sources,
                 targets,
                 restore,
@@ -606,7 +603,7 @@ impl Bridge {
                 return;
             }
             (
-                state.cache_settings.home_row_sources.clone(),
+                state.cache_settings.home_addon_sources(false),
                 state.installed.clone(),
             )
         };
@@ -619,6 +616,17 @@ impl Bridge {
 
     fn install_home_catalog_rows(&self, groups: Vec<HomeCatalogGroup>) {
         let Some(app) = self.app() else { return };
+        let view = app.get_home_view();
+        let open_source = if view >= 3 {
+            self.shared
+                .lock()
+                .unwrap()
+                .home_catalog_row_groups
+                .get((view - 3) as usize)
+                .map(|group| group.source.clone())
+        } else {
+            None
+        };
         let mut sections = Vec::new();
         let mut cards = Vec::new();
         let mut items = Vec::new();
@@ -658,6 +666,12 @@ impl Bridge {
                 items.push(preview.clone());
             }
         }
+        // A settings reorder must keep an open grid tied to its source,
+        // rather than silently displaying the new catalog at the old index.
+        let next_view = open_source
+            .as_ref()
+            .and_then(|source| groups.iter().position(|group| &group.source == source))
+            .map_or(0, |index| index as i32 + 3);
         {
             let mut state = self.shared.lock().unwrap();
             state.home_catalog_row_groups = groups;
@@ -665,6 +679,10 @@ impl Bridge {
         }
         app.set_home_catalog_sections(Rc::new(VecModel::from(sections)).into());
         app.set_home_catalog_cards(Rc::new(VecModel::from(cards)).into());
+        self.publish_home_catalog_order();
+        if view >= 3 {
+            app.set_home_view(next_view);
+        }
         self.dispatch_home_catalog_posters();
     }
 
@@ -1255,7 +1273,7 @@ impl Bridge {
                 state.entries.clone(),
                 state.progress.clone(),
                 state.continue_list.clone(),
-                state.cache_settings.home_continue_enabled,
+                state.cache_settings.home_row_enabled(&HomeRowSource::ContinueWatching),
                 state.cache_settings.home_episode_artwork,
             )
         };
@@ -1311,8 +1329,45 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_home_continue(Rc::new(VecModel::from(self.current_continue_rows())).into());
             app.set_home_upcoming(Rc::new(VecModel::from(self.current_upcoming_rows())).into());
+            let settings = self.shared.lock().unwrap().cache_settings.clone();
+            if (app.get_home_view() == 1
+                && !settings.home_row_enabled(&HomeRowSource::ContinueWatching))
+                || (app.get_home_view() == 2
+                    && !settings.home_row_enabled(&HomeRowSource::Upcoming))
+            {
+                app.set_home_view(0);
+            }
         }
         self.apply_upcoming_cal_to_ui();
+        self.publish_home_catalog_order();
+        self.ensure_home_catalog_rows_loaded();
+    }
+
+    /// Negative IDs are built-ins; nonnegative IDs address catalog sections.
+    /// Cached groups own stable source identities, so missing/empty catalogs
+    /// never shift another configured row into their slot.
+    pub(super) fn publish_home_catalog_order(&self) {
+        let order = {
+            let state = self.shared.lock().unwrap();
+            state
+                .cache_settings
+                .effective_home_rows()
+                .into_iter()
+                .filter(|row| row.enabled)
+                .filter_map(|row| match row.source {
+                    HomeRowSource::ContinueWatching => Some(-1),
+                    HomeRowSource::Upcoming => Some(-2),
+                    HomeRowSource::Addon(source) => state
+                        .home_catalog_row_groups
+                        .iter()
+                        .position(|group| group.source == source)
+                        .map(|index| index as i32),
+                })
+                .collect::<Vec<_>>()
+        };
+        if let Some(app) = self.app() {
+            app.set_home_catalog_order(Rc::new(VecModel::from(order)).into());
+        }
     }
 
     /// Refresh language-dependent Home row text without replacing poster
@@ -1448,7 +1503,7 @@ impl Bridge {
                 state.entries.clone(),
                 state.upcoming_list.clone(),
                 state.cache_settings.date_relative,
-                state.cache_settings.home_upcoming_enabled,
+                state.cache_settings.home_row_enabled(&HomeRowSource::Upcoming),
                 state.cache_settings.home_episode_artwork,
             )
         };
@@ -1471,7 +1526,7 @@ impl Bridge {
                 state.entries.clone(),
                 state.upcoming_list.clone(),
                 state.cache_settings.date_relative,
-                state.cache_settings.home_upcoming_enabled,
+                state.cache_settings.home_row_enabled(&HomeRowSource::Upcoming),
                 state.cache_settings.home_episode_artwork,
             )
         };
