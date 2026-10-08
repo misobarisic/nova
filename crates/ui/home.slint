@@ -812,9 +812,12 @@ component FeaturedActionButton inherits Rectangle {
             text: root.label;
             font-size: root.narrow ? (root.compact ? 13px : 14px) : 16px;
             font-weight: 600; color: Theme.current.on_accent; vertical-alignment: center;
+            horizontal-alignment: center; horizontal-stretch: 1;
             min-width: 0px; overflow: elide;
             wrap: word-wrap; max-lines: 2;
         }
+        // Balance the play icon so the caption centers in the entire button.
+        Rectangle { width: 20px; height: 100%; }
     }
     action_touch := TouchArea {
         accessible-role: button; accessible-label: root.label;
