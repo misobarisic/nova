@@ -1385,13 +1385,14 @@ export component PlayerOverlay {
             height: 220px;
             y: parent.height - self.height;
             // femtovg's gradient fills render as flat fills in this
-            // environment, so the scrim is a runtime-generated 1×220
-            // alpha-ramp image stretched over the area — the ease curve is
-            // baked into the pixels and is always smooth.
+            // environment, so the scrim is a runtime-generated 220×220
+            // alpha-ramp image. Repeated columns preserve the ease curve
+            // without stretching a thin colorized texture across the screen.
             Image {
                 width: 100%;
                 height: 100%;
                 source: root.scrim_image;
+                image-fit: fill;
                 colorize: Theme.current.scrim_player;
             }
             // Visible when the wake timer says so, and always while loading or a

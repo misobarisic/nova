@@ -61,15 +61,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     crate::web_log("nova: window created");
 
     // Player scrim: femtovg's gradient fills render as flat fills in this
-    // environment, so the 220px fade is baked into a 1×220 alpha-ramp image
+    // environment, so the 220px fade is baked into a 220×220 alpha-ramp image
     // (black with a quadratic ease from 0 to ~69% alpha) stretched over the
-    // OSD area. Image stretching is exact and renderer-independent.
+    // OSD area. A square texture avoids stretching a single colorized column
+    // across the screen, which can expose rendering artifacts.
     {
         const H: usize = 220;
-        let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(1, H as u32);
-        for (i, px) in buf.make_mut_slice().iter_mut().enumerate() {
-            let t = i as f32 / (H - 1) as f32;
-            *px = Rgba8Pixel::new(0, 0, 0, (175.0 * t * t) as u8);
+        let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(H as u32, H as u32);
+        for (y, row) in buf.make_mut_slice().chunks_exact_mut(H).enumerate() {
+            let t = y as f32 / (H - 1) as f32;
+            row.fill(Rgba8Pixel::new(0, 0, 0, (175.0 * t * t) as u8));
         }
         app.set_scrim_image(Image::from_rgba8(buf));
     }
