@@ -177,6 +177,7 @@ export component AppWindow inherits Window {
     in-out property <[UpcomingRow]> home_upcoming: [];
     in-out property <[HomeCatalogSection]> home_catalog_sections: [];
     in-out property <[int]> home_catalog_order: [-1, -2];
+    in-out property <[int]> home_catalog_positions: [0, 1];
     in-out property <[HomeCatalogCard]> home_catalog_cards: [];
     // Independent catalog-driven feature at the top of Home. Rust keeps its
     // selected preview and fetches the active backdrop on demand.
@@ -795,6 +796,7 @@ export component AppWindow inherits Window {
         upcoming_rows <=> root.home_upcoming;
         catalog_sections: root.home_catalog_sections;
         catalog_order: root.home_catalog_order;
+        catalog_positions: root.home_catalog_positions;
         catalog_cards: root.home_catalog_cards;
         cal_cells <=> root.home_cal_cells;
         cal_title <=> root.home_cal_title;

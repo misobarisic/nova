@@ -1247,6 +1247,8 @@ export component HomePage {
     in property <[HomeCatalogSection]> catalog_sections: [];
     // Configured order: -1 Continue, -2 Upcoming, otherwise catalog section.
     in property <[int]> catalog_order: [-1, -2];
+    // Positions indexed by Continue, Upcoming, then addon section index.
+    in property <[int]> catalog_positions: [0, 1];
     in property <[HomeCatalogCard]> catalog_cards: [];
     callback catalog_card_picked(int);
     // Upcoming calendar (month view inside the "see all" subpage, toggled by
@@ -1537,24 +1539,18 @@ export component HomePage {
         return id >= 0 && id < root.catalog_sections.length && root.catalog_sections[id].card_count > 0;
     }
 
-    // Compact away empty built-ins so hidden/empty catalogs leave no gaps.
+    // Rust publishes compact positions, omitting hidden and empty catalogs.
     function catalog_position(id: int) -> int {
-        let position = 0;
-        for candidate in root.catalog_order {
-            if (root.catalog_has_cards(candidate)) {
-                if (candidate == id) { return position; }
-                position += 1;
-            }
-        }
-        return -1;
+        let slot = id == -1 ? 0 : id == -2 ? 1 : id + 2;
+        if (id < -2 || slot >= root.catalog_positions.length) { return -1; }
+        return root.catalog_positions[slot];
     }
 
     function focused_catalog() -> int {
         if (root.kb_zone == 1) { return -1; }
         if (root.kb_zone == 2) { return -2; }
-        for section[i] in root.catalog_sections {
-            if (root.kb_zone == 3 && root.kb_idx >= section.first_card
-                && root.kb_idx < section.first_card + section.card_count) { return i; }
+        if (root.kb_zone == 3 && root.kb_idx >= 0 && root.kb_idx < root.catalog_cards.length) {
+            return root.catalog_cards[root.kb_idx].section_index;
         }
         return -3;
     }
@@ -1562,22 +1558,14 @@ export component HomePage {
     // Arrow navigation follows the displayed catalog order, including addon
     // rows placed between the two built-ins.
     function kb_move_catalog(direction: int) {
-        let current = root.catalog_position(root.focused_catalog());
-        let target = current + direction;
+        let target = root.catalog_position(root.focused_catalog()) + direction;
         if (target < 0) { root.kb_zone = 0; return; }
-        let position = 0;
-        for candidate in root.catalog_order {
-            if (root.catalog_has_cards(candidate)) {
-                if (position == target) {
-                    if (candidate == -1) { root.kb_zone = 1; }
-                    else if (candidate == -2) { root.kb_zone = 2; }
-                    else { root.kb_zone = 3; root.kb_idx = root.catalog_sections[candidate].first_card; }
-                    root.kb_clamp_idx();
-                    return;
-                }
-                position += 1;
-            }
-        }
+        if (target >= root.catalog_order.length) { return; }
+        let candidate = root.catalog_order[target];
+        if (candidate == -1) { root.kb_zone = 1; }
+        else if (candidate == -2) { root.kb_zone = 2; }
+        else { root.kb_zone = 3; root.kb_idx = root.catalog_sections[candidate].first_card; }
+        root.kb_clamp_idx();
     }
 
     function kb_left() {

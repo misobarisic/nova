@@ -1347,6 +1347,9 @@ impl Bridge {
     /// Cached groups own stable source identities, so missing/empty catalogs
     /// never shift another configured row into their slot.
     pub(super) fn publish_home_catalog_order(&self) {
+        let Some(app) = self.app() else { return };
+        let continue_count = app.get_home_continue().row_count();
+        let upcoming_count = app.get_home_upcoming().row_count();
         let order = {
             let state = self.shared.lock().unwrap();
             state
@@ -1355,19 +1358,30 @@ impl Bridge {
                 .into_iter()
                 .filter(|row| row.enabled)
                 .filter_map(|row| match row.source {
-                    HomeRowSource::ContinueWatching => Some(-1),
-                    HomeRowSource::Upcoming => Some(-2),
+                    HomeRowSource::ContinueWatching if continue_count > 0 => Some(-1),
+                    HomeRowSource::Upcoming if upcoming_count > 0 => Some(-2),
                     HomeRowSource::Addon(source) => state
                         .home_catalog_row_groups
                         .iter()
                         .position(|group| group.source == source)
                         .map(|index| index as i32),
+                    _ => None,
                 })
                 .collect::<Vec<_>>()
         };
-        if let Some(app) = self.app() {
-            app.set_home_catalog_order(Rc::new(VecModel::from(order)).into());
+        let mut positions = vec![-1; app.get_home_catalog_sections().row_count() + 2];
+        for (position, id) in order.iter().enumerate() {
+            let slot = match id {
+                -1 => 0,
+                -2 => 1,
+                id => *id as usize + 2,
+            };
+            if let Some(value) = positions.get_mut(slot) {
+                *value = position as i32;
+            }
         }
+        app.set_home_catalog_positions(Rc::new(VecModel::from(positions)).into());
+        app.set_home_catalog_order(Rc::new(VecModel::from(order)).into());
     }
 
     /// Refresh language-dependent Home row text without replacing poster
