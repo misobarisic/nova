@@ -102,6 +102,7 @@ export component SettingsPage {
     in-out property <float> card_corner_radius: 10;
     property <int> radius_preset_index: root.card_corner_radius == 0 ? 0 : root.card_corner_radius == 4 ? 1 : root.card_corner_radius == 10 ? 2 : root.card_corner_radius == 16 ? 3 : root.card_corner_radius == 24 ? 4 : -1;
     in-out property <float> card_spacing: 8;
+    property <int> spacing_preset_index: root.card_spacing == 0 ? 0 : root.card_spacing == 4 ? 1 : root.card_spacing == 8 ? 2 : root.card_spacing == 16 ? 3 : root.card_spacing == 32 ? 4 : -1;
     in-out property <float> status_bar_gradient: 80;
     in-out property <int> home_backdrop_size: 1;
     in-out property <int> detail_backdrop_size: 1;
@@ -242,6 +243,14 @@ export component SettingsPage {
         root.kb_zone = 17;
         root.kb_theme = 1;
         root.schedule_setting("card_corner_radius");
+    }
+
+    function pick_card_spacing(index: int) {
+        root.card_spacing = [0, 4, 8, 16, 32][index];
+        root.kb_active = SettingsStyle.keyboard-mode;
+        root.kb_zone = 17;
+        root.kb_theme = 2;
+        root.schedule_setting("card_spacing");
     }
 
     function restore_theme_defaults() {
@@ -3249,17 +3258,26 @@ export component SettingsPage {
                                     SettingsCard { SettingsRow {
                                         setting-key: "card_spacing";
                                         row-title: @tr("Card spacing");
-                                        row-desc: @tr("Choose the gap between cards in pixels. None means 0.");
-                                        Segmented {
-                                            labels: [@tr("None"), "4", "8", "16", "32"];
-                                            current_index: root.card_spacing == 0 ? 0 : root.card_spacing == 4 ? 1 : root.card_spacing == 8 ? 2 : root.card_spacing == 16 ? 3 : root.card_spacing == 32 ? 4 : -1;
+                                        row-desc: @tr("Choose how much space sits between cards. Compact is the default.");
+                                        if !root.narrow: Segmented {
+                                            labels: [@tr("None"), @tr("Tight"), @tr("Compact"), @tr("Comfortable"), @tr("Spacious")];
+                                            current_index: root.spacing_preset_index;
                                             focused: root.kb_zone == 17 && root.kb_theme == 2 && root.kb_active;
-                                            picked(i) => {
-                                                root.card_spacing = [0, 4, 8, 16, 32][i];
-                                                root.kb_active = SettingsStyle.keyboard-mode;
-                                                root.kb_zone = 17;
-                                                root.kb_theme = 2;
-                                                root.schedule_setting("card_spacing");
+                                            picked(i) => { root.pick_card_spacing(i); }
+                                        }
+                                        if root.narrow: VerticalLayout {
+                                            spacing: 0px;
+                                            Segmented {
+                                                labels: [@tr("None"), @tr("Tight"), @tr("Compact")];
+                                                current_index: root.spacing_preset_index < 3 ? root.spacing_preset_index : -1;
+                                                focused: root.kb_zone == 17 && root.kb_theme == 2 && root.kb_active;
+                                                picked(i) => { root.pick_card_spacing(i); }
+                                            }
+                                            Segmented {
+                                                labels: [@tr("Comfortable"), @tr("Spacious")];
+                                                current_index: root.spacing_preset_index >= 3 ? root.spacing_preset_index - 3 : -1;
+                                                focused: root.kb_zone == 17 && root.kb_theme == 2 && root.kb_active;
+                                                picked(i) => { root.pick_card_spacing(i + 3); }
                                             }
                                         }
                                     } }

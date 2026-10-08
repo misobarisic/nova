@@ -1907,3 +1907,18 @@ msgstr "Jako zaobljeno"
 
 msgid "Choose how rounded cards look. Soft is the default."
 msgstr "Odaberite zaobljenost kartica. Meko je zadana vrijednost."
+
+msgid "Tight"
+msgstr "Zbijeno"
+
+msgid "Compact"
+msgstr "Kompaktno"
+
+msgid "Comfortable"
+msgstr "Udobno"
+
+msgid "Spacious"
+msgstr "Prostrano"
+
+msgid "Choose how much space sits between cards. Compact is the default."
+msgstr "Odaberite razmak između kartica. Kompaktno je zadana vrijednost."

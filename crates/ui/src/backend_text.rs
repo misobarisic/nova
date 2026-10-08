@@ -452,6 +452,11 @@ pub fn tr(english: &'static str) -> &'static str {
         "Soft" => "Meko",
         "Rounded" => "Zaobljeno",
         "Extra rounded" => "Jako zaobljeno",
+        "None" => "Bez",
+        "Tight" => "Zbijeno",
+        "Compact" => "Kompaktno",
+        "Comfortable" => "Udobno",
+        "Spacious" => "Prostrano",
         "Connecting…" => "Povezivanje…",
         // ---- Library buckets and watch statuses ------------------------
         // Display only: the stored value stays the English identifier (the
@@ -1135,7 +1140,14 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
             Some(24) => tr("Extra rounded").into(),
             _ => format!("{number} px"),
         },
-        "card_spacing" => format!("{number} px"),
+        "card_spacing" => match value.as_u64() {
+            Some(0) => tr("None").into(),
+            Some(4) => tr("Tight").into(),
+            Some(8) => tr("Compact").into(),
+            Some(16) => tr("Comfortable").into(),
+            Some(32) => tr("Spacious").into(),
+            _ => format!("{number} px"),
+        },
         "playback_speed" => format!("{}×", value),
         "torrent_down_limit" if value.as_f64() == Some(0.0) => tr("Unlimited").into(),
         "torrent_down_limit" => format!("{number} KB/s"),
@@ -1246,7 +1258,7 @@ mod tests {
             assert_eq!(watch_action("S1 E4", true), "Continue watching S1 E4");
             assert_eq!(
                 setting_sync_value("card_spacing", &serde_json::json!(8)),
-                "8 px"
+                "Compact"
             );
             assert_eq!(downloading_files(3), "Downloading 3 file(s)");
             assert_eq!(season_label(2), "Season 2");
