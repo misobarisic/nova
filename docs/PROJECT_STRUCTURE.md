@@ -296,7 +296,10 @@ default 10), `card_spacing` (0–32 logical px, default 8), and
 `home_backdrop_size` / `detail_backdrop_size` (`BackdropSize`: Small, Medium,
 Large; default Medium), synced by default
 with device overrides. Radius and spacing use five preset buttons instead of
-sliders: radius 0 / 4 / 10 / 16 / 24 px (Square = 0), spacing
+sliders: radius Square / Subtle / Soft / Rounded / Extra rounded maps to
+0 / 4 / 10 / 16 / 24 px (Soft is the default); the names also appear in sync
+value comparisons. Radius choices use one row on wide Settings panes and two
+rows (three plus two choices) on narrow panes. Spacing uses
 0 / 4 / 8 / 16 / 32 px (None = 0). Older custom values remain effective until
 a preset is chosen; Left/Right steps to the adjacent lower/higher preset.
 Radius applies to Home/Discover/Library artwork cards,

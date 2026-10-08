@@ -1892,3 +1892,18 @@ msgstr "Odaberite zaobljenost kutova kartica u pikselima. Ravno znači 0."
 
 msgid "Choose the gap between cards in pixels. None means 0."
 msgstr "Odaberite razmak između kartica u pikselima. Bez znači 0."
+
+msgid "Subtle"
+msgstr "Suptilno"
+
+msgid "Soft"
+msgstr "Meko"
+
+msgid "Rounded"
+msgstr "Zaobljeno"
+
+msgid "Extra rounded"
+msgstr "Jako zaobljeno"
+
+msgid "Choose how rounded cards look. Soft is the default."
+msgstr "Odaberite zaobljenost kartica. Meko je zadana vrijednost."

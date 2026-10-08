@@ -447,6 +447,11 @@ pub fn tr(english: &'static str) -> &'static str {
         "Small" => "Malo",
         "Medium" => "Srednje",
         "Large" => "Veliko",
+        "Square" => "Ravno",
+        "Subtle" => "Suptilno",
+        "Soft" => "Meko",
+        "Rounded" => "Zaobljeno",
+        "Extra rounded" => "Jako zaobljeno",
         "Connecting…" => "Povezivanje…",
         // ---- Library buckets and watch statuses ------------------------
         // Display only: the stored value stays the English identifier (the
@@ -1122,7 +1127,15 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         },
         "lru_cache_mb" | "torrent_max_mb" => format!("{number} MB"),
         "quality" | "status_bar_gradient" => format!("{}%", value),
-        "card_corner_radius" | "card_spacing" => format!("{number} px"),
+        "card_corner_radius" => match value.as_u64() {
+            Some(0) => tr("Square").into(),
+            Some(4) => tr("Subtle").into(),
+            Some(10) => tr("Soft").into(),
+            Some(16) => tr("Rounded").into(),
+            Some(24) => tr("Extra rounded").into(),
+            _ => format!("{number} px"),
+        },
+        "card_spacing" => format!("{number} px"),
         "playback_speed" => format!("{}×", value),
         "torrent_down_limit" if value.as_f64() == Some(0.0) => tr("Unlimited").into(),
         "torrent_down_limit" => format!("{number} KB/s"),

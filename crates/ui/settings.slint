@@ -100,6 +100,7 @@ export component SettingsPage {
     // Look and feel (Settings → Look and feel): master + per-category switches.
     in-out property <bool> true_black: false;
     in-out property <float> card_corner_radius: 10;
+    property <int> radius_preset_index: root.card_corner_radius == 0 ? 0 : root.card_corner_radius == 4 ? 1 : root.card_corner_radius == 10 ? 2 : root.card_corner_radius == 16 ? 3 : root.card_corner_radius == 24 ? 4 : -1;
     in-out property <float> card_spacing: 8;
     in-out property <float> status_bar_gradient: 80;
     in-out property <int> home_backdrop_size: 1;
@@ -234,6 +235,14 @@ export component SettingsPage {
         }
     }
     function schedule_setting(field: string) { root.settings_edited(field); }
+
+    function pick_card_radius(index: int) {
+        root.card_corner_radius = [0, 4, 10, 16, 24][index];
+        root.kb_active = SettingsStyle.keyboard-mode;
+        root.kb_zone = 17;
+        root.kb_theme = 1;
+        root.schedule_setting("card_corner_radius");
+    }
 
     function restore_theme_defaults() {
         // Apply all controls before autosaving so each sync choice sees the
@@ -3214,17 +3223,26 @@ export component SettingsPage {
                                     SettingsCard { SettingsRow {
                                         setting-key: "card_corner_radius";
                                         row-title: @tr("Card corner radius");
-                                        row-desc: @tr("Choose card corner rounding in pixels. Square means 0.");
-                                        Segmented {
-                                            labels: [@tr("Square"), "4", "10", "16", "24"];
-                                            current_index: root.card_corner_radius == 0 ? 0 : root.card_corner_radius == 4 ? 1 : root.card_corner_radius == 10 ? 2 : root.card_corner_radius == 16 ? 3 : root.card_corner_radius == 24 ? 4 : -1;
+                                        row-desc: @tr("Choose how rounded cards look. Soft is the default.");
+                                        if !root.narrow: Segmented {
+                                            labels: [@tr("Square"), @tr("Subtle"), @tr("Soft"), @tr("Rounded"), @tr("Extra rounded")];
+                                            current_index: root.radius_preset_index;
                                             focused: root.kb_zone == 17 && root.kb_theme == 1 && root.kb_active;
-                                            picked(i) => {
-                                                root.card_corner_radius = [0, 4, 10, 16, 24][i];
-                                                root.kb_active = SettingsStyle.keyboard-mode;
-                                                root.kb_zone = 17;
-                                                root.kb_theme = 1;
-                                                root.schedule_setting("card_corner_radius");
+                                            picked(i) => { root.pick_card_radius(i); }
+                                        }
+                                        if root.narrow: VerticalLayout {
+                                            spacing: 0px;
+                                            Segmented {
+                                                labels: [@tr("Square"), @tr("Subtle"), @tr("Soft")];
+                                                current_index: root.radius_preset_index < 3 ? root.radius_preset_index : -1;
+                                                focused: root.kb_zone == 17 && root.kb_theme == 1 && root.kb_active;
+                                                picked(i) => { root.pick_card_radius(i); }
+                                            }
+                                            Segmented {
+                                                labels: [@tr("Rounded"), @tr("Extra rounded")];
+                                                current_index: root.radius_preset_index >= 3 ? root.radius_preset_index - 3 : -1;
+                                                focused: root.kb_zone == 17 && root.kb_theme == 1 && root.kb_active;
+                                                picked(i) => { root.pick_card_radius(i + 3); }
                                             }
                                         }
                                     } }
