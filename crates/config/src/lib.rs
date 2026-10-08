@@ -433,6 +433,9 @@ pub struct CacheSettings {
     /// Space in logical pixels between media/detail cards. Synced unless overridden.
     #[serde(default = "default_card_spacing")]
     pub card_spacing: u32,
+    /// Dark top artwork fade strength in percent; zero disables it.
+    #[serde(default = "default_status_bar_gradient")]
+    pub status_bar_gradient: u32,
     /// Device-local overrides, retaining a shared baseline for unseeded fields.
     #[serde(default)]
     pub sync_overrides: std::collections::BTreeMap<String, serde_json::Value>,
@@ -444,6 +447,10 @@ const fn default_card_corner_radius() -> u32 {
 
 const fn default_card_spacing() -> u32 {
     8
+}
+
+const fn default_status_bar_gradient() -> u32 {
+    80
 }
 
 impl Default for CacheSettings {
@@ -486,6 +493,7 @@ impl Default for CacheSettings {
             true_black: false,
             card_corner_radius: default_card_corner_radius(),
             card_spacing: default_card_spacing(),
+            status_bar_gradient: default_status_bar_gradient(),
             sync_overrides: Default::default(),
         }
     }

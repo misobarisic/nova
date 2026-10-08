@@ -1291,6 +1291,15 @@ export component DetailPage {
             image-fit: fill;
         }
 
+        // Fixed above the artwork but below controls, so parallax/scrolling
+        // never exposes a bright patch behind the system status icons.
+        if root.narrow: Image {
+            width: 100%; height: root.safe-top + 64px;
+            source: @image-url("../../assets/status-bar-scrim.svg");
+            image-fit: fill;
+            opacity: Theme.status_bar_gradient / 100;
+        }
+
         // Entrance fade: the page is instantiated fresh per open (`if
         // modal_visible` in AppWindow), so the fade replays every time.
         // The page fill matches the window background, so only the content

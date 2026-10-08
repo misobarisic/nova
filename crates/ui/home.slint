@@ -814,6 +814,7 @@ component FeaturedActionButton inherits Rectangle {
             font-size: root.narrow ? (root.compact ? 13px : 14px) : 16px;
             font-weight: 600; color: Theme.current.on_accent; vertical-alignment: center;
             min-width: 0px; overflow: elide;
+            wrap: word-wrap; max-lines: 2;
         }
     }
     action_touch := TouchArea {
@@ -824,6 +825,7 @@ component FeaturedActionButton inherits Rectangle {
 }
 
 component FeaturedActions inherits Rectangle {
+    in property <string> watch_label;
     in property <bool> narrow;
     in property <bool> compact;
     in property <length> available-width: 100000px;
@@ -832,7 +834,7 @@ component FeaturedActions inherits Rectangle {
     height: root.narrow ? 46px : 52px;
     watch_button := FeaturedActionButton {
         x: 0px; y: 0px; width: 100%;
-        label: @tr("Watch Now"); narrow: root.narrow; compact: root.compact;
+        label: root.watch_label; narrow: root.narrow; compact: root.compact;
         picked => { root.watch_now(); }
     }
 }
@@ -972,6 +974,7 @@ component FeaturedCaption inherits VerticalLayout {
 
 // Catalog artwork with a left-aligned caption and a steady bottom control row.
 component FeaturedShowcase inherits Rectangle {
+    in property <string> watch_label;
     in property <string> title;
     in property <string> media_type;
     in property <string> rating;
@@ -1231,6 +1234,7 @@ component FeaturedShowcase inherits Rectangle {
         opacity: root.fading && root.fade_text ? root.mix : 1.0;
     }
     featured_actions := FeaturedActions {
+        watch_label: root.watch_label;
         narrow: root.narrow; compact: root.width < 400px;
         available-width: Math.max(0px, root.width - root.left_inset - root.right_inset);
         x: root.left_inset; y: root.height - root.controls_height - 24px;
@@ -1267,6 +1271,7 @@ export component HomePage {
     in-out property <string> home_empty_hint: @tr("Nothing to continue — start watching a show or movie and it will show up here.");
     in property <bool> continue_enabled: true;
     in property <string> featured_title;
+    in property <string> featured_watch_label: @tr("Start watching");
     in property <image> featured_logo;
     in property <string> featured_type;
     in property <string> featured_rating;
@@ -1964,6 +1969,7 @@ export component HomePage {
                             spacing: 12px;
 
                             if root.featured_count > 0: FeaturedShowcase {
+                                watch_label: root.featured_watch_label;
                                 title: root.featured_title;
                                 logo: root.featured_logo;
                                 media_type: root.featured_type;
@@ -2028,7 +2034,7 @@ export component HomePage {
                                         width: 100%;
                                         changed y => { root.continue_top = self.y; }
                                         continue_content := VerticalLayout {
-                                            width: 100%; spacing: 16px; padding-bottom: 24px;
+                                            width: 100%; spacing: 4px; padding-bottom: 24px;
                                             // ---- Continue Watching --------------------
                                             if root.continue_rows.length > 0: SectionHeader {
                                                 title: @tr("Continue Watching");
@@ -2108,7 +2114,7 @@ export component HomePage {
                                         width: 100%;
                                         changed y => { root.upcoming_top = self.y; }
                                         upcoming_content := VerticalLayout {
-                                            width: 100%; spacing: 16px; padding-bottom: 24px;
+                                            width: 100%; spacing: 4px; padding-bottom: 24px;
                                             // ---- Upcoming (caught-up series, unaired) --
                                             if root.upcoming_rows.length > 0: SectionHeader {
                                                 title: @tr("Upcoming Episodes");
@@ -2193,7 +2199,7 @@ export component HomePage {
                                         }
 
                                         catalog_content := VerticalLayout {
-                                            width: 100%; spacing: 16px; padding-bottom: 24px;
+                                            width: 100%; spacing: 4px; padding-bottom: 24px;
                                             SectionHeader {
                                                 title: section.title;
                                                 count: section.card_count;
@@ -2668,6 +2674,15 @@ export component HomePage {
                 library_picked => { root.library_picked(); }
                 settings_picked => { root.settings_picked(); }
             }
+        }
+
+        // Fixed outside the layout and scroll view, so bright artwork cannot
+        // scroll out from under the status icons. Images do not capture input.
+        if root.narrow && root.view == 0: Image {
+            width: 100%; height: root.safe-top + 64px;
+            source: @image-url("../../assets/status-bar-scrim.svg");
+            image-fit: fill;
+            opacity: Theme.status_bar_gradient / 100;
         }
 
         // Left navigation rail (wide layouts only; narrow uses the bottom

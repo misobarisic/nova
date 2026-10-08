@@ -1405,6 +1405,7 @@ impl Bridge {
             return;
         };
         self.refresh_watch_action();
+        self.refresh_home_watch_action();
         let all = self.current_episode_rows();
         let total = all.len();
         // Clamp the stored page: the filter/season may have shrunk the list
@@ -2045,14 +2046,8 @@ impl Bridge {
             let Some(modal) = state.modal_item.as_ref() else {
                 return;
             };
-            if let Some(video) = watch_now_episode(&modal.id, &modal.videos, &state.progress) {
-                let continuing = modal.videos.iter().any(|v| {
-                    state
-                        .progress
-                        .get(&progress_map_key(&modal.id, &v.id))
-                        .is_some_and(|p| p.watched || p.position_secs > 0.0 || p.play_count > 0)
-                });
-                text::watch_action(&episode_se_label(video), continuing)
+            if watch_now_episode(&modal.id, &modal.videos, &state.progress).is_some() {
+                watch_action_label(&modal.id, &modal.videos, &state.progress)
             } else if modal.episodes_loading {
                 text::tr("Start watching").into()
             } else {

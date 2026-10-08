@@ -129,6 +129,7 @@ fn theme_search_toggle_resize_and_android_back() {
         assert!(p.x >= 0.0 && p.x + reset.size().width <= width as f32);
     }
     key(&app, slint::platform::Key::DownArrow.into());
+    key(&app, slint::platform::Key::DownArrow.into());
     key(&app, slint::platform::Key::Return.into());
     assert!(!app.get_true_black());
     assert!(!app.global::<nova::Theme>().get_true_black());
@@ -138,8 +139,13 @@ fn theme_search_toggle_resize_and_android_back() {
     assert_eq!(app.global::<nova::Theme>().get_card_spacing(), 8.0);
     assert!(!app.get_animations());
     assert_eq!(
-        &edits.borrow()[edits.borrow().len() - 3..],
-        ["true_black", "card_corner_radius", "card_spacing"]
+        &edits.borrow()[edits.borrow().len() - 4..],
+        [
+            "true_black",
+            "card_corner_radius",
+            "card_spacing",
+            "status_bar_gradient"
+        ]
     );
 
     app.window().set_size(slint::PhysicalSize::new(390, 844));

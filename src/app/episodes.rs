@@ -270,6 +270,24 @@ pub(crate) fn watch_now_episode<'a>(
         .or_else(|| next_episode_to_watch(series_id, episodes, map))
 }
 
+/// Shared caption for Detail and Home's featured action. Sparse catalog
+/// metadata can omit the episode suffix until its episode cache is hydrated.
+pub(crate) fn watch_action_label(
+    series_id: &str,
+    episodes: &[Video],
+    map: &HashMap<String, EpisodeProgress>,
+) -> String {
+    let prefix = format!("{series_id}\u{1}");
+    let continuing = map.iter().any(|(key, progress)| {
+        key.starts_with(&prefix)
+            && (progress.watched || progress.position_secs > 0.0 || progress.play_count > 0)
+    });
+    let episode = watch_now_episode(series_id, episodes, map)
+        .map(episode_se_label)
+        .unwrap_or_default();
+    text::watch_action(&episode, continuing)
+}
+
 /// Split a series' episode list for the Home → Upcoming caught-up check:
 /// future (index, air days) pairs plus available / available-watched tallies.
 /// Dateless episodes are skipped entirely (unknown schedule — they neither

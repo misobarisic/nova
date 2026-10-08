@@ -1845,6 +1845,12 @@ msgstr "Prilagodite kutove kartica naslova, sezona i epizoda. Postavite na 0 za 
 msgid "Restore theme defaults"
 msgstr "Vratite zadanu temu"
 
+msgid "Status bar gradient"
+msgstr "Gradijent statusne trake"
+
+msgid "Darken the top of Home and Detail on narrow screens. Set to 0 to turn off."
+msgstr "Zatamnite vrh početne stranice i detalja na uskim zaslonima. Postavite na 0 za isključivanje."
+
 msgid "Card spacing"
 msgstr "Razmak kartica"
 

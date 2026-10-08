@@ -751,6 +751,7 @@ impl Bridge {
                 state.home_showcase.len(),
             )
         };
+        self.refresh_home_watch_action();
         let Some(first) = first else {
             if let Some(app) = self.app() {
                 app.set_home_featured_refresh_pending(false);
@@ -823,7 +824,11 @@ impl Bridge {
             let Some(preview) = state.home_showcase.get(index).cloned() else {
                 return;
             };
-            if !home_showcase_needs_metadata(&preview) {
+            if !home_showcase_needs_metadata(&preview)
+                && (preview.type_ == "movie"
+                    || read_episodes_cache_for(&preview.type_, &preview.id)
+                        .is_some_and(|videos| !videos.is_empty()))
+            {
                 return;
             }
             if state
@@ -950,6 +955,7 @@ impl Bridge {
             cached.enrich(&requested, &item.preview);
             write_json(HOME_SHOWCASE_CACHE_KEY, &cached);
         }
+        self.refresh_home_watch_action();
         self.ensure_home_showcase_art(index, generation);
         let (current, count) = {
             let state = self.shared.lock().unwrap();
@@ -1146,6 +1152,8 @@ impl Bridge {
             (preview, backdrop, logo, count)
         };
 
+        self.refresh_home_watch_action();
+
         if let Some(app) = self.app() {
             app.set_home_featured_title(SharedString::from(preview.title()));
             app.set_home_featured_logo(logo.map(Image::from_rgba8).unwrap_or_default());
@@ -1218,6 +1226,20 @@ impl Bridge {
 
     pub(super) fn home_showcase_watch_now(&self) {
         self.open_home_showcase(true);
+    }
+
+    pub(super) fn refresh_home_watch_action(&self) {
+        let preview = self.shared.lock().unwrap().home_showcase_displayed.clone();
+        let label = if let Some(preview) = preview {
+            let videos = read_episodes_cache_for(&preview.type_, &preview.id).unwrap_or_default();
+            let state = self.shared.lock().unwrap();
+            watch_action_label(&preview.id, &videos, &state.progress)
+        } else {
+            text::tr("Start watching").into()
+        };
+        if let Some(app) = self.app() {
+            app.set_home_featured_watch_label(label.into());
+        }
     }
 
     pub(super) fn home_catalog_card_picked(&self, index: usize) {
@@ -1410,6 +1432,7 @@ impl Bridge {
     /// plus the Upcoming calendar models (healed first, so a rebuild that
     /// moved air dates never leaves the calendar on a dead month/day).
     pub(super) fn apply_home_to_ui(&self) {
+        self.refresh_home_watch_action();
         if let Some(app) = self.app() {
             app.set_home_continue(Rc::new(VecModel::from(self.current_continue_rows())).into());
             app.set_home_upcoming(Rc::new(VecModel::from(self.current_upcoming_rows())).into());
@@ -1471,6 +1494,7 @@ impl Bridge {
     /// Refresh language-dependent Home row text without replacing poster
     /// images or disturbing the carousel models when their shape is unchanged.
     pub(super) fn refresh_home_language_text(&self) {
+        self.refresh_home_watch_action();
         let Some(app) = self.app() else { return };
 
         let continue_rows = self.current_continue_rows();

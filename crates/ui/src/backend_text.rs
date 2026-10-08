@@ -1113,7 +1113,7 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         .unwrap_or_else(|| value.to_string());
     match field {
         "lru_cache_mb" | "torrent_max_mb" => format!("{number} MB"),
-        "quality" => format!("{}%", value),
+        "quality" | "status_bar_gradient" => format!("{}%", value),
         "card_corner_radius" | "card_spacing" => format!("{number} px"),
         "playback_speed" => format!("{}×", value),
         "torrent_down_limit" if value.as_f64() == Some(0.0) => tr("Unlimited").into(),
