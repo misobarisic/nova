@@ -2931,8 +2931,6 @@ dependencies = [
 [[package]]
 name = "i-slint-backend-android-activity"
 version = "1.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68c6955504f189493f9eb2857b4909c63db02eabd7cef10aeb954e026feddbee"
 dependencies = [
  "android-activity 0.5.2",
  "android-activity 0.6.1",

@@ -6,6 +6,9 @@ resolver = "3"
 license = "GPL-3.0-or-later"
 
 [patch.crates-io]
+# Slint 1.18 must suspend while TerminateWindow still owns a valid native
+# window, so mpv releases its GL resources before InitWindow replaces it.
+i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }
 # librqbit-utp 0.7.0 exits its dispatcher on Windows UDP datagram errors
 # (including WSAECONNRESET/10054), breaking every later uTP connection.
 # Pin the merged upstream fix until a release includes it; keep uTP enabled.

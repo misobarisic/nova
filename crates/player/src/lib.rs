@@ -24,6 +24,11 @@
 //! timeout error when playback never starts. [`Player::close`] stops mpv and
 //! returns to the catalog.
 
+#[cfg(any(target_os = "android", test))]
+mod android_recovery;
+#[cfg(any(target_os = "android", test))]
+mod mpv_load;
+
 use libmpv2::Mpv;
 use nova_ui::{AppWindow, TrackRow};
 use slint::{ComponentHandle, GraphicsAPI, RenderingState, VecModel};
@@ -251,29 +256,41 @@ pub(crate) fn alog(msg: &str) {
     }
 }
 
-/// Android activity lifecycle, fed by the `init_with_event_listener` hook in
-/// `android_main`. `WAS_PAUSED` records that the activity actually backgrounded
-/// (screen lock, home, recents) so a transient `Resume` (permission dialog,
-/// notification shade) does not trigger a needless reload. `RESUME_PENDING` is
-/// consumed by [`Player::tick`], which reloads the stream when a session was
-/// live — the decoder's output surface does not survive a pause/stop, so video
-/// would otherwise stay black while audio keeps playing.
+// The listener and rendering notifier run on the Slint event-loop thread.
+// Keep only a weak reference so activity events address the current player
+// immediately, rather than a global resume flag that can leak to a later file.
 #[cfg(target_os = "android")]
-static ANDROID_WAS_PAUSED: AtomicBool = AtomicBool::new(false);
+static ANDROID_PLAYER: Mutex<Option<std::sync::Weak<State>>> = Mutex::new(None);
 #[cfg(target_os = "android")]
-static ANDROID_RESUME_PENDING: AtomicBool = AtomicBool::new(false);
+static ANDROID_FOREGROUND: AtomicBool = AtomicBool::new(true);
 
-/// Record an activity `Pause` (see [`ANDROID_WAS_PAUSED`]).
 #[cfg(target_os = "android")]
 pub fn note_android_pause() {
-    ANDROID_WAS_PAUSED.store(true, Ordering::SeqCst);
+    ANDROID_FOREGROUND.store(false, Ordering::SeqCst);
+    if let Some(state) = ANDROID_PLAYER
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|s| s.upgrade())
+    {
+        let mut recovery = state.recovery.lock().unwrap();
+        recovery.pause();
+        alog(&format!("lifecycle pause: {recovery:?}"));
+    }
 }
 
-/// Record an activity `Resume`; arms a one-shot reload when it follows a pause.
 #[cfg(target_os = "android")]
 pub fn note_android_resume() {
-    if ANDROID_WAS_PAUSED.swap(false, Ordering::SeqCst) {
-        ANDROID_RESUME_PENDING.store(true, Ordering::SeqCst);
+    ANDROID_FOREGROUND.store(true, Ordering::SeqCst);
+    if let Some(state) = ANDROID_PLAYER
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|s| s.upgrade())
+    {
+        let mut recovery = state.recovery.lock().unwrap();
+        recovery.resume();
+        alog(&format!("lifecycle resume: {recovery:?}"));
     }
 }
 
@@ -396,6 +413,8 @@ struct MpvGlUnderlay {
     /// `libGLESv2` dlsym fallback for extension functions.
     #[cfg(target_os = "android")]
     gl: glow::Context,
+    #[cfg(target_os = "android")]
+    egl_context: usize,
 }
 
 // The raw pointers are only ever touched from the rendering notifier
@@ -403,15 +422,18 @@ struct MpvGlUnderlay {
 unsafe impl Send for MpvGlUnderlay {}
 unsafe impl Sync for MpvGlUnderlay {}
 
-impl Drop for MpvGlUnderlay {
-    fn drop(&mut self) {
+impl MpvGlUnderlay {
+    /// Called only from RenderingTeardown, with the original GL context
+    /// current. There is deliberately no Drop that invokes the render API:
+    /// ordinary Rust destruction does not guarantee a current GL context.
+    unsafe fn release_current(self) {
         unsafe {
             if !self.render_ctx.is_null() {
                 mpv_render_context_set_update_callback(self.render_ctx, None, std::ptr::null_mut());
+                mpv_render_context_free(self.render_ctx);
                 if !self.app_weak_ptr.is_null() {
                     let _ = Box::from_raw(self.app_weak_ptr as *mut slint::Weak<AppWindow>);
                 }
-                mpv_render_context_free(self.render_ctx);
             }
         }
     }
@@ -574,6 +596,16 @@ mod android_gl {
                 .filter(|&handle| handle != 0)
                 .collect()
         })
+    }
+
+    pub(super) fn current_context() -> usize {
+        let symbol = lookup(c"eglGetCurrentContext");
+        if symbol.is_null() {
+            return 0;
+        }
+        // EGL's exported function has this signature on Android.
+        let get: unsafe extern "C" fn() -> *mut c_void = unsafe { std::mem::transmute(symbol) };
+        unsafe { get() as usize }
     }
 
     /// `name` resolved straight out of the GLES/EGL libraries (null when
@@ -966,15 +998,12 @@ struct State {
     /// options instead.
     #[cfg(target_os = "android")]
     pending_start: Mutex<Option<f64>>,
-    /// Android: URL snapshot taken when the GL surface is recreated
-    /// mid-playback (screen lock/unlock, rotation). The decoder's output
-    /// surface dies with the old surface while audio keeps its own clock, so
-    /// `tick` reloads this URL at the live position. Set only while a session
-    /// is active; cleared by `close` semantics via the `last_url` match.
+    /// Android: session-scoped renderer recovery. Teardown arms it; setup
+    /// and activity resume jointly make it eligible for one reload.
     #[cfg(target_os = "android")]
-    surface_pending_url: Mutex<Option<String>>,
-    /// Android: restore the paused state after a surface-resume reload (the
-    /// `BeforeRendering` load path always unpauses).
+    recovery: Mutex<android_recovery::Recovery>,
+    /// Android: pause state for the queued load. Set before loadfile so a
+    /// restored paused frame never briefly starts playing.
     #[cfg(target_os = "android")]
     pending_paused: AtomicBool,
     /// Android: the active hardware decoder was already checked this session.
@@ -1024,6 +1053,22 @@ struct State {
     /// per-surface frame-rate request is re-applied on the next tick.
     #[cfg(target_os = "android")]
     frame_rate_reapply: AtomicBool,
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        if self.underlay.get_mut().unwrap().is_some() {
+            // A backend that misses teardown cannot safely free GL resources
+            // here. Keep the core and callback allocation alive as well; mpv
+            // requires its render context to be freed before core destruction.
+            // Normal shutdown and Android window termination use the notifier.
+            #[cfg(target_os = "android")]
+            alog("player dropped without render teardown; retaining native mpv resources");
+            if let Some(mpv) = self.mpv.get_mut().unwrap().take() {
+                std::mem::forget(mpv);
+            }
+        }
+    }
 }
 
 /// FFmpeg's JavaVM registration (`libavutil/jni.h`).
@@ -1151,7 +1196,9 @@ impl Player {
             #[cfg(target_os = "android")]
             pending_start: Mutex::new(None),
             #[cfg(target_os = "android")]
-            surface_pending_url: Mutex::new(None),
+            recovery: Mutex::new(android_recovery::Recovery::new(
+                ANDROID_FOREGROUND.load(Ordering::SeqCst),
+            )),
             #[cfg(target_os = "android")]
             pending_paused: AtomicBool::new(false),
             #[cfg(target_os = "android")]
@@ -1178,6 +1225,10 @@ impl Player {
             frame_rate_reapply: AtomicBool::new(false),
         });
 
+        #[cfg(target_os = "android")]
+        {
+            *ANDROID_PLAYER.lock().unwrap() = Some(Arc::downgrade(&state));
+        }
         let notifier_state = Arc::clone(&state);
         if let Err(e) =
             app.window()
@@ -1188,16 +1239,16 @@ impl Player {
                             return; // mpv init failed; play() reports the error
                         };
                         if notifier_state.underlay.lock().unwrap().is_some() {
-                            // A render context is already installed. On Android
-                            // a fresh `RenderingSetup` means a *new* GL context
-                            // (Skia builds one per surface), so the old mpv
-                            // context is stale — a sign its `RenderingTeardown`
-                            // was missed on a dead surface. Logged so logcat can
-                            // confirm; the activity-`Resume` reload recovers
-                            // lock/unlock video independently of this path.
+                            // Never free or reuse an old mpv context under a
+                            // replacement GL context. The local Android backend
+                            // patch must deliver teardown before destroying it.
                             #[cfg(target_os = "android")]
-                            alog("render setup: underlay already present (teardown missed?)");
-                            return; // already created
+                            {
+                                let msg = "render setup refused: previous mpv context missed teardown";
+                                alog(msg);
+                                *notifier_state.mpv_error.lock().unwrap() = Some(msg.into());
+                            }
+                            return;
                         }
 
                         let GraphicsAPI::NativeOpenGL { get_proc_address } = graphics_api else {
@@ -1208,6 +1259,18 @@ impl Player {
                             return;
                         };
 
+                        #[cfg(target_os = "android")]
+                        let egl_context = android_gl::current_context();
+                        #[cfg(target_os = "android")]
+                        {
+                            if egl_context == 0 {
+                                let msg = "render setup failed: no current EGL context";
+                                alog(msg);
+                                *notifier_state.mpv_error.lock().unwrap() = Some(msg.into());
+                                return;
+                            }
+                            alog(&format!("render setup begin: egl={egl_context:#x}"));
+                        }
                         unsafe {
                             let mut render_ctx = std::ptr::null_mut();
                             let get_proc_fn: &dyn Fn(&CStr) -> *const c_void = *get_proc_address;
@@ -1278,6 +1341,8 @@ impl Player {
                                 app_weak_ptr,
                                 #[cfg(target_os = "android")]
                                 gl,
+                                #[cfg(target_os = "android")]
+                                egl_context,
                             });
 
                             // A new surface/context (e.g. the native-window
@@ -1296,19 +1361,11 @@ impl Player {
                             notifier_state
                                 .frame_rate_reapply
                                 .store(true, Ordering::SeqCst);
-                            // The decoder's output surface died with the old
-                            // GL surface while audio kept its own clock: if a
-                            // session was actively playing, snapshot its URL
-                            // so `tick` reloads it at the live position.
-                            // First creation has no playback (`started` is
-                            // false) and skips; `close` clears `last_url`, so
-                            // a teardown after close arms nothing.
                             #[cfg(target_os = "android")]
-                            if notifier_state.started.load(Ordering::SeqCst) {
-                                if let Some(url) = notifier_state.last_url.lock().unwrap().clone() {
-                                    alog("surface recreated mid-playback; arming resume reload");
-                                    *notifier_state.surface_pending_url.lock().unwrap() = Some(url);
-                                }
+                            {
+                                let mut recovery = notifier_state.recovery.lock().unwrap();
+                                recovery.setup();
+                                alog(&format!("render setup ready: {recovery:?}"));
                             }
                         }
                     }
@@ -1320,6 +1377,16 @@ impl Player {
                         let Some(underlay) = underlay.as_ref() else {
                             return;
                         };
+
+                        #[cfg(target_os = "android")]
+                        if underlay.egl_context == 0
+                            || underlay.egl_context != android_gl::current_context()
+                        {
+                            let msg = "render refused: mpv belongs to another EGL context";
+                            alog(msg);
+                            *notifier_state.mpv_error.lock().unwrap() = Some(msg.into());
+                            return;
+                        }
 
                         // Start playback of a freshly picked stream.
                         if let Some(url) = notifier_state.pending.lock().unwrap().take() {
@@ -1340,39 +1407,53 @@ impl Player {
                             if let Ok(mpv) = notifier_state.mpv.lock()
                                 && let Some(mpv) = mpv.as_ref()
                             {
-                                // mpv reads this option when opening the URL;
-                                // set it before every initial or reloaded file.
-                                let _ = set_http_header_fields(mpv, &headers);
-                                let _ = set_string_list(mpv, c"sub-files", subtitles);
-                                // Android decoder reloads pass the resume
-                                // point as a per-file option: the global
-                                // `start` property is only honored for the
-                                // first load, so a second `loadfile` would
-                                // otherwise restart at 0.
                                 #[cfg(target_os = "android")]
-                                match start {
-                                    Some(pos) => {
-                                        let opts = format!("start={pos}");
-                                        let _ = mpv.command(
-                                            "loadfile",
-                                            &[url.as_str(), "replace", "-1", opts.as_str()],
-                                        );
-                                    }
-                                    None => {
-                                        let _ = mpv.command("loadfile", &[url.as_str()]);
-                                    }
-                                }
+                                let paused = notifier_state.pending_paused.swap(false, Ordering::SeqCst);
                                 #[cfg(not(target_os = "android"))]
-                                let _ = mpv.command("loadfile", &[url.as_str()]);
-                                // Ensure the new file actually starts: if
-                                // the previous session left mpv paused,
-                                // the file would load but not play.
-                                let _ = mpv.set_property("pause", false);
-                                // A surface-resume reload restores a paused
-                                // session as paused instead.
-                                #[cfg(target_os = "android")]
-                                if notifier_state.pending_paused.swap(false, Ordering::SeqCst) {
-                                    let _ = mpv.set_property("pause", true);
+                                let paused = false;
+                                // Set pause once, before loadfile: restoring a
+                                // paused frame must not briefly start playback.
+                                let result = (|| -> libmpv2::Result<()> {
+                                    set_http_header_fields(mpv, &headers)?;
+                                    set_string_list(mpv, c"sub-files", subtitles)?;
+                                    mpv.set_property("pause", paused)?;
+                                    // Runtime reloads use a per-file start;
+                                    // mpv only honors global start on first load.
+                                    #[cfg(target_os = "android")]
+                                    if let Some(pos) = start {
+                                        return mpv_load::load_file_at(mpv, &url, pos);
+                                    }
+                                    mpv.command("loadfile", &[url.as_str()])
+                                })();
+                                match result {
+                                    Ok(()) => {
+                                        *notifier_state.opened_at.lock().unwrap() = Instant::now();
+                                        #[cfg(target_os = "android")]
+                                        {
+                                            let mut recovery = notifier_state.recovery.lock().unwrap();
+                                            recovery.submitted();
+                                            alog(&format!("loadfile submitted: start={start:?} paused={paused} {recovery:?}"));
+                                        }
+                                    }
+                                    Err(error) => {
+                                        #[cfg(not(target_os = "android"))]
+                                        eprintln!("nova-player: loadfile failed: {error}");
+                                        #[cfg(target_os = "android")]
+                                        {
+                                            notifier_state.recovery.lock().unwrap().load_failed();
+                                            alog(&format!("loadfile/recovery failed: {error}"));
+                                        }
+                                        // Don't log the source or its headers:
+                                        // they may contain private access tokens.
+                                        // A rejected file/option is per-load, not
+                                        // a broken mpv core. Keep later streams
+                                        // in-app instead of forcing external playback.
+                                        notifier_state.reported.store(true, Ordering::SeqCst);
+                                        let _ = mpv.command("stop", &[]);
+                                        app.set_player_status(nova_ui::backend_text::tr(
+                                            "Cannot play this stream (mpv could not start playback).",
+                                        ).into());
+                                    }
                                 }
                             }
                         }
@@ -1440,8 +1521,45 @@ impl Player {
                     }
                     RenderingState::RenderingTeardown => {
                         #[cfg(target_os = "android")]
-                        alog("render teardown: dropping mpv render context");
-                        *notifier_state.underlay.lock().unwrap() = None;
+                        {
+                            // Capture before free disables the VO and may make
+                            // playback properties temporarily unavailable.
+                            let mpv = notifier_state.mpv.lock().unwrap();
+                            let mut recovery = notifier_state.recovery.lock().unwrap();
+                            if let Some(mpv) = mpv.as_ref() {
+                                recovery.observe(
+                                    if notifier_state.seek_pending.load(Ordering::SeqCst) {
+                                        None
+                                    } else {
+                                        mpv.get_property("time-pos").ok()
+                                    },
+                                    mpv.get_property("pause").ok(),
+                                );
+                            }
+                            recovery.teardown();
+                            alog(&format!("render teardown begin: {recovery:?}"));
+                        }
+                        let mut underlay = notifier_state.underlay.lock().unwrap();
+                        #[cfg(target_os = "android")]
+                        if let Some(old) = underlay.as_ref()
+                            && (old.egl_context == 0
+                                || old.egl_context != android_gl::current_context())
+                        {
+                            // A failed make-current must not turn into UB.
+                            let msg = "render teardown refused: original EGL context is not current";
+                            alog(msg);
+                            *notifier_state.mpv_error.lock().unwrap() = Some(msg.into());
+                            return;
+                        }
+                        if let Some(old) = underlay.take() {
+                            // Slint suspend makes the old surface current before
+                            // invoking this notifier, while ANativeWindow lives.
+                            #[cfg(target_os = "android")]
+                            alog(&format!("render teardown release: egl={:#x}", old.egl_context));
+                            unsafe { old.release_current() };
+                            #[cfg(target_os = "android")]
+                            alog("render teardown complete: mpv context released");
+                        }
                     }
                     _ => {}
                 })
@@ -1509,6 +1627,9 @@ impl Player {
             // Keep the URL for a decoder fallback reload; then arm the chain
             // from the user's Settings → Player preference. A new stream drops
             // any runtime override the previous stream picked.
+            self.state.recovery.lock().unwrap().begin(start_pos_secs);
+            *self.state.pending_start.lock().unwrap() = Some(start_pos_secs.max(0.0));
+            self.state.pending_paused.store(false, Ordering::SeqCst);
             *self.state.last_url.lock().unwrap() = Some(url.to_string());
             *self.state.last_headers.lock().unwrap() = headers.to_vec();
             *self.state.last_subtitles.lock().unwrap() = subtitles;
@@ -1524,7 +1645,7 @@ impl Player {
 
         // A new stream always starts playing, regardless of how the previous
         // one ended: mpv's `pause` property survives `stop`/EOF, so clear it
-        // here (and again after loadfile in the render callback) — otherwise
+        // here (and again before loadfile in the render callback) — otherwise
         // the second playback would silently start paused. `start` is set on
         // every play (even 0.0): it persists across files, so a previous
         // resume must not leak into the next playback.
@@ -1614,6 +1735,12 @@ impl Player {
         let paused: bool = mpv.get_property("pause").unwrap_or(false);
         let new_paused = !paused;
         let _ = mpv.set_property("pause", new_paused);
+        #[cfg(target_os = "android")]
+        if self.state.pending.lock().unwrap().is_some() {
+            self.state
+                .pending_paused
+                .store(new_paused, Ordering::SeqCst);
+        }
         if let Some(app) = self.state.app.upgrade() {
             app.set_is_paused(new_paused);
         }
@@ -1626,6 +1753,13 @@ impl Player {
 
     /// Seek to `pos` seconds (OSD slider).
     pub fn seek(&self, pos: f32) {
+        #[cfg(target_os = "android")]
+        {
+            self.state.recovery.lock().unwrap().seek(pos as f64);
+            if self.state.pending.lock().unwrap().is_some() {
+                *self.state.pending_start.lock().unwrap() = Some(pos.max(0.0) as f64);
+            }
+        }
         // Mark the seek in flight: the tick scrub guard only suppresses
         // mirroring while the thumb is ahead of mpv (see `seek_pending`).
         self.state.seek_pending.store(true, Ordering::SeqCst);
@@ -1851,6 +1985,9 @@ impl Player {
         self.state.pending_subtitles.lock().unwrap().clear();
         #[cfg(target_os = "android")]
         {
+            self.state.recovery.lock().unwrap().close();
+            *self.state.pending_start.lock().unwrap() = None;
+            self.state.pending_paused.store(false, Ordering::SeqCst);
             *self.state.last_url.lock().unwrap() = None;
             self.state.last_headers.lock().unwrap().clear();
             self.state.last_subtitles.lock().unwrap().clear();
@@ -1934,6 +2071,10 @@ impl Player {
         /// One tick's worth of mpv state.
         struct Snapshot {
             pos: f64,
+            #[cfg(target_os = "android")]
+            live_pos: Option<f64>,
+            #[cfg(target_os = "android")]
+            live_paused: Option<bool>,
             dur: f64,
             paused: bool,
             vol: f64,
@@ -1967,9 +2108,11 @@ impl Player {
                 return;
             };
 
-            let pos: f64 = mpv.get_property("time-pos").unwrap_or(0.0);
+            let live_pos: Option<f64> = mpv.get_property("time-pos").ok();
+            let live_paused: Option<bool> = mpv.get_property("pause").ok();
+            let pos = live_pos.unwrap_or(0.0);
             let dur: f64 = mpv.get_property("duration").unwrap_or(0.0);
-            let paused: bool = mpv.get_property("pause").unwrap_or(false);
+            let paused = live_paused.unwrap_or(false);
 
             // While the user is scrubbing the OSD slider — or right after a
             // seek, until mpv actually applies it — the slider value diverges
@@ -1992,6 +2135,10 @@ impl Player {
 
             Snapshot {
                 pos,
+                #[cfg(target_os = "android")]
+                live_pos,
+                #[cfg(target_os = "android")]
+                live_paused,
                 dur,
                 paused,
                 // Mirror volume/mute (cheap reads; keeps UI in sync if changed
@@ -2007,41 +2154,40 @@ impl Player {
             }
         };
 
-        // Android: the video output died — the GL surface was recreated
-        // mid-playback (rotation) or the activity was paused/backgrounded
-        // (screen lock/unlock), taking the decoder's output surface with it.
-        // Reload the same URL at the live position so video resumes instead
-        // of staying black while audio continues. Two triggers feed one path:
-        // `surface_pending_url` (armed from `RenderingSetup`) and
-        // `ANDROID_RESUME_PENDING` (armed from the activity `Resume` event).
-        // Skipped when the session moved on (`close`/`play` change `last_url`,
-        // and `started` only flips true once the new file progresses) or
-        // already ended.
+        // The request belongs to the session, not its URL or a transient
+        // started/time-pos flag. Resume and renderer setup can arrive in either
+        // order; neither consumes it until both foreground and renderer ready.
         #[cfg(target_os = "android")]
         {
-            let armed = self.state.surface_pending_url.lock().unwrap().take();
-            let resumed = if ANDROID_RESUME_PENDING.swap(false, Ordering::SeqCst) {
-                self.state.last_url.lock().unwrap().clone()
-            } else {
-                None
-            };
-            if let Some(armed) = armed.or(resumed) {
-                let current = self.state.last_url.lock().unwrap().clone();
-                let live = Some(armed.as_str()) == current.as_deref();
-                let started = self.state.started.load(Ordering::SeqCst);
-                if live && started && !snapshot.eof {
-                    let at = self.current_position_secs();
-                    alog(&format!("surface resume: reloading at {at:.1}s"));
-                    if self.reload_current_url(Some(at)) && snapshot.paused {
-                        // The load path unpauses; restore the paused state.
-                        self.state.pending_paused.store(true, Ordering::SeqCst);
-                    }
+            let mut recovery = self.state.recovery.lock().unwrap();
+            recovery.observe(
+                if snapshot.diverged {
+                    None
                 } else {
-                    alog(&format!(
-                        "surface resume: skipped (live={live}, started={started}, eof={})",
-                        snapshot.eof
-                    ));
+                    snapshot.live_pos
+                },
+                snapshot.live_paused,
+            );
+            let reload = recovery.take_reload();
+            let waiting = recovery.waiting();
+            drop(recovery);
+            if let Some(reload) = reload {
+                alog(&format!(
+                    "recovery scheduled: session={} at={:.3}s paused={}",
+                    reload.session, reload.position, reload.paused
+                ));
+                if self.reload_current_url(Some(reload.position)) {
+                    self.state
+                        .pending_paused
+                        .store(reload.paused, Ordering::SeqCst);
+                } else {
+                    self.state.recovery.lock().unwrap().load_failed();
+                    alog("recovery scheduling failed: no active source");
                 }
+                return; // Do not mirror the old VO or run decoder fallback.
+            }
+            if waiting {
+                return; // Preserve UI state and don't time out while backgrounded.
             }
         }
 

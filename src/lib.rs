@@ -57,12 +57,10 @@ fn android_main(app: slint::android::AndroidApp) {
     // Keep a clone of the AndroidApp so system-bar changes can be marshalled
     // onto the Java main thread (Slint's event loop runs on a native thread).
     crate::player::set_android_app(app.clone());
-    // Hook the activity lifecycle so a pause→resume (screen lock/unlock,
-    // backgrounding) can re-establish in-app video: the MediaCodec output
-    // surface does not survive a stop, and without a reload the picture stays
-    // black while the OSD and audio keep going. The listener runs on the Slint
-    // event loop thread, the same thread as the player tick, so the flags it
-    // sets need no further synchronization.
+    // Resume and renderer setup jointly release a session-scoped recovery
+    // request. The patched backend suspends on TerminateWindow while the old
+    // window is valid, so mpv teardown runs with its original GL context current.
+    // A pause alone keeps the existing background-audio behavior.
     slint::android::init_with_event_listener(app, |event| {
         use slint::android::android_activity::{MainEvent, PollEvent};
         if let PollEvent::Main(main) = event {
