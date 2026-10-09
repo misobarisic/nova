@@ -8,6 +8,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
+mod hls;
 mod http;
 
 pub use http::{
@@ -675,7 +676,7 @@ pub fn validate_download_url(url: &str) -> Result<Url, DownloadError> {
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(DownloadError::UnsupportedUrl(trimmed.to_string()));
     }
-    if is_manifest_url(trimmed) {
+    if http::is_unsupported_download_url(trimmed) {
         return Err(DownloadError::UnsupportedUrl(trimmed.to_string()));
     }
     Ok(parsed)

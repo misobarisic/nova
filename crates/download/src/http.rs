@@ -221,8 +221,20 @@ where
             ))
         })??;
         let final_url = response.url().to_string();
-        if is_manifest_url(&final_url) {
+        if is_unsupported_download_url(&final_url) {
             return Err(DownloadError::UnsupportedUrl(final_url));
+        }
+        let content_type = header_string(response.headers(), "content-type").unwrap_or_default();
+        if is_manifest_url(&final_url) || content_type.to_ascii_lowercase().contains("mpegurl") {
+            return super::hls::download_hls(
+                client,
+                response,
+                &headers,
+                &destination,
+                cancellation,
+                on_progress,
+            )
+            .await;
         }
         if let Some(content_type) = header_string(response.headers(), "content-type")
             && is_manifest_content_type(&content_type)
@@ -500,7 +512,7 @@ struct ContentRange {
     total: Option<u64>,
 }
 
-async fn send_request(
+pub(super) async fn send_request(
     client: &Client,
     url: &Url,
     offset: u64,
@@ -840,6 +852,25 @@ pub fn is_manifest_url(url: &str) -> bool {
         || query.contains("playlist")
 }
 
+// HLS is handled as an offline bundle; DASH and website-only links still
+// cannot be turned into a playable download by the HTTP worker.
+pub(super) fn is_unsupported_download_url(url: &str) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return true;
+    };
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    let path = percent_decode(&parsed.path().to_ascii_lowercase());
+    host == "youtu.be"
+        || host == "youtube.com"
+        || host.ends_with(".youtube.com")
+        || host == "youtube-nocookie.com"
+        || host.ends_with(".youtube-nocookie.com")
+        || [".mpd", ".ism", ".isml", ".f4m"]
+            .iter()
+            .any(|ext| path.ends_with(ext))
+        || path.split('/').any(|segment| segment == "dash")
+}
+
 #[cfg(test)]
 mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -929,13 +960,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_manifest_urls_without_creating_a_file() {
+    async fn rejects_dash_urls_without_creating_a_file() {
         let path = test_path("manifest-url");
         let _ = tokio::fs::remove_file(&path).await;
         let client = Client::new();
         let error = download_http(
             &client,
-            "http://127.0.0.1:1/master.m3u8",
+            "http://127.0.0.1:1/manifest.mpd",
             &path,
             CancellationToken::new(),
             |_| {},
@@ -951,7 +982,7 @@ mod tests {
         let path = test_path("manifest-type");
         let _ = tokio::fs::remove_file(&path).await;
         let (url, task) = one_shot_server(
-            b"HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: 7\r\n\r\n#EXTM3U\n",
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/dash+xml\r\nContent-Length: 7\r\n\r\n#EXTM3U\n",
         )
         .await;
         let client = Client::new();

@@ -1142,9 +1142,9 @@ impl Bridge {
             }
             None => {
                 let downloadable = match &stream.source {
-                    StreamSource::Url(url) => !crate::download::is_manifest_url(url),
+                    StreamSource::Url(url) => crate::download::validate_download_url(url).is_ok(),
                     StreamSource::UrlWithOptions { url, .. } => {
-                        !crate::download::is_manifest_url(url)
+                        crate::download::validate_download_url(url).is_ok()
                     }
                     StreamSource::Torrent { .. } => true,
                     StreamSource::Unsupported | StreamSource::Downloaded { .. } => false,
@@ -1222,9 +1222,9 @@ impl Bridge {
             StreamSource::Url(url) | StreamSource::UrlWithOptions { url, .. } => Some(url),
             _ => None,
         };
-        if url.is_some_and(|url| crate::download::is_manifest_url(url)) {
+        if url.is_some_and(|url| crate::download::validate_download_url(url).is_err()) {
             self.set_stream_hint(Some(StreamHint::Fixed(
-                "HLS, DASH, and YouTube streams cannot be downloaded here.",
+                "This stream cannot be downloaded here.",
             )));
             return;
         }
@@ -1468,6 +1468,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn removing_hls_episode_leaves_no_bundle_or_partial_data() {
+        for completed in [false, true] {
+            let root = temp_root("remove-hls");
+            let coordinator = DownloadCoordinator::new(root.clone());
+            let dir = root.join("http/download-hls");
+            let bundle = dir.join("hls");
+            std::fs::create_dir_all(&bundle).unwrap();
+            for name in [
+                "playlist-1.m3u8",
+                "asset-0.ts",
+                "asset-0.ts.done",
+                "asset-1.ts.part",
+                "asset-2.key",
+                "asset-3.vtt",
+            ] {
+                std::fs::write(bundle.join(name), b"data").unwrap();
+            }
+            let mut job = DownloadJob::new(
+                "download-hls",
+                JobSource::http("https://provider.example/master.m3u8"),
+            );
+            if completed {
+                job.phase = DownloadPhase::Completed;
+                let entry = dir.join("episode.m3u8");
+                std::fs::write(&entry, b"#EXTM3U\n").unwrap();
+                job.artifact_path = Some(entry);
+            } else {
+                job.phase = DownloadPhase::Paused;
+                std::fs::write(dir.join("episode.m3u8.part"), b"partial").unwrap();
+            }
+            coordinator.inner.state().manifest.jobs.push(job);
+            coordinator.remove("download-hls");
+            assert!(
+                !dir.exists(),
+                "all HLS files must be removed, completed={completed}"
+            );
+            assert!(coordinator.job("download-hls").is_none());
+            let _ = std::fs::remove_dir_all(root);
+        }
     }
 
     /// A completed job whose stored path is the same directory under a

@@ -225,7 +225,7 @@ supported. Other embedded players remain unsupported.
 files reach in-app mpv and survive resume prompts and Android decoder reloads.
 English subtitles are ordered first when supplied by MegaPlay. Headers are
 also persisted with MP4 download jobs.
-HLS playback works through mpv; manifest downloads remain unsupported.
+Finite HLS episodes can also be downloaded through `nova-download`: the highest-bandwidth variant and its audio/subtitle groups, initialization maps, byte ranges and ordinary AES-128 keys are saved as a local playlist bundle. Provider headers accompany playlist, segment and key requests. Completed segments survive pause/resume; partial segments restart. Removing the episode download removes its entire bundle, including keys, subtitles and partial files. Live playlists, DASH and unsupported encryption remain unavailable for offline download.
 
 ## Checks
 
