@@ -697,6 +697,37 @@ impl Coordinator {
                             && &b.target.account == account
                     });
                     if linked {
+                        // Peer sync carries links, not remote progress snapshots.
+                        // Read the connected entries before showing their progress.
+                        let source = self.context.as_ref().unwrap().source.clone();
+                        let mut refreshed = Vec::new();
+                        for binding in self
+                            .store
+                            .state()
+                            .bindings
+                            .clone()
+                            .into_iter()
+                            .filter(|b| b.enabled && b.source == source)
+                        {
+                            if refreshed.contains(&binding.target)
+                                || !self
+                                    .store
+                                    .state()
+                                    .active_accounts
+                                    .contains(&binding.target.account)
+                                || !self.session(binding.target.account.service).is_ok_and(
+                                    |session| {
+                                        session.client.viewer().is_ok_and(|viewer| {
+                                            viewer.account == binding.target.account
+                                        })
+                                    },
+                                )
+                            {
+                                continue;
+                            }
+                            self.refresh_link(&binding, false)?;
+                            refreshed.push(binding.target);
+                        }
                         self.notice =
                             text::tr("Tracking is ready. Add any missing releases below.").into();
                         Ok(())
@@ -1648,6 +1679,29 @@ impl Coordinator {
         self.notice = text::tr("Tracker edits queued. Nova watched history is unchanged.").into();
         Ok(())
     }
+    fn refresh_link(&mut self, binding: &Binding, retry: bool) -> Result<(), String> {
+        let session = self.session(binding.target.account.service)?;
+        if session.client.viewer().map_err(api_message)?.account != binding.target.account {
+            return Err(api_message(ApiError::WrongAccount));
+        }
+        let score_format = session.client.viewer().map_err(api_message)?.score_format;
+        let remote = session
+            .client
+            .read(binding.target.remote_media_id, now_secs())
+            .map_err(api_message)?;
+        let mut state = self.store.state().clone();
+        update_remote_snapshot(&mut state, binding, remote, score_format);
+        if retry {
+            state.retry_edits(&binding.target, now_secs());
+        }
+        self.store.save(state).map_err(|_| storage_message())?;
+        if retry {
+            self.store
+                .retry_target(&binding.target, now_secs())
+                .map_err(|_| storage_message())?;
+        }
+        Ok(())
+    }
     fn action(&mut self, id: String, action: i32) -> Result<(), String> {
         let binding = self
             .store
@@ -1659,40 +1713,7 @@ impl Coordinator {
             .ok_or_else(input_message)?;
         match action {
             0 => {
-                let session = self.session(binding.target.account.service)?;
-                if session.client.viewer().map_err(api_message)?.account != binding.target.account {
-                    return Err(api_message(ApiError::WrongAccount));
-                }
-                let score_format = session.client.viewer().map_err(api_message)?.score_format;
-                let remote = session
-                    .client
-                    .read(binding.target.remote_media_id, now_secs())
-                    .map_err(api_message)?;
-                let mut state = self.store.state().clone();
-                if let Some(snapshot) = state
-                    .snapshots
-                    .iter_mut()
-                    .find(|s| s.target == binding.target)
-                {
-                    snapshot.remote = remote.clone();
-                    snapshot.score_format = score_format;
-                }
-                if let Some(p) = state
-                    .projections
-                    .iter_mut()
-                    .find(|p| p.target == binding.target)
-                {
-                    p.refresh_remote(
-                        binding.account_generation,
-                        p.revision,
-                        remote.as_ref().map(|r| r.progress).unwrap_or(0),
-                    );
-                }
-                state.retry_edits(&binding.target, now_secs());
-                self.store.save(state).map_err(|_| storage_message())?;
-                self.store
-                    .retry_target(&binding.target, now_secs())
-                    .map_err(|_| storage_message())?;
+                self.refresh_link(&binding, true)?;
                 self.notice =
                     text::tr("Tracker entry refreshed. Retry respects service cooldowns.").into();
             }
@@ -2675,6 +2696,34 @@ fn history_progress(
         .max()
         .unwrap_or(0)
 }
+// Shared links carry title/mapping metadata, while a read supplies this
+// device's remote baseline without accepting or replaying saved watch history.
+fn update_remote_snapshot(
+    state: &mut TrackingState,
+    binding: &Binding,
+    remote: Option<RemoteEntry>,
+    score_format: ScoreFormat,
+) {
+    if let Some(snapshot) = state
+        .snapshots
+        .iter_mut()
+        .find(|s| s.target == binding.target)
+    {
+        snapshot.remote = remote.clone();
+        snapshot.score_format = score_format;
+    }
+    if let Some(p) = state
+        .projections
+        .iter_mut()
+        .find(|p| p.target == binding.target)
+    {
+        p.refresh_remote(
+            binding.account_generation,
+            p.revision,
+            remote.as_ref().map(|r| r.progress).unwrap_or(0),
+        );
+    }
+}
 fn display_progress(state: &TrackingState, key: &TargetKey) -> u32 {
     if let Some(pending) = state.outbox.pending().iter().rfind(|p| p.target == *key) {
         return pending.progress;
@@ -3176,6 +3225,53 @@ mod batch_link_tests {
             })
             .collect();
         (state, source, viewer, history, links)
+    }
+    #[test]
+    fn received_link_refreshes_service_progress_without_uploading_history() {
+        let (original, source, viewer, history, links) = fixture();
+        let linked = prepare_link_state(
+            &original,
+            &source,
+            &viewer,
+            NonZeroU64::MIN,
+            20,
+            &history,
+            links,
+            false,
+        )
+        .unwrap();
+        let records = nova_tracking::peer::peer_records(&linked)
+            .unwrap()
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect::<Vec<_>>();
+        let mut received = nova_tracking::peer::apply_peer_records(
+            &TrackingState::default(),
+            &records,
+            20,
+            |_| true,
+        )
+        .unwrap();
+        let binding = received.bindings[0].clone();
+        assert_eq!(display_progress(&received, &binding.target), 0);
+        let checkpoints = received.link_checkpoints.clone();
+        let remote = RemoteEntry {
+            account: binding.target.account.clone(),
+            media_id: binding.target.remote_media_id,
+            entry_id: None,
+            progress: 12,
+            status: ListStatus::Completed,
+            score_tenths: 0,
+            started: ListDate::default(),
+            completed: ListDate::default(),
+            repeating: false,
+        };
+        update_remote_snapshot(&mut received, &binding, Some(remote), viewer.score_format);
+        assert_eq!(display_progress(&received, &binding.target), 12);
+        assert_eq!(received.link_checkpoints, checkpoints);
+        assert!(received.outbox.pending().is_empty());
+        assert!(received.outbox.edits().is_empty());
+        received.validate().unwrap();
     }
     #[test]
     fn batch_links_checkpoint_history_and_route_future_watching_to_the_correct_part() {

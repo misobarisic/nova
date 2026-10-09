@@ -128,7 +128,9 @@ Tracking is a dedicated Detail tab for saved titles, beside Overview and Episode
 Its compact title header leaves room for the release review. Matches, linked
 entries, the confirmation summary, history switch, and final actions share one
 scroll viewport with bottom clearance. MyAnimeList and AniList pills switch
-between independent proposals.
+between independent proposals. Opening a linked title reads its connected service
+entries so received links do not display an empty local progress baseline. This
+read does not upload watch history or retry retained updates.
 Back from alignment returns to review; Back from Tracking returns to the Detail
 tab that opened it. Switching tabs or leaving Detail cancels the active review
 context; reopening a title restores its preceding content tab. Nova selects
