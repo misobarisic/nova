@@ -126,6 +126,10 @@ pub struct DownloadJob {
     pub bytes_downloaded: u64,
     pub total_bytes: Option<u64>,
     pub bytes_per_second: u64,
+    /// Transient HLS resource counts, never an estimated byte total. Rebuilt
+    /// from committed bundle assets when a paused download resumes.
+    #[serde(skip)]
+    pub resource_progress: Option<(u64, u64)>,
     pub artifact_path: Option<PathBuf>,
     pub file_name: Option<String>,
     pub error: Option<String>,
@@ -151,6 +155,7 @@ impl Default for DownloadJob {
             bytes_downloaded: 0,
             total_bytes: None,
             bytes_per_second: 0,
+            resource_progress: None,
             artifact_path: None,
             file_name: None,
             error: None,
@@ -212,6 +217,7 @@ impl DownloadJob {
         self.bytes_downloaded = progress.bytes_downloaded;
         self.total_bytes = progress.total_bytes;
         self.bytes_per_second = progress.bytes_per_second;
+        self.resource_progress = progress.resource_progress;
         self.phase = DownloadPhase::Downloading;
         self.updated_at = unix_timestamp();
     }
@@ -220,6 +226,7 @@ impl DownloadJob {
         self.bytes_downloaded = outcome.bytes_downloaded;
         self.total_bytes = outcome.total_bytes;
         self.bytes_per_second = outcome.bytes_per_second;
+        self.resource_progress = None;
         self.artifact_path = Some(outcome.path.clone());
         self.file_name = Some(outcome.file_name.clone());
         self.etag = outcome.etag.clone();
@@ -361,6 +368,8 @@ pub struct DownloadProgress {
     pub bytes_downloaded: u64,
     pub total_bytes: Option<u64>,
     pub bytes_per_second: u64,
+    #[serde(skip)]
+    pub resource_progress: Option<(u64, u64)>,
 }
 
 impl DownloadProgress {
@@ -369,10 +378,18 @@ impl DownloadProgress {
             bytes_downloaded,
             total_bytes,
             bytes_per_second,
+            resource_progress: None,
         }
     }
 
     pub fn fraction(&self) -> Option<f64> {
+        if let Some((completed, total)) = self.resource_progress {
+            return Some(if total == 0 {
+                1.0
+            } else {
+                (completed as f64 / total as f64).clamp(0.0, 1.0)
+            });
+        }
         self.total_bytes.map(|total| {
             if total == 0 {
                 1.0
@@ -380,6 +397,11 @@ impl DownloadProgress {
                 (self.bytes_downloaded as f64 / total as f64).clamp(0.0, 1.0)
             }
         })
+    }
+
+    pub fn with_resources(mut self, completed: u64, total: u64) -> Self {
+        self.resource_progress = Some((completed, total));
+        self
     }
 
     pub fn percent(&self) -> Option<f64> {
@@ -400,6 +422,9 @@ impl DownloadProgress {
     }
 
     pub fn formatted_percent(&self) -> String {
+        if let Some((completed, total)) = self.resource_progress {
+            return format_percent(completed, Some(total));
+        }
         format_percent(self.bytes_downloaded, self.total_bytes)
     }
 }
@@ -751,6 +776,24 @@ mod tests {
         assert_eq!(progress.formatted_percent(), "50%");
         assert_eq!(format_percent(2, Some(1)), "100%");
         assert_eq!(format_bytes(0), "0 B");
+    }
+
+    #[test]
+    fn hls_progress_keeps_real_bytes_and_transient_resource_counts_separate() {
+        let progress = DownloadProgress::new(124 * 1024 * 1024, None, 1024).with_resources(65, 100);
+        assert_eq!(progress.fraction(), Some(0.65));
+        assert_eq!(progress.formatted_percent(), "65%");
+        let mut job = DownloadJob::new(
+            "hls",
+            DownloadSource::http("https://example.com/master.m3u8"),
+        );
+        job.apply_progress(&progress);
+        let json = serde_json::to_string(&job).unwrap();
+        assert!(!json.contains("resource_progress"));
+        let loaded: DownloadJob = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.total_bytes, None);
+        assert_eq!(loaded.bytes_downloaded, 124 * 1024 * 1024);
+        assert_eq!(loaded.resource_progress, None);
     }
 
     #[test]

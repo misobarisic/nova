@@ -332,11 +332,14 @@ where
                 }
                 file.write_all(&chunk).await?;
                 transferred += chunk.len() as u64;
-                on_progress(DownloadProgress::new(
-                    downloaded + bytes,
-                    None,
-                    (transferred as f64 / start.elapsed().as_secs_f64().max(0.001)) as u64,
-                ));
+                on_progress(
+                    DownloadProgress::new(
+                        downloaded + bytes,
+                        None,
+                        (transferred as f64 / start.elapsed().as_secs_f64().max(0.001)) as u64,
+                    )
+                    .with_resources(index as u64, plan.assets.len() as u64),
+                );
             }
             if bytes == 0
                 || expected.is_some_and(|expected| expected != bytes)
@@ -353,12 +356,14 @@ where
             return Err(DownloadError::Cancelled);
         }
         downloaded += fs::metadata(&path).await?.len();
-        let total = downloaded.saturating_mul(plan.assets.len() as u64) / (index + 1) as u64;
-        on_progress(DownloadProgress::new(
-            downloaded,
-            Some(total),
-            (transferred as f64 / start.elapsed().as_secs_f64().max(0.001)) as u64,
-        ));
+        on_progress(
+            DownloadProgress::new(
+                downloaded,
+                None,
+                (transferred as f64 / start.elapsed().as_secs_f64().max(0.001)) as u64,
+            )
+            .with_resources((index + 1) as u64, plan.assets.len() as u64),
+        );
     }
     // Publish the entry playlist last. A missing manifest can re-adopt this
     // single root artifact, but can never adopt partial segments as episodes.
@@ -504,15 +509,28 @@ mod tests {
         ])
         .await;
         let path = destination("master");
+        let mut updates = Vec::new();
         let result = download(
             format!("{base}/master.m3u8"),
             &path,
             CancellationToken::new(),
-            |_| {},
+            |progress| updates.push(progress),
         )
         .await
         .unwrap();
         task.abort();
+        assert!(!updates.is_empty());
+        assert!(
+            updates
+                .iter()
+                .all(|progress| progress.total_bytes.is_none()
+                    && progress.resource_progress.is_some())
+        );
+        assert!(
+            updates
+                .windows(2)
+                .all(|pair| pair[0].fraction() <= pair[1].fraction())
+        );
         assert_eq!(result.path.extension().unwrap(), "m3u8");
         let root = fs::read_to_string(&result.path).await.unwrap();
         assert!(root.contains("hls/playlist-1.m3u8"));
@@ -554,7 +572,11 @@ mod tests {
             let token = CancellationToken::new();
             let cancel = token.clone();
             let result = download(format!("{base}/video"), &path, token, move |progress| {
-                if !after_segment || progress.total_bytes.is_some() {
+                if !after_segment
+                    || progress
+                        .resource_progress
+                        .is_some_and(|(completed, _)| completed > 0)
+                {
                     cancel.cancel();
                 }
             })

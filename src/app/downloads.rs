@@ -324,7 +324,12 @@ impl DownloadCoordinator {
         self.schedule_next();
     }
 
-    pub(crate) fn remove_for_watched_episode(&self, series_id: &str, episode_id: &str) -> bool {
+    pub(crate) fn remove_for_watched_episode(
+        &self,
+        series_id: &str,
+        episode_id: &str,
+        playing_episode: bool,
+    ) -> bool {
         let ids = {
             self.inner
                 .state()
@@ -332,6 +337,16 @@ impl DownloadCoordinator {
                 .jobs
                 .iter()
                 .filter(|job| job.media_id == series_id && job.request_id == episode_id)
+                // Unlike a single open MP4, the HLS demuxer opens more files
+                // as playback advances. Keep its bundle until player-close
+                // finalization calls automatic cleanup again.
+                .filter(|job| {
+                    !playing_episode
+                        || !job.artifact_path.as_ref().is_some_and(|path| {
+                            path.extension()
+                                .is_some_and(|extension| extension == "m3u8")
+                        })
+                })
                 .map(|job| job.id.clone())
                 .collect::<Vec<_>>()
         };
@@ -1000,7 +1015,14 @@ impl DownloadCoordinator {
                         format_bytes(total),
                         format_percent(job.bytes_downloaded, Some(total))
                     ),
-                    None => format!(" · {}", format_bytes(job.bytes_downloaded)),
+                    None => match job.resource_progress {
+                        Some((completed, total)) => format!(
+                            " · {} ({})",
+                            format_bytes(job.bytes_downloaded),
+                            format_percent(completed, Some(total))
+                        ),
+                        None => format!(" · {}", format_bytes(job.bytes_downloaded)),
+                    },
                 };
                 let speed = if job.bytes_per_second > 0 {
                     format!(" · {}", crate::download::format_speed(job.bytes_per_second))
@@ -1087,11 +1109,13 @@ impl DownloadCoordinator {
         let text = match active {
             Some(job) => {
                 let name = first_line(&job.display);
-                match job.total_bytes {
-                    Some(total) if total > 0 => format!(
-                        "{name} · {}",
-                        format_percent(job.bytes_downloaded, Some(total))
-                    ),
+                match job
+                    .resource_progress
+                    .or(job.total_bytes.map(|total| (job.bytes_downloaded, total)))
+                {
+                    Some((completed, total)) if total > 0 => {
+                        format!("{name} · {}", format_percent(completed, Some(total)))
+                    }
                     _ => name,
                 }
             }
@@ -1101,12 +1125,13 @@ impl DownloadCoordinator {
     }
 
     pub(crate) fn progress_fraction(job: &DownloadJob) -> f32 {
-        job.total_bytes
-            .map(|total| {
+        job.resource_progress
+            .or(job.total_bytes.map(|total| (job.bytes_downloaded, total)))
+            .map(|(completed, total)| {
                 if total == 0 {
                     1.0
                 } else {
-                    (job.bytes_downloaded as f64 / total as f64).clamp(0.0, 1.0) as f32
+                    (completed as f64 / total as f64).clamp(0.0, 1.0) as f32
                 }
             })
             .unwrap_or(0.0)
@@ -1341,20 +1366,27 @@ impl Bridge {
     }
 
     pub(super) fn auto_delete_watched_downloads(&self, series_id: &str, episode_ids: &[String]) {
-        let enabled = self
-            .shared
-            .lock()
-            .unwrap()
-            .download_settings
-            .auto_delete_watched;
+        let (enabled, playing_episode) = {
+            let state = self.shared.lock().unwrap();
+            (
+                state.download_settings.auto_delete_watched,
+                state
+                    .playback
+                    .as_ref()
+                    .filter(|target| target.series_id == series_id)
+                    .map(|target| target.episode_id.clone()),
+            )
+        };
         if !enabled {
             return;
         }
         let mut removed = false;
         for episode_id in episode_ids {
-            removed |= self
-                .downloads
-                .remove_for_watched_episode(series_id, episode_id);
+            removed |= self.downloads.remove_for_watched_episode(
+                series_id,
+                episode_id,
+                playing_episode.as_ref() == Some(episode_id),
+            );
         }
         if removed {
             self.apply_stream_filter();
@@ -1509,6 +1541,56 @@ mod tests {
             );
             assert!(coordinator.job("download-hls").is_none());
             let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn automatic_hls_cleanup_waits_until_playback_closes() {
+        let root = temp_root("auto-remove-hls");
+        let coordinator = DownloadCoordinator::new(root.clone());
+        let dir = root.join("http/download-hls");
+        std::fs::create_dir_all(dir.join("hls")).unwrap();
+        let entry = dir.join("episode.m3u8");
+        let segment = dir.join("hls/asset-0.ts");
+        std::fs::write(&entry, b"#EXTM3U\n").unwrap();
+        std::fs::write(&segment, b"video").unwrap();
+        let mut job = DownloadJob::new(
+            "download-hls",
+            JobSource::http("https://provider.example/master.m3u8"),
+        );
+        job.media_id = "series".into();
+        job.request_id = "episode".into();
+        job.phase = DownloadPhase::Completed;
+        job.artifact_path = Some(entry.clone());
+        coordinator.inner.state().manifest.jobs.push(job);
+        assert!(!coordinator.remove_for_watched_episode("series", "episode", true));
+        assert!(entry.exists() && segment.exists());
+        assert!(coordinator.remove_for_watched_episode("series", "episode", false));
+        assert!(!dir.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hls_status_keeps_the_same_amount_format_during_and_between_segments() {
+        let mut job = DownloadJob::new("hls", JobSource::http("https://example.com/master.m3u8"));
+        for (bytes, completed) in [(99, 50), (100, 50), (124, 65), (125, 65)] {
+            job.apply_progress(
+                &DownloadProgress::new(bytes * 1024 * 1024, None, 1024)
+                    .with_resources(completed, 100),
+            );
+            let status = DownloadCoordinator::status_text(&job);
+            assert!(
+                status.contains(&format!("{bytes} MiB ({completed}%)")),
+                "{status}"
+            );
+            assert!(
+                !status.contains(" / "),
+                "no fabricated byte total: {status}"
+            );
+            assert!(
+                (DownloadCoordinator::progress_fraction(&job) - completed as f32 / 100.0).abs()
+                    < 0.001
+            );
         }
     }
 
