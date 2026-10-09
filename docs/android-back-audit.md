@@ -1,6 +1,6 @@
 # Android Back audit
 
-Status as of 2026-10-03. Work stopped at the user's request.
+Focus recovery and remaining device checks for Android Back.
 
 ## Fixed and covered by regression tests
 
@@ -8,8 +8,8 @@ Android can finish the activity when Slint rejects both synthetic Back events.
 The window capture scope depends on a surviving focused item: removing a
 focused input or button can leave Back without a capture chain.
 
-- Tracking sheet dismissal restores Detail navigation focus. Adjust cancellation
-  and suggestion reloads focus the persistent sheet header.
+- Leaving the Tracking tab restores Detail navigation focus. Adjust cancellation
+  and suggestion reloads focus the persistent Tracking panel scope.
 - Leaving episode search for another tab or an episode's streams clears its edit
   state and restores Detail navigation focus.
 - Settings subpage closes restore the persistent navigation scope before the
@@ -37,25 +37,7 @@ These are candidates to investigate, not reproduced bugs:
   implemented, but the new regression directly checks only the addon URL.
 - Verify physical Back and gesture Back on the S25 FE, including keyboard open,
   rapid presses, app background/resume, and rotation. The current verification
-  is headless; no updated APK was built or sent during this audit.
-
-## Validation status
-
-Passed:
-
-- `cargo fmt --all -- --check`
-- Seven targeted tests: `android_back_nav`, `android_back_tracking`,
-  `android_back_settings_input`, `android_back_detail_input`,
-  `android_back_resize`, `tracking_ui`, and `discover_reveal_and_filters`.
-- `cargo clippy --workspace --all-targets --locked -j 1 -- -D warnings`
-
-The first Clippy attempt with default jobs exhausted memory while two generated
-UI checks each used about 5 GB. The single-job retry passed; no persistent build
-configuration was changed.
-
-`cargo check` was stopped at the user's request. The full app test suite and
-`cargo test -p nova-sync --lib` were not reached in the final validation run.
-The source fixes and regression tests are recorded alongside this audit note.
+  is headless; physical-device behavior still needs verification.
 
 Tests that inspect built-in input metadata use the default compiled UI, matching
 Android releases. Those tests are disabled with `live-preview`, whose built-in

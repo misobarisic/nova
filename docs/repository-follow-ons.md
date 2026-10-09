@@ -185,20 +185,6 @@ currently points to the tracked `android/keystore/debug.keystore` with the publi
   cannot update installs signed with the existing key, so users may need to
   reinstall unless a supported key-rotation path is arranged.
 
-## Pull-request validation
-
-The current Android pull-request job checks the workspace and builds the
-Android target, but it does not run the README's full test gate or formatting
-checks. Add a validation job for:
-
-- `cargo fmt --all -- --check`;
-- `cargo test --workspace --locked`; and
-- optionally `cargo clippy --workspace --all-targets --locked` after the
-  existing lint baseline has been reviewed.
-
-Keep the Android APK build as a separate check so failures identify the
-platform-specific cause.
-
 ## APK license and source delivery
 
 `Settings → About` and `THIRD_PARTY_NOTICES.md` now include the build's Rust

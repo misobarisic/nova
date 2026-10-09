@@ -1,10 +1,15 @@
 # nova
 
-A cross-platform (Linux desktop + Android) media catalog / player app in the
+A cross-platform (Linux and Windows desktop + Android) media catalog / player app in the
 style of Stremio. It talks to Stremio-protocol addons over HTTP, plays direct
 URLs with an in-window **mpv** player, streams torrents through an embedded
 BitTorrent client, and syncs library state across devices over
 [iroh](https://iroh.computer) (opt-in, end-to-end encrypted, no account).
+
+Anime releases can be linked to **MyAnimeList** and **AniList** from a saved
+title’s Tracking tab. Connect an account in Settings → Tracking, review the
+episode matches, and choose whether to apply saved watch history. See
+[tracking behavior](docs/tracking-behavior.md) for account, mapping, and delivery details.
 
 > **Alpha software:** Nova is under active development. Expect bugs, incomplete features, and breaking changes between releases.
 
@@ -42,6 +47,8 @@ catalog is generated from the locked dependency graph at build time. See
 - `src/` — app logic + UI bridge (state, pages, playback, sync wiring)
 - `crates/ui/` — Slint components (`.slint` sources of truth for the UI)
 - `crates/sync/` — cross-device record sync over iroh
+- `crates/tracking/` — MAL/AniList accounts, episode mappings and progress delivery
+- `crates/providers/` — addon metadata, identity matching and bundled providers
 - `crates/player/` — in-window mpv playback (+ Android JNI glue)
 - `crates/torrent/`, `crates/download/`, `crates/media/`, `crates/storage/`, `crates/config/`, `crates/addons/`
 - `tests/` — headless Slint integration tests (run with `i-slint-backend-testing`, no display)
@@ -49,31 +56,9 @@ catalog is generated from the locked dependency graph at build time. See
   (workspace layout, data flow, persistence keys, sync protocol); read it
   before exploring, and keep it current with structural changes
 
-## Notes for contributors
+## Contributing
 
-- All Slint property/callback access is main-thread only; background work
-  hops back with `slint::invoke_from_event_loop`.
-- A Slint change is three steps: page component + `AppWindow`
-  property/callback + `src/app/run.rs` wiring.
-- User-facing Slint strings use `@tr("…")` (English source, Croatian
-  catalog bundled); text formatted by the Rust side is owned by
-  `crates/ui/src/backend_text.rs`.
-- `cargo check` + the test suite are the gate; do not commit unless asked.
-
-### Commit messages
-
-Use Conventional Commit subjects:
-
-`<type>(<scope>): <imperative summary>`
-
-Keep the summary concise and lowercase after the colon (preserve proper names). Omit the scope when it does not help identify the change. Common types are `feat`, `fix`, `refactor`, `perf`, `ui`, `docs`, `test`, `build`, `ci`, and `chore`.
-
-Examples:
-
-```text
-feat(player): add subtitle selection
-fix(settings): prevent horizontal panning on Licenses
-ci(release): publish Linux .deb and AppImage builds
-```
-
-For breaking changes, add `!` after the type or scope and explain the impact in the commit body, for example `feat(sync)!: change pairing protocol`.
+Read [AGENTS.md](AGENTS.md) for coding conventions, commit messages, and required
+formatting, lint, build, and test checks. Use
+[the project map](docs/project-structure.md) for code navigation and
+[the behavior references](docs/) for the implemented feature contracts.

@@ -240,3 +240,7 @@ Remote tracker values never import library membership or mark Nova episodes watc
 Live sign-in and real account mutations still require interactive verification
 with the registered applications; fixture and headless UI tests do not substitute
 for that final validation.
+
+Curated mapping datasets remain deferred pending a coverage and redistribution-
+license review. Current proposals use official service metadata and explicit
+source evidence; they do not require a third-party mapping dataset.

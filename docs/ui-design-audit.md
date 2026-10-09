@@ -5,8 +5,9 @@ unified Nova interface. It covers visual styling and the related interaction
 and feedback patterns across Home, Discover, My Library, Detail, Settings,
 playback, and shared controls.
 
-The source snapshot reviewed was commit `ee687bb` on 2026-10-01. Findings below
-describe code that is present; they do not claim that a visual defect was
+The source snapshot reviewed was commit `ee687bb` on 2026-10-01. Resolved
+items have been removed; the remaining findings refer to that snapshot and need
+rechecking against current code. They do not claim that a visual defect was
 confirmed in a rendered build. The desktop app and Android app were not run for
 this audit. Items marked **Check visually** need screenshot or device review
 before they are treated as user-visible defects.
@@ -14,18 +15,12 @@ before they are treated as user-visible defects.
 Priority indicates the order for follow-up, not whether a visual difference is
 wrong: **High** risks misleading or losing a user action; **Medium** is a
 repeated styling or interaction inconsistency; **Check visually** needs rendered
-review. Some differences are intentional and are recorded after the findings.
+review. Some differences are intentional and need rendered review before changes.
 
 ## Findings
 
 ### Behavior and feedback
 
-- **High — Category edit removes the category.** The pencil control calls the
-  removal callback, and the Rust handler also removes that category from every
-  library entry. Its keyboard activation follows the same route. The icon
-  suggests editing while the action deletes data. See
-  [Settings](../crates/ui/settings.slint#L2859) and
-  [category removal](../src/app/library.rs#L435).
 - **High — Home can have no explanation for an empty landing page.** Its empty
   message is shown only while Continue Watching is enabled. If that setting is
   off and the other Home sections have no items, the landing content contains
@@ -47,46 +42,15 @@ review. Some differences are intentional and are recorded after the findings.
 - **Medium — Muted controls can still be active.** The inactive animation
   options are dimmed when the master switch is off but remain interactive.
   Record one clear meaning for dimmed, disabled, and unavailable states.
-- **Medium — Inert Detail tabs look and respond like controls.** Characters and
-  Artwork use muted text but retain a pointer interaction surface despite no
-  available content. The selected, unavailable, and disabled appearances need
-  distinct rules.
 - **Medium — Back and Escape behavior varies by page.** Discover and the player
   handle Escape; other pages mainly handle Back or Backspace. Check the intended
   close behavior for each popup and modal.
 
 ### Visual foundations
 
-- **Partially resolved 2026-10-04 — The initial theme palette centralizes colors
-  and effects.** `crates/ui/theme.slint` defines `Theme.current` for Home,
-  Detail, Settings, tracking, the player and shared controls, preserving their
-  existing shades and alpha values. Discover now uses those shared surfaces,
-  the Settings header glow, rounded navy search/filter controls and Home-style
-  cards (2026-10-08). Library page bodies remain deferred until their redesign.
-  Typography and geometry remain local.
-- **Medium — Page backgrounds differ.** Settings uses `#0b0b0e`; the main
-  browsing pages and Detail use `#0f0f12`. Decide whether these are surface
-  levels or separate page themes.
-- **Medium — Surfaces and borders use different color families.** Settings
-  favors neutral surfaces such as `#121214` and `#131316`; Home, Discover,
-  Library, and Detail also use blue-tinted surfaces such as `#18181c`, `#232330`,
-  and `#1f1f27`. Border contrasts also vary by component.
-- **Medium — Accent color has several competing roles.** `#8b5cf6`,
-  `#a89af5`, and muted purple fills appear as active, primary, focus, and icon
-  colors in different combinations. Define roles before selecting final values.
-- **Medium — Text colors lack shared semantic roles.** Primary and secondary
-  copy, hints, metadata, disabled labels, and empty-state text use different
-  values across pages. Example literal pairs include Detail's `#5c5c6e` on
-  `#0f0f12` (2.93:1) and Settings' `#8a8a92` on `#121214` (5.46:1); validate
-  actual rendered colors and intended size before drawing accessibility
-  conclusions.
 - **Medium — Heading and body scales vary by screen.** Main headings range from
   18px in Settings to 26px in Library and Home, and 26–32px in Discover. Detail
   and Settings subpage headings use additional sizes from 16–24px.
-- **Resolved 2026-10-02 — The UI uses bundled Roboto.** `AppWindow` now imports
-  Roboto Regular/Bold and declares the default family for desktop and Android;
-  packaged builds embed the fonts. Compare wrapping and system fallback glyphs
-  (including emoji) in rendered builds across platforms.
 - **Medium — Capitalization is inconsistent.** Examples include `DETAILS`,
   `WATCH NOW`, `New Episode`, and `Next up`. Check consistency in both English
   and Croatian translations.
@@ -153,8 +117,6 @@ review. Some differences are intentional and are recorded after the findings.
   Detail, and Settings apply safe insets in different layout calculations.
   Grid width calculations do not subtract the horizontal insets even when page
   padding adds them; several modal surfaces do not receive safe insets.
-- **Medium — Scroll indicators differ.** Detail draws a custom 3px position
-  indicator while other pages use the standard ScrollView treatment.
 - **Medium — Transitions do not use the same motion rules.** Action sheets
   animate in and out; several dialogs appear immediately. Settings also keeps a
   280ms page cleanup timer while animation duration can be set to zero.
@@ -170,20 +132,6 @@ review. Some differences are intentional and are recorded after the findings.
   accessible names and roles. Navigation icons, Detail top-bar buttons, player
   controls, switches, and other custom inputs lack equivalent explicit
   annotations. Verify the screen-reader tree before treating this as a defect.
-- **Audit coverage gap — Existing UI tests assert geometry and interaction, not
-  rendered appearance.** No screenshot or pixel-baseline test was found.
-
-## Existing patterns to retain
-
-- `SideNav` and `BottomNav` share the same four destinations and purple active
-  marker; their placement is a responsive layout change.
-- `SearchField`, `Dropdown`, `SpeedControl`, `icons.slint`, and `Anim` already
-  provide shared pieces to build on.
-- The featured Home showcase uses a pale-yellow title on narrow layouts, and
-  player controls use high-contrast surfaces over video. Keep these as deliberate
-  context-specific treatments unless a later direction replaces them.
-- Desktop context menus and touch action sheets provide platform-specific
-  interaction patterns. Review their labels, states, and visual roles together.
 
 ## Visual review checklist
 

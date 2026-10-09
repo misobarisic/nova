@@ -131,8 +131,8 @@ nova/
     ├── player-behavior.md        # next-episode offers and stream selection
     ├── project-structure.md      # this file
     ├── repository-follow-ons.md  # maintenance and Android restoration-latency follow-ons
-    ├── sync-follow-ons.md        # sync feature parking lot / status notes
-    ├── sync-hardening-plan.md    # prioritized correctness/recovery implementation plan
+    ├── sync-follow-ons.md        # remaining sync feature ideas
+    ├── sync-hardening-plan.md    # implemented correctness/recovery contracts and remaining validation
     ├── tracking-behavior.md      # anime tracking, account linking and progress projection
     └── ui-design-audit.md        # UI consistency inventory and visual review checklist
 ```
@@ -560,7 +560,7 @@ The most intricate subsystem. Sync is **opt-in** (`sync:settings.enabled`);
 nothing binds a socket until `SyncEngine::setup()` runs.
 
 Correctness and recovery work is tracked in
-[`sync-hardening-plan.md`](sync-hardening-plan.md) (A–G code implemented; H partially implemented, device/power validation outstanding).
+[`sync-hardening-plan.md`](sync-hardening-plan.md) (implemented contracts, regression matrix, and remaining device/power validation).
 
 ### Design
 - Generic, app-agnostic store: `domain -> key -> Record { value, version }`.
@@ -840,7 +840,7 @@ Copying frames can cost additional memory bandwidth, especially at 4K.
 | Stream downloads / provider HLS bundles / complete bundle cleanup / desktop action popup vs touch sheet | `crates/download/src/{lib,http,hls}.rs`, `src/app/downloads.rs`, `crates/torrent/src/lib.rs`, `crates/ui/detail.slint` (`StreamList`, shared action model), `tests/{stream_downloads_ui,desktop_action_menus}.rs` |
 | HTTP / images / Android blanks after successful decoding | `crates/media/src/net.rs` (platform transports), `crates/media/src/cache.rs` (actual resized pixel dimensions, shared encoding, per-entry locks, at most two encoders, atomic writes, maintenance), `crates/media/src/cache_tests.rs` (pixel-layout regression), `src/app/posters.rs`; sync transfers URLs, while each device decodes its own images |
 | Sync protocol / frame compression / peers / pairing | `crates/sync/src/{lib,protocol,frame,pair,store,merge}.rs`, `src/app/sync.rs`, `docs/sync-follow-ons.md` |
-| Sync hardening / settings reset investigation | `docs/sync-hardening-plan.md` (findings, phased implementation, regression matrix, migration decisions) |
+| Sync hardening / settings reset investigation | `docs/sync-hardening-plan.md` (implemented recovery/ownership/merge contracts, regression matrix, and remaining validation) |
 | Offline mutations / projection replay / progress convergence | `crates/sync/src/{local,store,progress}.rs`, `src/app/{io,sync}.rs`, `crates/sync/tests/{local_mutations,store_persistence}.rs` |
 | Sync invite QR / Android camera scan | `src/app/qr.rs`, `src/app/android_qr.rs`, `android/java/dev/misob/nova/QrScanActivity.java`, `crates/ui/settings.slint`, `src/app/run.rs` |
 | Android background execution (downloads/sign-in FGS + periodic sync) | `src/app/android_bg.rs`, `android/java/dev/misob/nova/{NovaBackgroundService,NovaAuthService,NovaSyncJobService}.java`, `nova_sync::SyncEngine::setup`, `DownloadCoordinator::has_active_work` |
