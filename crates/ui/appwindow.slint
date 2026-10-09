@@ -520,8 +520,6 @@ export component AppWindow inherits Window {
     in-out property <string> next_episode_token: "";
     in-out property <string> next_episode_title: "";
     in-out property <string> next_episode_context: "";
-    in-out property <image> next_episode_thumb;
-    in-out property <bool> next_episode_has_thumb: false;
     callback next_episode_streams(string);
     callback next_episode_dismiss(string);
     in-out property <bool> player_open: false;
@@ -1250,8 +1248,6 @@ export component AppWindow inherits Window {
         next_episode_token: root.next_episode_token;
         next_episode_title: root.next_episode_title;
         next_episode_context: root.next_episode_context;
-        next_episode_thumb: root.next_episode_thumb;
-        next_episode_has_thumb: root.next_episode_has_thumb;
         next_episode_streams(t) => { root.next_episode_streams(t); }
         next_episode_dismiss(t) => { root.next_episode_dismiss(t); }
         playback_started <=> root.playback_started;

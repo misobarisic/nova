@@ -59,14 +59,15 @@ regular episode numbering are excluded. Watched history does not change this
 order. A known future release blocks the offer; a missing or invalid air date
 uses the same availability rule as the episode picker.
 
-The slim banner uses the existing player-menu surface, typography, icons and
-primary-action gradient. It includes episode artwork when available, the
-episode number/title, **Choose streams**, and dismiss. Narrow layouts stack
-the action. Android landscape uses a compact top-right card without artwork
-and with a single-line title, leaving the central transport clear. Short
-windows place it beside the player's Close control rather than over the central
-transport and bottom subtitle/control lanes. It remains
-available when the OSD fades and yields to open player menus.
+The offer is a slim text-only strip in the bottom-right corner, capped at
+360 logical pixels wide. It uses a translucent player-control surface, a
+single-line episode number/title (elided when long), a quiet purple
+**Choose streams** text action, and dismiss. Both actions retain at least
+44-pixel touch targets, including in narrow layouts and translations; the
+action label may wrap to two lines without stacking the strip. No episode
+artwork is fetched or displayed for the offer. It remains available when the
+OSD fades, sits above the bottom control lane while controls are visible,
+and yields to open player menus.
 
 **Choose streams** saves the current episode's progress, runs normal player
 close cleanup, finalizes history, and opens the successor's existing stream
@@ -80,7 +81,7 @@ Natural end-of-stream behavior is unchanged.
 Dismiss lasts for the current stream opening. Seeking back out of the end
 region hides an undismissed banner; returning to the region offers it again.
 A replacement stream starts a new session, even for the same episode. Session
-tokens reject old actions and thumbnail results. Banner state is memory-only:
+tokens reject old actions. Banner state is memory-only:
 the banner adds no settings, storage keys, or sync records.
 
 The banner does not steal keyboard focus when it appears. Arrow navigation

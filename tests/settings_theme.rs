@@ -118,17 +118,29 @@ fn theme_search_toggle_resize_and_android_back() {
     // widths, even after a live resize. Keep an unrelated preference intact.
     app.set_animations(false);
     app.set_true_black(true);
+    app.set_hero_title_alignment(2);
     nova_ui::apply_theme(&app, true);
     for width in [320, 390, 1280] {
         app.window().set_size(slint::PhysicalSize::new(width, 900));
         settle(&app);
-        let reset = ElementHandle::find_by_accessible_label(&app, "Restore theme defaults")
-            .last()
-            .unwrap();
+        // Theme has more rows than a phone viewport. Queries omit clipped
+        // descendants, so reveal the reset before checking its bounds.
+        let reset = (0..20)
+            .find_map(|_| {
+                let reset =
+                    ElementHandle::find_by_accessible_label(&app, "Restore theme defaults").last();
+                if reset.is_none() {
+                    app.set_settings_scroll_y(app.get_settings_scroll_y() - 100.0);
+                    settle(&app);
+                }
+                reset
+            })
+            .expect("theme reset must be reachable by scrolling");
         let p = reset.absolute_position();
         assert!(p.x >= 0.0 && p.x + reset.size().width <= width as f32);
     }
-    for _ in 0..4 {
+    // Hero title alignment follows the two backdrop rows before Reset.
+    for _ in 0..5 {
         key(&app, slint::platform::Key::DownArrow.into());
     }
     key(&app, slint::platform::Key::Return.into());
@@ -136,18 +148,21 @@ fn theme_search_toggle_resize_and_android_back() {
     assert!(!app.global::<nova::Theme>().get_true_black());
     assert_eq!(app.get_card_corner_radius(), 10.0);
     assert_eq!(app.get_card_spacing(), 8.0);
+    assert_eq!(app.get_hero_title_alignment(), 1);
     assert_eq!(app.global::<nova::Theme>().get_card_corner_radius(), 10.0);
     assert_eq!(app.global::<nova::Theme>().get_card_spacing(), 8.0);
+    assert_eq!(app.global::<nova::Theme>().get_hero_title_alignment(), 1);
     assert!(!app.get_animations());
     assert_eq!(
-        &edits.borrow()[edits.borrow().len() - 6..],
+        &edits.borrow()[edits.borrow().len() - 7..],
         [
             "true_black",
             "card_corner_radius",
             "card_spacing",
             "status_bar_gradient",
             "home_backdrop_size",
-            "detail_backdrop_size"
+            "detail_backdrop_size",
+            "hero_title_alignment"
         ]
     );
 

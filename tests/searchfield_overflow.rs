@@ -121,6 +121,9 @@ fn exercise_field(
 fn all_input_sizes_follow_the_caret_and_clear_text() {
     i_slint_backend_testing::init_integration_test_with_system_time();
     let app = nova::AppWindow::new().unwrap();
+    // Caret following needs settled geometry. A two-pane transition can move
+    // the clear button between the synthetic pointer press and release.
+    app.global::<nova::Anim>().set_enabled(false);
     app.on_settings_search_matches(|query, haystack| {
         nova_ui::settings_search_matches(&query, &haystack)
     });

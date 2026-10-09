@@ -526,7 +526,6 @@ struct PlaybackTarget {
     session: u64,
     next_episode_dismissed: bool,
     next_episode_id: String,
-    next_episode_art_url: Option<String>,
     /// Position the engine should open at (resume). `None` when starting
     /// fresh / already watched / no saved position.
     resume_pos: Option<f64>,

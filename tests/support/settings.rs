@@ -27,7 +27,7 @@ pub async fn click(app: &nova::AppWindow, element: &ElementHandle) {
         .await;
 }
 
-async fn settle() {
+pub async fn settle() {
     let ready = Rc::new(Cell::new(false));
     let waker = Rc::new(RefCell::new(None::<std::task::Waker>));
     let timer_ready = ready.clone();

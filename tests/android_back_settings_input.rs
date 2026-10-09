@@ -41,19 +41,13 @@ fn check(failures: &RefCell<Vec<String>>, condition: bool, message: &str) {
 }
 
 fn tracking_link(app: &nova::AppWindow) -> Option<ElementHandle> {
-    // SettingsLink has no button role yet; identify the actual row through
-    // its title descendant, then click the row instead of its Text caption.
-    ElementHandle::find_by_element_type_name(app, "SettingsLink").find(|link| {
-        link.query_descendants()
-            .match_predicate(|element| element.accessible_label().as_deref() == Some("Tracking"))
-            .find_first()
-            .is_some()
-    })
+    ElementHandle::find_by_element_type_name(app, "SettingsLink")
+        .find(|link| link.accessible_id().as_deref() == Some("settings:tracking"))
 }
 
 async fn open_tracking(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) -> bool {
-    // Tracking follows Downloads in the landing list; keep phone dimensions
-    // and reveal it by scrolling instead of enlarging the test viewport.
+    // Keep phone dimensions and reveal the service row through real scrolling
+    // instead of enlarging the viewport or bypassing navigation.
     for _ in 0..3 {
         if let Some(link) = tracking_link(app) {
             link.single_click(slint::platform::PointerEventButton::Left)
@@ -75,8 +69,12 @@ async fn open_tracking(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) -
                 position: from,
                 button: slint::platform::PointerEventButton::Left,
             });
+        // Flickable recognizes a drag over separate event-loop frames; a
+        // press/move/release in one frame never advances the scroll viewport.
+        settle().await;
         app.window()
             .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: to });
+        settle().await;
         app.window()
             .dispatch_event(slint::platform::WindowEvent::PointerReleased {
                 position: to,

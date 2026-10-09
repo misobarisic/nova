@@ -17,13 +17,13 @@ fn after(ms: u64, body: impl FnOnce() + 'static) {
     slint::Timer::single_shot(std::time::Duration::from_millis(ms), body);
 }
 
-/// The smallest `Rectangle` that fully contains `target`, i.e. the row.
-fn enclosing_rect(
+/// Find the SettingsRow, rather than a small layout slot around its button.
+fn enclosing_row(
     app: &nova::AppWindow,
     target: (f32, f32, f32, f32),
 ) -> Option<(f32, f32, f32, f32)> {
     ElementQuery::from_root(app)
-        .match_inherits("Rectangle")
+        .match_type_name("SettingsRow")
         .find_all()
         .into_iter()
         .filter_map(|e| {
@@ -73,7 +73,7 @@ fn wrapped_download_row_grows_to_fit() {
     let app1 = app.as_weak();
     after(400, move || {
         let app = app1.upgrade().unwrap();
-        // Downloads is the 9th landing entry (index 8).
+        // Open Downloads through its stable navigation identity.
         let Some(downloads) = ({
             app.set_settings_search_query("Downloads".into());
             destinations::find(&app, "settings:downloads").next()
@@ -88,8 +88,9 @@ fn wrapped_download_row_grows_to_fit() {
                 .await;
             after(400, move || {
                 let app = app2.upgrade().unwrap();
-                let Some(view) =
-                    ElementHandle::find_by_element_type_name(&app, "PillButton").next()
+                assert_eq!(app.get_settings_selected_id(), 8);
+                let Some(view) = ElementHandle::find_by_accessible_label(&app, "View")
+                    .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button))
                 else {
                     slint::quit_event_loop().unwrap();
                     panic!("DIAG: no Downloaded episodes link");
@@ -100,25 +101,21 @@ fn wrapped_download_row_grows_to_fit() {
                         .await;
                     after(400, move || {
                         let app = app3.upgrade().unwrap();
+                        assert_eq!(app.get_settings_selected_id(), 9);
 
                         // The only Delete button lives in the one row.
                         let delete =
-                            ElementHandle::find_by_element_type_name(&app, "PillButton")
-                                .into_iter()
-                                .find(|e| {
-                                    let sz = e.size();
-                                    sz.width < 120.0 && sz.height < 60.0
-                                })
+                            ElementHandle::find_by_accessible_label(&app, "Delete")
+                                .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button))
                                 .expect("Delete button");
                         let dp = delete.absolute_position();
                         let ds = delete.size();
                         let (_rx, ry, _rw, rh) =
-                            enclosing_rect(&app, (dp.x, dp.y, ds.width, ds.height))
-                                .expect("enclosing row rectangle");
+                            enclosing_row(&app, (dp.x, dp.y, ds.width, ds.height))
+                                .expect("enclosing SettingsRow");
 
-                        // Title and description appear twice each (visible +
-                        // hidden measurement); the two tallest are the wrapped
-                        // title and description, whose sum the row must hold.
+                        // The two tallest texts are the wrapped title and
+                        // description, whose sum the actual row must hold.
                         let mut heights: Vec<f32> = ElementQuery::from_root(&app)
                             .match_type_name("Text")
                             .find_all()

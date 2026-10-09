@@ -97,15 +97,13 @@ async fn open_settings(
     failures: &RefCell<Vec<String>>,
 ) -> bool {
     for _ in 0..3 {
-        let link = ElementHandle::find_by_element_type_name(app, "SettingsLink").find(|link| {
-            let title = title.to_owned();
-            link.query_descendants()
-                .match_predicate(move |element| {
-                    element.accessible_label().as_deref() == Some(title.as_str())
-                })
-                .find_first()
-                .is_some()
-        });
+        let id = match title {
+            "Tracking" => "settings:tracking",
+            "Addons" => "settings:addons",
+            _ => panic!("unsupported settings destination {title}"),
+        };
+        let link = ElementHandle::find_by_element_type_name(app, "SettingsLink")
+            .find(|link| link.accessible_id().as_deref() == Some(id));
         if let Some(link) = link {
             link.single_click(slint::platform::PointerEventButton::Left)
                 .await;
@@ -131,8 +129,12 @@ async fn open_settings(
                 position: from,
                 button: slint::platform::PointerEventButton::Left,
             });
+        // Flickable recognizes a drag over separate event-loop frames; a
+        // press/move/release in one frame never advances the scroll viewport.
+        settle().await;
         app.window()
             .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: to });
+        settle().await;
         app.window()
             .dispatch_event(slint::platform::WindowEvent::PointerReleased {
                 position: to,

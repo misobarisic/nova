@@ -60,6 +60,39 @@ fn click_then(
     .unwrap();
 }
 
+fn open_player_settings(
+    app: &nova::AppWindow,
+    link: ElementHandle,
+    body: impl FnOnce(nova::AppWindow) + 'static,
+) {
+    click_then(app, link, 400, move |app| {
+        slint::spawn_local(async move {
+            assert_eq!(app.get_settings_selected_id(), 5);
+            assert!(app.get_settings_detail_open());
+            // Element queries omit clipped descendants. The rate control now
+            // follows the backend and episode-start rows on a phone, so reveal
+            // it before checking its presets, readout and pointer actions.
+            for _ in 0..20 {
+                let control = ElementHandle::find_by_element_type_name(&app, "SpeedControl").next();
+                if let Some(control) = control {
+                    let center = control.absolute_position().y + control.size().height / 2.0;
+                    app.set_settings_scroll_y(
+                        app.get_settings_scroll_y() + app.window().size().height as f32 / 2.0
+                            - center,
+                    );
+                    settings_support::settle().await;
+                    body(app);
+                    return;
+                }
+                app.set_settings_scroll_y(app.get_settings_scroll_y() - 100.0);
+                settings_support::settle().await;
+            }
+            panic!("missing playback-speed control after scrolling Settings → Player");
+        })
+        .unwrap();
+    });
+}
+
 #[test]
 fn playback_speed_control_renders_and_reports_steps() {
     i_slint_backend_testing::init_integration_test_with_system_time();
@@ -98,7 +131,7 @@ fn playback_speed_control_renders_and_reports_steps() {
             }
         };
 
-        // ---- Settings → Player (landing entry 5) ----
+        // ---- Settings → Player ----
         let Some(player_link) = ({
             app.set_settings_search_query("Player".into());
             destinations::find(&app, "settings:player").next()
@@ -110,7 +143,7 @@ fn playback_speed_control_renders_and_reports_steps() {
         let failures2 = failures1.clone();
         let steps2 = steps1.clone();
         let changes2 = changes1.clone();
-        click_then(&app, player_link, 400, move |app| {
+        open_player_settings(&app, player_link, move |app| {
             let controls = ElementHandle::find_by_element_type_name(&app, "SpeedControl").count();
             fail(
                 &failures2,

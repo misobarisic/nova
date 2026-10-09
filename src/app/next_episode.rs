@@ -37,8 +37,6 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_next_episode_visible(false);
             app.set_next_episode_token(SharedString::default());
-            app.set_next_episode_thumb(Image::default());
-            app.set_next_episode_has_thumb(false);
         }
     }
 
@@ -65,56 +63,19 @@ impl Bridge {
             });
             next.and_then(|next| {
                 let playing = state.playback.as_mut()?;
-                let refresh_art = playing.next_episode_id != next.id
-                    || playing.next_episode_art_url != next.thumbnail;
                 playing.next_episode_id.clone_from(&next.id);
-                playing.next_episode_art_url.clone_from(&next.thumbnail);
-                Some((playing.session, next, refresh_art))
+                Some((playing.session, next))
             })
         };
-        let Some((session, next, refresh_art)) = offer else {
+        let Some((session, next)) = offer else {
             app.set_next_episode_visible(false);
             return;
         };
         let offer_token = token(session, &next.id);
-        let changed = app.get_next_episode_token().as_str() != offer_token;
-        app.set_next_episode_token(offer_token.clone().into());
+        app.set_next_episode_token(offer_token.into());
         app.set_next_episode_title(episode_row_label(&next).into());
         app.set_next_episode_context(episode_badge(&next).into());
         app.set_next_episode_visible(true);
-        if changed || refresh_art {
-            app.set_next_episode_thumb(Image::default());
-            app.set_next_episode_has_thumb(false);
-            if let Some(url) = next.thumbnail.filter(|url| !url.trim().is_empty()) {
-                let bridge = self.clone();
-                net::fetch_image(url.clone(), None, move |pixels| {
-                    let Some(pixels) = pixels else { return };
-                    let _ = slint::invoke_from_event_loop(move || {
-                        let valid =
-                            bridge
-                                .shared
-                                .lock()
-                                .unwrap()
-                                .playback
-                                .as_ref()
-                                .is_some_and(|p| {
-                                    p.session == session
-                                        && p.next_episode_id == next.id
-                                        && p.next_episode_art_url.as_deref() == Some(url.as_str())
-                                        && !p.next_episode_dismissed
-                                });
-                        if valid
-                            && let Some(app) = bridge.app()
-                            && app.get_player_open()
-                            && app.get_next_episode_token().as_str() == offer_token
-                        {
-                            app.set_next_episode_thumb(Image::from_rgba8(pixels));
-                            app.set_next_episode_has_thumb(true);
-                        }
-                    });
-                });
-            }
-        }
     }
 
     pub(super) fn dismiss_next_episode(&self, offer_token: &str) {
@@ -304,7 +265,6 @@ mod tests {
         app.set_playback_started(true);
         bridge.refresh_next_episode_prompt();
         assert!(app.get_next_episode_visible());
-        assert!(!app.get_next_episode_has_thumb());
         let old_token = app.get_next_episode_token();
         bridge.dismiss_next_episode(old_token.as_str());
         app.set_position(200.0);

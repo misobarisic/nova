@@ -493,18 +493,18 @@ component SettingsMenu inherits Rectangle {
 component NextEpisodeAction inherits Rectangle {
     in property <bool> focused;
     callback activate();
-    height: Math.max(44px, action_text.preferred-height + 16px);
-    border-radius: 14px;
-    background: action_touch.has-hover ? Theme.current.primary_button_hover : Theme.current.primary_button;
-    border-width: root.focused ? 2px : 1px;
-    border-color: root.focused ? Theme.current.focus_ring : Theme.current.primary_button_border;
+    height: Math.max(44px, action_text.preferred-height + 8px);
+    border-radius: 8px;
+    background: action_touch.has-hover ? Theme.current.player_control_hover : transparent;
+    border-width: root.focused ? 2px : 0px;
+    border-color: Theme.current.focus_ring;
     accessible-role: button;
     accessible-label: @tr("Choose streams");
     HorizontalLayout {
-        padding-left: 14px; padding-right: 12px; spacing: 8px; alignment: center;
+        padding-left: 4px; padding-right: 4px; spacing: 4px; alignment: center;
         action_text := Text {
-            text: @tr("Choose streams"); color: Theme.current.on_accent;
-            font-size: 14px; font-weight: 600; wrap: word-wrap; max-lines: 2; overflow: elide;
+            text: @tr("Choose streams"); color: Theme.current.accent_soft;
+            font-size: 13px; font-weight: 600; wrap: word-wrap; max-lines: 2; overflow: elide;
             vertical-alignment: center; horizontal-alignment: center;
         }
         // Fixed-height icons are top-aligned by a HorizontalLayout. Let the
@@ -514,69 +514,53 @@ component NextEpisodeAction inherits Rectangle {
             IcChevronRight {
                 width: 18px; height: 18px;
                 y: (parent.height - self.height) / 2;
-                fill: Theme.current.on_accent;
+                fill: Theme.current.accent_soft;
             }
         }
     }
     action_touch := TouchArea { mouse-cursor: pointer; clicked => { root.activate(); } }
 }
 
-// Uses the same surface and spacing as the player's settings/track menus.
-// Compact screens stack the action rather than shrinking its touch target.
+// A text-only corner strip keeps the end of the episode visible. Elide long
+// titles instead of growing the card, while retaining full-size touch targets.
 component NextEpisodeBanner inherits Rectangle {
-    in property <bool> compact;
     in property <string> title;
     in property <string> context;
-    in property <image> thumbnail;
-    in property <bool> has_thumb;
     in property <int> focused_action: 0;
     callback choose();
     callback dismiss();
-    property <bool> stacked: root.width < 600px;
-    height: banner_col.preferred-height;
-    background: Theme.current.player_menu;
-    border-radius: 16px;
+    height: banner_row.preferred-height;
+    background: Theme.current.player_control;
+    border-radius: 10px;
     border-width: 1px; border-color: Theme.current.player_menu_border;
-    drop-shadow-blur: 24px; drop-shadow-color: Theme.current.scrim_shadow;
     // Consume empty-card taps; they must not toggle the video OSD.
     TouchArea { width: 100%; height: 100%; }
-    banner_col := VerticalLayout {
-        padding: root.compact ? 12px : 16px;
-        spacing: root.compact ? 8px : 12px;
-        HorizontalLayout {
-            spacing: 12px;
-            if root.has_thumb && root.width >= 340px && !root.compact: Rectangle {
-                width: root.stacked ? 72px : 96px; height: root.stacked ? 44px : 54px;
-                border-radius: 10px; clip: true;
-                Image { width: 100%; height: 100%; source: root.thumbnail; image-fit: cover; }
+    banner_row := HorizontalLayout {
+        padding: 10px;
+        spacing: 8px;
+        VerticalLayout {
+            spacing: 4px; horizontal-stretch: 1; alignment: center;
+            Text {
+                text: @tr("Next episode"); font-size: 12px;
+                color: Theme.current.accent_soft; overflow: elide;
             }
-            VerticalLayout {
-                spacing: 4px; horizontal-stretch: 1;
-                Text {
-                    text: @tr("Next episode"); font-size: 12px;
-                    color: Theme.current.accent_soft; overflow: elide;
-                }
-                Text {
-                    text: root.context + (root.title != root.context ? " · " + root.title : "");
-                    font-size: root.compact ? 13px : 14px; font-weight: 600; color: Theme.current.text_bright;
-                    wrap: root.compact ? no-wrap : word-wrap;
-                    max-lines: root.compact ? 1 : 2; overflow: elide;
-                }
-            }
-            if !root.stacked: next_streams_wide := NextEpisodeAction {
-                width: 164px; focused: root.focused_action == 1;
-                activate => { root.choose(); }
-            }
-            next_dismiss := IconBtn {
-                focused: root.focused_action == 2;
-                accessible-role: button; accessible-label: @tr("Dismiss next episode");
-                clicked => { root.dismiss(); }
-                IcClose { width: 20px; height: 20px; x: 10px; y: 10px; fill: Theme.current.text_bright; }
+            Text {
+                text: root.context + (root.title != root.context ? " · " + root.title : "");
+                font-size: 13px; font-weight: 600; color: Theme.current.text_bright;
+                wrap: no-wrap; overflow: elide;
             }
         }
-        if root.stacked: next_streams_narrow := NextEpisodeAction {
+        next_streams := NextEpisodeAction {
+            width: 108px;
             focused: root.focused_action == 1;
             activate => { root.choose(); }
+        }
+        next_dismiss := IconBtn {
+            width: 44px; height: 44px;
+            focused: root.focused_action == 2;
+            accessible-role: button; accessible-label: @tr("Dismiss next episode");
+            clicked => { root.dismiss(); }
+            IcClose { width: 18px; height: 18px; x: 13px; y: 13px; fill: Theme.current.text_player_secondary; }
         }
     }
 }
@@ -585,8 +569,6 @@ export component PlayerOverlay {
     in property <bool> next_episode_visible;
     in property <string> next_episode_title;
     in property <string> next_episode_context;
-    in property <image> next_episode_thumb;
-    in property <bool> next_episode_has_thumb;
     in property <string> next_episode_token;
     callback next_episode_streams(string);
     callback next_episode_dismiss(string);
@@ -1429,27 +1411,6 @@ export component PlayerOverlay {
             }
         }
 
-        // Stay independent of OSD fading. In short landscape windows the
-        // banner moves beside Close, leaving the central transport and the
-        // bottom subtitle/control lanes unobstructed.
-        if root.next_episode_shown: next_episode_banner := NextEpisodeBanner {
-            compact: root.is_android && root.width > root.height;
-            width: Math.max(0px, Math.min(self.compact ? 420px : 760px,
-                root.width - root.safe-left - root.safe-right - (root.height < 600px || self.compact ? 112px : 32px)));
-            x: root.height < 600px || self.compact
-                ? root.width - root.safe-right - self.width - 16px
-                : root.safe-left + (root.width - root.safe-left - root.safe-right - self.width) / 2;
-            y: root.height < 600px || self.compact ? root.safe-top + 16px
-                : Math.max(root.safe-top + 64px, root.height - (root.narrow ? 100px : 160px) - self.height);
-            title: root.next_episode_title;
-            context: root.next_episode_context;
-            thumbnail: root.next_episode_thumb;
-            has_thumb: root.next_episode_has_thumb;
-            focused_action: root.kb_active ? (root.kb_idx == 9 ? 1 : root.kb_idx == 10 ? 2 : 0) : 0;
-            choose => { root.next_episode_streams(root.next_episode_token); }
-            dismiss => { root.next_episode_dismiss(root.next_episode_token); }
-        }
-
         // ---- Android center transport (⏪10 ▶/⏸ ⏩10) ----------------
         // Android has no volume control and no bottom-row play/rw/ff: the
         // transport floats in the middle of the video like a mobile player.
@@ -2130,6 +2091,22 @@ export component PlayerOverlay {
                     }
                 }
             }
+        }
+
+        // Stay visible with the OSD hidden, then clear its 68px control lane
+        // when it wakes. Paint above the OSD so its transparent hover zone cannot
+        // intercept offer taps, even while the controls are hidden.
+        if root.next_episode_shown: next_episode_banner := NextEpisodeBanner {
+            width: Math.max(0px, Math.min(360px,
+                root.width - root.safe-left - root.safe-right - 32px));
+            x: root.width - root.safe-right - self.width - 16px;
+            y: Math.max(root.safe-top + 16px,
+                root.height - self.height - (root.controls_active ? 80px : 16px));
+            title: root.next_episode_title;
+            context: root.next_episode_context;
+            focused_action: root.kb_active ? (root.kb_idx == 9 ? 1 : root.kb_idx == 10 ? 2 : 0) : 0;
+            choose => { root.next_episode_streams(root.next_episode_token); }
+            dismiss => { root.next_episode_dismiss(root.next_episode_token); }
         }
 
         // Player settings panel (gear button): subtitle + audio track pickers
