@@ -189,7 +189,7 @@ the tracking actor owns local state, shared plaintext credentials and authentica
 ## 3. Root crate `nova` (`src/`)
 
 ### Entry points
-- `src/main.rs` — desktop `main`; installs jemalloc on Linux, calls `nova::app::run()`.
+- `src/main.rs` — desktop `main`; installs jemalloc on Linux, selects the GUI subsystem on Windows so launches do not open a console, and calls `nova::app::run()`.
 - `src/lib.rs` — re-exports leaf crates under stable paths (`crate::storage`, `crate::player`, `crate::torrent`, `crate::download`, `crate::net`, `nova_ui::*`), declares `pub mod app`, and holds `android_main` (Slint Android backend init + `app::run()`).
 - `src/diagnostics.rs` — initializes the process-wide `tracing-subscriber` once without replacing an embedding subscriber. `RUST_LOG` filters events (default `warn,nova_sync=info`; `RUST_LOG=nova_sync=debug` enables sync diagnostics). Desktop writes to stderr; Android writes directly to logcat under `Nova`, including job-only startup. Sync leaf code emits structured events/spans through `tracing`; it does not install a subscriber.
 
@@ -629,7 +629,7 @@ the app ignores unknown domains, so old peers stay compatible.
 
 | Concern | Desktop (Linux) | Android |
 |---|---|---|
-| Entry | `src/main.rs` → `app::run()` | `android_main` (`src/lib.rs`) → `app::run()` |
+| Entry | `src/main.rs` → `app::run()`; Windows uses the GUI subsystem without a console window | `android_main` (`src/lib.rs`) → `app::run()` |
 | System bars / safe areas | Window chrome remains outside the app content | Catalog and player retain edge-to-edge drawing from startup; visible status bars are transparent, captions and controls use Slint safe-area insets, and immersive playback hides the bars. Restoring bars keeps Home’s artwork behind them (`crates/player/src/external.rs`). |
 | App icon | `assets/logo.png` is the Slint window icon | Density-specific `android/res/mipmap-*/ic_launcher.png` resources from the same source image |
 | Renderer | `winit` + `femtovg` (mpv composites under the Slint scene) | Slint android-activity backend (Skia/GLES); mpv composites into same framebuffer |
@@ -829,6 +829,7 @@ Copying frames can cost additional memory bandwidth, especially at 4K.
 | Hero show/movie logos / title text fallback / responsive horizontal alignment | `crates/ui/title-artwork.slint`, Home slide snapshots in `crates/ui/home.slint`, Detail hero in `crates/ui/detail.slint`, logo loaders in `src/app/{home,posters}.rs`, `MetaHeader.logo_url` in `src/app.rs`, alpha-safe encoding in `crates/media/src/cache.rs`, `tests/hero_title_logo.rs` |
 | Home Continue Watching after playback / resume-card refresh | `src/app/playback.rs::note_player_progress_from_ui` finalizes progress and refreshes library/Home cards on close; `home_return_tests` covers advancing to the next released episode and repainting interrupted resume progress without navigation. |
 | Touch playback / player menus / OSD fade artifacts | `crates/player/src/lib.rs`, `src/app/playback.rs`, `crates/ui/player.slint`; tap/seek timing and hold-to-speed without waking the OSD (headless coverage in `tests/{player_gestures,player_double_tap}.rs`), responsive popup placement and track rows live in `player.slint`, shared speed controls in `crates/ui/speedcontrol.slint`; the square OSD alpha ramp is generated in `src/app/run.rs` |
+| Windows console window on launch / executable subsystem | `src/main.rs` sets `windows_subsystem = "windows"` for the desktop executable on Windows. |
 | Windows decoder artifacts / hardware decode policy | `crates/player/src/lib.rs` (`configure_desktop_decoder`, `tests::desktop_decoder_policy_is_accepted_by_mpv`); [mpv render API requirements](https://github.com/mpv-player/mpv/blob/master/include/mpv/render_gl.h) |
 | Android pause on Home/screen-off / return preference | `crates/player/src/{lib,android_recovery}.rs`, `CacheSettings.android_auto_continue`, `src/app/settings.rs`, `crates/ui/settings.slint`, AppWindow `android_auto_continue`, `src/app/run.rs` (paused OSD); [player behavior](player-behavior.md) |
 | End-of-episode banner / next episode streams | `src/app/next_episode.rs` (policy/session tests), `src/app/detail.rs::episode_streams_by_id`, `src/app/playback.rs`, `src/app/run.rs`, AppWindow `next_episode_*`, `crates/ui/player.slint`, `tests/next_episode_banner.rs`; [player behavior](player-behavior.md) |

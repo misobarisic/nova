@@ -31,4 +31,4 @@ Here, `<data>` and `<cache>` mean the platform's durable data and cache paths in
 
 ## Windows release bundle
 
-The Windows tag release is a ZIP containing `nova.exe`, `libmpv-2.dll`, the MinGW runtime DLLs required by the build, the app license, and third-party source provenance. Extract the files together and run `nova.exe`; keep the DLLs beside the executable.
+The Windows tag release is a ZIP containing `nova.exe`, `libmpv-2.dll`, the MinGW runtime DLLs required by the build, the app license, and third-party source provenance. Extract the files together and run `nova.exe`; keep the DLLs beside the executable. The executable uses the Windows GUI subsystem and opens the app without a console window.
