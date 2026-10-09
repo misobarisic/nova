@@ -450,7 +450,7 @@ export component LibraryPage {
             padding-right: 18px + safe-right;
             padding-bottom: root.narrow ? 0px : 18px;
             padding-top: 18px + safe-top;
-            spacing: 14px;
+            spacing: root.narrow ? 0px : 14px;
 
             // Grid (always present so the keyboard scope can drive its
             // ScrollView; empty with no cards when the library is empty).
@@ -974,6 +974,14 @@ export component LibraryPage {
                             }
                         }
                     }
+                }
+                // A short, non-interactive fade softens cards passing under
+                // the pinned controls without changing the scroll viewport.
+                library_header_fade := Rectangle {
+                    x: 0px;
+                    y: library_header.y + library_header.height;
+                    width: 100%; height: 8px;
+                    background: @linear-gradient(180deg, Theme.current.artwork_canvas, transparent);
                 }
             // Empty state
             if root.library.length == 0: VerticalLayout {

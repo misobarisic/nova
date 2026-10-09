@@ -1928,7 +1928,7 @@ export component HomePage {
             padding-right: 0px;
             padding-bottom: root.narrow && root.view == 0 ? 0px : 18px;
             padding-top: 0px;
-            spacing: 12px;
+            spacing: root.narrow ? 0px : 12px;
 
             content_host := Rectangle {
                 vertical-stretch: 1;
@@ -2693,7 +2693,8 @@ export component HomePage {
         if root.narrow && root.view == 0: Image {
             // Slint centers a shorter image unless its position is explicit.
             x: 0px; y: 0px;
-            width: 100%; height: root.safe-top + 64px;
+            // Without featured artwork, keep the shade above the first heading.
+            width: 100%; height: root.safe-top + (root.featured_count > 0 ? 64px : 0px);
             source: @image-url("../../assets/status-bar-scrim.svg");
             image-fit: fill;
             opacity: Theme.status_bar_gradient / 100;

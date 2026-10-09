@@ -268,7 +268,7 @@ fn nav_icons_pop_while_highlights_snap() {
                     let size = label.size();
                     assert!(p.x >= 12.0);
                     assert!(p.x + size.width <= width as f32 - 8.0);
-                    assert!(p.y + size.height <= panel.absolute_position().y + 76.0);
+                    assert!(p.y + size.height <= panel.absolute_position().y + 68.0);
                 }
             }
         }

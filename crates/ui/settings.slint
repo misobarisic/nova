@@ -1538,7 +1538,7 @@ export component SettingsPage {
             padding-right: 18px + safe-right;
             padding-bottom: root.phone_layout && !root.sub_open ? 0px : 18px + root.safe-bottom;
             padding-top: 18px + safe-top;
-            spacing: 12px;
+            spacing: root.phone_layout && !root.sub_open ? 0px : 12px;
 
             // Pinned: an unpinned 1px row still absorbs free vertical space
             // (see DiscoverPage), stretching the page instead of leaving the

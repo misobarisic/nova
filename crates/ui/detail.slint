@@ -2570,9 +2570,9 @@ export component DetailPage {
                                                     overflow: elide;
                                                 }
 
-                                                // No empty rail or percentage for an unplayed
-                                                // episode, including a manual watched mark.
-                                                if e.progress > 0: episode_progress := HorizontalLayout {
+                                                // Completed episodes keep the watched disc; only
+                                                // unfinished playback needs a resume rail.
+                                                if !e.watched && e.progress > 0: episode_progress := HorizontalLayout {
                                                     height: 20px;
                                                     spacing: 10px;
                                                     Rectangle {

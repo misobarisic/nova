@@ -48,14 +48,14 @@ fn artwork_cards_contain_text_and_only_show_recorded_playback() {
         let cards = elements(&app, "ep_card");
         assert_eq!(cards.len(), 4);
         assert_eq!(elements(&app, "episode_watched").len(), 2);
-        assert_eq!(elements(&app, "episode_progress").len(), 2);
+        assert_eq!(elements(&app, "episode_progress").len(), 1);
         assert_eq!(elements(&app, "episode_runtime").len(), 2);
-        assert_eq!(elements(&app, "episode_progress_track").len(), 2);
+        assert_eq!(elements(&app, "episode_progress_track").len(), 1);
         let percentages: Vec<_> = elements(&app, "episode_percentage")
             .into_iter()
             .filter_map(|element| element.accessible_label())
             .collect();
-        assert_eq!(percentages, ["45%", "100%"]);
+        assert_eq!(percentages, ["45%"]);
         for name in ["episode_title", "episode_synopsis", "episode_content"] {
             for child in elements(&app, name) {
                 let p = child.absolute_position();
