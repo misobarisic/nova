@@ -112,6 +112,7 @@ nova/
 │   │   └── debug.keystore    # Tracked debug key for local APK signing; not for publishing
 │   └── res/                  # Android launcher icon mipmaps
 ├── assets/                   # App logo, fonts, backdrop scrim, and in-app license/vendor catalog templates
+├── output/imagegen/          # Retained tracking UI design concepts and implementation screenshots
 ├── vendor/                   # pinned native libraries and local backend patch
 │   ├── android-libs/         # prebuilt libmpv.so per ABI + SOURCES provenance
 │   ├── i-slint-backend-android-activity/ # Slint 1.18 window-lifecycle patch + NOVA_PATCH.md
@@ -797,6 +798,7 @@ driver or playback validation.
 
 | Task | Start here |
 |---|---|
+| Tracking UI design references / responsive screenshots | `output/imagegen/detail-tracking-concepts-2026-10-09/` (design options), `output/imagegen/detail-tracking-implemented/` (headless screenshots at desktop and mobile sizes) |
 | Setting sync labels / per-device overrides / value comparison | `src/app/settings_sync.rs`, `src/app/sync.rs`, `crates/ui/settings-sync{,-modal}.slint`, `tests/settings_scopes.rs` |
 | Change theme colours / card corners / spacing / backdrop sizes / status-bar gradient / true-black mode / effects | `crates/ui/theme.slint` (`ThemePalette`, `Theme.standard`, `Theme.current`), `crates/ui/src/lib.rs::apply_theme`, `crates/ui/appwindow.slint` (Rust re-exports), `tests/theme.rs`, `tests/settings_theme.rs`; Theme (ID 14, `settings:theme`) changes canvases/navigation/artwork fades, card radius/spacing and the narrow Home/Detail status-bar gradient live, with a complete theme reset; preferences sync by default with optional device overrides, retaining artwork and accent/status colours; neutral cards and controls become black with subtle outlines |
 | Add a Settings option / destination / slider gesture handling | `crates/ui/settings.slint`, `crates/ui/settings-controls.slint` (`SettingsDestinations` and shared controls), `crates/ui/slider-touch.slint`, `tests/settings_slider_drag.rs`, `src/app/settings.rs`, `src/app/run.rs`, `crates/config/src/lib.rs` |
