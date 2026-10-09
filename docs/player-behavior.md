@@ -1,5 +1,9 @@
 # Player behavior
 
+Closing the in-app player finalizes its observed progress and immediately rebuilds
+Home’s Continue Watching and Upcoming cards, including the next released episode
+and updated resume progress, without requiring a navigation change.
+
 ## Android system gestures
 
 Leaving the app with Home, switching apps, or turning the screen off pauses

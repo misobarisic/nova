@@ -597,7 +597,11 @@ impl Bridge {
             if saw_frames && watched_now {
                 self.auto_delete_watched_downloads(&target.series_id, &[target.episode_id.clone()]);
             }
-            self.refresh_progress_ui();
+            // Closing reveals Home again without a navigation callback. Rebuild
+            // its derived episode cards after finalizing the saved position.
+            self.apply_episode_rows();
+            self.apply_season_cards();
+            self.refresh_library_progress_ui();
         }
     }
 
@@ -758,5 +762,116 @@ pub(crate) fn sync_torrent_engine(settings: &TorrentSettings) {
             torrent_cache_dir(),
             settings,
         )),
+    }
+}
+
+#[cfg(all(test, feature = "desktop"))]
+mod home_return_tests {
+    use super::*;
+
+    #[test]
+    fn closing_playback_refreshes_home_without_navigation() {
+        const ROOT: &str = "NOVA_HOME_PLAYBACK_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-home-playback-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .args(["--exact", "app::playback::home_return_tests::closing_playback_refreshes_home_without_navigation", "--nocapture"])
+                .output().unwrap();
+            let _ = std::fs::remove_dir_all(&root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        app.set_show_home(true);
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(Mutex::new(PosterStore::new(1))),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let videos = (1..=2)
+            .map(|number| Video {
+                id: format!("episode-{number}"),
+                name: format!("Episode {number}"),
+                season: Some(1),
+                episode: Some(number),
+                released: Some("2000-01-01T00:00:00.000Z".into()),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        super::super::detail::write_episodes_cache_for("series", "series", &videos);
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.entries = vec![
+                serde_json::from_value(
+                    serde_json::json!({"id":"series", "type_":"series", "name":"Series"}),
+                )
+                .unwrap(),
+            ];
+            state.progress.insert(
+                progress_map_key("series", "episode-1"),
+                EpisodeProgress {
+                    series_id: "series".into(),
+                    episode_id: "episode-1".into(),
+                    position_secs: 300.0,
+                    duration_secs: 1000.0,
+                    updated_at_secs: 1,
+                    ..Default::default()
+                },
+            );
+        }
+        bridge.rebuild_continue_list();
+        bridge.apply_home_to_ui();
+        let old = app.get_home_continue().row_data(0).unwrap();
+        assert_eq!(
+            bridge.shared.lock().unwrap().continue_list[0].episode_id,
+            "episode-1"
+        );
+        bridge.shared.lock().unwrap().playback = Some(PlaybackTarget {
+            series_id: "series".into(),
+            episode_id: "episode-1".into(),
+            last_pos: 950.0,
+            last_dur: 1000.0,
+            ..Default::default()
+        });
+        app.set_player_open(false);
+        bridge.note_player_progress_from_ui();
+        assert!(app.get_show_home());
+        assert_eq!(
+            bridge.shared.lock().unwrap().continue_list[0].episode_id,
+            "episode-2"
+        );
+        assert_ne!(
+            app.get_home_continue().row_data(0).unwrap().episode_title,
+            old.episode_title
+        );
+        // An interrupted next episode must also repaint its resume progress.
+        bridge.shared.lock().unwrap().playback = Some(PlaybackTarget {
+            series_id: "series".into(),
+            episode_id: "episode-2".into(),
+            last_pos: 500.0,
+            last_dur: 1000.0,
+            ..Default::default()
+        });
+        bridge.note_player_progress_from_ui();
+        assert!((app.get_home_continue().row_data(0).unwrap().progress - 0.5).abs() < 0.001);
     }
 }
