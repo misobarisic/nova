@@ -3,10 +3,10 @@
 //! The video backdrop owns taps (OSD toggle), double-taps on the outer
 //! thirds (∓10 s seek), a 500 ms press-and-hold (transient 2× preview until
 //! release) and, on Android, vertical swipes (left = brightness, right =
-//! system volume). Covers that double-taps seek (first tap acting normally,
-//! second seeking and re-waking), lone taps act at once, holds preview and
-//! restore the stored rate, and swipes step the system bridges without
-//! seeking.
+//! system volume). Covers that double-taps seek without waking controls or
+//! toggling playback, side singles wait for pairing, centre taps act at once,
+//! holds preview and restore the stored rate, and swipes step the system
+//! bridges without seeking.
 
 use slint::{ComponentHandle, LogicalPosition};
 use std::cell::RefCell;
@@ -152,7 +152,7 @@ fn backdrop_double_tap_hold_and_swipe() {
             ),
         );
 
-        // ---- Lone side tap hides the OSD at once ----
+        // ---- Lone side tap hides the OSD after the pairing window ----
         tap(&app, 500.0, 300.0);
         let app2 = app.as_weak();
         let failures2 = failures1.clone();

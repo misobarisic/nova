@@ -22,6 +22,22 @@ leaves Android notification-shade pulls alone even when Android delivers the
 initial touch to the player before taking over. Interior swipes retain the
 existing sensitivity and left/right brightness/volume mapping.
 
+## Video taps and double-tap seeking
+
+Double-tapping either outer third seeks backward/forward ten seconds and shows
+the small seek readout. It preserves OSD visibility and pause state: hidden
+controls stay hidden throughout both taps, and visible controls stay visible.
+On desktop it does not trigger the single-tap play/pause action first.
+
+A single tap on a seekable outer third waits for the 280 ms pairing window
+before toggling the OSD. Center taps act immediately. On Android, single taps
+only toggle controls; on desktop, waking hidden controls also toggles playback.
+Press-and-hold and swipe gestures cancel pending taps when recognized. Small
+finger movement within the tap threshold does not reveal controls early.
+
+Implementation and headless input coverage: `crates/ui/player.slint` and
+`tests/{player_gestures,player_double_tap}.rs`.
+
 ## Next-episode banner
 
 In-app episodic playback offers the next episode during the final two minutes,

@@ -963,17 +963,20 @@ export component PlayerOverlay {
     // popup closes, even though the cursor was moving the whole time.
     // (Also resets the keyboard track-list index.)
     changed open_popup => {
+        tap_timer.stop();
+        root.tap_side = -2;
         root.kb_menu = 0;
         root.osd_mouse_moved();
     }
 
     // ---- Backdrop gesture state (see player_backdrop below) ------------
-    // Taps act at once (a lone tap hides a visible OSD); a second tap on the
-    // same side within the double-tap window (280 ms) seeks ∓10 s instead
-    // and re-wakes the OSD. A stationary 500 ms press previews 2×; an
+    // Seekable outer-third taps wait for the double-tap window (280 ms),
+    // so seeking cannot flash the OSD or toggle desktop playback first.
+    // Centre taps act at once. A stationary 500 ms press previews 2×; an
     // Android vertical swipe steps brightness/volume. `tap_side`: the side
     // of the last tap (-1 left, 0 middle, +1 right, -2 none).
     property <int> tap_side: -2;
+    property <bool> tap_osd_visible: false;
     property <bool> hold_active: false;
     // Swipe kind: 0 none, 1 brightness (left half), 2 volume (right half).
     property <int> swipe_kind: 0;
@@ -988,8 +991,20 @@ export component PlayerOverlay {
         running: false;
         triggered => {
             self.running = false;
-            // Pairing window lapsed: the last tap stands alone.
+            // Pairing window lapsed: apply the single tap only now.
             root.tap_side = -2;
+            root.backdrop_single_tap(root.tap_osd_visible);
+        }
+    }
+
+    function backdrop_single_tap(was_visible: bool) {
+        if (was_visible) {
+            root.osd_visible = false;
+        } else {
+            root.osd_mouse_moved();
+            if (!root.is_android) {
+                root.toggle_pause();
+            }
         }
     }
 
@@ -1055,29 +1070,33 @@ export component PlayerOverlay {
             root.open_popup = 0;
             return;
         }
-        // Stationary tap, acting at once. A second tap on the same side
-        // within the window seeks instead (outer thirds, active playback).
+        // A second tap on the same side consumes the pending single tap.
+        // Neither tap may wake controls or change pause state while seeking.
         let can_seek = root.playback_started && root.duration > 0.0;
         let side = up_x < w / 3 ? -1 : (up_x > w * 2 / 3 ? 1 : 0);
-        if (can_seek && side != 0 && tap_timer.running && side == root.tap_side) {
+        if (can_seek && side != 0 && player_backdrop.double_tap_pending && side == root.tap_side) {
             tap_timer.stop();
+            player_backdrop.double_tap_pending = false;
             root.tap_side = -2;
             root.position = Math.max(0.0, Math.min(root.duration, root.position + side * 10.0));
             root.seek(root.position);
-            root.osd_mouse_moved();
             root.show_flash(side < 0 ? "-10 s" : "+10 s");
             return;
         }
-        tap_timer.stop();
-        tap_timer.start();
-        root.tap_side = side;
-        if (player_backdrop.osd_visible_at_press) {
-            root.osd_visible = false;
+        if (tap_timer.running) {
+            // Different regions are independent single taps, not a seek.
+            tap_timer.stop();
+            root.tap_side = -2;
+            root.backdrop_single_tap(root.tap_osd_visible);
+            player_backdrop.osd_visible_at_press = root.osd_visible;
+        }
+        let was_visible = player_backdrop.osd_visible_at_press;
+        if (can_seek && side != 0) {
+            root.tap_osd_visible = was_visible;
+            root.tap_side = side;
+            tap_timer.start();
         } else {
-            root.osd_mouse_moved();
-            if (!root.is_android) {
-                root.toggle_pause();
-            }
+            root.backdrop_single_tap(was_visible);
         }
     }
 
@@ -1222,11 +1241,10 @@ export component PlayerOverlay {
             }
         }
 
-        // Video gesture surface. Stationary taps act at once (toggling the
-        // OSD: waking it when down, hiding it when up — and, off Android,
-        // toggling play/pause on wake). On top of that:
-        // - double-tap the outer thirds to seek ∓10 s (any platform): the
-        //   first tap acts normally, the second seeks and re-wakes;
+        // Video gesture surface. Single taps toggle the OSD (and, off Android,
+        // toggle play/pause on wake). Seekable side taps wait 280 ms:
+        // - double-tap the outer thirds to seek ∓10 s (any platform):
+        //   seek feedback only, preserving the OSD and pause state;
         // - press-and-hold 500 ms to preview 2× until release (any platform);
         // - on Android, a vertical swipe adjusts brightness (left half) or
         //   the system volume (right half).
@@ -1239,6 +1257,7 @@ export component PlayerOverlay {
             // treat them as wake-only gestures.
             property <bool> dragged: false;
             property <bool> osd_visible_at_press: false;
+            property <bool> double_tap_pending: false;
             // Last pointer position that woke the OSD. A tap's release
             // synthesizes a move at the same position; waking on it would
             // re-show an OSD the tap just dismissed.
@@ -1252,7 +1271,18 @@ export component PlayerOverlay {
                     player_backdrop.dragged = false;
                     player_backdrop.last_wake_x = self.mouse-x;
                     player_backdrop.last_wake_y = self.mouse-y;
-                    root.osd_mouse_moved();
+                    let side = self.mouse-x < self.width / 3 ? -1
+                        : (self.mouse-x > self.width * 2 / 3 ? 1 : 0);
+                    player_backdrop.double_tap_pending = root.playback_started
+                        && root.duration > 0.0 && root.open_popup == 0
+                        && side != 0 && tap_timer.running && side == root.tap_side;
+                    if (player_backdrop.double_tap_pending) {
+                        // Pair on the second press, so a release just beyond
+                        // the deadline cannot fire the pending single first.
+                        tap_timer.stop();
+                    }
+                    // Do not reveal the OSD before we know whether this is
+                    // a single tap, double tap, hold, or drag.
                     // Arm press-and-hold 2× (stationary press, active
                     // playback, no popup in the way).
                     if (root.playback_started && root.duration > 0.0 && root.open_popup == 0) {
@@ -1264,7 +1294,9 @@ export component PlayerOverlay {
                         || self.mouse-y != player_backdrop.last_wake_y) {
                         player_backdrop.last_wake_x = self.mouse-x;
                         player_backdrop.last_wake_y = self.mouse-y;
-                        root.osd_mouse_moved();
+                        if (!self.pressed || player_backdrop.dragged) {
+                            root.osd_mouse_moved();
+                        }
                     }
                 } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
                     hold_timer.stop();
@@ -1278,6 +1310,7 @@ export component PlayerOverlay {
                         root.swipe_kind = 0;
                         tap_timer.stop();
                         root.tap_side = -2;
+                        player_backdrop.double_tap_pending = false;
                         player_backdrop.dragged = false;
                     } else {
                         root.backdrop_release(self.mouse-x, self.width);
@@ -1285,7 +1318,6 @@ export component PlayerOverlay {
                 }
             }
             moved => {
-                root.osd_mouse_moved();
                 if (Math.abs(self.mouse-x - self.pressed-x)
                     + Math.abs(self.mouse-y - self.pressed-y) > 12px) {
                     player_backdrop.dragged = true;
@@ -1293,6 +1325,8 @@ export component PlayerOverlay {
                     hold_timer.stop();
                     tap_timer.stop();
                     root.tap_side = -2;
+                    player_backdrop.double_tap_pending = false;
+                    root.osd_mouse_moved();
                 }
                 // Android brightness/volume swipe: a mostly-vertical drag.
                 // Decided here (not on press) so the direction is known, and

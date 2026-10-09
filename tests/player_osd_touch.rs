@@ -273,12 +273,11 @@ fn hidden_osd_taps_wake_without_activating_controls() {
             "empty OSD bar tap must not act on a control",
         );
 
-        // Same for the video area behind the OSD. Note the x: the previous
-        // dismiss tap was right-side, so this left-side tap cannot pair into
-        // a double-tap seek (two quick same-side taps seek ∓10 s).
+        // The centre video area has no seek ambiguity and dismisses at once.
+        // Side singles and double taps are covered in player_double_tap.rs.
         reset(&app, &wakes1, &toggles1, &closes1, &seeks1);
         app.set_osd_visible(true);
-        let video = LogicalPosition::new(300.0, 200.0);
+        let video = LogicalPosition::new(180.0, 200.0);
         let _ = press(&app, video);
         let _ = release(&app, video);
         fail(
@@ -288,12 +287,12 @@ fn hidden_osd_taps_wake_without_activating_controls() {
         );
 
         reset(&app, &wakes1, &toggles1, &closes1, &seeks1);
-        let start = LogicalPosition::new(60.0, 200.0);
+        let start = LogicalPosition::new(180.0, 200.0);
         let _ = press(&app, start);
         fail(
             &failures1,
-            app.get_osd_visible(),
-            "hidden empty-space tap must show the OSD while pressed",
+            !app.get_osd_visible(),
+            "empty-space press must wait for a recognized tap or gesture",
         );
         let _ = release(&app, start);
         check_wake_only(
@@ -314,12 +313,12 @@ fn hidden_osd_taps_wake_without_activating_controls() {
         for dy in [10.0, 30.0, 60.0] {
             let _ = app.window().dispatch_event_with_result(
                 slint::platform::WindowEvent::PointerMoved {
-                    position: LogicalPosition::new(60.0, 200.0 - dy),
+                    position: LogicalPosition::new(180.0, 200.0 - dy),
                 },
             );
         }
         fail(&failures1, *wakes1.borrow() >= 1, "swipe must wake the OSD");
-        let _ = release(&app, LogicalPosition::new(60.0, 140.0));
+        let _ = release(&app, LogicalPosition::new(180.0, 140.0));
         fail(
             &failures1,
             app.get_osd_visible(),
@@ -331,7 +330,7 @@ fn hidden_osd_taps_wake_without_activating_controls() {
         let _ =
             app.window()
                 .dispatch_event_with_result(slint::platform::WindowEvent::PointerMoved {
-                    position: LogicalPosition::new(61.0, 200.0),
+                    position: LogicalPosition::new(181.0, 200.0),
                 });
         fail(
             &failures1,
