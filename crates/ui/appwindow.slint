@@ -54,6 +54,8 @@ export component AppWindow inherits Window {
     in-out property <bool> tracking_busy;
     in-out property <bool> tracking_can_confirm;
     in-out property <bool> tracking_open: false;
+    // Tracking is a detail tab; Back returns to the tab that opened it.
+    in-out property <int> tracking_return_tab: 0;
     callback tracking_connect(int,string,string);
     callback tracking_complete(int,string);
     callback tracking_disconnect(int);
@@ -369,8 +371,7 @@ export component AppWindow inherits Window {
     in-out property <[string]> selected_genre_list: [];
     in-out property <bool> modal_visible: false;
     in-out property <int> selected_index: -1;
-    // Detail tab bar: 0 = Overview, 3 = Episodes (1/2 are stubs — the
-    // addon protocol provides no Characters/Artwork data).
+    // Detail tab bar: 0 = Overview, 3 = Episodes, 4 = Tracking.
     in-out property <int> detail_tab: 0;
     // Episode filter box text (Rust re-renders `episode_rows` on change).
     in-out property <string> episode_filter: "";
@@ -899,6 +900,7 @@ export component AppWindow inherits Window {
         tracking_busy: root.tracking_busy;
         tracking_can_confirm: root.tracking_can_confirm;
         tracking_open <=> root.tracking_open;
+        tracking_return_tab <=> root.tracking_return_tab;
         tracking_show() => {root.tracking_show();}
         tracking_close() => {root.tracking_close();}
         tracking_search(a0,a1) => {root.tracking_search(a0,a1);}

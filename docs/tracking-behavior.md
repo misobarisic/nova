@@ -2,7 +2,7 @@
 
 Nova can send progress for explicitly linked anime releases to MyAnimeList and
 AniList. Open **Settings → Tracking**, connect a service, then open a title and
-choose its **Tracking** action. Connection alone does not link any titles.
+choose its **Tracking** tab (the sync icon opens the same tab). Connection alone does not link any titles.
 
 ## Connecting
 
@@ -123,7 +123,15 @@ for the platform service contract.
 
 ## Linking and alignment
 
-Unlinked titles open a **Review setup** for the whole library title. Nova selects
+Unlinked titles open a review of suggested matches for the whole library title.
+Tracking is a dedicated Detail tab for saved titles, beside Overview and Episodes.
+Its compact title header leaves room for the release review. Matches, linked
+entries, the confirmation summary, history switch, and final actions share one
+scroll viewport with bottom clearance. MyAnimeList and AniList pills switch
+between independent proposals.
+Back from alignment returns to review; Back from Tracking returns to the Detail
+tab that opened it. Switching tabs or leaving Detail cancels the active review
+context; reopening a title restores its preceding content tab. Nova selects
 the first ranked tracker search result by default and explores its official
 prequel/sequel relationships. Existing confirmed links remain the anchor when
 adding coverage. This selection prepares a draft; only **Start tracking** enables
@@ -204,7 +212,7 @@ Queued work survives restarts. Nova reads the current remote entry before each
 mutation, serializes writes per target, respects service-wide cooldowns, and retries
 transient failures with backoff. Authentication failures require reconnecting the
 same verified account. Restarted in-flight requests are uncertain and are reread
-before retry. The tracking sheet shows pending, sending, retry, authentication,
+before retry. The Tracking tab shows pending, sending, retry, authentication,
 rejected, inactive-account, and alignment states. **Refresh / retry** cannot bypass
 a server cooldown. A score-preference change requires correcting an older queued
 score rather than silently converting it.

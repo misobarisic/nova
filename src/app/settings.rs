@@ -841,6 +841,9 @@ impl Bridge {
     }
 
     pub(super) fn modal_closed(&self) {
+        if self.app().is_some_and(|app| app.get_tracking_open()) {
+            self.tracking_close();
+        }
         // Snapshot position first (backing out + reopening restores it).
         self.save_detail_snapshot();
         {

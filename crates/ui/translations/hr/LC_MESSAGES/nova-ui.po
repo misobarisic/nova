@@ -1961,3 +1961,36 @@ msgstr "Ostani pauziran"
 
 msgid "Auto continue"
 msgstr "Automatski nastavi"
+
+msgid "Episode alignment"
+msgstr "Poravnanje epizoda"
+
+msgid "Your tracking"
+msgstr "Vaše praćenje"
+
+msgid "Track your progress"
+msgstr "Pratite svoj napredak"
+
+msgid "Review which episodes update this release."
+msgstr "Provjerite koje epizode ažuriraju ovo izdanje."
+
+msgid "Link this title to your anime list."
+msgstr "Povežite ovaj naslov sa svojim popisom animea."
+
+msgid "Suggested matches"
+msgstr "Predložena podudaranja"
+
+msgid "Nova episodes"
+msgstr "Epizode u Novi"
+
+msgid "Tracker episodes"
+msgstr "Epizode na servisu"
+
+msgid "Ready to track"
+msgstr "Spremno za praćenje"
+
+msgid "Only linked episodes will update your tracker."
+msgstr "Samo povezane epizode ažurirat će vaš popis na servisu."
+
+msgid "Back to details"
+msgstr "Natrag na detalje"

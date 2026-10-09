@@ -1,7 +1,7 @@
 //! Android Back must keep working after focused tracking controls disappear.
 //!
 //! Dispatch real key events: incrementing `system_back_request` directly skips
-//! the window capture path and cannot catch focus lost when a sheet closes.
+//! the window capture path and cannot catch focus lost when a tab closes.
 
 // Built-in interpreter widgets omit the element metadata used to prove
 // input focus here. Exercise the compiled UI shipped on Android instead.
@@ -130,7 +130,7 @@ async fn back(app: &nova::AppWindow, repeat: bool, failures: &RefCell<Vec<String
             released,
             Ok(slint::platform::WindowEventDispatchResult::Accepted)
         ),
-        "Back release must remain accepted after the focused sheet or page disappears",
+        "Back release must remain accepted after the focused tab or page disappears",
     );
     settle().await;
     check(
@@ -172,7 +172,9 @@ fn back_keeps_popping_layers_after_tracking_focus_is_removed() {
     let weak = app.as_weak();
     app.on_tracking_close(move || {
         recorded_closes.set(recorded_closes.get() + 1);
-        weak.upgrade().unwrap().set_tracking_open(false);
+        let app = weak.upgrade().unwrap();
+        app.set_tracking_open(false);
+        app.set_detail_tab(app.get_tracking_return_tab());
     });
     let cancelled_adjustments = Rc::new(Cell::new(0usize));
     let recorded_cancellations = cancelled_adjustments.clone();
@@ -208,11 +210,13 @@ fn back_keeps_popping_layers_after_tracking_focus_is_removed() {
         let failures = &recorded_failures;
         settle().await;
 
-        // Opening focuses the sheet's Close button. Hiding it must restore
+        // Opening focuses the Tracking panel's persistent scope. Hiding it must restore
         // focus to details, even though no pointer event follows dismissal.
         app.set_modal_visible(true);
         settle().await;
+        app.set_tracking_return_tab(app.get_detail_tab());
         app.set_tracking_open(true);
+        app.set_detail_tab(4);
         settle().await;
         back(&app, true, failures).await;
         check(
@@ -238,25 +242,27 @@ fn back_keeps_popping_layers_after_tracking_focus_is_removed() {
             "only a separate Back at Home root may background the app",
         );
 
-        // Clicking Close explicitly focuses that button before it disappears.
+        // The detail Back control leaves Tracking before the title.
         app.set_modal_visible(true);
         settle().await;
+        app.set_tracking_return_tab(app.get_detail_tab());
         app.set_tracking_open(true);
+        app.set_detail_tab(4);
         settle().await;
-        if !click(&app, "Close", failures).await {
+        if !click(&app, "Back to details", failures).await {
             slint::quit_event_loop().unwrap();
             return;
         }
         check(
             failures,
             !app.get_tracking_open() && app.get_modal_visible() && tracking_closes.get() == 2,
-            "Close must dismiss tracking while leaving details open",
+            "Back must leave tracking while leaving details open",
         );
         back(&app, true, failures).await;
         check(
             failures,
             !app.get_modal_visible() && detail_closes.get() == 2 && backgrounds.get() == 1,
-            "Back after clicking tracking Close must close details, not leave the app",
+            "Back after clicking tracking Back must close details, not leave the app",
         );
         back(&app, false, failures).await;
         check(
@@ -265,11 +271,13 @@ fn back_keeps_popping_layers_after_tracking_focus_is_removed() {
             "Home root Back must still work after Close",
         );
 
-        // Alignment cancellation removes the focused LineEdit. Subsequent
-        // Back presses must still reach the review sheet and then details.
+        // Alignment cancellation removes the focused custom input. Subsequent
+        // Back presses must still reach the review tab and then details.
         app.set_modal_visible(true);
         settle().await;
+        app.set_tracking_return_tab(app.get_detail_tab());
         app.set_tracking_open(true);
+        app.set_detail_tab(4);
         app.set_tracking_candidate_title("A suggested release".into());
         settle().await;
         if !click(&app, "First source row", failures).await {
@@ -338,10 +346,12 @@ fn back_keeps_popping_layers_after_tracking_focus_is_removed() {
         );
 
         // A suggestions response replaces the manual-search input. Its
-        // removal must preserve the sheet's own Back capture path too.
+        // removal must preserve the tab's own Back capture path too.
         app.set_modal_visible(true);
         settle().await;
+        app.set_tracking_return_tab(app.get_detail_tab());
         app.set_tracking_open(true);
+        app.set_detail_tab(4);
         settle().await;
         if !click(&app, "Choose another release", failures).await
             || !click(&app, "Tracker search", failures).await
@@ -372,7 +382,7 @@ fn back_keeps_popping_layers_after_tracking_focus_is_removed() {
         check(
             failures,
             !app.get_modal_visible() && detail_closes.get() == 4 && backgrounds.get() == 4,
-            "Back after the refreshed sheet closes must dismiss details only",
+            "Back after the refreshed tab closes must dismiss details only",
         );
         back(&app, false, failures).await;
         check(

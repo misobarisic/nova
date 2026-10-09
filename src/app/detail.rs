@@ -56,8 +56,8 @@ impl Bridge {
         };
 
         tracking::remember_source(&preview);
-        if let Some(app) = self.app() {
-            app.set_tracking_open(false);
+        if app.get_tracking_open() {
+            self.tracking_close();
         }
         {
             let mut state = self.shared.lock().unwrap();
@@ -1077,7 +1077,13 @@ impl Bridge {
             (
                 m.id.clone(),
                 DetailSnapshot {
-                    tab: app.get_detail_tab(),
+                    // Tracking drafts belong to the active worker context;
+                    // reopening restores the previous content tab instead.
+                    tab: if app.get_detail_tab() == 4 {
+                        app.get_tracking_return_tab()
+                    } else {
+                        app.get_detail_tab()
+                    },
                     season: season_val,
                     episode_id,
                     stream_idx: app.get_detail_kb_s().max(0) as usize,
@@ -2069,7 +2075,14 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
-        let tab = tab.clamp(0, 3);
+        if tab == 4 && app.get_in_library() {
+            self.tracking_show();
+            return;
+        }
+        if app.get_tracking_open() {
+            self.tracking_close();
+        }
+        let tab = if tab == 3 { 3 } else { 0 };
         app.set_detail_tab(tab);
         app.set_detail_kb_tab(if tab == 3 { 3 } else { 0 });
     }

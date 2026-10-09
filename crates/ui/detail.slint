@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
 import { TitleArtwork } from "title-artwork.slint";
-import { TrackingSheet } from "tracking.slint";
+import { TrackingPanel } from "tracking.slint";
 import { TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow } from "types.slint";
 import { Spinner } from "std-widgets.slint";
 import { SearchField } from "searchfield.slint";
@@ -674,6 +674,60 @@ component StreamList {
     }
 }
 
+// Both the cinematic detail view and compact Tracking view use the same
+// tabs. Numeric IDs stay stable for episode callbacks and saved snapshots.
+component DetailTabs inherits Rectangle {
+    in property <bool> narrow;
+    in property <bool> tracking_visible;
+    in property <int> selected;
+    in property <bool> kb_active;
+    in property <bool> focused;
+    in property <int> kb_tab;
+    callback picked(int);
+    height: 48px;
+    vertical-stretch: 0;
+    property <int> count: root.tracking_visible ? 3 : 2;
+    property <length> gap: root.narrow ? 4px : 24px;
+    Rectangle { y: parent.height - 1px; height: 1px; width: 100%; background: Theme.current.border_overlay; }
+    HorizontalLayout {
+        spacing: root.gap;
+        alignment: start;
+        for tab in root.tracking_visible ? [0, 3, 4] : [0, 3]: Rectangle {
+            width: root.narrow ? (root.width - (root.count - 1) * root.gap) / root.count : Math.min(140px, (root.width - (root.count - 1) * root.gap) / root.count);
+            height: 48px;
+            border-radius: 4px;
+            border-width: tab_focus.has-focus || (root.kb_active && root.focused && root.kb_tab == tab) ? 2px : 0px;
+            border-color: Theme.current.focus_ring;
+            accessible-role: button;
+            accessible-label: tab == 0 ? @tr("Overview") : tab == 3 ? @tr("Episodes") : @tr("Tracking");
+            forward-focus: tab_focus;
+            Rectangle {
+                y: parent.height - 4px;
+                height: 4px;
+                width: 100%;
+                border-radius: 2px;
+                background: root.selected == tab ? Theme.current.accent_vivid : transparent;
+            }
+            Text {
+                text: tab == 0 ? @tr("Overview") : tab == 3 ? @tr("Episodes") : @tr("Tracking");
+                color: root.selected == tab ? Theme.current.text_bright : Theme.current.text_detail_tab;
+                font-weight: root.selected == tab ? 600 : 400;
+                font-size: root.narrow ? 14px : 18px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: 100%;
+                overflow: elide;
+            }
+            tab_focus := FocusScope {
+                key-pressed(e) => {
+                    if e.text == Key.Return || e.text == " " { root.picked(tab); accept } else { reject }
+                }
+            }
+            TouchArea { mouse-cursor: pointer; clicked => { root.picked(tab); } }
+        }
+    }
+}
+
 export component DetailPage {
     in property <[TrackingLinkRow]> tracking_links;
     in property <[TrackingCandidateRow]> tracking_candidates;
@@ -695,6 +749,8 @@ export component DetailPage {
     in property <bool> tracking_busy;
     in property <bool> tracking_can_confirm;
     in-out property <bool> tracking_open: false;
+    in-out property <int> tracking_return_tab: 0;
+    property <int> tracking_focus_request: 0;
     callback tracking_show();
     callback tracking_close();
     callback tracking_search(int,string);
@@ -731,8 +787,7 @@ export component DetailPage {
         ? (Theme.detail_backdrop_size == 0 ? 140px : Theme.detail_backdrop_size == 2 ? 390px : 250px)
         : (Theme.detail_backdrop_size == 0 ? 20px : Theme.detail_backdrop_size == 2 ? 180px : 50px);
     in-out property <[string]> selected_genre_list: [];
-    // Tab bar: 0 = Overview, 3 = Episodes (1/2 are stubs — Stremio addons
-    // provide no Characters/Artwork data).
+    // Tab bar: 0 = Overview, 3 = Episodes, 4 = Tracking.
     in-out property <int> detail_tab: 0;
     in-out property <string> episode_filter: "";
     in-out property <bool> in_library: false;
@@ -876,7 +931,10 @@ export component DetailPage {
         if (root.kb_zone == 0) {
             root.kb_zone = 1;
         } else if (root.kb_zone == 1) {
-            root.kb_zone = 2;
+            if root.detail_tab == 4 {
+                root.kb_zone = 3;
+                root.tracking_focus_request += 1;
+            } else { root.kb_zone = 2; }
         } else if (root.kb_zone == 2) {
             if (root.det_content() != 0) {
                 root.kb_zone = 3;
@@ -931,7 +989,7 @@ export component DetailPage {
         } else if (root.kb_zone == 2) {
             root.hero_library_focused = false;
         } else if (root.kb_zone == 1) {
-            root.kb_tab = root.kb_tab == 0 ? 3 : 0;
+            root.kb_tab = root.kb_tab == 0 ? (root.in_library ? 4 : 3) : root.kb_tab == 4 ? 3 : 0;
         } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 0) {
             root.kb_cycle_season(-1);
         } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 1) {
@@ -952,7 +1010,7 @@ export component DetailPage {
         } else if (root.kb_zone == 2) {
             root.hero_library_focused = true;
         } else if (root.kb_zone == 1) {
-            root.kb_tab = root.kb_tab == 0 ? 3 : 0;
+            root.kb_tab = root.kb_tab == 0 ? 3 : root.kb_tab == 3 && root.in_library ? 4 : 0;
         } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 0) {
             root.kb_cycle_season(1);
         } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 1) {
@@ -983,7 +1041,7 @@ export component DetailPage {
     function kb_enter() {
         if (root.kb_zone == 0) {
             if (root.kb_top == 0) {
-                root.back();
+                if root.tracking_open { root.tracking_back(); } else { root.back(); }
             } else if (root.kb_top == 1 && root.in_library) {
                 root.tracking_show();
             } else if (root.kb_top == 2 && root.in_library) {
@@ -1023,14 +1081,21 @@ export component DetailPage {
         }
     }
 
+    function tracking_back() {
+        if root.tracking_candidate_title != "" { root.tracking_cancel_adjust(); }
+        else { root.tracking_close(); }
+    }
+
     function system_back() {
         root.kb_active = true;
-        if (root.tracking_open) {
-            if root.tracking_candidate_title != "" {root.tracking_cancel_adjust();} else {root.tracking_close();}
-        } else if (root.stream_action_open) {
+        // Tracking shares Detail's toolbar, so its library menu still owns
+        // the nearest Back layer before alignment or tab navigation.
+        if (root.stream_action_open) {
             root.stream_action_open = false;
         } else if (root.menu_kind >= 0) {
             root.close_menu();
+        } else if (root.tracking_open) {
+            root.tracking_back();
         } else if (root.kb_edit || root.filter_focused) {
             root.kb_edit = false;
             root.filter_focused = false;
@@ -1124,7 +1189,7 @@ export component DetailPage {
         root.kb_s = 0;
         root.kb_ep = 0;
         root.kb_ci = 2;
-        root.kb_tab = root.detail_tab == 3 ? 3 : 0;
+        root.kb_tab = root.detail_tab;
         if (root.detail_tab != 3) { root.leave_episode_search(); }
     }
     changed episode_rows => {
@@ -1150,6 +1215,7 @@ export component DetailPage {
     changed in_library => {
         root.det_top_fix();
         if (!root.in_library && root.menu_kind == 2) { root.close_menu(); }
+        if (!root.in_library && root.tracking_open) { root.tracking_close(); }
     }
     changed category_rows => { root.det_top_fix(); }
     changed popup_open => {
@@ -1158,9 +1224,15 @@ export component DetailPage {
         }
     }
     changed tracking_open => {
-        // Closing tracking hides its focused button/input. Android treats an
-        // unhandled Back as activity exit, so keep focus in the visible page.
-        if (!root.tracking_open) { nav_scope.focus(); }
+        if (root.tracking_open) {
+            if (root.detail_tab != 4) { root.tracking_return_tab = root.detail_tab; }
+            root.detail_tab = 4;
+        } else {
+            if (root.detail_tab == 4) { root.detail_tab = root.tracking_return_tab; }
+            // The tab's focused input was removed. Keep Android Back in the
+            // visible page capture chain even without a following pointer event.
+            nav_scope.focus();
+        }
     }
 
     function leave_episode_search() {
@@ -1255,7 +1327,7 @@ export component DetailPage {
 
         // Fade both artwork and its black backing to the page canvas. Leaving
         // the backing opaque creates a black band above the coloured scrim.
-        property <float> backdrop_fade: Math.min(1, Math.max(0, -det_scroll.content-y / ((root.backdrop_height - root.safe-top) * (root.narrow ? 0.643 : 0.703))));
+        property <float> backdrop_fade: root.detail_tab == 4 ? 0.9 : Math.min(1, Math.max(0, -det_scroll.content-y / ((root.backdrop_height - root.safe-top) * (root.narrow ? 0.643 : 0.703))));
         Rectangle {
             x: 0px;
             y: 0px;
@@ -1338,8 +1410,9 @@ export component DetailPage {
                 root.last_system_back_request = root.system_back_request;
             }
             key-pressed(e) => {
-                if (root.tracking_open) {
-                    if (e.text == Key.Escape || e.text == Key.Back) {if root.tracking_candidate_title != "" {root.tracking_cancel_adjust();} else {root.tracking_close();}accept} else {reject}
+                if (root.tracking_open && (e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace)) {
+                    if root.tracking_candidate_title != "" { root.tracking_cancel_adjust(); } else { root.tracking_close(); }
+                    accept
                 } else if (root.stream_action_open) {
                     root.stream_action_open = false;
                     accept
@@ -1443,7 +1516,13 @@ export component DetailPage {
                     TopIconButton {
                         narrow: root.narrow;
                         focused: root.kb_active && root.kb_zone == 0 && root.kb_top == 0;
-                        clicked => { root.kb_active = false; root.kb_top = 0; root.back(); }
+                        accessible-role: button;
+                        accessible-label: root.tracking_open ? (root.tracking_candidate_title != "" ? @tr("Back to review") : @tr("Back to details")) : @tr("Back");
+                        clicked => {
+                            root.kb_active = false;
+                            root.kb_top = 0;
+                            if root.tracking_open { root.tracking_back(); } else { root.back(); }
+                        }
 
                         IcChevronLeft {
                             x: (parent.width - self.width) / 2;
@@ -1452,6 +1531,16 @@ export component DetailPage {
                             height: 24px;
                             fill: Theme.current.text_bright;
                         }
+                    }
+                    if root.detail_tab == 4 && root.height < 600px: Text {
+                        text: root.selected_title;
+                        width: Math.max(0px, root.width - root.safe-left - root.safe-right - 224px);
+                        height: root.narrow ? 44px : 48px;
+                        font-size: 18px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        color: Theme.current.text_bright;
                     }
                 }
 
@@ -1490,7 +1579,10 @@ export component DetailPage {
 
             det_scroll := Flickable {
                 width: 100%;
-                vertical-stretch: 1;
+                min-height: 0px;
+                max-height: root.detail_tab == 4 ? 0px : 100000px;
+                visible: root.detail_tab != 4;
+                vertical-stretch: root.detail_tab == 4 ? 0 : 1;
                 // A raw Flickable, not a ScrollView (which does not expose
                 // the inner Flickable's `interactive`): the pill bar's axis
                 // lock flips exactly that (see `page_pan_enabled`). Panning
@@ -1688,59 +1780,14 @@ export component DetailPage {
                         }
                     }
 
-                    // ---- Tab bar --------------------------------------
-                    Rectangle {
-                        width: 100%;
-                        background: transparent;
-
-                        Rectangle { y: parent.height - 1px; height: 1px; width: 100%; background: Theme.current.border_overlay; }
-                        HorizontalLayout {
-                            spacing: root.narrow ? 4px : 24px;
-                            padding: 0px;
-                            alignment: start;
-
-                        for t[i] in [@tr("Overview"), @tr("Characters"), @tr("Artwork"), @tr("Episodes")]: Rectangle {
-                            // Equal phone slots; compact, left-aligned tabs on desktop.
-                            width: root.narrow ? (root.overview_width - 12px) / 4 : Math.min(140px, (root.overview_width - 72px) / 4);
-                            height: 48px;
-                            background: transparent;
-                            Rectangle {
-                                y: parent.height - 4px;
-                                height: 4px;
-                                width: 100%;
-                                border-radius: 2px;
-                                background: root.detail_tab == i ? Theme.current.accent_vivid : transparent;
-                            }
-                            border-width: (i == 0 || i == 3) && root.kb_zone == 1 && root.kb_tab == i ? 2px : 0px;
-                            border-color: Theme.current.focus_ring;
-                            clip: true;
-
-                            Text {
-                                text: t;
-                                color: root.detail_tab == i ? Theme.current.text_bright : Theme.current.text_detail_tab;
-                                font-weight: root.detail_tab == i ? 600 : 400;
-                                font-size: root.narrow ? 13px : 18px;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                                width: 100%;
-                                overflow: elide;
-                            }
-
-                            tab_touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.kb_active = false;
-                                    if (i == 0) {
-                                        root.kb_tab = 0;
-                                        root.detail_tab_picked(0);
-                                    } else if (i == 3) {
-                                        root.kb_tab = 3;
-                                        root.detail_tab_picked(3);
-                                    }
-                                }
-                            }
-                        }
-                        }
+                    DetailTabs {
+                        narrow: root.narrow;
+                        tracking_visible: root.in_library;
+                        selected: root.detail_tab;
+                        kb_active: root.kb_active;
+                        focused: root.kb_zone == 1;
+                        kb_tab: root.kb_tab;
+                        picked(tab) => { root.kb_active = false; root.kb_tab = tab; root.detail_tab_picked(tab); }
                     }
 
                     // ---- Body: full-width content ---------------------
@@ -2721,6 +2768,69 @@ export component DetailPage {
                     }
                 }
             }
+            if root.detail_tab == 4: HorizontalLayout {
+                padding-left: (root.narrow ? 20px : 64px) + root.safe-left;
+                padding-right: (root.narrow ? 20px : 64px) + root.safe-right;
+                alignment: start;
+                min-width: 0px;
+                VerticalLayout {
+                    width: Math.min(1040px, root.width - (root.narrow ? 40px : 128px) - root.safe-left - root.safe-right);
+                    spacing: 16px;
+                if root.height >= 600px: HorizontalLayout {
+                    height: root.narrow ? 54px : 72px;
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 4px;
+                        Text { text: root.selected_title; color: Theme.current.text_bright; font-size: root.narrow ? 20px : 28px; font-weight: 700; overflow: elide; min-width: 0px; }
+                        Text { text: root.selected_year; color: Theme.current.text_detail_metadata; font-size: 13px; overflow: elide; min-width: 0px; }
+                    }
+                }
+                DetailTabs {
+                    narrow: root.narrow;
+                    tracking_visible: root.in_library;
+                    selected: root.detail_tab;
+                    kb_active: root.kb_active;
+                    focused: root.kb_zone == 1;
+                    kb_tab: root.kb_tab;
+                    picked(tab) => { root.kb_active = false; root.kb_tab = tab; root.detail_tab_picked(tab); }
+                }
+                tracking_panel := TrackingPanel {
+                    open:root.tracking_open;
+                    compact:root.height < 700px;
+                    focus_request:root.tracking_focus_request;
+                    back_to_details() => { root.tracking_close(); }
+                    safe-bottom:root.safe-bottom;
+                    links:root.tracking_links;
+                    candidates:root.tracking_candidates;
+                    selected_service <=> root.tracking_service;
+                    setup:root.tracking_setup;
+                    setup_revision:root.tracking_setup_revision;
+                    setup_summary:root.tracking_setup_summary;
+                    setup_unmapped:root.tracking_setup_unmapped;
+                    setup_active:root.tracking_setup_active;
+                    range_first:root.tracking_range_first;
+                    range_last:root.tracking_range_last;
+                    range_start:root.tracking_range_start;
+
+                    preview_rows:root.tracking_preview_rows;
+                    mapping_rows:root.tracking_mapping_rows;
+                    notice:root.tracking_notice;
+                    candidate_title:root.tracking_candidate_title;
+                    busy:root.tracking_busy;
+                    can_confirm:root.tracking_can_confirm;
+                    search(a0,a1) => {root.tracking_search(a0,a1);}
+                    pick(a0) => {root.tracking_pick(a0);}
+                    preview(a0,a1,a2) => {root.tracking_preview(a0,a1,a2);}
+                    confirm() => {root.tracking_confirm();}
+                    accept_setup(revision,history) => {root.tracking_accept_setup(revision,history);}
+                    adjust_setup(index) => {root.tracking_adjust_setup(index);}
+                    cancel_adjust() => {root.tracking_cancel_adjust();}
+                    assign(row,value) => {root.tracking_assign(row,value);}
+                    edit(a0,a1,a2,a3,a4,a5,a6,a7) => {root.tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7);}
+                    action(a0,a1) => {root.tracking_action(a0,a1);}
+                }
+                }
+            }
         }
 
         // Hold behind the pill-bar axis lock (see `filters_panned`): the
@@ -2823,41 +2933,7 @@ export component DetailPage {
             closed => { root.close_menu(); }
         }
 
-        TrackingSheet {
-            open:root.tracking_open;
-            safe-top:root.safe-top;
-            safe-bottom:root.safe-bottom; safe-left:root.safe-left; safe-right:root.safe-right;
-            links:root.tracking_links;
-            candidates:root.tracking_candidates;
-            selected_service <=> root.tracking_service;
-            setup:root.tracking_setup;
-            setup_revision:root.tracking_setup_revision;
-            setup_summary:root.tracking_setup_summary;
-            setup_unmapped:root.tracking_setup_unmapped;
-            setup_active:root.tracking_setup_active;
-            range_first:root.tracking_range_first;
-            range_last:root.tracking_range_last;
-            range_start:root.tracking_range_start;
 
-            source_rows:root.tracking_source_rows;
-            preview_rows:root.tracking_preview_rows;
-            mapping_rows:root.tracking_mapping_rows;
-            notice:root.tracking_notice;
-            candidate_title:root.tracking_candidate_title;
-            busy:root.tracking_busy;
-            can_confirm:root.tracking_can_confirm;
-            close() => {root.tracking_close();}
-            search(a0,a1) => {root.tracking_search(a0,a1);}
-            pick(a0) => {root.tracking_pick(a0);}
-            preview(a0,a1,a2) => {root.tracking_preview(a0,a1,a2);}
-            confirm() => {root.tracking_confirm();}
-            accept_setup(revision,history) => {root.tracking_accept_setup(revision,history);}
-            adjust_setup(index) => {root.tracking_adjust_setup(index);}
-            cancel_adjust() => {root.tracking_cancel_adjust();}
-            assign(row,value) => {root.tracking_assign(row,value);}
-            edit(a0,a1,a2,a3,a4,a5,a6,a7) => {root.tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7);}
-            action(a0,a1) => {root.tracking_action(a0,a1);}
-        }
 
     }
 }

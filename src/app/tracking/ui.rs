@@ -132,6 +132,9 @@ impl Bridge {
         })
     }
     pub(in crate::app) fn tracking_show(&self) {
+        if self.app().is_some_and(|app| app.get_tracking_open()) {
+            return;
+        }
         let Some(context) = self.tracking_context() else {
             return;
         };
@@ -143,11 +146,21 @@ impl Bridge {
             .fetch_add(1, Ordering::AcqRel)
             + 1;
         if let Some(app) = self.app() {
+            app.set_tracking_return_tab(app.get_detail_tab());
             app.set_tracking_open(true);
+            app.set_detail_tab(4);
             app.set_tracking_candidate_title("".into());
             app.set_tracking_candidates(
                 Rc::new(VecModel::<crate::TrackingCandidateRow>::default()).into(),
             );
+            // The tab is visible immediately; never flash another title's
+            // previous links or proposal while its worker request is loading.
+            app.set_tracking_links(Rc::new(VecModel::<crate::TrackingLinkRow>::default()).into());
+            app.set_tracking_setup(Rc::new(VecModel::<crate::TrackingSetupRow>::default()).into());
+            app.set_tracking_setup_active(false);
+            app.set_tracking_setup_revision("".into());
+            app.set_tracking_setup_summary("".into());
+            app.set_tracking_setup_unmapped("".into());
             app.set_tracking_notice(text::tr("Loading tracking…").into());
             app.set_tracking_busy(true);
             app.set_tracking_can_confirm(false);
@@ -164,6 +177,10 @@ impl Bridge {
             .fetch_add(1, Ordering::AcqRel);
         if let Some(app) = self.app() {
             app.set_tracking_open(false);
+            if app.get_detail_tab() == 4 {
+                app.set_detail_tab(app.get_tracking_return_tab());
+                app.set_detail_kb_tab(app.get_tracking_return_tab());
+            }
         }
         self.tracking.send(Command::Close);
     }

@@ -1,8 +1,8 @@
 //! Tracking uses the real Slint pages; verify narrow layouts, explicit history
-//! confirmation, suggestion selection and sheet-first Back without network access.
+//! confirmation, suggestion selection and tab-first Back without network access.
 #[path = "support/destinations.rs"]
 mod destinations;
-use i_slint_backend_testing::{ElementHandle, ElementQuery};
+use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::{ComponentHandle, SharedString, VecModel};
 use std::{
     cell::{Cell, RefCell},
@@ -34,15 +34,87 @@ async fn settle() {
     .await;
 }
 async fn click(app: &nova::AppWindow, label: &str) {
-    let candidates: Vec<_> = if label.starts_with("settings:") {
-        destinations::find(app, label).collect()
-    } else {
-        ElementHandle::find_by_accessible_label(app, label).collect()
-    };
-    candidates
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| panic!("missing action {label}"))
+    let mut target = None;
+    for attempt in 0..12 {
+        target = if label.starts_with("settings:") {
+            destinations::find(app, label).next()
+        } else {
+            ElementHandle::find_by_accessible_label(app, label).find(|e| {
+                matches!(
+                    e.accessible_role(),
+                    Some(AccessibleRole::Button | AccessibleRole::Checkbox)
+                )
+            })
+        };
+        if target.is_some() {
+            break;
+        }
+        // Slint's queries omit controls fully clipped by the viewport.
+        // Reveal the next actions in a long expanded tracking card first.
+        let Some(scroll) = ElementHandle::find_by_element_id(app, "TrackingPanel::scroll").next()
+        else {
+            break;
+        };
+        let p = scroll.absolute_position();
+        let size = scroll.size();
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(
+                    p.x + size.width / 2.0,
+                    p.y + size.height / 2.0,
+                ),
+                delta_x: 0.0,
+                delta_y: if attempt == 0 {
+                    10_000.0
+                } else {
+                    -size.height / 2.0
+                },
+            });
+        settle().await;
+    }
+    let mut target = target.unwrap_or_else(|| panic!("missing action {label}"));
+    for _ in 0..12 {
+        let Some(scroll) = ElementHandle::find_by_element_id(app, "TrackingPanel::scroll").next()
+        else {
+            break;
+        };
+        let p = scroll.absolute_position();
+        let size = scroll.size();
+        let target_p = target.absolute_position();
+        let target_size = target.size();
+        if target_p.y >= p.y && target_p.y + target_size.height <= p.y + size.height {
+            break;
+        }
+        // Fixed header/footer actions do not belong to the scroll viewport.
+        let is_scrolling_child = scroll
+            .query_descendants()
+            .match_predicate(|_: &ElementHandle| true)
+            .find_all()
+            .iter()
+            .any(|child| child.id() == target.id() && child.absolute_position() == target_p);
+        if !is_scrolling_child {
+            break;
+        }
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(
+                    p.x + size.width / 2.0,
+                    p.y + size.height / 2.0,
+                ),
+                delta_x: 0.0,
+                delta_y: p.y + size.height / 2.0 - target_p.y - target_size.height / 2.0,
+            });
+        settle().await;
+        target = ElementHandle::find_by_accessible_label(app, label)
+            .find(|e| {
+                matches!(
+                    e.accessible_role(),
+                    Some(AccessibleRole::Button | AccessibleRole::Checkbox)
+                )
+            })
+            .unwrap();
+    }
+    target
         .single_click(slint::platform::PointerEventButton::Left)
         .await;
     settle().await;
@@ -82,7 +154,7 @@ fn check_width(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) {
     }
 }
 #[test]
-fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
+fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
     i_slint_backend_testing::init_integration_test_with_system_time();
     let app = nova::AppWindow::new().unwrap();
     app.on_settings_search_matches(|q, h| nova_ui::settings_search_matches(&q, &h));
@@ -119,11 +191,26 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
     });
     let weak = app.as_weak();
     app.on_tracking_show(move || {
-        weak.upgrade().unwrap().set_tracking_open(true);
+        let app = weak.upgrade().unwrap();
+        app.set_tracking_return_tab(app.get_detail_tab());
+        app.set_tracking_open(true);
+        app.set_detail_tab(4);
+    });
+    let weak = app.as_weak();
+    app.on_detail_tab_picked(move |tab| {
+        let app = weak.upgrade().unwrap();
+        if tab == 4 {
+            app.set_tracking_open(true);
+        } else {
+            app.set_tracking_open(false);
+            app.set_detail_tab(tab);
+        }
     });
     let weak = app.as_weak();
     app.on_tracking_close(move || {
-        weak.upgrade().unwrap().set_tracking_open(false);
+        let app = weak.upgrade().unwrap();
+        app.set_tracking_open(false);
+        app.set_detail_tab(app.get_tracking_return_tab());
     });
     let searches = Rc::new(RefCell::new(Vec::new()));
     let recorded_searches = searches.clone();
@@ -213,7 +300,10 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
         app.set_system_back_request(app.get_system_back_request() + 1);
         settle().await;
         assert!(!app.get_tracking_open());
-        assert!(app.get_modal_visible(), "Back closes sheet before detail");
+        assert!(
+            app.get_modal_visible(),
+            "Back leaves Tracking before detail"
+        );
         app.set_tracking_links(Rc::new(VecModel::from(Vec::<nova::TrackingLinkRow>::new())).into());
         app.set_tracking_service(1);
         app.set_tracking_candidates(
@@ -228,7 +318,7 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
         click(&app, "Tracking").await;
         assert!(
             picks.borrow().is_empty(),
-            "opening the sheet must not invoke a selection callback"
+            "opening the tab must not invoke a selection callback"
         );
         assert_eq!(confirms.get(), 0, "suggestions must not create links");
         assert_eq!(app.get_tracking_service(), 1);
@@ -246,12 +336,7 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
             .next()
             .is_some()
         );
-        ElementHandle::find_by_accessible_label(&app, "Suggested anime release")
-            .last()
-            .expect("candidate selection button")
-            .single_click(slint::platform::PointerEventButton::Left)
-            .await;
-        settle().await;
+        click(&app, "Suggested anime release").await;
         assert_eq!(*picks.borrow(), vec![0]);
         assert_eq!(
             confirms.get(),
@@ -307,13 +392,28 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
             app.window().set_size(slint::PhysicalSize::new(width, 800));
             settle().await;
             check_width(&app, &f);
+            let scroll = ElementHandle::find_by_element_id(&app, "TrackingPanel::scroll")
+                .next()
+                .unwrap();
+            let p = scroll.absolute_position();
+            let size = scroll.size();
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                    position: slint::LogicalPosition::new(
+                        p.x + size.width / 2.0,
+                        p.y + size.height / 2.0,
+                    ),
+                    delta_x: 0.0,
+                    delta_y: -10_000.0,
+                });
+            settle().await;
             assert!(
                 ElementHandle::find_by_accessible_label(&app, "Start tracking").any(|e| {
                     let p = e.absolute_position();
                     let size = e.size();
-                    p.y >= 0.0 && p.y + size.height <= 800.0
+                    p.y >= 0.0 && p.y + size.height <= 788.0
                 }),
-                "confirmation stays onscreen at {width}px"
+                "confirmation scrolls fully into view at {width}px"
             );
         }
         // The automatically prepared review keeps alternatives one button away.
@@ -331,12 +431,7 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
             .into(),
         );
         click(&app, "Choose another release").await;
-        ElementHandle::find_by_accessible_label(&app, "Alternative release")
-            .last()
-            .expect("alternate selection button")
-            .single_click(slint::platform::PointerEventButton::Left)
-            .await;
-        settle().await;
+        click(&app, "Alternative release").await;
         assert_eq!(*picks.borrow(), vec![0, 1]);
         assert!(
             accepts.borrow().is_empty(),
@@ -352,20 +447,20 @@ fn tracking_settings_and_sheet_fit_phone_and_require_history_confirmation() {
             accepts.borrow().last().unwrap(),
             &("proposal-2".to_string(), true)
         );
-        // Reveal the first release again after checking the footer controls.
-        let from = slint::LogicalPosition::new(220.0, 200.0);
-        let to = slint::LogicalPosition::new(220.0, 680.0);
+        // Reveal the first release again after checking the final action card.
+        let scroll = ElementHandle::find_by_element_id(&app, "TrackingPanel::scroll")
+            .next()
+            .unwrap();
+        let p = scroll.absolute_position();
+        let size = scroll.size();
         app.window()
-            .dispatch_event(slint::platform::WindowEvent::PointerPressed {
-                position: from,
-                button: slint::platform::PointerEventButton::Left,
-            });
-        app.window()
-            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: to });
-        app.window()
-            .dispatch_event(slint::platform::WindowEvent::PointerReleased {
-                position: to,
-                button: slint::platform::PointerEventButton::Left,
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(
+                    p.x + size.width / 2.0,
+                    p.y + size.height / 2.0,
+                ),
+                delta_x: 0.0,
+                delta_y: 10_000.0,
             });
         settle().await;
         click(&app, "Adjust").await;
