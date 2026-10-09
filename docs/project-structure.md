@@ -63,7 +63,12 @@ x86_64 `.deb` and AppImage, and a Windows x86_64 ZIP, then attaches all six
 files to a GitHub Release. Android release filenames are
 `nova-arm64-v8a-<tag>.apk`, `nova-x86_64-<tag>.apk`, and `nova-<tag>.apk`;
 the APK without an architecture suffix contains both arm64-v8a and x86_64.
-The Windows bundle is named `nova-windows-x86_64-<tag>.zip`. Linux release
+The Windows bundle is named `Nova-Windows-x86_64-<version>.zip` (tag without
+the leading `v`, with `/` replaced by `-`). `.github/scripts/package-windows.sh`
+places the executable, DLLs, and license/source notices directly inside it.
+The Actions upload uses `archive: false`, so downloading the build artifact
+returns that ZIP directly. The release job downloads it by artifact ID with
+`skip-decompress: true` to preserve the ZIP for publishing. Linux release
 files are named `nova-x86_64-<tag>.deb` and
 `nova-x86_64-<tag>.AppImage`; both come from one native Ubuntu 22.04 build.
 The `.deb` declares shared-library dependencies, while the AppImage bundles
@@ -867,5 +872,5 @@ driver or playback validation.
 | Android glue / external player / edge-to-edge system bars | `src/lib.rs` (`android_main`), `crates/player/src/external.rs` (Android; retains edge-to-edge layout with a transparent status bar when restoring visible system bars), `crates/player/src/lib.rs::open_external` (desktop) |
 | Android QuickJS bindings / NDK headers | `flake.nix` (Android shell's `BINDGEN_EXTRA_CLANG_ARGS_*`), `crates/providers/Cargo.toml` (`bindgen` feature) |
 | Tracker browser sign-in / Android HTTPS | `crates/tracking/src/auth.rs` (MAL PKCE, AniList minimal PIN authorization URL and manual token paste), `crates/tracking/src/api.rs` (`HttpsTransport::new`, Android bundled TLS roots), `src/app/tracking/worker.rs`, `crates/ui/tracking.slint` (tracking setup sheet and compact episode mapping review) |
-| Build/packaging | `Cargo.toml` (`[package.metadata.android]`), `build.rs`, `flake.nix`, `Makefile` |
+| Build/packaging / Windows artifact ZIP | `Cargo.toml` (`[package.metadata.android]`), `build.rs`, `flake.nix`, `Makefile`, `.github/workflows/build-release.yml`, `.github/scripts/package-windows.sh` (flat bundle ZIP; uploaded directly and preserved by the release job) |
 | Missing seasons in main series / preserved episode IDs | `crates/providers/src/metadata/coverage.rs`, `metadata.rs::{missing_seasons,apply_enrichment}`, `src/app/detail.rs::write_episode_meta_cache_for`; shared ID/alias/episode proof prevents duplicate coverage, fills partial seasons and retains saved IDs/episodes through refreshes; Detail, Home and prefetch use the existing stable episode cache. |

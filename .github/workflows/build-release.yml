@@ -217,6 +217,8 @@ jobs:
     name: Build Windows x86_64 (MinGW)
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    outputs:
+      artifact-id: ${{ steps.upload-windows.outputs.artifact-id }}
     permissions:
       contents: read
     steps:
@@ -239,10 +241,12 @@ jobs:
         run: nix develop .#windows --command bash .github/scripts/package-windows.sh
 
       - name: Upload Windows artifact
+        id: upload-windows
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: nova-windows-x86_64
           path: dist/*.zip
+          # The bundle is already zipped; upload it without a second ZIP layer.
+          archive: false
           if-no-files-found: error
           retention-days: 1
 
@@ -269,8 +273,10 @@ jobs:
       - name: Download Windows artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: nova-windows-x86_64
+          artifact-ids: ${{ needs.windows-build.outputs.artifact-id }}
           path: dist
+          # Preserve the release ZIP instead of extracting its executable/DLLs.
+          skip-decompress: true
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
