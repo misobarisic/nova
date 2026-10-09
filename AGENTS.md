@@ -46,11 +46,11 @@ cargo test --test settings_sync_overflow   # headless Slint UI regression tests
 - Android is built with `--no-default-features --features android`; verify
   desktop-only code is gated (`#[cfg(feature = "desktop")]`,
   `#[cfg(not(target_os = "android"))]`).
-- CI runs Rust formatting, Clippy, the default workspace `cargo check`, and
-  Windows GNU-target `cargo check` on pull requests and source/build changes
-  pushed to `main` (see `.github/workflows/build-release.yml`). Tag pushes build
-  releases. CI does not run tests; run relevant tests locally for behavior
-  changes.
+- CI runs Rust formatting, Clippy, the default workspace `cargo check`, the
+  shared OpenGL state guard regression, and Windows GNU-target `cargo check`
+  on pull requests and source/build changes pushed to `main` (see
+  `.github/workflows/build-release.yml`). Tag pushes build
+  releases. Other tests remain local; run relevant tests for behavior changes.
 - There is no Makefile lint target; run the formatting and Clippy commands above.
 - If you add a test, put it next to the code (`#[cfg(test)] mod tests`) or in
   `tests/` for headless Slint tests.

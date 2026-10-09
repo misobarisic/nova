@@ -18,6 +18,17 @@ libmpv2-sys = "4.0.1"
 # mpv track-list JSON parsing.
 serde_json = "1.0.151"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# Isolate mpv from the state of Slint's shared OpenGL context.
+glow = "0.17"
+
+[dev-dependencies]
+# Exercise the shared-context guard with a real headless OpenGL context.
+glow = "0.17"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libloading = "0.8"
+
 [target.'cfg(target_os = "android")'.dependencies]
 # GL state guard around mpv's render callback (same version Slint uses).
 glow = "0.17"
@@ -28,5 +39,6 @@ libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Idle inhibition over D-Bus (ScreenSaver, logind fallback). Same major
-# version the tree already pulls in transitively via atspi.
-zbus = { version = "5", default-features = false, features = ["blocking-api"] }
+# version the tree already pulls in transitively via atspi. The blocking
+# API needs a runtime even when this crate is built/tested standalone.
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
