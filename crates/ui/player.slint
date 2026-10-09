@@ -1019,9 +1019,9 @@ export component PlayerOverlay {
                 root.tap_side = -2;
                 root.swipe_kind = 0;
                 root.playback_speed_preview(2.0);
+                // Speed feedback must not reveal the transport controls.
                 root.flash_text = "2×";
                 root.flash_show = true;
-                root.osd_mouse_moved();
             }
         }
     }

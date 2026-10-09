@@ -35,6 +35,10 @@ only toggle controls; on desktop, waking hidden controls also toggles playback.
 Press-and-hold and swipe gestures cancel pending taps when recognized. Small
 finger movement within the tap threshold does not reveal controls early.
 
+A 500 ms hold temporarily previews 2× speed and shows only the speed readout,
+without waking the OSD. Releasing restores the stored playback speed and leaves
+OSD visibility unchanged.
+
 Implementation and headless input coverage: `crates/ui/player.slint` and
 `tests/{player_gestures,player_double_tap}.rs`.
 
