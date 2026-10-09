@@ -257,4 +257,4 @@ The app retains typed identity evidence from preview/detail metadata for trackin
 It resolves the selected tracker directly or via AniList's official MAL
 cross-reference, then offers bounded alias search and explicit manual alignment.
 IMDb/TMDB sources remain supported by this manual path; no curated mapping dataset
-is bundled. See [anime tracking behavior](../../docs/tracking.md).
+is bundled. See [anime tracking behavior](../../docs/tracking-behavior.md).

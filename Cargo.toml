@@ -131,7 +131,7 @@ resources = "android/res"
 # cargo-apk2 packaging: compile the Java background components (foreground
 # service + periodic sync JobService) into DEX alongside the native lib. The
 # predecessor cargo-apk has no service/dex support, which is why Android is
-# built with `cargo apk2` now (see docs/PROJECT_STRUCTURE.md).
+# built with `cargo apk2` now (see docs/project-structure.md).
 use_aapt2 = true
 java_sources = "android/java"
 

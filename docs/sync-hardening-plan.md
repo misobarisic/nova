@@ -6,8 +6,8 @@ Status: **A–G code implemented; H partially implemented; release/device valida
 This plan follows a source audit of settings persistence, app materialization,
 the sync store, connection recovery, pairing, and Android background execution.
 It prioritizes freezes and unintended resets over new sync features. See
-[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for navigation and
-[sync-followons.md](sync-followons.md) for the broader feature backlog.
+[project-structure.md](project-structure.md) for navigation and
+[sync-follow-ons.md](sync-follow-ons.md) for the broader feature backlog.
 
 ## 1. Scope and evidence
 
@@ -449,7 +449,7 @@ cannot certify Android lifecycle behavior.
   mixed-version behavior. Local JSON evolution still needs downgrade tests.
 - Before C/E/F changes, record the selected mutation, provenance, action-clock,
   and pairing contracts here. Any new KV keys, files, domains, modules, or UI
-  callbacks must also be documented in `PROJECT_STRUCTURE.md` in that change.
+  callbacks must also be documented in `project-structure.md` in that change.
 - Migration must preserve identity, membership/tombstones, settings, library,
   progress, addon order, and quarantine evidence. Test interruption and retry.
   Back up test fixtures; do not repair production data by deleting the database.

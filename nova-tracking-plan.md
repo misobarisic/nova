@@ -51,7 +51,7 @@ records, as explicitly requested. Account activation and token saving commit
 together; MAL refresh rotation is saved before subsequent verification, and
 Disconnect/reset remove saved tokens. The actor verifies the stored account
 before resuming delivery. Protected desktop/Android credential storage and the
-migration requirements are recorded in docs/tracking.md for future additions.
+migration requirements are recorded in docs/tracking-behavior.md for future additions.
 Automatic setup now defaults to the first ranked result; Choose another release
 exposes alternatives, while Start tracking remains the activation step.
 
@@ -95,7 +95,7 @@ login ownership and show reconnect messages. `cargo test --workspace --locked`
 passed with default parallelism: 466 tests, including 157 app unit tests and 88
 tracking unit tests. Formatting and whitespace checks passed. Android builds,
 emulator tests and device tests were not run; Android verification is manual.
-See [implemented tracking behavior](docs/tracking.md).
+See [implemented tracking behavior](docs/tracking-behavior.md).
 
 ## 1. Goal and agreed scope
 
@@ -508,7 +508,7 @@ Bind authorization to a pending session and validate state where supported. Prev
 
 ### 10.3 Secret persistence
 
-The current implementation uses explicitly accepted plaintext credential records in Nova storage and shares them through the dedicated tracking sync domain. See `docs/tracking.md` for the persistence contract and future protected-storage work; platform protection must cover both local credentials and credential-bearing sync records and baselines.
+The current implementation uses explicitly accepted plaintext credential records in Nova storage and shares them through the dedicated tracking sync domain. See `docs/tracking-behavior.md` for the persistence contract and future protected-storage work; platform protection must cover both local credentials and credential-bearing sync records and baselines.
 
 - Do not place plaintext tokens in library records, addon settings, the ordinary synchronized settings map, diagnostics, or backup exports.
 - Keep credential records separate from ordinary library metadata and tracking state.
@@ -925,7 +925,7 @@ Gate: one accepted Nova watch event can update both linked services correctly ev
 - [x] Add bounded positive/negative caching with provenance.
 - [x] Finish localization, keyboard/touch flows, long-title layouts, and repair messages.
 - [x] Verify performance under many links and offline backlog (500 links/intents, replay/coalescing and persistence regression).
-- [x] Update provider documentation and `docs/PROJECT_STRUCTURE.md` for implemented behavior.
+- [x] Update provider documentation and `docs/project-structure.md` for implemented behavior.
 
 Gate: common IDs can enter the same workflow, ambiguity has a useful manual path, and playback remains responsive during lookup and delivery.
 

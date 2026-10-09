@@ -4,7 +4,7 @@ Guidance for AI agents working in this repository.
 
 ## Start here
 
-Use relevant sections of [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md)
+Use relevant sections of [`docs/project-structure.md`](docs/project-structure.md)
 for orientation and code navigation. Treat it as a guide, not a substitute for
 the source: inspect code, tests, and configuration as needed, and use search
 when it helps answer the task. If the current change alters documented project
@@ -13,7 +13,7 @@ unrelated documentation drift without expanding the task.
 
 ## Keep the structure doc current
 
-`docs/PROJECT_STRUCTURE.md` is a living document. Update it **in the same
+`docs/project-structure.md` is a living document. Update it **in the same
 change** whenever a task alters the shape of the project, including:
 
 - Adding, removing, renaming, or moving a crate, module, or top-level source file.

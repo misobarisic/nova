@@ -26,7 +26,7 @@ cargo test -p nova-sync --lib   # fast sync-crate unit tests
 
 Android Cargo builds use `--no-default-features --features android`. Enter
 `nix develop .#android` before using Android Make targets; Make assumes the
-required toolchain is already active. See `docs/PROJECT_STRUCTURE.md` for all
+required toolchain is already active. See `docs/project-structure.md` for all
 targets.
 
 ## License
@@ -45,7 +45,7 @@ catalog is generated from the locked dependency graph at build time. See
 - `crates/player/` — in-window mpv playback (+ Android JNI glue)
 - `crates/torrent/`, `crates/download/`, `crates/media/`, `crates/storage/`, `crates/config/`, `crates/addons/`
 - `tests/` — headless Slint integration tests (run with `i-slint-backend-testing`, no display)
-- `docs/` — `PROJECT_STRUCTURE.md` is the canonical map of the project
+- `docs/` — `project-structure.md` is the canonical map of the project
   (workspace layout, data flow, persistence keys, sync protocol); read it
   before exploring, and keep it current with structural changes
 
