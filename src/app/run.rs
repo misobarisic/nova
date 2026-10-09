@@ -858,7 +858,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         b.shared.lock().unwrap().active_torrent = None;
         b.refresh_torrent_disk_usage();
+        b.clear_next_episode_prompt();
+        // Finalize before a next-episode selection installs a new target.
+        b.note_player_progress_from_ui();
     });
+
+    let b = bridge.clone();
+    app.on_next_episode_streams(move |token| b.choose_next_episode_streams(token.as_str()));
+    let b = bridge.clone();
+    app.on_next_episode_dismiss(move |token| b.dismiss_next_episode(token.as_str()));
 
     let b = bridge.clone();
     app.on_resume_choice(move |resume| b.resume_prompt_choice(resume));
@@ -947,8 +955,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_tracks_popup_opened(move |_kind| p.refresh_tracks());
 
     // OSD auto-hide: show on activity, hide after inactivity — 3 s while
-    // playing, 5 s while paused so the controls linger for resume. The
-    // countdown runs in both states (loading keeps the bar up regardless).
+    // playing, 5 s while paused so the controls linger for resume.
+    // Android keeps paused controls visible so Home/screen-off restoration
+    // presents Play until the user resumes (loading keeps the bar up too).
     let osd_timer = Rc::new(slint::Timer::default());
     {
         let osd_timer = osd_timer.clone();
@@ -970,7 +979,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 let aw = app_weak.clone();
                 osd_timer.start(slint::TimerMode::SingleShot, timeout, move || {
-                    if let Some(app) = aw.upgrade() {
+                    if let Some(app) = aw.upgrade()
+                        && (!app.get_is_android() || !app.get_is_paused())
+                    {
                         app.set_osd_visible(false);
                     }
                 });

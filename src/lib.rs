@@ -60,7 +60,8 @@ fn android_main(app: slint::android::AndroidApp) {
     // Resume and renderer setup jointly release a session-scoped recovery
     // request. The patched backend suspends on TerminateWindow while the old
     // window is valid, so mpv teardown runs with its original GL context current.
-    // A pause alone keeps the existing background-audio behavior.
+    // Activity pause also pauses playback; returning follows the device-local
+    // auto-continue preference.
     slint::android::init_with_event_listener(app, |event| {
         use slint::android::android_activity::{MainEvent, PollEvent};
         if let PollEvent::Main(main) = event {

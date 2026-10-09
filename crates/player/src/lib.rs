@@ -273,7 +273,31 @@ pub fn note_android_pause() {
         .as_ref()
         .and_then(|s| s.upgrade())
     {
+        // Pause the engine immediately; the UI timer may stop completely
+        // after Home/screen-off. Also cover a load waiting for its renderer.
+        state.pending_paused.store(true, Ordering::SeqCst);
+        let mut observation = (None, None);
+        if let Ok(mpv) = state.mpv.lock()
+            && let Some(mpv) = mpv.as_ref()
+        {
+            if state.pending.lock().unwrap().is_none() {
+                observation = (
+                    mpv.get_property("time-pos").ok(),
+                    mpv.get_property("pause").ok(),
+                );
+            }
+            if let Err(error) = mpv.set_property("pause", true) {
+                alog(&format!("lifecycle pause failed: {error}"));
+            }
+        }
+        if let Some(app) = state.app.upgrade()
+            && app.get_player_open()
+        {
+            app.set_is_paused(true);
+        }
+        converge_screen_on(false);
         let mut recovery = state.recovery.lock().unwrap();
+        recovery.observe(observation.0, observation.1);
         recovery.pause();
         alog(&format!("lifecycle pause: {recovery:?}"));
     }
@@ -289,8 +313,29 @@ pub fn note_android_resume() {
         .and_then(|s| s.upgrade())
     {
         let mut recovery = state.recovery.lock().unwrap();
-        recovery.resume();
+        let play = recovery.resume(nova_config::active_cache_settings().android_auto_continue);
         alog(&format!("lifecycle resume: {recovery:?}"));
+        drop(recovery);
+        if play {
+            state.pending_paused.store(false, Ordering::SeqCst);
+            if let Ok(mpv) = state.mpv.lock()
+                && let Some(mpv) = mpv.as_ref()
+                && let Err(error) = mpv.set_property("pause", false)
+            {
+                alog(&format!("lifecycle auto-continue failed: {error}"));
+            }
+            converge_screen_on(true);
+        }
+        if let Some(app) = state.app.upgrade()
+            && app.get_player_open()
+        {
+            if play {
+                app.set_is_paused(false);
+            }
+            // Re-arm activity rather than only setting visibility: an old
+            // inactivity timer may already be due after screen-off.
+            app.invoke_osd_mouse_moved();
+        }
     }
 }
 
@@ -1623,13 +1668,19 @@ impl Player {
             .collect::<Vec<_>>();
         *self.state.pending_subtitles.lock().unwrap() = subtitles.clone();
         #[cfg(target_os = "android")]
+        let start_paused = !ANDROID_FOREGROUND.load(Ordering::SeqCst);
+        #[cfg(not(target_os = "android"))]
+        let start_paused = false;
+        #[cfg(target_os = "android")]
         {
             // Keep the URL for a decoder fallback reload; then arm the chain
             // from the user's Settings → Player preference. A new stream drops
             // any runtime override the previous stream picked.
             self.state.recovery.lock().unwrap().begin(start_pos_secs);
             *self.state.pending_start.lock().unwrap() = Some(start_pos_secs.max(0.0));
-            self.state.pending_paused.store(false, Ordering::SeqCst);
+            self.state
+                .pending_paused
+                .store(start_paused, Ordering::SeqCst);
             *self.state.last_url.lock().unwrap() = Some(url.to_string());
             *self.state.last_headers.lock().unwrap() = headers.to_vec();
             *self.state.last_subtitles.lock().unwrap() = subtitles;
@@ -1643,8 +1694,9 @@ impl Player {
         self.state.reported.store(false, Ordering::SeqCst);
         *self.state.opened_at.lock().unwrap() = Instant::now();
 
-        // A new stream always starts playing, regardless of how the previous
-        // one ended: mpv's `pause` property survives `stop`/EOF, so clear it
+        // A new foreground stream starts playing regardless of how the previous
+        // one ended. A source resolved after Android Home stays paused.
+        // mpv's `pause` property survives `stop`/EOF, so set it
         // here (and again before loadfile in the render callback) — otherwise
         // the second playback would silently start paused. `start` is set on
         // every play (even 0.0): it persists across files, so a previous
@@ -1652,7 +1704,7 @@ impl Player {
         if let Ok(mpv) = self.state.mpv.lock()
             && let Some(mpv) = mpv.as_ref()
         {
-            let _ = mpv.set_property("pause", false);
+            let _ = mpv.set_property("pause", start_paused);
             let _ = mpv.set_property("start", start_pos_secs.max(0.0));
             // Rate is per device (Settings → Player / the player's own
             // settings panel); `speed` also survives stop/EOF, so set it
@@ -1670,7 +1722,7 @@ impl Player {
         #[cfg(target_os = "linux")]
         converge_idle_inhibit(true);
         #[cfg(target_os = "android")]
-        converge_screen_on(true);
+        converge_screen_on(!start_paused);
 
         app.set_player_open(true);
         app.set_playback_started(false);
@@ -2253,8 +2305,8 @@ impl Player {
             app.set_duration(snapshot.dur.max(1.0) as f32);
             app.set_is_paused(snapshot.paused);
             // OSD visibility is owned solely by the auto-hide countdown in
-            // `run.rs` (3 s playing, 5 s paused): never force it here, or a
-            // paused bar could never fade.
+            // `run.rs` (Android keeps paused controls visible; desktop can
+            // fade them after 5 s): do not override that policy here.
             app.set_time_text(slint::SharedString::from(format!(
                 "{} / {}",
                 format_time(snapshot.pos),

@@ -458,6 +458,9 @@ pub struct CacheSettings {
     /// How to start episodes that have resumable watch history. Local-only.
     #[serde(default)]
     pub episode_start_behavior: EpisodeStartBehavior,
+    /// Android: resume on returning only if playing before backgrounding. Local-only.
+    #[serde(default)]
+    pub android_auto_continue: bool,
     /// Master switch for UI animations (Settings → Look and feel). When off,
     /// every transition and hover effect becomes instant.
     #[serde(default = "default_true")]
@@ -547,6 +550,7 @@ impl Default for CacheSettings {
             desktop_external_app: DesktopExternalApp::SystemDefault,
             playback_speed: 1.0,
             episode_start_behavior: EpisodeStartBehavior::Resume,
+            android_auto_continue: false,
             animations: true,
             anim_transitions: true,
             anim_hover: true,
@@ -935,6 +939,7 @@ mod tests {
         let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
         let settings: CacheSettings = serde_json::from_str(older).unwrap();
         assert_eq!(settings.language, Language::English);
+        assert!(!settings.android_auto_continue);
         assert_eq!(
             settings.episode_start_behavior,
             EpisodeStartBehavior::Resume

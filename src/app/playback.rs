@@ -180,6 +180,7 @@ impl Bridge {
         headers: Vec<(String, String)>,
         subtitles: Vec<String>,
     ) -> bool {
+        self.clear_next_episode_prompt();
         let resume_choice = self.shared.lock().unwrap().resume_prompt_choice.take();
         // Set the player title from the modal item before opening.
         let (title, series_id, request_id, is_episode, is_movie) = {
@@ -236,6 +237,7 @@ impl Bridge {
             state.playback = Some(PlaybackTarget {
                 series_id,
                 episode_id: request_id,
+                session: next_episode::new_session(),
                 resume_pos: match (behavior, resume_choice) {
                     (EpisodeStartBehavior::StartOver, _) | (_, Some(false)) => None,
                     (_, Some(true)) => history_pos,
@@ -424,6 +426,7 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
+        self.refresh_next_episode_prompt();
         let player_open = app.get_player_open();
         let pos = app.get_position() as f64;
         let dur = app.get_duration() as f64;

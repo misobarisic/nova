@@ -260,6 +260,22 @@ fn backdrop_double_tap_hold_and_swipe() {
                                     volumes1.borrow()
                                 ),
                             );
+                            // A notification-shade pull can reach Slint
+                            // before Android takes over. Neither half may
+                            // become a player swipe later in the same drag.
+                            for x in [100.0, 500.0] {
+                                press(&app, LogicalPosition::new(x, 8.0));
+                                for k in 1..=12 {
+                                    moved(&app, LogicalPosition::new(x, 8.0 + k as f32 * 20.0));
+                                }
+                                release(&app, LogicalPosition::new(x, 248.0));
+                            }
+                            fail(
+                                &failures6,
+                                brightness1.borrow().as_slice() == [-1, -1, -1]
+                                    && volumes1.borrow().as_slice() == [-1, -1],
+                                "top-edge shade pulls must not change brightness or volume",
+                            );
                             fail(
                                 &failures6,
                                 seeks1.borrow().len() == 2,

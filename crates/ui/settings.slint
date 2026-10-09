@@ -96,6 +96,7 @@ export component SettingsPage {
     // value the player's own settings panel edits; the ± buttons ask the
     // backend for a quantized step.
     in-out property <float> playback_speed: 1.0;
+    in-out property <bool> android_auto_continue: false;
     in-out property <int> episode_start_index: 1;
     // Look and feel (Settings → Look and feel): master + per-category switches.
     in-out property <bool> true_black: false;
@@ -1126,13 +1127,13 @@ export component SettingsPage {
     // (after the decoder), first-and-only control row on desktop.
     function kb_player_speed_row() -> int {
         if (root.is_android) {
-            return root.player_backend_index == 0 ? 3 : -1;
+            return root.player_backend_index == 0 ? 4 : -1;
         }
         return root.player_backend_index == 0 ? 2 : -1;
     }
 
     function kb_player_n() -> int {
-        if (root.is_android) { return root.player_backend_index == 0 ? 4 : 2; }
+        if (root.is_android) { return root.player_backend_index == 0 ? 5 : 2; }
         return 3;
     }
 
@@ -1149,6 +1150,9 @@ export component SettingsPage {
             root.schedule_save();
         } else if (root.kb_pr == 1) {
             root.episode_start_index = Math.max(0, Math.min(2, root.episode_start_index + d));
+            root.schedule_save();
+        } else if (root.is_android && root.player_backend_index == 0 && root.kb_pr == 3) {
+            root.android_auto_continue = d > 0;
             root.schedule_save();
         } else if (root.kb_pr == root.kb_player_speed_row()) {
             // The backend applies ± a step and re-quantizes; the property
@@ -3119,6 +3123,17 @@ export component SettingsPage {
                                                 current_index <=> root.android_hwdec_index;
                                                 focused: root.kb_zone == 9 && root.kb_pr == 2 && root.kb_active;
                                                 picked(i) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 9; root.kb_pr = 2; root.android_hwdec_index = i; root.schedule_save(); }
+                                            }
+                                        }
+
+                                        if root.is_android && root.player_backend_index == 0: SettingsRow {
+                                            row-title: @tr("When returning to playback");
+                                            row-desc: @tr("Always pause in the background. Automatically continue only if the video was playing before you left.");
+                                            Segmented {
+                                                labels: [@tr("Stay paused"), @tr("Auto continue")];
+                                                current_index: root.android_auto_continue ? 1 : 0;
+                                                focused: root.kb_zone == 9 && root.kb_pr == 3 && root.kb_active;
+                                                picked(i) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 9; root.kb_pr = 3; root.android_auto_continue = i == 1; root.schedule_save(); }
                                             }
                                         }
 

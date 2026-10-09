@@ -15,6 +15,7 @@ pub(super) struct Recovery {
     playback: Option<Playback>,
     submitted: bool,
     foreground: bool,
+    resume_playback: bool,
     renderer_ready: bool,
     pending: bool,
     loading: bool,
@@ -28,6 +29,7 @@ impl Recovery {
             playback: None,
             submitted: false,
             foreground,
+            resume_playback: false,
             renderer_ready: false,
             pending: false,
             loading: false,
@@ -40,8 +42,9 @@ impl Recovery {
         self.playback = Some(Playback {
             session: self.next_session,
             position: position.max(0.0),
-            paused: false,
+            paused: !self.foreground,
         });
+        self.resume_playback = !self.foreground;
         self.submitted = false;
         self.pending = false;
         self.loading = true;
@@ -50,6 +53,7 @@ impl Recovery {
 
     pub fn close(&mut self) {
         self.playback = None;
+        self.resume_playback = false;
         self.submitted = false;
         self.pending = false;
         self.loading = false;
@@ -72,11 +76,24 @@ impl Recovery {
     }
 
     pub fn pause(&mut self) {
+        if self.foreground {
+            self.resume_playback = self.playback.is_some_and(|p| !p.paused);
+        }
         self.foreground = false;
+        if let Some(playback) = self.playback.as_mut() {
+            playback.paused = true;
+        }
     }
 
-    pub fn resume(&mut self) {
+    pub fn resume(&mut self, auto_continue: bool) -> bool {
+        let play =
+            !self.foreground && auto_continue && self.resume_playback && self.playback.is_some();
         self.foreground = true;
+        self.resume_playback = false;
+        if play && let Some(playback) = self.playback.as_mut() {
+            playback.paused = false;
+        }
+        play
     }
 
     pub fn teardown(&mut self) {
@@ -105,7 +122,9 @@ impl Recovery {
                     self.loading = false;
                 }
             }
-            if let Some(paused) = paused {
+            // A pre-pause property observation must not undo the activity's
+            // explicit pause while it is backgrounded.
+            if let Some(paused) = paused.filter(|_| self.foreground) {
                 playback.paused = paused;
             }
         }
@@ -147,7 +166,7 @@ mod tests {
             recovery.pause();
             recovery.teardown();
             if resume_first {
-                recovery.resume();
+                recovery.resume(false);
             } else {
                 recovery.setup();
             }
@@ -157,11 +176,11 @@ mod tests {
             if resume_first {
                 recovery.setup();
             } else {
-                recovery.resume();
+                recovery.resume(false);
             }
             assert_eq!(recovery.take_reload().unwrap().position, 42.5);
             recovery.setup();
-            recovery.resume();
+            recovery.resume(false);
             assert_eq!(recovery.take_reload(), None);
         }
     }
@@ -170,13 +189,13 @@ mod tests {
     fn duplicates_and_resume_without_window_loss_do_not_reload() {
         let mut recovery = playing(false);
         recovery.pause();
-        recovery.resume();
+        recovery.resume(false);
         assert_eq!(recovery.take_reload(), None);
         recovery.teardown();
         recovery.teardown();
         recovery.setup();
         recovery.setup();
-        recovery.resume();
+        recovery.resume(false);
         assert!(recovery.take_reload().is_some());
         assert_eq!(recovery.take_reload(), None);
         // Rotation in the foreground does not need an activity resume.
@@ -193,7 +212,7 @@ mod tests {
         recovery.observe(None, None);
         recovery.observe(Some(0.0), None);
         assert_eq!(recovery.take_reload(), None);
-        recovery.resume();
+        recovery.resume(false);
         assert_eq!(recovery.take_reload(), None);
         recovery.setup();
         let playback = recovery.take_reload().unwrap();
@@ -236,14 +255,49 @@ mod tests {
     }
 
     #[test]
-    fn background_audio_advances_the_recovery_position() {
+    fn background_pause_survives_stale_properties_and_resume() {
         let mut recovery = playing(false);
         recovery.pause();
         recovery.teardown();
         recovery.observe(Some(58.0), Some(false));
         recovery.setup();
-        recovery.resume();
-        assert_eq!(recovery.take_reload().unwrap().position, 58.0);
+        recovery.resume(false);
+        let reload = recovery.take_reload().unwrap();
+        assert_eq!(reload.position, 58.0);
+        assert!(reload.paused);
+    }
+
+    #[test]
+    fn auto_continue_only_restores_previously_playing_sessions() {
+        for paused in [true, false] {
+            let mut recovery = playing(paused);
+            recovery.pause();
+            recovery.pause();
+            recovery.teardown();
+            recovery.observe(None, Some(false));
+            recovery.setup();
+            assert_eq!(recovery.resume(true), !paused);
+            assert_eq!(recovery.take_reload().unwrap().paused, paused);
+            assert!(!recovery.resume(true), "duplicate resume cannot play again");
+        }
+        let mut recovery = playing(false);
+        recovery.pause();
+        recovery.close();
+        assert!(!recovery.resume(true), "closed playback cannot restart");
+    }
+
+    #[test]
+    fn background_without_window_loss_stays_paused_without_reload() {
+        let mut recovery = playing(false);
+        recovery.pause();
+        recovery.pause();
+        recovery.observe(None, Some(false));
+        recovery.resume(false);
+        assert!(recovery.playback.unwrap().paused);
+        assert_eq!(recovery.take_reload(), None);
+        // An explicit Play in the foreground still resumes normally.
+        recovery.observe(Some(43.0), Some(false));
+        assert!(!recovery.playback.unwrap().paused);
     }
 
     #[test]
@@ -257,7 +311,7 @@ mod tests {
             } else {
                 recovery.close();
             }
-            recovery.resume();
+            recovery.resume(false);
             recovery.setup();
             assert_eq!(recovery.take_reload(), None);
             if replace {
@@ -269,7 +323,7 @@ mod tests {
                     Some(Playback {
                         session: 2,
                         position: 7.0,
-                        paused: false
+                        paused: true
                     })
                 );
             }
@@ -290,11 +344,14 @@ mod tests {
             recovery.observe(None, None);
             recovery.observe(Some(0.0), None);
             recovery.setup();
-            recovery.resume();
+            recovery.resume(false);
             if submitted {
-                assert_eq!(recovery.take_reload().unwrap().position, 120.0);
+                let reload = recovery.take_reload().unwrap();
+                assert_eq!(reload.position, 120.0);
+                assert!(reload.paused);
             } else {
                 assert_eq!(recovery.take_reload(), None);
+                assert!(recovery.playback.unwrap().paused);
             }
         }
     }

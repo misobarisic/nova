@@ -49,7 +49,108 @@ pub(super) fn load_file_at(mpv: &Mpv, url: &str, position: f64) -> libmpv2::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn paused_network_video_preloads_without_advancing() {
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_property("config", false)?;
+            init.set_property("vo", "null")?;
+            init.set_property("ao", "null")
+        })
+        .unwrap();
+        // A tiny real video served over HTTP exercises network read-ahead,
+        // rather than merely proving that a paused local file can open.
+        let mut video = b"YUV4MPEG2 W32 H18 F30:1 Ip A1:1 C420jpeg\n".to_vec();
+        for _ in 0..300 {
+            video.extend(b"FRAME\n");
+            video.extend([128u8; 32 * 18 * 3 / 2]);
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/video.y4m", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        let server_done = done.clone();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !server_done.load(Ordering::Relaxed) && Instant::now() < deadline {
+                let Ok((mut socket, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                };
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while request.len() < 8192 && !request.ends_with(b"\r\n\r\n") {
+                    if socket.read(&mut byte).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    request.push(byte[0]);
+                }
+                let request = String::from_utf8_lossy(&request).to_ascii_lowercase();
+                let range = request.lines().find_map(|line| {
+                    line.strip_prefix("range: bytes=")?
+                        .split('-')
+                        .next()?
+                        .parse::<usize>()
+                        .ok()
+                });
+                let start = range.unwrap_or(0).min(video.len() - 1);
+                let (status, range_header) = if range.is_some() {
+                    (
+                        "206 Partial Content",
+                        format!(
+                            "Content-Range: bytes {start}-{}/{}\r\n",
+                            video.len() - 1,
+                            video.len()
+                        ),
+                    )
+                } else {
+                    ("200 OK", String::new())
+                };
+                let header = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/octet-stream\r\nAccept-Ranges: bytes\r\n{range_header}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    video.len() - start
+                );
+                let _ = socket
+                    .write_all(header.as_bytes())
+                    .and_then(|_| socket.write_all(&video[start..]));
+            }
+        });
+        mpv.set_property("pause", true).unwrap();
+        load_file_at(&mpv, &url, 0.0).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let buffered = mpv
+                .get_property::<f64>("demuxer-cache-duration")
+                .unwrap_or(0.0);
+            if buffered >= 2.0 && mpv.get_property::<f64>("time-pos").is_ok() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "paused video did not preload (buffered={buffered})"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let position = mpv.get_property::<f64>("time-pos").unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        assert!(mpv.get_property::<bool>("pause").unwrap());
+        assert!((mpv.get_property::<f64>("time-pos").unwrap() - position).abs() < 0.05);
+        mpv.command("stop", &[]).unwrap();
+        done.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+    }
 
     #[test]
     fn named_loadfile_starts_and_reloads_at_position_while_paused() {

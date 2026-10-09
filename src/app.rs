@@ -521,6 +521,12 @@ pub(crate) struct EpisodeProgress {
 struct PlaybackTarget {
     series_id: String,
     episode_id: String,
+    /// Ephemeral identity: callbacks and artwork from an older opening cannot
+    /// act on a replacement stream, even when its episode ID is unchanged.
+    session: u64,
+    next_episode_dismissed: bool,
+    next_episode_id: String,
+    next_episode_art_url: Option<String>,
     /// Position the engine should open at (resume). `None` when starting
     /// fresh / already watched / no saved position.
     resume_pos: Option<f64>,
@@ -750,6 +756,7 @@ mod detail;
 mod downloads;
 mod home;
 mod library;
+mod next_episode;
 mod playback;
 mod posters;
 mod run;

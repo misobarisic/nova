@@ -490,7 +490,107 @@ component SettingsMenu inherits Rectangle {
     }
 }
 
+component NextEpisodeAction inherits Rectangle {
+    in property <bool> focused;
+    callback activate();
+    height: Math.max(44px, action_text.preferred-height + 16px);
+    border-radius: 14px;
+    background: action_touch.has-hover ? Theme.current.primary_button_hover : Theme.current.primary_button;
+    border-width: root.focused ? 2px : 1px;
+    border-color: root.focused ? Theme.current.focus_ring : Theme.current.primary_button_border;
+    accessible-role: button;
+    accessible-label: @tr("Choose streams");
+    HorizontalLayout {
+        padding-left: 14px; padding-right: 12px; spacing: 8px; alignment: center;
+        action_text := Text {
+            text: @tr("Choose streams"); color: Theme.current.on_accent;
+            font-size: 14px; font-weight: 600; wrap: word-wrap; max-lines: 2; overflow: elide;
+            vertical-alignment: center; horizontal-alignment: center;
+        }
+        // Fixed-height icons are top-aligned by a HorizontalLayout. Let the
+        // slot fill the button and center the glyph inside that slot.
+        Rectangle {
+            width: 18px;
+            IcChevronRight {
+                width: 18px; height: 18px;
+                y: (parent.height - self.height) / 2;
+                fill: Theme.current.on_accent;
+            }
+        }
+    }
+    action_touch := TouchArea { mouse-cursor: pointer; clicked => { root.activate(); } }
+}
+
+// Uses the same surface and spacing as the player's settings/track menus.
+// Compact screens stack the action rather than shrinking its touch target.
+component NextEpisodeBanner inherits Rectangle {
+    in property <bool> compact;
+    in property <string> title;
+    in property <string> context;
+    in property <image> thumbnail;
+    in property <bool> has_thumb;
+    in property <int> focused_action: 0;
+    callback choose();
+    callback dismiss();
+    property <bool> stacked: root.width < 600px;
+    height: banner_col.preferred-height;
+    background: Theme.current.player_menu;
+    border-radius: 16px;
+    border-width: 1px; border-color: Theme.current.player_menu_border;
+    drop-shadow-blur: 24px; drop-shadow-color: Theme.current.scrim_shadow;
+    // Consume empty-card taps; they must not toggle the video OSD.
+    TouchArea { width: 100%; height: 100%; }
+    banner_col := VerticalLayout {
+        padding: root.compact ? 12px : 16px;
+        spacing: root.compact ? 8px : 12px;
+        HorizontalLayout {
+            spacing: 12px;
+            if root.has_thumb && root.width >= 340px && !root.compact: Rectangle {
+                width: root.stacked ? 72px : 96px; height: root.stacked ? 44px : 54px;
+                border-radius: 10px; clip: true;
+                Image { width: 100%; height: 100%; source: root.thumbnail; image-fit: cover; }
+            }
+            VerticalLayout {
+                spacing: 4px; horizontal-stretch: 1;
+                Text {
+                    text: @tr("Next episode"); font-size: 12px;
+                    color: Theme.current.accent_soft; overflow: elide;
+                }
+                Text {
+                    text: root.context + (root.title != root.context ? " · " + root.title : "");
+                    font-size: root.compact ? 13px : 14px; font-weight: 600; color: Theme.current.text_bright;
+                    wrap: root.compact ? no-wrap : word-wrap;
+                    max-lines: root.compact ? 1 : 2; overflow: elide;
+                }
+            }
+            if !root.stacked: next_streams_wide := NextEpisodeAction {
+                width: 164px; focused: root.focused_action == 1;
+                activate => { root.choose(); }
+            }
+            next_dismiss := IconBtn {
+                focused: root.focused_action == 2;
+                accessible-role: button; accessible-label: @tr("Dismiss next episode");
+                clicked => { root.dismiss(); }
+                IcClose { width: 20px; height: 20px; x: 10px; y: 10px; fill: Theme.current.text_bright; }
+            }
+        }
+        if root.stacked: next_streams_narrow := NextEpisodeAction {
+            focused: root.focused_action == 1;
+            activate => { root.choose(); }
+        }
+    }
+}
+
 export component PlayerOverlay {
+    in property <bool> next_episode_visible;
+    in property <string> next_episode_title;
+    in property <string> next_episode_context;
+    in property <image> next_episode_thumb;
+    in property <bool> next_episode_has_thumb;
+    in property <string> next_episode_token;
+    callback next_episode_streams(string);
+    callback next_episode_dismiss(string);
+    property <bool> next_episode_shown: root.next_episode_visible && root.open_popup == 0;
     preferred-width: 100%;
     preferred-height: 100%;
 
@@ -648,6 +748,8 @@ export component PlayerOverlay {
             root.settings_back();
         } else if (root.open_popup != 0) {
             root.open_popup = 0;
+        } else if (root.next_episode_shown) {
+            root.next_episode_dismiss(root.next_episode_token);
         } else {
             root.close_player();
         }
@@ -656,6 +758,7 @@ export component PlayerOverlay {
     // Highest present control index: the fullscreen button (8) is hidden on
     // Android, where the platform's own fullscreen affordance is used.
     function kb_control_max() -> int {
+        if (root.next_episode_shown) { return 10; }
         return root.is_android ? 7 : 8;
     }
 
@@ -664,6 +767,7 @@ export component PlayerOverlay {
     // 100%) and the track buttons (5/6) are hidden on narrow windows.
     function kb_prev() -> int {
         let raw = Math.max(0, root.kb_idx - 1);
+        if (root.is_android && raw == 8) { return 7; }
         if (root.is_android && raw == 2) {
             return 1;
         }
@@ -675,6 +779,7 @@ export component PlayerOverlay {
 
     function kb_next() -> int {
         let raw = Math.min(root.kb_control_max(), root.kb_idx + 1);
+        if (root.is_android && raw == 8) { return root.next_episode_shown ? 9 : 7; }
         if (root.is_android && raw == 2) {
             return 3;
         }
@@ -693,7 +798,11 @@ export component PlayerOverlay {
     }
 
     function kb_activate() {
-        if (root.kb_idx == 0) {
+        if (root.kb_idx == 9 && root.next_episode_shown) {
+            root.next_episode_streams(root.next_episode_token);
+        } else if (root.kb_idx == 10 && root.next_episode_shown) {
+            root.next_episode_dismiss(root.next_episode_token);
+        } else if (root.kb_idx == 0) {
             root.close_player();
         } else if (root.kb_idx == 1) {
             root.toggle_pause();
@@ -800,6 +909,7 @@ export component PlayerOverlay {
     // fullscreen button (8) is hidden on Android (the system affordance is
     // used there).
     function kb_clamp_focus() {
+        if (!root.next_episode_shown && root.kb_idx > 8) { root.kb_idx = 1; }
         if (root.narrow && (root.kb_idx == 5 || root.kb_idx == 6)) {
             root.kb_idx = 7;
         }
@@ -812,6 +922,7 @@ export component PlayerOverlay {
     }
     changed narrow => { root.kb_clamp_focus(); }
     changed is_android => { root.kb_clamp_focus(); }
+    changed next_episode_shown => { root.kb_clamp_focus(); }
 
     // Hover movement over the bar itself re-arms the auto-hide countdown.
     // TouchArea.moved only fires while pressed and the backdrop's mouse-x/y
@@ -994,6 +1105,8 @@ export component PlayerOverlay {
                         root.settings_back();
                     } else if (root.open_popup != 0) {
                         root.open_popup = 0;
+                    } else if (root.next_episode_shown) {
+                        root.next_episode_dismiss(root.next_episode_token);
                     } else if (root.is_fullscreen) {
                         root.toggle_fullscreen();
                     }
@@ -1070,7 +1183,7 @@ export component PlayerOverlay {
                     root.kb_activate();
                     accept
                 } else if (e.text == Key.Backspace || e.text == Key.Back) {
-                    root.close_player();
+                    root.system_back();
                     accept
                 } else {
                     reject
@@ -1184,7 +1297,11 @@ export component PlayerOverlay {
                 // Android brightness/volume swipe: a mostly-vertical drag.
                 // Decided here (not on press) so the direction is known, and
                 // only while no hold owns the gesture.
+                // Android can deliver the start of a notification-shade pull
+                // before taking over. Exclude its original top-edge press,
+                // even after it travels into the middle of the video.
                 if (root.is_android && root.playback_started && root.open_popup == 0
+                    && self.pressed-y >= Math.max(48px, root.safe-top + 24px)
                     && !root.hold_active && root.swipe_kind == 0
                     && Math.abs(self.mouse-y - self.pressed-y) > 24px
                     && Math.abs(self.mouse-y - self.pressed-y) > 2 * Math.abs(self.mouse-x - self.pressed-x)) {
@@ -1276,6 +1393,27 @@ export component PlayerOverlay {
                     root.kb_active = false; root.kb_idx = 0; root.close_player();
                 }
             }
+        }
+
+        // Stay independent of OSD fading. In short landscape windows the
+        // banner moves beside Close, leaving the central transport and the
+        // bottom subtitle/control lanes unobstructed.
+        if root.next_episode_shown: next_episode_banner := NextEpisodeBanner {
+            compact: root.is_android && root.width > root.height;
+            width: Math.max(0px, Math.min(self.compact ? 420px : 760px,
+                root.width - root.safe-left - root.safe-right - (root.height < 600px || self.compact ? 112px : 32px)));
+            x: root.height < 600px || self.compact
+                ? root.width - root.safe-right - self.width - 16px
+                : root.safe-left + (root.width - root.safe-left - root.safe-right - self.width) / 2;
+            y: root.height < 600px || self.compact ? root.safe-top + 16px
+                : Math.max(root.safe-top + 64px, root.height - (root.narrow ? 100px : 160px) - self.height);
+            title: root.next_episode_title;
+            context: root.next_episode_context;
+            thumbnail: root.next_episode_thumb;
+            has_thumb: root.next_episode_has_thumb;
+            focused_action: root.kb_active ? (root.kb_idx == 9 ? 1 : root.kb_idx == 10 ? 2 : 0) : 0;
+            choose => { root.next_episode_streams(root.next_episode_token); }
+            dismiss => { root.next_episode_dismiss(root.next_episode_token); }
         }
 
         // ---- Android center transport (⏪10 ▶/⏸ ⏩10) ----------------

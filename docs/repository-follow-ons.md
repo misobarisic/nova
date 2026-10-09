@@ -50,8 +50,8 @@ Measure those stages separately from source reopening and decoder startup.
   must apply its own options before loading so stale preparation cannot leak
   headers, subtitles, or pause state into it.
 - Keep original-context render teardown, selected decoder, position, pause
-  state, and background-audio behavior. No settings, storage, public API, or
-  wire-protocol changes are intended. Update the Android behavior/navigation
+  state, and the current pause-on-background behavior. No settings, storage,
+  public API, or wire-protocol changes are intended. Update the Android behavior/navigation
   documentation with the eventual implementation.
 
 ### Timing and regression coverage

@@ -1916,6 +1916,54 @@ impl Bridge {
                 video.thumbnail.clone(),
             )
         };
+        self.select_episode_streams(series_id, request_id, context, thumb_url, index);
+    }
+
+    /// Select by stable ID, independent of the current filter/season/page.
+    pub(super) fn episode_streams_by_id(&self, series_id: &str, episode_id: &str) {
+        self.cancel_watch_now();
+        let selection = {
+            let mut state = self.shared.lock().unwrap();
+            let Some(m) = state.modal_item.as_mut().filter(|m| m.id == series_id) else {
+                return;
+            };
+            let Some(video) = m.videos.iter().find(|v| v.id == episode_id).cloned() else {
+                return;
+            };
+            let Some(season_index) = m.seasons.iter().position(|s| Some(*s) == video.season) else {
+                return;
+            };
+            let index = season_episodes(&m.videos, m.seasons[season_index])
+                .iter()
+                .position(|v| v.id == episode_id)
+                .unwrap();
+            m.season_index = season_index;
+            m.episode_page = index / EPISODE_PAGE_SIZE;
+            (video, season_index, index)
+        };
+        if let Some(app) = self.app() {
+            app.set_episode_filter(SharedString::default());
+            app.set_season_combo_idx(selection.1 as i32);
+        }
+        self.refresh_episode_rows();
+        self.apply_season_cards();
+        self.select_episode_streams(
+            series_id.to_owned(),
+            episode_id.to_owned(),
+            episode_context_label(&selection.0),
+            selection.0.thumbnail,
+            selection.2,
+        );
+    }
+
+    fn select_episode_streams(
+        &self,
+        series_id: String,
+        request_id: String,
+        context: String,
+        thumb_url: Option<String>,
+        index: usize,
+    ) {
         // Arm playback tracking for this episode, resolving a resume point
         // from history (fresh when watched / no saved position).
         {

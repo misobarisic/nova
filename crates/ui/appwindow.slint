@@ -246,6 +246,7 @@ export component AppWindow inherits Window {
     // settings panel: the slider may sit anywhere in 0.5–2.0, the ± buttons
     // step by 0.05 (quantized by the backend). Local-only, never synced.
     in-out property <float> playback_speed: 1.0;
+    in-out property <bool> android_auto_continue: false;
     in-out property <int> episode_start_index: 1;
     in-out property <bool> resume_prompt_visible: false;
     // Monotonic signal used to route Android system Back through the active
@@ -514,6 +515,14 @@ export component AppWindow inherits Window {
     // web) and the Slint scene only draws this overlay on top. The window
     // background flips to transparent once `playback_started`, so the
     // video shows through. `player_open` = overlay up (catalog hidden).
+    in-out property <bool> next_episode_visible: false;
+    in-out property <string> next_episode_token: "";
+    in-out property <string> next_episode_title: "";
+    in-out property <string> next_episode_context: "";
+    in-out property <image> next_episode_thumb;
+    in-out property <bool> next_episode_has_thumb: false;
+    callback next_episode_streams(string);
+    callback next_episode_dismiss(string);
     in-out property <bool> player_open: false;
     in-out property <bool> playback_started: false;
     in-out property <bool> is_paused: true;
@@ -1126,6 +1135,7 @@ export component AppWindow inherits Window {
         player_backend_index <=> root.player_backend_index;
         desktop_external_app_index <=> root.desktop_external_app_index;
         playback_speed <=> root.playback_speed;
+        android_auto_continue <=> root.android_auto_continue;
         episode_start_index <=> root.episode_start_index;
         is_android: root.is_android;
         true_black <=> root.true_black;
@@ -1234,6 +1244,14 @@ export component AppWindow inherits Window {
 
     // ---- Player overlay --------------------------------------------------
     if root.player_open: PlayerOverlay {
+        next_episode_visible: root.next_episode_visible;
+        next_episode_token: root.next_episode_token;
+        next_episode_title: root.next_episode_title;
+        next_episode_context: root.next_episode_context;
+        next_episode_thumb: root.next_episode_thumb;
+        next_episode_has_thumb: root.next_episode_has_thumb;
+        next_episode_streams(t) => { root.next_episode_streams(t); }
+        next_episode_dismiss(t) => { root.next_episode_dismiss(t); }
         playback_started <=> root.playback_started;
         is_paused <=> root.is_paused;
         position <=> root.position;

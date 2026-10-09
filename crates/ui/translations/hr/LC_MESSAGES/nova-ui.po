@@ -1940,3 +1940,24 @@ msgstr "Sredina"
 
 msgid "Right"
 msgstr "Desno"
+
+msgid "Next episode"
+msgstr "Sljedeća epizoda"
+
+msgid "Choose streams"
+msgstr "Odaberite streamove"
+
+msgid "Dismiss next episode"
+msgstr "Sakrijte sljedeću epizodu"
+
+msgid "When returning to playback"
+msgstr "Pri povratku na reprodukciju"
+
+msgid "Always pause in the background. Automatically continue only if the video was playing before you left."
+msgstr "Uvijek pauziraj u pozadini. Automatski nastavi samo ako se video reproducirao prije odlaska."
+
+msgid "Stay paused"
+msgstr "Ostani pauziran"
+
+msgid "Auto continue"
+msgstr "Automatski nastavi"

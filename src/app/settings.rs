@@ -142,6 +142,7 @@ impl Bridge {
             app.set_player_backend_index(if settings.player_external { 1 } else { 0 });
             app.set_desktop_external_app_index(settings.desktop_external_app.index());
             app.set_playback_speed(settings.playback_speed);
+            app.set_android_auto_continue(settings.android_auto_continue);
             app.set_episode_start_index(match settings.episode_start_behavior {
                 EpisodeStartBehavior::StartOver => 0,
                 EpisodeStartBehavior::Resume => 1,
@@ -294,6 +295,7 @@ impl Bridge {
                     app.get_desktop_external_app_index(),
                 ),
                 playback_speed: nova_config::round_playback_speed(app.get_playback_speed()),
+                android_auto_continue: app.get_android_auto_continue(),
                 episode_start_behavior: match app.get_episode_start_index() {
                     0 => EpisodeStartBehavior::StartOver,
                     2 => EpisodeStartBehavior::Ask,

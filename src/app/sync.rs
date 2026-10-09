@@ -357,6 +357,7 @@ const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
     "desktop_external_app",
     "playback_speed",
     "episode_start_behavior",
+    "android_auto_continue",
     "sync_overrides",
     "rewrite_existing",
     "categories",
@@ -1753,6 +1754,7 @@ mod tests {
         assert!(!fields.contains_key("player_external"));
         assert!(!fields.contains_key("desktop_external_app"));
         assert!(!fields.contains_key("playback_speed"));
+        assert!(!fields.contains_key("android_auto_continue"));
         assert!(!fields.contains_key("rewrite_existing"));
         assert_eq!(fields.get("true_black").map(String::as_str), Some("false"));
         let base = CacheSettings {
