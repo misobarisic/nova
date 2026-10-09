@@ -8,6 +8,8 @@ Android can finish the activity when Slint rejects both synthetic Back events.
 The window capture scope depends on a surviving focused item: removing a
 focused input or button can leave Back without a capture chain.
 
+- Returning from Detail restores Home navigation focus on the next tick, after
+  the outgoing Detail scope is removed, keeping row-grid Back inside the app.
 - Leaving the Tracking tab restores Detail navigation focus. Adjust cancellation
   and suggestion reloads focus the persistent Tracking panel scope.
 - Leaving episode search for another tab or an episode's streams clears its edit

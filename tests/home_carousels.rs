@@ -167,4 +167,41 @@ fn carousels_render_headers_open_subpages_and_subpage_scrolls() {
         app.get_home_all_scroll_y() < 0.0,
         "subpage grid must scroll vertically"
     );
+    // Detail replaces Home while open. On return both component creation
+    // and outgoing focus teardown happen in the same update.
+    app.set_modal_visible(true);
+    idle(400);
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+            text: slint::platform::Key::Back.into(),
+        });
+    idle(400);
+    assert!(!app.get_modal_visible(), "system Back must close Detail");
+    assert_eq!(app.get_home_view(), 1, "Detail must preserve the row grid");
+
+    let backgrounds = Rc::new(Cell::new(0));
+    app.on_exit_to_background({
+        let backgrounds = backgrounds.clone();
+        move || backgrounds.set(backgrounds.get() + 1)
+    });
+    for event in [
+        slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        },
+        slint::platform::WindowEvent::KeyReleased {
+            text: slint::platform::Key::Back.into(),
+        },
+    ] {
+        assert!(matches!(
+            app.window().dispatch_event_with_result(event),
+            Ok(slint::platform::WindowEventDispatchResult::Accepted)
+        ));
+    }
+    idle(400);
+    assert_eq!(app.get_home_view(), 0, "system Back must return to Home");
+    assert_eq!(backgrounds.get(), 0, "subpage Back must stay in the app");
 }

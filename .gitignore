@@ -7,3 +7,6 @@ web-console.log
 *.aab
 /.reasonix/
 /.omx/
+
+# Generated visual output
+/output/

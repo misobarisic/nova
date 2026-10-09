@@ -82,6 +82,17 @@ fn library_cards_fit_and_dispatch_progress_search_views_and_menus() {
                 assert!((fill.absolute_position().y - track.absolute_position().y).abs() < 0.5);
                 assert!((fill.size().width - track.size().width * fraction).abs() < 0.5);
             }
+            for (track, count) in elements(&app, "library_progress_track")
+                .into_iter()
+                .zip(elements(&app, "library_episode_count"))
+            {
+                let rail_center = track.absolute_position().y + track.size().height / 2.0;
+                let count_center = count.absolute_position().y + count.size().height / 2.0;
+                assert!(
+                    (rail_center - count_center).abs() < 0.5,
+                    "progress rail and count must align at {width}px, list={list}"
+                );
+            }
             let counts: Vec<_> = elements(&app, "library_episode_count")
                 .iter()
                 .filter_map(|e| e.accessible_label())

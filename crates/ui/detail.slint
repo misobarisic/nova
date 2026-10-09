@@ -2365,12 +2365,9 @@ export component DetailPage {
                                             // Fixed shared width (see ep_card_w):
                                             // keeps every column equal.
                                             width: root.ep_card_w;
-                                            // Sparse episodes need only badge and text space;
-                                            // reserve the artwork canvas once an image or
-                                            // synopsis is actually available.
-                                            height: !e.has_thumb && e.details == ""
-                                                ? Math.max(124px, episode_content.preferred-height + 76px)
-                                                : Math.max(240px, self.width * 0.43);
+                                            // Keep the full canvas even when artwork and
+                                            // synopsis metadata are unavailable.
+                                            height: Math.max(240px, self.width * 0.43);
                                             // Hard containment: on some renderer
                                             // paths overflowing text is painted
                                             // past its element instead of being

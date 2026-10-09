@@ -74,8 +74,8 @@ fn artwork_cards_contain_text_and_only_show_recorded_playback() {
             }
         }
     }
-    // Missing/unpublished artwork should not leave a full-size empty canvas.
-    // Mix compact and full cards to cover the wide grid's shared row layout.
+    // Missing artwork and synopsis metadata retain the full card canvas.
+    // Mix metadata availability to cover the wide grid's shared row layout.
     app.set_episode_rows(
         Rc::new(VecModel::from(vec![
             nova::EpisodeRow {
@@ -115,22 +115,16 @@ fn artwork_cards_contain_text_and_only_show_recorded_playback() {
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(400));
         let cards = elements(&app, "ep_card");
         assert_eq!(cards.len(), 4);
-        assert!(
-            cards[0].size().height < 170.0,
-            "compact placeholder at {width}px"
-        );
-        assert!(
-            cards[1].size().height < 210.0,
-            "long compact footer at {width}px"
-        );
-        assert!(
-            cards[2].size().height >= 240.0,
-            "artwork keeps its canvas at {width}px"
-        );
-        assert!(
-            cards[3].size().height >= 240.0,
-            "synopsis keeps its canvas at {width}px"
-        );
+        for card in &cards {
+            assert!(
+                card.size().height >= 240.0,
+                "every episode keeps its full canvas at {width}px"
+            );
+            assert!(
+                (card.size().height - cards[2].size().height).abs() < 0.5,
+                "missing metadata must not change card height at {width}px"
+            );
+        }
         for child in elements(&app, "episode_content") {
             let p = child.absolute_position();
             let size = child.size();
@@ -143,7 +137,7 @@ fn artwork_cards_contain_text_and_only_show_recorded_playback() {
                         && p.x + size.width <= origin.x + bounds.width + 0.5
                         && p.y + size.height <= origin.y + bounds.height - 10.0
                 }),
-                "compact content must clear badges and fit its card at {width}px"
+                "episode content must clear badges and fit its card at {width}px"
             );
         }
     }

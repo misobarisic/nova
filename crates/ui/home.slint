@@ -1807,6 +1807,9 @@ export component HomePage {
         root.kb_follow();
     }
     changed view => {
+        // Subpage navigation removes the phone bar and changes visible
+        // controls. Keep Android Back attached to a surviving focus scope.
+        nav_scope.focus();
         if (root.view != 0) {
             root.kb_zone = 1;
         }
@@ -1841,6 +1844,17 @@ export component HomePage {
         root.view = kind;
     }
 
+    // Detail and Home are swapped in one update. Detail's teardown can
+    // clear the focus assigned during Home's init, so reclaim it next tick.
+    return_focus_t := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => {
+            self.stop();
+            nav_scope.focus();
+        }
+    }
+
     // Subpage row entrance. Deferred one tick (like the detail page fade):
     // flipping during creation would be treated as the baseline and not
     // animate. `sub_revealed` defaults true, so a re-created HomePage
@@ -1867,6 +1881,7 @@ export component HomePage {
             init => {
                 self.focus();
                 root.last_system_back_request = root.system_back_request;
+                return_focus_t.start();
             }
             key-pressed(e) => {
                 if (e.text == Key.UpArrow) {
