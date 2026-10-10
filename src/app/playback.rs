@@ -616,6 +616,9 @@ impl Bridge {
 
     /// Recompute library badges in place (no poster/model rebuild).
     pub(super) fn update_library_badges(&self) {
+        if self.shared.lock().unwrap().restoring_models {
+            return;
+        }
         let Some(app) = self.app() else {
             return;
         };
@@ -749,6 +752,41 @@ pub(crate) fn write_torrent_settings(settings: &TorrentSettings) {
 pub(crate) fn active_torrent_settings() -> TorrentSettings {
     CURRENT_TORRENT_SETTINGS.lock().unwrap().clone()
 }
+#[cfg(feature = "desktop")]
+impl Bridge {
+    /// Create the session on a worker after Home's first completed render.
+    pub(super) fn start_torrent_after_first_frame(&self) {
+        let settings = active_torrent_settings();
+        if !settings.enabled || crate::torrent::engine().is_some() {
+            return;
+        }
+        let dir = torrent_cache_dir();
+        let b = self.clone();
+        thread::spawn(move || {
+            let engine = {
+                let _phase = crate::startup_bench::span("torrent_engine_start");
+                crate::torrent::TorrentEngine::setup(dir.clone(), &settings)
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                let current = active_torrent_settings();
+                if b.app().is_some()
+                    && current.enabled
+                    && torrent_cache_dir() == dir
+                    && crate::torrent::engine().is_none()
+                {
+                    // Setup already used the startup settings. Live edits
+                    // start/update their own engine, which the guard above keeps.
+                    // Reapplying here could purge a no-cache session on the UI thread.
+                    crate::torrent::install(engine);
+                    b.refresh_torrent_disk_usage();
+                } else {
+                    thread::spawn(move || drop(engine));
+                }
+            });
+        });
+    }
+}
+
 /// Default folder the torrent session downloads into.
 pub(crate) fn torrent_cache_dir() -> PathBuf {
     let s = active_torrent_settings();

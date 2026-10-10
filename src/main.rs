@@ -14,5 +14,9 @@
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "desktop")]
+    if nova::startup_bench::initialize(std::time::Instant::now())? {
+        return Ok(());
+    }
     nova::app::run()
 }

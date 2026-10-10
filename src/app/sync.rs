@@ -707,62 +707,47 @@ impl Bridge {
     /// Push all current local state into the sync store. Called once at
     /// startup/after enabling; a no-op for records that already match.
     pub(super) fn sync_seed(&self) {
-        let (entries, progress, hidden, addons, settings) = {
-            let state = self.shared.lock().unwrap();
-            (
-                state.entries.clone(),
-                state.progress.clone(),
-                state.continue_hidden.clone(),
-                state
-                    .installed
-                    .iter()
-                    .map(|a| AddonStore {
-                        url: a.url.clone(),
-                        enabled: a.enabled,
-                        configure_ok: a.configure_ok,
-                        label: a.label.clone(),
-                    })
-                    .collect::<Vec<_>>(),
-                state.cache_settings.clone(),
-            )
-        };
-        for (key, domain, raw) in [
-            ("library", DOMAIN_LIBRARY, serde_json::to_string(&entries)),
-            (
-                "episode_progress",
-                DOMAIN_PROGRESS,
-                serde_json::to_string(&progress),
-            ),
-            (
-                "continue_hidden",
-                DOMAIN_CONTINUE_HIDDEN,
-                serde_json::to_string(&hidden),
-            ),
-            (
-                VIEWING_ACTIVITY_KEY,
-                DOMAIN_VIEWING_ACTIVITY,
-                serde_json::to_string(&read_viewing_activity()),
-            ),
-            (
-                NEW_EPISODES_HIDDEN_KEY,
-                DOMAIN_NEW_EPISODES_HIDDEN,
-                serde_json::to_string(
-                    &read_json::<HashMap<String, Vec<String>>>(NEW_EPISODES_HIDDEN_KEY)
-                        .unwrap_or_default(),
-                ),
-            ),
-            ("addons", DOMAIN_ADDONS, serde_json::to_string(&addons)),
-            (
-                "settings",
-                DOMAIN_SETTINGS,
-                serde_json::to_string(&settings),
-            ),
+        // Check the durable baseline before cloning/serializing large histories.
+        // Local writes already commit snapshots atomically with sync records.
+        for (key, domain) in [
+            ("library", DOMAIN_LIBRARY),
+            ("episode_progress", DOMAIN_PROGRESS),
+            ("continue_hidden", DOMAIN_CONTINUE_HIDDEN),
+            (VIEWING_ACTIVITY_KEY, DOMAIN_VIEWING_ACTIVITY),
+            (NEW_EPISODES_HIDDEN_KEY, DOMAIN_NEW_EPISODES_HIDDEN),
+            ("addons", DOMAIN_ADDONS),
+            ("settings", DOMAIN_SETTINGS),
         ] {
             let result = (|| -> nova_sync::Result<()> {
-                if storage::try_get_str(&format!("sync:baseline:{domain}"))?.is_none() {
-                    persist_sync_snapshot(key, &raw?, true)?;
+                if storage::try_get_str(&format!("sync:baseline:{domain}"))?.is_some() {
+                    return Ok(());
                 }
-                Ok(())
+                let state = self.shared.lock().unwrap();
+                let raw = match key {
+                    "library" => serde_json::to_string(&state.entries)?,
+                    "episode_progress" => serde_json::to_string(&state.progress)?,
+                    "continue_hidden" => serde_json::to_string(&state.continue_hidden)?,
+                    "addons" => serde_json::to_string(
+                        &state
+                            .installed
+                            .iter()
+                            .map(|a| AddonStore {
+                                url: a.url.clone(),
+                                enabled: a.enabled,
+                                configure_ok: a.configure_ok,
+                                label: a.label.clone(),
+                            })
+                            .collect::<Vec<_>>(),
+                    )?,
+                    "settings" => serde_json::to_string(&state.cache_settings)?,
+                    VIEWING_ACTIVITY_KEY => serde_json::to_string(&read_viewing_activity())?,
+                    NEW_EPISODES_HIDDEN_KEY => serde_json::to_string(
+                        &read_json::<HashMap<String, Vec<String>>>(key).unwrap_or_default(),
+                    )?,
+                    _ => unreachable!(),
+                };
+                drop(state);
+                persist_sync_snapshot(key, &raw, true)
             })();
             if let Err(e) = result {
                 storage::report(storage::Error::new(storage::ErrorKind::Transaction, e));
@@ -771,6 +756,15 @@ impl Bridge {
     }
 
     pub(super) fn replay_sync_projection(&self) {
+        self.replay_sync_projection_inner(true);
+    }
+
+    /// Restore unapplied headless changes before deriving the first UI models.
+    pub(super) fn restore_sync_projection(&self) {
+        self.replay_sync_projection_inner(false);
+    }
+
+    fn replay_sync_projection_inner(&self, publish_models: bool) {
         if let Ok(owner) = nova_sync::local_store() {
             let pending = {
                 let mut store = owner.lock().unwrap();
@@ -781,13 +775,33 @@ impl Bridge {
                 store.pending_domains()
             };
             if !pending.is_empty() {
-                self.sync_apply(pending);
+                self.sync_apply_inner(pending, publish_models);
             }
         }
     }
 
     /// Apply remote records for the given domains. Runs on the UI thread.
     pub(super) fn sync_apply(&self, domains: Vec<String>) {
+        self.sync_apply_inner(domains, true);
+    }
+
+    fn sync_apply_inner(&self, domains: Vec<String>, publish_models: bool) {
+        if domains.is_empty() {
+            return;
+        }
+        let library_changed = domains.iter().any(|d| d == DOMAIN_LIBRARY);
+        let models_changed = domains.iter().any(|d| {
+            matches!(
+                d.as_str(),
+                DOMAIN_LIBRARY
+                    | DOMAIN_PROGRESS
+                    | DOMAIN_CONTINUE_HIDDEN
+                    | DOMAIN_VIEWING_ACTIVITY
+                    | DOMAIN_NEW_EPISODES_HIDDEN
+                    | DOMAIN_SETTINGS
+                    | DOMAIN_CATEGORY
+            )
+        });
         let _guard = ApplyingGuard::new();
         let peers_changed = domains.iter().any(|d| d == nova_sync::DOMAIN_PEERS);
         for domain in domains {
@@ -801,7 +815,7 @@ impl Bridge {
                 DOMAIN_VIEWING_ACTIVITY => self.sync_apply_viewing_activity(),
                 DOMAIN_NEW_EPISODES_HIDDEN => self.sync_apply_new_episodes_hidden(),
                 DOMAIN_ADDONS => self.sync_apply_addons(),
-                DOMAIN_SETTINGS | DOMAIN_CATEGORY => self.sync_apply_settings(),
+                DOMAIN_SETTINGS | DOMAIN_CATEGORY => self.sync_apply_settings(publish_models),
                 DOMAIN_CONTINUE_HIDDEN => self.sync_apply_continue_hidden(),
                 nova_tracking::peer::TRACKING_DOMAIN => {
                     // The actor commits tracking state/credentials and acknowledges
@@ -828,7 +842,15 @@ impl Bridge {
                 }
             }
         }
-        self.refresh_library_progress_ui();
+        // Publish once after the whole batch, so every surface sees the same
+        // merged state. Startup publishes its initial models after this replay.
+        if publish_models && models_changed {
+            if library_changed {
+                self.apply_library_to_ui();
+            }
+            self.apply_episode_rows();
+            self.refresh_library_progress_ui();
+        }
         if peers_changed {
             // The mesh grew or shrank: refresh the list and immediately run a
             // pass so newly learned devices are dialed now. `Notify` coalesces
@@ -869,12 +891,6 @@ impl Bridge {
         }
         // Guarded write: keeps the local KV snapshot in step with the store.
         write_persisted_library(&entries);
-        self.apply_library_to_ui();
-        self.rebuild_continue_list();
-        self.rebuild_upcoming_list();
-        self.apply_home_to_ui();
-        self.dispatch_continue_posters();
-        self.dispatch_upcoming_posters();
     }
 
     fn sync_apply_new_episodes_hidden(&self) {
@@ -932,15 +948,6 @@ impl Bridge {
             self.shared.lock().unwrap().progress = merged_map.clone();
         }
         write_progress_map(&merged_map);
-        self.rebuild_continue_list();
-        self.rebuild_upcoming_list();
-        self.update_library_badges();
-        // An open detail modal shows episode rows too: refresh them on the
-        // light path (no thumbnail re-queue) so remote progress lands there.
-        self.apply_episode_rows();
-        self.apply_home_to_ui();
-        self.dispatch_continue_posters();
-        self.dispatch_upcoming_posters();
     }
 
     /// Apply remote Continue Watching removals. The store already resolved
@@ -965,8 +972,6 @@ impl Bridge {
         // Persist locally; the ApplyingGuard keeps this from echoing back, so
         // the local-only stamps are published explicitly below.
         write_continue_hidden(&map);
-        self.rebuild_continue_list();
-        self.apply_home_to_ui();
     }
 
     fn sync_apply_addons(&self) {
@@ -1128,7 +1133,7 @@ impl Bridge {
         }
     }
 
-    fn sync_apply_settings(&self) {
+    fn sync_apply_settings(&self, publish_models: bool) {
         let Some(engine) = projection_store() else {
             return;
         };
@@ -1146,10 +1151,9 @@ impl Bridge {
         }
         set_active_cache_settings(settings.clone());
         write_settings(&settings);
-        self.settings_to_ui();
-        self.apply_home_to_ui();
-        self.dispatch_continue_posters();
-        self.dispatch_upcoming_posters();
+        if publish_models {
+            self.settings_to_ui();
+        }
     }
 }
 
@@ -1172,38 +1176,55 @@ pub(crate) fn backfill_added_at(entries: &mut [LibraryEntry]) -> bool {
 impl Bridge {
     pub(super) fn start_sync(&self) {
         ensure_device_name();
-        match nova_sync::foreground_engine() {
-            Ok(engine) => {
-                // Remote changes arrive on the tokio runtime thread; marshal
-                // them onto the UI thread before touching app state.
-                let b = self.clone();
-                engine.set_on_remote(std::sync::Arc::new(move |domains| {
-                    let b = b.clone();
-                    let _ = slint::invoke_from_event_loop(move || b.sync_apply(domains));
-                }));
-                // Pairing events (requests + completions) likewise marshal.
-                let b = self.clone();
-                engine.set_pair_callback(std::sync::Arc::new(move |event| {
-                    let b = b.clone();
-                    let _ = slint::invoke_from_event_loop(move || b.sync_pair_event(event));
-                }));
-                // Keep the Android periodic job in step with the enable +
-                // background flags: it runs a bounded pass with no Activity.
-                #[cfg(target_os = "android")]
-                crate::app::android_bg::set_periodic_sync(
-                    nova_sync::read_settings().background_enabled,
-                );
-                // A device that has synced before gets the merged state from
-                // the store first; seeding then captures local-only records.
-                let domains = nova_sync::engine().map(|e| e.domains()).unwrap_or_default();
-                if !domains.is_empty() {
-                    self.sync_apply(domains);
-                }
-                self.sync_status_to_ui();
-                if let Some(engine) = nova_sync::engine() {
-                    engine.sync_now();
-                }
+        #[cfg(feature = "desktop")]
+        {
+            if let Some(engine) = nova_sync::engine() {
+                self.attach_sync(engine);
+                return;
             }
+            if self.sync_starting.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            let generation = self.sync_start_generation.fetch_add(1, Ordering::AcqRel) + 1;
+            let b = self.clone();
+            thread::spawn(move || {
+                let result = {
+                    let _phase = crate::startup_bench::span("sync_engine_start");
+                    nova_sync::SyncEngine::setup()
+                };
+                let _ = slint::invoke_from_event_loop(move || {
+                    if b.sync_start_generation.load(Ordering::Acquire) != generation {
+                        // Runtime teardown can wait for worker shutdown too.
+                        thread::spawn(move || drop(result));
+                        return;
+                    }
+                    b.sync_starting.store(false, Ordering::Release);
+                    if !nova_sync::read_settings().enabled || b.app().is_none() {
+                        thread::spawn(move || drop(result));
+                        return;
+                    }
+                    match result {
+                        Ok(engine) => {
+                            if nova_sync::engine().is_none() {
+                                nova_sync::install(engine);
+                            } else {
+                                thread::spawn(move || drop(engine));
+                            }
+                            if let Some(engine) = nova_sync::engine() {
+                                b.attach_sync(engine);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!(target: "nova_sync::app", error = %format_args!("{e:#}"), "could not start sync");
+                            b.sync_status_to_ui();
+                        }
+                    }
+                });
+            });
+        }
+        #[cfg(not(feature = "desktop"))]
+        match nova_sync::foreground_engine() {
+            Ok(engine) => self.attach_sync(engine),
             Err(e) => {
                 tracing::error!(target: "nova_sync::app", error = %format_args!("{e:#}"), "could not start sync");
                 self.sync_status_to_ui();
@@ -1211,8 +1232,38 @@ impl Bridge {
         }
     }
 
+    fn attach_sync(&self, engine: Arc<nova_sync::SyncEngine>) {
+        // Remote changes arrive on the tokio runtime thread; marshal
+        // them onto the UI thread before touching app state.
+        let b = self.clone();
+        engine.set_on_remote(std::sync::Arc::new(move |domains| {
+            let b = b.clone();
+            let _ = slint::invoke_from_event_loop(move || b.sync_apply(domains));
+        }));
+        // Pairing events (requests + completions) likewise marshal.
+        let b = self.clone();
+        engine.set_pair_callback(std::sync::Arc::new(move |event| {
+            let b = b.clone();
+            let _ = slint::invoke_from_event_loop(move || b.sync_pair_event(event));
+        }));
+        // Keep the Android periodic job in step with the enable +
+        // background flags: it runs a bounded pass with no Activity.
+        #[cfg(target_os = "android")]
+        crate::app::android_bg::set_periodic_sync(nova_sync::read_settings().background_enabled);
+        self.replay_sync_projection();
+        self.sync_status_to_ui();
+        if let Some(engine) = nova_sync::engine() {
+            engine.sync_now();
+        }
+    }
+
     /// Stop the sync engine and drop its endpoint.
     pub(super) fn stop_sync(&self) {
+        #[cfg(feature = "desktop")]
+        {
+            self.sync_start_generation.fetch_add(1, Ordering::AcqRel);
+            self.sync_starting.store(false, Ordering::Release);
+        }
         #[cfg(target_os = "android")]
         crate::app::android_bg::set_periodic_sync(false);
         nova_sync::uninstall();
@@ -1419,7 +1470,8 @@ impl Bridge {
         let mut settings = nova_sync::read_settings();
         settings.enable_local_discovery = enabled;
         nova_sync::write_settings(&settings);
-        if nova_sync::is_running() {
+        if settings.enabled {
+            // Invalidate setup in flight too: discovery is fixed at bind time.
             self.stop_sync();
             self.start_sync();
         }

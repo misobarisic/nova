@@ -671,8 +671,12 @@ impl Bridge {
         self.invalidate_home_catalog_rows();
         // Membership changes apply to cached Home content even while Settings
         // is open, and generation guards reject the outgoing addon requests.
-        self.ensure_home_showcase_loaded();
-        self.ensure_home_catalog_rows_loaded();
+        // During startup, saved Home preferences are restored after addons.
+        // Refreshing against the temporary defaults would prune their caches.
+        if !self.shared.lock().unwrap().loading_addons {
+            self.ensure_home_showcase_loaded();
+            self.ensure_home_catalog_rows_loaded();
+        }
 
         if load && has_grid_source {
             self.load_catalog();

@@ -878,6 +878,20 @@ impl Player {
     /// window (the underlay render context is created at the first
     /// `RenderingSetup`, when the GL context is current).
     pub fn setup(app: &AppWindow) -> Self {
+        Self::setup_inner(app, None)
+    }
+
+    /// Observe rendering without registering a second notifier (Slint only
+    /// permits one). The observer must stay cheap and preserve graphics state.
+    /// `AfterRendering` is before presentation, not proof of screen visibility.
+    pub fn setup_with_render_observer(
+        app: &AppWindow,
+        observer: impl FnMut(RenderingState) + 'static,
+    ) -> Self {
+        Self::setup_inner(app, Some(Box::new(observer)))
+    }
+
+    fn setup_inner(app: &AppWindow, mut observer: Option<Box<dyn FnMut(RenderingState)>>) -> Self {
         // Android: register the JavaVM with libavutil before mpv can touch a
         // decoder — direct MediaCodec aborts without it (see
         // [`register_java_vm`]), so which decoder to request is decided here.
@@ -986,7 +1000,11 @@ impl Player {
         let notifier_state = Arc::clone(&state);
         if let Err(e) =
             app.window()
-                .set_rendering_notifier(move |state, graphics_api| match state {
+                .set_rendering_notifier(move |state, graphics_api| {
+                    if let Some(observer) = observer.as_mut() {
+                        observer(state.clone());
+                    }
+                    match state {
                     RenderingState::RenderingSetup => {
                         let mpv = notifier_state.mpv.lock().unwrap();
                         let Some(mpv) = mpv.as_ref() else {
@@ -1318,6 +1336,7 @@ impl Player {
                         }
                     }
                     _ => {}
+                    }
                 })
         {
             *state.mpv_error.lock().unwrap() =

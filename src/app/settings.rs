@@ -1,5 +1,33 @@
 //! Settings page: cache + torrent settings, maintenance.
 use super::*;
+/// One scan per cache, with repeated requests coalesced to the latest path.
+/// Generations reject results computed before a clear or directory change.
+#[derive(Default)]
+pub(super) struct DiskUsageScan {
+    generation: u64,
+    running: bool,
+    pending: Option<(u64, PathBuf)>,
+}
+
+impl DiskUsageScan {
+    fn request(&mut self, path: PathBuf) -> Option<(u64, PathBuf)> {
+        self.generation += 1;
+        self.pending = Some((self.generation, path));
+        if self.running {
+            None
+        } else {
+            self.running = true;
+            self.pending.take()
+        }
+    }
+
+    fn next(&mut self) -> Option<(u64, PathBuf)> {
+        let next = self.pending.take();
+        self.running = next.is_some();
+        next
+    }
+}
+
 static CACHE_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub(super) fn cancel_cache_rewrite() {
@@ -210,12 +238,7 @@ impl Bridge {
 
     /// Refresh the Settings page torrent-cache readout. Native only.
     pub(super) fn refresh_torrent_disk_usage(&self) {
-        if let Some(app) = self.app()
-            && let Some(engine) = crate::torrent::engine()
-        {
-            let bytes = engine.cache_bytes(&torrent_cache_dir());
-            app.set_torrent_disk_usage(SharedString::from(&format_disk_usage(bytes, 0)));
-        }
+        self.refresh_disk_usage(true);
     }
 
     /// Apply a change to the torrent settings: persist + update runtime cache
@@ -229,14 +252,62 @@ impl Bridge {
         self.torrent_settings_to_ui();
     }
 
-    /// Refresh the Settings page disk-usage readout from the on-disk image
-    /// cache. Native only (the row is hidden on web); a metadata-only walk,
-    /// cheap enough to run on page open and after saving.
+    /// Home does not need cache accounting. Scan when Settings is mounted,
+    /// then publish on the UI thread without blocking navigation or painting.
     pub(super) fn refresh_cache_disk_usage(&self) {
-        if let Some(app) = self.app() {
-            let (bytes, files) = poster_cache_disk_usage(&poster_cache_dir());
-            app.set_cache_disk_usage(SharedString::from(&format_disk_usage(bytes, files)));
+        self.refresh_disk_usage(false);
+    }
+
+    fn refresh_disk_usage(&self, torrent: bool) {
+        if !self.app().is_some_and(|app| app.get_show_settings()) {
+            return;
         }
+        let (scan, path) = if torrent {
+            (self.torrent_usage_scan.clone(), torrent_cache_dir())
+        } else {
+            (self.image_usage_scan.clone(), poster_cache_dir())
+        };
+        let Some(mut request) = scan.lock().unwrap().request(path) else {
+            return;
+        };
+        let b = self.clone();
+        thread::spawn(move || {
+            loop {
+                let (generation, path) = request;
+                let (bytes, files) = {
+                    #[cfg(feature = "desktop")]
+                    let _phase = crate::startup_bench::span(if torrent {
+                        "torrent_cache_scan"
+                    } else {
+                        "image_cache_scan"
+                    });
+                    if torrent {
+                        (crate::torrent::cache_bytes(&path), 0)
+                    } else {
+                        poster_cache_disk_usage(&path)
+                    }
+                };
+                let b = b.clone();
+                let published_scan = scan.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if published_scan.lock().unwrap().generation != generation {
+                        return;
+                    }
+                    if let Some(app) = b.app() {
+                        let text = format_disk_usage(bytes, files).into();
+                        if torrent && torrent_cache_dir() == path {
+                            app.set_torrent_disk_usage(text);
+                        } else if !torrent && poster_cache_dir() == path {
+                            app.set_cache_disk_usage(text);
+                        }
+                    }
+                });
+                let Some(next) = scan.lock().unwrap().next() else {
+                    break;
+                };
+                request = next;
+            }
+        });
     }
 
     pub(super) fn show_settings_page(&self) {
@@ -913,6 +984,21 @@ pub(crate) fn write_settings(settings: &CacheSettings) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn disk_usage_requests_coalesce_and_reject_old_results() {
+        let mut scan = super::DiskUsageScan::default();
+        let first = scan.request("old-cache".into()).unwrap();
+        assert!(scan.request("intermediate-cache".into()).is_none());
+        assert!(scan.request("new-cache".into()).is_none());
+        assert_ne!(first.0, scan.generation);
+        let latest = scan.next().unwrap();
+        assert_eq!(latest.1, std::path::PathBuf::from("new-cache"));
+        assert_eq!(latest.0, scan.generation);
+        assert!(scan.next().is_none());
+        assert!(scan.request("cleared-cache".into()).is_some());
+        assert_ne!(latest.0, scan.generation);
+    }
+
     use super::*;
 
     #[test]
@@ -997,9 +1083,44 @@ mod tests {
                     version,
                 },
             );
+            store.apply(
+                DOMAIN_LIBRARY,
+                "startup-remote",
+                nova_sync::Record {
+                    value: Some(
+                        serde_json::json!({
+                            "id": "startup-remote", "type_": "movie", "name": "Headless addition",
+                            "added_at_secs": 1
+                        })
+                        .to_string(),
+                    ),
+                    version,
+                },
+            );
             store.save().unwrap();
         }
-        bridge.sync_apply(vec![DOMAIN_SETTINGS.into()]);
+        assert_eq!(
+            owner.lock().unwrap().pending_domains(),
+            vec![DOMAIN_LIBRARY, DOMAIN_SETTINGS]
+        );
+        assert_eq!(app.get_library().row_count(), 0);
+        bridge.restore_sync_projection();
+        assert_eq!(
+            bridge.shared.lock().unwrap().entries[0].id,
+            "startup-remote"
+        );
+        assert_eq!(read_persisted_library()[0].id, "startup-remote");
+        assert_eq!(
+            app.get_library().row_count(),
+            0,
+            "startup replay must defer model construction"
+        );
+        bridge.apply_library_to_ui();
+        bridge.settings_to_ui();
+        assert_eq!(app.get_library().row_count(), 1);
+        assert!(owner.lock().unwrap().pending_domains().is_empty());
+        // A subsequent no-op replay must keep the already published models.
+        bridge.replay_sync_projection();
         assert_eq!(
             bridge
                 .shared

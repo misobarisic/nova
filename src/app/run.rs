@@ -32,6 +32,10 @@ fn note_nav_switch(bridge: &Bridge, next: i32) {
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "desktop")]
+    let startup = crate::startup_bench::span("startup");
+    #[cfg(feature = "desktop")]
+    let window_setup = crate::startup_bench::span("window_setup");
     crate::diagnostics::init();
     net::init_metadata_transport();
     // Native desktop: in-app playback renders through mpv's OpenGL underlay
@@ -49,6 +53,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let app = AppWindow::new()?;
+    #[cfg(feature = "desktop")]
+    drop(window_setup);
+    #[cfg(feature = "desktop")]
+    let licenses = crate::startup_bench::span("license_models");
     app.set_license_catalog(OPEN_SOURCE_LICENSE_CATALOG.into());
     app.set_license_sources(
         Rc::new(VecModel::<LicenseSource>::from(
@@ -56,7 +64,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .into(),
     );
-    storage::init_at(&app_data_dir());
+    #[cfg(feature = "desktop")]
+    drop(licenses);
+    {
+        #[cfg(feature = "desktop")]
+        let _storage = crate::startup_bench::span("storage_open");
+        storage::init_at(&app_data_dir());
+    }
     nova_providers::set_metadata_cache(Arc::new(io::ProviderMetadataCache));
     crate::web_log("nova: window created");
 
@@ -94,6 +108,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Shared stale-response guard for catalog fetches (both targets).
     let catalog_gen = Arc::new(AtomicU64::new(0));
 
+    #[cfg(feature = "desktop")]
+    let poster_workers = crate::startup_bench::span("poster_workers");
     #[cfg(feature = "desktop")]
     // Poster download pipeline (off-thread decode + per-generation cache).
     // Dual intake: `hi` carries near-viewport (pre)loads from `visible_range`,
@@ -235,8 +251,33 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // In-app player (same window, like the reference prototype): mpv underlay
     // on desktop, HTML5 video element on web. Same public API either way.
+    #[cfg(feature = "desktop")]
+    drop(poster_workers);
+    #[cfg(feature = "desktop")]
+    let player_setup = crate::startup_bench::span("player_setup");
+    #[cfg(feature = "desktop")]
+    let after_first_frame = Rc::new(std::cell::RefCell::new(None::<Box<dyn FnOnce()>>));
+    #[cfg(feature = "desktop")]
+    let first_frame_job = after_first_frame.clone();
+    #[cfg(feature = "desktop")]
+    let player = crate::startup_bench::player(&app, move |state| {
+        if matches!(state, slint::RenderingState::AfterRendering)
+            && let Some(job) = first_frame_job.borrow_mut().take()
+        {
+            // Leave the rendering notifier before starting workers or touching
+            // models: the GL context still belongs to Slint here.
+            slint::Timer::single_shot(Duration::ZERO, job);
+        }
+    });
+    #[cfg(not(feature = "desktop"))]
     let player = crate::player::Player::setup(&app);
-    let downloads = DownloadCoordinator::new(app_data_dir().join("downloads"));
+    #[cfg(feature = "desktop")]
+    drop(player_setup);
+    let downloads = {
+        #[cfg(feature = "desktop")]
+        let _downloads = crate::startup_bench::span("download_reconciliation");
+        DownloadCoordinator::new(app_data_dir().join("downloads"))
+    };
 
     #[cfg(feature = "desktop")]
     let bridge = Bridge::new(
@@ -255,13 +296,21 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         downloads,
     );
 
-    bridge.initialize_tracking();
+    bridge.shared.lock().unwrap().restoring_models = true;
+
+    {
+        #[cfg(feature = "desktop")]
+        let _tracking = crate::startup_bench::span("tracking_worker_start");
+        bridge.initialize_tracking();
+    }
 
     // Publish the bridge for the Android camera scanner's JNI entry point
     // (android_qr.rs), which runs off the UI thread.
     crate::app::bridge::install_global_bridge(&bridge);
 
     // Handler wiring.
+    #[cfg(feature = "desktop")]
+    let callback_wiring = crate::startup_bench::span("callback_wiring");
     let b = bridge.clone();
     app.on_addon_added(move |url| b.add_addon(&url));
 
@@ -724,6 +773,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_library_view_changed(move || b.library_view_changed());
 
+    #[cfg(feature = "desktop")]
+    drop(callback_wiring);
+    #[cfg(feature = "desktop")]
+    let addon_restore = crate::startup_bench::span("addon_restore");
+
     // Startup addon set: the persisted KV list first, plus any
     // extra URLs from NOVA_ADDONS / --addon. Both are installed from their
     // cached manifest when available (no server ping); the cache is only
@@ -774,6 +828,26 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.shared.lock().unwrap().loading_addons = false;
     bridge.persist_installed();
 
+    #[cfg(feature = "desktop")]
+    drop(addon_restore);
+    #[cfg(feature = "desktop")]
+    let settings_restore = crate::startup_bench::span("settings_restore");
+
+    // Restore preferences before deriving Home models: applying Home with
+    // temporary defaults would prune the saved poster-rail catalog cache.
+    // These settings also control the first artwork decode/encode requests.
+    {
+        let mut state = bridge.shared.lock().unwrap();
+        state.cache_settings = read_settings();
+        state.download_settings = read_download_settings();
+        set_active_cache_settings(state.cache_settings.clone());
+    }
+    bridge.settings_to_ui();
+    #[cfg(feature = "desktop")]
+    drop(settings_restore);
+    #[cfg(feature = "desktop")]
+    let library_restore = crate::startup_bench::span("library_restore");
+
     // Library: restore saved items and render them in the Library page.
     {
         let mut state = bridge.shared.lock().unwrap();
@@ -791,7 +865,25 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     bridge.migrate_viewing_activity();
+    #[cfg(feature = "desktop")]
+    drop(library_restore);
+    {
+        #[cfg(feature = "desktop")]
+        let _local_sync = crate::startup_bench::span("local_sync_projection");
+        // Only unapplied records need replay; snapshots already materialized
+        // by previous launches/local writes are authoritative and cheap to load.
+        bridge.sync_seed();
+        bridge.restore_sync_projection();
+        bridge.settings_to_ui();
+    }
+    #[cfg(feature = "desktop")]
+    let library_models = crate::startup_bench::span("library_models");
+    bridge.shared.lock().unwrap().restoring_models = false;
     bridge.apply_library_to_ui();
+    #[cfg(feature = "desktop")]
+    drop(library_models);
+    #[cfg(feature = "desktop")]
+    let home_models = crate::startup_bench::span("home_models");
     // Home landing page: derive Continue Watching, New episodes and Upcoming
     // from viewing activity, playback history and cached episode air dates.
     bridge.rebuild_continue_list();
@@ -800,21 +892,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.dispatch_continue_posters();
     bridge.dispatch_upcoming_posters();
     bridge.dispatch_home_catalog_posters();
-
-    // Settings: restore the image-cache preferences and mirror them to the
-    // Settings page (also used by the cache encode pipeline).
-    {
-        let mut state = bridge.shared.lock().unwrap();
-        state.cache_settings = read_settings();
-        state.download_settings = read_download_settings();
-        set_active_cache_settings(state.cache_settings.clone());
-    }
-    bridge.settings_to_ui();
+    #[cfg(feature = "desktop")]
+    drop(home_models);
+    #[cfg(feature = "desktop")]
+    let home_catalogs = crate::startup_bench::span("home_catalog_restore_and_refresh");
     // Restore selected featured catalogs from local storage before the first
     // frame, then refresh in the background. Pending manifests do not block
     // cached titles; their completion retries the corresponding live fetch.
     bridge.refresh_home_showcase();
     bridge.refresh_home_catalog_rows();
+    #[cfg(feature = "desktop")]
+    drop(home_catalogs);
+    #[cfg(feature = "desktop")]
+    let torrent_setup = crate::startup_bench::span("torrent_settings_and_engine");
 
     // Torrent settings: restore + mirror into the runtime cache read by the
     // engine and the player-close cleanup path.
@@ -824,31 +914,38 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     bridge.torrent_settings_to_ui();
 
-    // Embedded BitTorrent streaming (native only; the web build has no
-    // librqbit): only start the process-wide session when torrent playback
-    // is enabled, so the disabled default costs no threads or sockets. The
-    // engine is started lazily if the user enables it later.
-    sync_torrent_engine(&active_torrent_settings());
-    bridge.downloads.start();
-
-    // Cross-device sync (opt-in). Binds no socket unless enabled in Settings.
-    // Android also reconciles the periodic JobScheduler job with the enable +
-    // background flags, so a disabled sync/background cancels a stale job.
+    #[cfg(feature = "desktop")]
+    drop(torrent_setup);
+    #[cfg(not(feature = "desktop"))]
     let sync_settings = nova_sync::read_settings();
-    // Initialize/migrate socket-free mutation ownership before networking or
-    // projection. Headless changes remain authoritative over old snapshots.
-    bridge.sync_seed();
-    if let Ok(store) = nova_sync::local_store() {
-        let domains = store.lock().unwrap().domains();
-        bridge.sync_apply(domains);
-    }
     #[cfg(target_os = "android")]
     crate::app::android_bg::set_periodic_sync(
         sync_settings.enabled && sync_settings.background_enabled,
     );
-    if sync_settings.enabled {
-        bridge.start_sync();
+    #[cfg(not(feature = "desktop"))]
+    {
+        sync_torrent_engine(&active_torrent_settings());
+        bridge.downloads.start();
+        if sync_settings.enabled {
+            bridge.start_sync();
+        }
     }
+    #[cfg(feature = "desktop")]
+    {
+        let b = bridge.clone();
+        *after_first_frame.borrow_mut() = Some(Box::new(move || {
+            b.start_torrent_after_first_frame();
+            b.downloads.start();
+            if nova_sync::read_settings().enabled {
+                b.start_sync();
+            }
+        }));
+    }
+
+    #[cfg(feature = "desktop")]
+    crate::startup_bench::models_ready(&app);
+    #[cfg(feature = "desktop")]
+    let player_callbacks = crate::startup_bench::span("player_callback_wiring");
 
     // In-app player overlay callbacks (same window).
     let p = player.clone();
@@ -966,6 +1063,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let p = player.clone();
     app.on_tracks_popup_opened(move |_kind| p.refresh_tracks());
 
+    #[cfg(feature = "desktop")]
+    drop(player_callbacks);
+    #[cfg(feature = "desktop")]
+    let timers = crate::startup_bench::span("timer_setup");
+
     // OSD auto-hide: show on activity, hide after inactivity — 3 s while
     // playing, 5 s while paused so the controls linger for resume.
     // Android keeps paused controls visible so Home/screen-off restoration
@@ -1069,6 +1171,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     crate::web_log("nova: startup complete, entering event loop");
+    #[cfg(feature = "desktop")]
+    drop(timers);
+    #[cfg(feature = "desktop")]
+    drop(startup);
+    #[cfg(feature = "desktop")]
+    let _benchmark_timer = crate::startup_bench::observe(&app);
     let result = app.run();
     bridge.shutdown_tracking();
     result?;

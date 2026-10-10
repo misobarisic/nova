@@ -263,6 +263,8 @@ struct Shared {
     /// True while the initial set of addons is being loaded at startup.
     /// Suppresses the "All addons are disabled" hint until loading finishes.
     loading_addons: bool,
+    /// Language changes during restore must not derive partial Library models.
+    restoring_models: bool,
     /// Items offset for the next page in endless-scroll pagination.
     next_skip: usize,
     /// Set when a page adds 0 new items (no more pages to fetch).
@@ -750,6 +752,12 @@ struct Bridge {
     tracking: tracking::StateHandle,
     downloads_seen: Arc<AtomicU64>,
     stream_seq: Arc<AtomicU64>,
+    image_usage_scan: Arc<Mutex<settings::DiskUsageScan>>,
+    torrent_usage_scan: Arc<Mutex<settings::DiskUsageScan>>,
+    #[cfg(feature = "desktop")]
+    sync_start_generation: Arc<AtomicU64>,
+    #[cfg(feature = "desktop")]
+    sync_starting: Arc<AtomicBool>,
 }
 
 mod addon_mgr;

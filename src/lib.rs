@@ -35,6 +35,10 @@ pub use nova_torrent as torrent;
 pub mod app;
 mod diagnostics;
 
+/// Opt-in desktop startup measurements and fixture preparation.
+#[cfg(feature = "desktop")]
+pub mod startup_bench;
+
 // Android entry point: cargo-apk / xbuild launch `android_main`, not
 // `main`. Initializes the Slint Android backend, then runs the same catalog
 // app as desktop (src/main.rs calls `app::run()` the same way).

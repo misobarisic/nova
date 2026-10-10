@@ -3033,6 +3033,45 @@ mod tests {
             )],
         );
         write_json(HOME_SHOWCASE_CACHE_KEY, &cached);
+        write_json(HOME_CATALOG_ROWS_CACHE_KEY, &cached);
+
+        // Startup restores cached addon manifests before Home preferences.
+        // That bulk restore must not prune catalogs using temporary defaults.
+        let saved_settings = {
+            let mut state = bridge.shared.lock().unwrap();
+            state.loading_addons = true;
+            std::mem::take(&mut state.cache_settings)
+        };
+        write_cached_manifest_for(
+            &source.addon_url,
+            &serde_json::from_value(
+                serde_json::json!({"id":"home-fixture", "name":"Fixture", "version":"1"}),
+            )
+            .unwrap(),
+        );
+        bridge.install_persisted(&source.addon_url, true, Some(false), None);
+        assert_eq!(
+            read_json::<HomeShowcaseCache>(HOME_SHOWCASE_CACHE_KEY)
+                .unwrap()
+                .catalogs
+                .len(),
+            1,
+            "bulk addon restore must preserve cached Home catalogs"
+        );
+        assert_eq!(
+            read_json::<HomeShowcaseCache>(HOME_CATALOG_ROWS_CACHE_KEY)
+                .unwrap()
+                .catalogs
+                .len(),
+            1,
+            "bulk addon restore must also preserve cached poster rails"
+        );
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.loading_addons = false;
+            state.cache_settings = saved_settings;
+            state.installed[0].available = false;
+        }
         bridge.refresh_home_showcase();
         assert_eq!(app.get_home_featured_title(), "cached-a");
         assert_eq!(app.get_home_featured_release_info(), "2016");

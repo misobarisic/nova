@@ -194,8 +194,9 @@ impl Store {
                 }
             }
         }
-        if let Some(raw) = nova_storage::try_get_str(PENDING_KEY)? {
-            store.pending_domains = serde_json::from_str(&raw).context("projection metadata")?;
+        let projection_metadata = nova_storage::try_get_str(PENDING_KEY)?;
+        if let Some(raw) = &projection_metadata {
+            store.pending_domains = serde_json::from_str(raw).context("projection metadata")?;
         }
         for (row, value) in nova_storage::try_scan_prefix(RECORD_PREFIX)? {
             let Some((domain, key)) = parse_record_row_key(&row) else {
@@ -216,7 +217,17 @@ impl Store {
             }
         }
         store.reconcile_clock();
+        store.ensure_projection_metadata(projection_metadata.is_some());
         Ok(store)
+    }
+
+    /// Older stores have no receipts proving their snapshots were applied.
+    /// Replay once during migration rather than skipping potentially newer records.
+    fn ensure_projection_metadata(&mut self, present: bool) {
+        if !present && !self.domains.is_empty() {
+            self.pending_domains.extend(self.domains.keys().cloned());
+            self.clock_dirty = true;
+        }
     }
 
     /// Mark every live record for rewrite (used by the legacy migration).
@@ -540,6 +551,7 @@ fn legacy_to_store(raw: &str) -> Result<Store, &'static str> {
     migrate_legacy(&mut value);
     let mut store = serde_json::from_value::<Store>(value).map_err(|_| "unexpected schema")?;
     store.reconcile_clock();
+    store.ensure_projection_metadata(false);
     Ok(store)
 }
 
@@ -694,10 +706,27 @@ mod tests {
     }
 
     #[test]
+    fn missing_projection_receipts_require_one_replay() {
+        let mut store = Store::default();
+        store.set("library", "a", Some("local".into()), 0, 7);
+        assert!(store.pending_domains().is_empty());
+        store.ensure_projection_metadata(true);
+        assert!(store.pending_domains().is_empty());
+        store.ensure_projection_metadata(false);
+        assert_eq!(store.pending_domains(), vec!["library"]);
+        let basis = store.digest()["library"].clone();
+        store.mark_projected("library", &basis).unwrap();
+        assert!(store.pending_domains().is_empty());
+        store.ensure_projection_metadata(true);
+        assert!(store.pending_domains().is_empty());
+    }
+
+    #[test]
     fn legacy_blob_parses_and_migrates_pre_hlc() {
         // Seconds-resolution `ts`, no `counter`: migrated to ms + counter.
         let raw = r#"{"domains":{"library":{"a":{"value":"1","version":{"ts":1700000000,"dev":7,"deleted":false}}}},"hlc":{"physical_ms":1700000000000,"counter":0}}"#;
         let store = legacy_to_store(raw).unwrap();
+        assert_eq!(store.pending_domains(), vec!["library"]);
         let v = store.digest()["library"]["a"];
         assert_eq!(v.ts, 1_700_000_000_000);
         assert_eq!(v.counter, 0);
