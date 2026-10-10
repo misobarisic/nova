@@ -1,9 +1,11 @@
 # My Library — behavior reference
 
 How entries, buckets, episode counts, badges, categories and menus behave.
-Derived state (buckets, badges, episode counts) is always computed locally from
-library entries + playback progress + the cached episode list — nothing about
-it is stored or synced. Code: `src/app/library.rs`, `src/app/episodes.rs`
+Buckets, badges and episode counts are computed locally from library entries,
+playback progress, cached episodes and a synced viewing-activity checkpoint.
+The checkpoint distinguishes an active backlog from a completed show awaiting
+return; new metadata alone never starts viewing. Code: `src/app/library.rs`,
+`src/app/watch_state.rs`, `src/app/episodes.rs`
 (pure helpers, unit-tested in `src/app/tests.rs`), UI in `crates/ui/library.slint`.
 
 ## Terms
@@ -14,8 +16,9 @@ it is stored or synced. Code: `src/app/library.rs`, `src/app/episodes.rs`
   usable date at all (dateless/unparseable count as released: only a *known
   future* date holds an episode back).
 - **Unaired**: known air date in the future. Included in the card’s full
-  episode total, but excluded from “N left” counts and never auto-marked or offered — but completion requires every known episode
-  watched, so an unaired tail blocks Completed.
+  episode total, but excluded from “N left” counts and never auto-marked or
+  offered. An unaired tail does not block Completed or the library’s
+  watched/unwatched action toggle.
 - **Watched**: sticky per-episode flag. Set automatically at ≥ 90% of known
   duration (`WATCHED_FRACTION`) or on natural end, or manually. Once set,
   position/duration are kept so un-toggling restores the resume rail.
@@ -45,24 +48,61 @@ it is stored or synced. Code: `src/app/library.rs`, `src/app/episodes.rs`
 
 ## Automatic buckets (the filter bar)
 
-The horizontal pill order is fixed: **All, Watching, Completed, On Hold,
-Dropped, Plan to Watch**, then user categories. Labels are localized, values stay English,
-so a translation can never leak into the data.
+The horizontal pill order is fixed: **All, Watching, New episodes, Completed,
+On Hold, Dropped, Plan to Watch**, then user categories. Labels are localized.
+The New episodes filter uses `builtin:new_episodes`, keeping existing user
+categories called “New episodes” independently selectable; other bucket values
+retain their English identifiers.
 
 | Bucket | Rule |
 |---|---|
 | Plan to Watch | No progress record at all (untouched movies, added-but-never-played series). |
-| Watching | Any progress, not Completed. |
-| Completed | **Every known episode watched.** Unaired episodes can never be watched, so a series with episodes still to come never completes. Needs a cached episode list. |
+| Watching | A started, incomplete viewing run, including its next unstarted episode. Legacy backlogs without a checkpoint conservatively stay here. |
+| New episodes | Previously completed (or explicitly awaiting return), with dated released episodes outstanding, without resumed meaningful playback. |
+| Completed | **All known dated, released episodes watched**, without unfinished meaningful playback in the known list. Future episodes and untouched dateless extras do not block it. A dateless-only list completes only when every known episode is watched. Establishing completion needs a cached episode list; an existing checkpoint survives missing metadata. The show need not have ended. |
 | On Hold / Dropped | Pinned manually per entry (card menu → status); overrides the derived bucket. Back-to-automatic clears the pin. |
 
-Pinned entries appear under their pin only — never under the three auto
+Pinned entries appear under their pin only — never under the automatic
 buckets. A pin replaces the card’s status pill, while resume text and the
 watched/total rail remain derived from progress.
 
 Quirk, documented as-is: movies have no episode list, so a fully watched
 movie buckets as Watching (not Completed) and has no episode rail — it reads
 `✓ Seen` instead (see below).
+
+## Returning shows and Home
+
+Completing the available episodes checkpoints `AwaitingReturn`. A future
+announcement leaves Completed intact and appears in Upcoming; a released
+unwatched episode moves the show to New episodes. Opening details or streams
+and short playback below 10 seconds do not start a new viewing run. Meaningful
+progress switches the phase to Active and the bucket to Watching; finishing
+one episode leaves an existing backlog active. Manual watch/unwatch actions
+reconcile the same checkpoint, atomically with progress persistence.
+
+Home separates active Continue Watching from New episodes. The latter has one
+card per title, targets the earliest available unwatched episode, counts all
+available releases, and sorts by the newest outstanding release date. Each
+section has its own See all grid, keyboard route and removal behavior. New
+episodes removal hides the current episode-ID batch until a different episode
+becomes available, independently of Continue Watching removal. On Hold and
+Dropped titles appear in neither viewing rail nor Upcoming.
+
+`viewing_activity:v1` and `new_episodes_hidden:v1` are JSON snapshots with
+per-title sync records in `viewing_activity` and `new_episodes_hidden`. Activity
+is retained with history after library removal. Migration checkpoints existing
+completed entries, but cannot reconstruct a completion that occurred before
+new episodes were already present. For watched series with an unstarted backlog,
+**Wait for new episodes** ends the active run without changing watched flags;
+**Resume watching** reactivates it. These actions are available in Library and
+Detail and preserve manual pins. All availability uses the existing UTC-day
+convention and refreshes at the day boundary while the app remains open.
+
+Settings → Home can reorder, hide, remove or restore New episodes. Legacy
+layouts get it between Continue Watching and Upcoming; explicitly customized
+`home_rows` layouts retain their exact selection and can add it through the
+built-in picker. Older clients keep their previous UI and do not interpret the
+new activity domains. External tracking statuses remain independent.
 
 ## Card anatomy: status, watched/total rail and resume text
 
@@ -72,7 +112,7 @@ rail and “watched / total” count appear only when at least one known episode
 is marked watched. The total includes the whole cached list (specials,
 dateless and announced episodes); partial playback and stale progress for
 unknown episode IDs do not inflate the count. Movies and unknown totals have
-no episode rail. Completed series show their status and a full rail.
+no episode rail. Completed series can have an incomplete rail when future or dateless episodes remain.
 
 The **playback text** below still counts dated, released episodes only;
 dateless episodes do not feed “N left” and unaired ones are tallied separately.
@@ -81,10 +121,11 @@ Resume (latest-updated resumable position) beats that text count.
 | Situation | Badge | Bucket |
 |---|---|---|
 | Fresh series, nothing watched | (none — no noise) | Plan to Watch |
-| Partially watched | `N left` (+ `· M unaired`) | Watching |
+| Partially watched active run | `N left` (+ `· M unaired`) | Watching |
+| Previously completed, new releases unstarted | `N left` (+ tail) | New episodes |
 | Mid-episode (resume available) | `▶ Resume <Title>` (+ tail) | Watching |
-| All dated released watched, unaired tail | `Caught up · N unaired` | Watching |
-| All dated watched, untouched dateless pending, no tail | `Caught up` | Watching |
+| All dated released watched, unaired tail | `Caught up · N unaired` | Completed |
+| All dated watched, untouched dateless pending, no tail | `Caught up` | Completed |
 | All dated watched, started dateless episode | `▶ Resume <Title>` | Watching |
 | Everything watched, nothing unaired | (none — status and full rail) | Completed |
 | Nothing dated released, unaired known | `N unaired` | Plan to Watch if untouched, else Watching |
@@ -109,7 +150,8 @@ bottom sheet on touch. Desktop right-click also pops the menu at the cursor;
 touch hold or right-click opens the same bottom sheet, whose Cancel row closes it.
 Rows: **Open** (same as tapping the card), **Mark series as
 watched/unwatched** (label flips with state), **Mark as On Hold / Dropped /
-Back to automatic**, **Remove from library**. All indices resolve against the
+Back to automatic**, **Wait for new episodes / Resume watching** (when
+applicable), **Remove from library**. All indices resolve against the
 currently filtered/sorted view. A touch sheet closes if a background refresh
 replaces its row, preventing its old index from acting on a different show.
 

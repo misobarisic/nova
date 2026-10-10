@@ -792,6 +792,7 @@ export component DetailPage {
     in-out property <string> episode_filter: "";
     in-out property <bool> in_library: false;
     in property <bool> library_watched: false;
+    in property <int> library_activity_action: 0;
     private property <bool> hero_library_focused: false;
     in-out property <[CategoryRow]> category_rows: [];
     in-out property <int> selected_category_count: 0;
@@ -1296,6 +1297,7 @@ export component DetailPage {
         { label: @tr("Back to automatic"), enabled: true },
         { label: @tr("Categories"), enabled: root.category_rows.length > 0 },
         { label: @tr("Remove from library"), enabled: true },
+        { label: root.library_activity_action == 4 ? @tr("Resume watching") : @tr("Wait for new episodes"), enabled: root.library_activity_action > 0 },
     ];
 
     function open_library_menu() {
@@ -1306,7 +1308,7 @@ export component DetailPage {
     function library_menu_picked(a: int) {
         root.close_menu();
         if (a == 4) { root.open_categories(); }
-        else { root.library_action(a == 5 ? 4 : a); }
+        else { root.library_action(a == 6 ? (root.library_activity_action == 4 ? 6 : 5) : a == 5 ? 4 : a); }
     }
 
     function request_stream_action(id: string) {

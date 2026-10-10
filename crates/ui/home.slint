@@ -106,6 +106,7 @@ component ContinueCard inherits Rectangle {
     // "Enter series": open the detail page without starting playback.
     callback enter_requested();
     callback remove_requested();
+    in property <string> removal_label: @tr("Remove from Continue Watching");
 
     width: card-width;
     // True 2:3 poster at any width + 76px footer reserves title, episode
@@ -129,7 +130,7 @@ component ContinueCard inherits Rectangle {
             }
             MenuSeparator {}
             MenuItem {
-                title: @tr("Remove from Continue Watching");
+                title: root.removal_label;
                 activated => { root.remove_requested(); }
             }
         }
@@ -1262,12 +1263,14 @@ export component HomePage {
     preferred-height: 100%;
 
     in-out property <[ContinueRow]> continue_rows: [];
+    in-out property <[ContinueRow]> new_episode_rows: [];
+    property <[ContinueRow]> episode_grid_rows: root.view == -3 ? root.new_episode_rows : root.continue_rows;
     in-out property <[UpcomingRow]> upcoming_rows: [];
     in property <[HomeCatalogSection]> catalog_sections: [];
-    // Configured order: -1 Continue, -2 Upcoming, otherwise catalog section.
-    in property <[int]> catalog_order: [-1, -2];
-    // Positions indexed by Continue, Upcoming, then addon section index.
-    in property <[int]> catalog_positions: [0, 1];
+    // Configured order: -1 Continue, -2 Upcoming, -3 New episodes, otherwise catalog section.
+    in property <[int]> catalog_order: [-1, -3, -2];
+    // Positions indexed by Continue, Upcoming, addon sections, then New episodes.
+    in property <[int]> catalog_positions: [0, 2, 1];
     in property <[HomeCatalogCard]> catalog_cards: [];
     callback catalog_card_picked(int);
     // Upcoming calendar (month view inside the "see all" subpage, toggled by
@@ -1296,7 +1299,7 @@ export component HomePage {
     in property <int> featured_count;
     in property <int> featured_revision;
     in property <bool> featured_refresh_pending;
-    // 0 = landing, 1 = all Continue, 2 = all Upcoming, 3 + section index = catalog grid.
+    // 0 = landing, 1 = all Continue, 2 = all Upcoming, -3 = all New episodes, 3 + section index = catalog grid.
     in-out property <int> view: 0;
     in property <int> system_back_request: 0;
     property <int> last_system_back_request: -1;
@@ -1330,6 +1333,7 @@ export component HomePage {
     // Conditional headers report their actual positions; wrapped headings
     // and a taller showcase must not invalidate keyboard scroll estimates.
     property <length> continue_top: 0px;
+    property <length> new_episodes_top: 0px;
     property <length> upcoming_top: 0px;
     // Stagger only when transitions are on, so disabling animations makes
     // the cards appear at once (no per-card delay left running).
@@ -1398,6 +1402,9 @@ export component HomePage {
     callback library_picked();
     callback settings_picked();
     callback continue_picked(int);
+    callback new_episode_picked(int);
+    callback new_episode_enter(int);
+    callback new_episode_remove(int);
     // Card menu actions, all resolved against the current library view in the
     // backend: `continue_picked` plays the resume episode (the card tap too),
     // `continue_enter` opens the detail page without starting playback, and
@@ -1426,6 +1433,7 @@ export component HomePage {
     property <bool> menu_open: false;
     property <int> menu_idx: 0;
     property <bool> menu_upcoming: false;
+    property <bool> menu_new: false;
 
     function open_continue_menu(idx: int) {
         if (root.menu_open) {
@@ -1433,11 +1441,20 @@ export component HomePage {
             return;
         }
         root.menu_upcoming = false;
+        root.menu_new = false;
+        root.menu_idx = idx;
+        root.menu_open = true;
+    }
+
+    function open_new_episode_menu(idx: int) {
+        root.menu_upcoming = false;
+        root.menu_new = true;
         root.menu_idx = idx;
         root.menu_open = true;
     }
 
     function open_upcoming_menu(idx: int) {
+        root.menu_new = false;
         root.menu_upcoming = true;
         root.menu_idx = idx;
         root.menu_open = true;
@@ -1465,6 +1482,7 @@ export component HomePage {
     in-out property <length> scroll_y: 0px;
     in-out property <length> all_scroll_y: 0px;
     in-out property <length> continue_x: 0px;
+    in-out property <length> new_episodes_x: 0px;
     in-out property <length> upcoming_x: 0px;
 
     // Compact layout for narrow (portrait) windows.
@@ -1485,8 +1503,8 @@ export component HomePage {
     in property <bool> touch_menus: false;
 
     // ---- 6-button keyboard nav (arrows + Enter + Backspace) ----
-    // Landing zones: 0 page-nav, 1 Continue, 2 Upcoming, 3 catalog rails.
-    // Subpage: zone 1 is the grid. Backspace pops the subpage. Bound to
+    // Landing zones: 0 page-nav, 1 Continue, 2 Upcoming, 3 catalog rails, 4 New episodes.
+    // Subpage: zone 1 is the grid, or zone 4 for New episodes. Backspace pops the subpage. Bound to
     // AppWindow (survives page recreation).
     in-out property <int> kb_zone: 0;
     in-out property <int> kb_nav: 0;
@@ -1507,7 +1525,7 @@ export component HomePage {
         if (root.view == 2) {
             return root.upcoming_rows.length;
         }
-        return root.continue_rows.length;
+        return root.view == -3 || (root.view == 0 && root.kb_zone == 4) ? root.new_episode_rows.length : root.continue_rows.length;
     }
 
     function kb_clamp_idx() {
@@ -1557,13 +1575,14 @@ export component HomePage {
     function catalog_has_cards(id: int) -> bool {
         if (id == -1) { return root.continue_rows.length > 0; }
         if (id == -2) { return root.upcoming_rows.length > 0; }
+        if (id == -3) { return root.new_episode_rows.length > 0; }
         return id >= 0 && id < root.catalog_sections.length && root.catalog_sections[id].card_count > 0;
     }
 
     // Rust publishes compact positions, omitting hidden and empty catalogs.
     function catalog_position(id: int) -> int {
-        let slot = id == -1 ? 0 : id == -2 ? 1 : id + 2;
-        if (id < -2 || slot >= root.catalog_positions.length) { return -1; }
+        let slot = id == -1 ? 0 : id == -2 ? 1 : id == -3 ? root.catalog_sections.length + 2 : id + 2;
+        if (id < -3 || slot >= root.catalog_positions.length) { return -1; }
         return root.catalog_positions[slot];
     }
 
@@ -1573,7 +1592,8 @@ export component HomePage {
         if (root.kb_zone == 3 && root.kb_idx >= 0 && root.kb_idx < root.catalog_cards.length) {
             return root.catalog_cards[root.kb_idx].section_index;
         }
-        return -3;
+        if (root.kb_zone == 4) { return -3; }
+        return -4;
     }
 
     // Arrow navigation follows the displayed catalog order, including addon
@@ -1585,6 +1605,7 @@ export component HomePage {
         let candidate = root.catalog_order[target];
         if (candidate == -1) { root.kb_zone = 1; }
         else if (candidate == -2) { root.kb_zone = 2; }
+        else if (candidate == -3) { root.kb_zone = 4; root.kb_idx = 0; }
         else { root.kb_zone = 3; root.kb_idx = root.catalog_sections[candidate].first_card; }
         root.kb_clamp_idx();
     }
@@ -1599,7 +1620,7 @@ export component HomePage {
             }
         } else if (root.kb_zone == 0) {
             root.kb_nav = Math.mod(root.kb_nav + 3, 4);
-        } else if (root.kb_zone == 1) {
+        } else if (root.kb_zone == 1 || root.kb_zone == 4) {
             if (root.kb_idx > 0) {
                 root.kb_idx -= 1;
             }
@@ -1625,8 +1646,8 @@ export component HomePage {
             }
         } else if (root.kb_zone == 0) {
             root.kb_nav = Math.mod(root.kb_nav + 1, 4);
-        } else if (root.kb_zone == 1) {
-            if (root.kb_idx + 1 < root.continue_rows.length) {
+        } else if (root.kb_zone == 1 || root.kb_zone == 4) {
+            if (root.kb_idx + 1 < root.active_len()) {
                 root.kb_idx += 1;
             }
         } else if (root.kb_zone == 3) {
@@ -1649,6 +1670,8 @@ export component HomePage {
             if (root.kb_idx >= 0 && root.kb_idx < root.active_len()) {
                 if (root.view >= 3) {
                     root.catalog_card_picked(root.catalog_cards[root.catalog_sections[root.view - 3].first_card + root.kb_idx].flat_index);
+                } else if (root.view == -3) {
+                    root.new_episode_picked(root.kb_idx);
                 } else if (root.view == 2) {
                     root.upcoming_picked(root.kb_idx);
                 } else {
@@ -1669,6 +1692,8 @@ export component HomePage {
             if (root.kb_idx >= 0 && root.kb_idx < root.continue_rows.length) {
                 root.continue_picked(root.kb_idx);
             }
+        } else if (root.kb_zone == 4) {
+            if (root.kb_idx >= 0 && root.kb_idx < root.new_episode_rows.length) { root.new_episode_picked(root.kb_idx); }
         } else if (root.kb_zone == 3) {
             if (root.kb_idx >= 0 && root.kb_idx < root.catalog_cards.length) {
                 root.catalog_card_picked(root.catalog_cards[root.kb_idx].flat_index);
@@ -1720,6 +1745,12 @@ export component HomePage {
             rail_continue.content-x = root.rail_show(rail_continue.content-x, x, cw, rail_continue.width, rail_continue.content-width);
             root.kb_scroll_to(continue_section.absolute-position.y - landing_rows.absolute-position.y + landing_rows.y,
                 continue_rail_host.absolute-position.y - landing_rows.absolute-position.y + landing_rows.y + continue_rail_host.height);
+        } else if (root.kb_zone == 4 && root.new_episode_rows.length > 0) {
+            let cw = root.rail_item_width;
+            let x = n_row.padding-left + root.kb_idx * (cw + root.item-gap);
+            rail_new_episodes.content-x = root.rail_show(rail_new_episodes.content-x, x, cw, rail_new_episodes.width, rail_new_episodes.content-width);
+            root.kb_scroll_to(new_episode_section.absolute-position.y - landing_rows.absolute-position.y + landing_rows.y,
+                new_episode_rail_host.absolute-position.y - landing_rows.absolute-position.y + landing_rows.y + new_episode_rail_host.height);
         } else if (root.kb_zone == 2 && root.upcoming_rows.length > 0) {
             let cw = root.rail_item_width;
             let x = u_row.padding-left + root.kb_up_idx * (cw + root.item-gap);
@@ -1783,7 +1814,12 @@ export component HomePage {
     changed kb_idx => { root.kb_follow(); }
     changed kb_up_idx => { root.kb_follow(); }
     changed kb_zone => { root.kb_follow(); }
+    changed new_episode_rows => {
+        if (root.menu_new) { root.close_menu(); }
+        root.kb_clamp_idx(); root.kb_follow();
+    }
     changed continue_rows => {
+        if (!root.menu_new && !root.menu_upcoming) { root.close_menu(); }
         root.kb_clamp_idx();
         root.kb_follow();
     }
@@ -1811,7 +1847,7 @@ export component HomePage {
         // controls. Keep Android Back attached to a surviving focus scope.
         nav_scope.focus();
         if (root.view != 0) {
-            root.kb_zone = 1;
+            root.kb_zone = root.view == -3 ? 4 : 1;
         }
         root.kb_clamp_idx();
         root.kb_follow();
@@ -1831,7 +1867,7 @@ export component HomePage {
     // are on) and resets the subpage scroll so a fresh list starts at the top.
     function open_subpage(kind: int) {
         root.kb_active = false;
-        root.kb_zone = 1;
+        root.kb_zone = kind == -3 ? 4 : 1;
         root.kb_idx = 0;
         root.all_scroll_y = 0px;
         sub_scroll.content-y = 0px;
@@ -2035,6 +2071,7 @@ export component HomePage {
                                 padding-right: 18px + root.safe-right;
                                 padding-top: root.featured_count == 0 ? 18px + root.safe-top : 0px;
                                 if root.continue_rows.length == 0
+                                    && root.new_episode_rows.length == 0
                                     && root.upcoming_rows.length == 0
                                     && root.catalog_sections.length == 0
                                     && root.featured_count == 0
@@ -2056,7 +2093,7 @@ export component HomePage {
                                     width: 100%; spacing: 0px;
                                     continue_section := Rectangle {
                                         row: root.catalog_position(-1) >= 0 ? root.catalog_position(-1) : root.catalog_order.length; col: 0;
-                                        visible: root.catalog_position(-1) >= 0;
+                                        visible: root.catalog_position(-1) >= 0 && root.continue_rows.length > 0;
                                         height: self.visible ? continue_content.preferred-height : 0px;
                                         width: 100%;
                                         changed y => { root.continue_top = self.y; }
@@ -2134,9 +2171,90 @@ export component HomePage {
 
                                         }
                                     }
+                                    new_episode_section := Rectangle {
+                                        row: root.catalog_position(-3) >= 0 ? root.catalog_position(-3) : root.catalog_order.length; col: 0;
+                                        visible: root.catalog_position(-3) >= 0 && root.new_episode_rows.length > 0;
+                                        height: self.visible ? new_episode_content.preferred-height : 0px;
+                                        width: 100%;
+                                        changed y => { root.new_episodes_top = self.y; }
+                                        new_episode_content := VerticalLayout {
+                                            width: 100%; spacing: 4px; padding-bottom: 24px;
+                                            // ---- New episodes -------------------------
+                                            if root.new_episode_rows.length > 0: SectionHeader {
+                                                title: @tr("New episodes");
+                                                count: root.new_episode_rows.length;
+                                                open_all => { root.open_subpage(-3); }
+                                            }
+
+
+                                            // Horizontal carousel: the inner Flickable owns
+                                            // dragging and native momentum, like the stream
+                                            // filter pills. Cards report early axis hints so
+                                            // the vertical page does not steal the gesture.
+                                            new_episode_rail_host := Rectangle {
+                                                visible: root.new_episode_rows.length > 0;
+                                                width: 100%;
+                                                height: root.rail_h + 8px;
+
+                                                rail_new_episodes := Flickable {
+                                                    // Bleed the scroll clip to the screen edges while
+                                                    // the first card keeps the section's safe inset.
+                                                    x: -18px - (root.narrow ? root.safe-left : 0px);
+                                                    width: content_host.width;
+                                                    height: 100%;
+                                                    interactive: root.view == 0;
+                                                    mouse-drag-pan-enabled: true;
+                                                    content-width: n_row.width;
+                                                    content-height: self.height;
+                                                    init => { self.content-x = root.new_episodes_x; }
+                                                    changed content-x => {
+                                                        root.new_episodes_x = self.content-x;
+                                                        if (!root.kb_active && root.view == 0) { root.rail_panned(); }
+                                                    }
+
+                                                    n_row := HorizontalLayout {
+                                                        y: 8px;
+                                                        height: root.rail_h;
+                                                        width: self.preferred-width;
+                                                        padding-left: 18px + (root.narrow ? root.safe-left : 0px);
+                                                        padding-right: 18px + root.safe-right;
+                                                        spacing: root.item-gap;
+
+                                                        for c[i] in root.new_episode_rows: ContinueCard {
+                                                            entry: c;
+                                                            removal_label: @tr("Remove from New episodes");
+                                                            card-width: root.rail_item_width;
+                                                            tappable: root.view == 0;
+                                                            rail-gesture: root.view == 0;
+                                                            touch_menus: root.touch_menus;
+                                                            focused: root.kb_active && root.kb_zone == 4 && root.kb_idx == i;
+                                                            pointer_pressed => { root.kb_active = false; }
+                                                            picked => {
+                                                                root.kb_active = false;
+                                                                root.kb_zone = 4;
+                                                                root.kb_idx = i;
+                                                                root.new_episode_picked(i);
+                                                            }
+                                                            menu_requested => {
+                                                                if (root.touch_menus) { root.open_new_episode_menu(i); }
+                                                            }
+                                                            enter_requested => { root.new_episode_enter(i); }
+                                                            remove_requested => { root.new_episode_remove(i); }
+                                                            pan_hint => {
+                                                                root.kb_active = false;
+                                                                root.rail_panned();
+                                                            }
+                                                            pan_release => { root.rail_pan_released(); }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                        }
+                                    }
                                     upcoming_section := Rectangle {
                                         row: root.catalog_position(-2) >= 0 ? root.catalog_position(-2) : root.catalog_order.length + 1; col: 0;
-                                        visible: root.catalog_position(-2) >= 0;
+                                        visible: root.catalog_position(-2) >= 0 && root.upcoming_rows.length > 0;
                                         height: self.visible ? upcoming_content.preferred-height : 0px;
                                         width: 100%;
                                         changed y => { root.upcoming_top = self.y; }
@@ -2346,7 +2464,7 @@ export component HomePage {
 
                             Text {
                                 text: root.view >= 3 ? root.catalog_sections[root.view - 3].title
-                                    : root.view == 2 ? @tr("Upcoming") : @tr("Continue Watching");
+                                    : root.view == -3 ? @tr("New episodes") : root.view == 2 ? @tr("Upcoming") : @tr("Continue Watching");
                                 font-size: 22px;
                                 font-weight: 700;
                                 color: Theme.current.text_bright;
@@ -2415,7 +2533,7 @@ export component HomePage {
                                     spacing: 12px;
 
                                     // ---- All Continue Watching ------
-                                    if root.view == 1: VerticalLayout {
+                                    if root.view == 1 || root.view == -3: VerticalLayout {
                                         width: 100%;
                                         spacing: 12px;
 
@@ -2428,33 +2546,34 @@ export component HomePage {
                                                 width: root.grid_cols * (root.grid_item_width + root.item-gap) - root.item-gap;
                                                 spacing: root.item-gap;
 
-                                                for c[i] in root.continue_rows: ContinueCard {
+                                                for c[i] in root.episode_grid_rows: ContinueCard {
                                                     row: Math.floor(i / root.grid_cols);
                                                     col: Math.mod(i, root.grid_cols);
 
                                                     entry: c;
+                                                    removal_label: root.view == -3 ? @tr("Remove from New episodes") : @tr("Remove from Continue Watching");
                                                     card-width: root.grid_item_width;
                                                     touch_menus: root.touch_menus;
-                                                    focused: root.kb_active && root.kb_zone == 1 && root.kb_idx == i;
+                                                    focused: root.kb_active && root.kb_idx == i;
                                                     reveal: root.sub_revealed;
                                                     reveal-delay: root.stagger ? i * 30ms : 0ms;
                                                     pointer_pressed => { root.kb_active = false; }
                                                     picked => {
                                                         root.kb_active = false;
-                                                        root.kb_zone = 1;
+                                                        root.kb_zone = root.view == -3 ? 4 : 1;
                                                         root.kb_idx = i;
-                                                        root.continue_picked(i);
+                                                        if (root.view == -3) { root.new_episode_picked(i); } else { root.continue_picked(i); }
                                                     }
                                                     menu_requested => {
                                                         if (root.touch_menus) {
-                                                            root.open_continue_menu(i);
+                                                            if (root.view == -3) { root.open_new_episode_menu(i); } else { root.open_continue_menu(i); }
                                                         }
                                                     }
                                                     enter_requested => {
-                                                        root.continue_enter(i);
+                                                        if (root.view == -3) { root.new_episode_enter(i); } else { root.continue_enter(i); }
                                                     }
                                                     remove_requested => {
-                                                        root.continue_remove(i);
+                                                        if (root.view == -3) { root.new_episode_remove(i); } else { root.continue_remove(i); }
                                                     }
                                                 }
                                             }
@@ -2754,18 +2873,24 @@ export component HomePage {
             max_h: root.height * 0.85;
             sheet_title: root.menu_upcoming && root.menu_idx >= 0 && root.menu_idx < root.upcoming_rows.length
                 ? root.upcoming_rows[root.menu_idx].title
+                : root.menu_new && root.menu_idx >= 0 && root.menu_idx < root.new_episode_rows.length
+                ? root.new_episode_rows[root.menu_idx].title
                 : root.menu_idx >= 0 && root.menu_idx < root.continue_rows.length
                 ? root.continue_rows[root.menu_idx].title
                 : @tr("Continue Watching");
             items: root.menu_upcoming ? [ { label: @tr("Enter series"), enabled: true } ] : [
                 { label: @tr("Play"), enabled: true },
                 { label: @tr("Enter series"), enabled: true },
-                { label: @tr("Remove from Continue Watching"), enabled: true },
+                { label: root.menu_new ? @tr("Remove from New episodes") : @tr("Remove from Continue Watching"), enabled: true },
             ];
             picked(a) => {
                 if (root.menu_upcoming) {
                     root.kb_active = false;
                     root.upcoming_picked(root.menu_idx);
+                } else if (root.menu_new) {
+                    if (a == 0) { root.new_episode_picked(root.menu_idx); }
+                    else if (a == 1) { root.new_episode_enter(root.menu_idx); }
+                    else { root.new_episode_remove(root.menu_idx); }
                 } else if (a == 0) {
                     root.kb_active = false;
                     root.kb_zone = 1;

@@ -438,6 +438,7 @@ pub fn tr(english: &'static str) -> &'static str {
         "✓ Seen" => "✓ Pogledano",
         "▶ Resume" => "▶ Nastavite",
         "Caught up" => "Sve pogledano",
+        "New episodes" => "Nove epizode",
         "Specials" => "Specijali",
         "Episode" => "Epizoda",
         "Resume" => "Nastavite",
@@ -1196,6 +1197,26 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
                 .into()
             })
             .unwrap_or_else(|| value.to_string()),
+    }
+}
+
+/// Released episodes awaiting an explicit return to viewing.
+pub fn new_episodes(count: usize) -> String {
+    if croatian() {
+        format!(
+            "{count} {}",
+            plural(
+                count as u64,
+                "nova epizoda",
+                "nove epizode",
+                "novih epizoda"
+            )
+        )
+    } else {
+        format!(
+            "{count} new {}",
+            if count == 1 { "episode" } else { "episodes" }
+        )
     }
 }
 

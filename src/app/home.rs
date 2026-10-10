@@ -1326,31 +1326,87 @@ impl Bridge {
                 latest.insert(p.series_id.clone(), p);
             }
         }
+        self.migrate_viewing_activity();
+        let activity = read_viewing_activity();
+        let new_hidden: HashMap<String, Vec<String>> =
+            read_json(NEW_EPISODES_HIDDEN_KEY).unwrap_or_default();
+        let mut new_episodes = Vec::new();
         let mut list: Vec<ContinueEntry> = Vec::new();
         for e in &entries {
+            if e.watch_status != WatchStatus::Auto {
+                continue;
+            }
             let Some(p) = latest.get(&e.id) else { continue };
             // Explicitly removed from Home: stays hidden until a newer progress
             // update (a resume, local or from a synced peer) appears.
-            if hidden.get(&e.id).is_some_and(|at| *at >= p.updated_at_secs) {
-                continue;
-            }
             let episodes = if e.type_ == "movie" {
                 None
             } else {
                 read_episodes_cache_for(&e.type_, &e.id)
             };
-            let Some(episode_id) =
+            let bucket = activity_bucket(
+                &e.id,
+                episodes.as_deref().unwrap_or_default(),
+                &progress,
+                activity.get(&e.id),
+                today_days(),
+            );
+            if bucket == "Completed" {
+                continue;
+            }
+            let returning = e.type_ != "movie" && bucket == "New episodes";
+            let episode_id = if returning {
+                next_episode_to_watch(&e.id, episodes.as_deref().unwrap_or_default(), &progress)
+                    .map(|v| v.id.clone())
+            } else {
                 continue_resume_id(&e.type_, &e.id, p, episodes.as_deref(), &progress)
-            else {
+            };
+            let Some(episode_id) = episode_id else {
                 continue;
             };
-            list.push(ContinueEntry {
+            if returning {
+                let available =
+                    new_episode_ids(&e.id, episodes.as_deref().unwrap_or_default(), &progress);
+                if new_hidden
+                    .get(&e.id)
+                    .is_some_and(|hidden| available.iter().all(|id| hidden.contains(id)))
+                {
+                    continue;
+                }
+            } else if hidden.get(&e.id).is_some_and(|at| *at >= p.updated_at_secs) {
+                continue;
+            }
+            let card = ContinueEntry {
                 series_id: e.id.clone(),
                 type_: e.type_.clone(),
                 episode_id,
                 updated_at_secs: p.updated_at_secs,
-            });
+            };
+            if returning {
+                new_episodes.push(card);
+            } else {
+                list.push(card);
+            }
         }
+        new_episodes.sort_by_key(|entry| {
+            let episodes =
+                read_episodes_cache_for(&entry.type_, &entry.series_id).unwrap_or_default();
+            let newest = episodes
+                .iter()
+                .filter(|v| {
+                    episode_has_air_date(v)
+                        && episode_is_out(v, today_days())
+                        && !progress
+                            .get(&progress_map_key(&entry.series_id, &v.id))
+                            .is_some_and(|p| p.watched)
+                })
+                .filter_map(|v| v.released.as_deref().and_then(iso_days))
+                .max()
+                .unwrap_or(0);
+            (std::cmp::Reverse(newest), entry.series_id.clone())
+        });
+        new_episodes.truncate(CONTINUE_MAX);
+        self.shared.lock().unwrap().new_episodes_list = new_episodes;
         list.sort_by_key(|c| std::cmp::Reverse(c.updated_at_secs));
         list.truncate(CONTINUE_MAX);
         self.shared.lock().unwrap().continue_list = list;
@@ -1385,15 +1441,29 @@ impl Bridge {
     /// entries for title/poster and the episode cache for the label).
     /// Posters paint instantly when already decoded, otherwise dispatch.
     pub(super) fn current_continue_rows(&self) -> Vec<ContinueRow> {
+        self.current_episode_home_rows(false)
+    }
+
+    pub(super) fn current_new_episode_rows(&self) -> Vec<ContinueRow> {
+        self.current_episode_home_rows(true)
+    }
+
+    fn current_episode_home_rows(&self, new: bool) -> Vec<ContinueRow> {
         let (entries, progress, list, enabled, episode_artwork) = {
             let state = self.shared.lock().unwrap();
             (
                 state.entries.clone(),
                 state.progress.clone(),
-                state.continue_list.clone(),
-                state
-                    .cache_settings
-                    .home_row_enabled(&HomeRowSource::ContinueWatching),
+                if new {
+                    state.new_episodes_list.clone()
+                } else {
+                    state.continue_list.clone()
+                },
+                state.cache_settings.home_row_enabled(if new {
+                    &HomeRowSource::NewEpisodes
+                } else {
+                    &HomeRowSource::ContinueWatching
+                }),
                 state.cache_settings.home_episode_artwork,
             )
         };
@@ -1431,18 +1501,31 @@ impl Bridge {
                     subtitle: SharedString::from(&subtitle),
                     episode_title: video.map(episode_row_label).unwrap_or_default().into(),
                     ep_no: video.map(episode_badge).unwrap_or_default().into(),
-                    remaining: continue_remaining(record).into(),
+                    remaining: if new {
+                        text::new_episodes(
+                            new_episode_ids(&c.series_id, &episodes, &progress).len(),
+                        )
+                        .into()
+                    } else {
+                        continue_remaining(record).into()
+                    },
                     art_url: art_url.into(),
                     poster,
                     is_loaded,
-                    progress: fraction,
-                    badge,
+                    progress: if new { 0.0 } else { fraction },
+                    badge: if new {
+                        2
+                    } else if badge == 2 {
+                        1
+                    } else {
+                        badge
+                    },
                 })
             })
             .collect()
     }
 
-    /// Push the current Continue Watching + Upcoming rows to the Home page,
+    /// Push the current Continue Watching, New episodes and Upcoming rows to Home,
     /// plus the Upcoming calendar models (healed first, so a rebuild that
     /// moved air dates never leaves the calendar on a dead month/day).
     pub(super) fn apply_home_to_ui(&self) {
@@ -1450,11 +1533,16 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_home_continue(Rc::new(VecModel::from(self.current_continue_rows())).into());
             app.set_home_upcoming(Rc::new(VecModel::from(self.current_upcoming_rows())).into());
+            app.set_home_new_episodes(
+                Rc::new(VecModel::from(self.current_new_episode_rows())).into(),
+            );
             let settings = self.shared.lock().unwrap().cache_settings.clone();
             if (app.get_home_view() == 1
                 && !settings.home_row_enabled(&HomeRowSource::ContinueWatching))
                 || (app.get_home_view() == 2
                     && !settings.home_row_enabled(&HomeRowSource::Upcoming))
+                || (app.get_home_view() == -3
+                    && !settings.home_row_enabled(&HomeRowSource::NewEpisodes))
             {
                 app.set_home_view(0);
             }
@@ -1471,6 +1559,7 @@ impl Bridge {
         let Some(app) = self.app() else { return };
         let continue_count = app.get_home_continue().row_count();
         let upcoming_count = app.get_home_upcoming().row_count();
+        let new_count = app.get_home_new_episodes().row_count();
         let order = {
             let state = self.shared.lock().unwrap();
             state
@@ -1481,6 +1570,7 @@ impl Bridge {
                 .filter_map(|row| match row.source {
                     HomeRowSource::ContinueWatching if continue_count > 0 => Some(-1),
                     HomeRowSource::Upcoming if upcoming_count > 0 => Some(-2),
+                    HomeRowSource::NewEpisodes if new_count > 0 => Some(-3),
                     HomeRowSource::Addon(source) => state
                         .home_catalog_row_groups
                         .iter()
@@ -1490,11 +1580,12 @@ impl Bridge {
                 })
                 .collect::<Vec<_>>()
         };
-        let mut positions = vec![-1; app.get_home_catalog_sections().row_count() + 2];
+        let mut positions = vec![-1; app.get_home_catalog_sections().row_count() + 3];
         for (position, id) in order.iter().enumerate() {
             let slot = match id {
                 -1 => 0,
                 -2 => 1,
+                -3 => app.get_home_catalog_sections().row_count() + 2,
                 id => *id as usize + 2,
             };
             if let Some(value) = positions.get_mut(slot) {
@@ -1511,21 +1602,30 @@ impl Bridge {
         self.refresh_home_watch_action();
         let Some(app) = self.app() else { return };
 
-        let continue_rows = self.current_continue_rows();
-        let continue_model = app.get_home_continue();
-        if continue_model.row_count() == continue_rows.len() {
-            for (index, fresh) in continue_rows.into_iter().enumerate() {
-                if let Some(mut current) = continue_model.row_data(index)
-                    && (current.subtitle != fresh.subtitle || current.remaining != fresh.remaining)
-                {
-                    current.subtitle = fresh.subtitle;
-                    current.episode_title = fresh.episode_title;
-                    current.remaining = fresh.remaining;
-                    continue_model.set_row_data(index, current);
+        for new in [false, true] {
+            let rows = self.current_episode_home_rows(new);
+            let model = if new {
+                app.get_home_new_episodes()
+            } else {
+                app.get_home_continue()
+            };
+            if model.row_count() == rows.len() {
+                for (index, fresh) in rows.into_iter().enumerate() {
+                    if let Some(mut current) = model.row_data(index)
+                        && (current.subtitle != fresh.subtitle
+                            || current.remaining != fresh.remaining)
+                    {
+                        current.subtitle = fresh.subtitle;
+                        current.episode_title = fresh.episode_title;
+                        current.remaining = fresh.remaining;
+                        model.set_row_data(index, current);
+                    }
                 }
+            } else if new {
+                app.set_home_new_episodes(Rc::new(VecModel::from(rows)).into());
+            } else {
+                app.set_home_continue(Rc::new(VecModel::from(rows)).into());
             }
-        } else {
-            app.set_home_continue(Rc::new(VecModel::from(continue_rows)).into());
         }
 
         let upcoming_rows = self.current_upcoming_rows();
@@ -1594,7 +1694,7 @@ impl Bridge {
         let today = today_days();
         let mut upcoming: Vec<UpcomingEntry> = Vec::new();
         for e in &entries {
-            if e.type_ == "movie" {
+            if e.type_ == "movie" || e.watch_status != WatchStatus::Auto {
                 continue;
             }
             let episodes = read_episodes_cache_for(&e.type_, &e.id).unwrap_or_default();
@@ -1685,12 +1785,7 @@ impl Bridge {
                 .map(|u| u.series_id.clone())
         };
         let Some(series_id) = series_id else { return };
-        let lib_idx = self
-            .current_library_view()
-            .iter()
-            .position(|e| e.id == series_id);
-        let Some(lib_idx) = lib_idx else { return };
-        self.open_library_item(lib_idx);
+        self.episode_home_enter(&series_id);
     }
 
     /// Main thread: a Continue Watching card was picked — open the series
@@ -1698,11 +1793,27 @@ impl Bridge {
     /// its episode list is cached (otherwise the detail page opens
     /// normally and the user picks the episode once meta loads).
     pub(super) fn continue_picked(&self, index: usize) {
-        let entry = self.continue_entry(index);
-        let Some(c) = entry else { return };
-        let lib_idx = self.continue_library_index(&c.series_id);
-        let Some(lib_idx) = lib_idx else { return };
-        self.open_library_item(lib_idx);
+        let Some(c) = self.continue_entry(index) else {
+            return;
+        };
+        self.episode_home_picked(c);
+    }
+
+    pub(super) fn new_episode_picked(&self, index: usize) {
+        let entry = self
+            .shared
+            .lock()
+            .unwrap()
+            .new_episodes_list
+            .get(index)
+            .cloned();
+        if let Some(entry) = entry {
+            self.episode_home_picked(entry);
+        }
+    }
+
+    fn episode_home_picked(&self, c: ContinueEntry) {
+        self.episode_home_enter(&c.series_id);
         // Resolve the resume episode against the cached list (the rows
         // just built come from this same cache, so the index matches).
         let (season, row_idx) = {
@@ -1803,26 +1914,60 @@ impl Bridge {
             .cloned()
     }
 
-    /// Index of a Continue Watching card's entry in the current (filtered)
-    /// library view: the open/enter/remove actions all work on the card's
-    /// library entry, so they resolve it the same way here.
-    fn continue_library_index(&self, entry_id: &str) -> Option<usize> {
-        self.current_library_view()
+    fn episode_home_enter(&self, id: &str) {
+        let entry = self
+            .shared
+            .lock()
+            .unwrap()
+            .entries
             .iter()
-            .position(|e| e.id == entry_id)
+            .find(|e| e.id == id)
+            .cloned();
+        if let Some(entry) = entry {
+            self.open_library_entry(entry);
+        }
     }
 
-    /// Main thread: "Enter series" on a Continue Watching card menu — open the
-    /// entry's detail page without starting playback (`continue_picked`, the
-    /// card tap, is the resume-and-play variant).
     pub(super) fn continue_enter(&self, index: usize) {
-        let Some(entry) = self.continue_entry(index) else {
-            return;
-        };
-        let Some(lib_idx) = self.continue_library_index(&entry.series_id) else {
-            return;
-        };
-        self.open_library_item(lib_idx);
+        if let Some(entry) = self.continue_entry(index) {
+            self.episode_home_enter(&entry.series_id);
+        }
+    }
+
+    pub(super) fn new_episode_enter(&self, index: usize) {
+        let entry = self
+            .shared
+            .lock()
+            .unwrap()
+            .new_episodes_list
+            .get(index)
+            .cloned();
+        if let Some(entry) = entry {
+            self.episode_home_enter(&entry.series_id);
+        }
+    }
+
+    pub(super) fn new_episode_remove(&self, index: usize) {
+        let entry = self
+            .shared
+            .lock()
+            .unwrap()
+            .new_episodes_list
+            .get(index)
+            .cloned();
+        let Some(entry) = entry else { return };
+        let episodes = read_episodes_cache_for(&entry.type_, &entry.series_id).unwrap_or_default();
+        let ids = new_episode_ids(
+            &entry.series_id,
+            &episodes,
+            &self.shared.lock().unwrap().progress,
+        );
+        let mut hidden: HashMap<String, Vec<String>> =
+            read_json(NEW_EPISODES_HIDDEN_KEY).unwrap_or_default();
+        hidden.insert(entry.series_id, ids);
+        write_json(NEW_EPISODES_HIDDEN_KEY, &hidden);
+        self.rebuild_continue_list();
+        self.apply_home_to_ui();
     }
 
     pub(super) fn show_discover_page(&self) {
@@ -2302,7 +2447,7 @@ pub(crate) fn continue_resume_id(
     } else if latest.position_secs > 0.0 {
         Some(latest.episode_id.clone())
     } else {
-        None
+        next_episode_to_watch(item_id, episodes?, progress).map(|v| v.id.clone())
     }
 }
 
@@ -2319,6 +2464,29 @@ pub(crate) fn write_continue_hidden(map: &HashMap<String, u64>) {
     if !applying() {
         notify_continue_hidden(map);
     }
+}
+
+pub(crate) const NEW_EPISODES_HIDDEN_KEY: &str = "new_episodes_hidden:v1";
+
+fn new_episode_ids(
+    id: &str,
+    episodes: &[Video],
+    progress: &HashMap<String, EpisodeProgress>,
+) -> Vec<String> {
+    let mut ids: Vec<_> = episodes
+        .iter()
+        .filter(|v| {
+            episode_has_air_date(v)
+                && episode_is_out(v, today_days())
+                && !progress
+                    .get(&progress_map_key(id, &v.id))
+                    .is_some_and(|p| p.watched)
+        })
+        .map(|v| v.id.clone())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
 }
 
 #[cfg(test)]

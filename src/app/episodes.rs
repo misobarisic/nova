@@ -318,10 +318,9 @@ pub(crate) fn upcoming_tally(
     }
     (future, available, available_watched)
 }
-/// Whether every known episode of a series is marked watched. Unaired
-/// episodes (known future air date) can never be watched, so a series
-/// with episodes still to come never counts as fully watched — it stays
-/// in Watching and feeds Home → Upcoming. Empty lists never count.
+/// Whether every known episode is watched, including future and dateless
+/// episodes. Used for dateless-only completion; the Completed bucket and
+/// library bulk-action toggle otherwise use currently available episodes.
 pub(crate) fn series_fully_watched(
     series_id: &str,
     episodes: &[Video],
@@ -352,22 +351,16 @@ pub(crate) fn library_episode_counts(
         .count();
     (watched as i32, ids.len() as i32)
 }
-/// Automatic bucket for a library entry: "Completed" (every known episode
-/// watched — series with unaired episodes never complete), "Watching"
-/// (any progress, not complete) or "Plan to Watch" (untouched, including
-/// movies which carry no progress).
+/// Progress-only fallback for entries without an activity checkpoint.
+/// Completed means all available episodes watched; future episodes do not
+/// reopen the show. Returning shows use `activity_bucket` instead.
+#[cfg(test)]
 pub(crate) fn auto_bucket(
     series_id: &str,
     episodes: &[Video],
     map: &HashMap<String, EpisodeProgress>,
 ) -> &'static str {
-    if series_fully_watched(series_id, episodes, map) {
-        "Completed"
-    } else if map.values().any(|p| p.series_id == series_id) {
-        "Watching"
-    } else {
-        "Plan to Watch"
-    }
+    activity_bucket(series_id, episodes, map, None, today_days())
 }
 pub(crate) fn episode_context_label_for(episode_id: &str, episodes: &[Video]) -> Option<String> {
     episodes

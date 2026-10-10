@@ -1994,3 +1994,15 @@ msgstr "Samo povezane epizode ažurirat će vaš popis na servisu."
 
 msgid "Back to details"
 msgstr "Natrag na detalje"
+
+msgid "New episodes"
+msgstr "Nove epizode"
+
+msgid "Remove from New episodes"
+msgstr "Ukloni iz novih epizoda"
+
+msgid "Wait for new episodes"
+msgstr "Čekaj nove epizode"
+
+msgid "Resume watching"
+msgstr "Nastavi gledati"

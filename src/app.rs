@@ -331,6 +331,8 @@ struct Shared {
     /// Home → Continue Watching entries, rebuilt from `progress` whenever
     /// it changes (latest resumable episode per library series first).
     continue_list: Vec<ContinueEntry>,
+    /// Released episodes awaiting an explicit return, separate from active viewing.
+    new_episodes_list: Vec<ContinueEntry>,
     /// Home → Upcoming entries, rebuilt alongside (`continue_list`):
     /// unaired episodes of caught-up library series, air-date first.
     upcoming_list: Vec<UpcomingEntry>,
@@ -774,6 +776,7 @@ mod io;
 mod streams;
 mod sync;
 mod tracking;
+mod watch_state;
 pub(crate) use nova_ui::backend_text as text;
 
 // Android background execution glue (foreground service + JobScheduler sync).
@@ -806,6 +809,7 @@ pub(crate) use qr::*;
 pub(crate) use settings::*;
 pub(crate) use streams::*;
 pub(crate) use sync::*;
+pub(crate) use watch_state::*;
 
 #[cfg(test)]
 mod tests;
@@ -840,7 +844,7 @@ pub(crate) struct AddonStore {
 /// bucket regardless of progress. Set from the library card context menu.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) enum WatchStatus {
-    /// Derive from progress: Plan to Watch / Watching / Completed.
+    /// Derive from progress/activity: Plan to Watch / Watching / New episodes / Completed.
     #[default]
     Auto,
     OnHold,
@@ -862,6 +866,7 @@ impl WatchStatus {
 /// the filter rail. "All" (empty filter) still shows everything.
 const BUILTIN_FILTERS: &[&str] = &[
     "Watching",
+    NEW_EPISODES_FILTER,
     "Completed",
     "On Hold",
     "Dropped",

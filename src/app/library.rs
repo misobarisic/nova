@@ -29,6 +29,7 @@ impl Bridge {
             let state = self.shared.lock().unwrap();
             (state.entries.clone(), state.progress.clone())
         };
+        let activity = read_viewing_activity();
         let entries = entries
             .into_iter()
             .filter(|e| {
@@ -42,7 +43,13 @@ impl Bridge {
                             let episodes =
                                 read_episodes_cache_for(&e.type_, &e.id).unwrap_or_default();
                             e.watch_status == WatchStatus::Auto
-                                && auto_bucket(&e.id, &episodes, &progress) == bucket
+                                && activity_bucket(
+                                    &e.id,
+                                    &episodes,
+                                    &progress,
+                                    activity.get(&e.id),
+                                    today_days(),
+                                ) == builtin_filter_label(bucket)
                         }
                     }
                 } else {
@@ -64,7 +71,9 @@ impl Bridge {
     /// Refresh the Slint `library` model from `Shared.entries`.
     pub(super) fn apply_library_to_ui(&self) {
         let view = self.current_library_view();
+        self.migrate_viewing_activity();
         let map = self.shared.lock().unwrap().progress.clone();
+        let activity = read_viewing_activity();
         // Search and sorting replace the model frequently. Retain decoded
         // artwork by identity so existing titles do not flash placeholders.
         let artwork: HashMap<String, MediaCard> = self
@@ -81,10 +90,9 @@ impl Bridge {
             .iter()
             .map(|e| {
                 let episodes = read_episodes_cache_for(&e.type_, &e.id).unwrap_or_default();
-                let status = e
-                    .watch_status
-                    .badge_label()
-                    .unwrap_or_else(|| auto_bucket(&e.id, &episodes, &map));
+                let status = e.watch_status.badge_label().unwrap_or_else(|| {
+                    activity_bucket(&e.id, &episodes, &map, activity.get(&e.id), today_days())
+                });
                 let (watched_count, episode_count) = if e.type_ == "movie" {
                     (0, 0)
                 } else {
@@ -102,10 +110,11 @@ impl Bridge {
                     is_loaded: previous.is_some(),
                     badge: library_badge_for(&e.id, &episodes, &map).into(),
                     status: text::tr(status).into(),
+                    activity_action: viewing_menu_action(e, &episodes, &map, activity.get(&e.id)),
                     media_type: text::tr(if e.type_ == "movie" { "Movie" } else { "TV" }).into(),
                     watched_count,
                     episode_count,
-                    watched: series_fully_watched(&e.id, &episodes, &map),
+                    watched: available_completed(&e.id, &episodes, &map, today_days()),
                 }
             })
             .collect();
@@ -162,8 +171,9 @@ impl Bridge {
 
     /// Main thread: library card context-menu status action. `index` is
     /// into the current (filter-narrowed) library view; `status`: 0 back
-    /// to automatic, 1 pin On Hold, 2 pin Dropped. Pins override the
-    /// derived bucket (Plan to Watch / Watching / Completed).
+    /// to automatic, 1 pin On Hold, 2 pin Dropped, 3 await return,
+    /// 4 resume viewing. Pins override the derived bucket; activity actions
+    /// leave watched history unchanged.
     pub(super) fn library_status_action(&self, index: usize, status: i32) {
         let view = self.current_library_view();
         if let Some(entry) = view.get(index) {
@@ -172,6 +182,34 @@ impl Bridge {
     }
 
     fn library_entry_status_action(&self, entry_id: &str, status: i32) {
+        if status == 3 || status == 4 {
+            let (entry, progress) = {
+                let state = self.shared.lock().unwrap();
+                (
+                    state.entries.iter().find(|e| e.id == entry_id).cloned(),
+                    state.progress.clone(),
+                )
+            };
+            let Some(entry) = entry else { return };
+            let episodes = read_episodes_cache_for(&entry.type_, entry_id).unwrap_or_default();
+            let mut activity = read_viewing_activity();
+            if viewing_menu_action(&entry, &episodes, &progress, activity.get(entry_id)) != status {
+                return;
+            }
+            activity.insert(
+                entry_id.into(),
+                ViewingActivity {
+                    phase: if status == 3 {
+                        ViewingPhase::AwaitingReturn
+                    } else {
+                        ViewingPhase::Active
+                    },
+                },
+            );
+            write_json(VIEWING_ACTIVITY_KEY, &activity);
+            self.refresh_library_progress_ui();
+            return;
+        }
         let watch_status = match status {
             1 => WatchStatus::OnHold,
             2 => WatchStatus::Dropped,
@@ -191,12 +229,14 @@ impl Bridge {
         if changed {
             self.persist_library();
             self.apply_library_to_ui();
+            self.refresh_library_progress_ui();
         }
     }
 
     /// Detail actions resolve the saved identity directly: a library filter
     /// may hide this entry or change after its status is edited.
-    /// Actions: 0 toggle watched, 1 On Hold, 2 Dropped, 3 automatic, 4 remove.
+    /// Actions: 0 toggle watched, 1 On Hold, 2 Dropped, 3 automatic, 4 remove,
+    /// 5 await return, 6 resume viewing.
     pub(super) fn detail_library_action(&self, action: i32) {
         let entry = {
             let state = self.shared.lock().unwrap();
@@ -209,10 +249,11 @@ impl Bridge {
         match action {
             0 => {
                 let episodes = read_episodes_cache_for(&entry.type_, &entry.id).unwrap_or_default();
-                let watched = series_fully_watched(
+                let watched = available_completed(
                     &entry.id,
                     &episodes,
                     &self.shared.lock().unwrap().progress,
+                    today_days(),
                 );
                 self.library_entry_watch_action(&entry, if watched { 2 } else { 1 });
             }
@@ -220,6 +261,8 @@ impl Bridge {
             2 => self.library_entry_status_action(&entry.id, 2),
             3 => self.library_entry_status_action(&entry.id, 0),
             4 => self.toggle_current_in_library(),
+            5 => self.library_entry_status_action(&entry.id, 3),
+            6 => self.library_entry_status_action(&entry.id, 4),
             _ => {}
         }
     }
@@ -229,10 +272,25 @@ impl Bridge {
             let state = self.shared.lock().unwrap();
             state.modal_item.as_ref().is_some_and(|item| {
                 let episodes = read_episodes_cache_for(&item.type_, &item.id).unwrap_or_default();
-                series_fully_watched(&item.id, &episodes, &state.progress)
+                available_completed(&item.id, &episodes, &state.progress, today_days())
             })
         };
         if let Some(app) = self.app() {
+            let state = self.shared.lock().unwrap();
+            let action = state
+                .modal_item
+                .as_ref()
+                .and_then(|item| state.entries.iter().find(|e| e.id == item.id))
+                .map(|entry| {
+                    viewing_menu_action(
+                        entry,
+                        &read_episodes_cache_for(&entry.type_, &entry.id).unwrap_or_default(),
+                        &state.progress,
+                        read_viewing_activity().get(&entry.id),
+                    )
+                })
+                .unwrap_or(0);
+            app.set_detail_library_activity_action(action);
             app.set_detail_library_watched(watched);
         }
     }
@@ -530,7 +588,7 @@ impl Bridge {
         self.open_library_entry(e);
     }
 
-    fn open_library_entry(&self, e: LibraryEntry) {
+    pub(super) fn open_library_entry(&self, e: LibraryEntry) {
         let index = self
             .current_library_view()
             .iter()
@@ -853,7 +911,8 @@ impl Bridge {
             })
             .collect();
         // `category_names` holds the values the filter is keyed on (the
-        // English identifiers also used by `BUILTIN_FILTERS`/`auto_bucket`);
+        // stable identifiers also used by `BUILTIN_FILTERS`; the new release
+        // filter is namespaced so existing category names remain selectable);
         // `category_labels` is what the pills show — the same list with
         // the automatic buckets translated. Picking a pill still sends back
         // the value, so a localized label can never leak into the data.
@@ -864,7 +923,7 @@ impl Bridge {
             .collect();
         let labels: Vec<SharedString> = BUILTIN_FILTERS
             .iter()
-            .map(|s| SharedString::from(text::tr(s)))
+            .map(|s| SharedString::from(text::tr(builtin_filter_label(s))))
             .chain(cats.iter().map(SharedString::from))
             .collect();
         if let Some(app) = self.app() {
@@ -994,6 +1053,14 @@ fn order_library_view(mut entries: Vec<LibraryEntry>, query: &str, sort: i32) ->
         _ => entries.sort_by_key(|e| std::cmp::Reverse(e.added_at_secs)),
     }
     entries
+}
+
+fn builtin_filter_label(value: &str) -> &str {
+    if value == NEW_EPISODES_FILTER {
+        "New episodes"
+    } else {
+        value
+    }
 }
 
 #[cfg(test)]

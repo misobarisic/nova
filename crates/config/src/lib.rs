@@ -166,6 +166,7 @@ pub struct HomeCatalogSource {
 #[serde(tag = "kind", content = "catalog", rename_all = "snake_case")]
 pub enum HomeRowSource {
     ContinueWatching,
+    NewEpisodes,
     Upcoming,
     Addon(HomeCatalogSource),
 }
@@ -577,6 +578,10 @@ impl CacheSettings {
                 HomeRow {
                     source: HomeRowSource::ContinueWatching,
                     enabled: self.home_continue_enabled,
+                },
+                HomeRow {
+                    source: HomeRowSource::NewEpisodes,
+                    enabled: true,
                 },
                 HomeRow {
                     source: HomeRowSource::Upcoming,

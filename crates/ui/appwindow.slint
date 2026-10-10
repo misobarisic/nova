@@ -173,13 +173,15 @@ export component AppWindow inherits Window {
     in-out property <bool> show_home: true;
     in-out property <bool> in_library: false;
     in-out property <bool> detail_library_watched: false;
+    in-out property <int> detail_library_activity_action: 0;
     in-out property <string> library_empty_hint: @tr("Your library is empty — open any movie, series or anime and press \"+ Add to library\".");
     // --- Home (landing page, Continue Watching) ------------------------
     in-out property <[ContinueRow]> home_continue: [];
+    in-out property <[ContinueRow]> home_new_episodes: [];
     in-out property <[UpcomingRow]> home_upcoming: [];
     in-out property <[HomeCatalogSection]> home_catalog_sections: [];
-    in-out property <[int]> home_catalog_order: [-1, -2];
-    in-out property <[int]> home_catalog_positions: [0, 1];
+    in-out property <[int]> home_catalog_order: [-1, -3, -2];
+    in-out property <[int]> home_catalog_positions: [0, 2, 1];
     in-out property <[HomeCatalogCard]> home_catalog_cards: [];
     // Independent catalog-driven feature at the top of Home. Rust keeps its
     // selected preview and fetches the active backdrop on demand.
@@ -207,7 +209,7 @@ export component AppWindow inherits Window {
     in-out property <int> home_cal_epoch: -1;
     in-out property <bool> home_cal_open: false;
     // Home subpage stack: 0 = landing carousels, 1 = all Continue Watching,
-    // 2 = all Upcoming, 3 + section index = catalog grid. Owned here so the chosen view (and its scroll)
+    // 2 = all Upcoming, -3 = all New episodes, 3 + section index = catalog grid. Owned here so the chosen view (and its scroll)
     // survives the detail modal destroying/recreating HomePage.
     in-out property <int> home_view: 0;
     // Touch-driven platform (Android): card menus open as bottom sheets
@@ -441,6 +443,7 @@ export component AppWindow inherits Window {
     // detail modal, same mirror pattern as the grids).
     in-out property <length> home_all_scroll_y: 0px;
     in-out property <length> home_continue_x: 0px;
+    in-out property <length> home_new_episodes_x: 0px;
     in-out property <length> home_upcoming_x: 0px;
     // Whole-page scroll on Android (Discover filters scroll away with the
     // grid); desktop keeps the filter header pinned. Set once from Rust.
@@ -591,6 +594,9 @@ export component AppWindow inherits Window {
     callback discover_picked();
     callback home_picked();
     callback continue_picked(int);
+    callback new_episode_picked(int);
+    callback new_episode_enter(int);
+    callback new_episode_remove(int);
     callback continue_remove(int);
     // "Enter series": open the card's detail page without starting playback.
     callback continue_enter(int);
@@ -811,6 +817,7 @@ export component AppWindow inherits Window {
     if root.show_home && !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings: HomePage {
         nav-viewport-width: root.width;
         continue_rows <=> root.home_continue;
+        new_episode_rows <=> root.home_new_episodes;
         upcoming_rows <=> root.home_upcoming;
         catalog_sections: root.home_catalog_sections;
         catalog_order: root.home_catalog_order;
@@ -847,6 +854,7 @@ export component AppWindow inherits Window {
         system_back_request: root.system_back_request;
         all_scroll_y <=> root.home_all_scroll_y;
         continue_x <=> root.home_continue_x;
+        new_episodes_x <=> root.home_new_episodes_x;
         upcoming_x <=> root.home_upcoming_x;
         narrow: root.narrow_ui;
         touch_menus: root.touch_menus;
@@ -861,6 +869,9 @@ export component AppWindow inherits Window {
         library_picked => { root.library_picked(); }
         settings_picked => { root.settings_picked(); }
         continue_picked(i) => { root.continue_picked(i); }
+        new_episode_picked(i) => { root.new_episode_picked(i); }
+        new_episode_enter(i) => { root.new_episode_enter(i); }
+        new_episode_remove(i) => { root.new_episode_remove(i); }
         continue_remove(i) => { root.continue_remove(i); }
         continue_enter(i) => { root.continue_enter(i); }
         upcoming_picked(i) => { root.upcoming_picked(i); }
@@ -975,6 +986,7 @@ export component AppWindow inherits Window {
         episodes_back => { root.episodes_back(); }
         add_to_library => { root.add_to_library(); }
         library_watched: root.detail_library_watched;
+        library_activity_action: root.detail_library_activity_action;
         library_action(a) => { root.detail_library_action(a); }
         open_categories => { root.categories_modal = true; }
         season_picked(i) => { root.season_picked(i); }

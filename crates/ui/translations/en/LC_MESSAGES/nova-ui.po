@@ -18,3 +18,15 @@ msgstr ""
 "Project-Id-Version: nova-ui\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "New episodes"
+msgstr "New episodes"
+
+msgid "Remove from New episodes"
+msgstr "Remove from New episodes"
+
+msgid "Wait for new episodes"
+msgstr "Wait for new episodes"
+
+msgid "Resume watching"
+msgstr "Resume watching"

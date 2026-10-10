@@ -853,6 +853,11 @@ impl Bridge {
     /// Fetch the Home card's selected thumbnail/poster off the UI thread.
     /// Guard both series and URL: the next episode can occupy the same slot.
     pub(super) fn dispatch_continue_posters(&self) {
+        self.dispatch_episode_home_posters(false);
+        self.dispatch_episode_home_posters(true);
+    }
+
+    fn dispatch_episode_home_posters(&self, new: bool) {
         let Some(app) = self.app() else { return };
         let fallbacks: HashMap<_, _> = self
             .shared
@@ -862,8 +867,12 @@ impl Bridge {
             .iter()
             .map(|entry| (entry.id.clone(), entry.poster_url.clone()))
             .collect();
-        let items: Vec<_> = app
-            .get_home_continue()
+        let model = if new {
+            app.get_home_new_episodes()
+        } else {
+            app.get_home_continue()
+        };
+        let items: Vec<_> = model
             .iter()
             .enumerate()
             .filter(|(_, row)| {
@@ -887,7 +896,11 @@ impl Bridge {
                         return;
                     };
                     let Some(app) = weak.upgrade() else { return };
-                    let model = app.get_home_continue();
+                    let model = if new {
+                        app.get_home_new_episodes()
+                    } else {
+                        app.get_home_continue()
+                    };
                     if let Some((index, mut row)) = model
                         .iter()
                         .enumerate()

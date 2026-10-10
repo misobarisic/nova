@@ -526,9 +526,8 @@ mod playback_tests {
             entry("s", "s:1:2", 600.0, 600.0, true, 2),
         );
         assert_eq!(auto_bucket("s", &eps, &map), "Completed");
-        // Caught-up series with episodes still to come never complete: no
-        // checkmark, Watching bucket, and the badge names the wait (they
-        // feed Home → Upcoming instead).
+        // Completion means everything currently available is watched. The
+        // full-list helper still includes the future tail.
         let mut eps2 = vec![
             video("s:1:1", 1, 1, "One"),
             video("s:1:2", 1, 2, "Two"),
@@ -538,7 +537,7 @@ mod playback_tests {
         eps2[1].released = Some("2020-01-02".to_string());
         eps2[2].released = Some("2999-01-01".to_string());
         assert!(!series_fully_watched("s", &eps2, &map));
-        assert_eq!(auto_bucket("s", &eps2, &map), "Watching");
+        assert_eq!(auto_bucket("s", &eps2, &map), "Completed");
         assert_eq!(library_badge_for("s", &eps2, &map), "Caught up · 1 unaired");
         // …but a list with nothing out yet never completes, even untouched.
         let eps3 = vec![eps2[2].clone()];
@@ -566,7 +565,7 @@ mod playback_tests {
         let mut eps4 = eps2.clone();
         eps4.push(video("s:0:1", 0, 1, "Special"));
         assert!(!series_fully_watched("s", &eps4, &map));
-        assert_eq!(auto_bucket("s", &eps4, &map), "Watching");
+        assert_eq!(auto_bucket("s", &eps4, &map), "Completed");
         assert_eq!(library_badge_for("s", &eps4, &map), "Caught up · 1 unaired");
         // Built-in names are reserved and distinct from user categories.
         assert!(BUILTIN_FILTERS.contains(&"Watching"));

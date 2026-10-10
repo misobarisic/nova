@@ -8,12 +8,14 @@ export struct MediaCard {
     /// Playback badge for library items (e.g. "▶ Resume S1 E3", "3 left",
     /// "✓ Seen"). Empty when there is nothing to report.
     badge: string,
-    /// True when every known episode of the series is marked watched
+    /// True when the series is completed for currently available episodes
     /// (drives the library watched/unwatched menu; always false for
     /// Discover catalog cards).
     watched: bool,
     /// Library-only display state; catalog cards leave these at their defaults.
     status: string,
+    /// Library activity action: 0 unavailable, 3 await return, 4 resume viewing.
+    activity_action: int,
     media_type: string,
     watched_count: int,
     episode_count: int,

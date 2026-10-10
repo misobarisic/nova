@@ -444,6 +444,7 @@ impl Bridge {
                 .effective_home_rows();
             for (source, label) in [
                 (HomeRowSource::ContinueWatching, "Continue Watching"),
+                (HomeRowSource::NewEpisodes, "New episodes"),
                 (HomeRowSource::Upcoming, "Upcoming"),
             ] {
                 if !configured.iter().any(|row| row.source == source) {
@@ -480,9 +481,13 @@ impl Bridge {
             let home_rows = configured
                 .into_iter()
                 .map(|entry| match entry.source {
-                    HomeRowSource::ContinueWatching | HomeRowSource::Upcoming => HomeCatalogRow {
+                    HomeRowSource::ContinueWatching
+                    | HomeRowSource::NewEpisodes
+                    | HomeRowSource::Upcoming => HomeCatalogRow {
                         title: text::tr(if entry.source == HomeRowSource::ContinueWatching {
                             "Continue Watching"
+                        } else if entry.source == HomeRowSource::NewEpisodes {
+                            "New episodes"
                         } else {
                             "Upcoming"
                         })

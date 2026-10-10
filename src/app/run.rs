@@ -677,6 +677,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_sync_respond_pair(move |id, accept| b.sync_respond_pair(&id, accept));
 
+    let b = bridge.clone();
+    app.on_new_episode_picked(move |i| b.new_episode_picked(i as usize));
+    let b = bridge.clone();
+    app.on_new_episode_enter(move |i| b.new_episode_enter(i as usize));
+    let b = bridge.clone();
+    app.on_new_episode_remove(move |i| b.new_episode_remove(i as usize));
+
     // Category callbacks.
     let b = bridge.clone();
     app.on_category_added(move |name| b.add_category_to_ui(&name));
@@ -780,9 +787,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             write_persisted_library(&entries);
         }
     }
+    bridge.migrate_viewing_activity();
     bridge.apply_library_to_ui();
-    // Home landing page: derive Continue Watching + Upcoming from playback
-    // history and cached episode air dates.
+    // Home landing page: derive Continue Watching, New episodes and Upcoming
+    // from viewing activity, playback history and cached episode air dates.
     bridge.rebuild_continue_list();
     bridge.rebuild_upcoming_list();
     bridge.apply_home_to_ui();
@@ -995,10 +1003,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _timer = slint::Timer::default();
     let tick_player = player.clone();
     let tick_bridge = bridge.clone();
+    let mut episode_day = today_days();
     _timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(250),
         move || {
+            let today = today_days();
+            if today != episode_day {
+                episode_day = today;
+                tick_bridge.refresh_library_progress_ui();
+            }
             tick_player.tick();
             tick_bridge.note_player_progress_from_ui();
             tick_bridge.note_torrent_progress_from_ui();

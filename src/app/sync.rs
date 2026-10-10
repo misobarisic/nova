@@ -19,6 +19,8 @@ use std::collections::BTreeSet;
 
 pub(crate) const DOMAIN_LIBRARY: &str = "library";
 pub(crate) const DOMAIN_PROGRESS: &str = "progress";
+pub(crate) const DOMAIN_VIEWING_ACTIVITY: &str = "viewing_activity";
+pub(crate) const DOMAIN_NEW_EPISODES_HIDDEN: &str = "new_episodes_hidden";
 pub(crate) const DOMAIN_ADDONS: &str = "addons";
 pub(crate) const DOMAIN_SETTINGS: &str = "settings";
 pub(crate) const DOMAIN_CATEGORY: &str = "category";
@@ -83,6 +85,8 @@ fn sync_records(domain: &str, records: Vec<(String, String, u64)>) {
     let key = match domain {
         DOMAIN_LIBRARY => "library",
         DOMAIN_PROGRESS => "episode_progress",
+        DOMAIN_VIEWING_ACTIVITY => VIEWING_ACTIVITY_KEY,
+        DOMAIN_NEW_EPISODES_HIDDEN => NEW_EPISODES_HIDDEN_KEY,
         DOMAIN_ADDONS => "addons",
         DOMAIN_SETTINGS | DOMAIN_CATEGORY => "settings",
         DOMAIN_CONTINUE_HIDDEN => "continue_hidden",
@@ -125,6 +129,20 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
                 DOMAIN_PROGRESS,
                 map.iter()
                     .map(|(k, v)| Ok((k.clone(), serde_json::to_string(v)?, v.updated_at_secs)))
+                    .collect::<Result<_, serde_json::Error>>()?,
+            )]
+        }
+        VIEWING_ACTIVITY_KEY => {
+            let activity: HashMap<String, ViewingActivity> = serde_json::from_str(raw)?;
+            vec![(DOMAIN_VIEWING_ACTIVITY, activity_records(&activity)?)]
+        }
+        NEW_EPISODES_HIDDEN_KEY => {
+            let hidden: HashMap<String, Vec<String>> = serde_json::from_str(raw)?;
+            vec![(
+                DOMAIN_NEW_EPISODES_HIDDEN,
+                hidden
+                    .iter()
+                    .map(|(id, ids)| Ok((id.clone(), serde_json::to_string(ids)?, 0)))
                     .collect::<Result<_, serde_json::Error>>()?,
             )]
         }
@@ -179,9 +197,64 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
             return Ok(());
         }
     };
+    // Playback and its activity checkpoint share a transaction. Availability
+    // refreshes never produce an Active record, and remote apply never echoes.
+    let activity_update = if key == EPISODE_PROGRESS_KEY && !applying() && !seed {
+        let mut activity = read_viewing_activity();
+        if writable_key(VIEWING_ACTIVITY_KEY) {
+            let before = activity.clone();
+            let progress: HashMap<String, EpisodeProgress> = serde_json::from_str(raw)?;
+            let old = read_progress_map();
+            // Progress saves are frequent. Read episode metadata only for
+            // affected titles, rather than decoding the entire saved library.
+            let affected: HashSet<_> = progress
+                .iter()
+                .filter(|(key, value)| {
+                    old.get(*key).is_none_or(|previous| {
+                        previous.watched != value.watched
+                            || previous.position_secs != value.position_secs
+                            || previous.unwatched_at_secs != value.unwatched_at_secs
+                    })
+                })
+                .map(|(_, value)| value.series_id.as_str())
+                .collect();
+            let entries: Vec<_> = read_persisted_library()
+                .into_iter()
+                .filter(|entry| affected.contains(entry.id.as_str()))
+                .collect();
+            reconcile_viewing_activity(
+                &mut activity,
+                &entries,
+                &old,
+                &progress,
+                |e| read_episodes_cache_for(&e.type_, &e.id).unwrap_or_default(),
+                today_days(),
+            );
+            (activity != before).then_some(activity)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let owner = nova_sync::local_store()?;
     let dev = nova_sync::local_device()?;
     let mut store = owner.lock().unwrap();
+    if let Some(activity) = activity_update {
+        nova_sync::prepare_snapshot(
+            &mut store,
+            dev,
+            DOMAIN_VIEWING_ACTIVITY,
+            &activity_records(&activity)?,
+            None,
+            false,
+            false,
+        )?;
+        store.queue_extra(
+            VIEWING_ACTIVITY_KEY,
+            Some(serde_json::to_string(&activity)?),
+        );
+    }
     for (domain, records) in domains {
         // Untouched installation defaults are projection-only. Legacy installs
         // with an existing settings object conservatively retain all choices.
@@ -665,6 +738,19 @@ impl Bridge {
                 DOMAIN_CONTINUE_HIDDEN,
                 serde_json::to_string(&hidden),
             ),
+            (
+                VIEWING_ACTIVITY_KEY,
+                DOMAIN_VIEWING_ACTIVITY,
+                serde_json::to_string(&read_viewing_activity()),
+            ),
+            (
+                NEW_EPISODES_HIDDEN_KEY,
+                DOMAIN_NEW_EPISODES_HIDDEN,
+                serde_json::to_string(
+                    &read_json::<HashMap<String, Vec<String>>>(NEW_EPISODES_HIDDEN_KEY)
+                        .unwrap_or_default(),
+                ),
+            ),
             ("addons", DOMAIN_ADDONS, serde_json::to_string(&addons)),
             (
                 "settings",
@@ -712,6 +798,8 @@ impl Bridge {
             match domain.as_str() {
                 DOMAIN_LIBRARY => self.sync_apply_library(),
                 DOMAIN_PROGRESS => self.sync_apply_progress(),
+                DOMAIN_VIEWING_ACTIVITY => self.sync_apply_viewing_activity(),
+                DOMAIN_NEW_EPISODES_HIDDEN => self.sync_apply_new_episodes_hidden(),
                 DOMAIN_ADDONS => self.sync_apply_addons(),
                 DOMAIN_SETTINGS | DOMAIN_CATEGORY => self.sync_apply_settings(),
                 DOMAIN_CONTINUE_HIDDEN => self.sync_apply_continue_hidden(),
@@ -740,6 +828,7 @@ impl Bridge {
                 }
             }
         }
+        self.refresh_library_progress_ui();
         if peers_changed {
             // The mesh grew or shrank: refresh the list and immediately run a
             // pass so newly learned devices are dialed now. `Notify` coalesces
@@ -786,6 +875,42 @@ impl Bridge {
         self.apply_home_to_ui();
         self.dispatch_continue_posters();
         self.dispatch_upcoming_posters();
+    }
+
+    fn sync_apply_new_episodes_hidden(&self) {
+        self.sync_apply_json_map::<Vec<String>>(
+            DOMAIN_NEW_EPISODES_HIDDEN,
+            NEW_EPISODES_HIDDEN_KEY,
+        );
+    }
+
+    fn sync_apply_viewing_activity(&self) {
+        self.sync_apply_json_map::<ViewingActivity>(DOMAIN_VIEWING_ACTIVITY, VIEWING_ACTIVITY_KEY);
+    }
+
+    fn sync_apply_json_map<T: serde::de::DeserializeOwned + Serialize>(
+        &self,
+        domain: &str,
+        key: &str,
+    ) {
+        let Some(engine) = projection_store() else {
+            return;
+        };
+        let values = engine
+            .records(domain)
+            .into_iter()
+            .map(|(id, raw)| serde_json::from_str::<T>(&raw).map(|value| (id, value)))
+            .collect::<Result<HashMap<_, _>, _>>();
+        match values {
+            Ok(values) => write_json(key, &values),
+            Err(error) => {
+                storage::report(storage::Error::new(storage::ErrorKind::Schema, error));
+                block_unreadable(key);
+                // Count the failed projection without replacing either the
+                // original snapshot or the offending sync record.
+                write_json(key, &HashMap::<String, T>::new());
+            }
+        }
     }
 
     fn sync_apply_progress(&self) {
@@ -1492,6 +1617,15 @@ fn sync_status_text(status: &nova_sync::SyncStatus) -> String {
 /// timestamp. Shared by the status line and the per-peer last-seen labels.
 pub(crate) fn format_ago(secs: u64) -> String {
     text::ago(now_secs().saturating_sub(secs))
+}
+
+fn activity_records(
+    activity: &HashMap<String, ViewingActivity>,
+) -> Result<Vec<(String, String, u64)>, serde_json::Error> {
+    activity
+        .iter()
+        .map(|(id, value)| Ok((id.clone(), serde_json::to_string(value)?, 0)))
+        .collect()
 }
 
 #[cfg(test)]

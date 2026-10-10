@@ -119,6 +119,7 @@ export component LibraryPage {
     property <bool> menu_open: false;
     property <int> menu_idx: 0;
     property <bool> menu_watched: false;
+    property <int> menu_activity_action: root.menu_valid ? root.library[root.menu_idx].activity_action : 0;
     property <string> menu_id: "";
     // A sync or watched-state refresh can remove/reorder a filtered row while
     // its sheet is open. Never let its old index act on the replacement show.
@@ -570,6 +571,11 @@ export component LibraryPage {
                                     MenuItem {
                                         title: @tr("Back to automatic");
                                         activated => { root.library_status_action(i, 0); }
+                                    }
+                                    MenuItem {
+                                        title: card.activity_action == 4 ? @tr("Resume watching") : @tr("Wait for new episodes");
+                                        enabled: card.activity_action > 0;
+                                        activated => { root.library_status_action(i, card.activity_action); }
                                     }
                                     MenuSeparator {}
                                     MenuItem {
@@ -1075,6 +1081,7 @@ export component LibraryPage {
                 { label: @tr("Mark as Dropped"), enabled: true },
                 { label: @tr("Back to automatic"), enabled: true },
                 { label: @tr("Remove from library"), enabled: true },
+                { label: root.menu_activity_action == 4 ? @tr("Resume watching") : @tr("Wait for new episodes"), enabled: root.menu_activity_action > 0 },
             ];
             picked(a) => {
                 if (!root.menu_valid) {
@@ -1094,6 +1101,8 @@ export component LibraryPage {
                     root.library_status_action(root.menu_idx, 2);
                 } else if (a == 4) {
                     root.library_status_action(root.menu_idx, 0);
+                } else if (a == 6) {
+                    root.library_status_action(root.menu_idx, root.menu_activity_action);
                 } else {
                     root.remove_library_item(root.menu_idx);
                 }

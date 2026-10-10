@@ -84,11 +84,12 @@ impl Bridge {
     }
 
     /// Repaint progress-derived surfaces outside the detail page: library
-    /// badges/checks plus Home's Continue Watching + Upcoming rows. Called
+    /// badges/checks plus Home's Continue Watching, New episodes and Upcoming rows. Called
     /// after progress writes and whenever fresh episode meta lands (which
-    /// may add unaired episodes, dropping stale ✓/Seen states and
-    /// Completed buckets). Lightweight: no thumbnail re-queue.
+    /// may reveal new released episodes without starting a viewing run).
+    /// Lightweight: no thumbnail re-queue.
     pub(super) fn refresh_library_progress_ui(&self) {
+        self.migrate_viewing_activity();
         self.update_library_badges();
         self.refresh_detail_library_watched();
         self.rebuild_continue_list();
@@ -622,6 +623,7 @@ impl Bridge {
             self.current_library_view(),
             self.shared.lock().unwrap().progress.clone(),
         );
+        let activity = read_viewing_activity();
         let model = app.get_library();
         if model.row_count() != view.len()
             || view.iter().enumerate().any(|(i, entry)| {
@@ -638,18 +640,21 @@ impl Bridge {
         for (i, entry) in view.iter().enumerate() {
             let episodes = read_episodes_cache_for(&entry.type_, &entry.id).unwrap_or_default();
             let badge = library_badge_for(&entry.id, &episodes, &map);
-            let status = text::tr(
-                entry
-                    .watch_status
-                    .badge_label()
-                    .unwrap_or_else(|| auto_bucket(&entry.id, &episodes, &map)),
-            );
+            let status = text::tr(entry.watch_status.badge_label().unwrap_or_else(|| {
+                activity_bucket(
+                    &entry.id,
+                    &episodes,
+                    &map,
+                    activity.get(&entry.id),
+                    today_days(),
+                )
+            }));
             let media_type = text::tr(if entry.type_ == "movie" {
                 "Movie"
             } else {
                 "TV"
             });
-            let watched = series_fully_watched(&entry.id, &episodes, &map);
+            let watched = available_completed(&entry.id, &episodes, &map, today_days());
             let (watched_count, episode_count) = if entry.type_ == "movie" {
                 (0, 0)
             } else {
@@ -661,12 +666,16 @@ impl Bridge {
             if card.badge.as_str() != badge.as_str()
                 || card.watched != watched
                 || card.status.as_str() != status
+                || card.activity_action
+                    != viewing_menu_action(entry, &episodes, &map, activity.get(&entry.id))
                 || card.media_type.as_str() != media_type
                 || card.watched_count != watched_count
                 || card.episode_count != episode_count
             {
                 card.badge = badge.into();
                 card.status = status.into();
+                card.activity_action =
+                    viewing_menu_action(entry, &episodes, &map, activity.get(&entry.id));
                 card.media_type = media_type.into();
                 card.watched = watched;
                 card.watched_count = watched_count;
@@ -838,6 +847,7 @@ mod home_return_tests {
                 },
             );
         }
+        bridge.persist_library();
         bridge.rebuild_continue_list();
         bridge.apply_home_to_ui();
         let old = app.get_home_continue().row_data(0).unwrap();
@@ -873,5 +883,145 @@ mod home_return_tests {
         });
         bridge.note_player_progress_from_ui();
         assert!((app.get_home_continue().row_data(0).unwrap().progress - 0.5).abs() < 0.001);
+
+        // Complete the known show, announce a future episode, then release it.
+        bridge.shared.lock().unwrap().playback = Some(PlaybackTarget {
+            series_id: "series".into(),
+            episode_id: "episode-2".into(),
+            last_pos: 1000.0,
+            last_dur: 1000.0,
+            ..Default::default()
+        });
+        bridge.note_player_progress_from_ui();
+        assert_eq!(
+            read_viewing_activity()["series"].phase,
+            ViewingPhase::AwaitingReturn
+        );
+        assert_eq!(app.get_home_continue().row_count(), 0);
+        let mut refreshed = videos.clone();
+        refreshed.push(Video {
+            id: "episode-3".into(),
+            name: "New episode".into(),
+            season: Some(1),
+            episode: Some(3),
+            released: Some("2999-01-01".into()),
+            ..Default::default()
+        });
+        write_episodes_cache_for("series", "series", &refreshed);
+        bridge.refresh_library_progress_ui();
+        assert_eq!(app.get_library().row_data(0).unwrap().status, "Completed");
+        assert_eq!(app.get_home_new_episodes().row_count(), 0);
+        assert_eq!(app.get_home_upcoming().row_count(), 1);
+        refreshed[2].released = Some("2000-01-03".into());
+        write_episodes_cache_for("series", "series", &refreshed);
+        bridge.refresh_library_progress_ui();
+        assert_eq!(
+            app.get_library().row_data(0).unwrap().status,
+            "New episodes"
+        );
+        assert_eq!(app.get_home_continue().row_count(), 0);
+        assert_eq!(app.get_home_new_episodes().row_count(), 1);
+        assert_eq!(
+            app.get_home_new_episodes().row_data(0).unwrap().remaining,
+            "1 new episode"
+        );
+
+        // Removing an available batch stays separate from Continue hides.
+        bridge.new_episode_remove(0);
+        assert_eq!(app.get_home_new_episodes().row_count(), 0);
+        refreshed.push(Video {
+            id: "episode-4".into(),
+            season: Some(1),
+            episode: Some(4),
+            released: Some("2000-01-04".into()),
+            ..Default::default()
+        });
+        write_episodes_cache_for("series", "series", &refreshed);
+        bridge.refresh_library_progress_ui();
+        assert_eq!(app.get_home_new_episodes().row_count(), 1);
+        assert_eq!(
+            bridge.shared.lock().unwrap().new_episodes_list[0].episode_id,
+            "episode-3"
+        );
+
+        // A short attempt cannot reactivate viewing; meaningful playback can.
+        for (position, expected) in [(3.0, "New episodes"), (100.0, "Watching")] {
+            bridge.shared.lock().unwrap().playback = Some(PlaybackTarget {
+                series_id: "series".into(),
+                episode_id: "episode-3".into(),
+                last_pos: position,
+                last_dur: 1000.0,
+                ..Default::default()
+            });
+            bridge.note_player_progress_from_ui();
+            assert_eq!(app.get_library().row_data(0).unwrap().status, expected);
+        }
+        assert_eq!(app.get_home_new_episodes().row_count(), 0);
+        assert_eq!(app.get_home_continue().row_count(), 1);
+        let owner = nova_sync::local_store().unwrap();
+        let basis = owner
+            .lock()
+            .unwrap()
+            .digest()
+            .get(DOMAIN_VIEWING_ACTIVITY)
+            .cloned();
+        bridge.sync_apply(vec![DOMAIN_PROGRESS.into(), DOMAIN_VIEWING_ACTIVITY.into()]);
+        assert_eq!(
+            owner
+                .lock()
+                .unwrap()
+                .digest()
+                .get(DOMAIN_VIEWING_ACTIVITY)
+                .cloned(),
+            basis,
+            "applying remote activity must not echo it"
+        );
+        assert_eq!(
+            read_viewing_activity()["series"].phase,
+            ViewingPhase::Active
+        );
+        bridge.shared.lock().unwrap().playback = Some(PlaybackTarget {
+            series_id: "series".into(),
+            episode_id: "episode-3".into(),
+            last_pos: 1000.0,
+            last_dur: 1000.0,
+            ..Default::default()
+        });
+        bridge.note_player_progress_from_ui();
+        assert_eq!(app.get_library().row_data(0).unwrap().activity_action, 3);
+        let before = read_progress_map();
+        bridge.library_status_action(0, 3);
+        assert_eq!(
+            app.get_library().row_data(0).unwrap().status,
+            "New episodes"
+        );
+        assert_eq!(app.get_library().row_data(0).unwrap().activity_action, 4);
+        bridge.library_status_action(0, 4);
+        assert_eq!(app.get_library().row_data(0).unwrap().status, "Watching");
+        assert_eq!(
+            serde_json::to_value(read_progress_map()).unwrap(),
+            serde_json::to_value(before).unwrap(),
+            "manual viewing intent must not modify watched history"
+        );
+
+        let snapshot = storage::get_str(VIEWING_ACTIVITY_KEY).unwrap();
+        {
+            let mut store = owner.lock().unwrap();
+            store.set(
+                DOMAIN_VIEWING_ACTIVITY,
+                "series",
+                Some("{invalid".into()),
+                0,
+                nova_sync::local_device().unwrap(),
+            );
+            store.save().unwrap();
+        }
+        bridge.sync_apply(vec![DOMAIN_VIEWING_ACTIVITY.into()]);
+        assert_eq!(
+            storage::get_str(VIEWING_ACTIVITY_KEY).unwrap(),
+            snapshot,
+            "malformed remote activity must retain the local snapshot"
+        );
+        assert!(!writable_key(VIEWING_ACTIVITY_KEY));
     }
 }
