@@ -1002,7 +1002,9 @@ impl Bridge {
             if !app.get_episode_context().is_empty()
                 && let Some(video) = selected
             {
-                app.set_episode_context(SharedString::from(episode_context_label(&video)));
+                app.set_episode_context(SharedString::from(stream_episode_context_label(
+                    &video,
+                )));
                 if thumbnail_changed
                     && !app.get_player_open()
                     && let Some(url) = video.thumbnail.filter(|url| !url.is_empty())
@@ -1941,7 +1943,7 @@ impl Bridge {
             (
                 m.id.clone(),
                 video.id.clone(),
-                episode_context_label(video),
+                stream_episode_context_label(video),
                 video.thumbnail.clone(),
             )
         };
@@ -1979,7 +1981,7 @@ impl Bridge {
         self.select_episode_streams(
             series_id.to_owned(),
             episode_id.to_owned(),
-            episode_context_label(&selection.0),
+            stream_episode_context_label(&selection.0),
             selection.0.thumbnail,
             selection.2,
         );

@@ -5,6 +5,8 @@
 // `src/app.rs`) no longer re-expand and re-typecheck this large generated
 // code on every debug rebuild — it only rebuilds when a `.slint` file changes.
 pub mod backend_text;
+mod fonts;
+pub use fonts::initialize_fonts;
 
 slint::include_modules!();
 
@@ -40,6 +42,8 @@ pub fn apply_theme(app: &AppWindow, true_black: bool) {
         palette.popup = black;
         palette.category_panel = black;
         palette.control = black;
+        palette.hero_control = black;
+        palette.hero_metadata_badge = black;
         palette.settings_control = black;
         palette.stream_card = black;
         palette.season_card = black;
@@ -56,6 +60,8 @@ pub fn apply_theme(app: &AppWindow, true_black: bool) {
         palette.player_menu = black;
         let hover = slint::Color::from_rgb_u8(18, 18, 18);
         palette.control_hover = hover;
+        palette.hero_control_hover = hover;
+        palette.detail_filter_hover = hover;
         palette.input_hover = hover;
         palette.settings_control_hover = hover;
         palette.tracking_control_hover = hover;

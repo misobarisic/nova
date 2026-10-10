@@ -306,6 +306,11 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
         );
         app.set_tracking_links(Rc::new(VecModel::from(Vec::<nova::TrackingLinkRow>::new())).into());
         app.set_tracking_service(1);
+        // A match can lack enough numbered episodes for automatic coverage.
+        // An empty draft must expose candidates instead of a blank review.
+        app.set_tracking_setup_active(true);
+        app.set_tracking_setup_revision(s("empty-proposal"));
+        app.set_tracking_setup(Rc::new(VecModel::default()).into());
         app.set_tracking_candidates(
             Rc::new(VecModel::from(vec![nova::TrackingCandidateRow {
                 title: s("Suggested anime release"),

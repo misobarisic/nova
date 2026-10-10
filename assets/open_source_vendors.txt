@@ -51,10 +51,13 @@ Linux builds use the system/Nix-provided libmpv and X11 runtime libraries;
 Nova does not vendor a Linux libmpv binary. The actual distribution package
 determines the enabled features and corresponding notices for system libraries.
 
-BUNDLED FONT
+BUNDLED FONTS
 Roboto-Regular.ttf is bundled at assets/fonts/Roboto-Regular.ttf under
 Apache-2.0. Its complete font notice is assets/fonts/LICENSE.txt and is
 included below.
+NotoColorEmoji.ttf is bundled at assets/fonts/NotoColorEmoji.ttf under
+OFL-1.1. Its complete license is assets/fonts/NotoColorEmoji-LICENSE.txt and
+is included below.
 
 FULL NATIVE VENDOR LICENSE TEXTS
 

@@ -16,16 +16,16 @@ component StreamFilterPill inherits Rectangle {
     callback reveal_requested(length, length);
     // Side padding. The pill keeps this intrinsic width whether or not a
     // query is in flight: while loading the spinner *replaces* the trailing
-    // padding (same 12px) instead of adding to it, so the bar no longer
+    // padding (same 14px) instead of adding to it, so the bar no longer
     // reflows as addons answer one by one.
-    property <length> pad: 12px;
+    property <length> pad: 14px;
 
-    height: 36px;
-    border-radius: 18px;
-    background: selected ? Theme.current.accent : (pill_touch.has-hover ? Theme.current.detail_filter_hover : Theme.current.control);
+    height: 40px;
+    border-radius: 20px;
+    background: root.selected ? Theme.current.primary_button : (pill_touch.has-hover ? Theme.current.control_hover : Theme.current.hero_control);
     clip: true;
-    border-width: root.focused ? 2px : 0px;
-    border-color: Theme.current.accent_vivid;
+    border-width: root.focused ? 2px : 1px;
+    border-color: root.focused ? Theme.current.accent_vivid : (root.selected ? Theme.current.accent : Theme.current.border_strong);
     accessible-role: button;
     accessible-label: root.label;
     changed focused => { if (root.focused) { reveal_t.start(); } }
@@ -42,9 +42,9 @@ component StreamFilterPill inherits Rectangle {
 
         Text {
             text: root.label;
-            color: root.selected ? Theme.current.text_bright : Theme.current.text_filter;
+            color: root.selected ? Theme.current.on_accent : Theme.current.text_secondary;
             font-size: 13px;
-            font-weight: 600;
+            font-weight: root.selected ? 600 : 400;
             vertical-alignment: center;
         }
 
@@ -221,7 +221,7 @@ component StreamFilterBar inherits HorizontalLayout {
     pill_flick := Flickable {
         horizontal-stretch: 1;
         min-width: 0px;
-        height: 36px;
+        height: 40px;
         interactive: true;
         content-width: pill_row.width;
         content-height: self.height;
@@ -230,7 +230,7 @@ component StreamFilterBar inherits HorizontalLayout {
         // scrolls it horizontally instead of squeezing it.
         pill_row := HorizontalLayout {
             width: self.preferred-width;
-            height: 36px;
+            height: 40px;
             spacing: 8px;
             alignment: start;
 

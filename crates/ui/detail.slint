@@ -113,6 +113,7 @@ export component DetailPage {
     in-out property <bool> tracking_open: false;
     in-out property <int> tracking_return_tab: 0;
     property <int> tracking_focus_request: 0;
+    property <int> tracking_back_request: 0;
     callback tracking_show();
     callback tracking_close();
     callback tracking_search(int,string);
@@ -431,8 +432,7 @@ export component DetailPage {
     }
 
     function tracking_back() {
-        if root.tracking_candidate_title != "" { root.tracking_cancel_adjust(); }
-        else { root.tracking_close(); }
+        root.tracking_back_request += 1;
     }
 
     function system_back() {
@@ -745,7 +745,7 @@ export component DetailPage {
             }
             key-pressed(e) => {
                 if (root.tracking_open && (e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace)) {
-                    if root.tracking_candidate_title != "" { root.tracking_cancel_adjust(); } else { root.tracking_close(); }
+                    root.tracking_back();
                     accept
                 } else if (root.stream_action_open) {
                     root.stream_action_open = false;
@@ -1143,6 +1143,7 @@ export component DetailPage {
                     width:Math.min(1040px, parent.width);
                     height:self.preferred-height;
                     focus_request:root.tracking_focus_request;
+                    back_request:root.tracking_back_request;
                     back_to_details() => { root.tracking_close(); }
                     safe-bottom:root.safe-bottom;
                     links:root.tracking_links;

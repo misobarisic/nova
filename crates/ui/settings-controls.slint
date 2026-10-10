@@ -406,8 +406,8 @@ export component Segmented inherits HorizontalLayout {
         width: seg_lbl.preferred-width + 28px;
         height: 44px;
         border-radius: 8px;
-        border-width: root.enabled && SettingsStyle.keyboard-mode && ((root.focused && root.current_index == i) || segment_focus.has-focus) ? 2px : 0px;
-        border-color: Theme.current.focus_ring;
+        border-width: self.focus_visible ? 2px : (Theme.true_black ? 1px : 0px);
+        border-color: self.focus_visible ? Theme.current.focus_ring : Theme.current.control_border;
         background: root.current_index == i ? Theme.current.selection_fill : transparent;
         animate background { duration: Anim.hover_fast; }
 

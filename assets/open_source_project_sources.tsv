@@ -23,5 +23,6 @@ mbed TLS 3.4.0 (Android bundled)	Apache-2.0	https://github.com/Mbed-TLS/mbedtls/
 dav1d 1.2.0 (Android bundled)	BSD-2-Clause	https://code.videolan.org/videolan/dav1d/-/tree/1.2.0
 libxml2 2.10.3 (Android bundled)	MIT	https://gitlab.gnome.org/GNOME/libxml2/-/tree/v2.10.3
 Roboto Regular font	Apache-2.0	https://github.com/misobarisic/nova/tree/main/assets/fonts
+Noto Color Emoji font	OFL-1.1	https://github.com/googlefonts/noto-emoji/tree/e20cbc2bbec1926686be9f9bee7d1d2cfa1fea0e/2D/fonts
 Android NDK system libraries (not bundled)	Android platform terms	https://developer.android.com/ndk
 Linux libmpv/X11 runtime (system-provided)	Distribution-provided licenses	https://github.com/mpv-player/mpv/tree/78d43740f52db817d98bcf24fb30a76ab6fa13ff

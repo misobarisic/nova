@@ -418,6 +418,7 @@ fn render_stream_selector_previews() {
     );
     std::fs::create_dir_all(&out).unwrap();
     let app = nova::AppWindow::new().unwrap();
+    nova_ui::initialize_fonts(app.window());
     nova_ui::apply_theme(
         &app,
         std::env::var_os("NOVA_STREAM_SELECTOR_PREVIEW_TRUE_BLACK").is_some(),
@@ -448,7 +449,7 @@ fn render_stream_selector_previews() {
     app.set_stream_page_count(2);
     let mut rows: Vec<_> = (0..25).map(row).collect();
     rows[0].text = "Arrival · 1080p".into();
-    rows[0].details = "Downloaded · 2.1 GB".into();
+    rows[0].details = "Downloaded · 2.1 GB\n👤 10 · 💾 · ⚙️ NyaaSi\n🇬🇧 / 🇩🇪 / 🇫🇷 / 🇪🇸".into();
     rows[0].is_download = true;
     rows[0].download_action = 4;
     app.set_streams(Rc::new(VecModel::from(rows)).into());

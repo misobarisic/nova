@@ -132,6 +132,7 @@ component AccountEditor inherits Rectangle {
     callback disconnect(int);
     callback cancel(int);
     callback input_focus(bool);
+    callback release_focus();
     callback automatic(int,bool);
     min-width: 0px;
     background: Theme.current.card;
@@ -141,6 +142,17 @@ component AccountEditor inherits Rectangle {
     property <string> client: root.entry.client_id;
     property <string> redirect: root.entry.redirect_uri;
     property <bool> pin_sign_in: root.entry.service == 1 && root.entry.redirect_uri == "https://anilist.co/api/v2/oauth/pin";
+    property <bool> returned_focused: false;
+    out property <bool> input_focused: client_input.has-focus || redirect_input.has-focus || root.returned_focused;
+    changed input_focused => { root.input_focus(root.input_focused); }
+    property <bool> signing_in: root.entry.signing_in;
+    changed signing_in => {
+        // Expiry and automatic browser returns remove the temporary input
+        // without going through either sign-in button.
+        if !root.signing_in { root.release_focus(); root.returned_focused = false; }
+    }
+    property <bool> connected: root.entry.connected;
+    changed connected => { if !root.connected { root.release_focus(); } }
     VerticalLayout {
         padding: 16px; spacing: 8px;
         Text { text: root.entry.service == 0 ? "MyAnimeList" : "AniList"; color: Theme.current.text_bright; font-weight: 700; }
@@ -149,22 +161,22 @@ component AccountEditor inherits Rectangle {
         SettingsRow { setting-key: "tracking_automatic_" + root.entry.service; row-title: @tr("Automatic tracking for linked releases"); ToggleSwitch { name: @tr("Automatic tracking for linked releases"); checked: root.entry.automatic; toggled => { root.automatic(root.entry.service, self.checked); } } }
         Text { text: @tr("Public client ID"); color: Theme.current.text_settings; }
         SettingSyncBadge { max-width: parent.width; setting_key: "tracking_client_" + root.entry.service; setting_title: @tr("Public client ID"); }
-        SettingsInput { changed has-focus => {root.input_focus(self.has-focus);} text <=> root.client; placeholder-text: @tr("Public client ID"); accessible-label: @tr("Public client ID"); }
+        client_input := SettingsInput { text <=> root.client; placeholder-text: @tr("Public client ID"); accessible-label: @tr("Public client ID"); }
         Text { text: @tr("Registered redirect URL"); color: Theme.current.text_settings; }
         SettingSyncBadge { max-width: parent.width; setting_key: "tracking_redirect_" + root.entry.service; setting_title: @tr("Registered redirect URL"); }
-        SettingsInput { changed has-focus => {root.input_focus(self.has-focus);} text <=> root.redirect; placeholder-text: @tr("Registered redirect URL"); accessible-label: @tr("Registered redirect URL"); }
+        redirect_input := SettingsInput { text <=> root.redirect; placeholder-text: @tr("Registered redirect URL"); accessible-label: @tr("Registered redirect URL"); }
         if !root.entry.signing_in: PillButton {
             label: root.entry.connected ? @tr("Reconnect") : @tr("Connect");
-            clicked => {root.connect(root.entry.service,root.client,root.redirect);}
+            clicked => {root.release_focus();root.connect(root.entry.service,root.client,root.redirect);}
         }
         if root.entry.signing_in: VerticalLayout {
             spacing: 8px;
             Text { text: root.pin_sign_in ? @tr("Approve Nova in AniList, then copy the displayed token and paste it below.") : @tr("Finish sign-in in your browser. Paste the full return URL here if automatic return fails."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0; }
-            returned := SettingsInput { changed has-focus => {root.input_focus(self.has-focus);} placeholder-text: root.pin_sign_in ? @tr("AniList token") : @tr("Full return URL"); accessible-label: root.pin_sign_in ? @tr("AniList token") : @tr("Full return URL"); input-type: password; }
-            PillButton { label: @tr("Finish sign-in"); primary: true; clicked => {root.complete(root.entry.service,returned.full-text);returned.text="";} }
-            PillButton { label: @tr("Cancel sign-in"); clicked => {returned.text="";root.cancel(root.entry.service);} }
+            returned := SettingsInput { changed has-focus => {root.returned_focused=self.has-focus;} placeholder-text: root.pin_sign_in ? @tr("AniList token") : @tr("Full return URL"); accessible-label: root.pin_sign_in ? @tr("AniList token") : @tr("Full return URL"); input-type: password; }
+            PillButton { label: @tr("Finish sign-in"); primary: true; clicked => {let value=returned.full-text;root.release_focus();returned.text="";root.complete(root.entry.service,value);} }
+            PillButton { label: @tr("Cancel sign-in"); clicked => {root.release_focus();returned.text="";root.cancel(root.entry.service);} }
         }
-        if root.entry.connected: PillButton { label: @tr("Disconnect"); destructive: true; clicked => {root.disconnect(root.entry.service);} }
+        if root.entry.connected: PillButton { label: @tr("Disconnect"); destructive: true; clicked => {root.release_focus();root.disconnect(root.entry.service);} }
     }
 }
 export component TrackingSettings inherits Rectangle {
@@ -177,10 +189,24 @@ export component TrackingSettings inherits Rectangle {
     callback reset();
     callback automatic(int,bool);
     in-out property <bool> reset_confirm:false;
-    property <int> focus_count:0;
-    out property <bool> input_focused:root.focus_count>0;
+    // Per-service state cannot retain a stale increment when a focused
+    // conditional input or the whole account model disappears.
+    property <bool> mal_input_focused: false;
+    property <bool> anilist_input_focused: false;
+    out property <bool> input_focused: root.mal_input_focused || root.anilist_input_focused;
     in property <bool> blur;
-    changed blur => {blur_scope.focus();}
+    function recover_focus() {
+        blur_scope.focus();
+        root.mal_input_focused = false;
+        root.anilist_input_focused = false;
+    }
+    changed blur => { root.recover_focus(); }
+    changed accounts => {
+        // Replacement destroys account scopes. In-place row updates keep
+        // the same model and do not move focus away from their inputs.
+        root.recover_focus();
+    }
+    changed reset_confirm => { if !root.reset_confirm { root.recover_focus(); } }
     blur_scope := FocusScope {width:1px;height:1px;}
     vertical-stretch: 0;
     min-width: 0px;
@@ -195,31 +221,63 @@ export component TrackingSettings inherits Rectangle {
             disconnect(service) => {root.disconnect(service);}
             cancel(service) => {root.cancel(service);}
             automatic(service,enabled) => {root.automatic(service,enabled);}
-            input_focus(focused) => {root.focus_count=Math.max(0,root.focus_count+(focused ? 1 : -1));}
+            input_focus(focused) => {
+                if row.service == 0 { root.mal_input_focused = focused; }
+                else { root.anilist_input_focused = focused; }
+            }
+            release_focus() => { root.recover_focus(); }
         }
-        PillButton {label:@tr("Reset local tracking");destructive:true;clicked => {root.reset_confirm=true;}}
+        PillButton {label:@tr("Reset local tracking");destructive:true;clicked => {root.recover_focus();root.reset_confirm=true;}}
         if root.reset_confirm: VerticalLayout {
             Text {text:@tr("Reset all local links and queued updates? A recovery backup is retained. Nova history and remote tracker lists stay unchanged.");color:Theme.current.text_settings;wrap:word-wrap;min-width:0;}
-            PillButton {label:@tr("Confirm tracking reset");destructive:true;clicked => {root.reset_confirm=false;root.reset();}}
-            PillButton {label:@tr("Cancel");clicked => {root.reset_confirm=false;}}
+            PillButton {label:@tr("Confirm tracking reset");destructive:true;clicked => {root.recover_focus();root.reset_confirm=false;root.reset();}}
+            PillButton {label:@tr("Cancel");clicked => {root.recover_focus();root.reset_confirm=false;}}
         }
 
     }
 }
 component EntryEditor inherits Rectangle {
     in property <TrackingLinkRow> entry;
+    // The panel owns one nested entry layer by stable ID, rather than by
+    // repeater index. A row update must never transfer an editor to another ID.
+    in-out property <string> active_entry_id;
+    in-out property <bool> entry_more;
+    in-out property <bool> entry_editing;
+    in-out property <bool> entry_history_confirm;
+    in-out property <bool> entry_unlink_confirm;
+    callback release_focus();
     callback edit(string,string,int,string,bool,string,bool,string);
     callback action(string,int);
     background: Theme.current.episode_toolbar; border-radius: 16px; border-width: 1px; border-color: Theme.current.border_medium; vertical-stretch: 0; min-width: 0;
-    property <bool> editing: false;
-    property <bool> more: false;
-    property <bool> history_confirm: false;
-    property <bool> unlink_confirm: false;
+    property <bool> active: root.active_entry_id == root.entry.id;
+    property <bool> editing: root.active && root.entry_editing;
+    property <bool> more: root.active && root.entry_more;
+    property <bool> history_confirm: root.active && root.entry_history_confirm;
+    property <bool> unlink_confirm: root.active && root.entry_unlink_confirm;
+    property <string> shown_id: "";
+    init => { root.shown_id = root.entry.id; }
+    changed entry => {
+        if root.shown_id != "" && root.shown_id != root.entry.id && root.active_entry_id == root.shown_id {
+            root.release_focus();
+        }
+        root.shown_id = root.entry.id;
+    }
+    function activate() {
+        if !root.active {
+            root.entry_more = false;
+            root.entry_editing = false;
+            root.entry_history_confirm = false;
+            root.entry_unlink_confirm = false;
+            root.active_entry_id = root.entry.id;
+        }
+    }
+    function cancel_edit() { root.entry_editing = false; }
     // Entry edits and confirmations remove their focused controls. Keep a
     // stable focus target inside the card for the next Android Back press.
-    changed editing => { if !root.editing { more_button.focus(); } }
-    changed history_confirm => { if !root.history_confirm { more_button.focus(); } }
-    changed unlink_confirm => { if !root.unlink_confirm { more_button.focus(); } }
+    changed editing => { if root.active { more_button.focus(); } }
+    changed more => { if root.active && !root.more { more_button.focus(); } }
+    changed history_confirm => { if root.active && !root.history_confirm { more_button.focus(); } }
+    changed unlink_confirm => { if root.active && !root.unlink_confirm { more_button.focus(); } }
     VerticalLayout {
         padding: 12px; spacing: 8px;
         Text { text: root.entry.title; color: Theme.current.text_tracking_primary; wrap: word-wrap; min-width: 0; font-weight: 700; }
@@ -229,13 +287,13 @@ component EntryEditor inherits Rectangle {
         more_button := TrackingButton {
             text: root.editing ? @tr("Back to review") : @tr("More");
             quiet: true;
-            clicked => { if root.editing { root.editing = false; } else { root.more = !root.more; } }
+            clicked => { root.activate(); if root.editing { root.cancel_edit(); } else { root.entry_more = !root.more; } }
         }
         if !root.editing && root.more: VerticalLayout {
             spacing: 6px;
             HorizontalLayout {
                 spacing: 8px;
-                TrackingButton { text: @tr("Edit tracker entry"); icon:6; horizontal-stretch:1; clicked => {root.editing=true;} }
+                TrackingButton { text: @tr("Edit tracker entry"); icon:6; horizontal-stretch:1; clicked => {root.entry_editing=true;} }
                 TrackingButton { text:@tr("Open on service"); icon:7; horizontal-stretch:1; clicked => {root.action(root.entry.id,4);} }
             }
             HorizontalLayout {
@@ -246,18 +304,18 @@ component EntryEditor inherits Rectangle {
             HorizontalLayout {
                 spacing: 8px;
                 TrackingButton { text: @tr("Edit alignment"); icon:8; horizontal-stretch:1; clicked => {root.action(root.entry.id,1);} }
-                TrackingButton { text: @tr("Apply Nova history"); icon:9; horizontal-stretch:1; clicked => {root.history_confirm=true;root.unlink_confirm=false;} }
+                TrackingButton { text: @tr("Apply Nova history"); icon:9; horizontal-stretch:1; clicked => {root.entry_history_confirm=true;root.entry_unlink_confirm=false;} }
             }
             if root.history_confirm: VerticalLayout {
                 Text {text:root.entry.history_preview; color:Theme.current.text_secondary; wrap:word-wrap; min-width:0;}
-                TrackingButton {text:@tr("Confirm history update"); clicked => {root.action(root.entry.id,2);root.history_confirm=false;}}
-                TrackingButton {text:@tr("Cancel"); clicked => {root.history_confirm=false;}}
+                TrackingButton {text:@tr("Confirm history update"); clicked => {root.action(root.entry.id,2);root.entry_history_confirm=false;}}
+                TrackingButton {text:@tr("Cancel"); clicked => {root.entry_history_confirm=false;}}
             }
-            TrackingButton { text: @tr("Unlink"); icon:10; destructive:true; clicked => {root.unlink_confirm=true;root.history_confirm=false;} }
+            TrackingButton { text: @tr("Unlink"); icon:10; destructive:true; clicked => {root.entry_unlink_confirm=true;root.entry_history_confirm=false;} }
             if root.unlink_confirm: VerticalLayout {
                 Text {text:@tr("Unlink this release? Unsent updates will be discarded when no other source uses it. An update already sent may finish.");color:Theme.current.text_secondary;wrap:word-wrap;min-width:0;}
-                TrackingButton {text:@tr("Confirm unlink");clicked => {root.action(root.entry.id,3);root.unlink_confirm=false;}}
-                TrackingButton {text:@tr("Cancel");clicked => {root.unlink_confirm=false;}}
+                TrackingButton {text:@tr("Confirm unlink");clicked => {root.action(root.entry.id,3);}}
+                TrackingButton {text:@tr("Cancel");clicked => {root.entry_unlink_confirm=false;}}
             }
         }
         if root.editing: VerticalLayout {
@@ -272,8 +330,8 @@ component EntryEditor inherits Rectangle {
             completed_check := CheckBox { text:@tr("Change finish date"); enabled:root.entry.dates_writable; }
             completed := SettingsInput { text:root.entry.completed; placeholder-text:@tr("YYYY-MM-DD, partial date, or empty to clear"); enabled:root.entry.dates_writable; accessible-label:@tr("Finish date"); }
             if !root.entry.dates_writable: Text { text:@tr("MyAnimeList dates are read-only through its API."); color:Theme.current.text_secondary; wrap:word-wrap; min-width:0; }
-            TrackingButton { text:@tr("Save tracker edits"); clicked => {root.edit(root.entry.id,progress.text,status.current-index,score.text,started_check.checked,started.text,completed_check.checked,completed.text);root.editing=false;} }
-            TrackingButton { text:@tr("Cancel"); clicked => {root.editing=false;} }
+            TrackingButton { text:@tr("Save tracker edits"); clicked => {root.edit(root.entry.id,progress.text,status.current-index,score.text,started_check.checked,started.text,completed_check.checked,completed.text);root.cancel_edit();} }
+            TrackingButton { text:@tr("Cancel"); clicked => {root.cancel_edit();} }
         }
     }
 }
@@ -306,21 +364,66 @@ export component TrackingPanel inherits Rectangle {
     property <bool> manual_search: false;
     property <string> query_text: "";
     property <bool> include_history: false;
+    property <string> active_entry_id: "";
+    property <bool> entry_more: false;
+    property <bool> entry_editing: false;
+    property <bool> entry_history_confirm: false;
+    property <bool> entry_unlink_confirm: false;
+    function close_entry() {
+        root.active_entry_id = "";
+        root.entry_more = false;
+        root.entry_editing = false;
+        root.entry_history_confirm = false;
+        root.entry_unlink_confirm = false;
+    }
+    function recover_entry_focus() {
+        // Model replacement destroys row scopes; ordinary row data updates
+        // retain them and do not run this recovery.
+        if root.open && (root.active_entry_id != "" || panel_focus.has-focus) {
+            panel_focus.focus();
+            root.close_entry();
+        }
+    }
+    changed links => { root.recover_entry_focus(); }
+    property <int> link_count: root.links.length;
+    changed link_count => { root.recover_entry_focus(); }
+    in property <int> back_request;
+    property <int> last_back_request: -1;
+    changed back_request => {
+        if root.last_back_request >= 0 && root.back_request != root.last_back_request {
+            root.last_back_request = root.back_request;
+            root.nested_back();
+        }
+    }
+    function nested_back() {
+        if root.active_entry_id != "" && root.entry_unlink_confirm { root.entry_unlink_confirm = false; }
+        else if root.active_entry_id != "" && root.entry_history_confirm { root.entry_history_confirm = false; }
+        // Same Cancel behavior as the entry editor: discard unsaved inputs.
+        else if root.active_entry_id != "" && root.entry_editing { root.entry_editing = false; }
+        else if root.active_entry_id != "" && root.entry_more { root.entry_more = false; }
+        else if root.manual_search { root.manual_search = false; }
+        else if root.candidate_title != "" { root.cancel_adjust(); }
+        else { root.back_to_details(); }
+    }
     property <bool> wide: root.width >= 840px;
     // Derive density from the window, rather than this layout's own height.
     in property <bool> compact: false;
-    property <bool> setup_review: root.setup_active && root.candidate_title == "" && !root.manual_search && root.setup.length > 0;
+    property <bool> has_setup: root.setup_active && root.setup.length > 0;
+    property <bool> setup_review: root.has_setup && root.candidate_title == "" && !root.manual_search;
+    changed has_setup => { if root.has_setup { root.recover_entry_focus(); } }
     changed candidate_title => {
         root.edit_first = root.range_first;
         root.edit_last = root.range_last;
         root.edit_start = root.range_start;
         root.individual_mode = false;
+        root.close_entry();
         if root.candidate_title != "" { root.manual_search = false; }
         // Adjust/search can remove the focused input. Keep a persistent
         // control focused so Android Back stays in the window capture chain.
         if root.open { panel_focus.focus(); }
     }
     changed setup_revision => {
+        root.close_entry();
         root.include_history = false;
         root.manual_search = false;
         if root.open { panel_focus.focus(); }
@@ -328,7 +431,7 @@ export component TrackingPanel inherits Rectangle {
     changed manual_search => {
         if root.open { panel_focus.focus(); }
     }
-    init => { panel_focus.focus(); }
+    init => { panel_focus.focus(); root.last_back_request = root.back_request; }
     in property <int> focus_request;
     changed focus_request => { panel_focus.focus(); }
     callback back_to_details();
@@ -356,7 +459,7 @@ export component TrackingPanel inherits Rectangle {
         height: 100%;
         key-pressed(e) => {
             if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
-                if root.candidate_title != "" { root.cancel_adjust(); } else { root.back_to_details(); }
+                if !e.repeat { root.nested_back(); }
                 accept
             } else { reject }
         }
@@ -369,7 +472,7 @@ export component TrackingPanel inherits Rectangle {
                 VerticalLayout {
                     spacing: 4px;
                     Text {
-                        text: root.candidate_title != "" ? @tr("Episode alignment") : root.links.length > 0 && !root.setup_active ? @tr("Your tracking") : @tr("Track your progress");
+                        text: root.candidate_title != "" ? @tr("Episode alignment") : root.links.length > 0 && !root.has_setup ? @tr("Your tracking") : @tr("Track your progress");
                         color: Theme.current.text_tracking_primary;
                         font-size: root.wide ? 26px : 22px;
                         font-weight: 700;
@@ -457,13 +560,27 @@ export component TrackingPanel inherits Rectangle {
                         min-width: 0px;
                         vertical-stretch: 0;
                     }
-                    if !root.setup_active && root.candidate_title == "": VerticalLayout {
+                    if !root.has_setup && root.candidate_title == "": VerticalLayout {
                         spacing: 12px;
                         vertical-stretch: 0;
                         for row in root.links: EntryEditor {
                             entry: row;
+                            active_entry_id <=> root.active_entry_id;
+                            entry_more <=> root.entry_more;
+                            entry_editing <=> root.entry_editing;
+                            entry_history_confirm <=> root.entry_history_confirm;
+                            entry_unlink_confirm <=> root.entry_unlink_confirm;
+                            release_focus() => { root.recover_entry_focus(); }
                             edit(id, progress, status, score, set_started, started, set_completed, completed) => { root.edit(id, progress, status, score, set_started, started, set_completed, completed); }
-                            action(id, action) => { root.action(id, action); }
+                            action(id, action) => {
+                                if action == 3 {
+                                    // Unlink can remove this entire card. Move focus
+                                    // before enqueueing it, rather than to More.
+                                    panel_focus.focus();
+                                    root.close_entry();
+                                }
+                                root.action(id, action);
+                            }
                         }
                     }
                     if root.setup_unmapped != "" && root.setup_review: Text { text: root.setup_unmapped; color: Theme.current.text_tracking_warning; font-size: 13px; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
@@ -529,7 +646,7 @@ export component TrackingPanel inherits Rectangle {
                         enabled: !root.busy;
                         clicked => { root.search(root.selected_service, root.query_text); }
                     }
-                    if root.manual_search || (!root.setup_active && root.links.length == 0 && root.candidate_title == ""): VerticalLayout {
+                    if root.manual_search || (!root.has_setup && root.links.length == 0 && root.candidate_title == ""): VerticalLayout {
                         spacing: 12px;
                         vertical-stretch: 0;
                         for candidate[index] in root.candidates: Rectangle {
@@ -580,7 +697,7 @@ export component TrackingPanel inherits Rectangle {
                                 }
                                 for label in root.preview_rows: Text { text: label; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
                             }
-                            TrackingButton { text: root.setup_active ? @tr("Save adjustment") : @tr("Confirm alignment"); primary: true; enabled: root.can_confirm && !root.busy; clicked => { root.confirm(); } }
+                            TrackingButton { text: root.has_setup ? @tr("Save adjustment") : @tr("Confirm alignment"); primary: true; enabled: root.can_confirm && !root.busy; clicked => { root.confirm(); } }
                         }
                     }
                     if root.setup_review: Rectangle {

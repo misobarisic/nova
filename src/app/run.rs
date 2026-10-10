@@ -53,6 +53,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let app = AppWindow::new()?;
+    nova_ui::initialize_fonts(app.window());
     #[cfg(feature = "desktop")]
     drop(window_setup);
     #[cfg(feature = "desktop")]

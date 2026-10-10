@@ -66,6 +66,7 @@ fn generate_license_catalog() {
         "assets/open_source_vendors.txt",
         "LICENSE",
         "assets/fonts/LICENSE.txt",
+        "assets/fonts/NotoColorEmoji-LICENSE.txt",
         "crates/addons/Cargo.toml",
         "crates/ui/Cargo.toml",
         "crates/storage/Cargo.toml",
@@ -113,6 +114,8 @@ fn generate_license_catalog() {
     catalog.push_str(include_str!("LICENSE"));
     catalog.push_str("\n\n===== Roboto font license: Apache-2.0 =====\n\n");
     catalog.push_str(include_str!("assets/fonts/LICENSE.txt"));
+    catalog.push_str("\n\n===== Noto Color Emoji font license: OFL-1.1 =====\n\n");
+    catalog.push_str(include_str!("assets/fonts/NotoColorEmoji-LICENSE.txt"));
     catalog.push_str("\n\n===== AniKoto JavaScript provider =====\n\n");
     catalog.push_str(include_str!("crates/providers/plugins/anikoto/NOTICE.md"));
     // The complete Apache-2.0 terms are included by the font notice above.

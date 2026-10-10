@@ -590,6 +590,17 @@ pub fn loading_episodes(addons: usize) -> String {
     }
 }
 
+/// Selected stream context, e.g. `"S1 E1 · Pilot"`, with no duplicate fallback.
+pub fn stream_episode_context(identifier: &str, title: &str) -> String {
+    if identifier.is_empty() || identifier == title {
+        title.to_owned()
+    } else if title.is_empty() {
+        identifier.to_owned()
+    } else {
+        format!("{identifier} · {title}")
+    }
+}
+
 /// `"12 streams from 3 add-ons."`.
 pub fn streams_found(streams: usize, addons: usize) -> String {
     if croatian() {

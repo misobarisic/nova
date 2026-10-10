@@ -21,6 +21,7 @@ librqbit-utp = { git = "https://github.com/ikatson/librqbit-utp", rev = "f19f77e
 # software renderer and desktop-only extras.
 slint = { version = "1.18.0", default-features = false, features = ["std", "accessibility", "compat-1-2"] }
 slint-build = "1.18.0"
+i-slint-core = { version = "1.18.0", default-features = false, features = ["std", "shared-parley"] }
 i-slint-backend-testing = "1.18.0"
 tracing = "0.1"
 
@@ -105,7 +106,7 @@ rqrr = { version = "0.11", default-features = false }
 # through synthetic pointer events, no display needed.
 i-slint-backend-testing = { workspace = true }
 # Feed real touch phases (rather than mouse events) to the carousel gesture test.
-i-slint-core = "1.18.0"
+i-slint-core = { workspace = true }
 # Test fixtures build small PNGs.
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 # The QR round-trip test encodes a ticket and decodes the resulting raster;

@@ -252,7 +252,9 @@ impl Coordinator {
             .ok_or_else(input_message)?;
         draft.revision = self.setup_revision;
         self.validate_setup(&draft)?;
-        self.setup = Some(draft);
+        // No coverage means there is nothing to review or accept yet. Keep
+        // the ranked candidates visible so the user can align one manually.
+        self.setup = (!draft.proposal.releases.is_empty()).then_some(draft);
         self.choice = None;
         self.busy = false;
         self.notice = text::tr("Review the suggested releases, then start tracking.").into();

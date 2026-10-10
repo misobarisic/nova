@@ -1720,6 +1720,7 @@ export component SettingsPage {
                                 }
 
                                 if root.sel == 12: tracking_settings := TrackingSettings {
+                                    init => { root.tracking_input_focused = self.input_focused; }
                                     accounts: root.tracking_accounts;
                                     reset_confirm <=> root.tracking_reset_confirm;
                                     changed input_focused => {root.tracking_input_focused=self.input_focused;}

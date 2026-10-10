@@ -474,8 +474,7 @@ pub(crate) fn episode_row_label(v: &Video) -> String {
     }
     text::tr("Episode").to_string()
 }
-/// Context label for a picked episode shown above its streams: just the
-/// title (the top-bar pill and badges carry the S/E identifier). Falls back
+/// Episode title for resume labels and download descriptions. Falls back
 /// to the S/E identifier when the addon sent no title.
 pub(crate) fn episode_context_label(v: &Video) -> String {
     let title = v.label().trim().to_string();
@@ -483,4 +482,10 @@ pub(crate) fn episode_context_label(v: &Video) -> String {
         return title;
     }
     episode_se_label(v)
+}
+
+/// The stream selector needs numbering alongside the title because it has
+/// no episode thumbnail badge. Keep other episode descriptions unchanged.
+pub(crate) fn stream_episode_context_label(v: &Video) -> String {
+    text::stream_episode_context(&episode_se_label(v), &episode_context_label(v))
 }

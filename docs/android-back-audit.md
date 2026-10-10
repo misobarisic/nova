@@ -2,7 +2,7 @@
 
 Focus recovery and remaining device checks for Android Back.
 
-## Fixed and covered by regression tests
+## Earlier fixes with regression coverage
 
 Android can finish the activity when Slint rejects both synthetic Back events.
 The window capture scope depends on a surviving focused item: removing a
@@ -26,20 +26,41 @@ The tests dispatch actual Back press/release events, including held repeats,
 and verify acceptance and one-layer navigation. Home root still backgrounds the
 app through the existing callback.
 
-## Remaining audit items
+## Tracking changes reviewed from source
 
-These are candidates to investigate, not reproduced bugs:
+These changes have been reviewed in the diff only. No tests were run for this
+change; device confirmation is still needed.
 
-- In `TrackingSettings` / `AccountEditor` (`crates/ui/tracking.slint`), check
-  focus after confirming a local reset, finishing/cancelling sign-in, and
-  replacing the account model. Conditional controls or account rows can disappear;
-  verify that a surviving control owns focus before the next Back press.
-- Add focused rotation coverage for Settings' category-name and torrent-folder
-  inputs, including keyboard edit mode. Their responsive focus recovery is
-  implemented, but the new regression directly checks only the addon URL.
-- Verify physical Back and gesture Back on the S25 FE, including keyboard open,
-  rapid presses, app background/resume, and rotation. The current verification
-  is headless; physical-device behavior still needs verification.
+- Entry editing focuses the persistent More / Back to review button both when
+  entering and leaving the editor. Back discards unsaved inputs through the same
+  state change as Cancel.
+- The Tracking panel owns its active entry by stable ID. Confirmation, editor,
+  and More layers dismiss before manual search, episode alignment, and Tracking
+  itself. Detail's toolbar, keyboard, and system Back paths share this UI handler.
+- Unlink focuses the persistent panel before submitting the action. Linked-card
+  removal, model replacement, and row identity changes recover that focus;
+  ordinary updates to an existing row do not move it.
+- Sign-in actions and reset move focus off temporary controls before submission.
+  Completion, cancellation, expiry, and disconnect restore the surviving settings
+  scope. Per-service input focus replaces increment/decrement accounting, and
+  disappearing inputs or replaced accounts clear stale focus state.
+- The existing Settings keyboard-dismissal path and the window's held-Back repeat
+  protection remain in place.
+
+## Device verification
+
+Check both navbar and gesture Back on the S25 FE:
+
+- Open Edit tracker entry and press Back before touching any input. Repeat with
+  unsaved edits; they should be discarded without saving to the tracker.
+- Unlink a release, wait for its card to disappear, then press Back.
+- Focus a sign-in input, finish or cancel sign-in, then press Back. Also check
+  expiry, disconnect, reset confirmation/cancellation, and account replacement.
+- Open each confirmation, editor, More panel, manual search, and alignment. Each
+  press should close just the nearest layer.
+- Check category-name and torrent-folder editing across rotation, rapid presses,
+  app background/resume, and return from playback, including keyboard edit mode.
+- Only Home root should background the app; returning should retain its state.
 
 Tests that inspect built-in input metadata use the default compiled UI, matching
 Android releases. Those tests are disabled with `live-preview`, whose built-in

@@ -141,6 +141,10 @@ it. Use **Choose another release** to see alternatives and search by title, ID o
 official URL if the default does not match. Switching the service rebuilds that
 service's independent proposal.
 
+If episode numbering or release boundaries cannot produce an automatic draft,
+the ranked suggestions remain visible for selection and manual alignment. An
+empty draft does not hide matches or expose a Start tracking action.
+
 The review groups releases by library season and shows readable episode ranges.
 For example, Demon Slayer's merged second season maps episodes 1–7 to the Mugen
 Train TV entry and 8–18 to Entertainment District episodes 1–11. Mushoku Tensei's
