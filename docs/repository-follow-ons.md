@@ -208,7 +208,7 @@ this follow-on is taken up. `assets/fonts/NotoColorEmoji.ttf` currently adds
 
 ## APK license and source delivery
 
-`Settings → About` and `THIRD_PARTY_NOTICES.md` now include the build's Rust
+`About → Licenses` and `THIRD_PARTY_NOTICES.md` now include the build's Rust
 dependency license texts and source links, the native media vendor inventory,
 and the bundled font license. That satisfies the in-app notice/catalog part;
 it does not deliver the corresponding source for a particular APK.

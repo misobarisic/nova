@@ -2,7 +2,7 @@
 use super::*;
 
 /// Nav index of the page currently shown: 0 Home, 1 Discover, 2 Library,
-/// 3 Settings (Discover is the fallback page).
+/// 3 Settings, 4 About (Discover is the fallback page).
 fn current_nav(app: &AppWindow) -> i32 {
     if app.get_show_home() {
         0
@@ -10,6 +10,8 @@ fn current_nav(app: &AppWindow) -> i32 {
         2
     } else if app.get_show_settings() {
         3
+    } else if app.get_show_about() {
+        4
     } else {
         1
     }
@@ -617,6 +619,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_settings_picked(move || {
         note_nav_switch(&b, 3);
         b.show_settings_page();
+    });
+
+    let b = bridge.clone();
+    app.on_about_picked(move || {
+        note_nav_switch(&b, 4);
+        b.show_about_page();
     });
 
     // System back on the root screen (HomePage `exit_to_background`). Only

@@ -761,6 +761,7 @@ struct Bridge {
     sync_starting: Arc<AtomicBool>,
 }
 
+mod about;
 mod addon_mgr;
 mod bridge;
 mod catalog;

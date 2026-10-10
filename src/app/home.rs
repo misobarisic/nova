@@ -1984,6 +1984,7 @@ impl Bridge {
 
     pub(super) fn show_discover_page(&self) {
         if let Some(app) = self.app() {
+            app.set_show_about(false);
             app.set_show_home(false);
             app.set_show_library(false);
             app.set_show_settings(false);
@@ -1993,6 +1994,7 @@ impl Bridge {
     /// Main thread: show the Home landing page (Continue Watching).
     pub(super) fn show_home_page(&self) {
         if let Some(app) = self.app() {
+            app.set_show_about(false);
             app.set_show_home(true);
             app.set_show_library(false);
             app.set_show_settings(false);

@@ -62,7 +62,7 @@ fn bar_labels(app: &nova::AppWindow, height: f32) -> Vec<(f32, f32)> {
             .next()
             .is_none()
     );
-    ["home", "discover", "library", "settings"]
+    ["home", "discover", "library", "more"]
         .into_iter()
         .filter_map(|name| {
             let e = ElementHandle::find_by_element_id(app, &format!("BottomNav::label_{name}"))
@@ -85,9 +85,10 @@ fn check_marker(
     vertical: bool,
     failures: &Rc<RefCell<Vec<String>>>,
 ) {
-    if icons.len() != 4 {
+    let expected = if vertical { 5 } else { 4 };
+    if icons.len() != expected {
         failures.borrow_mut().push(format!(
-            "{label}: expected 4 nav icons, found {}",
+            "{label}: expected {expected} nav icons, found {}",
             icons.len()
         ));
         return;

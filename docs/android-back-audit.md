@@ -49,6 +49,20 @@ unlink, and sign-in lifecycle changes.
 - The existing Settings keyboard-dismissal path and the window's held-Back repeat
   protection remain in place.
 
+## Responsive More and About navigation
+
+More is a UI-only window sheet on narrow Home/Discover/Library pages. Window
+capture dismisses it before the underlying page receives Back, preserving the
+held-Back repeat guard. Settings and About hide the narrow bottom bar throughout
+their pages and use header Back; wide layouts retain separate sidebar entries,
+including on Android. Crossing to wide layout closes More without navigating.
+
+About owns a persistent focus scope before its Licenses controls are removed.
+Back from Licenses returns to About, then Home. Settings retains its existing
+editor/keyboard dismissal and nested-page behavior. Regression fixtures in
+`tests/responsive_more.rs` and `tests/settings_about.rs` cover these paths and
+responsive geometry; they have not been run for this change.
+
 ## Device verification
 
 Check both navbar and gesture Back on the S25 FE:
@@ -64,6 +78,12 @@ Check both navbar and gesture Back on the S25 FE:
   app background/resume, and return from playback, including keyboard edit mode.
 - From My Library, open a series, select an episode and open its streams. Navbar
   Back should close stream actions, return to Episodes, then return to My Library.
+- Open More from Home, Discover and Library; Back should dismiss only the sheet.
+  Hold Back while dismissing More on Home; repeats should not background the app.
+- Enter Settings/About through More; verify the bottom bar stays hidden on the
+  root and nested pages. Check header, navbar and gesture Back one layer at a time.
+- Open Licenses, rotate to a wide layout and back; verify its page/scroll state,
+  the five sidebar entries on wide layouts, and no bottom bar on narrow layouts.
 - Only Home root should background the app; returning should retain its state.
 
 Tests that inspect built-in input metadata use the default compiled UI, matching

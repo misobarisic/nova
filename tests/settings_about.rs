@@ -1,12 +1,10 @@
-//! Settings → About → Licenses (headless).
+//! Standalone About → Licenses (headless).
 //!
 //! The About page keeps the generated license catalog behind its own nested
 //! page, and source-link buttons stay vertically centered in their rows on
 //! narrow and wide layouts. One test function: the testing backend initializes
 //! once per process.
 
-#[path = "support/destinations.rs"]
-mod destinations;
 use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle, LogicalPosition, SharedString, VecModel};
 use std::cell::RefCell;
@@ -16,15 +14,42 @@ fn s(v: &str) -> SharedString {
     SharedString::from(v)
 }
 
-fn after(ms: u64, body: impl FnOnce() + 'static) {
-    slint::Timer::single_shot(std::time::Duration::from_millis(ms), body);
+fn back(app: &nova::AppWindow) {
+    for event in [
+        slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        },
+        slint::platform::WindowEvent::KeyReleased {
+            text: slint::platform::Key::Back.into(),
+        },
+    ] {
+        app.window().dispatch_event(event);
+    }
 }
 
-fn back(app: &nova::AppWindow) {
-    app.window()
-        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
-            text: slint::platform::Key::Back.into(),
-        });
+fn settle(app: &nova::AppWindow) {
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(400));
+    let _ = ElementHandle::find_by_element_type_name(app, "AboutPage")
+        .next()
+        .map(|e| e.size());
+}
+
+fn click(app: &nova::AppWindow, element: &ElementHandle) {
+    let p = element.absolute_position();
+    let size = element.size();
+    let position = LogicalPosition::new(p.x + size.width / 2.0, p.y + size.height / 2.0);
+    for event in [
+        slint::platform::WindowEvent::PointerPressed {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        },
+        slint::platform::WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        },
+    ] {
+        app.window().dispatch_event(event);
+    }
 }
 
 fn drag_horizontal(app: &nova::AppWindow, from: LogicalPosition, to: LogicalPosition) {
@@ -53,39 +78,10 @@ fn drag_horizontal(app: &nova::AppWindow, from: LogicalPosition, to: LogicalPosi
             });
 }
 
-fn scroll_landing_down(app: &nova::AppWindow) {
-    let from = LogicalPosition::new(220.0, 680.0);
-    let to = LogicalPosition::new(220.0, 180.0);
-    let _ = app
-        .window()
-        .dispatch_event_with_result(slint::platform::WindowEvent::PointerPressed {
-            position: from,
-            button: slint::platform::PointerEventButton::Left,
-        });
-    for step in 1..=4 {
-        let t = step as f32 / 4.0;
-        let _ =
-            app.window()
-                .dispatch_event_with_result(slint::platform::WindowEvent::PointerMoved {
-                    position: LogicalPosition::new(
-                        from.x + (to.x - from.x) * t,
-                        from.y + (to.y - from.y) * t,
-                    ),
-                });
-    }
-    let _ =
-        app.window()
-            .dispatch_event_with_result(slint::platform::WindowEvent::PointerReleased {
-                position: to,
-                button: slint::platform::PointerEventButton::Left,
-            });
-}
-
 fn check_alignment(app: &nova::AppWindow, label: &str, failures: &Rc<RefCell<Vec<String>>>) {
-    let rows: Vec<_> =
-        ElementHandle::find_by_element_id(app, "SettingsPage::source_card").collect();
+    let rows: Vec<_> = ElementHandle::find_by_element_id(app, "AboutPage::source_card").collect();
     let buttons: Vec<_> =
-        ElementHandle::find_by_element_id(app, "SettingsPage::source_view_button").collect();
+        ElementHandle::find_by_element_id(app, "AboutPage::source_view_button").collect();
     if rows.len() != 2 || buttons.len() != 2 {
         failures.borrow_mut().push(format!(
             "{label}: expected two source rows/buttons, found {} rows and {} buttons",
@@ -131,18 +127,23 @@ fn check_alignment(app: &nova::AppWindow, label: &str, failures: &Rc<RefCell<Vec
 
 #[test]
 fn about_opens_nested_licenses_and_centers_source_buttons() {
-    i_slint_backend_testing::init_integration_test_with_system_time();
-
+    i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = nova::AppWindow::new().unwrap();
-    app.on_settings_search_matches(|query, haystack| {
-        nova_ui::settings_search_matches(&query, &haystack)
-    });
     app.window().set_size(slint::PhysicalSize::new(360, 1600));
     app.window().show().unwrap();
-    app.set_show_settings(true);
     app.set_show_home(false);
-    // Exercise intrinsic-width edge cases with long generated-style license
-    // text and crate names while keeping realistic word and line breaks.
+    app.set_show_about(true);
+    let weak = app.as_weak();
+    app.on_home_picked(move || {
+        let app = weak.upgrade().unwrap();
+        app.set_show_about(false);
+        app.set_show_home(true);
+    });
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let urls = opened.clone();
+    app.on_license_source_requested(move |url| urls.borrow_mut().push(url.to_string()));
+    // Preserve intrinsic-width and source-row geometry coverage with long
+    // generated-style crate names and legal text, including unbroken tokens.
     let mut license_text = (0..64)
         .map(|_| "A long license clause with attributed contributors and redistribution terms.")
         .collect::<Vec<_>>()
@@ -165,158 +166,65 @@ fn about_opens_nested_licenses_and_centers_source_buttons() {
         ]))
         .into(),
     );
-
-    let failures: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
-    let fail = |failures: &Rc<RefCell<Vec<String>>>, cond: bool, msg: &str| {
-        if !cond {
-            failures.borrow_mut().push(msg.to_string());
-        }
-    };
-
-    let app1 = app.as_weak();
-    let failures1 = failures.clone();
-    after(400, move || {
-        let app = app1.upgrade().unwrap();
-        // Resolve About by destination identity, independently of landing order.
-        scroll_landing_down(&app);
-        let Some(about) = ({
-            app.set_settings_search_query("About".into());
-            destinations::find(&app, "settings:about").next()
-        }) else {
-            fail(&failures1, false, "DIAG: no About landing entry");
-            slint::quit_event_loop().unwrap();
-            return;
-        };
-        let app2 = app.as_weak();
-        let failures2 = failures1.clone();
-        slint::spawn_local(async move {
-            about
-                .single_click(slint::platform::PointerEventButton::Left)
-                .await;
-            after(400, move || {
-                let app = app2.upgrade().unwrap();
-                let Some(licenses) =
-                    ElementHandle::find_by_accessible_label(&app, "Licenses").next()
-                else {
-                    fail(&failures2, false, "About page must offer a Licenses button");
-                    slint::quit_event_loop().unwrap();
-                    return;
-                };
-                let app3 = app.as_weak();
-                let failures3 = failures2.clone();
-                slint::spawn_local(async move {
-                    licenses
-                        .single_click(slint::platform::PointerEventButton::Left)
-                        .await;
-                    after(400, move || {
-                        let app = app3.upgrade().unwrap();
-                        let source_buttons = ElementHandle::find_by_element_id(
-                            &app,
-                            "SettingsPage::source_view_button",
-                        )
-                        .count();
-                        fail(
-                            &failures3,
-                            source_buttons == 2,
-                            "Licenses page must contain both source links",
-                        );
-                        check_alignment(&app, "narrow layout", &failures3);
-
-                        // A horizontal swipe over a long license row must not
-                        // move the page sideways, even when catalog text is
-                        // unusually long and contains no word-break points.
-                        if let Some(row) =
-                            ElementHandle::find_by_element_id(&app, "SettingsPage::source_card")
-                                .next()
-                        {
-                            let row_pos = row.absolute_position();
-                            let row_size = row.size();
-                            let before_x = row_pos.x;
-                            let y = row_pos.y + row_size.height / 2.0;
-                            let end_x = (app.window().size().width as f32 - 24.0).max(24.0);
-                            drag_horizontal(
-                                &app,
-                                LogicalPosition::new(end_x, y),
-                                LogicalPosition::new((end_x - 160.0).max(16.0), y),
-                            );
-                            let after_x = ElementHandle::find_by_element_id(
-                                &app,
-                                "SettingsPage::source_card",
-                            )
-                            .next()
-                            .map(|e| e.absolute_position().x);
-                            fail(
-                                &failures3,
-                                after_x.is_some_and(|x| (x - before_x).abs() <= 1.0),
-                                "horizontal drag must not pan the Licenses page",
-                            );
-                        } else {
-                            fail(
-                                &failures3,
-                                false,
-                                "DIAG: no license source row to test horizontal panning",
-                            );
-                        }
-
-                        // Resize without leaving the nested page so the same
-                        // source rows are measured at desktop button height.
-                        app.window().set_size(slint::PhysicalSize::new(900, 750));
-                        let app4 = app.as_weak();
-                        let failures4 = failures3.clone();
-                        after(300, move || {
-                            let app = app4.upgrade().unwrap();
-                            check_alignment(&app, "wide layout", &failures4);
-
-                            back(&app);
-                            let app5 = app.as_weak();
-                            let failures5 = failures4.clone();
-                            after(400, move || {
-                                let app = app5.upgrade().unwrap();
-                                fail(
-                                    &failures5,
-                                    ElementHandle::find_by_element_id(
-                                        &app,
-                                        "SettingsPage::about_licenses_button",
-                                    )
-                                    .count()
-                                        == 1,
-                                    "Back from Licenses must return to About",
-                                );
-
-                                back(&app);
-                                let app6 = app.as_weak();
-                                let failures6 = failures5.clone();
-                                after(400, move || {
-                                    let app = app6.upgrade().unwrap();
-                                    fail(
-                                        &failures6,
-                                        destinations::find(&app, "settings:about").count() == 1
-                                            && ElementHandle::find_by_element_id(
-                                                &app,
-                                                "SettingsPage::about_licenses_button",
-                                            )
-                                            .count()
-                                                == 0,
-                                        "Back from About must return to the Settings landing menu",
-                                    );
-                                    slint::quit_event_loop().unwrap();
-                                });
-                            });
-                        });
-                    });
-                })
-                .unwrap();
-            });
-        })
-        .unwrap();
-    });
-
-    slint::run_event_loop().unwrap();
-
-    let failures = failures.borrow();
+    let failures = Rc::new(RefCell::new(Vec::new()));
+    settle(&app);
     assert!(
-        failures.is_empty(),
-        "settings About failures:\n  {}",
-        failures.join("\n  ")
+        ElementHandle::find_by_element_type_name(&app, "BottomNav")
+            .next()
+            .is_none()
+    );
+    let licenses = ElementHandle::find_by_element_id(&app, "AboutPage::about_licenses_button")
+        .next()
+        .unwrap();
+    click(&app, &licenses);
+    settle(&app);
+    assert!(app.get_about_licenses_open());
+    check_alignment(&app, "narrow layout", &failures);
+    let row = ElementHandle::find_by_element_id(&app, "AboutPage::source_card")
+        .next()
+        .unwrap();
+    let before_x = row.absolute_position().x;
+    let y = row.absolute_position().y + row.size().height / 2.0;
+    drag_horizontal(
+        &app,
+        LogicalPosition::new(336.0, y),
+        LogicalPosition::new(176.0, y),
+    );
+    let row = ElementHandle::find_by_element_id(&app, "AboutPage::source_card")
+        .next()
+        .unwrap();
+    assert!(
+        (row.absolute_position().x - before_x).abs() <= 1.0,
+        "long legal text must not pan horizontally"
+    );
+    let source = ElementHandle::find_by_element_id(&app, "AboutPage::source_view_button")
+        .next()
+        .unwrap();
+    click(&app, &source);
+    assert_eq!(*opened.borrow(), ["https://example.com/crate-one"]);
+    // Resize while inside Licenses; the rail appears without losing the page.
+    app.window().set_size(slint::PhysicalSize::new(900, 750));
+    settle(&app);
+    assert!(app.get_about_licenses_open());
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(&app, "SideItem").count(),
+        5
+    );
+    check_alignment(&app, "wide layout", &failures);
+    back(&app);
+    settle(&app);
+    assert!(app.get_show_about() && !app.get_about_licenses_open());
+    assert!(
+        ElementHandle::find_by_element_id(&app, "AboutPage::about_licenses_button")
+            .next()
+            .is_some()
+    );
+    back(&app);
+    settle(&app);
+    assert!(app.get_show_home() && !app.get_show_about());
+    assert!(
+        failures.borrow().is_empty(),
+        "About geometry failures: {:?}",
+        failures.borrow()
     );
 }

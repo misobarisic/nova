@@ -168,8 +168,40 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
     );
     app.set_system_back_request(app.get_system_back_request() + 1);
     settle(&app);
-    app.window().set_size(slint::PhysicalSize::new(390, 844));
     app.set_settings_selected_id(5);
+    // The narrow speed title used to center itself underneath its inline
+    // badge. Require separate bounds for both inline and stacked captions,
+    // including translated labels and the longer override badge.
+    for language in ["en", "hr"] {
+        slint::select_bundled_translation(language).unwrap();
+        for width in [320, 390, 699] {
+            app.window().set_size(slint::PhysicalSize::new(width, 1400));
+            for status in [0, 2] {
+                let mut speed = rows.row_data(1).unwrap();
+                speed.status = status;
+                rows.set_row_data(1, speed);
+                settle(&app);
+                let title = ElementHandle::find_by_element_id(&app, "SettingsPage::speed_title")
+                    .next()
+                    .expect("narrow playback speed title");
+                let scope = badge(&app, "playback_speed");
+                let tp = title.absolute_position();
+                let ts = title.size();
+                let bp = scope.absolute_position();
+                let bs = scope.size();
+                assert!(
+                    tp.x + ts.width <= bp.x - 7.5 || tp.y + ts.height <= bp.y - 2.5,
+                    "{language}/{width}/{status}: speed title {tp:?}/{ts:?} overlaps badge {bp:?}/{bs:?}"
+                );
+                assert!(bp.x >= 0.0 && bp.x + bs.width <= width as f32 + 0.5);
+            }
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
+    let mut speed = rows.row_data(1).unwrap();
+    speed.status = 0;
+    rows.set_row_data(1, speed);
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
     settle(&app);
     badge(&app, "playback_speed").mock_single_click(slint::platform::PointerEventButton::Left);
     settle(&app);

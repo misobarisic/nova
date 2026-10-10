@@ -17,7 +17,9 @@ fn marker(app: &nova::AppWindow, wide: bool) -> ElementHandle {
                 .is_none(),
             "the flat phone bar has no selection pill"
         );
-        let index = if app.get_show_home() {
+        let index = if app.get_more_open() {
+            3
+        } else if app.get_show_home() {
             0
         } else if app.get_show_library() {
             2
@@ -48,12 +50,17 @@ fn check_marker_shape(item: &ElementHandle, wide: bool) {
 
 fn icon(app: &nova::AppWindow, wide: bool, index: usize) -> ElementHandle {
     let component = if wide { "SideItem" } else { "BottomNav" };
-    let name = [
-        "icon_home",
-        "icon_discover",
-        "icon_library",
-        "icon_settings",
-    ][index];
+    let name = if wide {
+        [
+            "icon_home",
+            "icon_discover",
+            "icon_library",
+            "icon_settings",
+            "icon_about",
+        ][index]
+    } else {
+        ["icon_home", "icon_discover", "icon_library", "icon_more"][index]
+    };
     ElementHandle::find_by_element_id(app, &format!("{component}::{name}"))
         .next()
         .expect("nav icon")
@@ -65,7 +72,7 @@ fn idle(app: &nova::AppWindow, wide: bool, ms: u64) {
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
         let m = marker(app, wide);
         let _ = (m.absolute_position(), m.size());
-        for index in 0..4 {
+        for index in 0..if wide { 5 } else { 4 } {
             let _ = icon(app, wide, index).size();
         }
     }
@@ -78,19 +85,18 @@ fn switch(app: &nova::AppWindow, next: i32) {
         2
     } else if app.get_show_settings() {
         3
+    } else if app.get_show_about() {
+        4
     } else {
         1
     };
     if from != next {
         app.global::<nova::NavState>().set_from(from);
     }
+    app.set_more_open(false);
+    app.set_show_about(next == 4);
     app.set_show_home(next == 0);
     app.set_show_library(next == 2);
-    // This test exercises the overview's bottom bar. Responsive Settings
-    // otherwise retains the desktop detail selection when returning on a phone.
-    if next == 3 && app.window().size().width < 700 {
-        app.set_settings_detail_open(false);
-    }
     app.set_show_settings(next == 3);
 }
 
@@ -104,7 +110,7 @@ fn click(app: &nova::AppWindow, wide: bool, index: usize) {
             "BottomNav::tab_home",
             "BottomNav::tab_discover",
             "BottomNav::tab_library",
-            "BottomNav::tab_settings",
+            "BottomNav::tab_more",
         ][index];
         ElementHandle::find_by_element_id(app, id).next().unwrap()
     };
@@ -139,6 +145,8 @@ fn nav_icons_pop_while_highlights_snap() {
     app.on_library_picked(move || switch(&weak.upgrade().unwrap(), 2));
     let weak = app.as_weak();
     app.on_settings_picked(move || switch(&weak.upgrade().unwrap(), 3));
+    let weak = app.as_weak();
+    app.on_about_picked(move || switch(&weak.upgrade().unwrap(), 4));
 
     for wide in [true, false] {
         let anim = app.global::<nova::Anim>();
@@ -150,14 +158,19 @@ fn nav_icons_pop_while_highlights_snap() {
         idle(&app, wide, 400);
         let axis = |p: LogicalPosition| if wide { p.y } else { p.x };
         let home = axis(center(&marker(&app, wide)));
-        click(&app, wide, 3);
+        let target = if wide { 4 } else { 2 };
+        click(&app, wide, target);
         // The page switch is immediate, even while feedback is in flight.
-        assert!(app.get_show_settings());
+        assert!(if wide {
+            app.get_show_about()
+        } else {
+            app.get_show_library()
+        });
         idle(&app, wide, 1);
         let selected = center(&marker(&app, wide));
         assert!(
             axis(selected) > home,
-            "highlight snaps to Settings immediately"
+            "highlight snaps to the destination immediately"
         );
         check_marker_shape(&marker(&app, wide), wide);
         idle(&app, wide, 90);
@@ -166,20 +179,22 @@ fn nav_icons_pop_while_highlights_snap() {
             selected,
             "highlight never travels"
         );
-        let size = icon(&app, wide, 3).size().width;
+        let size = icon(&app, wide, target).size().width;
         assert!(
             size > 24.5 && size <= 26.0,
             "selected icon pops: wide={wide}, size={size}"
         );
-        for index in 0..3 {
-            assert_eq!(icon(&app, wide, index).size().width, 24.0);
+        for index in 0..if wide { 5 } else { 4 } {
+            if index != target {
+                assert_eq!(icon(&app, wide, index).size().width, 24.0);
+            }
         }
 
         // Interrupt a pop with a new click: only the incoming icon animates.
         click(&app, wide, 1);
         assert!(!app.get_show_settings() && !app.get_show_home());
         idle(&app, wide, 1);
-        assert_eq!(icon(&app, wide, 3).size().width, 24.0);
+        assert_eq!(icon(&app, wide, target).size().width, 24.0);
         let discover = axis(center(&marker(&app, wide)));
         assert!(discover > home && discover < axis(selected));
         idle(&app, wide, 90);
@@ -245,7 +260,7 @@ fn nav_icons_pop_while_highlights_snap() {
         app.window().set_size(slint::PhysicalSize::new(width, 900));
         for scroll_page in [false, true] {
             app.set_discover_scroll_page(scroll_page);
-            for page in 0..4 {
+            for page in 0..3 {
                 switch(&app, page);
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
                 let panel = ElementHandle::find_by_element_id(&app, "BottomNav::pill")
@@ -257,7 +272,7 @@ fn nav_icons_pop_while_highlights_snap() {
                     (panel.absolute_position().y + panel.size().height - 900.0).abs() < 0.5,
                     "bottom bar must reach the window edge on page {page}"
                 );
-                for name in ["home", "discover", "library", "settings"] {
+                for name in ["home", "discover", "library", "more"] {
                     let label = ElementHandle::find_by_element_id(
                         &app,
                         &format!("BottomNav::label_{name}"),
@@ -279,7 +294,7 @@ fn nav_icons_pop_while_highlights_snap() {
         app.window().set_size(slint::PhysicalSize::new(width, 900));
         for scroll_page in [false, true] {
             app.set_discover_scroll_page(scroll_page);
-            for page in 0..4 {
+            for page in 0..5 {
                 switch(&app, page);
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
                 let labels =
@@ -291,10 +306,12 @@ fn nav_icons_pop_while_highlights_snap() {
                             .next()
                             .is_none()
                     );
-                    assert!(
+                    assert_eq!(
                         ElementHandle::find_by_element_type_name(&app, "BottomNav")
                             .next()
-                            .is_some()
+                            .is_some(),
+                        page < 3,
+                        "Settings and About hide the phone bar throughout their pages"
                     );
                     continue;
                 }

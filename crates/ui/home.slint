@@ -1401,6 +1401,11 @@ export component HomePage {
     callback discover_picked();
     callback library_picked();
     callback settings_picked();
+    callback about_picked();
+    callback more_picked();
+    in property <bool> more_open: false;
+    private property <int> nav_count: root.narrow ? 4 : 5;
+    changed narrow => { root.kb_nav = Math.min(root.kb_nav, root.nav_count - 1); }
     callback continue_picked(int);
     callback new_episode_picked(int);
     callback new_episode_enter(int);
@@ -1619,7 +1624,7 @@ export component HomePage {
                 root.kb_idx -= 1;
             }
         } else if (root.kb_zone == 0) {
-            root.kb_nav = Math.mod(root.kb_nav + 3, 4);
+            root.kb_nav = Math.mod(root.kb_nav + root.nav_count - 1, root.nav_count);
         } else if (root.kb_zone == 1 || root.kb_zone == 4) {
             if (root.kb_idx > 0) {
                 root.kb_idx -= 1;
@@ -1645,7 +1650,7 @@ export component HomePage {
                 root.kb_idx += 1;
             }
         } else if (root.kb_zone == 0) {
-            root.kb_nav = Math.mod(root.kb_nav + 1, 4);
+            root.kb_nav = Math.mod(root.kb_nav + 1, root.nav_count);
         } else if (root.kb_zone == 1 || root.kb_zone == 4) {
             if (root.kb_idx + 1 < root.active_len()) {
                 root.kb_idx += 1;
@@ -1685,8 +1690,10 @@ export component HomePage {
                 root.discover_picked();
             } else if (root.kb_nav == 2) {
                 root.library_picked();
+            } else if (root.kb_nav == 3) {
+                if (root.narrow) { root.more_picked(); } else { root.settings_picked(); }
             } else {
-                root.settings_picked();
+                root.about_picked();
             }
         } else if (root.kb_zone == 1) {
             if (root.kb_idx >= 0 && root.kb_idx < root.continue_rows.length) {
@@ -2807,6 +2814,7 @@ export component HomePage {
             // Hidden on a "see all" subpage — the rail stays up there, since
             // on a desktop it is window chrome rather than page chrome.
             if root.narrow && root.view == 0: bottom := BottomNav {
+                more_open: root.more_open;
                 active: 0;
                 safe-bottom: root.safe-bottom;
                 safe-left: root.safe-left;
@@ -2818,7 +2826,7 @@ export component HomePage {
                 home_picked => { root.home_picked(); }
                 discover_picked => { root.discover_picked(); }
                 library_picked => { root.library_picked(); }
-                settings_picked => { root.settings_picked(); }
+                more_picked => { root.more_picked(); }
             }
         }
 
@@ -2854,6 +2862,7 @@ export component HomePage {
             discover_picked => { root.discover_picked(); }
             library_picked => { root.library_picked(); }
             settings_picked => { root.settings_picked(); }
+            about_picked => { root.about_picked(); }
         }
 
         // Card menu (single instance, page-level overlay): the dim

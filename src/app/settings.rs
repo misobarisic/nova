@@ -312,6 +312,7 @@ impl Bridge {
 
     pub(super) fn show_settings_page(&self) {
         if let Some(app) = self.app() {
+            app.set_show_about(false);
             app.set_show_home(false);
             app.set_show_library(false);
             app.set_show_settings(true);

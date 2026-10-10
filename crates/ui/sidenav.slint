@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { IcHome, IcExplore, IcVideoLibrary, IcSettingsGear } from "icons.slint";
+import { IcHome, IcExplore, IcVideoLibrary, IcSettingsGear, IcInfo } from "icons.slint";
 import { Anim } from "anim.slint";
 
 // Left navigation stays a compact icon-only rail on every wide layout.
@@ -9,7 +9,7 @@ import { Anim } from "anim.slint";
 // narrow pages), keeping content clear of the rail.
 //
 // Wide subpages keep the rail (unlike the narrow bottom bar, which hides on
-// the Home/Settings subpages): on a desktop the rail is window chrome, not
+// the Home subpages and throughout Settings/About): on a desktop the rail is window chrome, not
 // page chrome. The detail modal and the player cover it, as they always did.
 //
 // Shared geometry keeps the rail and page content using the same footprint.
@@ -28,8 +28,8 @@ export global NavMetrics {
 // (`app::run`), right before it flips the page flags.
 export global NavState {
     // Section the current switch is coming from (0 Home, 1 Discover,
-    // 2 Library, 3 Settings). Consumed by the new bar so a rebuild (returning
-    // from detail or resizing) does not replay the selected icon's pop.
+    // 2 Library, 3 Settings, 4 About). Consumed by the new bar so a rebuild
+    // (returning from detail or resizing) does not replay the selected icon's pop.
     in-out property <int> from: 0;
 }
 
@@ -67,16 +67,19 @@ export component NavFeedback inherits Rectangle {
 }
 
 component SideItem inherits Rectangle {
-    // 0 Home, 1 Discover, 2 Library, 3 Settings (same order as BottomNav).
+    // 0 Home, 1 Discover, 2 Library, 3 Settings, 4 About.
     in property <int> kind: 0;
     in property <bool> active: false;
-    // Keyboard cursor (6-button nav, zone 0). Drawn as a ring on the icon
+    // Keyboard cursor (arrow-key nav, zone 0). Drawn as a ring on the icon
     // circle instead of the bottom bar's "▶" KbMark: that marker is a
     // horizontal-layout row and would consume a row of the rail's height.
     in property <bool> kb_focused: false;
     in property <float> pop: 0.0;
 
     callback picked();
+
+    accessible-role: button;
+    accessible-label: root.kind == 0 ? @tr("Home") : root.kind == 1 ? @tr("Discover") : root.kind == 2 ? @tr("Library") : root.kind == 3 ? @tr("Settings") : @tr("About");
 
     height: 56px;
 
@@ -120,6 +123,13 @@ component SideItem inherits Rectangle {
             height: self.width;
             fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
+        if root.kind == 4: icon_about := IcInfo {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 24px + root.pop * 2px;
+            height: self.width;
+            fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
+        }
     }
 
     item_touch := TouchArea {
@@ -129,7 +139,7 @@ component SideItem inherits Rectangle {
 }
 
 export component SideNav inherits Rectangle {
-    // Active section: 0 Home, 1 Discover, 2 Library, 3 Settings.
+    // Active section: 0 Home, 1 Discover, 2 Library, 3 Settings, 4 About.
     in property <int> active: 0;
     in property <brush> panel-background: Theme.current.nav_rail;
     // Use the hosting page's width, not this component's own footprint.
@@ -147,6 +157,7 @@ export component SideNav inherits Rectangle {
     callback discover_picked();
     callback library_picked();
     callback settings_picked();
+    callback about_picked();
 
     motion := NavFeedback { active: root.active; }
 
@@ -174,7 +185,7 @@ export component SideNav inherits Rectangle {
 
     // Panel: a plain full-bleed column — no outer margin, no rounded corners
     // — spanning from the window's left edge to its bottom edge, with the
-    // four items listed top to bottom just under the top. Flush against the
+    // five items listed top to bottom just under the top. Flush against the
     // window edges a rounded corner would only read as a bug.
     panel := Rectangle {
         x: root.safe-left;
@@ -236,6 +247,13 @@ export component SideNav inherits Rectangle {
                 pop: root.active == 3 ? motion.pulse : 0.0;
                 kb_focused: root.kb_zone == 0 && root.kb_nav == 3 && root.kb_active;
                 picked => { root.kb_active = false; root.settings_picked(); }
+            }
+            SideItem {
+                kind: 4;
+                active: root.active == 4;
+                pop: root.active == 4 ? motion.pulse : 0.0;
+                kb_focused: root.kb_zone == 0 && root.kb_nav == 4 && root.kb_active;
+                picked => { root.kb_active = false; root.about_picked(); }
             }
         }
     }

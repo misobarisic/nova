@@ -112,20 +112,25 @@ fn history_focus_replay_back_and_clear() {
                 .single_click(slint::platform::PointerEventButton::Left)
                 .await;
             let expanded = Rc::new(Cell::new(false));
-            let last_y = Rc::new(Cell::new(None::<f32>));
+            let last_height = Rc::new(Cell::new(None::<f32>));
             for delay in (20..280).step_by(20) {
                 let weak = weak.clone();
                 let expanded = expanded.clone();
-                let last_y = last_y.clone();
+                let last_height = last_height.clone();
                 after(delay, move || {
                     let app = weak.upgrade().unwrap();
-                    if let Some(row) = ElementHandle::find_by_accessible_label(&app, "Type").next()
+                    if let Some(panel) =
+                        ElementHandle::find_by_element_id(&app, "DiscoverHeader::history_panel")
+                            .next()
                     {
-                        let y = row.absolute_position().y;
-                        if last_y.get().is_some_and(|previous| y > previous + 0.1) {
+                        let height = panel.size().height;
+                        if last_height
+                            .get()
+                            .is_some_and(|previous| height > previous + 0.1)
+                        {
                             expanded.set(true);
                         }
-                        last_y.set(Some(y));
+                        last_height.set(Some(height));
                     }
                 });
             }
@@ -136,7 +141,7 @@ fn history_focus_replay_back_and_clear() {
                 if !expanded.get() {
                     failures1
                         .borrow_mut()
-                        .push("recents did not expand into the page layout".into());
+                        .push("recents did not animate their expansion".into());
                 }
                 assert!(
                     ElementHandle::find_by_accessible_label(&app, "Recent searches")

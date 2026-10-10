@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { IcHome, IcExplore, IcVideoLibrary, IcSettingsGear } from "icons.slint";
+import { IcHome, IcExplore, IcVideoLibrary, IcMoreHoriz } from "icons.slint";
 import { NavFeedback } from "sidenav.slint";
 
 // A flat, labelled phone bar. The selected icon and label turn purple;
@@ -8,8 +8,10 @@ import { NavFeedback } from "sidenav.slint";
 // insets are bled out by the panel so its geometry stays identical on each
 // page, while the labels and touch targets respect the window's safe area.
 export component BottomNav inherits Rectangle {
-    // 0 Home, 1 Discover, 2 Library, 3 Settings.
+    // 0 Home, 1 Discover, 2 Library, 3 More.
     in property <int> active: 0;
+    in property <bool> more_open: false;
+    private property <int> selected: root.more_open ? 3 : root.active;
     in property <length> safe-bottom: 0px;
     in property <length> safe-left: 0px;
     in property <length> safe-right: 0px;
@@ -22,13 +24,13 @@ export component BottomNav inherits Rectangle {
     callback home_picked();
     callback discover_picked();
     callback library_picked();
-    callback settings_picked();
+    callback more_picked();
 
     width: 100%;
     height: 68px + root.safe-bottom;
     vertical-stretch: 0;
 
-    motion := NavFeedback { active: root.active; }
+    motion := NavFeedback { active: root.selected; }
 
     pill := Rectangle {
         x: -root.page-inset-left;
@@ -72,17 +74,17 @@ export component BottomNav inherits Rectangle {
                 icon_home := IcHome {
                     x: (parent.width - self.width) / 2;
                     y: 19px - self.height / 2;
-                    width: 24px + (root.active == 0 ? motion.pulse * 2px : 0px);
+                    width: 24px + (root.selected == 0 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.active == 0 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
+                    fill: root.selected == 0 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
                 }
                 label_home := Text {
                     x: 4px; y: 36px;
                     width: parent.width - 8px; height: 17px;
                     text: @tr("Home");
                     font-size: 12px;
-                    font-weight: root.active == 0 ? 600 : 400;
-                    color: root.active == 0 ? Theme.current.accent_soft : Theme.current.nav_label_inactive;
+                    font-weight: root.selected == 0 ? 600 : 400;
+                    color: root.selected == 0 ? Theme.current.accent_soft : Theme.current.nav_label_inactive;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;
@@ -110,17 +112,17 @@ export component BottomNav inherits Rectangle {
                 icon_discover := IcExplore {
                     x: (parent.width - self.width) / 2;
                     y: 19px - self.height / 2;
-                    width: 24px + (root.active == 1 ? motion.pulse * 2px : 0px);
+                    width: 24px + (root.selected == 1 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.active == 1 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
+                    fill: root.selected == 1 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
                 }
                 label_discover := Text {
                     x: 4px; y: 36px;
                     width: parent.width - 8px; height: 17px;
                     text: @tr("Discover");
                     font-size: 12px;
-                    font-weight: root.active == 1 ? 600 : 400;
-                    color: root.active == 1 ? Theme.current.accent_soft : Theme.current.nav_label_inactive;
+                    font-weight: root.selected == 1 ? 600 : 400;
+                    color: root.selected == 1 ? Theme.current.accent_soft : Theme.current.nav_label_inactive;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;
@@ -148,17 +150,17 @@ export component BottomNav inherits Rectangle {
                 icon_library := IcVideoLibrary {
                     x: (parent.width - self.width) / 2;
                     y: 19px - self.height / 2;
-                    width: 24px + (root.active == 2 ? motion.pulse * 2px : 0px);
+                    width: 24px + (root.selected == 2 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.active == 2 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
+                    fill: root.selected == 2 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
                 }
                 label_library := Text {
                     x: 4px; y: 36px;
                     width: parent.width - 8px; height: 17px;
                     text: @tr("Library");
                     font-size: 12px;
-                    font-weight: root.active == 2 ? 600 : 400;
-                    color: root.active == 2 ? Theme.current.accent_soft : Theme.current.nav_label_inactive;
+                    font-weight: root.selected == 2 ? 600 : 400;
+                    color: root.selected == 2 ? Theme.current.accent_soft : Theme.current.nav_label_inactive;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;
@@ -183,28 +185,28 @@ export component BottomNav inherits Rectangle {
                     background: transparent;
                 }
 
-                icon_settings := IcSettingsGear {
+                icon_more := IcMoreHoriz {
                     x: (parent.width - self.width) / 2;
                     y: 19px - self.height / 2;
-                    width: 24px + (root.active == 3 ? motion.pulse * 2px : 0px);
+                    width: 24px + (root.selected == 3 ? motion.pulse * 2px : 0px);
                     height: self.width;
-                    fill: root.active == 3 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
+                    fill: root.selected == 3 ? Theme.current.accent_soft : Theme.current.nav_icon_inactive;
                 }
-                label_settings := Text {
+                label_more := Text {
                     x: 4px; y: 36px;
                     width: parent.width - 8px; height: 17px;
-                    text: @tr("Settings");
+                    text: @tr("More");
                     font-size: 12px;
-                    font-weight: root.active == 3 ? 600 : 400;
-                    color: root.active == 3 ? Theme.current.accent_soft : Theme.current.nav_label_inactive;
+                    font-weight: root.selected == 3 ? 600 : 400;
+                    color: root.selected == 3 ? Theme.current.accent_soft : Theme.current.nav_label_inactive;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;
                 }
-                tab_settings := TouchArea {
+                tab_more := TouchArea {
                     width: 100%; height: 100%;
                     mouse-cursor: pointer;
-                    clicked => { root.kb_active = false; root.settings_picked(); }
+                    clicked => { root.kb_active = false; root.more_picked(); }
                 }
             }
         }

@@ -130,7 +130,6 @@ fn settings_navigation_survives_search_back_breakpoints_and_recreation() {
             "image-cache",
             "downloads",
             "p2p",
-            "about",
         ]
         .into_iter()
         .map(|id| format!("settings:{id}"))
@@ -182,30 +181,21 @@ fn settings_navigation_survives_search_back_breakpoints_and_recreation() {
             settle().await;
             assert_eq!(links(&app), ["settings:player"], "option label {query}");
         }
-        app.set_settings_search_query("licenses".into());
-        settle().await;
-        assert_eq!(links(&app), ["settings:about", "settings:licenses"]);
-        click(&app, "settings:licenses").await;
-        assert_eq!(app.get_settings_selected_id(), 11);
+        for query in ["licenses", "About"] {
+            app.set_settings_search_query(query.into());
+            settle().await;
+            assert!(links(&app).is_empty(), "app information belongs to About");
+        }
         app.window().set_size(slint::PhysicalSize::new(430, 800));
         settle().await;
         back(&app);
         settle().await;
-        assert_eq!(
-            app.get_settings_selected_id(),
-            10,
-            "nested Back returns to About"
-        );
-        back(&app);
-        settle().await;
         assert!(!app.get_settings_detail_open());
-        assert_eq!(
-            app.get_settings_focused_id(),
-            11,
-            "navigation origin survives nested Back"
+        assert!(
+            ElementHandle::find_by_element_type_name(&app, "BottomNav")
+                .next()
+                .is_none()
         );
-        assert_eq!(app.get_settings_search_query(), "licenses");
-        assert_eq!(links(&app), ["settings:about", "settings:licenses"]);
         app.set_settings_search_query("Downloaded episodes".into());
         settle().await;
         assert_eq!(

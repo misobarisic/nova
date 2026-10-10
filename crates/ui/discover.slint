@@ -137,7 +137,7 @@ component DiscoverFilters inherits Flickable {
 component DiscoverHeader {
     // Only the browse hero collapses. Search Back/input/filter/history
     // controls remain available throughout the search session.
-    out property <length> hero_height: root.results_open || root.search_filters_open ? 0px : discover_hero.height + 12px;
+    out property <length> hero_height: root.search_mode ? 0px : context_heading.height + 12px;
 
     in property <[string]> addon_names;
     in property <[string]> type_names;
@@ -169,6 +169,8 @@ component DiscoverHeader {
     // Disabled only when no enabled source accepts a search query.
     in property <bool> searchable: true;
     in property <bool> results_open: false;
+    private property <bool> search_mode: root.results_open || root.search_filters_open || root.search_focused;
+    in property <bool> context_revealed: true;
     in property <bool> narrow;
     in property <int> kb_zone;
     in property <int> kb_nav;
@@ -202,68 +204,92 @@ component DiscoverHeader {
         width: 100%;
         spacing: 12px;
 
-        // Search has its own temporary selectors; browse keeps its selection.
-        if root.results_open || root.search_filters_open: results_heading := HorizontalLayout {
+        // Reuse one title slot so entering search moves the persistent input
+        // smoothly instead of adding a heading above a disappearing hero.
+        context_heading := Rectangle {
+            width: 100%;
             vertical-stretch: 0;
-            height: Math.max(44px, results_title.preferred-height);
-            spacing: 12px;
-
+            height: root.search_mode ? Math.max(44px, search_title_measure.preferred-height) : discover_hero.height;
+            clip: true;
+            animate height { duration: Anim.transition_slide; easing: ease-in-out; }
             Rectangle {
-                width: 44px;
-                height: 44px;
-                border-radius: 22px;
-                background: back_touch.has-hover ? Theme.current.control_hover : Theme.current.hero_control;
-                accessible-role: button;
-                accessible-label: @tr("Back");
-
-                IcChevronLeft {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    width: 22px;
-                    height: 22px;
-                    fill: Theme.current.text_primary;
+                height: 0px; clip: true;
+                search_title_measure := Text {
+                    width: Math.max(0px, root.width - 56px);
+                    text: root.results_open ? @tr("Search results") : @tr("Search");
+                    font-size: root.narrow ? 28px : 32px;
+                    font-weight: 700;
+                    wrap: word-wrap;
                 }
-                back_touch := TouchArea {
+            }
+            if root.search_mode: results_heading := HorizontalLayout {
+                x: 0px; y: 0px; width: 100%;
+                vertical-stretch: 0;
+                opacity: root.context_revealed ? 1.0 : 0.0;
+                animate opacity { duration: Anim.transition_fade; easing: ease-out; }
+                height: Math.max(44px, results_title.preferred-height);
+                spacing: 12px;
+
+                Rectangle {
+                    width: 44px;
+                    height: 44px;
+                    border-radius: 22px;
+                    background: back_touch.has-hover ? Theme.current.control_hover : Theme.current.hero_control;
+                    accessible-role: button;
+                    accessible-label: @tr("Back");
+
+                    IcChevronLeft {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        width: 22px;
+                        height: 22px;
+                        fill: Theme.current.text_primary;
+                    }
+                    back_touch := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        mouse-cursor: pointer;
+                        clicked => { root.back_picked(); }
+                    }
+                }
+                results_title := Text {
+                    text: root.results_open ? @tr("Search results") : @tr("Search");
+                    font-size: root.narrow ? 28px : 32px;
+                    font-weight: 700;
+                    color: Theme.current.text_bright;
+                    vertical-alignment: center;
+                    min-width: 0px;
+                    height: self.preferred-height;
+                    wrap: word-wrap;
+                }
+            }
+
+            discover_hero := Rectangle {
+                x: 0px; y: 0px; width: 100%;
+                height: Math.max(44px, hero_title.preferred-height) + 8px + hero_description.preferred-height;
+                visible: !root.search_mode;
+                opacity: root.context_revealed ? 1.0 : 0.0;
+                animate opacity { duration: Anim.transition_fade; easing: ease-out; }
+                hero_title := Text {
+                    x: 0px; y: 0px;
                     width: 100%;
-                    height: 100%;
-                    mouse-cursor: pointer;
-                    clicked => { root.back_picked(); }
+                    height: Math.max(44px, self.preferred-height);
+                    text: @tr("Discover");
+                    font-size: root.narrow ? 28px : 32px;
+                    font-weight: 700;
+                    color: Theme.current.text_bright;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
                 }
-            }
-            results_title := Text {
-                text: root.results_open ? @tr("Search results") : @tr("Search");
-                font-size: root.narrow ? 28px : 32px;
-                font-weight: 700;
-                color: Theme.current.text_bright;
-                vertical-alignment: center;
-                min-width: 0px;
-                height: self.preferred-height;
-                wrap: word-wrap;
-            }
-        }
-
-        discover_hero := Rectangle {
-            height: root.results_open || root.search_filters_open ? 0px : Math.max(44px, hero_title.preferred-height) + 8px + hero_description.preferred-height;
-            visible: !root.results_open && !root.search_filters_open;
-            hero_title := Text {
-                x: 0px; y: 0px;
-                width: 100%;
-                height: Math.max(44px, self.preferred-height);
-                text: @tr("Discover");
-                font-size: root.narrow ? 28px : 32px;
-                font-weight: 700;
-                color: Theme.current.text_bright;
-                vertical-alignment: center;
-                wrap: word-wrap;
-            }
-            hero_description := Text {
-                y: hero_title.height + 8px;
-                width: 100%;
-                height: self.preferred-height;
-                text: @tr("Find your next movie, show, or anime.");
-                font-size: 14px;
-                color: Theme.current.text_secondary;
-                wrap: word-wrap;
+                hero_description := Text {
+                    y: hero_title.height + 8px;
+                    width: 100%;
+                    height: self.preferred-height;
+                    text: @tr("Find your next movie, show, or anime.");
+                    font-size: 14px;
+                    color: Theme.current.text_secondary;
+                    wrap: word-wrap;
+                }
             }
         }
 
@@ -310,6 +336,8 @@ component DiscoverHeader {
         }
 
         if root.search_filters_open: VerticalLayout {
+            opacity: root.context_revealed ? 1.0 : 0.0;
+            animate opacity { duration: Anim.transition_fade; easing: ease-out; }
             vertical-stretch: 0;
             spacing: 6px;
             Text {
@@ -466,7 +494,9 @@ component DiscoverHeader {
             }
         }
 
-        if !root.results_open: filter_flick := DiscoverFilters {
+        if !root.search_mode: filter_flick := DiscoverFilters {
+            opacity: root.context_revealed ? 1.0 : 0.0;
+            animate opacity { duration: Anim.transition_fade; easing: ease-out; }
             addon_names: root.addon_names;
             type_names: root.type_names;
             catalog_names: root.catalog_names;
@@ -511,13 +541,21 @@ component DiscoverGrid {
     in property <bool> loading: false;
     in property <string> empty_hint;
     in property <bool> stagger: false;
+    in property <bool> active: true;
+    in property <bool> context_revealed: true;
+    visible: root.active;
+    height: root.active ? grid_content.preferred-height : 0px;
     in property <bool> touch_menus: false;
 
     callback item_selected(string, int);
 
-    VerticalLayout {
+    grid_content := VerticalLayout {
         width: 100%;
         padding-top: 8px;
+        opacity: root.context_revealed ? 1.0 : 0.0;
+        y: root.context_revealed ? 0px : 8px;
+        animate opacity { duration: Anim.transition_fade; easing: ease-out; }
+        animate y { duration: Anim.transition_slide; easing: ease-out; }
 
         // Left-align capped poster rows, matching My Library.
         HorizontalLayout {
@@ -769,6 +807,11 @@ export component DiscoverPage {
     callback discover_picked();
     callback library_picked();
     callback settings_picked();
+    callback about_picked();
+    callback more_picked();
+    in property <bool> more_open: false;
+    private property <int> nav_count: root.narrow ? 4 : 5;
+    changed narrow => { root.kb_nav = Math.min(root.kb_nav, root.nav_count - 1); }
     callback load_more();
     // Preload fetch window (visible ±2 rows) for poster loading/unloading
     // (Rust fetches it nearest-first and unloads outside a wider window).
@@ -776,11 +819,13 @@ export component DiscoverPage {
 
     in-out property <bool> can_load_more: false;
     in-out property <bool> loading_more: false;
-    property <[MediaCard]> display_catalog: root.search_results_open ? root.search_results : root.catalog;
-    property <bool> display_can_load_more: root.search_results_open ? root.search_can_load_more : root.can_load_more;
-    property <bool> display_loading_more: root.search_results_open ? root.search_loading_more : root.loading_more;
+    private property <bool> search_mode: root.search_results_open || root.search_filters_open || root.search_focused;
+    private property <bool> grid_active: !root.search_mode || root.search_results_open;
+    property <[MediaCard]> display_catalog: root.search_mode ? (root.search_results_open ? root.search_results : []) : root.catalog;
+    property <bool> display_can_load_more: root.search_mode ? root.search_results_open && root.search_can_load_more : root.can_load_more;
+    property <bool> display_loading_more: root.search_mode ? root.search_results_open && root.search_loading_more : root.loading_more;
     property <bool> display_loading: root.search_results_open && root.search_loading;
-    property <string> display_empty_hint: root.search_results_open ? root.search_empty_hint : root.empty_hint;
+    property <string> display_empty_hint: root.search_mode ? root.search_empty_hint : root.empty_hint;
 
     // Compact layout for narrow (portrait) windows.
     in property <bool> narrow;
@@ -797,7 +842,7 @@ export component DiscoverPage {
     in property <bool> touch_menus: false;
 
     // ---- 6-button keyboard nav (arrows + Enter + Backspace) ----
-    // Zones: 0 page-nav (0 Home, 1 Discover, 2 Library, 3 Settings),
+    // Zones: 0 page-nav (Home, Discover, Library, then More or Settings/About),
     // 1 addon combo, 2 type/catalog/search row, 3 grid.
     // Left/Right moves within a row (combos cycle options in place);
     // Up/Down moves between zones; Enter activates; Backspace returns to
@@ -822,7 +867,7 @@ export component DiscoverPage {
     // out does not jump the catalog the user was viewing.
     in-out property <length> scroll_y: 0px;
     in-out property <length> search_scroll_y: 0px;
-    property <length> display_scroll_y: root.search_results_open ? root.search_scroll_y : root.scroll_y;
+    property <length> display_scroll_y: root.search_mode ? root.search_scroll_y : root.scroll_y;
     // Platform scroll branches retain their input/focus and offset mirrors;
     // both use a collapsing browse hero with pinned search/filter controls.
     // Set once from Rust (target_os-gated).
@@ -839,6 +884,24 @@ export component DiscoverPage {
     property <length> header_shift: Math.max(-root.sv_hero_height, Math.min(0px, root.display_scroll_y));
     property <length> header_cover: root.sv_header_height + root.header_shift;
     property <bool> transition_cover: false;
+    private property <bool> context_revealed: true;
+    private property <bool> context_motion: Anim.enabled && Anim.transitions;
+    private property <bool> view_reset_pending: true;
+    changed search_mode => {
+        // Content shrinks while entering an empty search session. Its clamp
+        // must not overwrite the browse offset that Back will restore.
+        root.view_reset_pending = true;
+        root.context_revealed = !root.context_motion;
+        if (root.context_motion) { context_reveal_t.stop(); context_reveal_t.start(); }
+    }
+    changed context_motion => {
+        if (!root.context_motion) { context_reveal_t.stop(); root.context_revealed = true; }
+    }
+    context_reveal_t := Timer {
+        interval: 16ms;
+        running: false;
+        triggered => { self.stop(); root.context_revealed = true; }
+    }
     property <bool> page_pan_enabled: true;
     function filters_panned() {
         root.page_pan_enabled = false;
@@ -860,9 +923,11 @@ export component DiscoverPage {
         }
     }
 
-    function kb_addon_on() -> bool { return root.search_filters_open ? root.search_addon_names.length > 0 : root.addon_names.length > 0; }
+    function kb_addon_on() -> bool { return root.search_mode ? root.search_addon_names.length > 0 : root.addon_names.length > 0; }
     function leave_search() {
         root.kb_edit = false;
+        root.kb_zone = 2;
+        root.kb_ctl = 3;
         nav_scope.focus();
         root.search_text = "";
         root.search_back_picked();
@@ -870,12 +935,8 @@ export component DiscoverPage {
 
     function system_back() {
         root.kb_active = true;
-        if (root.search_results_open || root.search_filters_open) {
+        if (root.search_mode) {
             root.leave_search();
-        } else if (root.search_focused) {
-            root.kb_edit = false;
-            root.search_focused = false;
-            nav_scope.focus();
         } else {
             root.home_picked();
         }
@@ -911,18 +972,18 @@ export component DiscoverPage {
 
     // The same keyboard zones operate on the search rail while it is open.
     function kb_cycle_filter(kind: int, d: int) {
-        let names = kind == 0 ? (root.search_filters_open ? root.search_addon_names : root.addon_names)
-            : kind == 1 ? (root.search_filters_open ? root.search_type_names : root.type_names)
-            : kind == 2 ? (root.search_filters_open ? root.search_catalog_names : root.catalog_names)
-            : (root.search_filters_open ? root.search_genre_names : root.genre_names);
-        let current = kind == 0 ? (root.search_filters_open ? root.search_addon_combo_idx : root.addon_combo_idx)
-            : kind == 1 ? (root.search_filters_open ? root.search_type_combo_idx : root.type_combo_idx)
-            : kind == 2 ? (root.search_filters_open ? root.search_catalog_combo_idx : root.catalog_combo_idx)
-            : (root.search_filters_open ? root.search_genre_combo_idx : root.genre_combo_idx);
+        let names = kind == 0 ? (root.search_mode ? root.search_addon_names : root.addon_names)
+            : kind == 1 ? (root.search_mode ? root.search_type_names : root.type_names)
+            : kind == 2 ? (root.search_mode ? root.search_catalog_names : root.catalog_names)
+            : (root.search_mode ? root.search_genre_names : root.genre_names);
+        let current = kind == 0 ? (root.search_mode ? root.search_addon_combo_idx : root.addon_combo_idx)
+            : kind == 1 ? (root.search_mode ? root.search_type_combo_idx : root.type_combo_idx)
+            : kind == 2 ? (root.search_mode ? root.search_catalog_combo_idx : root.catalog_combo_idx)
+            : (root.search_mode ? root.search_genre_combo_idx : root.genre_combo_idx);
         if (names.length == 0 || (kind == 3 && names.length <= 1)) { return; }
         let v = root.kb_cycle(current, d, names.length);
         if (v == current) { return; }
-        if (root.search_filters_open) {
+        if (root.search_mode) {
             if (kind == 0) { root.search_addon_combo_idx = v; }
             else if (kind == 1) { root.search_type_combo_idx = v; }
             else if (kind == 2) { root.search_catalog_combo_idx = v; }
@@ -969,7 +1030,7 @@ export component DiscoverPage {
         } else if (root.kb_zone == 1) {
             root.kb_zone = 2;
         } else if (root.kb_zone == 2) {
-            if (root.display_catalog.length > 0) {
+            if (!root.view_reset_pending && root.display_catalog.length > 0) {
                 root.kb_zone = 3;
                 root.kb_clamp_idx();
             }
@@ -984,7 +1045,7 @@ export component DiscoverPage {
 
     function kb_left() {
         if (root.kb_zone == 0) {
-            root.kb_nav = Math.mod(root.kb_nav + 3, 4);
+            root.kb_nav = Math.mod(root.kb_nav + root.nav_count - 1, root.nav_count);
         } else if (root.kb_zone == 1) {
             root.kb_cycle_addon(-1);
         } else if (root.kb_zone == 2) {
@@ -1006,7 +1067,7 @@ export component DiscoverPage {
 
     function kb_right() {
         if (root.kb_zone == 0) {
-            root.kb_nav = Math.mod(root.kb_nav + 1, 4);
+            root.kb_nav = Math.mod(root.kb_nav + 1, root.nav_count);
         } else if (root.kb_zone == 1) {
             root.kb_cycle_addon(1);
         } else if (root.kb_zone == 2) {
@@ -1032,8 +1093,10 @@ export component DiscoverPage {
                 root.discover_picked();
             } else if (root.kb_nav == 2) {
                 root.library_picked();
+            } else if (root.kb_nav == 3) {
+                if (root.narrow) { root.more_picked(); } else { root.settings_picked(); }
             } else {
-                root.settings_picked();
+                root.about_picked();
             }
         } else if (root.kb_zone == 1) {
             root.kb_cycle_addon(1);
@@ -1067,7 +1130,7 @@ export component DiscoverPage {
     // layout (content-height 0) — the one-shot restore timer below
     // retries.
     function kb_follow() {
-        if (root.kb_zone != 3 || root.display_catalog.length == 0) {
+        if (root.view_reset_pending || root.kb_zone != 3 || root.display_catalog.length == 0) {
             return;
         }
         if (root.sv_vph == 0px) {
@@ -1113,7 +1176,8 @@ export component DiscoverPage {
     }
 
     function set_display_scroll_y(value: length) {
-        if (root.search_results_open) {
+        if (root.view_reset_pending) { return; }
+        if (root.search_mode) {
             root.search_scroll_y = value;
         } else {
             root.scroll_y = value;
@@ -1166,7 +1230,7 @@ export component DiscoverPage {
                 accept
             } else if (e.text == Key.Backspace || e.text == Key.Back || e.text == Key.Escape) {
                 root.kb_active = true;
-                if (root.search_results_open || root.search_filters_open) {
+                if (root.search_mode) {
                     root.leave_search();
                 } else {
                     root.home_picked();
@@ -1208,9 +1272,11 @@ export component DiscoverPage {
                 // This viewport survives the browse/results header switch.
                 // Move it to the newly active model's stored offset so the
                 // two views keep independent scroll positions.
-                property <bool> results_mode: root.search_results_open;
+                property <bool> results_mode: root.search_mode;
                 changed results_mode => {
+                    root.view_reset_pending = true;
                     self.content-y = root.display_scroll_y;
+                    grid_restore_t.stop(); grid_restore_t.start();
                 }
                 // One-way mirror (NOT a two-way binding): Flickable
                 // removes viewport bindings on the first press/drag, which
@@ -1229,6 +1295,7 @@ export component DiscoverPage {
                     }
                 }
                 init => {
+                    root.view_reset_pending = true;
                     root.sv_vw = self.visible-width;
                     root.sv_vh = self.visible-height;
                     root.sv_vph = self.content-height;
@@ -1243,6 +1310,8 @@ export component DiscoverPage {
                     interval: 120ms;
                     running: true;
                     triggered => {
+                        grid_scroll.content-y = root.display_scroll_y;
+                        root.view_reset_pending = false;
                         root.sv_vw = grid_scroll.visible-width;
                         root.sv_vh = grid_scroll.visible-height;
                         root.sv_vph = grid_scroll.content-height;
@@ -1275,11 +1344,11 @@ export component DiscoverPage {
                     // remaining content below the viewport is
                     // content-height + content-y - visible-height. Fetch
                     // the next page only once that drops to 600px.
-                    if (root.display_catalog.length > 0 && root.display_can_load_more && !root.display_loading_more
+                    if (!root.view_reset_pending && root.display_catalog.length > 0 && root.display_can_load_more && !root.display_loading_more
                         && self.content-y <= self.visible-height - self.content-height + 600px) {
                         root.load_more();
                     }
-                    if (root.display_catalog.length > 0) {
+                    if (!root.view_reset_pending && root.display_catalog.length > 0) {
                         // Only the hover inset precedes this grid; the
                         // whole-page branch also has its header above it.
                         let first_row = Math.max(0, Math.floor((root.header_cover - self.content-y - root.sv_grid_top) / root.row_stride));
@@ -1311,6 +1380,8 @@ export component DiscoverPage {
 
                 fix_grid := DiscoverGrid {
                     width: 100%;
+                    active: root.grid_active;
+                    context_revealed: root.context_revealed;
                     catalog: root.display_catalog;
                     cols: root.cols;
                     item-width: root.item-width;
@@ -1341,7 +1412,7 @@ export component DiscoverPage {
                 fix_header := DiscoverHeader {
                     height: self.preferred-height;
                     width: 100%;
-                    changed height => { root.sv_header_height = self.height; }
+                    changed height => { root.sv_header_height = self.height; root.sv_grid_top = self.height + 20px; }
                     changed hero_height => { root.sv_hero_height = self.hero_height; }
                     init => { root.sv_header_height = self.height; root.sv_hero_height = self.hero_height; }
                     catalog_names: root.catalog_names;
@@ -1352,6 +1423,7 @@ export component DiscoverPage {
                     addon_names: root.addon_names;
                     searchable: root.searchable;
                     results_open: root.search_results_open;
+                    context_revealed: root.context_revealed;
                     addon_combo_idx <=> root.addon_combo_idx;
                     type_combo_idx <=> root.type_combo_idx;
                     catalog_combo_idx <=> root.catalog_combo_idx;
@@ -1409,11 +1481,11 @@ export component DiscoverPage {
 
         }
 
-        // Bottom tab bar (narrow only): desktop/wide navigate up top.
-        // In-flow sibling of the grid region (same as Home/Library/
-        // Settings) so the grid shrinks above it instead of sliding
-        // underneath.
+        // Bottom tab bar (narrow only): wide layouts use the left rail.
+        // In-flow sibling of the grid region, as on Home/Library, so the
+        // grid shrinks above it instead of sliding underneath.
         if root.narrow: bottom_fix := BottomNav {
+            more_open: root.more_open;
             active: 1;
             safe-bottom: root.safe-bottom;
             safe-left: root.safe-left;
@@ -1427,7 +1499,7 @@ export component DiscoverPage {
             home_picked => { root.home_picked(); }
             discover_picked => { root.discover_picked(); }
             library_picked => { root.library_picked(); }
-            settings_picked => { root.settings_picked(); }
+            more_picked => { root.more_picked(); }
         }
     }
 
@@ -1457,9 +1529,11 @@ export component DiscoverPage {
         // the fluent-style ScrollView disables drag-pan by default,
         // so opt in explicitly.
         mouse-drag-pan-enabled: root.page_pan_enabled;
-        property <bool> results_mode: root.search_results_open;
+        property <bool> results_mode: root.search_mode;
         changed results_mode => {
+            root.view_reset_pending = true;
             self.content-y = root.display_scroll_y;
+            page_restore_t.stop(); page_restore_t.start();
         }
         // One-way mirror, same pattern as the desktop grid scroll above.
         property <length> want_y: root.display_scroll_y;
@@ -1471,6 +1545,7 @@ export component DiscoverPage {
             }
         }
         init => {
+            root.view_reset_pending = true;
             root.sv_vw = self.visible-width;
             root.sv_vh = self.visible-height;
             root.sv_vph = self.content-height;
@@ -1482,6 +1557,8 @@ export component DiscoverPage {
             interval: 120ms;
             running: true;
             triggered => {
+                page_scroll.content-y = root.display_scroll_y;
+                root.view_reset_pending = false;
                 root.sv_vw = page_scroll.visible-width;
                 root.sv_vh = page_scroll.visible-height;
                 root.sv_vph = page_scroll.content-height;
@@ -1507,11 +1584,11 @@ export component DiscoverPage {
             // Near-bottom guard (same as the desktop grid scroll above):
             // content-y is 0 at the top and
             // visible-height - content-height at the bottom.
-            if (root.display_catalog.length > 0 && root.display_can_load_more && !root.display_loading_more
+            if (!root.view_reset_pending && root.display_catalog.length > 0 && root.display_can_load_more && !root.display_loading_more
                 && self.content-y <= self.visible-height - self.content-height + 600px) {
                 root.load_more();
             }
-            if (root.display_catalog.length > 0) {
+            if (!root.view_reset_pending && root.display_catalog.length > 0) {
                 let grid_off = Math.max(0px, root.header_cover - self.content-y - root.sv_grid_top);
                 let first_row = Math.floor(grid_off / root.row_stride);
                 let vis_rows = Math.ceil(self.visible-height / root.row_stride);
@@ -1536,6 +1613,8 @@ export component DiscoverPage {
 
             and_grid := DiscoverGrid {
                 width: 100%;
+                active: root.grid_active;
+                context_revealed: root.context_revealed;
                 catalog: root.display_catalog;
                 cols: root.cols;
                 item-width: root.item-width;
@@ -1576,6 +1655,7 @@ export component DiscoverPage {
                 addon_names: root.addon_names;
                 searchable: root.searchable;
                 results_open: root.search_results_open;
+                context_revealed: root.context_revealed;
                 addon_combo_idx <=> root.addon_combo_idx;
                 type_combo_idx <=> root.type_combo_idx;
                 catalog_combo_idx <=> root.catalog_combo_idx;
@@ -1629,11 +1709,12 @@ export component DiscoverPage {
         }
         }
 
-    // Bottom tab bar (narrow only): desktop/wide navigate up top.
-    // In-flow sibling of the scroll region (same as Home/Library/
-    // Settings and the desktop branch above) so it never moves with
+    // Bottom tab bar (narrow only): wide layouts use the left rail.
+    // In-flow sibling of the scroll region (same as Home/Library
+    // and the desktop branch above) so it never moves with
     // the scroll content or window-metric changes.
     if root.narrow: bottom_scroll := BottomNav {
+        more_open: root.more_open;
         active: 1;
         safe-bottom: root.safe-bottom;
         safe-left: root.safe-left;
@@ -1647,7 +1728,7 @@ export component DiscoverPage {
         home_picked => { root.home_picked(); }
         discover_picked => { root.discover_picked(); }
         library_picked => { root.library_picked(); }
-        settings_picked => { root.settings_picked(); }
+        more_picked => { root.more_picked(); }
     }
     }
 
@@ -1669,6 +1750,7 @@ export component DiscoverPage {
         discover_picked => { root.discover_picked(); }
         library_picked => { root.library_picked(); }
         settings_picked => { root.settings_picked(); }
+        about_picked => { root.about_picked(); }
     }
 
     // Fade-through gives the switch between browse and results a brief,
