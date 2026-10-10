@@ -838,8 +838,9 @@ impl Bridge {
         app.set_addon_rows(Rc::new(VecModel::from(rows)).into());
         for url in logo_requests {
             let bridge = self.clone();
-            std::thread::spawn(move || {
-                let loaded = nova_media::cache::poster_pixels(&url).is_ok();
+            // Use the shared transport so Android also warms the decoded cache.
+            net::fetch_image(url.clone(), None, move |pixels| {
+                let loaded = pixels.is_some();
                 let _ = slint::invoke_from_event_loop(move || {
                     if loaded {
                         bridge
