@@ -41,6 +41,8 @@ fn pinned_download_and_stream_actions_fit_and_dispatch() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
+    // Geometry/gesture fixture; entrance motion is covered separately.
+    app.global::<nova::Anim>().set_enabled(false);
     // Keep stream controls visible beneath the movie hero’s library button.
     app.window().set_size(slint::PhysicalSize::new(360, 1200));
     app.window().show().unwrap();

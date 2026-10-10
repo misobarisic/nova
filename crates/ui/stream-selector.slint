@@ -6,10 +6,11 @@ import { MenuSheet } from "menusheet.slint";
 import { IcPlay, IcCheck, IcMoreHoriz, IcChevronLeft, IcChevronRight } from "icons.slint";
 
 // One filter pill in the horizontal addon bar above the stream list.
-component StreamFilterPill inherits Rectangle {
+export component StreamFilterPill inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
     in property <bool> focused;
+    in property <bool> touch_feedback: false;
     // The addon is still being queried: show a small spinner on the right.
     in property <bool> loading;
     callback picked();
@@ -22,7 +23,8 @@ component StreamFilterPill inherits Rectangle {
 
     height: 40px;
     border-radius: 20px;
-    background: root.selected ? Theme.current.primary_button : (pill_touch.has-hover ? Theme.current.control_hover : Theme.current.hero_control);
+    // A released Android touch can retain has-hover without a pointer exit.
+    background: root.selected ? Theme.current.primary_button : ((root.touch_feedback ? pill_touch.pressed : pill_touch.has-hover) ? Theme.current.control_hover : Theme.current.hero_control);
     clip: true;
     border-width: root.focused ? 2px : 1px;
     border-color: root.focused ? Theme.current.accent_vivid : (root.selected ? Theme.current.accent : Theme.current.border_strong);
@@ -182,6 +184,7 @@ component StreamFilterBar inherits HorizontalLayout {
     // Active filter: 0 = All, otherwise 1-based index into `addons`.
     in property <int> addon_filter: 0;
     in property <bool> touch_menus: false;
+    in property <bool> touch_feedback: false;
     in property <bool> kb_active: false;
 
     callback filter_picked(int);
@@ -235,6 +238,7 @@ component StreamFilterBar inherits HorizontalLayout {
             alignment: start;
 
             for i in root.addons.length + 1: StreamFilterPill {
+                touch_feedback: root.touch_feedback;
                 label: i == 0 ? @tr("All") : root.addons[i - 1];
                 selected: root.addon_filter == i;
                 focused: root.kb_active && root.addon_filter == i;
@@ -269,6 +273,7 @@ component StreamList {
     callback action_requested(string);
     callback action_selected(string, int);
     callback focused_row(length, length);
+    private property <bool> stagger: Anim.enabled && Anim.transitions;
 
     VerticalLayout {
         width: 100%;
@@ -289,7 +294,6 @@ component StreamList {
                         + ((st.is_download && st.download_action != 4) ? 4px : 0px)),
             );
             property <bool> focused: root.kb_active && root.kb_focus == i + root.page_start;
-            background: st.is_download ? Theme.current.stream_download : (self.focused ? Theme.current.selection_wash : Theme.current.stream_card);
             changed focused => { if (self.focused) { reveal_t.start(); } }
             changed y => { if (self.focused) { reveal_t.start(); } }
             changed height => { if (self.focused) { reveal_t.start(); } }
@@ -301,190 +305,212 @@ component StreamList {
                     if (stream_row.focused) { root.focused_row(stream_row.absolute-position.y, stream_row.height); }
                 }
             }
-            border-radius: Theme.card_corner_radius;
-            // Black cards need an edge against the black canvas; keyboard
-            // focus retains its stronger accent ring in either theme.
-            border-width: self.focused ? 2px : (Theme.true_black ? 1px : 0px);
-            border-color: self.focused ? Theme.current.focus_ring : Theme.current.border_soft;
-            clip: true;
-
-            VerticalLayout {
-                width: 100%;
-                min-width: 0px;
-                padding-top: 10px;
-                padding-bottom: 10px;
-                padding-left: 16px;
-                padding-right: 92px;
-                // Explicit so the hidden `row_measure` (same spacing)
-                // matches this layout's content height exactly.
-                spacing: 0px;
-
-                Text {
-                    text: st.text;
-                    color: Theme.current.text_primary;
-                    font-size: 16px;
-                    wrap: word-wrap;
-                    vertical-alignment: center;
-                    width: 100%;
-                    min-width: 0px;
-                }
-
-                if st.details != "": Text {
-                    text: st.details;
-                    color: Theme.current.text_download;
-                    font-size: 12px;
-                    wrap: word-wrap;
-                    width: 100%;
-                    min-width: 0px;
-                }
-
-                // Progress rail, anchored to the left edge (`x: 0`, like
-                // the other rails in the app) so it fills left → right.
-                // Hidden once the file is complete: the row reads
-                // "Downloaded" and an empty rail there is just noise.
-                if st.is_download && st.download_action != 4: dl_bar := Rectangle {
-                    x: 0;
-                    width: 100%;
-                    height: 4px;
-                    border-radius: 2px;
-                    background: Theme.current.download_track;
-
-                    dl_fill := Rectangle {
-                        x: 0;
-                        width: parent.width * st.download_progress;
-                        height: 100%;
-                        border-radius: 2px;
-                        background: Theme.current.accent;
-                    }
-                }
+            // Keep each row's layout slot fixed while its contents reveal.
+            // In-place progress updates preserve this one-shot state and timer.
+            property <bool> item_revealed: false;
+            property <bool> reveal_motion: root.stagger;
+            // Rows first shown without motion stay visible when it is enabled
+            // later; turning it off also completes any pending reveal.
+            init => { if (!self.reveal_motion) { self.item_revealed = true; } }
+            changed reveal_motion => { if (!self.reveal_motion) { self.item_revealed = true; } }
+            property <duration> item_reveal_delay: Math.min(i, 8) * 24ms;
+            item_reveal_t := Timer {
+                interval: 16ms;
+                running: root.stagger && !stream_row.item_revealed;
+                triggered => { stream_row.item_revealed = true; }
             }
-
-            // Hidden measurement copy of the text stack at the padded
-            // content width (16px left, 92px for the trailing controls), so
-            // the row minimum above tracks real wrapping instead of the
-            // intrinsic one-line width.
-            mrow := Rectangle {
-                width: 100%;
-                height: 0;
+            row_reveal := Rectangle {
+                width: 100%; height: 100%;
+                opacity: !root.stagger || stream_row.item_revealed ? 1.0 : 0.0;
+                y: !root.stagger || stream_row.item_revealed ? 0px : 12px;
+                animate opacity { duration: Anim.transition_fade; delay: root.stagger ? stream_row.item_reveal_delay : 0ms; easing: ease-out; }
+                animate y { duration: Anim.transition_slide; delay: root.stagger ? stream_row.item_reveal_delay : 0ms; easing: ease-out; }
+                background: st.is_download ? Theme.current.stream_download : (stream_row.focused ? Theme.current.selection_wash : Theme.current.stream_card);
+                border-radius: Theme.card_corner_radius;
+                // Black cards need an edge against the black canvas; keyboard
+                // focus retains its stronger accent ring in either theme.
+                border-width: stream_row.focused ? 2px : (Theme.true_black ? 1px : 0px);
+                border-color: stream_row.focused ? Theme.current.focus_ring : Theme.current.border_soft;
                 clip: true;
 
-                row_measure := VerticalLayout {
-                    width: Math.max(0px, mrow.width - 108px);
+                VerticalLayout {
+                    width: 100%;
+                    min-width: 0px;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
+                    padding-left: 16px;
+                    padding-right: 92px;
+                    // Explicit so the hidden `row_measure` (same spacing)
+                    // matches this layout's content height exactly.
                     spacing: 0px;
 
                     Text {
                         text: st.text;
+                        color: Theme.current.text_primary;
                         font-size: 16px;
                         wrap: word-wrap;
+                        vertical-alignment: center;
+                        width: 100%;
                         min-width: 0px;
                     }
 
                     if st.details != "": Text {
                         text: st.details;
+                        color: Theme.current.text_download;
                         font-size: 12px;
                         wrap: word-wrap;
+                        width: 100%;
                         min-width: 0px;
                     }
-                }
-            }
 
-            // Populate the backend-owned actions before explicitly showing
-            // the desktop popup; a ContextMenuArea's automatic right-click
-            // would otherwise open before this row's actions are prepared.
-            stream_ctx := ContextMenuArea {
-                x: 0px; y: 0px;
-                width: 0px; height: 0px;
-                Menu {
-                    for action[a] in root.action_items: MenuItem {
-                        title: action.label;
-                        enabled: action.enabled;
-                        activated => { root.action_selected(st.id, a); }
-                    }
-                }
-            }
+                    // Progress rail, anchored to the left edge (`x: 0`, like
+                    // the other rails in the app) so it fills left → right.
+                    // Hidden once the file is complete: the row reads
+                    // "Downloaded" and an empty rail there is just noise.
+                    if st.is_download && st.download_action != 4: dl_bar := Rectangle {
+                        x: 0;
+                        width: 100%;
+                        height: 4px;
+                        border-radius: 2px;
+                        background: Theme.current.download_track;
 
-            touch_st := TouchArea {
-                property <bool> lp_suppress: false;
-                width: 100%;
-                height: 100%;
-                accessible-role: button;
-                accessible-label: st.text;
-                mouse-cursor: pointer;
-                clicked => {
-                    if (touch_st.lp_suppress) {
-                        touch_st.lp_suppress = false;
-                    } else {
-                        root.picked(i + root.page_start);
-                    }
-                }
-                pointer-event(ev) => {
-                    if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
-                        row_lp_timer.stop();
-                        touch_st.lp_suppress = true;
-                        root.action_requested(st.id);
-                        if (!root.touch_menus) {
-                            stream_ctx.show({ x: self.mouse-x, y: self.mouse-y });
+                        dl_fill := Rectangle {
+                            x: 0;
+                            width: parent.width * st.download_progress;
+                            height: 100%;
+                            border-radius: 2px;
+                            background: Theme.current.accent;
                         }
-                    } else if (ev.kind == PointerEventKind.down) {
-                        touch_st.lp_suppress = false;
-                        if (root.touch_menus) {
+                    }
+                }
+
+                // Hidden measurement copy of the text stack at the padded
+                // content width (16px left, 92px for the trailing controls), so
+                // the row minimum above tracks real wrapping instead of the
+                // intrinsic one-line width.
+                mrow := Rectangle {
+                    width: 100%;
+                    height: 0;
+                    clip: true;
+
+                    row_measure := VerticalLayout {
+                        width: Math.max(0px, mrow.width - 108px);
+                        spacing: 0px;
+
+                        Text {
+                            text: st.text;
+                            font-size: 16px;
+                            wrap: word-wrap;
+                            min-width: 0px;
+                        }
+
+                        if st.details != "": Text {
+                            text: st.details;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                            min-width: 0px;
+                        }
+                    }
+                }
+
+                // Populate the backend-owned actions before explicitly showing
+                // the desktop popup; a ContextMenuArea's automatic right-click
+                // would otherwise open before this row's actions are prepared.
+                stream_ctx := ContextMenuArea {
+                    x: 0px; y: 0px;
+                    width: 0px; height: 0px;
+                    Menu {
+                        for action[a] in root.action_items: MenuItem {
+                            title: action.label;
+                            enabled: action.enabled;
+                            activated => { root.action_selected(st.id, a); }
+                        }
+                    }
+                }
+
+                touch_st := TouchArea {
+                    property <bool> lp_suppress: false;
+                    width: 100%;
+                    height: 100%;
+                    accessible-role: button;
+                    accessible-label: st.text;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if (touch_st.lp_suppress) {
+                            touch_st.lp_suppress = false;
+                        } else {
+                            root.picked(i + root.page_start);
+                        }
+                    }
+                    pointer-event(ev) => {
+                        if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
                             row_lp_timer.stop();
-                            row_lp_timer.start();
+                            touch_st.lp_suppress = true;
+                            root.action_requested(st.id);
+                            if (!root.touch_menus) {
+                                stream_ctx.show({ x: self.mouse-x, y: self.mouse-y });
+                            }
+                        } else if (ev.kind == PointerEventKind.down) {
+                            touch_st.lp_suppress = false;
+                            if (root.touch_menus) {
+                                row_lp_timer.stop();
+                                row_lp_timer.start();
+                            }
+                        } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                            row_lp_timer.stop();
                         }
-                    } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
-                        row_lp_timer.stop();
+                    }
+                    moved => {
+                        if (Math.abs(touch_st.mouse-x - touch_st.pressed-x)
+                            + Math.abs(touch_st.mouse-y - touch_st.pressed-y) > 24px) {
+                            row_lp_timer.stop();
+                        }
                     }
                 }
-                moved => {
-                    if (Math.abs(touch_st.mouse-x - touch_st.pressed-x)
-                        + Math.abs(touch_st.mouse-y - touch_st.pressed-y) > 24px) {
-                        row_lp_timer.stop();
-                    }
-                }
-            }
 
-            if !st.is_download || st.download_action != 4: IcPlay {
-                x: parent.width - 82px;
-                y: (parent.height - self.height) / 2;
-                width: 20px; height: 20px;
-                fill: Theme.current.text_secondary;
-            }
-            if st.is_download && st.download_action == 4: IcCheck {
-                x: parent.width - 82px;
-                y: (parent.height - self.height) / 2;
-                width: 20px; height: 20px;
-                fill: Theme.current.text_download;
-            }
-            stream_actions := Rectangle {
-                x: parent.width - 52px;
-                y: (parent.height - self.height) / 2;
-                width: 44px; height: 44px;
-                border-radius: 10px;
-                background: action_touch.has-hover ? Theme.current.hover_overlay : transparent;
-                accessible-role: button;
-                accessible-label: @tr("Stream actions");
-                IcMoreHoriz {
-                    x: (parent.width - self.width) / 2;
+                if !st.is_download || st.download_action != 4: IcPlay {
+                    x: parent.width - 82px;
                     y: (parent.height - self.height) / 2;
                     width: 20px; height: 20px;
                     fill: Theme.current.text_secondary;
                 }
-                action_touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.action_requested(st.id);
-                        if (!root.touch_menus) { stream_ctx.show({ x: stream_actions.x, y: stream_actions.y + stream_actions.height }); }
+                if st.is_download && st.download_action == 4: IcCheck {
+                    x: parent.width - 82px;
+                    y: (parent.height - self.height) / 2;
+                    width: 20px; height: 20px;
+                    fill: Theme.current.text_download;
+                }
+                stream_actions := Rectangle {
+                    x: parent.width - 52px;
+                    y: (parent.height - self.height) / 2;
+                    width: 44px; height: 44px;
+                    border-radius: 10px;
+                    background: action_touch.has-hover ? Theme.current.hover_overlay : transparent;
+                    accessible-role: button;
+                    accessible-label: @tr("Stream actions");
+                    IcMoreHoriz {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        width: 20px; height: 20px;
+                        fill: Theme.current.text_secondary;
+                    }
+                    action_touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.action_requested(st.id);
+                            if (!root.touch_menus) { stream_ctx.show({ x: stream_actions.x, y: stream_actions.y + stream_actions.height }); }
+                        }
                     }
                 }
-            }
 
-            row_lp_timer := Timer {
-                interval: 600ms;
-                running: false;
-                triggered => {
-                    self.stop();
-                    touch_st.lp_suppress = true;
-                    root.action_requested(st.id);
+                row_lp_timer := Timer {
+                    interval: 600ms;
+                    running: false;
+                    triggered => {
+                        self.stop();
+                        touch_st.lp_suppress = true;
+                        root.action_requested(st.id);
+                    }
                 }
             }
         }
@@ -548,6 +574,22 @@ export component StreamSelector inherits Rectangle {
 
     width: 100%; height: 100%;
     background: Theme.current.artwork_canvas;
+    // The conditional Detail host is shared by Home shortcuts and manual
+    // picks. Defer the reveal until a frame has established its start values;
+    // data updates and resizing keep this instance, so they never replay it.
+    private property <bool> entered: false;
+    private property <bool> entrance_motion: Anim.enabled && Anim.transitions;
+    init => { if (!root.entrance_motion) { root.entered = true; } }
+    changed entrance_motion => { if (!root.entrance_motion) { root.entered = true; } }
+    x: root.entered || !root.entrance_motion ? 0px : Math.min(48px, root.width * 0.08);
+    opacity: root.entered || !root.entrance_motion ? 1.0 : 0.0;
+    animate x { duration: Anim.transition_slide; easing: ease-out; }
+    animate opacity { duration: Anim.transition_fade; easing: ease-out; }
+    entrance_t := Timer {
+        interval: 16ms;
+        running: !root.entered;
+        triggered => { root.entered = true; }
+    }
     private property <length> usable_height: root.height - root.safe-top - root.safe-bottom;
     private property <bool> short: root.usable_height < 600px;
     private property <length> usable_width: root.width - root.safe-left - root.safe-right;
@@ -742,6 +784,7 @@ export component StreamSelector inherits Rectangle {
             addons: root.addons; loading: root.loading;
             searching: root.searching; addon_filter: root.addon_filter;
             touch_menus: root.touch_menus || root.narrow;
+            touch_feedback: root.touch_menus;
             kb_active: root.kb_active && root.focus_zone == 1;
             filter_picked(i) => { root.kb_active = false; root.pick_filter(i); }
         }

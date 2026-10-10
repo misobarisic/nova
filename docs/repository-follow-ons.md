@@ -185,6 +185,27 @@ currently points to the tracked `android/keystore/debug.keystore` with the publi
   cannot update installs signed with the existing key, so users may need to
   reinstall unless a supported key-rotation path is arranged.
 
+## Noto Color Emoji subsetting
+
+Status: planned, not implemented. Keep the current bundled font unchanged until
+this follow-on is taken up. `assets/fonts/NotoColorEmoji.ttf` currently adds
+10,730,124 bytes before APK compression; registration and fallback live in
+`crates/ui/src/fonts.rs`, with upstream provenance in `assets/fonts/README.md`.
+
+- Measure subsetting from the pinned upstream font, including removing
+  unreachable glyphs before considering reduced character coverage. Addon text
+  is arbitrary, so a subset based only on emoji literals in Nova's source is
+  insufficient. Document any coverage loss and its fallback behavior.
+- Retain the substitution dependencies for country flags, variation selectors,
+  skin tones and joined emoji. Generate the chosen subset reproducibly and
+  preserve the font license and updated provenance.
+- Verify shaping without system fonts and color rendering on desktop FemtoVG
+  and Android Skia. Check representative addon text, flags and joined sequences
+  on the S25. Record original/subset font bytes and signed release APK bytes.
+- Run only one Cargo command at a time. Remove temporary font experiments and
+  scratch outputs when finished; retain only the intended packaged asset and
+  reproducible source tooling.
+
 ## APK license and source delivery
 
 `Settings → About` and `THIRD_PARTY_NOTICES.md` now include the build's Rust

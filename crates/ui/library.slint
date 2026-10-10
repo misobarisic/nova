@@ -10,9 +10,10 @@ import { Anim } from "anim.slint";
 import { Theme } from "theme.slint";
 import { SearchField } from "searchfield.slint";
 
-component LibraryFilterChip inherits Rectangle {
+export component LibraryFilterChip inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
+    in property <bool> touch_feedback: false;
     callback picked();
     callback reveal(length, length);
     changed selected => { if (root.selected) { root.reveal(root.x, root.width); } }
@@ -23,7 +24,9 @@ component LibraryFilterChip inherits Rectangle {
     border-radius: 20px;
     border-width: 1px;
     border-color: root.selected ? Theme.current.accent : Theme.current.border_strong;
-    background: root.selected ? Theme.current.primary_button : (chip_touch.has-hover ? Theme.current.control_hover : Theme.current.hero_control);
+    // Android keeps the touch pointer over the last tapped item after Up.
+    // Pressed clears on release/cancel; desktop still has real hover.
+    background: root.selected ? Theme.current.primary_button : ((root.touch_feedback ? chip_touch.pressed : chip_touch.has-hover) ? Theme.current.control_hover : Theme.current.hero_control);
     accessible-role: button;
     accessible-label: root.label;
     chip_text := Text {
@@ -898,12 +901,14 @@ export component LibraryPage {
                                         spacing: 8px;
                                         alignment: start;
                                         LibraryFilterChip {
+                                            touch_feedback: root.touch_menus;
                                             label: @tr("All");
                                             selected: root.library_filter_category == "";
                                             picked => { root.library_filter_picked(""); }
                                             reveal(left, w) => { root.reveal_filter(left, w); }
                                         }
                                         for name[i] in root.category_names: LibraryFilterChip {
+                                            touch_feedback: root.touch_menus;
                                             label: i < root.category_labels.length ? root.category_labels[i] : name;
                                             selected: root.library_filter_category == name;
                                             picked => { root.library_filter_picked(name); }

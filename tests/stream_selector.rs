@@ -52,6 +52,7 @@ fn responsive_selector_keeps_state_and_dispatches_movie_and_stream_actions() {
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = nova::AppWindow::new().unwrap();
     app.set_animations(false);
+    app.global::<nova::Anim>().set_enabled(false);
     app.set_modal_visible(true);
     app.set_detail_is_movie(true);
     app.set_selected_title("Arrival".into());
@@ -424,6 +425,7 @@ fn render_stream_selector_previews() {
         std::env::var_os("NOVA_STREAM_SELECTOR_PREVIEW_TRUE_BLACK").is_some(),
     );
     app.set_animations(false);
+    app.global::<nova::Anim>().set_enabled(false);
     app.set_modal_visible(true);
     app.set_detail_is_movie(true);
     app.set_stream_selector_open(true);

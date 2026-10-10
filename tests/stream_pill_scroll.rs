@@ -69,6 +69,7 @@ fn pill_chevrons_step_and_the_touch_bar_stays_above_the_streams() {
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = nova::AppWindow::new().unwrap();
     app.set_animations(false);
+    app.global::<nova::Anim>().set_enabled(false);
     app.window().set_size(slint::PhysicalSize::new(900, 900));
     app.set_modal_visible(true);
     app.set_detail_is_movie(true);

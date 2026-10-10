@@ -1002,9 +1002,7 @@ impl Bridge {
             if !app.get_episode_context().is_empty()
                 && let Some(video) = selected
             {
-                app.set_episode_context(SharedString::from(stream_episode_context_label(
-                    &video,
-                )));
+                app.set_episode_context(SharedString::from(stream_episode_context_label(&video)));
                 if thumbnail_changed
                     && !app.get_player_open()
                     && let Some(url) = video.thumbnail.filter(|url| !url.is_empty())
@@ -2541,8 +2539,9 @@ impl Bridge {
     /// Android — so a hold can never reach its threshold and the sheet never
     /// appears. When the row identity/order is unchanged (the common
     /// progress-only case) update the existing rows in place via
-    /// `set_row_data`, which preserves the delegates and their timers; only
-    /// rebuild the model when the shape actually changes.
+    /// `set_row_data`, which preserves the delegates and their timers. New
+    /// addon batches insert/remove by stable ID so retained rows also keep
+    /// their reveal state instead of fading out again with every response.
     pub(super) fn apply_stream_filter(&self) {
         let (displayed, stream_rows, hint) = self.compute_stream_view();
         let (page, page_count, page_start, total, page_rows) = {
@@ -2571,15 +2570,8 @@ impl Bridge {
         app.set_stream_total(total as i32);
         let model = app.get_streams();
         let existing = model.as_any().downcast_ref::<VecModel<StreamRow>>();
-        let same_shape = existing.is_some_and(|model| stream_rows_same_shape(model, &page_rows));
-        if same_shape {
-            if let Some(model) = existing {
-                for (index, row) in page_rows.into_iter().enumerate() {
-                    if model.row_data(index).as_ref() != Some(&row) {
-                        model.set_row_data(index, row);
-                    }
-                }
-            }
+        if let Some(model) = existing {
+            update_stream_rows(model, &page_rows);
         } else {
             app.set_streams(Rc::new(VecModel::from(page_rows)).into());
         }
@@ -3342,6 +3334,42 @@ pub(crate) fn stream_rows_same_shape<M: Model<Data = StreamRow>>(
                 .row_data(index)
                 .is_some_and(|previous| previous.id == row.id)
         })
+}
+
+/// Reconcile the bounded, 25-row page without resetting retained delegates.
+/// Addon responses preserve existing relative order; inserting their new rows
+/// must not restart earlier rows' entrance fades or Android hold timers.
+pub(crate) fn update_stream_rows(model: &VecModel<StreamRow>, rows: &[StreamRow]) {
+    let same_shape = stream_rows_same_shape(model, rows);
+    for (index, row) in rows.iter().enumerate() {
+        if !same_shape {
+            // Remove vanished rows at this slot before looking for a moved
+            // identity. That keeps the remaining delegates intact on shrink.
+            while model.row_data(index).is_some_and(|current| {
+                current.id != row.id && !rows[index..].iter().any(|next| next.id == current.id)
+            }) {
+                model.remove(index);
+            }
+            if model
+                .row_data(index)
+                .is_none_or(|current| current.id != row.id)
+            {
+                if let Some(previous) = (index + 1..model.row_count())
+                    .find(|&previous| model.row_data(previous).is_some_and(|old| old.id == row.id))
+                {
+                    model.remove(previous);
+                }
+                model.insert(index, row.clone());
+                continue;
+            }
+        }
+        if model.row_data(index).as_ref() != Some(row) {
+            model.set_row_data(index, row.clone());
+        }
+    }
+    while model.row_count() > rows.len() {
+        model.remove(rows.len());
+    }
 }
 
 /// Directory holding cached episode lists (keyed by meta type + item id).

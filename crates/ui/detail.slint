@@ -2117,39 +2117,46 @@ export component DetailPage {
 
     }
 
-    if root.stream_selector_open: StreamSelector {
-        title: root.selected_title;
-        is_movie: root.is_movie;
-        year: root.selected_year;
-        episode_context: root.episode_context;
-        poster: root.selected_poster;
-        backdrop: root.selected_backdrop;
-        rows: root.streams;
-        hint: root.streams_hint;
-        addons: root.stream_addons;
-        loading: root.stream_loading;
-        searching: root.streams_searching;
-        addon_filter: root.stream_filter;
-        page: root.stream_page;
-        page_count: root.stream_page_count;
-        page_start: root.stream_page_start;
-        total: root.stream_total;
-        touch_menus: root.touch_menus;
-        safe-top: root.safe-top;
-        safe-left: root.safe-left;
-        safe-right: root.safe-right;
-        safe-bottom: root.safe-bottom;
-        kb_index <=> root.kb_s;
-        kb_active <=> root.kb_active;
-        action_open <=> root.stream_action_open;
-        action_title: root.stream_action_title;
-        action_id: root.stream_action_id;
-        action_items: root.stream_action_items;
-        back => { root.stream_selector_back(); }
-        picked(i) => { root.stream_picked(i); }
-        page_picked(p) => { root.stream_page_picked(p); }
-        filter_picked(i) => { root.stream_filter_picked(i); }
-        action_requested(id) => { root.request_stream_action(id); }
-        action_selected(id, a) => { root.stream_action_selected(id, a); }
+    // A stationary canvas keeps the entrance fade opaque to the previous
+    // screen; clipping contains the selector's short slide at every size.
+    if root.stream_selector_open: Rectangle {
+        width: 100%; height: 100%;
+        background: Theme.current.artwork_canvas;
+        clip: true;
+        StreamSelector {
+            title: root.selected_title;
+            is_movie: root.is_movie;
+            year: root.selected_year;
+            episode_context: root.episode_context;
+            poster: root.selected_poster;
+            backdrop: root.selected_backdrop;
+            rows: root.streams;
+            hint: root.streams_hint;
+            addons: root.stream_addons;
+            loading: root.stream_loading;
+            searching: root.streams_searching;
+            addon_filter: root.stream_filter;
+            page: root.stream_page;
+            page_count: root.stream_page_count;
+            page_start: root.stream_page_start;
+            total: root.stream_total;
+            touch_menus: root.touch_menus;
+            safe-top: root.safe-top;
+            safe-left: root.safe-left;
+            safe-right: root.safe-right;
+            safe-bottom: root.safe-bottom;
+            kb_index <=> root.kb_s;
+            kb_active <=> root.kb_active;
+            action_open <=> root.stream_action_open;
+            action_title: root.stream_action_title;
+            action_id: root.stream_action_id;
+            action_items: root.stream_action_items;
+            back => { root.stream_selector_back(); }
+            picked(i) => { root.stream_picked(i); }
+            page_picked(p) => { root.stream_page_picked(p); }
+            filter_picked(i) => { root.stream_filter_picked(i); }
+            action_requested(id) => { root.request_stream_action(id); }
+            action_selected(id, a) => { root.stream_action_selected(id, a); }
+        }
     }
 }

@@ -50,6 +50,7 @@ fn second_page_is_populated_and_picks_absolute_index() {
     app.window().set_size(slint::PhysicalSize::new(900, 800));
     app.window().show().unwrap();
     app.set_animations(false);
+    app.global::<nova::Anim>().set_enabled(false);
     app.set_anim_transitions(false);
     app.set_modal_visible(true);
     app.set_detail_is_movie(true);

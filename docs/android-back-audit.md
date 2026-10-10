@@ -26,10 +26,12 @@ The tests dispatch actual Back press/release events, including held repeats,
 and verify acceptance and one-layer navigation. Home root still backgrounds the
 app through the existing callback.
 
-## Tracking changes reviewed from source
+## Tracking focus and nested Back
 
-These changes have been reviewed in the diff only. No tests were run for this
-change; device confirmation is still needed.
+Compiled-UI regressions cover More dismissal before Tracking closure, Tracking
+closure after reopening, alignment cancellation, and focus recovery after
+suggestion reloads. Device confirmation is still needed for entry editing,
+unlink, and sign-in lifecycle changes.
 
 - Entry editing focuses the persistent More / Back to review button both when
   entering and leaving the editor. Back discards unsaved inputs through the same
@@ -60,6 +62,8 @@ Check both navbar and gesture Back on the S25 FE:
   press should close just the nearest layer.
 - Check category-name and torrent-folder editing across rotation, rapid presses,
   app background/resume, and return from playback, including keyboard edit mode.
+- From My Library, open a series, select an episode and open its streams. Navbar
+  Back should close stream actions, return to Episodes, then return to My Library.
 - Only Home root should background the app; returning should retain its state.
 
 Tests that inspect built-in input metadata use the default compiled UI, matching

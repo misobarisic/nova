@@ -58,6 +58,7 @@ fn desktop_action_menus_use_popups_at_phone_and_desktop_widths() {
 fn desktop_library_options_never_open_a_bottom_sheet() {
     let app = nova::AppWindow::new().unwrap();
     app.set_animations(false);
+    app.global::<nova::Anim>().set_enabled(false);
     app.set_show_home(false);
     app.set_modal_visible(true);
     app.set_in_library(true);
@@ -106,6 +107,7 @@ fn desktop_library_options_never_open_a_bottom_sheet() {
 fn desktop_stream_right_click_prepares_actions_without_opening_a_sheet_or_playing() {
     let app = nova::AppWindow::new().unwrap();
     app.set_animations(false);
+    app.global::<nova::Anim>().set_enabled(false);
     app.set_show_home(false);
     app.set_modal_visible(true);
     app.set_modal_episodes(false);

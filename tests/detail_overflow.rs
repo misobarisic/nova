@@ -159,6 +159,8 @@ fn detail_screen_has_no_horizontal_overflow() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
+    // Measure stationary layout; sampled entrance motion has its own regression.
+    app.global::<nova::Anim>().set_enabled(false);
     app.window().set_size(slint::PhysicalSize::new(360, 800));
     app.window().show().unwrap();
     show_detail(&app);

@@ -20,6 +20,8 @@ fn idle(ms: u64) {
 /// unscrolled pill row.
 fn setup() -> nova::AppWindow {
     let app = nova::AppWindow::new().unwrap();
+    // Geometry/gesture fixture; entrance motion is covered separately.
+    app.global::<nova::Anim>().set_enabled(false);
     app.window().set_size(slint::PhysicalSize::new(1100, 900));
     app.window().show().unwrap();
     app.set_modal_visible(true);

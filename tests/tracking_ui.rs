@@ -33,6 +33,22 @@ async fn settle() {
     })
     .await;
 }
+async fn navbar_back(app: &nova::AppWindow) {
+    for event in [
+        slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        },
+        slint::platform::WindowEvent::KeyReleased {
+            text: slint::platform::Key::Back.into(),
+        },
+    ] {
+        assert!(matches!(
+            app.window().dispatch_event_with_result(event).unwrap(),
+            slint::platform::WindowEventDispatchResult::Accepted
+        ));
+    }
+    settle().await;
+}
 async fn click(app: &nova::AppWindow, label: &str) {
     let mut target = None;
     for attempt in 0..12 {
@@ -297,8 +313,15 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
         assert_eq!(a.get(), 0, "preview must not send history");
         click(&app, "Confirm history update").await;
         assert_eq!(a.get(), 1);
-        app.set_system_back_request(app.get_system_back_request() + 1);
-        settle().await;
+        navbar_back(&app).await;
+        assert!(app.get_tracking_open(), "Back closes More before Tracking");
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Apply Nova history")
+                .next()
+                .is_none()
+        );
+        assert_eq!(a.get(), 1, "Back cannot submit another history update");
+        navbar_back(&app).await;
         assert!(!app.get_tracking_open());
         assert!(
             app.get_modal_visible(),
@@ -472,8 +495,7 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
         assert_eq!(*adjusts.borrow(), vec![0]);
         app.set_tracking_candidate_title(s("Mugen Train TV"));
         settle().await;
-        app.set_system_back_request(app.get_system_back_request() + 1);
-        settle().await;
+        navbar_back(&app).await;
         assert!(
             app.get_tracking_open(),
             "Back from adjustment returns to review"

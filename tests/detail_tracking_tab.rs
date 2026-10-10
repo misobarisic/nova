@@ -347,14 +347,35 @@ fn tracking_is_a_detail_tab_with_reachable_confirmation() {
         click_tab(&app, "Overview").await;
         assert_eq!(app.get_detail_tab(), 0);
         assert!(!app.get_tracking_open());
-        app.invoke_tracking_show();
-        settle().await;
-        assert_eq!(app.get_tracking_return_tab(), 0);
-        app.set_system_back_request(app.get_system_back_request() + 1);
-        settle().await;
-        assert_eq!(app.get_detail_tab(), 0);
-        assert!(!app.get_tracking_open());
-        assert!(app.get_modal_visible());
+        // Materialize the visible tab: this backend does not draw frames.
+        // No input needs to be touched before Android navbar Back works.
+        // Repeat to catch stale requests carried over from the last visit.
+        for _ in 0..3 {
+            app.invoke_tracking_show();
+            settle().await;
+            assert_eq!(app.get_tracking_return_tab(), 0);
+            let panel = ElementHandle::find_by_element_type_name(&app, "TrackingPanel")
+                .next()
+                .expect("visible reopened Tracking panel");
+            assert!(panel.size().height > 0.0);
+            for event in [
+                slint::platform::WindowEvent::KeyPressed {
+                    text: slint::platform::Key::Back.into(),
+                },
+                slint::platform::WindowEvent::KeyReleased {
+                    text: slint::platform::Key::Back.into(),
+                },
+            ] {
+                assert!(matches!(
+                    app.window().dispatch_event_with_result(event).unwrap(),
+                    slint::platform::WindowEventDispatchResult::Accepted
+                ));
+            }
+            settle().await;
+            assert_eq!(app.get_detail_tab(), 0);
+            assert!(!app.get_tracking_open());
+            assert!(app.get_modal_visible());
+        }
         slint::quit_event_loop().unwrap();
     })
     .unwrap();

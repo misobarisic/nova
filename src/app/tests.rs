@@ -1737,16 +1737,79 @@ mod stream_row_shape_tests {
     }
 
     #[test]
-    fn reordered_or_resized_rows_force_a_rebuild() {
+    fn reordered_or_resized_rows_need_membership_updates() {
         let rows = vec![row("a"), row("download:1")];
         let model = VecModel::from(rows.clone());
-        // Same ids but different order: the pinned download rows move, so the
-        // model must be rebuilt rather than patched in place.
+        // Different membership/order needs insert/remove notifications rather
+        // than the progress-only set_row_data path.
         let reordered = vec![rows[1].clone(), rows[0].clone()];
         assert!(!stream_rows_same_shape(&model, &reordered));
-        // Membership change (a new download pinned / one removed): rebuild.
+        // Membership change (a new download pinned / one removed).
         let grown = vec![row("download:2"), rows[0].clone(), rows[1].clone()];
         assert!(!stream_rows_same_shape(&model, &grown));
         assert!(!stream_rows_same_shape(&model, &rows[..1]));
+    }
+
+    #[test]
+    fn arriving_and_removed_rows_preserve_retained_delegates() {
+        use i_slint_core::model::{ModelChangeListener, ModelChangeListenerContainer};
+        use std::{cell::RefCell, pin::Pin};
+
+        #[derive(Default)]
+        struct Changes(RefCell<Vec<(&'static str, usize, usize)>>);
+        impl ModelChangeListener for Changes {
+            fn row_changed(self: Pin<&Self>, row: usize) {
+                self.0.borrow_mut().push(("changed", row, 1));
+            }
+            fn row_added(self: Pin<&Self>, index: usize, count: usize) {
+                self.0.borrow_mut().push(("added", index, count));
+            }
+            fn row_removed(self: Pin<&Self>, index: usize, count: usize) {
+                self.0.borrow_mut().push(("removed", index, count));
+            }
+            fn reset(self: Pin<&Self>) {
+                panic!("retained stream delegates must not reset");
+            }
+        }
+        let changes = Box::pin(ModelChangeListenerContainer::<Changes>::default());
+        let model = VecModel::from(vec![row("download:1"), row("addon-b")]);
+        model
+            .model_tracker()
+            .attach_peer(changes.as_ref().model_peer());
+        let mut download = row("download:1");
+        download.download_progress = 0.7;
+        let rows = vec![
+            download.clone(),
+            row("addon-a"),
+            row("addon-b"),
+            row("addon-c"),
+        ];
+        update_stream_rows(&model, &rows);
+        assert_eq!(model.iter().collect::<Vec<_>>(), rows);
+        assert_eq!(
+            &*changes.0.borrow(),
+            &[("changed", 0, 1), ("added", 1, 1), ("added", 3, 1)]
+        );
+
+        changes.0.borrow_mut().clear();
+        let rows = vec![download, row("addon-b")];
+        update_stream_rows(&model, &rows);
+        assert_eq!(model.iter().collect::<Vec<_>>(), rows);
+        assert_eq!(
+            &*changes.0.borrow(),
+            &[("removed", 1, 1), ("removed", 2, 1)]
+        );
+
+        changes.0.borrow_mut().clear();
+        update_stream_rows(&model, &rows);
+        assert!(
+            changes.0.borrow().is_empty(),
+            "unchanged ticks emit no notifications"
+        );
+        let rows = vec![row("addon-b"), row("download:1")];
+        update_stream_rows(&model, &rows);
+        assert_eq!(model.iter().collect::<Vec<_>>(), rows);
+        update_stream_rows(&model, &[]);
+        assert_eq!(model.row_count(), 0);
     }
 }
