@@ -64,8 +64,6 @@ fn theme_search_toggle_resize_and_android_back() {
     assert!(app.get_true_black());
     assert!(app.global::<nova::Theme>().get_true_black());
     assert_eq!(edits.borrow().as_slice(), ["true_black"]);
-    let glow = ElementHandle::find_by_element_id(&app, "SettingsPage::settings_backdrop").next();
-    assert!(glow.is_none(), "opaque blue header artwork must be hidden");
     app.window().set_size(slint::PhysicalSize::new(1280, 900));
     settle(&app);
     assert_eq!(app.get_settings_selected_id(), 14);

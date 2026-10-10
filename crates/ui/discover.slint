@@ -837,7 +837,6 @@ export component DiscoverPage {
     property <length> sv_header_height: 0px;
     property <length> sv_hero_height: 0px;
     property <length> header_shift: Math.max(-root.sv_hero_height, Math.min(0px, root.display_scroll_y));
-    property <length> backdrop_height: Math.max(144px, root.sv_hero_height + root.safe-top + 36px);
     property <length> header_cover: root.sv_header_height + root.header_shift;
     property <bool> transition_cover: false;
     property <bool> page_pan_enabled: true;
@@ -1135,12 +1134,6 @@ export component DiscoverPage {
         width: 100%;
         height: 100%;
         background: Theme.current.artwork_canvas;
-        // Shared canvas artwork moves with the hero. Drawing it only once
-        // avoids subpixel seams at the clipped header's edges.
-        if !Theme.true_black: Image {
-            width: 100%; height: root.backdrop_height; y: root.header_shift;
-            source: @image-url("../../assets/settings-header.svg"); image-fit: fill;
-        }
 
     // 6-button scope: covers the page without intercepting the mouse.
     nav_scope := FocusScope {
@@ -1406,6 +1399,14 @@ export component DiscoverPage {
                 }
             }
 
+            // Match Library's short fade where scrolling cards pass under
+            // the pinned controls, in both browse and search results.
+            fix_header_fade := Rectangle {
+                y: root.header_cover;
+                width: 100%; height: 8px;
+                background: @linear-gradient(180deg, Theme.current.artwork_canvas, transparent);
+            }
+
         }
 
         // Bottom tab bar (narrow only): desktop/wide navigate up top.
@@ -1620,6 +1621,11 @@ export component DiscoverPage {
                 filters_panned => { root.filters_panned(); }
                 filters_pan_released => { root.filters_pan_released(); }
             }
+        }
+        and_header_fade := Rectangle {
+            y: root.header_cover;
+            width: 100%; height: 8px;
+            background: @linear-gradient(180deg, Theme.current.artwork_canvas, transparent);
         }
         }
 

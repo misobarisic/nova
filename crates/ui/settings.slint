@@ -341,7 +341,6 @@ export component SettingsPage {
     property <bool> narrow: root.detail_width < 680px;
     in property <bool> two_pane;
     property <length> usable_width: root.nav-viewport-width - root.rail_w - root.safe-left - root.safe-right - 36px;
-    property <length> backdrop_scroll_shift: root.two_pane ? 0px : (root.sub_open ? Math.min(0px, root.scroll_y) : root.landing_header_shift);
     property <length> combined_width: Math.max(0px, root.usable_width);
     property <length> detail_width: root.two_pane ? root.combined_width - 364px : root.combined_width;
     changed two_pane => {
@@ -1446,25 +1445,6 @@ export component SettingsPage {
         height: 100%;
         background: Theme.current.artwork_canvas;
 
-        // Artwork belongs to the page canvas so safe-area and content gutters
-        // never frame it. Only the captions and controls retain their padding.
-        settings_backdrop := Rectangle {
-            visible: !Theme.true_black;
-            x: 0px;
-            y: 0px;
-            width: 100%;
-            height: root.safe-top + 31px + (root.sub_open ? sub_header.height : 108px);
-            clip: true;
-            Image {
-                x: 0px;
-                y: root.backdrop_scroll_shift;
-                width: 100%;
-                height: parent.height;
-                source: @image-url("../../assets/settings-header.svg");
-                image-fit: fill;
-            }
-        }
-
         // 6-button scope: overlays the page without intercepting the mouse.
         nav_scope := FocusScope {
             width: 100%;
@@ -1647,17 +1627,6 @@ export component SettingsPage {
                             height: 124px;
                             clip: true;
                             background: Theme.current.artwork_canvas;
-                            // Paint the same page-space slice as the canvas:
-                            // an opaque flat mask would cut a notch in its glow.
-                            Image {
-                                visible: !Theme.true_black;
-                                x: settings_backdrop.absolute-position.x - landing_controls_canvas.absolute-position.x;
-                                y: settings_backdrop.absolute-position.y - landing_controls_canvas.absolute-position.y + root.backdrop_scroll_shift;
-                                width: settings_backdrop.width;
-                                height: settings_backdrop.height;
-                                source: @image-url("../../assets/settings-header.svg");
-                                image-fit: fill;
-                            }
                         }
 
                         Rectangle {
