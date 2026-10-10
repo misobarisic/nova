@@ -2,7 +2,7 @@ import { SettingsSync, SettingSyncBadge } from "settings-sync.slint";
 import { Theme } from "theme.slint";
 import { SliderTouchArea } from "slider-touch.slint";
 import { SearchField } from "searchfield.slint";
-import { IcExtension, IcTag, IcImage, IcDisplay, IcPlay, IcChevronLeft, IcChevronRight, IcSettingsGear, IcSync, IcDelete, IcHome, IcVideoLibrary } from "icons.slint";
+import { IcExtension, IcTag, IcImage, IcDisplay, IcPlay, IcChevronLeft, IcChevronRight, IcSettingsGear, IcSync, IcDelete, IcHome, IcVideoLibrary, IcLink } from "icons.slint";
 import { KbMark } from "kbnav.slint";
 import { Anim } from "anim.slint";
 
@@ -204,22 +204,18 @@ export component AddonIconButton inherits Rectangle {
 
 }
 
-// One addon row on narrow screens: the name owns the first line (toggle +
-// title + move arrows) and the remaining actions sit on a second line
-// underneath (configure cog, Copy link, refresh, remove) — a phone's row
-// offers ~260px for controls, so seven text pills either squeeze the title
-// to nothing or spill off the row. Keyboard column order matches the wide
-// row's: 0 toggle, 1 Configure, 2 Copy link, 3 Refresh, 4 Remove, 5 move
-// up, 6 move down.
+// Addon identity and actions share the same card on phones and desktop.
+// Keyboard columns retain their existing action indices.
 export component AddonRowCard inherits Rectangle {
-    in property <string> title: "";
-    in property <bool> tinted: false;
-    in property <bool> on: false;
-    in property <bool> has_config: false;
-    // Keyboard row focus (zone 2, this row) and modality.
-    in property <bool> kb_focused_row: false;
-    in property <bool> kb_active: false;
-    // Keyboard column on this row (same numbering as the wide row).
+    in property <string> title;
+    in property <string> caption;
+    in property <image> logo;
+    in property <string> initial;
+    in property <bool> tinted;
+    in property <bool> on;
+    in property <bool> has_config;
+    in property <bool> kb_focused_row;
+    in property <bool> kb_active;
     in property <int> kb_col: -1;
     callback toggled(bool);
     callback configure();
@@ -228,130 +224,82 @@ export component AddonRowCard inherits Rectangle {
     callback remove();
     callback move_up();
     callback move_down();
-
+    min-width: 0px;
     background: Theme.current.card;
-
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: Theme.current.border_card;
     VerticalLayout {
-        padding-top: 12px;
-        padding-bottom: 12px;
-        padding-left: 16px;
-        padding-right: 16px;
+        padding: 12px;
         spacing: 10px;
-
-        // Row 1: identity + order.
         HorizontalLayout {
-            spacing: 12px;
-
-            KbMark { on: root.kb_focused_row; active: root.kb_active; }
-            // Centered on the 44px arrow line (a layout child would ride 6px
-            // high next to the roomy buttons).
+            spacing: 10px;
             Rectangle {
-                width: 44px;
-                height: 44px;
-
-                ToggleSwitch {
-                    x: 0px;
-                    y: (parent.height - self.height) / 2;
-                    checked: root.on;
-                    focused: root.kb_active && root.kb_focused_row && root.kb_col == 0;
-                    toggled => { root.toggled(self.checked); }
+                width: 48px; height: 48px; horizontal-stretch: 0;
+                background: Theme.current.selection_wash;
+                border-radius: 12px;
+                clip: true;
+                if root.logo.width > 0: Image {
+                    source: root.logo; width: 100%; height: 100%; image-fit: contain;
+                }
+                if root.logo.width == 0: Text {
+                    text: root.initial; font-size: 24px; font-weight: 700;
+                    color: Theme.current.accent_soft;
+                    horizontal-alignment: center; vertical-alignment: center;
                 }
             }
-
-            Text {
-                text: root.title;
-                font-size: 16px;
-                font-weight: 600;
-                color: Theme.current.text_bright;
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-                vertical-alignment: center;
-                min-width: 0px;
-                wrap: word-wrap;
+            VerticalLayout {
+                min-width: 0px; horizontal-stretch: 1; spacing: 4px; alignment: center;
+                Text { text: root.title; font-size: 16px; font-weight: 600; color: Theme.current.text_bright; wrap: word-wrap; min-width: 0px; }
+                if root.caption != "": Text { text: root.caption; color: Theme.current.text_secondary; font-size: 12px; wrap: word-wrap; min-width: 0px; }
             }
-
-            AddonIconButton {
-                roomy: true;
-                name: @tr("Move up");
-                focused: root.kb_active && root.kb_focused_row && root.kb_col == 5;
-                clicked => { root.move_up(); }
-                Text {
-                    text: "↑";
-                    font-size: 18px;
-                    color: Theme.current.text_settings;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-
-            AddonIconButton {
-                roomy: true;
-                name: @tr("Move down");
-                focused: root.kb_active && root.kb_focused_row && root.kb_col == 6;
-                clicked => { root.move_down(); }
-                Text {
-                    text: "↓";
-                    font-size: 18px;
-                    color: Theme.current.text_settings;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
+            Rectangle {
+                width: 44px; height: 48px;
+                ToggleSwitch { y: (parent.height - self.height)/2; checked: root.on; focused: root.kb_active && root.kb_focused_row && root.kb_col == 0; toggled => { root.toggled(self.checked); } }
             }
         }
-
-        // Row 2: actions, in keyboard-column order.
+        HorizontalLayout {
+            spacing: 8px; alignment: end;
+            if root.has_config: AddonIconButton {
+                name: @tr("Configure"); focused: root.kb_active && root.kb_focused_row && root.kb_col == 1;
+                clicked => { root.configure(); }
+                IcSettingsGear { x:11px; y:11px; width:22px; height:22px; fill:Theme.current.text_settings; }
+            }
+            AddonIconButton {
+                name: @tr("Refresh"); focused: root.kb_active && root.kb_focused_row && root.kb_col == 3;
+                clicked => { root.refresh(); }
+                IcSync { x:11px; y:11px; width:22px; height:22px; fill:Theme.current.text_settings; }
+            }
+            AddonIconButton {
+                name: @tr("Move up"); focused: root.kb_active && root.kb_focused_row && root.kb_col == 5;
+                clicked => { root.move_up(); }
+                Text { text: "↑"; font-size:18px; color:Theme.current.text_settings; horizontal-alignment:center; vertical-alignment:center; }
+            }
+            AddonIconButton {
+                name: @tr("Move down"); focused: root.kb_active && root.kb_focused_row && root.kb_col == 6;
+                clicked => { root.move_down(); }
+                Text { text: "↓"; font-size:18px; color:Theme.current.text_settings; horizontal-alignment:center; vertical-alignment:center; }
+            }
+        }
         HorizontalLayout {
             spacing: 8px;
-            alignment: start;
-
-            if root.has_config: AddonIconButton {
-                roomy: true;
-                name: @tr("Configure");
-                focused: root.kb_active && root.kb_focused_row && root.kb_col == 1;
-                clicked => { root.configure(); }
-                IcSettingsGear {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    width: 22px;
-                    height: 22px;
-                    fill: Theme.current.text_settings;
-                }
+            addon_copy := Rectangle {
+                horizontal-stretch: 1; min-width: 0px; height: 44px;
+                border-radius: 12px; border-width: 1px;
+                border-color: root.kb_active && root.kb_focused_row && root.kb_col == 2 ? Theme.current.focus_ring : Theme.current.border_overlay;
+                background: copy_touch.has-hover ? Theme.current.settings_control_hover : Theme.current.settings_control;
+                accessible-role: button; accessible-label: @tr("Copy link");
+                forward-focus: copy_focus;
+                IcLink { x:12px; y:12px; width:20px; height:20px; fill:Theme.current.accent_soft; }
+                Text { x:42px; width:Math.max(0px,parent.width - 66px); height:100%; text:@tr("Copy link"); color:Theme.current.text_bright; font-size:13px; vertical-alignment:center; overflow:elide; }
+                IcChevronRight { x:parent.width - 26px; y:13px; width:18px; height:18px; fill:Theme.current.text_secondary; }
+                copy_focus := FocusScope { key-pressed(e) => { if e.text == Key.Return || e.text == " " {root.copy_link();accept} else {reject} } }
+                copy_touch := TouchArea { mouse-cursor:pointer; clicked => {copy_focus.focus();root.copy_link();} }
             }
-
-            PillButton {
-                label: @tr("Copy link");
-                roomy: true;
-                compact: true;
-                focused: root.kb_active && root.kb_focused_row && root.kb_col == 2;
-                clicked => { root.copy_link(); }
-            }
-
             AddonIconButton {
-                roomy: true;
-                name: @tr("Refresh");
-                focused: root.kb_active && root.kb_focused_row && root.kb_col == 3;
-                clicked => { root.refresh(); }
-                IcSync {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    width: 22px;
-                    height: 22px;
-                    fill: Theme.current.text_settings;
-                }
-            }
-
-            AddonIconButton {
-                roomy: true;
-                name: @tr("Remove"); destructive: true;
-                focused: root.kb_active && root.kb_focused_row && root.kb_col == 4;
-                clicked => { root.remove(); }
-                IcDelete {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    width: 22px;
-                    height: 22px;
-                    fill: Theme.current.text_settings;
-                }
+                name:@tr("Remove"); destructive:true; focused: root.kb_active && root.kb_focused_row && root.kb_col == 4;
+                clicked => {root.remove();}
+                IcDelete {x:11px;y:11px;width:22px;height:22px;fill:Theme.current.text_destructive;}
             }
         }
     }
@@ -583,6 +531,7 @@ export component SectionHeader inherits HorizontalLayout {
 // One setting row: title + description on the left, any control(s) after.
 // Rows share a solid card surface and separate with inset rules.
 export component SettingsRow inherits Rectangle {
+    min-width: 0px;
     in property <string> setting-key: "";
     in property <string> row-title: "";
     in property <string> row-desc: "";
@@ -604,6 +553,20 @@ export component SettingsRow inherits Rectangle {
     property <length> text-width: root.stack-controls
     ? root.inner-width
     : root.side-text-width;
+    property <bool> inline-badge: root.setting-key != ""
+        && title_natural.preferred-width + badge_natural.preferred-width + 34px + 8px <= root.text-width;
+    // Natural text sizes decide badge placement without widening the row.
+    Rectangle {
+        width: 0px;
+        height: 0px; clip: true;
+        title_natural := Text { width: 0px; height: 0px; text: root.row-title; font-size: 16px; font-weight: 600; }
+        badge_natural := Text {
+            width: 0px; height: 0px;
+            text: SettingsSync.rows[SettingsSync.lookup(root.setting-key)].status == 1 ? @tr("Synced")
+                : SettingsSync.rows[SettingsSync.lookup(root.setting-key)].status == 2 ? @tr("This device (overridden)") : @tr("This device");
+            font-size: 11px; font-weight: 600;
+        }
+    }
     property <length> text-height: measure_col.preferred-height;
 
     // Keep at least 150px for a readable text column. Rows whose controls
@@ -630,18 +593,24 @@ export component SettingsRow inherits Rectangle {
         alignment: center;
         spacing: 3px;
 
-        Text {
-            text: row-title;
-            font-size: 16px;
-            font-weight: 600;
-            color: Theme.current.text_bright;
-            // min-width: 0 lets the column shrink past a long unbreakable token
-            // (an addon URL, a slug) without widening the settings page.
-            min-width: 0px;
-            wrap: word-wrap;
+        title_line := Rectangle {
+            height: Math.max(title_text.preferred-height, root.inline-badge ? 26px : 0px)
+                + (root.setting-key != "" && !root.inline-badge ? 29px : 0px);
+            title_text := Text {
+                x: 0px;
+                text: root.row-title; font-size: 16px; font-weight: 600;
+                color: Theme.current.text_bright; wrap: word-wrap; min-width: 0px;
+                width: root.inline-badge ? title_natural.preferred-width : parent.width;
+                height: self.preferred-height;
+                y: root.inline-badge ? (parent.height - self.height)/2 : 0px;
+            }
+            if root.setting-key != "": scope_badge := SettingSyncBadge {
+                setting_key: root.setting-key; setting_title: root.row-title;
+                width: Math.min(self.preferred-width, root.text-width);
+                x: root.inline-badge ? title_natural.preferred-width + 8px : 0px;
+                y: root.inline-badge ? (parent.height - self.height)/2 : title_text.preferred-height + 3px;
+            }
         }
-
-        if root.setting-key != "": SettingSyncBadge { setting_key: root.setting-key; setting_title: root.row-title; max-width: root.text-width; }
 
         if row-desc != "": Text {
             text: row-desc;
@@ -683,15 +652,7 @@ export component SettingsRow inherits Rectangle {
             width: title_col.width;
             spacing: 3px;
 
-            Text {
-                text: row-title;
-                font-size: 16px;
-                font-weight: 600;
-                wrap: word-wrap;
-                min-width: 0px;
-            }
-
-            if root.setting-key != "": Rectangle { height: 26px; }
+            Rectangle { height: title_line.height; }
 
             if row-desc != "": Text {
                 text: row-desc;

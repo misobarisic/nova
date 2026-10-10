@@ -36,10 +36,12 @@ async fn settle() {
 fn row(name: &str, url: &str) -> nova::AddonRow {
     nova::AddonRow {
         label: name.into(),
+        initial: name.chars().next().unwrap().to_string().into(),
         url: url.into(),
         enabled: false,
         config_url: SharedString::default(),
         capabilities: SharedString::default(),
+        ..Default::default()
     }
 }
 

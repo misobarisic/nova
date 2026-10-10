@@ -348,7 +348,7 @@ pub(crate) fn sort_by_order(current: Vec<String>, order: &[String]) -> Vec<Strin
 
 /// `CacheSettings` fields that are never synced: device-specific
 /// (`android_hwdec`, `player_external`, `desktop_external_app`,
-/// `episode_start_behavior`, `playback_speed`) or local-only
+/// `playback_speed`) or local-only
 /// (`rewrite_existing`);
 /// `categories` sync as their own domain so concurrent additions union.
 const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
@@ -356,7 +356,6 @@ const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
     "player_external",
     "desktop_external_app",
     "playback_speed",
-    "episode_start_behavior",
     "android_auto_continue",
     "sync_overrides",
     "rewrite_existing",
@@ -1713,6 +1712,30 @@ mod tests {
             status.last_error = Some("boom".into());
             assert_eq!(sync_status_text(&status), "Last sync failed: boom");
         });
+    }
+
+    #[test]
+    fn episode_start_behavior_syncs_as_an_independent_setting() {
+        let local = CacheSettings {
+            episode_start_behavior: nova_config::EpisodeStartBehavior::Ask,
+            ..Default::default()
+        };
+        let fields: HashMap<_, _> = settings_fields(&local)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert_eq!(
+            fields.get("episode_start_behavior").map(String::as_str),
+            Some("\"Ask\"")
+        );
+        let merged = merge_settings_fields(
+            &local,
+            &[("episode_start_behavior".into(), "\"StartOver\"".into())],
+        );
+        assert_eq!(
+            merged.episode_start_behavior,
+            nova_config::EpisodeStartBehavior::StartOver
+        );
     }
 
     #[test]

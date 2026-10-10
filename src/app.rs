@@ -252,6 +252,8 @@ struct HomeCatalogGroup {
 #[derive(Default)]
 struct Shared {
     installed: Vec<Installed>,
+    /// In-flight and failed addon logo URLs; successes live in the image cache.
+    addon_logo_requested: std::collections::HashSet<String>,
     chosen_addon: usize,
     type_defs: Vec<TypeDef>,
     chosen_type: usize,

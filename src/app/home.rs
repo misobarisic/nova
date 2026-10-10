@@ -307,7 +307,17 @@ fn home_showcase_sources(state: &Shared) -> Vec<HomeCatalogSource> {
 /// All selected poster-rail sources, including unavailable addons so their
 /// local cached results remain visible while a manifest cannot be fetched.
 fn home_catalog_row_sources(state: &Shared) -> Vec<HomeCatalogSource> {
-    state.cache_settings.home_addon_sources(true)
+    state
+        .cache_settings
+        .home_addon_sources(true)
+        .into_iter()
+        .filter(|source| {
+            state
+                .installed
+                .iter()
+                .any(|addon| addon.url == source.addon_url && addon.enabled)
+        })
+        .collect()
 }
 
 fn home_catalog_row_groups(
@@ -1596,19 +1606,11 @@ impl Bridge {
                     .get(&progress_map_key(&e.id, &v.id))
                     .is_some_and(|p| p.watched)
             };
-            let (future, available, available_watched) =
-                upcoming_tally(&episodes, is_watched, today);
-            // Caught up (something actually watched, nothing available
-            // left) and still waiting on unaired episodes.
-            if future.is_empty() || available == 0 || available_watched < available {
-                continue;
-            }
-            for (i, days) in future {
-                let v = &episodes[i];
+            if let Some((i, days)) = next_upcoming_episode(&episodes, is_watched, today) {
                 upcoming.push(UpcomingEntry {
                     series_id: e.id.clone(),
                     type_: e.type_.clone(),
-                    episode_id: v.id.clone(),
+                    episode_id: episodes[i].id.clone(),
                     air_days: days,
                 });
             }
@@ -2234,6 +2236,26 @@ fn cal_cells(
         .collect()
 }
 
+// Upcoming represents a series once, using its nearest announced episode.
+// Catalog episode order is not guaranteed to match the release dates.
+fn next_upcoming_episode(
+    episodes: &[Video],
+    watched: impl Fn(&Video) -> bool,
+    today: i64,
+) -> Option<(usize, i64)> {
+    let (future, available, available_watched) = upcoming_tally(episodes, watched, today);
+    if available == 0 || available_watched < available {
+        return None;
+    }
+    future.into_iter().min_by_key(|(index, days)| {
+        (
+            *days,
+            episodes[*index].season.unwrap_or(0),
+            episodes[*index].episode.unwrap_or(0),
+        )
+    })
+}
+
 /// Which badge a Continue Watching card gets: 0 = resume (no badge — the
 /// progress rail shows it), 1 = "Next up" (still working through the
 /// series: older dated, released episodes unwatched), 2 = "New Episode"
@@ -2302,6 +2324,54 @@ pub(crate) fn write_continue_hidden(map: &HashMap<String, u64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upcoming_selects_only_the_nearest_episode_of_a_caught_up_series() {
+        let episodes: Vec<Video> = serde_json::from_value(serde_json::json!([
+            {"id":"later", "released":"2026-10-20", "season":1, "episode":3},
+            {"id":"aired", "released":"2026-10-01", "season":1, "episode":1},
+            {"id":"next", "released":"2026-10-11", "season":1, "episode":2}
+        ]))
+        .unwrap();
+        let today = days_from_civil(2026, 10, 10);
+        assert_eq!(
+            next_upcoming_episode(&episodes, |v| v.id == "aired", today)
+                .map(|(i, _)| episodes[i].id.as_str()),
+            Some("next")
+        );
+        assert!(next_upcoming_episode(&episodes, |_| false, today).is_none());
+    }
+
+    #[test]
+    fn home_sources_drop_disabled_and_removed_addons_but_keep_unavailable_installs() {
+        let source = showcase_source("popular", "");
+        let mut state = Shared::default();
+        state.cache_settings.home_catalog_sources = vec![source.clone()];
+        state.cache_settings.home_rows = Some(vec![nova_config::HomeRow {
+            source: HomeRowSource::Addon(source.clone()),
+            enabled: true,
+        }]);
+        state.installed = vec![Installed {
+            url: source.addon_url.clone(),
+            label: "Fixture".into(),
+            enabled: true,
+            configure_ok: None,
+            available: false,
+            generation: 1,
+            manifest: serde_json::from_value(
+                serde_json::json!({"id":"fixture","name":"Fixture","version":"1"}),
+            )
+            .unwrap(),
+        }];
+        assert_eq!(home_showcase_sources(&state), vec![source.clone()]);
+        assert_eq!(home_catalog_row_sources(&state), vec![source]);
+        state.installed[0].enabled = false;
+        assert!(home_showcase_sources(&state).is_empty());
+        assert!(home_catalog_row_sources(&state).is_empty());
+        state.installed.clear();
+        assert!(home_showcase_sources(&state).is_empty());
+        assert!(home_catalog_row_sources(&state).is_empty());
+    }
 
     #[test]
     fn home_card_artwork_respects_episode_availability_and_spoiler_preference() {

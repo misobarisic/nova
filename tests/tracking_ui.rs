@@ -51,7 +51,7 @@ async fn click(app: &nova::AppWindow, label: &str) {
         }
         // Slint's queries omit controls fully clipped by the viewport.
         // Reveal the next actions in a long expanded tracking card first.
-        let Some(scroll) = ElementHandle::find_by_element_id(app, "TrackingPanel::scroll").next()
+        let Some(scroll) = ElementHandle::find_by_element_id(app, "DetailPage::det_scroll").next()
         else {
             break;
         };
@@ -74,7 +74,7 @@ async fn click(app: &nova::AppWindow, label: &str) {
     }
     let mut target = target.unwrap_or_else(|| panic!("missing action {label}"));
     for _ in 0..12 {
-        let Some(scroll) = ElementHandle::find_by_element_id(app, "TrackingPanel::scroll").next()
+        let Some(scroll) = ElementHandle::find_by_element_id(app, "DetailPage::det_scroll").next()
         else {
             break;
         };
@@ -328,6 +328,7 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
             vec![(1, String::new())],
             "request suggestions for the displayed service"
         );
+        click(&app, "Suggested anime release").await;
         assert!(
             ElementHandle::find_by_accessible_label(
                 &app,
@@ -336,7 +337,6 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
             .next()
             .is_some()
         );
-        click(&app, "Suggested anime release").await;
         assert_eq!(*picks.borrow(), vec![0]);
         assert_eq!(
             confirms.get(),
@@ -392,7 +392,7 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
             app.window().set_size(slint::PhysicalSize::new(width, 800));
             settle().await;
             check_width(&app, &f);
-            let scroll = ElementHandle::find_by_element_id(&app, "TrackingPanel::scroll")
+            let scroll = ElementHandle::find_by_element_id(&app, "DetailPage::det_scroll")
                 .next()
                 .unwrap();
             let p = scroll.absolute_position();
@@ -448,7 +448,7 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
             &("proposal-2".to_string(), true)
         );
         // Reveal the first release again after checking the final action card.
-        let scroll = ElementHandle::find_by_element_id(&app, "TrackingPanel::scroll")
+        let scroll = ElementHandle::find_by_element_id(&app, "DetailPage::det_scroll")
             .next()
             .unwrap();
         let p = scroll.absolute_position();

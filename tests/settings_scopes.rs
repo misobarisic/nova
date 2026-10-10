@@ -85,6 +85,26 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
         settle(&app);
         let scope = badge(&app, "quality");
         assert_eq!(scope.accessible_label().as_deref(), Some("Synced"));
+        if width == 1280 {
+            let badge_position = scope.absolute_position();
+            let badge_size = scope.size();
+            assert!(
+                ElementHandle::find_by_accessible_label(&app, "Quality").any(|title| {
+                    let position = title.absolute_position();
+                    let size = title.size();
+                    position.x + size.width <= badge_position.x - 7.5
+                        && (position.y + size.height / 2.0
+                            - badge_position.y
+                            - badge_size.height / 2.0)
+                            .abs()
+                            < 0.5
+                }),
+                "a roomy title row must place Synced inline; badge at {badge_position:?} size {badge_size:?}; titles {:?}",
+                ElementHandle::find_by_accessible_label(&app, "Quality")
+                    .map(|title| (title.absolute_position(), title.size()))
+                    .collect::<Vec<_>>()
+            );
+        }
         scope.mock_single_click(slint::platform::PointerEventButton::Left);
         settle(&app);
         assert!(app.global::<nova::SettingsSync>().get_open());

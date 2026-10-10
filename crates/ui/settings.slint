@@ -1990,134 +1990,14 @@ export component SettingsPage {
                                                 }
                                             }
 
-                                            if !root.narrow: VerticalLayout {
-                                                spacing: 0px;
-                                                for row[i] in root.addon_rows: SettingsRow {
-                                                    tinted: Math.mod(i, 2) == 1;
-                                                    row-title: row.label;
-                                                    row-desc: row.capabilities;
-                                                    // The install URL stays behind Copy link.
-
-                                                    // Wide: text pill + icon actions on one
-                                                    // line, in keyboard-column order
-                                                    // (0 toggle, 1 Configure, 2 Copy link,
-                                                    // 3 Refresh, 4 Remove, 5 move up,
-                                                    // 6 move down — same sequence as the
-                                                    // narrow card below). Every control is
-                                                    // 32px tall so the row stays aligned.
-                                                    if !root.narrow: HorizontalLayout {
-                                                        spacing: 12px;
-
-                                                        KbMark { on: root.kb_zone == 2 && root.kb_ar == i; active: root.kb_active; }
-                                                        // Mirror the click back into the model so the
-                                                        // switch reflects it before the backend refresh
-                                                        // (which is the source of truth).
-                                                        ToggleSwitch {
-                                                            name: row.label;
-                                                            checked: row.enabled;
-                                                            focused: root.kb_zone == 2 && root.kb_ar == i && root.kb_ac == 0 && root.kb_active;
-                                                            toggled => {
-                                                                root.addon_rows[i].enabled = self.checked;
-                                                                root.kb_active = SettingsStyle.keyboard-mode;
-                                                                root.kb_zone = 2;
-                                                                root.kb_ar = i;
-                                                                root.kb_ac = 0;
-                                                                root.addon_toggled(i);
-                                                            }
-                                                        }
-
-                                                        // Opens the addon's web config page
-                                                        // (<addon base>/configure) in a browser.
-                                                        if row.config_url != "": AddonIconButton {
-                                                            name: @tr("Configure");
-                                                            focused: root.kb_zone == 2 && root.kb_ar == i && root.kb_ac == 1 && root.kb_active;
-                                                            clicked => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ar = i; root.kb_ac = 1; root.addon_configure(row.config_url); }
-                                                            IcSettingsGear {
-                                                                x: (parent.width - self.width) / 2;
-                                                                y: (parent.height - self.height) / 2;
-                                                                width: 22px;
-                                                                height: 22px;
-                                                                fill: Theme.current.text_settings;
-                                                            }
-                                                        }
-
-                                                        // The install URL, kept out of the row
-                                                        // text (see `row-desc` above).
-                                                        PillButton {
-                                                            label: @tr("Copy link");
-                                                            roomy: true;
-                                                            compact: true;
-                                                            focused: root.kb_zone == 2 && root.kb_ar == i && root.kb_ac == 2 && root.kb_active;
-                                                            clicked => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ar = i; root.kb_ac = 2; root.addon_copy_link(row.url); }
-                                                        }
-
-                                                        // Re-fetches manifest.json and refreshes
-                                                        // all stored metadata for this addon.
-                                                        AddonIconButton {
-                                                            name: @tr("Refresh");
-                                                            focused: root.kb_zone == 2 && root.kb_ar == i && root.kb_ac == 3 && root.kb_active;
-                                                            clicked => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ar = i; root.kb_ac = 3; root.addon_refresh(i); }
-                                                            IcSync {
-                                                                x: (parent.width - self.width) / 2;
-                                                                y: (parent.height - self.height) / 2;
-                                                                width: 22px;
-                                                                height: 22px;
-                                                                fill: Theme.current.text_settings;
-                                                            }
-                                                        }
-
-                                                        AddonIconButton {
-                                                            name: @tr("Remove"); destructive: true;
-                                                            focused: root.kb_zone == 2 && root.kb_ar == i && root.kb_ac == 4 && root.kb_active;
-                                                            clicked => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ar = i; root.kb_ac = 4; root.addon_remove(i); }
-                                                            IcDelete {
-                                                                x: (parent.width - self.width) / 2;
-                                                                y: (parent.height - self.height) / 2;
-                                                                width: 22px;
-                                                                height: 22px;
-                                                                fill: Theme.current.text_settings;
-                                                            }
-                                                        }
-
-                                                        AddonIconButton {
-                                                            name: @tr("Move up");
-                                                            focused: root.kb_zone == 2 && root.kb_ar == i && root.kb_ac == 5 && root.kb_active;
-                                                            clicked => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ac = 5; root.addon_move_up(i); root.kb_ar = Math.max(0, i - 1); }
-                                                            Text {
-                                                                text: "↑";
-                                                                font-size: 18px;
-                                                                color: Theme.current.text_settings;
-                                                                horizontal-alignment: center;
-                                                                vertical-alignment: center;
-                                                            }
-                                                        }
-
-                                                        AddonIconButton {
-                                                            name: @tr("Move down");
-                                                            focused: root.kb_zone == 2 && root.kb_ar == i && root.kb_ac == 6 && root.kb_active;
-                                                            clicked => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ac = 6; root.addon_move_down(i); root.kb_ar = Math.min(root.addon_rows.length - 1, i + 1); }
-                                                            Text {
-                                                                text: "↓";
-                                                                font-size: 18px;
-                                                                color: Theme.current.text_settings;
-                                                                horizontal-alignment: center;
-                                                                vertical-alignment: center;
-                                                            }
-                                                        }
-                                                    }
-
-                                                }
-                                            }
-
-                                            // Narrow: the name owns the first line (toggle
-                                            // + title + move arrows), the remaining actions
-                                            // the second line underneath — see AddonRowCard
-                                            // (same keyboard-column order as the wide row).
-                                            if root.narrow: VerticalLayout {
-                                                spacing: 0px;
+                                            VerticalLayout {
+                                                spacing: 12px;
                                                 for row[i] in root.addon_rows: AddonRowCard {
                                                     tinted: Math.mod(i, 2) == 1;
-                                                    title: row.capabilities == "" ? row.label : row.label + " · " + row.capabilities;
+                                                    title: row.label;
+                                                    caption: row.capabilities;
+                                                    logo: row.logo;
+                                                    initial: row.initial;
                                                     on: row.enabled;
                                                     has_config: row.config_url != "";
                                                     kb_focused_row: root.kb_zone == 2 && root.kb_ar == i;

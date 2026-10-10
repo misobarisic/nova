@@ -1106,12 +1106,12 @@ impl Bridge {
         }
 
         if has_query {
-            let query = text.trim().to_string();
+            let query = text.to_string();
             let bridge = self.clone();
             slint::Timer::single_shot(Duration::from_millis(350), move || {
                 let current = bridge.shared.lock().unwrap().search_generation == generation;
                 if current {
-                    bridge.submit_search(&query);
+                    bridge.start_search(&query, false);
                 }
             });
         }
@@ -1143,7 +1143,11 @@ impl Bridge {
         };
 
         if let Some(app) = self.app() {
-            app.set_search_text(SharedString::from(&trimmed));
+            // Debounced requests must not rewrite an editor whose trailing
+            // space is waiting for the next word (especially on Windows).
+            if focus_search {
+                app.set_search_text(SharedString::from(text));
+            }
             app.set_discover_search_animate_results(true);
             app.set_search_results(Rc::new(VecModel::<MediaCard>::from(vec![])).into());
             app.set_discover_search_open(true);
@@ -2340,6 +2344,66 @@ pub(super) fn catalog_genres(catalog: &addons::Catalog) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debounced_search_preserves_a_space_until_the_next_word() {
+        const CHILD: &str = "NOVA_TEST_SEARCH_SPACE_CHILD";
+        let Ok(root) = std::env::var(CHILD) else {
+            let root =
+                std::env::temp_dir().join(format!("nova-search-space-{}", std::process::id()));
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "app::catalog::tests::debounced_search_preserves_a_space_until_the_next_word",
+                    "--nocapture",
+                ])
+                .env(CHILD, &root)
+                .output()
+                .unwrap();
+            let _ = std::fs::remove_dir_all(&root);
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        app.window().show().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let downloads = DownloadCoordinator::new(root.join("downloads"));
+        #[cfg(feature = "desktop")]
+        let bridge = {
+            let (hi, _) = mpsc::channel();
+            let (lo, _) = mpsc::channel();
+            Bridge::new(
+                app.as_weak(),
+                PosterTx { hi, lo },
+                Arc::new(Mutex::new(PosterStore::new(1))),
+                Arc::new(AtomicU64::new(0)),
+                player,
+                downloads,
+            )
+        };
+        #[cfg(not(feature = "desktop"))]
+        let bridge = Bridge::new(
+            app.as_weak(),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            downloads,
+        );
+        for input in ["black ", "black clover"] {
+            app.set_search_text(input.into());
+            bridge.search_edited(input);
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(400));
+            assert_eq!(app.get_search_text(), input);
+            assert_eq!(bridge.shared.lock().unwrap().search, input.trim());
+        }
+    }
 
     #[test]
     fn library_metadata_retries_follow_inventory_and_coalesce_pending_work() {

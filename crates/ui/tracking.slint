@@ -4,7 +4,7 @@ import { ScrollView } from "scrollview.slint";
 import { PillButton, ToggleSwitch, SettingsRow, SettingsInput } from "settings-controls.slint";
 import { SettingSyncBadge } from "settings-sync.slint";
 import { Dropdown } from "dropdown.slint";
-import { IcClose, IcChevronRight, IcSync, IcMyAnimeList, IcAniList } from "icons.slint";
+import { IcClose, IcChevronRight, IcSync, IcMyAnimeList, IcAniList, IcEdit, IcOpenInNew, IcHistory, IcDelete, IcInfo, IcTag } from "icons.slint";
 import { Anim } from "anim.slint";
 import { TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow } from "types.slint";
 
@@ -14,16 +14,17 @@ component TrackingButton inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> primary: false;
     in property <bool> quiet: false;
+    in property <bool> destructive: false;
     in property <bool> selected: false;
     in property <bool> compact: false;
     in property <int> icon: 0; // 1 close, 2 reload, 3 forward, 4 MAL, 5 AniList.
     callback clicked();
-    min-height: root.primary && !root.compact ? 52px : 44px;
+    min-height: root.icon >= 6 ? 68px : root.primary && !root.compact ? 52px : 44px;
     max-height: self.min-height;
     min-width: 0px;
     vertical-stretch: 0;
     border-radius: root.icon == 1 ? 22px : 12px;
-    background: root.primary ? Theme.current.primary_button : (root.selected ? Theme.current.selection_wash : root.quiet ? transparent : (touch.has-hover ? Theme.current.tracking_control_hover : Theme.current.tracking_control));
+    background: root.destructive ? Theme.current.destructive_control : root.primary ? Theme.current.primary_button : (root.selected ? Theme.current.selection_wash : root.quiet ? transparent : (touch.has-hover ? Theme.current.tracking_control_hover : Theme.current.tracking_control));
     opacity: root.enabled ? 1 : 0.45;
     border-width: focus.has-focus ? 2px : (root.quiet ? 0px : 1px);
     border-color: focus.has-focus || root.selected ? Theme.current.accent_vivid : Theme.current.border_overlay;
@@ -35,15 +36,21 @@ component TrackingButton inherits Rectangle {
         padding-left: root.icon == 1 ? 10px : 12px;
         padding-right: root.icon == 1 ? 10px : 12px;
         spacing: 8px;
-        alignment: center;
+        alignment: root.icon >= 6 ? start : center;
+        if root.icon == 6: Rectangle { width:20px; horizontal-stretch:0; IcEdit { y:(parent.height - self.height)/2; width:20px; height:20px; fill:Theme.current.text_bright; } }
+        if root.icon == 7: Rectangle { width:20px; horizontal-stretch:0; IcOpenInNew { y:(parent.height - self.height)/2; width:20px; height:20px; fill:Theme.current.text_bright; } }
+        if root.icon == 8: Rectangle { width:20px; horizontal-stretch:0; IcTag { y:(parent.height - self.height)/2; width:20px; height:20px; fill:Theme.current.text_bright; } }
+        if root.icon == 9: Rectangle { width:20px; horizontal-stretch:0; IcHistory { y:(parent.height - self.height)/2; width:20px; height:20px; fill:Theme.current.text_bright; } }
+        if root.icon == 10: Rectangle { width:20px; horizontal-stretch:0; IcDelete { y:(parent.height - self.height)/2; width:20px; height:20px; fill:Theme.current.text_destructive; } }
+        if root.icon == 11: Rectangle { width:20px; horizontal-stretch:0; IcInfo { y:(parent.height - self.height)/2; width:20px; height:20px; fill:Theme.current.text_bright; } }
         if root.icon == 1: Rectangle { width:24px; background:transparent; IcClose { y:(parent.height - self.height)/2; width:24px; height:24px; fill:Theme.current.text_hero_icon; } }
         if root.icon == 2: Rectangle { width:20px; background:transparent; IcSync { y:(parent.height - self.height)/2; width:20px; height:20px; fill:Theme.current.accent_vivid; } }
         if root.icon == 4: Rectangle { width:24px; background:transparent; IcMyAnimeList { y:(parent.height - self.height)/2; width:24px; height:24px; fill:#2e51a2; } }
         if root.icon == 5: Rectangle { width:20px; background:transparent; IcAniList { y:(parent.height - self.height)/2; width:20px; height:20px; fill:#02a9ff; } }
         if root.icon != 1: Text {
-            text: root.text; color: root.primary ? Theme.current.on_accent : Theme.current.text_bright;
-            font-size: root.primary ? 16px : 14px; font-weight: root.primary ? 600 : 500;
-            vertical-alignment: center; overflow: elide; min-width: 0px;
+            text: root.text; color: root.destructive ? Theme.current.text_destructive : root.primary ? Theme.current.on_accent : Theme.current.text_bright;
+            font-size: root.icon >= 6 ? 13px : root.primary ? 16px : 14px; font-weight: root.primary ? 600 : 500;
+            vertical-alignment: center; wrap: word-wrap; overflow: elide; min-width: 0px;
         }
         if root.icon == 3: Rectangle { width:18px; background:transparent; IcChevronRight { y:(parent.height - self.height)/2; width:18px; height:18px; fill:Theme.current.accent_vivid; } }
     }
@@ -226,18 +233,27 @@ component EntryEditor inherits Rectangle {
         }
         if !root.editing && root.more: VerticalLayout {
             spacing: 6px;
-            TrackingButton { text: @tr("Edit tracker entry"); clicked => {root.editing=true;} }
-            TrackingButton {text:@tr("Open on service");clicked => {root.action(root.entry.id,4);}}
-            TrackingButton {text:@tr("Restore automatic status and dates");clicked => {root.action(root.entry.id,5);}}
-            TrackingButton { text: @tr("Refresh / retry"); clicked => {root.action(root.entry.id,0);} }
-            TrackingButton { text: @tr("Edit alignment"); clicked => {root.action(root.entry.id,1);} }
-            TrackingButton { text: @tr("Apply Nova history"); clicked => {root.history_confirm=true;root.unlink_confirm=false;} }
+            HorizontalLayout {
+                spacing: 8px;
+                TrackingButton { text: @tr("Edit tracker entry"); icon:6; horizontal-stretch:1; clicked => {root.editing=true;} }
+                TrackingButton { text:@tr("Open on service"); icon:7; horizontal-stretch:1; clicked => {root.action(root.entry.id,4);} }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                TrackingButton { text:@tr("Restore automatic status and dates"); icon:2; horizontal-stretch:1; min-height:68px; clicked => {root.action(root.entry.id,5);} }
+                TrackingButton { text: @tr("Refresh / retry"); icon:2; horizontal-stretch:1; min-height:68px; clicked => {root.action(root.entry.id,0);} }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                TrackingButton { text: @tr("Edit alignment"); icon:8; horizontal-stretch:1; clicked => {root.action(root.entry.id,1);} }
+                TrackingButton { text: @tr("Apply Nova history"); icon:9; horizontal-stretch:1; clicked => {root.history_confirm=true;root.unlink_confirm=false;} }
+            }
             if root.history_confirm: VerticalLayout {
                 Text {text:root.entry.history_preview; color:Theme.current.text_secondary; wrap:word-wrap; min-width:0;}
                 TrackingButton {text:@tr("Confirm history update"); clicked => {root.action(root.entry.id,2);root.history_confirm=false;}}
                 TrackingButton {text:@tr("Cancel"); clicked => {root.history_confirm=false;}}
             }
-            TrackingButton { text: @tr("Unlink"); clicked => {root.unlink_confirm=true;root.history_confirm=false;} }
+            TrackingButton { text: @tr("Unlink"); icon:10; destructive:true; clicked => {root.unlink_confirm=true;root.history_confirm=false;} }
             if root.unlink_confirm: VerticalLayout {
                 Text {text:@tr("Unlink this release? Unsent updates will be discarded when no other source uses it. An update already sent may finish.");color:Theme.current.text_secondary;wrap:word-wrap;min-width:0;}
                 TrackingButton {text:@tr("Confirm unlink");clicked => {root.action(root.entry.id,3);root.unlink_confirm=false;}}
@@ -303,7 +319,6 @@ export component TrackingPanel inherits Rectangle {
         // Adjust/search can remove the focused input. Keep a persistent
         // control focused so Android Back stays in the window capture chain.
         if root.open { panel_focus.focus(); }
-        scroll.content-y = 0px;
     }
     changed setup_revision => {
         root.include_history = false;
@@ -312,7 +327,6 @@ export component TrackingPanel inherits Rectangle {
     }
     changed manual_search => {
         if root.open { panel_focus.focus(); }
-        scroll.content-y = 0px;
     }
     init => { panel_focus.focus(); }
     in property <int> focus_request;
@@ -328,9 +342,13 @@ export component TrackingPanel inherits Rectangle {
     callback assign(int, string);
     callback edit(string, string, int, string, bool, string, bool, string);
     callback action(string, int);
+    horizontal-stretch: 0;
+    preferred-width: 0px;
+    preferred-height: panel_layout.preferred-height;
+    max-width: 100000px;
     min-width: 0px;
     min-height: 0px;
-    vertical-stretch: 1;
+    vertical-stretch: 0;
     background: transparent;
 
     panel_focus := FocusScope {
@@ -342,7 +360,7 @@ export component TrackingPanel inherits Rectangle {
                 accept
             } else { reject }
         }
-        VerticalLayout {
+        panel_layout := VerticalLayout {
             spacing: root.compact ? 8px : root.wide ? 20px : 12px;
             padding-bottom: root.safe-bottom + (root.compact ? 8px : 12px);
             if !root.compact: HorizontalLayout {
@@ -405,20 +423,20 @@ export component TrackingPanel inherits Rectangle {
                     }
                 }
             }
-            scroll := Flickable {
+            scroll := Rectangle {
                 min-width: 0px;
-                min-height: 0px;
+                max-width: 100000px;
+                preferred-width: 0px;
                 horizontal-stretch: 1;
-                vertical-stretch: 1;
-                mouse-drag-pan-enabled: true;
-                content-width: self.width;
-                // Use the laid-out bottom marker: native text wrapping can make
-                // repeated entry cards taller than their layout size hint.
-                content-height: Math.max(self.height, content_end.y + content_end.height + 12px);
+                vertical-stretch: 0;
+                // Grow with the body; Detail owns all wheel and drag scrolling.
+                height: Math.max(tracking_body.preferred-height, content_end.y + content_end.height) + 24px;
                 tracking_body := VerticalLayout {
                     x: 0px;
                     y: 0px;
                     width: 100%;
+                    max-width: 100000px;
+                    preferred-width: 0px;
                     height: self.preferred-height;
                     spacing: 12px;
                     alignment: start;

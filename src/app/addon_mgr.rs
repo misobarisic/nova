@@ -453,6 +453,10 @@ impl Bridge {
         {
             let mut state = self.shared.lock().unwrap();
             state.refreshing.remove(&base);
+            // An explicit refresh may retry a logo that failed earlier.
+            if let Some(url) = manifest.logo.as_deref() {
+                state.addon_logo_requested.remove(url);
+            }
             let Some(pos) = state.installed.iter().position(|a| a.url == base) else {
                 return;
             };
@@ -665,10 +669,10 @@ impl Bridge {
         self.apply_home_catalog_rows();
         self.invalidate_home_showcase();
         self.invalidate_home_catalog_rows();
-        if app.get_show_home() {
-            self.ensure_home_showcase_loaded();
-            self.ensure_home_catalog_rows_loaded();
-        }
+        // Membership changes apply to cached Home content even while Settings
+        // is open, and generation guards reject the outgoing addon requests.
+        self.ensure_home_showcase_loaded();
+        self.ensure_home_catalog_rows_loaded();
 
         if load && has_grid_source {
             self.load_catalog();
@@ -778,6 +782,20 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
+        let logo_requests = {
+            let mut shared = self.shared.lock().unwrap();
+            let urls: std::collections::HashSet<String> = shared
+                .installed
+                .iter()
+                .filter_map(|addon| addon.manifest.logo.clone())
+                .filter(|url| {
+                    !url.is_empty() && nova_media::cache::decoded_cache_get(url).is_none()
+                })
+                .collect();
+            urls.into_iter()
+                .filter(|url| shared.addon_logo_requested.insert(url.clone()))
+                .collect::<Vec<_>>()
+        };
         let query = app.get_addon_search_text().trim().to_lowercase();
         let filter = app.get_addon_capability_filter();
         let rows = self
@@ -789,6 +807,22 @@ impl Bridge {
             .filter(|a| addon_matches(a, &query, filter))
             .map(|a| AddonRow {
                 label: SharedString::from(&a.label),
+                initial: a
+                    .label
+                    .trim_start()
+                    .chars()
+                    .next()
+                    .unwrap_or('?')
+                    .to_uppercase()
+                    .to_string()
+                    .into(),
+                logo: a
+                    .manifest
+                    .logo
+                    .as_deref()
+                    .and_then(nova_media::cache::decoded_cache_get)
+                    .map(Image::from_rgba8)
+                    .unwrap_or_default(),
                 url: SharedString::from(&a.url),
                 enabled: a.enabled,
                 config_url: SharedString::from(Self::addon_config_url(a)),
@@ -802,6 +836,23 @@ impl Bridge {
             })
             .collect::<Vec<_>>();
         app.set_addon_rows(Rc::new(VecModel::from(rows)).into());
+        for url in logo_requests {
+            let bridge = self.clone();
+            std::thread::spawn(move || {
+                let loaded = nova_media::cache::poster_pixels(&url).is_ok();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if loaded {
+                        bridge
+                            .shared
+                            .lock()
+                            .unwrap()
+                            .addon_logo_requested
+                            .remove(&url);
+                    }
+                    bridge.apply_addon_rows();
+                });
+            });
+        }
     }
 
     /// Settings → Addons: copy the addon's install URL. The row prints only the

@@ -1327,7 +1327,7 @@ export component DetailPage {
 
         // Fade both artwork and its black backing to the page canvas. Leaving
         // the backing opaque creates a black band above the coloured scrim.
-        property <float> backdrop_fade: root.detail_tab == 4 ? 0.9 : Math.min(1, Math.max(0, -det_scroll.content-y / ((root.backdrop_height - root.safe-top) * (root.narrow ? 0.643 : 0.703))));
+        property <float> backdrop_fade: Math.min(1, Math.max(0, -det_scroll.content-y / ((root.backdrop_height - root.safe-top) * (root.narrow ? 0.643 : 0.703))));
         Rectangle {
             x: 0px;
             y: 0px;
@@ -1580,9 +1580,7 @@ export component DetailPage {
             det_scroll := Flickable {
                 width: 100%;
                 min-height: 0px;
-                max-height: root.detail_tab == 4 ? 0px : 100000px;
-                visible: root.detail_tab != 4;
-                vertical-stretch: root.detail_tab == 4 ? 0 : 1;
+                vertical-stretch: 1;
                 // A raw Flickable, not a ScrollView (which does not expose
                 // the inner Flickable's `interactive`): the pill bar's axis
                 // lock flips exactly that (see `page_pan_enabled`). Panning
@@ -1801,6 +1799,48 @@ export component DetailPage {
                             min-width: 0px;
                             spacing: 10px;
                             alignment: start;
+
+                            if root.detail_tab == 4: Rectangle {
+                                width: 100%;
+                                height: tracking_panel.preferred-height;
+                tracking_panel := TrackingPanel {
+                    open:root.tracking_open;
+                    compact:false;
+                    width:Math.min(1040px, parent.width);
+                    height:self.preferred-height;
+                    focus_request:root.tracking_focus_request;
+                    back_to_details() => { root.tracking_close(); }
+                    safe-bottom:root.safe-bottom;
+                    links:root.tracking_links;
+                    candidates:root.tracking_candidates;
+                    selected_service <=> root.tracking_service;
+                    setup:root.tracking_setup;
+                    setup_revision:root.tracking_setup_revision;
+                    setup_summary:root.tracking_setup_summary;
+                    setup_unmapped:root.tracking_setup_unmapped;
+                    setup_active:root.tracking_setup_active;
+                    range_first:root.tracking_range_first;
+                    range_last:root.tracking_range_last;
+                    range_start:root.tracking_range_start;
+
+                    preview_rows:root.tracking_preview_rows;
+                    mapping_rows:root.tracking_mapping_rows;
+                    notice:root.tracking_notice;
+                    candidate_title:root.tracking_candidate_title;
+                    busy:root.tracking_busy;
+                    can_confirm:root.tracking_can_confirm;
+                    search(a0,a1) => {root.tracking_search(a0,a1);}
+                    pick(a0) => {root.tracking_pick(a0);}
+                    preview(a0,a1,a2) => {root.tracking_preview(a0,a1,a2);}
+                    confirm() => {root.tracking_confirm();}
+                    accept_setup(revision,history) => {root.tracking_accept_setup(revision,history);}
+                    adjust_setup(index) => {root.tracking_adjust_setup(index);}
+                    cancel_adjust() => {root.tracking_cancel_adjust();}
+                    assign(row,value) => {root.tracking_assign(row,value);}
+                    edit(a0,a1,a2,a3,a4,a5,a6,a7) => {root.tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7);}
+                    action(a0,a1) => {root.tracking_action(a0,a1);}
+                }
+                            }
 
                             // ---- Overview tab -------------------------
                             // start-aligned: never share leftover height
@@ -2765,69 +2805,7 @@ export component DetailPage {
                     }
                 }
             }
-            if root.detail_tab == 4: HorizontalLayout {
-                padding-left: (root.narrow ? 20px : 64px) + root.safe-left;
-                padding-right: (root.narrow ? 20px : 64px) + root.safe-right;
-                alignment: start;
-                min-width: 0px;
-                VerticalLayout {
-                    width: Math.min(1040px, root.width - (root.narrow ? 40px : 128px) - root.safe-left - root.safe-right);
-                    spacing: 16px;
-                if root.height >= 600px: HorizontalLayout {
-                    height: root.narrow ? 54px : 72px;
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 4px;
-                        Text { text: root.selected_title; color: Theme.current.text_bright; font-size: root.narrow ? 20px : 28px; font-weight: 700; overflow: elide; min-width: 0px; }
-                        Text { text: root.selected_year; color: Theme.current.text_detail_metadata; font-size: 13px; overflow: elide; min-width: 0px; }
-                    }
-                }
-                DetailTabs {
-                    narrow: root.narrow;
-                    tracking_visible: root.in_library;
-                    selected: root.detail_tab;
-                    kb_active: root.kb_active;
-                    focused: root.kb_zone == 1;
-                    kb_tab: root.kb_tab;
-                    picked(tab) => { root.kb_active = false; root.kb_tab = tab; root.detail_tab_picked(tab); }
-                }
-                tracking_panel := TrackingPanel {
-                    open:root.tracking_open;
-                    compact:root.height < 700px;
-                    focus_request:root.tracking_focus_request;
-                    back_to_details() => { root.tracking_close(); }
-                    safe-bottom:root.safe-bottom;
-                    links:root.tracking_links;
-                    candidates:root.tracking_candidates;
-                    selected_service <=> root.tracking_service;
-                    setup:root.tracking_setup;
-                    setup_revision:root.tracking_setup_revision;
-                    setup_summary:root.tracking_setup_summary;
-                    setup_unmapped:root.tracking_setup_unmapped;
-                    setup_active:root.tracking_setup_active;
-                    range_first:root.tracking_range_first;
-                    range_last:root.tracking_range_last;
-                    range_start:root.tracking_range_start;
 
-                    preview_rows:root.tracking_preview_rows;
-                    mapping_rows:root.tracking_mapping_rows;
-                    notice:root.tracking_notice;
-                    candidate_title:root.tracking_candidate_title;
-                    busy:root.tracking_busy;
-                    can_confirm:root.tracking_can_confirm;
-                    search(a0,a1) => {root.tracking_search(a0,a1);}
-                    pick(a0) => {root.tracking_pick(a0);}
-                    preview(a0,a1,a2) => {root.tracking_preview(a0,a1,a2);}
-                    confirm() => {root.tracking_confirm();}
-                    accept_setup(revision,history) => {root.tracking_accept_setup(revision,history);}
-                    adjust_setup(index) => {root.tracking_adjust_setup(index);}
-                    cancel_adjust() => {root.tracking_cancel_adjust();}
-                    assign(row,value) => {root.tracking_assign(row,value);}
-                    edit(a0,a1,a2,a3,a4,a5,a6,a7) => {root.tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7);}
-                    action(a0,a1) => {root.tracking_action(a0,a1);}
-                }
-                }
-            }
         }
 
         // Hold behind the pill-bar axis lock (see `filters_panned`): the

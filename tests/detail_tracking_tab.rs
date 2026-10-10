@@ -31,7 +31,7 @@ async fn settle() {
 }
 
 async fn scroll_to_end(app: &nova::AppWindow) {
-    let scroll = ElementHandle::find_by_element_id(app, "TrackingPanel::scroll")
+    let scroll = ElementHandle::find_by_element_id(app, "DetailPage::det_scroll")
         .next()
         .unwrap();
     let p = scroll.absolute_position();
@@ -46,6 +46,19 @@ async fn scroll_to_end(app: &nova::AppWindow) {
 }
 
 async fn click_tab(app: &nova::AppWindow, label: &str) {
+    // The tabs now scroll with the shared Detail hero.
+    let scroll = ElementHandle::find_by_element_id(app, "DetailPage::det_scroll")
+        .next()
+        .unwrap();
+    let p = scroll.absolute_position();
+    let size = scroll.size();
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(p.x + size.width / 2.0, p.y + size.height / 2.0),
+            delta_x: 0.0,
+            delta_y: 10_000.0,
+        });
+    settle().await;
     let label = label.to_string();
     let tabs = ElementHandle::find_by_element_type_name(app, "DetailTabs")
         .find(|e| e.size().height > 0.0 && e.absolute_position().y < 800.0)
@@ -127,7 +140,18 @@ fn tracking_is_a_detail_tab_with_reachable_confirmation() {
     slint::spawn_local(async move {
         let app = weak.upgrade().unwrap();
         settle().await;
+        let tabs_y = ElementHandle::find_by_element_type_name(&app, "DetailTabs")
+            .next()
+            .unwrap()
+            .absolute_position()
+            .y;
         click_tab(&app, "Tracking").await;
+        let tracking_tabs_y = ElementHandle::find_by_element_type_name(&app, "DetailTabs")
+            .next()
+            .unwrap()
+            .absolute_position()
+            .y;
+        assert!((tracking_tabs_y - tabs_y).abs() < 1.0, "Tracking preserves the shared hero height");
         assert_eq!(app.get_detail_tab(), 4);
         assert!(app.get_tracking_open());
         assert_eq!(app.get_tracking_return_tab(), 3);
@@ -185,10 +209,13 @@ fn tracking_is_a_detail_tab_with_reachable_confirmation() {
                 p.y >= 0.0 && p.y + size.height <= height as f32 + 1.0,
                 "action height at {width}x{height}: {p:?} {size:?}"
             );
-            let scroll = ElementHandle::find_by_element_id(&app, "TrackingPanel::scroll")
+            let scroll = ElementHandle::find_by_element_id(&app, "DetailPage::det_scroll")
                 .next()
                 .unwrap();
-            assert!(scroll.size().width <= 1040.0, "Tracking has a readable content width");
+            let body = ElementHandle::find_by_element_id(&app, "TrackingPanel::tracking_body")
+                .next()
+                .unwrap();
+            assert!(body.size().width <= 1040.0, "Tracking has a readable content width");
             assert!(
                 scroll.size().height >= 80.0,
                 "review viewport at {width}x{height}: {:?}",
@@ -232,11 +259,22 @@ fn tracking_is_a_detail_tab_with_reachable_confirmation() {
             *recorded_accepts.borrow(),
             vec![("season-2".to_string(), false)]
         );
-        ElementHandle::find_by_accessible_label(&app, "AniList")
+        let service = ElementHandle::find_by_accessible_label(&app, "AniList")
             .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
-            .unwrap()
-            .single_click(slint::platform::PointerEventButton::Left)
-            .await;
+            .unwrap();
+        let scroll = ElementHandle::find_by_element_id(&app, "DetailPage::det_scroll")
+            .next()
+            .unwrap();
+        let p = scroll.absolute_position();
+        let size = scroll.size();
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(p.x + size.width / 2.0, p.y + size.height / 2.0),
+                delta_x: 0.0,
+                delta_y: p.y + size.height / 2.0 - service.absolute_position().y - service.size().height / 2.0,
+            });
+        settle().await;
+        service.single_click(slint::platform::PointerEventButton::Left).await;
         settle().await;
         assert_eq!(*searches.borrow(), vec![(1, String::new())]);
         // A linked title can have several release cards. Its library actions
@@ -265,7 +303,7 @@ fn tracking_is_a_detail_tab_with_reachable_confirmation() {
             app.window()
                 .set_size(slint::PhysicalSize::new(width, height));
             settle().await;
-            let scroll = ElementHandle::find_by_element_id(&app, "TrackingPanel::scroll")
+            let scroll = ElementHandle::find_by_element_id(&app, "DetailPage::det_scroll")
                 .next()
                 .unwrap();
             assert!(scroll.size().height >= 80.0);

@@ -29,8 +29,10 @@ fn release(app: &nova::AppWindow, position: LogicalPosition) {
 }
 
 fn slider(app: &nova::AppWindow, id: i32, wide: bool) -> ElementHandle {
+    // Inline title badges make the wide Player page short enough to fit at
+    // 650px; keep this fixture shorter so the post-drag gesture can scroll.
     app.window()
-        .set_size(slint::PhysicalSize::new(if wide { 1600 } else { 560 }, 650));
+        .set_size(slint::PhysicalSize::new(if wide { 1600 } else { 560 }, 550));
     app.set_settings_selected_id(id);
     app.set_settings_detail_open(true);
     app.set_settings_scroll_y(0.0);
@@ -119,7 +121,13 @@ fn slider_drags_hold_page_scroll_and_release_it_afterwards() {
             assert!((app.get_settings_scroll_y() - before).abs() < 0.5);
 
             // A new vertical gesture on the page must work after release.
-            let from = LogicalPosition::new(if wide { 490.0 } else { 25.0 }, 480.0);
+            let viewport = ElementHandle::find_by_element_id(&app, "SettingsPage::set_scroll")
+                .next()
+                .unwrap();
+            let from = LogicalPosition::new(
+                viewport.absolute_position().x + 8.0,
+                viewport.absolute_position().y + viewport.size().height * 0.6,
+            );
             moved(&app, from);
             idle(16);
             press(&app, from);
@@ -140,7 +148,12 @@ fn slider_drags_hold_page_scroll_and_release_it_afterwards() {
             idle(50);
             assert!(
                 (app.get_settings_scroll_y() - before).abs() > 10.0,
-                "page scroll stayed locked: wide={wide}, section={id}"
+                "page scroll stayed locked: wide={wide}, section={id}, before={before}, after={}, viewport={:?}, slider={:?}",
+                app.get_settings_scroll_y(),
+                ElementHandle::find_by_element_id(&app, "SettingsPage::set_scroll")
+                    .map(|e| (e.absolute_position(), e.size()))
+                    .collect::<Vec<_>>(),
+                (p, size)
             );
 
             let track = slider(&app, id, wide);

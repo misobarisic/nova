@@ -68,6 +68,8 @@ export struct EpisodeRow {
 /// One installed addon shown in the Settings → Addons list.
 export struct AddonRow {
     label: string,
+    logo: image,
+    initial: string,
     /// Normalised install URL.
     url: string,
     /// Whether the addon is enabled (feeds Discover / streams). Disabled

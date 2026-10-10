@@ -50,6 +50,9 @@ fn row_controls(app: &nova::AppWindow) -> Vec<(String, Rect)> {
             out.push((format!("{kind} {name:?}"), r));
         }
     }
+    if let Some(copy) = ElementHandle::find_by_element_id(app, "AddonRowCard::addon_copy").next() {
+        out.push(("Copy link".into(), rect(&copy)));
+    }
     out
 }
 
@@ -77,12 +80,6 @@ fn inside(control: Rect, row: Rect) -> bool {
     cx >= rx - 0.5 && cy >= ry - 0.5 && cx + cw <= rx + rw + 0.5 && cy + ch <= ry + rh + 0.5
 }
 
-fn by_label(app: &nova::AppWindow, kind: &str, label: &str) -> Option<ElementHandle> {
-    ElementHandle::find_by_element_type_name(app, kind)
-        .into_iter()
-        .find(|e| e.accessible_label().map(|l| l == label).unwrap_or(false))
-}
-
 fn check(app: &nova::AppWindow, label: &str, failures: &Rc<RefCell<Vec<String>>>) {
     let controls = row_controls(app);
     if controls.len() < 7 {
@@ -103,53 +100,26 @@ fn check(app: &nova::AppWindow, label: &str, failures: &Rc<RefCell<Vec<String>>>
         }
     }
 
-    // The name shares its line with the arrows: find the title Text (wide,
-    // vertically aligned with the toggle) and require it to end where the
-    // move arrows begin and to stay above the action line.
-    let toggle = row_controls(app)
-        .into_iter()
+    // Identity text stays above the action bands and to the left of its toggle.
+    let title = ElementHandle::find_by_element_type_name(app, "Text")
+        .find(|element| element.accessible_label().as_deref() == Some("Cinemeta"));
+    let toggle = controls
+        .iter()
         .find(|(name, _)| name.starts_with("ToggleSwitch"));
-    let up = by_label(app, "AddonIconButton", "Move up");
-    if app.window().size().width < 700
-        && let (Some((_, t)), Some(up)) = (toggle, up)
-    {
-        let (ux, _, _, _) = rect(&up);
-        let band = (t.1, t.1 + t.3);
-        let title = ElementHandle::find_by_element_type_name(app, "Text")
-            .map(|e| rect(&e))
-            .find(|(x, y, w, h)| {
-                *w > 60.0
-                    && *x > t.0 + t.2
-                    && y + h / 2.0 >= band.0 - 4.0
-                    && y + h / 2.0 <= band.1 + 4.0
-            });
-        match title {
-            Some((x, y, w, h)) => {
-                if x + w > ux + 0.5 {
-                    failures.borrow_mut().push(format!(
-                        "{label}: addon name runs under the move arrows (title right {rx:.1}, arrows at {ux:.1})",
-                        rx = x + w,
-                    ));
-                }
-                // The action line is the lowest control band in the row:
-                // controls below the title band.
-                let actions_top = row_controls(app)
-                    .into_iter()
-                    .filter(|(_, r)| r.1 > band.1 - 4.0)
-                    .map(|(_, r)| r.1)
-                    .fold(f32::MAX, f32::min);
-                if actions_top.is_finite() && y + h > actions_top + 0.5 {
-                    failures.borrow_mut().push(format!(
-                        "{label}: addon name reaches into the action line (title bottom {:.1}, actions at {:.1})",
-                        y + h,
-                        actions_top
-                    ));
-                }
-            }
-            None => failures.borrow_mut().push(format!(
-                "{label}: DIAG: no title Text found on the toggle line"
-            )),
-        }
+    if let (Some(title), Some((_, toggle))) = (title, toggle) {
+        let (x, y, width, height) = rect(&title);
+        assert!(x + width <= toggle.0 + 0.5, "title must clear the toggle");
+        let title_row = row_of(app, rect(&title)).expect("title belongs to an addon card");
+        let actions_top = controls
+            .iter()
+            .filter(|(name, rect)| !name.starts_with("ToggleSwitch") && inside(*rect, title_row))
+            .map(|(_, rect)| rect.1)
+            .fold(f32::MAX, f32::min);
+        assert!(
+            y + height <= actions_top + 0.5,
+            "{label}: title bottom {} must clear actions at {actions_top}; controls {controls:?}",
+            y + height
+        );
     }
 }
 
@@ -169,10 +139,12 @@ fn addon_row_controls_fit_their_row() {
     app.set_addon_rows(
         Rc::new(VecModel::from(vec![nova::AddonRow {
             label: s("Cinemeta"),
+            initial: s("C"),
             capabilities: s(""),
             url: s("https://v3-cinemeta.strem.io/manifest.json"),
             enabled: true,
             config_url: s("https://v3-cinemeta.strem.io/configure"),
+            ..Default::default()
         }]))
         .into(),
     );
