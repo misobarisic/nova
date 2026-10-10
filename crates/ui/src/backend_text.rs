@@ -601,6 +601,21 @@ pub fn stream_episode_context(identifier: &str, title: &str) -> String {
     }
 }
 
+/// Decimal file-size units for addon size pills, e.g. `"1.1 GB"`.
+pub fn stream_size(bytes: u64) -> String {
+    const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
+    if bytes < 1000 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1000.0 && unit + 1 < UNITS.len() {
+        value /= 1000.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
+}
+
 /// `"12 streams from 3 add-ons."`.
 pub fn streams_found(streams: usize, addons: usize) -> String {
     if croatian() {

@@ -662,7 +662,7 @@ impl Bridge {
         app.set_modal_visible(true);
         app.set_modal_episodes(false);
         app.set_detail_deep_stream(false);
-        app.set_episode_context(SharedString::default());
+        apply_stream_episode_context(&app, None);
         app.set_season_names(Rc::new(VecModel::<SharedString>::from(vec![])).into());
         app.set_season_combo_idx(-1);
         app.set_season_cards(Rc::new(VecModel::<SeasonCard>::from(vec![])).into());

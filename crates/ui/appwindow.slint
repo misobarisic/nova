@@ -400,6 +400,8 @@ export component AppWindow inherits Window {
     in-out property <int> stream_page_start: 0;
     in-out property <int> stream_total: 0;
     in-out property <string> episode_context: "";
+    in-out property <string> stream_episode_number: "";
+    in-out property <string> stream_episode_title: "";
     in-out property <string> detail_watch_label: @tr("Start");
     // True while the streams view was entered directly (Home Continue
     // deep-link) without visiting the episode list: system back then closes
@@ -972,6 +974,8 @@ export component AppWindow inherits Window {
         episode_reveal_request: root.detail_episode_reveal_request;
         episode_total <=> root.episode_total;
         episode_context <=> root.episode_context;
+        stream_episode_number: root.stream_episode_number;
+        stream_episode_title: root.stream_episode_title;
         watch_label: root.detail_watch_label;
         deep_stream: root.detail_deep_stream;
         system_back_request: root.system_back_request;

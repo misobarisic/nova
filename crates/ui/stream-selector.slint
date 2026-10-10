@@ -3,7 +3,7 @@ import { Anim } from "anim.slint";
 import { StreamRow, SheetItem } from "types.slint";
 import { Spinner } from "std-widgets.slint";
 import { MenuSheet } from "menusheet.slint";
-import { IcPlay, IcCheck, IcMoreHoriz, IcChevronLeft, IcChevronRight } from "icons.slint";
+import { IcMoreHoriz, IcChevronLeft, IcChevronRight } from "icons.slint";
 
 // One filter pill in the horizontal addon bar above the stream list.
 export component StreamFilterPill inherits Rectangle {
@@ -288,10 +288,9 @@ component StreamList {
             // narrow screens and clips. Keep it as a floor for the first
             // paint (before `row_measure` has a width).
             min-height: Math.max(
-                48px,
-                max(st.lines * 22px + 24px,
-                    row_measure.preferred-height + 20px
-                        + ((st.is_download && st.download_action != 4) ? 4px : 0px)),
+                72px,
+                max(st.lines * 18px + 56px,
+                    row_measure.preferred-height + 24px),
             );
             property <bool> focused: root.kb_active && root.kb_focus == i + root.page_start;
             changed focused => { if (self.focused) { reveal_t.start(); } }
@@ -336,16 +335,33 @@ component StreamList {
                 VerticalLayout {
                     width: 100%;
                     min-width: 0px;
-                    padding-top: 10px;
-                    padding-bottom: 10px;
+                    padding-top: 12px;
+                    padding-bottom: 12px;
                     padding-left: 16px;
-                    padding-right: 92px;
+                    padding-right: 16px;
                     // Explicit so the hidden `row_measure` (same spacing)
                     // matches this layout's content height exactly.
-                    spacing: 0px;
+                    spacing: 6px;
 
-                    Text {
-                        text: st.text;
+                    // Only the addon/quality header reserves the menu's width.
+                    // Release titles and details use the full padded card.
+                    HorizontalLayout {
+                        min-height: 40px;
+                        spacing: 0px;
+                        card_metadata := Text {
+                            text: st.metadata;
+                            color: Theme.current.text_secondary;
+                            font-size: 14px;
+                            wrap: word-wrap;
+                            vertical-alignment: center;
+                            min-width: 0px;
+                            horizontal-stretch: 1;
+                        }
+                        Rectangle { width: 44px; horizontal-stretch: 0; }
+                    }
+
+                    card_title := Text {
+                        text: st.title != "" ? st.title : st.text;
                         color: Theme.current.text_primary;
                         font-size: 16px;
                         wrap: word-wrap;
@@ -354,13 +370,47 @@ component StreamList {
                         min-width: 0px;
                     }
 
+                    if st.description != "": card_description := Text {
+                        text: st.description;
+                        color: Theme.current.text_secondary;
+                        font-size: 14px;
+                        wrap: word-wrap;
+                        width: 100%;
+                        min-width: 0px;
+                    }
+
                     if st.details != "": Text {
                         text: st.details;
-                        color: Theme.current.text_download;
+                        color: Theme.current.text_secondary;
                         font-size: 12px;
                         wrap: word-wrap;
                         width: 100%;
                         min-width: 0px;
+                    }
+
+                    pill_row := HorizontalLayout {
+                        height: 26px;
+                        spacing: 0px;
+                        size_pill := Rectangle {
+                            width: Math.min(pill_row.width, size_label.preferred-width + 20px);
+                            height: 26px;
+                            horizontal-stretch: 0;
+                            border-radius: 13px;
+                            background: Theme.current.control_hover;
+                            border-width: 1px;
+                            border-color: Theme.current.border_soft;
+                            size_label := Text {
+                                x: 10px; y: 0px;
+                                width: parent.width - 20px; height: 100%;
+                                text: st.size != "" ? @tr("SIZE {}", st.size) : @tr("SIZE UNKNOWN");
+                                color: Theme.current.text_secondary;
+                                font-size: 12px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
                     }
 
                     // Progress rail, anchored to the left edge (`x: 0`, like
@@ -385,7 +435,7 @@ component StreamList {
                 }
 
                 // Hidden measurement copy of the text stack at the padded
-                // content width (16px left, 92px for the trailing controls), so
+                // content width (16px on either side), so
                 // the row minimum above tracks real wrapping instead of the
                 // intrinsic one-line width.
                 mrow := Rectangle {
@@ -394,12 +444,32 @@ component StreamList {
                     clip: true;
 
                     row_measure := VerticalLayout {
-                        width: Math.max(0px, mrow.width - 108px);
-                        spacing: 0px;
+                        width: Math.max(0px, mrow.width - 32px);
+                        spacing: 6px;
+
+                        HorizontalLayout {
+                            min-height: 40px;
+                            spacing: 0px;
+                            Text {
+                                text: st.metadata;
+                                font-size: 14px;
+                                wrap: word-wrap;
+                                min-width: 0px;
+                                horizontal-stretch: 1;
+                            }
+                            Rectangle { width: 44px; horizontal-stretch: 0; }
+                        }
 
                         Text {
-                            text: st.text;
+                            text: st.title != "" ? st.title : st.text;
                             font-size: 16px;
+                            wrap: word-wrap;
+                            min-width: 0px;
+                        }
+
+                        if st.description != "": Text {
+                            text: st.description;
+                            font-size: 14px;
                             wrap: word-wrap;
                             min-width: 0px;
                         }
@@ -410,6 +480,9 @@ component StreamList {
                             wrap: word-wrap;
                             min-width: 0px;
                         }
+
+                        Rectangle { height: 26px; }
+                        if st.is_download && st.download_action != 4: Rectangle { height: 4px; }
                     }
                 }
 
@@ -468,24 +541,12 @@ component StreamList {
                     }
                 }
 
-                if !st.is_download || st.download_action != 4: IcPlay {
-                    x: parent.width - 82px;
-                    y: (parent.height - self.height) / 2;
-                    width: 20px; height: 20px;
-                    fill: Theme.current.text_secondary;
-                }
-                if st.is_download && st.download_action == 4: IcCheck {
-                    x: parent.width - 82px;
-                    y: (parent.height - self.height) / 2;
-                    width: 20px; height: 20px;
-                    fill: Theme.current.text_download;
-                }
                 stream_actions := Rectangle {
                     x: parent.width - 52px;
-                    y: (parent.height - self.height) / 2;
+                    y: 8px;
                     width: 44px; height: 44px;
                     border-radius: 10px;
-                    background: action_touch.has-hover ? Theme.current.hover_overlay : transparent;
+                    background: (root.touch_menus ? action_touch.pressed : action_touch.has-hover) ? Theme.current.hover_overlay : transparent;
                     accessible-role: button;
                     accessible-label: @tr("Stream actions");
                     IcMoreHoriz {
@@ -542,6 +603,8 @@ export component StreamSelector inherits Rectangle {
     in property <bool> is_movie;
     in property <string> year;
     in property <string> episode_context;
+    in property <string> episode_number;
+    in property <string> episode_title;
     in property <image> poster;
     in property <image> backdrop;
     in property <[StreamRow]> rows;
@@ -598,8 +661,10 @@ export component StreamSelector inherits Rectangle {
     out property <bool> artwork_layout: root.usable_width >= 1200px && !root.short;
     private property <length> margin: root.narrow ? 16px : 32px;
     private property <length> artwork_width: root.artwork_layout ? root.usable_width * 0.34 : 0px;
-    private property <length> header_height: root.safe-top + (root.short ? 80px : (root.narrow ? 168px : 128px));
+    private property <length> header_height: root.safe-top + (root.short ? (root.episode_header ? 100px : 80px) : (root.narrow ? (root.episode_header ? 200px : 168px) : (root.episode_header ? 156px : 128px)));
     private property <string> context: root.episode_context != "" ? root.episode_context : (root.is_movie ? (root.year != "" ? @tr("{} · Movie", root.year) : @tr("Movie")) : root.year);
+    private property <bool> episode_header: !root.is_movie && root.episode_context != "";
+    private property <string> main_title: root.episode_header ? (root.episode_title != "" ? root.episode_title : (root.episode_number != "" ? root.title : root.episode_context)) : root.title;
     // Zones: back, addon filters, stream rows, pager. Stream indexes are
     // absolute across the Rust-provided 25-row slices.
     private property <int> focus_zone: 2;
@@ -685,13 +750,25 @@ export component StreamSelector inherits Rectangle {
         height: root.height - root.safe-top - root.safe-bottom - 112px;
         spacing: 12px;
         Rectangle { vertical-stretch: 1; background: transparent; }
+        if root.episode_header && root.episode_number != "": Text {
+            text: root.episode_number;
+            color: Theme.current.text_bright;
+            font-size: 16px; font-weight: 600;
+            overflow: elide;
+        }
         Text {
-            text: root.title;
+            text: root.main_title;
             color: Theme.current.text_bright;
             font-size: 34px; font-weight: 700;
             wrap: word-wrap; max-lines: 3; overflow: elide;
         }
-        Text {
+        if root.episode_header && (root.episode_title != "" || root.episode_number == ""): Text {
+            text: root.title;
+            color: Theme.current.text_secondary;
+            font-size: 18px;
+            wrap: word-wrap; max-lines: 2; overflow: elide;
+        }
+        if !root.episode_header: Text {
             text: root.context;
             color: Theme.current.text_secondary;
             font-size: 16px;
@@ -711,7 +788,7 @@ export component StreamSelector inherits Rectangle {
         x: root.safe-left + root.margin + (root.narrow && !root.short ? 0px : 60px);
         y: root.short ? back_button.y : root.safe-top + (root.narrow ? 64px : 20px);
         width: root.usable_width - 2 * root.margin - (root.narrow && !root.short ? 0px : 60px);
-        height: root.short ? 48px : (root.narrow ? 88px : 96px);
+        height: root.short ? (root.episode_header ? 76px : 48px) : (root.narrow ? (root.episode_header ? 120px : 88px) : (root.episode_header ? 124px : 96px));
         spacing: 16px;
         if root.poster.width > 0 && (!root.narrow || !root.short): Rectangle {
             width: root.short ? 32px : (root.narrow ? 58px : 64px);
@@ -723,17 +800,30 @@ export component StreamSelector inherits Rectangle {
         }
         VerticalLayout {
             alignment: center;
-            spacing: root.short ? 4px : 6px;
+            spacing: root.short ? 3px : 4px;
             min-width: 0px;
-            Text {
-                text: root.title;
+            if root.episode_header && root.episode_number != "": compact_episode_number := Text {
+                text: root.episode_number;
+                color: Theme.current.text_bright;
+                font-size: root.short ? 12px : 14px;
+                font-weight: 600;
+                overflow: elide; min-width: 0px;
+            }
+            compact_main_title := Text {
+                text: root.main_title;
                 color: Theme.current.text_bright;
                 font-size: root.short ? 22px : (root.narrow ? 24px : 28px);
                 font-weight: 700;
                 wrap: word-wrap; max-lines: root.short ? 1 : 2; overflow: elide;
                 min-width: 0px;
             }
-            Text {
+            if root.episode_header && (root.episode_title != "" || root.episode_number == ""): compact_series_title := Text {
+                text: root.title;
+                color: Theme.current.text_secondary;
+                font-size: root.short ? 12px : 14px;
+                overflow: elide; min-width: 0px;
+            }
+            if !root.episode_header: Text {
                 text: root.context;
                 color: Theme.current.text_secondary;
                 font-size: 13px;

@@ -18,6 +18,7 @@ fn row(index: usize) -> nova::StreamRow {
         is_download: false,
         download_progress: 0.0,
         download_action: 0,
+        ..Default::default()
     }
 }
 

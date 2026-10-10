@@ -33,6 +33,7 @@ fn stream_row(id: &str, text: &str, details: &str, is_download: bool) -> nova::S
         is_download,
         download_progress: if is_download { 0.42 } else { 0.0 },
         download_action: if is_download { 1 } else { 0 },
+        ..Default::default()
     }
 }
 

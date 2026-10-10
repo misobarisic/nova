@@ -22,6 +22,9 @@ fn stream_row(id: &str, is_download: bool) -> nova::StreamRow {
     nova::StreamRow {
         id: s(id),
         text: s("Torrentio\nMovie 2160p"),
+        title: s("Movie 2160p"),
+        metadata: s("Torrentio"),
+        size: s("1.1 GB"),
         details: if is_download {
             s("Downloading · 42%")
         } else {
@@ -31,6 +34,7 @@ fn stream_row(id: &str, is_download: bool) -> nova::StreamRow {
         is_download,
         download_progress: if is_download { 0.42 } else { 0.0 },
         download_action: if is_download { 1 } else { 0 },
+        ..Default::default()
     }
 }
 
@@ -96,6 +100,39 @@ fn pills_keep_one_width_and_the_download_rail_fills_left_to_right() {
                 &format!(
                     "a filtering pill must keep one width (loading {loading_width}, idle {idle_width})"
                 ),
+            );
+
+            let row = ElementHandle::find_by_element_id(&app, "StreamList::row_reveal")
+                .next()
+                .expect("stream card");
+            let title = ElementHandle::find_by_element_id(&app, "StreamList::card_title")
+                .next()
+                .expect("release title");
+            let menu = ElementHandle::find_by_element_id(&app, "StreamList::stream_actions")
+                .next()
+                .expect("stream menu");
+            let pill = ElementHandle::find_by_element_id(&app, "StreamList::size_pill")
+                .next()
+                .expect("size pill");
+            fail(
+                &failures2,
+                (menu.absolute_position().y - row.absolute_position().y - 8.0).abs() <= 0.5,
+                "the menu belongs in the top-right corner",
+            );
+            fail(
+                &failures2,
+                (title.size().width - (row.size().width - 32.0)).abs() <= 0.5,
+                "release text uses the full padded card width",
+            );
+            fail(
+                &failures2,
+                (pill.absolute_position().x - title.absolute_position().x).abs() <= 0.5,
+                "size pill aligns with the text's left edge",
+            );
+            fail(
+                &failures2,
+                pill.absolute_position().y >= title.absolute_position().y + title.size().height,
+                "size pill follows the release text",
             );
 
             // The download rail: anchored to the track's left edge and filling

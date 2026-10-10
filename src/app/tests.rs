@@ -1633,6 +1633,65 @@ mod stream_display_tests {
     fn blank_stream_uses_placeholder() {
         assert_eq!(stream_display(&s(None, None, None)), "Stream");
     }
+
+    #[test]
+    fn stream_card_separates_release_title_and_metadata() {
+        let stream = s(
+            Some("Torrentio\n1080p"),
+            Some("Show.S01E01.1080p.mkv\n👤 42 💾 1.1 GB ⚙ NyaaSi\nDual audio"),
+            None,
+        );
+        let card = stream_card_text(&stream);
+        assert_eq!(card.title, "Show.S01E01.1080p.mkv");
+        assert_eq!(card.metadata, "Torrentio\n1080p");
+        assert_eq!(card.description, "👤 42 💾 1.1 GB ⚙ NyaaSi\nDual audio");
+        assert_eq!(card.size, "1.1 GB");
+    }
+
+    #[test]
+    fn structured_stream_size_wins_over_display_text() {
+        let mut stream = s(Some("Addon"), Some("Release\n💾 2.0 GB"), None);
+        stream.extra.insert(
+            "behaviorHints".into(),
+            serde_json::json!({ "videoSize": "1100000000" }),
+        );
+        assert_eq!(stream_card_text(&stream).size, "1.1 GB");
+    }
+
+    #[test]
+    fn stream_size_rejects_filenames_and_transfer_rates() {
+        for detail in [
+            "Release.1.1GB.mkv",
+            "Release\n2.0 MiB/s",
+            "Release\n2.0 MB /s",
+            "Release\n1080p\n42 seeders",
+        ] {
+            assert!(
+                stream_card_text(&s(Some("Addon"), Some(detail), None))
+                    .size
+                    .is_empty()
+            );
+        }
+        assert_eq!(
+            stream_card_text(&s(Some("Addon"), Some("Release\n💾 313.13MB"), None)).size,
+            "313.13 MB"
+        );
+    }
+
+    #[test]
+    fn downloaded_card_uses_known_total_without_changing_saved_text() {
+        let job = DownloadJob {
+            display: "Torrentio\n1080p\nRelease.mkv\n💾 2.0 GB".into(),
+            addon: "Torrentio".into(),
+            total_bytes: Some(1_100_000_000),
+            ..Default::default()
+        };
+        let card = downloaded_stream_card(&job);
+        assert_eq!(card.title, "Release.mkv");
+        assert_eq!(card.metadata, "Torrentio\n1080p");
+        assert_eq!(card.size, "1.1 GB");
+        assert!(job.display.ends_with("💾 2.0 GB"));
+    }
 }
 
 #[cfg(all(test, feature = "desktop"))]

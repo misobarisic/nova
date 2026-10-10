@@ -489,3 +489,23 @@ pub(crate) fn episode_context_label(v: &Video) -> String {
 pub(crate) fn stream_episode_context_label(v: &Video) -> String {
     text::stream_episode_context(&episode_se_label(v), &episode_context_label(v))
 }
+
+/// Keep navigation's combined context and the selector's three-line header
+/// in step. Separate fields avoid parsing punctuation inside addon titles.
+pub(crate) fn apply_stream_episode_context(app: &AppWindow, video: Option<&Video>) {
+    if let Some(video) = video {
+        let number = episode_se_label(video);
+        let title = episode_context_label(video);
+        app.set_episode_context(stream_episode_context_label(video).into());
+        app.set_stream_episode_title(if title == number {
+            "".into()
+        } else {
+            title.into()
+        });
+        app.set_stream_episode_number(number.into());
+    } else {
+        app.set_episode_context(SharedString::default());
+        app.set_stream_episode_number(SharedString::default());
+        app.set_stream_episode_title(SharedString::default());
+    }
+}

@@ -209,6 +209,7 @@ pub(crate) struct PendingStream {
 struct StreamUi {
     id: String,
     display: String,
+    card: StreamCardText,
     source: StreamSource,
     /// Label of the addon that returned this stream, for the per-addon
     /// filter pills above the list (empty when the addon is unknown).

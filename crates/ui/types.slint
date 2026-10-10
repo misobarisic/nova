@@ -25,7 +25,14 @@ export struct MediaCard {
 
 export struct StreamRow {
     id: string,
+    /// Full addon text for accessibility and legacy callers.
     text: string,
+    /// Release title, separate from the smaller addon/quality and detail text.
+    title: string,
+    metadata: string,
+    description: string,
+    /// Advertised file size (empty when the addon does not provide one).
+    size: string,
     details: string,
     /// Reserved line count (explicit lines + wrap estimate), used to give
     /// each row an explicit height so long text is never clipped.

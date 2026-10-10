@@ -194,6 +194,8 @@ export component DetailPage {
     in-out property <int> episode_page_start: 0;
     in-out property <int> episode_total: 0;
     in-out property <string> episode_context: "";
+    in property <string> stream_episode_number;
+    in property <string> stream_episode_title;
     in property <string> watch_label: @tr("Start");
     // Set by AppWindow when the streams view was entered directly (Home
     // Continue deep-link) without visiting the episode list — see kb_back.
@@ -2128,6 +2130,8 @@ export component DetailPage {
             is_movie: root.is_movie;
             year: root.selected_year;
             episode_context: root.episode_context;
+            episode_number: root.stream_episode_number;
+            episode_title: root.stream_episode_title;
             poster: root.selected_poster;
             backdrop: root.selected_backdrop;
             rows: root.streams;

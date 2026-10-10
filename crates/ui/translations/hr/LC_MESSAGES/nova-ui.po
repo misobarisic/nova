@@ -2015,6 +2015,12 @@ msgstr "Odaberite izvor"
 msgid "Stream actions"
 msgstr "Radnje izvora"
 
+msgid "SIZE {}"
+msgstr "VELIČINA {}"
+
+msgid "SIZE UNKNOWN"
+msgstr "VELIČINA NEPOZNATA"
+
 msgid "Select a source to start watching."
 msgstr "Odaberite izvor za početak gledanja."
 

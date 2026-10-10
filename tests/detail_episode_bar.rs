@@ -28,6 +28,8 @@ fn episode_selector_back_chevron_is_vertically_centered() {
     app.set_modal_episodes(false);
     app.set_selected_title(s("Show"));
     app.set_episode_context(s("S1 E1 · Pilot"));
+    app.set_stream_episode_number(s("S1 E1"));
+    app.set_stream_episode_title(s("Pilot"));
     app.set_streams(
         Rc::new(VecModel::from(vec![nova::StreamRow {
             id: s("stream-1"),
@@ -37,6 +39,7 @@ fn episode_selector_back_chevron_is_vertically_centered() {
             is_download: false,
             download_progress: 0.0,
             download_action: 0,
+            ..Default::default()
         }]))
         .into(),
     );
@@ -56,6 +59,22 @@ fn episode_selector_back_chevron_is_vertically_centered() {
         };
         let bar_pos = bar.absolute_position();
         let bar_centre = bar_pos.y + bar.size().height / 2.0;
+        let number =
+            ElementHandle::find_by_element_id(&app, "StreamSelector::compact_episode_number")
+                .next()
+                .expect("season and episode");
+        let episode = ElementHandle::find_by_element_id(&app, "StreamSelector::compact_main_title")
+            .next()
+            .expect("episode title");
+        let series =
+            ElementHandle::find_by_element_id(&app, "StreamSelector::compact_series_title")
+                .next()
+                .expect("series title");
+        if number.absolute_position().y + number.size().height > episode.absolute_position().y
+            || episode.absolute_position().y + episode.size().height > series.absolute_position().y
+        {
+            fail("header must show season/episode, episode title, then series title".into());
+        }
         // The bar's chevron: the only `IcChevronLeft` inside the bar's band
         // (hidden detail controls are excluded from the search).
         let icons: Vec<_> =

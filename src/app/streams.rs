@@ -1,6 +1,136 @@
 //! Stream-row mapping and display text helpers.
 use super::*;
 
+/// Presentation only: the original addon text stays intact for downloads and
+/// accessibility, while the card can give the release title its own style.
+#[derive(Clone, Default)]
+pub(crate) struct StreamCardText {
+    pub title: String,
+    pub metadata: String,
+    pub description: String,
+    pub size: String,
+}
+
+pub(crate) fn stream_card_text(stream: &addons::Stream) -> StreamCardText {
+    let label = tidy_stream_text(&stream.label());
+    let display = stream_display(stream);
+    let detail = display.strip_prefix(&label).unwrap_or_default().trim();
+    let mut card = split_stream_card(&label, detail);
+    // Stremio addons may expose the selected video's byte size in hints.
+    // Read this before falling back to human-readable torrent metadata.
+    card.size = stream
+        .extra
+        .get("behaviorHints")
+        .and_then(|hints| hints.get("videoSize"))
+        .or_else(|| stream.extra.get("size"))
+        .and_then(|size| size.as_u64().or_else(|| size.as_str()?.parse().ok()))
+        .filter(|size| *size > 0)
+        .map(text::stream_size)
+        .or_else(|| advertised_stream_size(&display))
+        .unwrap_or_default();
+    card
+}
+
+fn split_stream_card(label: &str, detail: &str) -> StreamCardText {
+    if detail.is_empty() {
+        let (title, metadata) = label.split_once('\n').unwrap_or((label, ""));
+        return StreamCardText {
+            title: title.to_owned(),
+            metadata: metadata.to_owned(),
+            ..Default::default()
+        };
+    }
+    let (title, description) = detail.split_once('\n').unwrap_or((detail, ""));
+    StreamCardText {
+        title: title.to_owned(),
+        metadata: label.to_owned(),
+        description: description.to_owned(),
+        size: String::new(),
+    }
+}
+
+/// Old download jobs retain only the combined display string. Reconstruct
+/// their presentation without migrating or rewriting the stored jobs.
+pub(crate) fn downloaded_stream_card(job: &DownloadJob) -> StreamCardText {
+    let display = tidy_stream_text(&job.display);
+    let mut lines = display.lines().peekable();
+    let first = lines.next().unwrap_or_default();
+    let mut label = first.to_owned();
+    // The common addon label is followed by a resolution on its own line.
+    if lines.peek().is_some_and(|line| {
+        matches!(
+            line.trim().to_ascii_lowercase().as_str(),
+            "4k" | "8k" | "sd" | "hd" | "full hd"
+        ) || line
+            .trim()
+            .strip_suffix('p')
+            .is_some_and(|n| n.parse::<u32>().is_ok())
+    }) {
+        label.push('\n');
+        label.push_str(lines.next().unwrap());
+    }
+    let detail = lines.collect::<Vec<_>>().join("\n");
+    let mut card = split_stream_card(&label, &detail);
+    card.size = job
+        .total_bytes
+        .filter(|size| *size > 0)
+        .map(text::stream_size)
+        .or_else(|| advertised_stream_size(&display))
+        .unwrap_or_default();
+    card
+}
+
+/// Extract an advertised size only at a numeric/unit boundary. Do not mistake
+/// resolution, a release filename or a transfer rate for a file size.
+fn advertised_stream_size(display: &str) -> Option<String> {
+    for (start, ch) in display.char_indices() {
+        if !ch.is_ascii_digit()
+            || (start > 0
+                && display[..start]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_alphanumeric() || matches!(c, '.' | ',')))
+        {
+            continue;
+        }
+        let tail = &display[start..];
+        let number_end = tail
+            .find(|c: char| !c.is_ascii_digit() && !matches!(c, '.' | ','))
+            .unwrap_or(tail.len());
+        let number = &tail[..number_end];
+        if number
+            .replace(',', ".")
+            .parse::<f64>()
+            .ok()
+            .is_none_or(|n| !n.is_finite() || n <= 0.0)
+        {
+            continue;
+        }
+        let rest = tail[number_end..].trim_start();
+        let unit_end = rest
+            .find(|c: char| !c.is_ascii_alphabetic())
+            .unwrap_or(rest.len());
+        let unit = &rest[..unit_end];
+        if !matches!(
+            unit.to_ascii_uppercase().as_str(),
+            "B" | "KB" | "MB" | "GB" | "TB" | "KIB" | "MIB" | "GIB" | "TIB"
+        ) {
+            continue;
+        }
+        let after_unit = &rest[unit_end..];
+        if after_unit.trim_start().starts_with('/')
+            || after_unit
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || matches!(c, '.' | '_'))
+        {
+            continue;
+        }
+        return Some(format!("{number} {unit}"));
+    }
+    None
+}
+
 /// Classify a parsed addon stream into how it can be played here.
 ///
 /// A direct URL (or YouTube id) wins: it plays without the embedded engine.

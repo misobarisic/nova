@@ -129,7 +129,7 @@ impl Bridge {
         app.set_modal_episodes(false);
         app.set_detail_watch_label(text::tr("Start").into());
         app.set_detail_deep_stream(false);
-        app.set_episode_context(SharedString::default());
+        apply_stream_episode_context(&app, None);
         app.set_season_names(Rc::new(VecModel::<SharedString>::from(vec![])).into());
         app.set_season_combo_idx(-1);
         app.set_season_cards(Rc::new(VecModel::<SeasonCard>::from(vec![])).into());
@@ -436,6 +436,7 @@ impl Bridge {
                                     // `stream_display` for how the label +
                                     // detail lines are chosen.
                                     display: stream_display(&s),
+                                    card: stream_card_text(&s),
                                     source: stream_source(&s),
                                     addon: addon.clone(),
                                     download: None,
@@ -1002,7 +1003,7 @@ impl Bridge {
             if !app.get_episode_context().is_empty()
                 && let Some(video) = selected
             {
-                app.set_episode_context(SharedString::from(stream_episode_context_label(&video)));
+                apply_stream_episode_context(&app, Some(&video));
                 if thumbnail_changed
                     && !app.get_player_open()
                     && let Some(url) = video.thumbnail.filter(|url| !url.is_empty())
@@ -1631,7 +1632,7 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_modal_episodes(true);
             app.set_detail_deep_stream(false);
-            app.set_episode_context(SharedString::default());
+            apply_stream_episode_context(&app, None);
             app.set_season_names(Rc::new(VecModel::from(season_names)).into());
             app.set_season_combo_idx(season_idx as i32);
             self.clear_streams();
@@ -1916,7 +1917,7 @@ impl Bridge {
     /// into the currently displayed (filter-narrowed) episode rows.
     pub(super) fn episode_picked(&self, index: usize) {
         self.cancel_watch_now();
-        let (series_id, request_id, context, thumb_url) = {
+        let (series_id, request_id, video) = {
             let state = self.shared.lock().unwrap();
             let m = match state.modal_item.as_ref() {
                 Some(m) if !m.seasons.is_empty() => m,
@@ -1938,14 +1939,9 @@ impl Bridge {
                 Some(v) => v,
                 None => return,
             };
-            (
-                m.id.clone(),
-                video.id.clone(),
-                stream_episode_context_label(video),
-                video.thumbnail.clone(),
-            )
+            (m.id.clone(), video.id.clone(), (***video).clone())
         };
-        self.select_episode_streams(series_id, request_id, context, thumb_url, index);
+        self.select_episode_streams(series_id, request_id, video, index);
     }
 
     /// Select by stable ID, independent of the current filter/season/page.
@@ -1979,8 +1975,7 @@ impl Bridge {
         self.select_episode_streams(
             series_id.to_owned(),
             episode_id.to_owned(),
-            stream_episode_context_label(&selection.0),
-            selection.0.thumbnail,
+            selection.0,
             selection.2,
         );
     }
@@ -1989,8 +1984,7 @@ impl Bridge {
         &self,
         series_id: String,
         request_id: String,
-        context: String,
-        thumb_url: Option<String>,
+        video: Video,
         index: usize,
     ) {
         // Arm playback tracking for this episode, resolving a resume point
@@ -2016,7 +2010,7 @@ impl Bridge {
             // deep-link back shortcut ends here (`continue_picked` sets it
             // again afterwards for its own auto-opened streams).
             app.set_detail_deep_stream(false);
-            app.set_episode_context(SharedString::from(&context));
+            apply_stream_episode_context(&app, Some(&video));
             self.clear_streams();
             self.set_stream_hint(Some(StreamHint::Fixed("Loading streams…")));
             // Streams render inside the Episodes tab for series.
@@ -2041,8 +2035,8 @@ impl Bridge {
         // Full-res backdrop for the player loading screen: the list rows
         // carry downscaled thumbs, so fetch the original and upgrade the
         // poster — but only if the user hasn't moved on meanwhile.
-        if let Some(url) = thumb_url {
-            let ctx = context.clone();
+        if let Some(url) = video.thumbnail.clone() {
+            let ctx = stream_episode_context_label(&video);
             let app_weak = self.app.clone();
             net::fetch_image(url, None, move |pixels| {
                 let Some(pixels) = pixels else {
@@ -2082,7 +2076,7 @@ impl Bridge {
             // The episode list is on screen now, so a deep-link back shortcut
             // no longer applies (system back returns here from new streams).
             app.set_detail_deep_stream(false);
-            app.set_episode_context(SharedString::default());
+            apply_stream_episode_context(&app, None);
             self.clear_streams();
             self.set_stream_hint(None);
             // Reveal the Episodes tab underneath the fullscreen selector.
@@ -2489,6 +2483,7 @@ impl Bridge {
                 StreamUi {
                     id: format!("download:{}", job.id),
                     display: job.display.clone(),
+                    card: downloaded_stream_card(&job),
                     source: StreamSource::Downloaded {
                         job_id: job.id.clone(),
                         path,
@@ -2512,6 +2507,10 @@ impl Bridge {
                 StreamRow {
                     id: SharedString::from(&row.id),
                     text: SharedString::from(&row.display),
+                    title: SharedString::from(&row.card.title),
+                    metadata: SharedString::from(&row.card.metadata),
+                    description: SharedString::from(&row.card.description),
+                    size: SharedString::from(&row.card.size),
                     details: SharedString::from(details),
                     lines,
                     is_download: row.download.is_some(),
@@ -3796,6 +3795,7 @@ mod tests {
         StreamUi {
             id: id.into(),
             display: id.into(),
+            card: StreamCardText::default(),
             source: StreamSource::Unsupported,
             addon: addon.into(),
             download: None,
