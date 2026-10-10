@@ -98,15 +98,23 @@ impl Bridge {
         // so cached text shows on the first frame. The meta fetch still
         // upgrades anything still missing when it answers.
         self.fill_modal_gaps_from_header_cache(&preview.id);
-        let (paint_description, paint_genres, paint_year) = {
+        let (paint_description, paint_genres, paint_year, is_movie) = {
             let state = self.shared.lock().unwrap();
             match state.modal_item.as_ref() {
-                Some(m) => (m.description.clone(), m.genres.clone(), m.year.clone()),
+                Some(m) => (
+                    m.description.clone(),
+                    m.genres.clone(),
+                    m.year.clone(),
+                    m.type_ == "movie",
+                ),
                 None => return,
             }
         };
 
         app.set_selected_title(SharedString::from(preview.title()));
+        app.set_detail_is_movie(is_movie);
+        app.set_stream_selector_open(false);
+        app.set_detail_episode_reveal_request(0);
         app.set_selected_year(SharedString::from(&paint_year));
         app.set_selected_index(discover_index.map(|i| i as i32).unwrap_or(-1));
         if let Some(index) = discover_index {
@@ -211,6 +219,11 @@ impl Bridge {
             // Movies keep the direct behaviour: fetch streams right away.
             self.start_stream_search(item_id.clone());
             self.refresh_movie_meta(item_id);
+            self.refresh_watch_action();
+            if watch_now {
+                app.set_stream_selector_open(true);
+                app.set_detail_deep_stream(true);
+            }
         } else {
             // Series-like: list seasons/episodes first and only fetch
             // streams once an episode is picked.
@@ -935,6 +948,7 @@ impl Bridge {
                     .is_some_and(|videos| !ordered_seasons(&videos).is_empty());
                 if !had_cache {
                     self.start_stream_search(id);
+                    self.refresh_watch_action();
                 }
             }
         }
@@ -1122,11 +1136,19 @@ impl Bridge {
             .cloned();
         match snap {
             Some(s) => {
-                app.set_detail_tab(s.tab);
+                app.set_detail_tab(if app.get_detail_is_movie() && s.tab == 3 {
+                    0
+                } else {
+                    s.tab
+                });
                 app.set_episode_filter(SharedString::from(&s.filter));
                 app.set_detail_kb_zone(s.kb_zone);
                 app.set_detail_kb_top(s.kb_top);
-                app.set_detail_kb_tab(s.kb_tab);
+                app.set_detail_kb_tab(if app.get_detail_is_movie() && s.kb_tab == 3 {
+                    0
+                } else {
+                    s.kb_tab
+                });
                 app.set_detail_kb_ci(s.kb_ci);
                 app.set_detail_kb_ep(s.kb_ep);
                 app.set_detail_kb_s(s.kb_s);
@@ -1572,6 +1594,7 @@ impl Bridge {
     pub(super) fn show_episode_picker(&self, id: String, videos: Vec<Video>) {
         let seasons = ordered_seasons(&videos);
         if seasons.is_empty() {
+            self.refresh_watch_action();
             self.resolve_watch_now();
             self.start_stream_search(id);
             return;
@@ -1988,6 +2011,7 @@ impl Bridge {
         }
         if let Some(app) = self.app() {
             app.set_modal_episodes(false);
+            app.set_stream_selector_open(true);
             // A manual pick means the episode list was visited, so any
             // deep-link back shortcut ends here (`continue_picked` sets it
             // again afterwards for its own auto-opened streams).
@@ -2054,22 +2078,83 @@ impl Bridge {
         }
         if let Some(app) = self.app() {
             app.set_modal_episodes(true);
+            app.set_stream_selector_open(false);
             // The episode list is on screen now, so a deep-link back shortcut
             // no longer applies (system back returns here from new streams).
             app.set_detail_deep_stream(false);
             app.set_episode_context(SharedString::default());
             self.clear_streams();
             self.set_stream_hint(None);
-            // Return to the Episodes tab (streams live there for series).
+            // Reveal the Episodes tab underneath the fullscreen selector.
             app.set_detail_tab(3);
             app.set_detail_kb_zone(3);
             app.set_detail_kb_ci(2);
         }
+        self.reveal_last_watched_episode();
+    }
+
+    /// Restore the last observed episode, not the next unwatched candidate.
+    /// Clear a stale filter so a recently played episode cannot remain hidden.
+    fn reveal_last_watched_episode(&self) {
+        let Some(app) = self.app() else { return };
+        let selection = {
+            let mut state = self.shared.lock().unwrap();
+            let Some(modal) = state.modal_item.as_ref() else {
+                return;
+            };
+            let video = modal
+                .videos
+                .iter()
+                .filter_map(|video| {
+                    let progress = state
+                        .progress
+                        .get(&progress_map_key(&modal.id, &video.id))?;
+                    (video.season.is_some()
+                        && (progress.position_secs > 0.0
+                            || progress.watched
+                            || progress.play_count > 0))
+                        .then_some((video, progress))
+                })
+                .max_by_key(|(video, progress)| (progress.updated_at_secs, video.id.as_str()))
+                .map(|(video, _)| video.clone());
+            video.and_then(|video| {
+                let modal = state.modal_item.as_mut()?;
+                let season_index = modal
+                    .seasons
+                    .iter()
+                    .position(|season| Some(*season) == video.season)?;
+                let index = season_episodes(&modal.videos, modal.seasons[season_index])
+                    .iter()
+                    .position(|v| v.id == video.id)?;
+                modal.season_index = season_index;
+                modal.episode_page = index / EPISODE_PAGE_SIZE;
+                Some((season_index, index % EPISODE_PAGE_SIZE))
+            })
+        };
+        if let Some((season_index, local_index)) = selection {
+            app.set_episode_filter(SharedString::default());
+            app.set_season_combo_idx(season_index as i32);
+            self.refresh_episode_rows();
+            self.apply_season_cards();
+            app.set_detail_kb_ep(local_index as i32);
+        }
+        app.set_detail_episode_reveal_request(app.get_detail_episode_reveal_request() + 1);
+    }
+
+    /// A player opened from Detail returns to the watched episode in its list.
+    /// Home shortcuts retain their own return route.
+    pub(super) fn restore_detail_after_playback(&self) {
+        if let Some(app) = self.app()
+            && app.get_modal_visible()
+            && !app.get_detail_deep_stream()
+            && !app.get_episode_context().is_empty()
+        {
+            self.episodes_back();
+        }
     }
 
     /// Detail tab bar: 0 = Overview, 3 = Episodes (1/2 are addon-less stubs).
-    /// Series episode streams render inside the Episodes tab, so stepping
-    /// into/out of streams keeps the tab in sync.
+    /// The episode list remains on this tab underneath its stream selector.
     pub(super) fn detail_tab_picked(&self, tab: i32) {
         self.cancel_watch_now();
         let Some(app) = self.app() else {
@@ -2082,7 +2167,11 @@ impl Bridge {
         if app.get_tracking_open() {
             self.tracking_close();
         }
-        let tab = if tab == 3 { 3 } else { 0 };
+        let tab = if tab == 3 && !app.get_detail_is_movie() {
+            3
+        } else {
+            0
+        };
         app.set_detail_tab(tab);
         app.set_detail_kb_tab(if tab == 3 { 3 } else { 0 });
     }
@@ -2107,7 +2196,9 @@ impl Bridge {
             let Some(modal) = state.modal_item.as_ref() else {
                 return;
             };
-            if watch_now_episode(&modal.id, &modal.videos, &state.progress).is_some() {
+            if modal.type_ == "movie" || (!modal.episodes_loading && modal.seasons.is_empty()) {
+                watch_action_label(&modal.id, None, &state.progress)
+            } else if watch_now_episode(&modal.id, &modal.videos, &state.progress).is_some() {
                 watch_action_label(&modal.id, Some(&modal.videos), &state.progress)
             } else if modal.episodes_loading {
                 text::tr("Start").into()
@@ -2120,24 +2211,56 @@ impl Bridge {
         }
     }
 
-    /// Both Watch Now entry points share the same episode selection; streams
-    /// remain a manual choice so quality/addon preferences are respected.
+    /// Movie and episode actions open the same selector; streams remain a
+    /// manual choice so quality/addon preferences are respected.
     pub(super) fn watch_now(&self) {
-        {
+        let direct_streams = {
             let mut state = self.shared.lock().unwrap();
             let Some(modal) = state.modal_item.as_mut() else {
                 return;
             };
-            if modal.type_ == "movie" {
-                return;
-            }
-            modal.pending_watch_now = Some(WatchNowOrigin::Detail);
+            // Some addons can stream a title without providing episodes.
+            // Keep that existing fallback reachable through the hero action.
+            let direct =
+                modal.type_ == "movie" || (!modal.episodes_loading && modal.seasons.is_empty());
+            modal.pending_watch_now = if direct {
+                None
+            } else {
+                Some(WatchNowOrigin::Detail)
+            };
+            direct
+        };
+        let Some(app) = self.app() else {
+            return;
+        };
+        if direct_streams {
+            app.set_detail_deep_stream(false);
+            app.set_detail_kb_s(0);
+            app.set_stream_selector_open(true);
+            return;
         }
-        if let Some(app) = self.app() {
-            app.set_detail_tab(3);
-            app.set_detail_kb_zone(3);
-        }
+        app.set_detail_tab(3);
+        app.set_detail_kb_zone(3);
         self.resolve_watch_now();
+    }
+
+    /// Back preserves the origin of selection: manual episodes return to
+    /// their list, movies to Overview, and Home shortcuts to the root page.
+    pub(super) fn stream_selector_back(&self) {
+        let Some(app) = self.app() else {
+            return;
+        };
+        if app.get_detail_deep_stream() {
+            app.set_modal_visible(false);
+            self.modal_closed();
+        } else if !app.get_episode_context().is_empty() {
+            self.episodes_back();
+        } else {
+            app.set_stream_selector_open(false);
+            app.set_stream_action_open(false);
+            app.set_detail_tab(0);
+            app.set_detail_kb_zone(2);
+        }
     }
 
     fn cancel_watch_now(&self) {
@@ -2147,8 +2270,28 @@ impl Bridge {
     }
 
     /// Consume one pending intent once an eligible episode is known. With
-    /// no cached candidate, keep waiting for the fresh metadata lookup.
+    /// no cached candidate, wait for metadata before using the direct-stream
+    /// fallback for providers that cannot list episodes.
     fn resolve_watch_now(&self) {
+        let direct_origin = {
+            let mut state = self.shared.lock().unwrap();
+            let Some(modal) = state.modal_item.as_mut() else {
+                return;
+            };
+            if !modal.episodes_loading && modal.seasons.is_empty() {
+                modal.pending_watch_now.take()
+            } else {
+                None
+            }
+        };
+        if let Some(origin) = direct_origin {
+            if let Some(app) = self.app() {
+                app.set_detail_kb_s(0);
+                app.set_stream_selector_open(true);
+                app.set_detail_deep_stream(matches!(origin, WatchNowOrigin::Featured));
+            }
+            return;
+        }
         let selected = {
             let mut state = self.shared.lock().unwrap();
             let Some(modal) = state.modal_item.as_ref() else {
@@ -3389,6 +3532,207 @@ pub(crate) fn merge_meta_header_for(type_: &str, id: &str, fresh: &MetaHeader) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "desktop")]
+    fn stream_selector_returns_to_its_origin_and_movies_keep_a_watch_action() {
+        // Storage and Slint are process-global; isolate this navigation test
+        // so its progress fixtures never touch the user's library.
+        const ROOT: &str = "NOVA_STREAM_SELECTOR_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-stream-selector-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .args([
+                    "--exact",
+                    "app::detail::tests::stream_selector_returns_to_its_origin_and_movies_keep_a_watch_action",
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(Mutex::new(PosterStore::new(1))),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        bridge.shared.lock().unwrap().modal_item = Some(ModalItem {
+            open_token: Arc::new(()),
+            pending_watch_now: None,
+            episodes_loading: false,
+            id: "movie".into(),
+            type_: "movie".into(),
+            request_id: "movie".into(),
+            videos: vec![],
+            season_backdrops: HashMap::new(),
+            seasons: vec![],
+            season_index: 0,
+            episode_page: 0,
+            name: "Movie".into(),
+            year: "2016".into(),
+            poster_url: String::new(),
+            background_url: String::new(),
+            logo_url: String::new(),
+            description: String::new(),
+            genres: vec![],
+        });
+        app.set_modal_visible(true);
+        app.set_detail_is_movie(true);
+        bridge.refresh_watch_action();
+        assert_eq!(app.get_detail_watch_label(), text::tr("Start"));
+        bridge.watch_now();
+        assert!(app.get_stream_selector_open());
+        bridge.stream_selector_back();
+        assert!(!app.get_stream_selector_open());
+        assert!(app.get_modal_visible());
+        bridge.detail_tab_picked(3);
+        assert_eq!(app.get_detail_tab(), 0, "movies cannot enter Episodes");
+        bridge.shared.lock().unwrap().progress.insert(
+            progress_map_key("movie", "movie"),
+            EpisodeProgress {
+                series_id: "movie".into(),
+                episode_id: "movie".into(),
+                position_secs: 60.0,
+                duration_secs: 120.0,
+                ..Default::default()
+            },
+        );
+        bridge.refresh_watch_action();
+        assert_eq!(app.get_detail_watch_label(), text::tr("Continue"));
+
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            let modal = state.modal_item.as_mut().unwrap();
+            modal.id = "series".into();
+            modal.type_ = "series".into();
+            modal.request_id = "series".into();
+        }
+        app.set_detail_is_movie(false);
+        bridge.refresh_watch_action();
+        assert_eq!(app.get_detail_watch_label(), text::tr("Start"));
+        bridge.watch_now();
+        assert!(
+            app.get_stream_selector_open(),
+            "seasonless titles keep direct streams"
+        );
+        bridge.stream_selector_back();
+        assert_eq!(app.get_detail_tab(), 0);
+
+        // A featured shortcut made while metadata is loading also resolves
+        // into the fallback when no addon can provide an episode list.
+        let open_token = {
+            let mut state = bridge.shared.lock().unwrap();
+            let modal = state.modal_item.as_mut().unwrap();
+            modal.episodes_loading = true;
+            modal.pending_watch_now = Some(WatchNowOrigin::Featured);
+            modal.open_token.clone()
+        };
+        bridge.apply_episode_meta("series".into(), None, false, open_token);
+        assert!(app.get_stream_selector_open());
+        assert!(app.get_detail_deep_stream());
+        assert!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .unwrap()
+                .pending_watch_now
+                .is_none()
+        );
+        app.set_detail_deep_stream(false);
+        bridge.stream_selector_back();
+
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            let modal = state.modal_item.as_mut().unwrap();
+            modal.seasons = vec![1];
+            modal.videos = vec![Video {
+                id: "series:1:1".into(),
+                season: Some(1),
+                episode: Some(1),
+                name: "Pilot".into(),
+                released: Some("2020-01-01".into()),
+                ..Default::default()
+            }];
+        }
+        app.set_modal_episodes(true);
+        bridge.episode_picked(0);
+        assert!(app.get_stream_selector_open());
+        assert!(!app.get_episode_context().is_empty());
+        bridge.stream_selector_back();
+        assert!(!app.get_stream_selector_open());
+        assert!(app.get_modal_episodes());
+        assert!(app.get_episode_context().is_empty());
+        // A completed episode is the return anchor, even though Continue
+        // would select the next episode. Restore its season and second page.
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            let modal = state.modal_item.as_mut().unwrap();
+            modal.seasons = vec![1, 2];
+            modal.videos.extend((1..=60).map(|episode| Video {
+                id: format!("series:2:{episode}"),
+                season: Some(2),
+                episode: Some(episode),
+                name: format!("Episode {episode}"),
+                ..Default::default()
+            }));
+            state.progress.insert(
+                progress_map_key("series", "series:2:57"),
+                EpisodeProgress {
+                    series_id: "series".into(),
+                    episode_id: "series:2:57".into(),
+                    watched: true,
+                    updated_at_secs: 100,
+                    ..Default::default()
+                },
+            );
+        }
+        app.set_episode_filter("Pilot".into());
+        app.set_stream_selector_open(true);
+        app.set_episode_context("Pilot".into());
+        bridge.stream_selector_back();
+        assert_eq!(app.get_season_combo_idx(), 1);
+        assert_eq!(app.get_episode_page(), 1);
+        assert_eq!(app.get_detail_kb_ep(), 6);
+        assert!(app.get_episode_filter().is_empty());
+        assert!(app.get_detail_episode_reveal_request() > 0);
+        app.set_stream_selector_open(true);
+        app.set_episode_context("Episode 57".into());
+        bridge.restore_detail_after_playback();
+        assert!(!app.get_stream_selector_open());
+        assert_eq!(app.get_detail_kb_ep(), 6);
+        bridge.episode_picked(0);
+        app.set_detail_deep_stream(true);
+        bridge.stream_selector_back();
+        assert!(!app.get_modal_visible());
+        assert!(!app.get_stream_selector_open());
+        assert!(bridge.shared.lock().unwrap().modal_item.is_none());
+    }
 
     #[test]
     fn cached_headers_add_poster_urls_without_breaking_older_storage() {

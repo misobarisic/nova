@@ -25,6 +25,8 @@ fn wrapped_stream_row_grows_to_fit() {
 
     let text = "Torrentio averylongunbrokenstreamlabelfilenamewithoutanyspaces that must wrap over many lines on this narrow phone width";
     app.set_modal_visible(true);
+    app.set_detail_is_movie(true);
+    app.set_stream_selector_open(true);
     app.set_detail_tab(0);
     app.set_modal_episodes(false);
     app.set_selected_title(s("Movie"));

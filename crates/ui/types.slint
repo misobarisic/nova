@@ -14,6 +14,8 @@ export struct MediaCard {
     watched: bool,
     /// Library-only display state; catalog cards leave these at their defaults.
     status: string,
+    /// Untranslated automatic category / status pin, for stable pill colors.
+    status_key: string,
     /// Library activity action: 0 unavailable, 3 await return, 4 resume viewing.
     activity_action: int,
     media_type: string,

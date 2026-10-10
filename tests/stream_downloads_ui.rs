@@ -45,6 +45,8 @@ fn pinned_download_and_stream_actions_fit_and_dispatch() {
     app.window().set_size(slint::PhysicalSize::new(360, 1200));
     app.window().show().unwrap();
     app.set_modal_visible(true);
+    app.set_detail_is_movie(true);
+    app.set_stream_selector_open(true);
     app.set_detail_tab(0);
     app.set_modal_episodes(false);
     app.set_selected_title(s("Movie"));

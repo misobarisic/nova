@@ -1838,7 +1838,7 @@ export component SettingsPage {
                                                             roomy: true;
                                                             btn_min_width: 92px;
                                                             focused: root.kb_zone == 1 && root.kb_actl == 1 && root.kb_active;
-                                                            clicked => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 1; root.kb_actl = 1; root.addon_added(addon_url_wide.full-text); }
+                                                            clicked => { nav_scope.focus(); root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 1; root.kb_actl = 1; root.addon_added(addon_url_wide.full-text); }
                                                         }
                                                     }
                                                 }
@@ -1912,7 +1912,7 @@ export component SettingsPage {
                                                         roomy: true;
                                                         btn_min_width: 92px;
                                                         focused: root.kb_zone == 1 && root.kb_actl == 1 && root.kb_active;
-                                                        clicked => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 1; root.kb_actl = 1; root.addon_added(addon_url_narrow.full-text); }
+                                                        clicked => { nav_scope.focus(); root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 1; root.kb_actl = 1; root.addon_added(addon_url_narrow.full-text); }
                                                     }
                                                 }
                                             }
@@ -1944,19 +1944,19 @@ export component SettingsPage {
                                     if !root.narrow: Segmented {
                                         labels: [@tr("All"), @tr("Searchable catalogs"), @tr("Metadata"), @tr("Streams")];
                                         current_index <=> root.addon_capability_filter;
-                                        picked(index) => { root.addon_capability_filter = index; root.addon_filter_changed(); }
+                                        picked(index) => { nav_scope.focus(); root.addon_capability_filter = index; root.addon_filter_changed(); }
                                     }
                                     if root.narrow: VerticalLayout {
                                         spacing: 0px;
                                         Segmented {
                                             labels: [@tr("All"), @tr("Searchable catalogs")];
                                             current_index: root.addon_capability_filter < 2 ? root.addon_capability_filter : -1;
-                                            picked(index) => { root.addon_capability_filter = index; root.addon_filter_changed(); }
+                                            picked(index) => { nav_scope.focus(); root.addon_capability_filter = index; root.addon_filter_changed(); }
                                         }
                                         Segmented {
                                             labels: [@tr("Metadata"), @tr("Streams")];
                                             current_index: root.addon_capability_filter >= 2 ? root.addon_capability_filter - 2 : -1;
-                                            picked(index) => { root.addon_capability_filter = index + 2; root.addon_filter_changed(); }
+                                            picked(index) => { nav_scope.focus(); root.addon_capability_filter = index + 2; root.addon_filter_changed(); }
                                         }
                                     }
                                     Rectangle {
@@ -2004,6 +2004,8 @@ export component SettingsPage {
                                                     kb_active: root.kb_active;
                                                     kb_col: root.kb_ac;
                                                     toggled(on) => {
+                                                        // Row rebuilds must not destroy the only Back route.
+                                                        nav_scope.focus();
                                                         root.addon_rows[i].enabled = on;
                                                         root.kb_active = SettingsStyle.keyboard-mode;
                                                         root.kb_zone = 2;
@@ -2011,12 +2013,12 @@ export component SettingsPage {
                                                         root.kb_ac = 0;
                                                         root.addon_toggled(i);
                                                     }
-                                                    configure => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ar = i; root.kb_ac = 1; root.addon_configure(row.config_url); }
-                                                    copy_link => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ar = i; root.kb_ac = 2; root.addon_copy_link(row.url); }
-                                                    refresh => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ar = i; root.kb_ac = 3; root.addon_refresh(i); }
-                                                    remove => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ar = i; root.kb_ac = 4; root.addon_remove(i); }
-                                                    move_up => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ac = 5; root.addon_move_up(i); root.kb_ar = Math.max(0, i - 1); }
-                                                    move_down => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ac = 6; root.addon_move_down(i); root.kb_ar = Math.min(root.addon_rows.length - 1, i + 1); }
+                                                    configure => { nav_scope.focus(); root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ar = i; root.kb_ac = 1; root.addon_configure(row.config_url); }
+                                                    copy_link => { nav_scope.focus(); root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ar = i; root.kb_ac = 2; root.addon_copy_link(row.url); }
+                                                    refresh => { nav_scope.focus(); root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ar = i; root.kb_ac = 3; root.addon_refresh(i); }
+                                                    remove => { nav_scope.focus(); root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ar = i; root.kb_ac = 4; root.addon_remove(i); }
+                                                    move_up => { nav_scope.focus(); root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ac = 5; root.addon_move_up(i); root.kb_ar = Math.max(0, i - 1); }
+                                                    move_down => { nav_scope.focus(); root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 2; root.kb_ac = 6; root.addon_move_down(i); root.kb_ar = Math.min(root.addon_rows.length - 1, i + 1); }
                                                 }
                                             }
                                         }
@@ -3042,14 +3044,35 @@ export component SettingsPage {
                                                 VerticalLayout {
                                                     spacing: 3px;
 
-                                                    Text {
-                                                        text: @tr("Playback speed");
-                                                        font-size: 14px;
-                                                        font-weight: 600;
-                                                        color: Theme.current.text_bright;
-                                                        wrap: word-wrap;
+                                                    speed_title_line := Rectangle {
+                                                        // Match ordinary settings rows without forcing
+                                                        // translated titles and badges onto one line.
+                                                        property <bool> inline-badge: speed_title_natural.preferred-width + speed_scope_badge.preferred-width + 8px <= self.width;
+                                                        height: self.inline-badge ? Math.max(speed_title.preferred-height, 26px) : speed_title.preferred-height + 29px;
+
+                                                        Rectangle {
+                                                            width: 0px; height: 0px; clip: true;
+                                                            speed_title_natural := Text { width: 0px; height: 0px; text: @tr("Playback speed"); font-size: 14px; font-weight: 600; }
+                                                        }
+                                                        speed_title := Text {
+                                                            text: @tr("Playback speed");
+                                                            font-size: 14px;
+                                                            font-weight: 600;
+                                                            color: Theme.current.text_bright;
+                                                            wrap: word-wrap;
+                                                            min-width: 0px;
+                                                            width: speed_title_line.inline-badge ? speed_title_natural.preferred-width : parent.width;
+                                                            height: self.preferred-height;
+                                                            y: speed_title_line.inline-badge ? (parent.height - self.height) / 2 : 0px;
+                                                        }
+                                                        speed_scope_badge := SettingSyncBadge {
+                                                            setting_key: "playback_speed";
+                                                            setting_title: @tr("Playback speed");
+                                                            width: Math.min(self.preferred-width, parent.width);
+                                                            x: speed_title_line.inline-badge ? speed_title_natural.preferred-width + 8px : 0px;
+                                                            y: speed_title_line.inline-badge ? (parent.height - self.height) / 2 : speed_title.preferred-height + 3px;
+                                                        }
                                                     }
-                                                    SettingSyncBadge { max-width: parent.width; setting_key: "playback_speed"; setting_title: @tr("Playback speed"); }
 
                                                     Text {
                                                         text: @tr("Rate the built-in player starts at. The slider covers 0.5×–2.0×; ± moves in 0.05× steps.");

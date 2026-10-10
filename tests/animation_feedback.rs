@@ -54,6 +54,7 @@ fn sheet_and_player_feedback_respect_animation_switches() {
     app.window().set_size(slint::PhysicalSize::new(360, 800));
     app.window().show().unwrap();
     app.set_modal_visible(true);
+    app.set_stream_selector_open(true);
     app.set_stream_action_title("Stream options".into());
     app.set_stream_action_items(
         Rc::new(VecModel::from(vec![nova::SheetItem {

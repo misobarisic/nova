@@ -39,10 +39,12 @@ fn pills_keep_one_width_and_the_download_rail_fills_left_to_right() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
-    // Keep stream controls visible beneath the movie hero’s library button.
+    // Keep the complete selector header and both sample rows visible.
     app.window().set_size(slint::PhysicalSize::new(600, 1200));
     app.window().show().unwrap();
     app.set_modal_visible(true);
+    app.set_detail_is_movie(true);
+    app.set_stream_selector_open(true);
     app.set_detail_tab(0);
     app.set_modal_episodes(false);
     app.set_selected_title(s("Movie"));

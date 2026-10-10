@@ -110,6 +110,7 @@ impl Bridge {
                     is_loaded: previous.is_some(),
                     badge: library_badge_for(&e.id, &episodes, &map).into(),
                     status: text::tr(status).into(),
+                    status_key: status.into(),
                     activity_action: viewing_menu_action(e, &episodes, &map, activity.get(&e.id)),
                     media_type: text::tr(if e.type_ == "movie" { "Movie" } else { "TV" }).into(),
                     watched_count,
@@ -652,6 +653,9 @@ impl Bridge {
         self.persist_header_for(&e.id, &paint_genres, &paint_description, &paint_year, false);
 
         app.set_selected_title(SharedString::from(&e.name));
+        app.set_detail_is_movie(e.type_ == "movie");
+        app.set_stream_selector_open(false);
+        app.set_detail_episode_reveal_request(0);
         app.set_selected_year(SharedString::from(&paint_year));
         app.set_selected_index(-1);
         self.clear_streams();
@@ -738,6 +742,7 @@ impl Bridge {
         if e.type_ == "movie" {
             self.start_stream_search(e.id.clone());
             self.refresh_movie_meta(e.id);
+            self.refresh_watch_action();
         } else {
             self.prepare_episodes(e.id, e.type_);
         }

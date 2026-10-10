@@ -192,6 +192,7 @@ fn detail_screen_has_no_horizontal_overflow() {
             // Picked-episode streams state.
             app.set_detail_tab(3);
             app.set_modal_episodes(false);
+            app.set_stream_selector_open(true);
             app.set_episode_context(s("S1 E1 · Pilot With A Long Title"));
             let app3 = app.as_weak();
             let failures3 = failures2.clone();
@@ -208,6 +209,7 @@ fn detail_screen_has_no_horizontal_overflow() {
                 // must squeeze (elide) instead of pushing the page wide.
                 // Back in list state so the top-bar context pill stays out.
                 app.set_modal_episodes(true);
+                app.set_stream_selector_open(false);
                 app.set_episode_context(s(""));
                 app.window().set_size(slint::PhysicalSize::new(320, 800));
                 let app4 = app.as_weak();

@@ -109,6 +109,7 @@ fn desktop_stream_right_click_prepares_actions_without_opening_a_sheet_or_playin
     app.set_show_home(false);
     app.set_modal_visible(true);
     app.set_modal_episodes(false);
+    app.set_stream_selector_open(true);
     app.set_selected_title(s("Movie"));
     app.set_streams(
         Rc::new(VecModel::from(vec![

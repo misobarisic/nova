@@ -1,0 +1,865 @@
+import { Theme } from "theme.slint";
+import { Anim } from "anim.slint";
+import { StreamRow, SheetItem } from "types.slint";
+import { Spinner } from "std-widgets.slint";
+import { MenuSheet } from "menusheet.slint";
+import { IcPlay, IcCheck, IcMoreHoriz, IcChevronLeft, IcChevronRight } from "icons.slint";
+
+// One filter pill in the horizontal addon bar above the stream list.
+component StreamFilterPill inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    in property <bool> focused;
+    // The addon is still being queried: show a small spinner on the right.
+    in property <bool> loading;
+    callback picked();
+    callback reveal_requested(length, length);
+    // Side padding. The pill keeps this intrinsic width whether or not a
+    // query is in flight: while loading the spinner *replaces* the trailing
+    // padding (same 12px) instead of adding to it, so the bar no longer
+    // reflows as addons answer one by one.
+    property <length> pad: 12px;
+
+    height: 36px;
+    border-radius: 18px;
+    background: selected ? Theme.current.accent : (pill_touch.has-hover ? Theme.current.detail_filter_hover : Theme.current.control);
+    clip: true;
+    border-width: root.focused ? 2px : 0px;
+    border-color: Theme.current.accent_vivid;
+    accessible-role: button;
+    accessible-label: root.label;
+    changed focused => { if (root.focused) { reveal_t.start(); } }
+    reveal_t := Timer {
+        interval: 16ms;
+        running: root.focused;
+        triggered => { self.stop(); root.reveal_requested(root.absolute-position.x, root.width); }
+    }
+
+    HorizontalLayout {
+        padding-left: root.pad;
+        padding-right: root.loading ? 0px : root.pad;
+        spacing: root.loading ? 0px : 8px;
+
+        Text {
+            text: root.label;
+            color: root.selected ? Theme.current.text_bright : Theme.current.text_filter;
+            font-size: 13px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+
+        // Centred in the pill's height (a layout child of a HorizontalLayout
+        // is top-aligned, and a squashed ring would look wrong).
+        if root.loading: Rectangle {
+            width: root.pad;
+            height: 100%;
+
+            Spinner {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: root.pad;
+                height: root.pad;
+            }
+        }
+    }
+
+    pill_touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+}
+
+// Chevron button shared by compact stream controls and touch-sized episode paging.
+export component PageButton inherits Rectangle {
+    // 0 = previous (‹), 1 = next (›).
+    in property <int> glyph: 0;
+    in property <bool> roomy: false;
+    in property <bool> minimal: false;
+    in property <string> name: "";
+    in property <bool> enabled: true;
+    callback picked();
+
+    width: root.roomy ? 44px : 28px;
+    height: self.width;
+    horizontal-stretch: 0;
+    border-radius: root.roomy ? 12px : 8px;
+    background: root.minimal || !root.enabled ? transparent : (pg_touch.has-hover ? Theme.current.pager_hover : (root.roomy ? Theme.current.pager_roomy : Theme.current.control));
+    border-width: root.minimal ? 0px : 1px;
+    border-color: root.enabled ? Theme.current.step_border : Theme.current.pager_disabled_border;
+    accessible-role: button;
+    accessible-label: root.name;
+
+    // The icon stays visually small without shrinking its touch target.
+    if root.minimal: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 28px; height: 28px;
+        border-radius: 8px;
+        background: root.enabled && pg_touch.has-hover ? Theme.current.border_subtle : transparent;
+    }
+
+    if root.glyph == 0: IcChevronLeft {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.minimal ? 16px : 18px;
+        height: self.width;
+        fill: root.enabled ? Theme.current.text_primary : Theme.current.icon_disabled;
+    }
+    if root.glyph == 1: IcChevronRight {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.minimal ? 16px : 18px;
+        height: self.width;
+        fill: root.enabled ? Theme.current.text_primary : Theme.current.icon_disabled;
+    }
+
+    pg_touch := TouchArea {
+        enabled: root.enabled;
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+}
+
+// Pager buttons for the episode list: rendered both above and under the grid,
+// so a 200-episode season can be turned from either end without scrolling back
+// to the top.
+export component EpisodePager inherits Rectangle {
+    in property <int> page: 0;
+    in property <int> count: 1;
+    // Stream/filter hosts keep the compact chevrons. Episodes retain touch
+    // targets around small, unboxed arrows and a quiet page counter.
+    in property <bool> episode-style: false;
+    callback picked(int);
+
+    width: root.episode-style ? 152px : 62px;
+    height: root.episode-style ? 44px : 28px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    background: transparent;
+
+    HorizontalLayout {
+        spacing: root.episode-style ? 4px : 6px;
+        PageButton {
+            glyph: 0;
+            roomy: root.episode-style;
+            minimal: root.episode-style;
+            name: @tr("Previous page");
+            enabled: root.page > 0;
+            picked => { root.picked(root.page - 1); }
+        }
+        if root.episode-style: page_counter := Text {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            height: 44px;
+            text: @tr("{} / {}", root.page + 1, root.count);
+            accessible-label: @tr("Page {}/{}", root.page + 1, root.count);
+            color: Theme.current.text_detail_metadata;
+            font-size: 13px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        PageButton {
+            glyph: 1;
+            roomy: root.episode-style;
+            minimal: root.episode-style;
+            name: @tr("Next page");
+            enabled: root.page + 1 < root.count;
+            picked => { root.picked(root.page + 1); }
+        }
+    }
+}
+
+// Addon filter pills above the stream list: All + one per addon, with
+// per-pill spinners while queries are in flight. The fixed header owns one
+// instance independently of the vertical result viewport.
+component StreamFilterBar inherits HorizontalLayout {
+    in property <[string]> addons: [];
+    in property <[bool]> loading: [];
+    in property <bool> searching: false;
+    // Active filter: 0 = All, otherwise 1-based index into `addons`.
+    in property <int> addon_filter: 0;
+    in property <bool> touch_menus: false;
+    in property <bool> kb_active: false;
+
+    callback filter_picked(int);
+
+    function reveal_pill(x: length, width: length) {
+        let relative = x - pill_flick.absolute-position.x;
+        let min_x = Math.min(0px, pill_flick.width - pill_flick.content-width);
+        if (relative < 0px) { pill_flick.content-x = Math.min(0px, pill_flick.content-x - relative); }
+        else if (relative + width > pill_flick.width) {
+            pill_flick.content-x = Math.max(min_x, pill_flick.content-x - (relative + width - pill_flick.width));
+        }
+    }
+
+    min-width: 0px;
+    spacing: 8px;
+
+    // True while the pill row is wider than its viewport. The desktop
+    // chevron slots below are always laid out (never `if`-gated), so
+    // this flag can't feed back into the geometry (binding loop).
+    property <bool> overflowing: pill_row.width > pill_flick.width + 1px;
+
+    // Desktop chevron slots: fixed geometry whether or not the row
+    // overflows; the buttons fade in only while useful (an `if` here
+    // would resize the viewport and loop with `overflowing` above).
+    // A disabled touch passes taps through, so a faded slot is inert.
+    if !root.touch_menus: PageButton {
+        glyph: 0;
+        name: @tr("Scroll filters left");
+        opacity: root.overflowing && pill_flick.content-x < -0.5px ? 1.0 : 0.0;
+        animate opacity { duration: Anim.hover_fast; }
+        enabled: root.overflowing && pill_flick.content-x < -0.5px;
+        picked => {
+            pill_flick.content-x = Math.min(0px, pill_flick.content-x + pill_flick.width);
+        }
+    }
+
+    pill_flick := Flickable {
+        horizontal-stretch: 1;
+        min-width: 0px;
+        height: 36px;
+        interactive: true;
+        content-width: pill_row.width;
+        content-height: self.height;
+
+        // Explicit width = intrinsic pill row width, so the Flickable
+        // scrolls it horizontally instead of squeezing it.
+        pill_row := HorizontalLayout {
+            width: self.preferred-width;
+            height: 36px;
+            spacing: 8px;
+            alignment: start;
+
+            for i in root.addons.length + 1: StreamFilterPill {
+                label: i == 0 ? @tr("All") : root.addons[i - 1];
+                selected: root.addon_filter == i;
+                focused: root.kb_active && root.addon_filter == i;
+                loading: i == 0 ? root.searching : (i - 1 < root.loading.length && root.loading[i - 1]);
+                picked => { root.filter_picked(i); }
+                reveal_requested(x, w) => { root.reveal_pill(x, w); }
+            }
+        }
+    }
+
+    if !root.touch_menus: PageButton {
+        glyph: 1;
+        name: @tr("Scroll filters right");
+        opacity: root.overflowing && pill_flick.content-x > pill_flick.width - pill_flick.content-width + 0.5px ? 1.0 : 0.0;
+        animate opacity { duration: Anim.hover_fast; }
+        enabled: root.overflowing && pill_flick.content-x > pill_flick.width - pill_flick.content-width + 0.5px;
+        picked => {
+            pill_flick.content-x = Math.max(pill_flick.width - pill_flick.content-width, pill_flick.content-x - pill_flick.width);
+        }
+    }
+}
+
+// One row model and action path serve every responsive selector layout.
+component StreamList {
+    in property <[StreamRow]> rows;
+    in property <int> page_start: 0;
+    in property <int> kb_focus: -1;
+    in property <bool> kb_active;
+    in property <bool> touch_menus;
+    in property <[SheetItem]> action_items;
+    callback picked(int);
+    callback action_requested(string);
+    callback action_selected(string, int);
+    callback focused_row(length, length);
+
+    VerticalLayout {
+        width: 100%;
+        min-width: 0px;
+        spacing: Theme.card_spacing;
+        for st[i] in root.rows: stream_row := Rectangle {
+            width: 100%;
+            min-width: 0px;
+            // Follow the text as it actually wraps at the live width;
+            // Slint measures wrapped Text at its intrinsic (single-line)
+            // width, so the `st.lines` heuristic alone under-counts on
+            // narrow screens and clips. Keep it as a floor for the first
+            // paint (before `row_measure` has a width).
+            min-height: Math.max(
+                48px,
+                max(st.lines * 22px + 24px,
+                    row_measure.preferred-height + 20px
+                        + ((st.is_download && st.download_action != 4) ? 4px : 0px)),
+            );
+            property <bool> focused: root.kb_active && root.kb_focus == i + root.page_start;
+            background: st.is_download ? Theme.current.stream_download : (self.focused ? Theme.current.selection_wash : Theme.current.stream_card);
+            changed focused => { if (self.focused) { reveal_t.start(); } }
+            changed y => { if (self.focused) { reveal_t.start(); } }
+            changed height => { if (self.focused) { reveal_t.start(); } }
+            reveal_t := Timer {
+                interval: 16ms;
+                running: stream_row.focused;
+                triggered => {
+                    self.stop();
+                    if (stream_row.focused) { root.focused_row(stream_row.absolute-position.y, stream_row.height); }
+                }
+            }
+            border-radius: Theme.card_corner_radius;
+            // Black cards need an edge against the black canvas; keyboard
+            // focus retains its stronger accent ring in either theme.
+            border-width: self.focused ? 2px : (Theme.true_black ? 1px : 0px);
+            border-color: self.focused ? Theme.current.focus_ring : Theme.current.border_soft;
+            clip: true;
+
+            VerticalLayout {
+                width: 100%;
+                min-width: 0px;
+                padding-top: 10px;
+                padding-bottom: 10px;
+                padding-left: 16px;
+                padding-right: 92px;
+                // Explicit so the hidden `row_measure` (same spacing)
+                // matches this layout's content height exactly.
+                spacing: 0px;
+
+                Text {
+                    text: st.text;
+                    color: Theme.current.text_primary;
+                    font-size: 16px;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                    width: 100%;
+                    min-width: 0px;
+                }
+
+                if st.details != "": Text {
+                    text: st.details;
+                    color: Theme.current.text_download;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                    width: 100%;
+                    min-width: 0px;
+                }
+
+                // Progress rail, anchored to the left edge (`x: 0`, like
+                // the other rails in the app) so it fills left → right.
+                // Hidden once the file is complete: the row reads
+                // "Downloaded" and an empty rail there is just noise.
+                if st.is_download && st.download_action != 4: dl_bar := Rectangle {
+                    x: 0;
+                    width: 100%;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Theme.current.download_track;
+
+                    dl_fill := Rectangle {
+                        x: 0;
+                        width: parent.width * st.download_progress;
+                        height: 100%;
+                        border-radius: 2px;
+                        background: Theme.current.accent;
+                    }
+                }
+            }
+
+            // Hidden measurement copy of the text stack at the padded
+            // content width (16px left, 92px for the trailing controls), so
+            // the row minimum above tracks real wrapping instead of the
+            // intrinsic one-line width.
+            mrow := Rectangle {
+                width: 100%;
+                height: 0;
+                clip: true;
+
+                row_measure := VerticalLayout {
+                    width: Math.max(0px, mrow.width - 108px);
+                    spacing: 0px;
+
+                    Text {
+                        text: st.text;
+                        font-size: 16px;
+                        wrap: word-wrap;
+                        min-width: 0px;
+                    }
+
+                    if st.details != "": Text {
+                        text: st.details;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                        min-width: 0px;
+                    }
+                }
+            }
+
+            // Populate the backend-owned actions before explicitly showing
+            // the desktop popup; a ContextMenuArea's automatic right-click
+            // would otherwise open before this row's actions are prepared.
+            stream_ctx := ContextMenuArea {
+                x: 0px; y: 0px;
+                width: 0px; height: 0px;
+                Menu {
+                    for action[a] in root.action_items: MenuItem {
+                        title: action.label;
+                        enabled: action.enabled;
+                        activated => { root.action_selected(st.id, a); }
+                    }
+                }
+            }
+
+            touch_st := TouchArea {
+                property <bool> lp_suppress: false;
+                width: 100%;
+                height: 100%;
+                accessible-role: button;
+                accessible-label: st.text;
+                mouse-cursor: pointer;
+                clicked => {
+                    if (touch_st.lp_suppress) {
+                        touch_st.lp_suppress = false;
+                    } else {
+                        root.picked(i + root.page_start);
+                    }
+                }
+                pointer-event(ev) => {
+                    if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
+                        row_lp_timer.stop();
+                        touch_st.lp_suppress = true;
+                        root.action_requested(st.id);
+                        if (!root.touch_menus) {
+                            stream_ctx.show({ x: self.mouse-x, y: self.mouse-y });
+                        }
+                    } else if (ev.kind == PointerEventKind.down) {
+                        touch_st.lp_suppress = false;
+                        if (root.touch_menus) {
+                            row_lp_timer.stop();
+                            row_lp_timer.start();
+                        }
+                    } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                        row_lp_timer.stop();
+                    }
+                }
+                moved => {
+                    if (Math.abs(touch_st.mouse-x - touch_st.pressed-x)
+                        + Math.abs(touch_st.mouse-y - touch_st.pressed-y) > 24px) {
+                        row_lp_timer.stop();
+                    }
+                }
+            }
+
+            if !st.is_download || st.download_action != 4: IcPlay {
+                x: parent.width - 82px;
+                y: (parent.height - self.height) / 2;
+                width: 20px; height: 20px;
+                fill: Theme.current.text_secondary;
+            }
+            if st.is_download && st.download_action == 4: IcCheck {
+                x: parent.width - 82px;
+                y: (parent.height - self.height) / 2;
+                width: 20px; height: 20px;
+                fill: Theme.current.text_download;
+            }
+            stream_actions := Rectangle {
+                x: parent.width - 52px;
+                y: (parent.height - self.height) / 2;
+                width: 44px; height: 44px;
+                border-radius: 10px;
+                background: action_touch.has-hover ? Theme.current.hover_overlay : transparent;
+                accessible-role: button;
+                accessible-label: @tr("Stream actions");
+                IcMoreHoriz {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 20px; height: 20px;
+                    fill: Theme.current.text_secondary;
+                }
+                action_touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.action_requested(st.id);
+                        if (!root.touch_menus) { stream_ctx.show({ x: stream_actions.x, y: stream_actions.y + stream_actions.height }); }
+                    }
+                }
+            }
+
+            row_lp_timer := Timer {
+                interval: 600ms;
+                running: false;
+                triggered => {
+                    self.stop();
+                    touch_st.lp_suppress = true;
+                    root.action_requested(st.id);
+                }
+            }
+        }
+
+    }
+}
+
+component SelectorIconButton inherits Rectangle {
+    in property <bool> focused;
+    callback picked();
+    width: 44px; height: 44px;
+    border-radius: 22px;
+    background: touch.has-hover ? Theme.current.hero_control_hover : Theme.current.hero_control;
+    border-width: root.focused ? 2px : 1px;
+    border-color: root.focused ? Theme.current.focus_ring : Theme.current.border_strong;
+    accessible-role: button;
+    accessible-label: @tr("Back");
+    IcChevronLeft {
+        x: 12px; y: 12px; width: 20px; height: 20px;
+        fill: Theme.current.text_primary;
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.picked(); } }
+}
+
+// The three designs share live data and one focus scope. Resizing only changes
+// geometry, so active downloads, addon filters and the current page survive.
+export component StreamSelector inherits Rectangle {
+    in property <string> title;
+    in property <bool> is_movie;
+    in property <string> year;
+    in property <string> episode_context;
+    in property <image> poster;
+    in property <image> backdrop;
+    in property <[StreamRow]> rows;
+    in property <string> hint;
+    in property <[string]> addons;
+    in property <[bool]> loading;
+    in property <bool> searching;
+    in property <int> addon_filter;
+    in property <int> page;
+    in property <int> page_count;
+    in property <int> page_start;
+    in property <int> total;
+    in property <bool> touch_menus;
+    in property <length> safe-top;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    in property <length> safe-bottom;
+    in-out property <int> kb_index;
+    in-out property <bool> kb_active;
+    in-out property <bool> action_open;
+    in property <string> action_title;
+    in property <string> action_id;
+    in property <[SheetItem]> action_items;
+    callback back();
+    callback picked(int);
+    callback page_picked(int);
+    callback filter_picked(int);
+    callback action_requested(string);
+    callback action_selected(string, int);
+
+    width: 100%; height: 100%;
+    background: Theme.current.artwork_canvas;
+    private property <length> usable_height: root.height - root.safe-top - root.safe-bottom;
+    private property <bool> short: root.usable_height < 600px;
+    private property <length> usable_width: root.width - root.safe-left - root.safe-right;
+    out property <bool> narrow: root.usable_width < 700px;
+    // Short landscape windows need all of their width for wrapped filenames.
+    out property <bool> artwork_layout: root.usable_width >= 1200px && !root.short;
+    private property <length> margin: root.narrow ? 16px : 32px;
+    private property <length> artwork_width: root.artwork_layout ? root.usable_width * 0.34 : 0px;
+    private property <length> header_height: root.safe-top + (root.short ? 80px : (root.narrow ? 168px : 128px));
+    private property <string> context: root.episode_context != "" ? root.episode_context : (root.is_movie ? (root.year != "" ? @tr("{} · Movie", root.year) : @tr("Movie")) : root.year);
+    // Zones: back, addon filters, stream rows, pager. Stream indexes are
+    // absolute across the Rust-provided 25-row slices.
+    private property <int> focus_zone: 2;
+
+    function request_back() {
+        if (root.action_open) { root.action_open = false; }
+        else { root.back(); }
+    }
+    function move_page(delta: int) {
+        let next = Math.max(0, Math.min(root.page_count - 1, root.page + delta));
+        if (next != root.page) {
+            root.kb_index = next * 25;
+            root.page_picked(next);
+            result_scroll.content-y = 0px;
+        }
+    }
+    function pick_filter(index: int) {
+        root.kb_index = 0;
+        root.filter_picked(Math.max(0, Math.min(root.addons.length, index)));
+        result_scroll.content-y = 0px;
+    }
+    function focus_stream(index: int) {
+        root.kb_index = Math.max(0, Math.min(root.total - 1, index));
+        let page = Math.floor(root.kb_index / 25);
+        if (root.total > 0 && page != root.page) { root.page_picked(page); }
+    }
+    function reveal_row(y: length, h: length) {
+        let relative = y - result_scroll.absolute-position.y;
+        let min_y = Math.min(0px, result_scroll.height - result_scroll.content-height);
+        // A very tall row starts at the viewport's top; shorter rows fit in
+        // full. This uses actual text geometry rather than a fixed row stride.
+        if (relative < 0px) {
+            result_scroll.content-y = Math.min(0px, result_scroll.content-y - relative);
+        } else if (relative + h > result_scroll.height) {
+            let shift = h > result_scroll.height ? relative : relative + h - result_scroll.height;
+            result_scroll.content-y = Math.max(min_y, result_scroll.content-y - shift);
+        }
+    }
+    changed page => { result_scroll.content-y = 0px; }
+    changed total => { root.kb_index = Math.max(0, Math.min(root.kb_index, root.total - 1)); }
+    changed action_open => { if (!root.action_open) { selector_scope.focus(); } }
+
+    // Blank/disabled-control taps keep focus in this screen. Otherwise the
+    // ancestor system-Back scope takes it, and a floating FocusScope can eat
+    // the following press merely to restore focus before the button sees it.
+    TouchArea {
+        width: 100%; height: 100%;
+        clicked => { root.kb_active = false; selector_scope.focus(); }
+    }
+
+    if root.poster.width > 0 || root.backdrop.width > 0: artwork := Rectangle {
+        x: root.safe-left;
+        // Slint centers the shorter phone/compact layer unless anchored.
+        // It must fade from the top header, not appear behind stream rows.
+        y: 0px;
+        width: root.artwork_layout ? root.artwork_width + 80px : root.usable_width;
+        height: root.artwork_layout ? root.height : root.header_height + 80px;
+        clip: true;
+        Image {
+            x: 0px; y: 0px;
+            width: 100%; height: 100%;
+            source: root.backdrop.width > 0 ? root.backdrop : root.poster;
+            image-fit: cover;
+            opacity: root.artwork_layout ? 0.65 : 0.35;
+        }
+        Image {
+            x: 0px; y: 0px;
+            width: 100%; height: 100%;
+            source: Theme.true_black ? @image-url("../../assets/detail-bottom-scrim-black.svg") : @image-url("../../assets/detail-bottom-scrim.svg");
+            image-fit: fill;
+        }
+        if root.artwork_layout: Rectangle {
+            x: parent.width - self.width;
+            width: 180px; height: 100%;
+            background: @linear-gradient(90deg, transparent, Theme.current.artwork_canvas);
+        }
+    }
+
+    if root.artwork_layout: artwork_context := VerticalLayout {
+        x: root.safe-left + root.margin;
+        y: root.safe-top + 80px;
+        width: root.artwork_width - 2 * root.margin;
+        height: root.height - root.safe-top - root.safe-bottom - 112px;
+        spacing: 12px;
+        Rectangle { vertical-stretch: 1; background: transparent; }
+        Text {
+            text: root.title;
+            color: Theme.current.text_bright;
+            font-size: 34px; font-weight: 700;
+            wrap: word-wrap; max-lines: 3; overflow: elide;
+        }
+        Text {
+            text: root.context;
+            color: Theme.current.text_secondary;
+            font-size: 16px;
+            wrap: word-wrap; max-lines: 3; overflow: elide;
+        }
+        Text {
+            text: @tr("Select a source to start watching.");
+            color: Theme.current.text_muted;
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+    }
+
+    if !root.artwork_layout: compact_context := HorizontalLayout {
+        // Short phones share the compact header row so status/error feedback
+        // can remain visible without consuming the stream viewport.
+        x: root.safe-left + root.margin + (root.narrow && !root.short ? 0px : 60px);
+        y: root.short ? back_button.y : root.safe-top + (root.narrow ? 64px : 20px);
+        width: root.usable_width - 2 * root.margin - (root.narrow && !root.short ? 0px : 60px);
+        height: root.short ? 48px : (root.narrow ? 88px : 96px);
+        spacing: 16px;
+        if root.poster.width > 0 && (!root.narrow || !root.short): Rectangle {
+            width: root.short ? 32px : (root.narrow ? 58px : 64px);
+            height: 100%;
+            horizontal-stretch: 0;
+            border-radius: Theme.card_corner_radius;
+            clip: true;
+            Image { width: 100%; height: 100%; source: root.poster; image-fit: cover; }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: root.short ? 4px : 6px;
+            min-width: 0px;
+            Text {
+                text: root.title;
+                color: Theme.current.text_bright;
+                font-size: root.short ? 22px : (root.narrow ? 24px : 28px);
+                font-weight: 700;
+                wrap: word-wrap; max-lines: root.short ? 1 : 2; overflow: elide;
+                min-width: 0px;
+            }
+            Text {
+                text: root.context;
+                color: Theme.current.text_secondary;
+                font-size: 13px;
+                wrap: word-wrap; max-lines: root.short ? 1 : 2; overflow: elide;
+                min-width: 0px;
+            }
+        }
+    }
+
+    back_button := SelectorIconButton {
+        x: root.safe-left + root.margin;
+        y: root.safe-top + (root.narrow ? 12px : 20px);
+        focused: root.kb_active && root.focus_zone == 0;
+        picked => { root.kb_active = false; root.request_back(); }
+    }
+
+    selector_body := VerticalLayout {
+        x: root.safe-left + root.artwork_width + root.margin;
+        y: root.artwork_layout ? root.safe-top + 24px : root.header_height;
+        width: root.usable_width - root.artwork_width - 2 * root.margin;
+        height: root.height - self.y - root.safe-bottom - 12px;
+        min-width: 0px;
+        spacing: root.short ? 8px : (root.narrow ? 12px : 16px);
+        HorizontalLayout {
+            height: root.short ? 32px : 40px;
+            spacing: 8px;
+            Text {
+                text: @tr("Choose a stream");
+                color: Theme.current.text_bright;
+                font-size: root.narrow ? 20px : 26px; font-weight: 700;
+                vertical-alignment: center;
+                overflow: elide; min-width: 0px; horizontal-stretch: 1;
+            }
+            Text {
+                text: @tr("{n} stream" | "{n} streams" % root.total);
+                color: Theme.current.text_muted;
+                font-size: 13px; vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+            if root.page_count > 1 && !root.narrow: EpisodePager {
+                page: root.page; count: root.page_count;
+                picked(p) => { root.kb_active = false; root.move_page(p - root.page); }
+            }
+        }
+        // Kept outside the result viewport: horizontal addon swipes cannot
+        // race a surrounding vertical Flickable for pointer ownership.
+        if root.addons.length > 0: StreamFilterBar {
+            addons: root.addons; loading: root.loading;
+            searching: root.searching; addon_filter: root.addon_filter;
+            touch_menus: root.touch_menus || root.narrow;
+            kb_active: root.kb_active && root.focus_zone == 1;
+            filter_picked(i) => { root.kb_active = false; root.pick_filter(i); }
+        }
+        if root.rows.length > 0 && root.hint != "": Text {
+            text: root.hint;
+            font-size: 13px; color: Theme.current.text_muted;
+            wrap: word-wrap; max-lines: root.short ? 1 : 0; overflow: elide; min-width: 0px;
+        }
+        result_scroll := Flickable {
+            vertical-stretch: 1;
+            min-height: 0px;
+            min-width: 0px;
+            content-width: self.width;
+            content-height: root.rows.length > 0 ? stream_list.preferred-height : self.height;
+            stream_list := StreamList {
+                width: result_scroll.width;
+                rows: root.rows; page_start: root.page_start;
+                kb_focus: root.kb_index;
+                kb_active: root.kb_active && root.focus_zone == 2;
+                touch_menus: root.touch_menus;
+                action_items: root.action_items;
+                picked(i) => { root.kb_active = false; root.kb_index = i; root.picked(i); }
+                action_requested(id) => { root.action_requested(id); }
+                action_selected(id, a) => { root.action_selected(id, a); }
+                focused_row(y, h) => { root.reveal_row(y, h); }
+            }
+            if root.rows.length == 0: VerticalLayout {
+                width: result_scroll.width;
+                height: result_scroll.height;
+                alignment: center;
+                spacing: 16px;
+                if root.searching: HorizontalLayout {
+                    alignment: center;
+                    Spinner { width: 24px; height: 24px; }
+                }
+                Text {
+                    text: root.hint != "" ? root.hint : (root.searching ? @tr("Loading streams…") : @tr("No streams found."));
+                    color: Theme.current.text_muted;
+                    font-size: 15px; wrap: word-wrap;
+                    horizontal-alignment: center;
+                    min-width: 0px;
+                }
+            }
+        }
+        if root.page_count > 1 || (!root.touch_menus && !root.narrow && !root.short): HorizontalLayout {
+            height: 44px;
+            spacing: 12px;
+            if !root.touch_menus && !root.narrow && !root.short: Text {
+                text: @tr("↑ ↓ Navigate    Enter Play    Esc Back");
+                color: Theme.current.text_hint;
+                font-size: 12px; vertical-alignment: center;
+                overflow: elide; min-width: 0px;
+            }
+            Rectangle { horizontal-stretch: 1; background: transparent; }
+            if root.page_count > 1: EpisodePager {
+                episode-style: true;
+                page: root.page; count: root.page_count;
+                picked(p) => { root.kb_active = false; root.move_page(p - root.page); }
+                border-width: root.kb_active && root.focus_zone == 3 ? 2px : 0px;
+                border-color: Theme.current.focus_ring;
+                border-radius: 8px;
+            }
+        }
+    }
+
+    selector_scope := FocusScope {
+        width: 100%; height: 100%;
+        focus-on-click: false;
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (e.text == Key.Back && e.repeat) {
+                accept
+            } else if (e.text == Key.Back || e.text == Key.Escape || e.text == Key.Backspace) {
+                root.kb_active = true;
+                root.request_back();
+                accept
+            } else if (root.action_open) {
+                reject
+            } else if (e.text == Key.DownArrow) {
+                root.kb_active = true;
+                if (root.focus_zone < 2) { root.focus_zone += root.addons.length == 0 ? 2 : 1; }
+                else if (root.focus_zone == 2 && root.kb_index + 1 < root.total) { root.focus_stream(root.kb_index + 1); }
+                else if (root.page_count > 1) { root.focus_zone = 3; }
+                accept
+            } else if (e.text == Key.UpArrow) {
+                root.kb_active = true;
+                if (root.focus_zone == 2 && root.kb_index > 0) { root.focus_stream(root.kb_index - 1); }
+                else if (root.focus_zone > 0) { root.focus_zone -= root.focus_zone == 2 && root.addons.length == 0 ? 2 : 1; }
+                accept
+            } else if (e.text == Key.PageUp || e.text == Key.PageDown) {
+                root.kb_active = true;
+                root.move_page(e.text == Key.PageUp ? -1 : 1);
+                root.focus_zone = 2;
+                accept
+            } else if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                root.kb_active = true;
+                let delta = e.text == Key.LeftArrow ? -1 : 1;
+                if (root.focus_zone == 1) { root.pick_filter(root.addon_filter + delta); }
+                else if (root.focus_zone > 1) { root.move_page(delta); }
+                accept
+            } else if (e.text == Key.Return || e.text == " ") {
+                root.kb_active = true;
+                if (root.focus_zone == 0) {
+                    root.request_back();
+                } else if (root.focus_zone == 2 && root.kb_index >= 0 && root.kb_index < root.total) { root.picked(root.kb_index); }
+                accept
+            } else { reject }
+        }
+    }
+
+    MenuSheet {
+        open: root.touch_menus && root.action_open;
+        width: 100%; height: 100%;
+        safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;
+        max_h: root.height * 0.85;
+        sheet_title: root.action_title;
+        items: root.action_items;
+        picked(a) => { root.action_open = false; root.action_selected(root.action_id, a); }
+        closed => { root.action_open = false; selector_scope.focus(); }
+    }
+}

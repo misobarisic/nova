@@ -640,7 +640,7 @@ impl Bridge {
         for (i, entry) in view.iter().enumerate() {
             let episodes = read_episodes_cache_for(&entry.type_, &entry.id).unwrap_or_default();
             let badge = library_badge_for(&entry.id, &episodes, &map);
-            let status = text::tr(entry.watch_status.badge_label().unwrap_or_else(|| {
+            let status_key = entry.watch_status.badge_label().unwrap_or_else(|| {
                 activity_bucket(
                     &entry.id,
                     &episodes,
@@ -648,7 +648,8 @@ impl Bridge {
                     activity.get(&entry.id),
                     today_days(),
                 )
-            }));
+            });
+            let status = text::tr(status_key);
             let media_type = text::tr(if entry.type_ == "movie" {
                 "Movie"
             } else {
@@ -666,6 +667,7 @@ impl Bridge {
             if card.badge.as_str() != badge.as_str()
                 || card.watched != watched
                 || card.status.as_str() != status
+                || card.status_key.as_str() != status_key
                 || card.activity_action
                     != viewing_menu_action(entry, &episodes, &map, activity.get(&entry.id))
                 || card.media_type.as_str() != media_type
@@ -674,6 +676,7 @@ impl Bridge {
             {
                 card.badge = badge.into();
                 card.status = status.into();
+                card.status_key = status_key.into();
                 card.activity_action =
                     viewing_menu_action(entry, &episodes, &map, activity.get(&entry.id));
                 card.media_type = media_type.into();

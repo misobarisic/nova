@@ -4,6 +4,43 @@ Closing the in-app player finalizes its observed progress and immediately rebuil
 Home’s Continue Watching and Upcoming cards, including the next released episode
 and updated resume progress, without requiring a navigation change.
 
+## Fullscreen stream selection
+
+Movies show Start/Continue beside the library button and have no Episodes tab.
+The action opens a fullscreen selector; choosing a series episode opens the same
+selector with its episode context. Provider results arrive incrementally, and
+request-specific downloads stay pinned before the remote results.
+Titles whose addons cannot provide an episode list retain their direct stream
+fallback through the same primary action.
+
+The selector uses the phone layout below 700 logical pixels, a compact full-width
+list from 700 to 1199 pixels, and a shaded artwork/context column from 1200 pixels
+when the usable height is at least 600 pixels. Short landscape windows use the
+compact layout with a single-row title/context header and visible stream feedback.
+Resizing keeps the selected addon, page, stream focus and downloads.
+The addon filters stay in the header while results scroll independently.
+Artwork starts at the top and fades into the canvas. True-black cards use a thin
+gray outline for separation, with the stronger purple ring for keyboard focus.
+Stream rows offer playback and an actions button; desktop keeps native menus and touch
+keeps hold-to-open sheets. Empty/loading states use the existing stream hints.
+
+Back returns a manually chosen episode to its episode list and a movie to
+Overview. Home Continue/Watch Now shortcuts return directly to their root page.
+The selector has one Back control. Returning from the selector or closing playback
+opened in Detail reveals the last watched episode, selecting its season/page,
+clearing a filter that could hide it and scrolling its measured card into view.
+Without viewing history, the selected episode remains the return anchor.
+Movies and Home shortcuts retain their existing return routes. Keyboard
+arrows navigate controls and streams, Enter plays the focused stream, Left/Right
+or PageUp/PageDown change pages, and Escape/Back dismisses the nearest open layer.
+Android system Back routes directly to the selector at the window capture layer;
+it dismisses an open actions sheet first and ignores held-key repeats.
+
+Implementation: `crates/ui/stream-selector.slint` and the AppWindow/Detail host;
+`src/app/{detail,library,home,run}.rs` own entry/exit and callback wiring. Headless
+coverage includes `tests/stream_selector.rs` and the stream paging, downloads,
+wrapped-row and addon-gesture tests.
+
 ## Android system gestures
 
 Leaving the app with Home, switching apps, or turning the screen off pauses

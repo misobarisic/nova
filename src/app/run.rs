@@ -389,6 +389,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_stream_filter_picked(move |idx| b.stream_filter_picked(idx as usize));
 
     let b = bridge.clone();
+    app.on_stream_selector_back(move || b.stream_selector_back());
+
+    let b = bridge.clone();
     app.on_season_picked(move |idx| b.season_picked(idx as usize));
 
     let b = bridge.clone();
@@ -869,6 +872,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         b.clear_next_episode_prompt();
         // Finalize before a next-episode selection installs a new target.
         b.note_player_progress_from_ui();
+        b.restore_detail_after_playback();
     });
 
     let b = bridge.clone();

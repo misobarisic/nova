@@ -675,14 +675,21 @@ export component LibraryPage {
                                 }
 
                                 if card.status != "" && (root.list_view || root.item-width > 100px): library_status := Rectangle {
+                                    // Category colors must not depend on translated captions.
+                                    property <color> status_color: card.status_key == "Watching" ? #338543
+                                        : card.status_key == "Completed" ? #2d4277
+                                        : card.status_key == "Plan to Watch" ? #717171
+                                        : card.status_key == "On Hold" ? #caa320
+                                        : card.status_key == "Dropped" ? #842e2f
+                                        : Theme.current.episode_number_badge;
                                     x: root.list_view ? 104px : 8px;
                                     y: root.list_view ? 10px : 8px;
                                     width: Math.min(status_text.preferred-width + 18px, root.list_view ? parent.width - 152px : parent.width - 54px);
                                     height: 26px;
                                     border-radius: 13px;
                                     border-width: 1px;
-                                    border-color: Theme.current.accent_vivid;
-                                    background: Theme.current.episode_number_badge;
+                                    border-color: self.status_color;
+                                    background: self.status_color;
                                     status_text := Text {
                                         x: 9px;
                                         width: Math.max(1px, parent.width - 18px);

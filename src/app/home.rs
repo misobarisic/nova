@@ -1814,6 +1814,18 @@ impl Bridge {
 
     fn episode_home_picked(&self, c: ContinueEntry) {
         self.episode_home_enter(&c.series_id);
+        let is_movie = self
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .is_some_and(|m| m.id == c.series_id && m.type_ == "movie");
+        if is_movie && let Some(app) = self.app() {
+            self.watch_now();
+            app.set_detail_deep_stream(true);
+            return;
+        }
         // Resolve the resume episode against the cached list (the rows
         // just built come from this same cache, so the index matches).
         let (season, row_idx) = {

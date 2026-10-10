@@ -45,13 +45,15 @@ fn second_page_is_populated_and_picks_absolute_index() {
     i_slint_backend_testing::init_integration_test_with_system_time();
 
     let app = nova::AppWindow::new().unwrap();
-    // Include the movie hero’s library control while keeping both pagers
+    // Include the movie selector while keeping both pagers
     // in view; the test clicks the bottom one rather than scrolling to it.
     app.window().set_size(slint::PhysicalSize::new(900, 800));
     app.window().show().unwrap();
     app.set_animations(false);
     app.set_anim_transitions(false);
     app.set_modal_visible(true);
+    app.set_detail_is_movie(true);
+    app.set_stream_selector_open(true);
     app.set_selected_title(s("Movie"));
     app.set_detail_tab(0);
     app.set_modal_episodes(false);

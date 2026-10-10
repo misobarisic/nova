@@ -862,6 +862,9 @@ impl Bridge {
         }
         if let Some(app) = self.app() {
             app.set_modal_episodes(false);
+            app.set_stream_selector_open(false);
+            app.set_detail_episode_reveal_request(0);
+            app.set_detail_is_movie(false);
             app.set_detail_deep_stream(false);
             app.set_episode_context(SharedString::default());
             app.set_season_names(Rc::new(VecModel::<SharedString>::from(vec![])).into());

@@ -47,6 +47,7 @@ fn library_cards_fit_and_dispatch_progress_search_views_and_menus() {
                     year: "2026".into(),
                     media_type: "TV".into(),
                     status: status.into(),
+                    status_key: status.into(),
                     badge: if i == 1 { "▶ Resume New Days" } else { "" }.into(),
                     watched_count,
                     episode_count,

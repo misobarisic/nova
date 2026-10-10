@@ -1,248 +1,14 @@
 import { Theme } from "theme.slint";
+import { StreamSelector, PageButton, EpisodePager } from "stream-selector.slint";
 import { TitleArtwork } from "title-artwork.slint";
 import { TrackingPanel } from "tracking.slint";
 import { TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow } from "types.slint";
-import { Spinner } from "std-widgets.slint";
 import { SearchField } from "searchfield.slint";
 import { CategoryRow, EpisodeRow, StreamRow, SeasonCard, SheetItem } from "types.slint";
 import { KbMark } from "kbnav.slint";
 import { MenuSheet } from "menusheet.slint";
 import { IcPlay, IcBookmark, IcAdd, IcMoreHoriz, IcSync, IcCheck, IcChevronLeft, IcChevronRight, IcSchedule, IcSearch, IcClose } from "icons.slint";
 import { Anim } from "anim.slint";
-
-// One filter pill in the horizontal addon bar above the stream list.
-component StreamFilterPill inherits Rectangle {
-    in property <string> label;
-    in property <bool> selected;
-    // The addon is still being queried: show a small spinner on the right.
-    in property <bool> loading;
-    callback picked();
-    // The pointer is dragging over this pill (or the gesture is still too
-    // young to tell which way it goes): the bar blocks the page's pan (see
-    // StreamFilterBar::panned). Reported from the pill's own moves because
-    // they arrive *before* the enclosing Flickables hand their held-back
-    // press over, while the page — which registered the press up front —
-    // would otherwise claim the gesture on the first 8px of vertical wobble.
-    callback pan_hint();
-    // The gesture is not the row's to own after all (it is going vertical, so
-    // the page does the panning), or it has ended: the bar hands the page's
-    // pan back at once.
-    callback pan_release();
-
-    // Side padding. The pill keeps this intrinsic width whether or not a
-    // query is in flight: while loading the spinner *replaces* the trailing
-    // padding (same 12px) instead of adding to it, so the bar no longer
-    // reflows as addons answer one by one.
-    property <length> pad: 12px;
-
-    height: 30px;
-    border-radius: 15px;
-    background: selected ? Theme.current.accent : (pill_touch.has-hover ? Theme.current.detail_filter_hover : Theme.current.control);
-    clip: true;
-
-    HorizontalLayout {
-        padding-left: root.pad;
-        padding-right: root.loading ? 0px : root.pad;
-        spacing: root.loading ? 0px : 8px;
-
-        Text {
-            text: root.label;
-            color: root.selected ? Theme.current.text_bright : Theme.current.text_filter;
-            font-size: 13px;
-            font-weight: 600;
-            vertical-alignment: center;
-        }
-
-        // Centred in the pill's height (a layout child of a HorizontalLayout
-        // is top-aligned, and a squashed ring would look wrong).
-        if root.loading: Rectangle {
-            width: root.pad;
-            height: 100%;
-
-            Spinner {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: root.pad;
-                height: root.pad;
-            }
-        }
-    }
-
-    pill_touch := TouchArea {
-        mouse-cursor: pointer;
-        // Gesture anchor for the axis decision below: the first event of the
-        // gesture. A touch reaches this TouchArea as moves before the
-        // enclosing Flickables deliver the press they hold back (its finger id
-        // is non-zero), so the anchor cannot come from `pressed-x` alone.
-        property <length> hint_x: 0px;
-        property <length> hint_y: 0px;
-        property <bool> hint_live: false;
-        // True between `pan_hint` and `pan_release`: the pill owns the
-        // gesture for the bar until the finger says otherwise.
-        property <bool> hint_held: false;
-
-        function hint_stop() {
-            self.hint_live = false;
-            if (self.hint_held) {
-                self.hint_held = false;
-                root.pan_release();
-            }
-        }
-
-        pointer-event(ev) => {
-            if (ev.kind == PointerEventKind.down) {
-                self.hint_x = self.mouse-x;
-                self.hint_y = self.mouse-y;
-                self.hint_live = true;
-            } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
-                self.hint_stop();
-            } else if (ev.kind == PointerEventKind.move) {
-                if (!(self.pressed || ev.touch-finger-id != 0)) {
-                    // A hover, not a drag: the pills are simply under the
-                    // pointer. (`pressed` lags the first moves of a mouse
-                    // drag — the enclosing Flickables hold its press back for
-                    // 100ms — so a mouse can only own the gesture from there
-                    // on.)
-                    self.hint_stop();
-                    return;
-                }
-                if (!self.hint_live) {
-                    self.hint_x = self.mouse-x;
-                    self.hint_y = self.mouse-y;
-                    self.hint_live = true;
-                }
-                let dx = self.mouse-x - self.hint_x;
-                let dy = self.mouse-y - self.hint_y;
-                if (Math.abs(dy) > 8px && Math.abs(dy) > Math.abs(dx)) {
-                    // Going vertical: hand the page's pan back so the drag
-                    // scrolls like it would anywhere else.
-                    self.hint_stop();
-                } else {
-                    // Horizontal, or too early to tell — hold the page off
-                    // now: the page trips its own 8px vertical threshold
-                    // within a frame or two, and a gesture it captured is
-                    // never given back.
-                    self.hint_held = true;
-                    root.pan_hint();
-                }
-            }
-        }
-
-        // A gesture can pass without an up/cancel reaching the grabbing item,
-        // but `pressed` always falls — the same safety net the landing cards
-        // use.
-        changed pressed => {
-            if (!self.pressed) {
-                self.hint_stop();
-            }
-        }
-
-        clicked => { root.picked(); }
-    }
-}
-
-// Chevron button shared by compact stream controls and touch-sized episode paging.
-component PageButton inherits Rectangle {
-    // 0 = previous (‹), 1 = next (›).
-    in property <int> glyph: 0;
-    in property <bool> roomy: false;
-    in property <bool> minimal: false;
-    in property <string> name: "";
-    in property <bool> enabled: true;
-    callback picked();
-
-    width: root.roomy ? 44px : 28px;
-    height: self.width;
-    horizontal-stretch: 0;
-    border-radius: root.roomy ? 12px : 8px;
-    background: root.minimal || !root.enabled ? transparent : (pg_touch.has-hover ? Theme.current.pager_hover : (root.roomy ? Theme.current.pager_roomy : Theme.current.control));
-    border-width: root.minimal ? 0px : 1px;
-    border-color: root.enabled ? Theme.current.step_border : Theme.current.pager_disabled_border;
-    accessible-role: button;
-    accessible-label: root.name;
-
-    // The icon stays visually small without shrinking its touch target.
-    if root.minimal: Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 28px; height: 28px;
-        border-radius: 8px;
-        background: root.enabled && pg_touch.has-hover ? Theme.current.border_subtle : transparent;
-    }
-
-    if root.glyph == 0: IcChevronLeft {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: root.minimal ? 16px : 18px;
-        height: self.width;
-        fill: root.enabled ? Theme.current.text_primary : Theme.current.icon_disabled;
-    }
-    if root.glyph == 1: IcChevronRight {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: root.minimal ? 16px : 18px;
-        height: self.width;
-        fill: root.enabled ? Theme.current.text_primary : Theme.current.icon_disabled;
-    }
-
-    pg_touch := TouchArea {
-        enabled: root.enabled;
-        width: 100%;
-        height: 100%;
-        mouse-cursor: pointer;
-        clicked => { root.picked(); }
-    }
-}
-
-// Pager buttons for the episode list: rendered both above and under the grid,
-// so a 200-episode season can be turned from either end without scrolling back
-// to the top.
-component EpisodePager inherits Rectangle {
-    in property <int> page: 0;
-    in property <int> count: 1;
-    // Stream/filter hosts keep the compact chevrons. Episodes retain touch
-    // targets around small, unboxed arrows and a quiet page counter.
-    in property <bool> episode-style: false;
-    callback picked(int);
-
-    width: root.episode-style ? 152px : 62px;
-    height: root.episode-style ? 44px : 28px;
-    horizontal-stretch: 0;
-    vertical-stretch: 0;
-    background: transparent;
-
-    HorizontalLayout {
-        spacing: root.episode-style ? 4px : 6px;
-        PageButton {
-            glyph: 0;
-            roomy: root.episode-style;
-            minimal: root.episode-style;
-            name: @tr("Previous page");
-            enabled: root.page > 0;
-            picked => { root.picked(root.page - 1); }
-        }
-        if root.episode-style: page_counter := Text {
-            horizontal-stretch: 1;
-            min-width: 0px;
-            height: 44px;
-            text: @tr("{} / {}", root.page + 1, root.count);
-            accessible-label: @tr("Page {}/{}", root.page + 1, root.count);
-            color: Theme.current.text_detail_metadata;
-            font-size: 13px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-        PageButton {
-            glyph: 1;
-            roomy: root.episode-style;
-            minimal: root.episode-style;
-            name: @tr("Next page");
-            enabled: root.page + 1 < root.count;
-            picked => { root.picked(root.page + 1); }
-        }
-    }
-}
 
 // Circular, text-free icon button for the detail top bar (back, library,
 // categories). The caller drops the icon (and any badge) in as a child; the
@@ -269,415 +35,11 @@ component TopIconButton inherits Rectangle {
     }
 }
 
-// Addon filter pills above the stream list: All + one per addon, with
-// per-pill spinners while queries are in flight. One instance per stream
-// list (a movie's Overview tab, a picked series episode), in flow with the
-// streams.
-component StreamFilterBar inherits HorizontalLayout {
-    in property <[string]> addons: [];
-    in property <[bool]> loading: [];
-    in property <bool> searching: false;
-    // Active filter: 0 = All, otherwise 1-based index into `addons`.
-    in property <int> addon_filter: 0;
-    in property <bool> touch_menus: false;
-
-    callback filter_picked(int);
-    // The row owns the pointer gesture (a pill reported a horizontal drag, or
-    // the row itself just panned): the host blocks the page's own pan while
-    // that lasts. Nested Flickables have no axis lock in Slint, so without
-    // this the page would register the vertical axis of the same gesture at
-    // the first 8px of wobble — and it never gives a captured gesture back.
-    // See DetailPage::page_pan_enabled.
-    callback panned();
-    // The gesture is going vertical, or has ended: the page may pan again.
-    callback pan_released();
-
-    min-width: 0px;
-    spacing: 8px;
-
-    // True while the pill row is wider than its viewport. The desktop
-    // chevron slots below are always laid out (never `if`-gated), so
-    // this flag can't feed back into the geometry (binding loop).
-    property <bool> overflowing: pill_row.width > pill_flick.width + 1px;
-
-    // Desktop chevron slots: fixed geometry whether or not the row
-    // overflows; the buttons fade in only while useful (an `if` here
-    // would resize the viewport and loop with `overflowing` above).
-    // A disabled touch passes taps through, so a faded slot is inert.
-    if !root.touch_menus: Rectangle {
-        width: 28px;
-        height: 30px;
-        opacity: overflowing && pill_flick.content-x < -0.5px ? 1.0 : 0.0;
-        animate opacity { duration: Anim.hover_fast; }
-
-        PageButton {
-            glyph: 0;
-            name: @tr("Scroll filters left");
-            enabled: overflowing && pill_flick.content-x < -0.5px;
-            picked => {
-                pill_flick.content-x = Math.min(0px, pill_flick.content-x + pill_flick.width);
-            }
-        }
-    }
-
-    pill_flick := Flickable {
-        horizontal-stretch: 1;
-        min-width: 0px;
-        height: 30px;
-        interactive: true;
-        content-width: pill_row.width;
-        content-height: self.height;
-
-        // The row moving is the only "a drag owns this Flickable" signal
-        // Slint offers: there is no drag-started callback, and the page's own
-        // press state is not observable from here. The chevron steps below
-        // and a layout clamp also land here — they just re-arm the host's
-        // hold for one interval.
-        changed content-x => { root.panned(); }
-
-        // Explicit width = intrinsic pill row width, so the Flickable
-        // scrolls it horizontally instead of squeezing it.
-        pill_row := HorizontalLayout {
-            width: self.preferred-width;
-            height: 30px;
-            spacing: 8px;
-            alignment: start;
-
-            StreamFilterPill {
-                label: @tr("All");
-                selected: root.addon_filter == 0;
-                loading: root.searching;
-                picked => { root.filter_picked(0); }
-                pan_hint => { root.panned(); }
-                pan_release => { root.pan_released(); }
-            }
-
-            for a[i] in root.addons: StreamFilterPill {
-                label: a;
-                selected: root.addon_filter == i + 1;
-                loading: i < root.loading.length && root.loading[i];
-                picked => { root.filter_picked(i + 1); }
-                pan_hint => { root.panned(); }
-                pan_release => { root.pan_released(); }
-            }
-        }
-    }
-
-    if !root.touch_menus: Rectangle {
-        width: 28px;
-        height: 30px;
-        opacity: overflowing && pill_flick.content-x > pill_flick.width - pill_flick.content-width + 0.5px ? 1.0 : 0.0;
-        animate opacity { duration: Anim.hover_fast; }
-
-        PageButton {
-            glyph: 1;
-            name: @tr("Scroll filters right");
-            enabled: overflowing && pill_flick.content-x > pill_flick.width - pill_flick.content-width + 0.5px;
-            picked => {
-                pill_flick.content-x = Math.max(pill_flick.width - pill_flick.content-width, pill_flick.content-x - pill_flick.width);
-            }
-        }
-    }
-}
-
-// Stream list shared by the Overview tab (movies) and the Episodes tab
-// (a picked series episode).
-component StreamList {
-    in property <[StreamRow]> rows;
-    in property <string> hint;
-    // Addon labels shown as pills, in installed-addon order (pending addons
-    // included). The bar shows an "All" pill plus one per addon.
-    in property <[string]> addons: [];
-    // Per-pill loading flag, index-aligned with `addons` (spinner while an
-    // addon is still being queried).
-    in property <[bool]> loading: [];
-    // True while any addon is still being queried (All pill spinner).
-    in property <bool> searching: false;
-    // Active filter: 0 = All, otherwise 1-based index into `addons`.
-    in property <int> addon_filter: 0;
-    // Keyboard focus index (-1 = none). The parent drives it.
-    in property <int> kb_focus: -1;
-    in property <int> page: 0;
-    in property <int> page_count: 1;
-    in property <int> page_start: 0;
-    // Keyboard modality (parent-driven): the ring shows only while true.
-    in property <bool> kb_active: false;
-    in property <bool> touch_menus: false;
-
-    callback picked(int);
-    callback page_picked(int);
-    callback bottom_page_picked(int, length);
-    in property <[SheetItem]> action_items: [];
-    callback action_requested(string);
-    callback action_selected(string, int);
-    callback filter_picked(int);
-    // Forwarded from the filter bar's own `panned` / `pan_released` (see
-    // DetailPage::page_pan_enabled).
-    callback filter_panned();
-    callback filter_pan_released();
-
-    VerticalLayout {
-        width: 100%;
-        // Allow squeezing below the widest unbreakable token: without this
-        // the min-width of long stream text propagates up and widens the
-        // whole content column (WATCH NOW + filter row stretch with it).
-        min-width: 0px;
-        spacing: 8px;
-
-        Text {
-            text: root.hint;
-            font-size: 13px;
-            color: Theme.current.text_muted;
-            wrap: word-wrap;
-            width: 100%;
-        }
-
-        // Per-addon filter bar: a horizontally scrollable row of pills so
-        // many addons never blow the width out of bounds. `content-width`
-        // is set explicitly because Flickable cannot infer it with a `for`.
-        //
-        // The bar pans by dragging on touch. Desktop also gets step chevrons
-        // on both ends (see StreamFilterBar): a mouse drag on the pills pans
-        // them like touch does, but the chevrons stay the precise way to
-        // reach clipped pills. Each chevron click moves by one viewport,
-        // clamped.
-        if root.addons.length > 1: StreamFilterBar {
-            width: 100%;
-            addons: root.addons;
-            loading: root.loading;
-            searching: root.searching;
-            addon_filter: root.addon_filter;
-            touch_menus: root.touch_menus;
-            filter_picked(i) => { root.filter_picked(i); }
-            panned => { root.filter_panned(); }
-            pan_released => { root.filter_pan_released(); }
-        }
-
-        VerticalLayout {
-            width: 100%;
-            min-width: 0px;
-            spacing: Theme.card_spacing;
-
-            if root.page_count > 1: HorizontalLayout {
-                width: 100%;
-                height: 28px;
-                spacing: 10px;
-                alignment: end;
-                Text {
-                    text: @tr("Page {}/{}", root.page + 1, root.page_count);
-                    height: 28px;
-                    font-size: 12px;
-                    color: Theme.current.text_muted;
-                    vertical-alignment: center;
-                }
-                EpisodePager {
-                    page: root.page;
-                    count: root.page_count;
-                    picked(p) => { root.page_picked(p); }
-                }
-            }
-
-            for st[i] in root.rows: Rectangle {
-                width: 100%;
-                min-width: 0px;
-                // Follow the text as it actually wraps at the live width;
-                // Slint measures wrapped Text at its intrinsic (single-line)
-                // width, so the `st.lines` heuristic alone under-counts on
-                // narrow screens and clips. Keep it as a floor for the first
-                // paint (before `row_measure` has a width).
-                min-height: Math.max(
-                    48px,
-                    max(st.lines * 22px + 24px,
-                        row_measure.preferred-height + 20px
-                            + ((st.is_download && st.download_action != 4) ? 4px : 0px)),
-                );
-                background: st.is_download ? Theme.current.stream_download : Theme.current.stream_card;
-                border-radius: Theme.card_corner_radius;
-                border-width: root.kb_active && root.kb_focus == i + root.page_start ? 2px : 0px;
-                border-color: Theme.current.focus_ring;
-                clip: true;
-
-                VerticalLayout {
-                    width: 100%;
-                    min-width: 0px;
-                    padding-top: 10px;
-                    padding-bottom: 10px;
-                    padding-left: 16px;
-                    padding-right: 16px;
-                    // Explicit so the hidden `row_measure` (same spacing)
-                    // matches this layout's content height exactly.
-                    spacing: 0px;
-
-                    Text {
-                        text: st.text;
-                        color: Theme.current.text_primary;
-                        font-size: 16px;
-                        wrap: word-wrap;
-                        vertical-alignment: center;
-                        width: 100%;
-                        min-width: 0px;
-                    }
-
-                    if st.details != "": Text {
-                        text: st.details;
-                        color: Theme.current.text_download;
-                        font-size: 12px;
-                        wrap: word-wrap;
-                        width: 100%;
-                        min-width: 0px;
-                    }
-
-                    // Progress rail, anchored to the left edge (`x: 0`, like
-                    // the other rails in the app) so it fills left → right.
-                    // Hidden once the file is complete: the row reads
-                    // "Downloaded" and an empty rail there is just noise.
-                    if st.is_download && st.download_action != 4: dl_bar := Rectangle {
-                        x: 0;
-                        width: 100%;
-                        height: 4px;
-                        border-radius: 2px;
-                        background: Theme.current.download_track;
-
-                        dl_fill := Rectangle {
-                            x: 0;
-                            width: parent.width * st.download_progress;
-                            height: 100%;
-                            border-radius: 2px;
-                            background: Theme.current.accent;
-                        }
-                    }
-                }
-
-                // Hidden measurement copy of the text stack at the padded
-                // content width (the visible layout pads 16px each side), so
-                // the row minimum above tracks real wrapping instead of the
-                // intrinsic one-line width.
-                mrow := Rectangle {
-                    width: 100%;
-                    height: 0;
-                    clip: true;
-
-                    row_measure := VerticalLayout {
-                        width: Math.max(0px, mrow.width - 32px);
-                        spacing: 0px;
-
-                        Text {
-                            text: st.text;
-                            font-size: 16px;
-                            wrap: word-wrap;
-                            min-width: 0px;
-                        }
-
-                        if st.details != "": Text {
-                            text: st.details;
-                            font-size: 12px;
-                            wrap: word-wrap;
-                            min-width: 0px;
-                        }
-                    }
-                }
-
-                // Populate the backend-owned actions before explicitly showing
-                // the desktop popup; a ContextMenuArea's automatic right-click
-                // would otherwise open before this row's actions are prepared.
-                stream_ctx := ContextMenuArea {
-                    x: 0px; y: 0px;
-                    width: 0px; height: 0px;
-                    Menu {
-                        for action[a] in root.action_items: MenuItem {
-                            title: action.label;
-                            enabled: action.enabled;
-                            activated => { root.action_selected(st.id, a); }
-                        }
-                    }
-                }
-
-                touch_st := TouchArea {
-                    property <bool> lp_suppress: false;
-                    width: 100%;
-                    height: 100%;
-                    accessible-role: button;
-                    accessible-label: st.text;
-                    mouse-cursor: pointer;
-                    clicked => {
-                        if (touch_st.lp_suppress) {
-                            touch_st.lp_suppress = false;
-                        } else {
-                            root.picked(i + root.page_start);
-                        }
-                    }
-                    pointer-event(ev) => {
-                        if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
-                            row_lp_timer.stop();
-                            touch_st.lp_suppress = true;
-                            root.action_requested(st.id);
-                            if (!root.touch_menus) {
-                                stream_ctx.show({ x: self.mouse-x, y: self.mouse-y });
-                            }
-                        } else if (ev.kind == PointerEventKind.down) {
-                            touch_st.lp_suppress = false;
-                            if (root.touch_menus) {
-                                row_lp_timer.stop();
-                                row_lp_timer.start();
-                            }
-                        } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
-                            row_lp_timer.stop();
-                        }
-                    }
-                    moved => {
-                        if (Math.abs(touch_st.mouse-x - touch_st.pressed-x)
-                            + Math.abs(touch_st.mouse-y - touch_st.pressed-y) > 24px) {
-                            row_lp_timer.stop();
-                        }
-                    }
-                }
-
-                row_lp_timer := Timer {
-                    interval: 600ms;
-                    running: false;
-                    triggered => {
-                        self.stop();
-                        touch_st.lp_suppress = true;
-                        root.action_requested(st.id);
-                    }
-                }
-            }
-
-            // Repeat the pager after the entries so users don't have to
-            // scroll all the way back up to turn a long stream list.
-            if root.page_count > 1: HorizontalLayout {
-                width: 100%;
-                height: 28px;
-                spacing: 10px;
-                alignment: end;
-                Text {
-                    text: @tr("Page {}/{}", root.page + 1, root.page_count);
-                    height: 28px;
-                    font-size: 12px;
-                    color: Theme.current.text_muted;
-                    vertical-alignment: center;
-                }
-                EpisodePager {
-                    page: root.page;
-                    count: root.page_count;
-                    picked(p) => { root.bottom_page_picked(p, root.absolute-position.y); }
-                }
-            }
-        }
-
-        Text {
-            text: @tr("Click a stream to start playback. Right-click or hold for actions.");
-            font-size: 12px;
-            color: Theme.current.text_disabled;
-            width: 100%;
-        }
-    }
-}
-
 // Both the cinematic detail view and compact Tracking view use the same
 // tabs. Numeric IDs stay stable for episode callbacks and saved snapshots.
 component DetailTabs inherits Rectangle {
     in property <bool> narrow;
+    in property <bool> episodes_visible: true;
     in property <bool> tracking_visible;
     in property <int> selected;
     in property <bool> kb_active;
@@ -686,13 +48,13 @@ component DetailTabs inherits Rectangle {
     callback picked(int);
     height: 48px;
     vertical-stretch: 0;
-    property <int> count: root.tracking_visible ? 3 : 2;
+    property <int> count: 1 + (root.episodes_visible ? 1 : 0) + (root.tracking_visible ? 1 : 0);
     property <length> gap: root.narrow ? 4px : 24px;
     Rectangle { y: parent.height - 1px; height: 1px; width: 100%; background: Theme.current.border_overlay; }
     HorizontalLayout {
         spacing: root.gap;
         alignment: start;
-        for tab in root.tracking_visible ? [0, 3, 4] : [0, 3]: Rectangle {
+        for tab in root.episodes_visible ? (root.tracking_visible ? [0, 3, 4] : [0, 3]) : (root.tracking_visible ? [0, 4] : [0]): Rectangle {
             width: root.narrow ? (root.width - (root.count - 1) * root.gap) / root.count : Math.min(140px, (root.width - (root.count - 1) * root.gap) / root.count);
             height: 48px;
             border-radius: 4px;
@@ -773,6 +135,8 @@ export component DetailPage {
     in-out property <image> selected_backdrop;
     in property <image> selected_logo;
     in-out property <string> selected_title: "";
+    in property <bool> is_movie;
+    in-out property <bool> stream_selector_open;
     in-out property <string> selected_year: "";
     in-out property <string> selected_description: "";
     property <bool> synopsis_expanded: false;
@@ -834,6 +198,7 @@ export component DetailPage {
     // Continue deep-link) without visiting the episode list — see kb_back.
     in property <bool> deep_stream: false;
     in property <int> system_back_request: 0;
+    in property <int> episode_reveal_request: 0;
     property <int> last_system_back_request: -1;
     property <bool> filter_focused: false;
     private property <bool> episode_search_open: false;
@@ -876,17 +241,15 @@ export component DetailPage {
     property <length> season_card_w: root.narrow ? Math.min(180px, Math.max(120px, (root.width - 40px - root.safe-left - root.safe-right) / 2.2)) : Math.min(root.max-season, (root.episode_content_w - (root.season_cols - 1) * root.card-gap) / root.season_cols);
     // Columns actually used (partial last row still packs left).
     property <int> season_grid_cols: Math.min(root.season_cols, root.season_cards.length);
-    // Series flow when an addon listed seasons; movies have none.
-    property <bool> has_episodes: root.season_names.length > 0;
     // True while the assign-categories popup covers this page (wired by
     // AppWindow): used to hand keyboard focus back when it closes.
     in property <bool> popup_open: false;
 
     // ---- 6-button keyboard nav (arrows + Enter + Backspace) ----
-    // Zones: 0 top bar, 1 tabs, 2 hero actions, 3 content. Content kind:
-    // 0 none, 1 stream list, 2 episode picker (season/filter/grid).
-    // Enter activates; Backspace steps back (episode streams -> list ->
-    // modal). The filter field uses edit mode like Discover's search.
+    // Zones: 0 top bar, 1 tabs, 2 hero actions, 3 episode content.
+    // The fullscreen selector owns stream navigation separately.
+    // Enter activates; Backspace steps back. The filter field uses edit
+    // mode like Discover's search.
     // Bound to AppWindow (survives modal recreation): reopening the same
     // entry restores focus. kb_edit stays local (transient edit mode).
     in-out property <int> kb_zone: 0;
@@ -902,12 +265,6 @@ export component DetailPage {
     function det_content() -> int {
         if (root.detail_tab == 3 && root.modal_episodes) {
             return 2;
-        }
-        if (root.detail_tab == 3 && !root.modal_episodes) {
-            return 1;
-        }
-        if (root.detail_tab == 0 && !root.has_episodes) {
-            return 1;
         }
         return 0;
     }
@@ -941,7 +298,7 @@ export component DetailPage {
                 root.kb_zone = 3;
             }
         } else {
-            // Inside content: grid Down moves a row, streams move one row.
+            // Inside episode content, Down moves one grid row.
             if (root.det_content() == 2 && root.kb_ci == 2) {
                 if (root.kb_ep + root.ep_cols < root.episode_rows.length) {
                     root.kb_ep += root.ep_cols;
@@ -950,11 +307,6 @@ export component DetailPage {
             } else if (root.det_content() == 2 && root.kb_ci < 2) {
                 root.kb_ci += 1;
                 root.kb_nudge(-80px);
-            } else if (root.det_content() == 1) {
-                if (root.kb_s + 1 < root.stream_total) {
-                    root.kb_s += 1;
-                    root.kb_nudge(-50px);
-                }
             }
         }
     }
@@ -990,7 +342,7 @@ export component DetailPage {
         } else if (root.kb_zone == 2) {
             root.hero_library_focused = false;
         } else if (root.kb_zone == 1) {
-            root.kb_tab = root.kb_tab == 0 ? (root.in_library ? 4 : 3) : root.kb_tab == 4 ? 3 : 0;
+            root.kb_tab = root.is_movie ? (root.in_library && root.kb_tab == 0 ? 4 : 0) : (root.kb_tab == 0 ? (root.in_library ? 4 : 3) : root.kb_tab == 4 ? 3 : 0);
         } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 0) {
             root.kb_cycle_season(-1);
         } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 1) {
@@ -1011,7 +363,7 @@ export component DetailPage {
         } else if (root.kb_zone == 2) {
             root.hero_library_focused = true;
         } else if (root.kb_zone == 1) {
-            root.kb_tab = root.kb_tab == 0 ? 3 : root.kb_tab == 3 && root.in_library ? 4 : 0;
+            root.kb_tab = root.is_movie ? (root.in_library && root.kb_tab == 0 ? 4 : 0) : (root.kb_tab == 0 ? 3 : root.kb_tab == 3 && root.in_library ? 4 : 0);
         } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 0) {
             root.kb_cycle_season(1);
         } else if (root.kb_zone == 3 && root.det_content() == 2 && root.kb_ci == 1) {
@@ -1051,14 +403,10 @@ export component DetailPage {
         } else if (root.kb_zone == 1) {
             root.detail_tab_picked(root.kb_tab);
         } else if (root.kb_zone == 2) {
-            if (root.hero_library_focused || !root.has_episodes) { root.add_to_library(); }
+            if (root.hero_library_focused) { root.add_to_library(); }
             else { root.watch_now(); }
         } else {
-            if (root.det_content() == 1) {
-                if (root.kb_s >= 0 && root.kb_s < root.stream_total) {
-                    root.stream_picked(root.kb_s);
-                }
-            } else if (root.det_content() == 2) {
+            if (root.det_content() == 2) {
                 if (root.kb_ci == 0) {
                     root.kb_cycle_season(1);
                 } else if (root.kb_ci == 1) {
@@ -1093,6 +441,8 @@ export component DetailPage {
         // the nearest Back layer before alignment or tab navigation.
         if (root.stream_action_open) {
             root.stream_action_open = false;
+        } else if (root.stream_selector_open) {
+            root.stream_selector_back();
         } else if (root.menu_kind >= 0) {
             root.close_menu();
         } else if (root.tracking_open) {
@@ -1115,28 +465,10 @@ export component DetailPage {
     }
 
     // ---- Page pan lock (horizontal rails) ----------------------------
-    // Nested Flickables have no axis locking in Slint: whichever one crosses
-    // the 8px grab threshold first owns the whole gesture, and a Flickable
-    // that captured the pointer never gives it back. A finger on the 30px
-    // pill strip always wobbles a little vertically, so the page used to
-    // grab the drag a few frames in and scroll — mid-swipe, while the pills
-    // stopped moving.
-    //
-    // The pills therefore block the page's pan at the *start* of the
-    // gesture, not when their row starts moving (it cannot: the page holds
-    // the press back for its 100ms drag-vs-tap window, so the row's own
-    // Flickable only wakes up well after the page has had its chance). Two
-    // reports keep it off — `StreamFilterBar::panned` for a horizontal pill
-    // drag or any row movement (a fling coasts on `content-x` changes), and
-    // `pan_released` to hand it back when the gesture is going vertical
-    // instead — with the hold lapsing a moment after the reports stop. With
-    // `interactive: false` the page also forwards events straight through,
-    // so the pills get the rest of the gesture outright.
-    //
-    // The whole page is instantiated per modal open (see `page` below), so
-    // this can never stay stuck across opens.
-    // Narrow season cards reuse these pointer hints; automatic season
-    // reveal deliberately does not lock the page.
+    // The narrow season rail sits inside the vertical detail scroller.
+    // Its pointer hints temporarily stop the page from grabbing a diagonal
+    // swipe, and keep it stopped while horizontal momentum continues.
+    // The fullscreen stream filters use independent viewports instead.
     property <bool> page_pan_enabled: true;
 
     function filters_panned() {
@@ -1149,14 +481,14 @@ export component DetailPage {
         pan_release_t.restart();
     }
 
-    // The pill row is not panning any more (its gesture went vertical, or the
+    // The season rail is not panning any more (its gesture went vertical, or the
     // finger lifted): the page picks its pan straight back up.
     function filters_pan_released() {
         root.page_pan_enabled = true;
         pan_release_t.stop();
     }
 
-    // Best-effort scroll follow (episode cards and stream rows have
+    // Best-effort scroll follow (episode cards have
     // variable heights, so nudge instead of computing exact strides).
     function kb_nudge(d: length) {
         let vy = det_scroll.content-y;
@@ -1168,7 +500,7 @@ export component DetailPage {
 
     function scroll_list_to_top(list_y: length) {
         // The final pager sits after many variable-height rows. Align the
-        // start of the episode or stream list in the outer scroller after it is
+        // start of the episode list in the outer scroller after it is
         // used, so the next page begins at its first entry rather than at an
         // arbitrary offset left over from the bottom controls.
         let relative_y = list_y - det_scroll.absolute-position.y;
@@ -1203,15 +535,13 @@ export component DetailPage {
             root.kb_s = Math.max(0, root.stream_total - 1);
         }
     }
-    changed kb_s => {
-        if (root.kb_active && root.kb_s >= 0 && root.kb_s / 25 != root.stream_page) {
-            root.stream_page_picked(root.kb_s / 25);
-        }
-    }
     changed episode_context => { root.det_top_fix(); }
     changed modal_episodes => {
         root.det_top_fix();
         if (!root.modal_episodes) { root.leave_episode_search(); }
+    }
+    changed stream_selector_open => {
+        if (!root.stream_selector_open) { nav_scope.focus(); }
     }
     changed in_library => {
         root.det_top_fix();
@@ -1258,6 +588,7 @@ export component DetailPage {
     callback stream_action_requested(string);
     callback stream_action_selected(string, int);
     callback stream_filter_picked(int);
+    callback stream_selector_back();
     callback detail_tab_picked(int);
     callback episode_filter_changed(string);
     callback watch_now();
@@ -1326,6 +657,7 @@ export component DetailPage {
         width: 100%;
         height: 100%;
         background: Theme.current.artwork_canvas;
+        visible: !root.stream_selector_open;
 
         // Fade both artwork and its black backing to the page canvas. Leaving
         // the backing opaque creates a black band above the coloured scrim.
@@ -1584,7 +916,7 @@ export component DetailPage {
                 min-height: 0px;
                 vertical-stretch: 1;
                 // A raw Flickable, not a ScrollView (which does not expose
-                // the inner Flickable's `interactive`): the pill bar's axis
+                // the inner Flickable's `interactive`): the season rail's axis
                 // lock flips exactly that (see `page_pan_enabled`). Panning
                 // is otherwise unchanged — touch drags and mouse drags pan,
                 // the wheel scrolls regardless of `interactive`.
@@ -1709,8 +1041,7 @@ export component DetailPage {
                                 }
                                 HorizontalLayout {
                                     spacing: 12px;
-                                    if !root.has_episodes: Rectangle { horizontal-stretch: 1; }
-                                    if root.has_episodes: watch_action_button := Rectangle {
+                                    watch_action_button := Rectangle {
                                         horizontal-stretch: 1;
                                         min-width: 0px;
                                         height: root.narrow ? 56px : 62px;
@@ -1754,7 +1085,7 @@ export component DetailPage {
                                         border-radius: self.width / 2;
                                         background: library_hero.has-hover ? Theme.current.hero_library_hover : Theme.current.hero_library;
                                         border-width: 1px;
-                                        border-color: root.kb_active && root.kb_zone == 2 && (root.hero_library_focused || !root.has_episodes) ? Theme.current.accent_vivid : Theme.current.border_overlay;
+                                        border-color: root.kb_active && root.kb_zone == 2 && root.hero_library_focused ? Theme.current.accent_vivid : Theme.current.border_overlay;
                                         accessible-role: button;
                                         accessible-label: root.in_library ? @tr("Remove from library") : @tr("Add to library");
                                         if !root.in_library: IcAdd {
@@ -1782,6 +1113,7 @@ export component DetailPage {
 
                     DetailTabs {
                         narrow: root.narrow;
+                        episodes_visible: !root.is_movie;
                         tracking_visible: root.in_library;
                         selected: root.detail_tab;
                         kb_active: root.kb_active;
@@ -1949,44 +1281,6 @@ export component DetailPage {
 
                                 }
 
-                                // Movies list their streams here (series
-                                // streams live in the Episodes tab).
-                                if !root.modal_episodes && !root.has_episodes: StreamList {
-                                    rows: root.streams;
-                                    hint: root.streams_hint;
-                                    addons: root.stream_addons;
-                                    loading: root.stream_loading;
-                                    searching: root.streams_searching;
-                                    addon_filter: root.stream_filter;
-                                    page: root.stream_page;
-                                    page_count: root.stream_page_count;
-                                    page_start: root.stream_page_start;
-                                    kb_focus: root.kb_zone == 3 ? root.kb_s : -1;
-                                    kb_active: root.kb_active;
-                                    touch_menus: root.touch_menus;
-                                    picked(i) => { root.kb_active = false; root.stream_picked(i); }
-                                    page_picked(p) => {
-                                        root.kb_active = false;
-                                        root.stream_page_picked(p);
-                                        root.kb_s = p * 25;
-                                    }
-                                    bottom_page_picked(p, y) => {
-                                        root.kb_active = false;
-                                        root.stream_page_picked(p);
-                                        root.kb_s = p * 25;
-                                        root.scroll_list_to_top(y);
-                                    }
-                                    action_items: root.stream_action_items;
-                                    action_requested(id) => { root.request_stream_action(id); }
-                                    action_selected(id, a) => { root.stream_action_selected(id, a); }
-                                    filter_picked(i) => {
-                                        root.kb_active = false;
-                                        root.kb_s = 0;
-                                        root.stream_filter_picked(i);
-                                    }
-                                    filter_panned => { root.filters_panned(); }
-                                    filter_pan_released => { root.filters_pan_released(); }
-                                }
                             }
 
                             // ---- Stub tabs (no addon data) ------------
@@ -2402,6 +1696,28 @@ export component DetailPage {
                                         spacing: root.card-gap;
 
                                         for e[i] in root.episode_rows: ep_card := Rectangle {
+                                            // Reveal after the season/page model and the
+                                            // outer scroll geometry have settled.
+                                            property <int> reveal_request: root.episode_reveal_request;
+                                            changed reveal_request => {
+                                                if (self.reveal_request > 0 && i == root.kb_ep) {
+                                                    episode_reveal_t.stop();
+                                                    episode_reveal_t.start();
+                                                }
+                                            }
+                                            init => {
+                                                if (self.reveal_request > 0 && i == root.kb_ep) { episode_reveal_t.start(); }
+                                            }
+                                            episode_reveal_t := Timer {
+                                                interval: 60ms;
+                                                running: false;
+                                                triggered => {
+                                                    self.stop();
+                                                    if (!root.stream_selector_open && root.modal_episodes && root.detail_tab == 3 && i == root.kb_ep) {
+                                                        root.scroll_list_to_top(ep_card.absolute-position.y - 12px);
+                                                    }
+                                                }
+                                            }
                                             row: Math.floor(i / root.ep_cols);
                                             col: Math.mod(i, root.ep_cols);
                                             // Fixed shared width (see ep_card_w):
@@ -2707,101 +2023,6 @@ export component DetailPage {
                                     }
                                 }
 
-                                // Picked episode: an indicator/back bar (the
-                                // top bar is icon-only) above its streams.
-                                if !root.modal_episodes: VerticalLayout {
-                                    width: 100%;
-                                    min-width: 0px;
-                                    spacing: 10px;
-                                    alignment: start;
-
-                                    if root.episode_context != "": Rectangle {
-                                        width: 100%;
-                                        height: root.narrow ? 40px : 34px;
-                                        border-radius: 8px;
-                                        background: ep_ctx_touch.has-hover ? Theme.current.control_hover : Theme.current.stream_card;
-
-                                        HorizontalLayout {
-                                            padding-left: 4px;
-                                            padding-right: 12px;
-                                            spacing: 4px;
-                                            alignment: start;
-
-                                            Rectangle {
-                                                width: root.narrow ? 32px : 28px;
-                                                // Full bar height: this box only
-                                                // reserves the icon's width, and a
-                                                // HorizontalLayout top-aligns a
-                                                // plain Rectangle child (no
-                                                // `vertical-alignment`), which left
-                                                // the chevron sitting high in the bar.
-                                                height: 100%;
-
-                                                IcChevronLeft {
-                                                    x: (parent.width - self.width) / 2;
-                                                    y: (parent.height - self.height) / 2;
-                                                    width: 20px;
-                                                    height: 20px;
-                                                    fill: Theme.current.text_secondary;
-                                                }
-                                            }
-
-                                            Text {
-                                                text: root.episode_context;
-                                                color: Theme.current.text_context_menu;
-                                                font-size: 13px;
-                                                vertical-alignment: center;
-                                                overflow: elide;
-                                                horizontal-stretch: 1;
-                                                min-width: 0px;
-                                            }
-                                        }
-
-                                        ep_ctx_touch := TouchArea {
-                                            width: 100%;
-                                            height: 100%;
-                                            mouse-cursor: pointer;
-                                            clicked => { root.kb_active = false; root.episodes_back(); }
-                                        }
-                                    }
-
-                                    StreamList {
-                                        rows: root.streams;
-                                        hint: root.streams_hint;
-                                        addons: root.stream_addons;
-                                        loading: root.stream_loading;
-                                        searching: root.streams_searching;
-                                        addon_filter: root.stream_filter;
-                                        page: root.stream_page;
-                                        page_count: root.stream_page_count;
-                                        page_start: root.stream_page_start;
-                                        kb_focus: root.kb_zone == 3 ? root.kb_s : -1;
-                                        kb_active: root.kb_active;
-                                        touch_menus: root.touch_menus;
-                                        picked(i) => { root.kb_active = false; root.stream_picked(i); }
-                                        page_picked(p) => {
-                                            root.kb_active = false;
-                                            root.stream_page_picked(p);
-                                            root.kb_s = p * 25;
-                                        }
-                                        bottom_page_picked(p, y) => {
-                                            root.kb_active = false;
-                                            root.stream_page_picked(p);
-                                            root.kb_s = p * 25;
-                                            root.scroll_list_to_top(y);
-                                        }
-                                        action_items: root.stream_action_items;
-                                        action_requested(id) => { root.request_stream_action(id); }
-                                        action_selected(id, a) => { root.stream_action_selected(id, a); }
-                                        filter_picked(i) => {
-                                            root.kb_active = false;
-                                            root.kb_s = 0;
-                                            root.stream_filter_picked(i);
-                                        }
-                                        filter_panned => { root.filters_panned(); }
-                                        filter_pan_released => { root.filters_pan_released(); }
-                                    }
-                                }
                             }
                         }
                     }
@@ -2824,23 +2045,6 @@ export component DetailPage {
 
         // Card bottom sheets (single instance per kind): the dim
         // backdrop eats outside taps (dismiss only, never forwarded).
-        MenuSheet {
-            open: root.touch_menus && root.stream_action_open;
-            width: 100%;
-            height: 100%;
-            safe-bottom: root.safe-bottom;
-            safe-left: root.safe-left;
-            safe-right: root.safe-right;
-            max_h: root.height * 0.85;
-            sheet_title: root.stream_action_title;
-            items: root.stream_action_items;
-            picked(a) => {
-                root.stream_action_open = false;
-                root.stream_action_selected(root.stream_action_id, a);
-            }
-            closed => { root.stream_action_open = false; }
-        }
-
         MenuSheet {
             open: root.menu_kind == 0;
             width: 100%;
@@ -2910,7 +2114,41 @@ export component DetailPage {
             closed => { root.close_menu(); }
         }
 
+    }
 
-
+    if root.stream_selector_open: StreamSelector {
+        title: root.selected_title;
+        is_movie: root.is_movie;
+        year: root.selected_year;
+        episode_context: root.episode_context;
+        poster: root.selected_poster;
+        backdrop: root.selected_backdrop;
+        rows: root.streams;
+        hint: root.streams_hint;
+        addons: root.stream_addons;
+        loading: root.stream_loading;
+        searching: root.streams_searching;
+        addon_filter: root.stream_filter;
+        page: root.stream_page;
+        page_count: root.stream_page_count;
+        page_start: root.stream_page_start;
+        total: root.stream_total;
+        touch_menus: root.touch_menus;
+        safe-top: root.safe-top;
+        safe-left: root.safe-left;
+        safe-right: root.safe-right;
+        safe-bottom: root.safe-bottom;
+        kb_index <=> root.kb_s;
+        kb_active <=> root.kb_active;
+        action_open <=> root.stream_action_open;
+        action_title: root.stream_action_title;
+        action_id: root.stream_action_id;
+        action_items: root.stream_action_items;
+        back => { root.stream_selector_back(); }
+        picked(i) => { root.stream_picked(i); }
+        page_picked(p) => { root.stream_page_picked(p); }
+        filter_picked(i) => { root.stream_filter_picked(i); }
+        action_requested(id) => { root.request_stream_action(id); }
+        action_selected(id, a) => { root.stream_action_selected(id, a); }
     }
 }

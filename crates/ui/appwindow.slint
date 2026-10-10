@@ -372,14 +372,16 @@ export component AppWindow inherits Window {
     in-out property <string> selected_description: "";
     in-out property <[string]> selected_genre_list: [];
     in-out property <bool> modal_visible: false;
+    in-out property <bool> detail_is_movie: false;
+    in-out property <bool> stream_selector_open: false;
     in-out property <int> selected_index: -1;
     // Detail tab bar: 0 = Overview, 3 = Episodes, 4 = Tracking.
     in-out property <int> detail_tab: 0;
     // Episode filter box text (Rust re-renders `episode_rows` on change).
     in-out property <string> episode_filter: "";
     // Series episode picker (Stremio/Nuvio-style selection flow).
-    // `modal_episodes` shows the season/episode list; when false the
-    // streams area is shown instead.
+    // Series picker state beneath the fullscreen stream selector.
+    // Movies leave this false; `stream_selector_open` owns stream visibility.
     in-out property <bool> modal_episodes: false;
     in-out property <[string]> season_names: [];
     in-out property <int> season_combo_idx: -1;
@@ -390,6 +392,7 @@ export component AppWindow inherits Window {
     in-out property <int> episode_page: 0;
     in-out property <int> episode_page_count: 1;
     in-out property <int> episode_page_start: 0;
+    in-out property <int> detail_episode_reveal_request: 0;
     in-out property <int> episode_total: 0;
     // Stream list pagination (Rust supplies only the active 25-row slice).
     in-out property <int> stream_page: 0;
@@ -494,6 +497,7 @@ export component AppWindow inherits Window {
     callback stream_action_requested(string);
     callback stream_action_selected(string, int);
     callback stream_filter_picked(int);
+    callback stream_selector_back();
     callback season_picked(int);
     callback episode_picked(int);
     // Episodes tab pager move (absolute page; the backend clamps it).
@@ -728,6 +732,12 @@ export component AppWindow inherits Window {
             } else if (root.categories_modal) {
                 root.categories_modal = false;
                 accept
+            } else if (root.modal_visible && !root.player_open && root.stream_selector_open) {
+                // The fullscreen selector owns Back independently of the hidden
+                // detail navigation, including when returning from playback.
+                if (root.stream_action_open) { root.stream_action_open = false; }
+                else { root.stream_selector_back(); }
+                accept
             } else {
                 root.system_back_request += 1;
                 accept
@@ -927,6 +937,8 @@ export component AppWindow inherits Window {
         selected_backdrop <=> root.selected_backdrop;
         selected_logo: root.selected_logo;
         selected_title <=> root.selected_title;
+        is_movie: root.detail_is_movie;
+        stream_selector_open <=> root.stream_selector_open;
         selected_year <=> root.selected_year;
         selected_description <=> root.selected_description;
         selected_genre_list <=> root.selected_genre_list;
@@ -957,6 +969,7 @@ export component AppWindow inherits Window {
         episode_page <=> root.episode_page;
         episode_page_count <=> root.episode_page_count;
         episode_page_start <=> root.episode_page_start;
+        episode_reveal_request: root.detail_episode_reveal_request;
         episode_total <=> root.episode_total;
         episode_context <=> root.episode_context;
         watch_label: root.detail_watch_label;
@@ -1000,6 +1013,7 @@ export component AppWindow inherits Window {
         stream_action_requested(id) => { root.stream_action_requested(id); }
         stream_action_selected(id, a) => { root.stream_action_selected(id, a); }
         stream_filter_picked(i) => { root.stream_filter_picked(i); }
+        stream_selector_back => { root.stream_selector_back(); }
         detail_tab_picked(t) => { root.detail_tab_picked(t); }
         episode_filter_changed(t) => { root.episode_filter_changed(t); }
         watch_now => { root.watch_now(); }

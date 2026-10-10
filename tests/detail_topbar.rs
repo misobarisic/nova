@@ -191,7 +191,8 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
     settle();
     assert_eq!(app.get_detail_kb_top(), 0);
 
-    // Movies also need an add control when no episode Watch Now action exists.
+    // Movies retain both actions, with directional access to saving.
+    app.set_detail_is_movie(true);
     app.set_season_names(Default::default());
     settle();
     assert_eq!(
@@ -201,6 +202,10 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
         Some("Add to library")
     );
     app.set_detail_kb_zone(2);
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::RightArrow.into(),
+        });
     app.window()
         .dispatch_event(slint::platform::WindowEvent::KeyPressed {
             text: slint::platform::Key::Return.into(),

@@ -2006,3 +2006,35 @@ msgstr "Čekaj nove epizode"
 
 msgid "Resume watching"
 msgstr "Nastavi gledati"
+
+# Fullscreen stream selector.
+
+msgid "Choose a stream"
+msgstr "Odaberite izvor"
+
+msgid "Stream actions"
+msgstr "Radnje izvora"
+
+msgid "Select a source to start watching."
+msgstr "Odaberite izvor za početak gledanja."
+
+msgid "Movie"
+msgstr "Film"
+
+msgid "{} · Movie"
+msgstr "{} · Film"
+
+msgid "{n} stream"
+msgid_plural "{n} streams"
+msgstr[0] "{n} izvor"
+msgstr[1] "{n} izvora"
+msgstr[2] "{n} izvora"
+
+msgid "↑ ↓ Navigate    Enter Play    Esc Back"
+msgstr "↑ ↓ Pomicanje    Enter Reprodukcija    Esc Natrag"
+
+msgid "Loading streams…"
+msgstr "Učitavanje zapisa…"
+
+msgid "No streams found."
+msgstr "Nema pronađenih zapisa."

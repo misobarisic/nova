@@ -1,24 +1,6 @@
-//! Stream filter pill bar: the axis lock against the page pan (headless).
-//!
-//! Nested Flickables have no axis locking in Slint: whichever one crosses the
-//! 8px grab threshold first owns the gesture for good. A finger on the 30px
-//! pill strip always wobbles a little vertically, so a horizontal swipe used
-//! to be claimed by the page a frame or two in — the pills stopped mid-swipe
-//! and the page scrolled instead. Covers that a horizontal drag on the pills
-//! pans the row *and* leaves the page where it is (even once the gesture has
-//! drifted well past 8px vertically), that a vertical drag on the pills still
-//! scrolls the page, and that the page scrolls normally elsewhere.
-//!
-//! Gestures here are time-spread (`mock_elapsed_time`), not back-to-back like
-//! the other headless tests: the drag arbitration only exists in time — the
-//! enclosing Flickables hold a press back for 100ms while they decide, and the
-//! 8px grab threshold needs more than one move event to be crossed.
-//!
-//! Only the vertical handoff *before* the row has grabbed the pointer is
-//! covered here. A headless pointer press is a mouse press, so it reaches the
-//! pills at the same 100ms mark at which their Flickable grabs the gesture
-//! (see the pill's note on `touch-finger-id`); a touch-only drag is not
-//! synthesizable through `WindowEvent`.
+//! Fullscreen stream selectors separate horizontal addon filters from the
+//! vertical result viewport. Diagonal addon swipes cannot scroll the results,
+//! and vertical result drags leave the fixed header in place.
 
 use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle, LogicalPosition, SharedString, VecModel};
@@ -33,7 +15,7 @@ fn idle(ms: u64) {
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(ms));
 }
 
-/// A movie's Detail page with an overflowing addon list, on touch, opened and
+/// A movie's selector with an overflowing addon list, on touch, opened and
 /// settled. Every case gets its own instance so it starts from scroll 0 and an
 /// unscrolled pill row.
 fn setup() -> nova::AppWindow {
@@ -41,6 +23,8 @@ fn setup() -> nova::AppWindow {
     app.window().set_size(slint::PhysicalSize::new(1100, 900));
     app.window().show().unwrap();
     app.set_modal_visible(true);
+    app.set_detail_is_movie(true);
+    app.set_stream_selector_open(true);
     app.set_detail_tab(0);
     app.set_modal_episodes(false);
     app.set_selected_title(s("Movie"));
@@ -76,7 +60,7 @@ fn setup() -> nova::AppWindow {
 }
 
 /// The pill row's absolute position: it moves with the bar's own pan
-/// horizontally and with the page's scroll vertically.
+/// horizontally while staying above the vertical result viewport.
 fn row_pos(app: &nova::AppWindow) -> LogicalPosition {
     ElementHandle::find_by_element_id(app, "StreamFilterBar::pill-row")
         .next()
@@ -138,7 +122,7 @@ fn drag_frames(app: &nova::AppWindow, from: LogicalPosition, dx: f32, dy: f32, f
 }
 
 #[test]
-fn pill_bar_owns_a_horizontal_drag_and_gives_vertical_back_to_the_page() {
+fn addon_swipes_and_result_drags_have_independent_viewports() {
     // One backend per process: every case below runs on its own freshly opened
     // page instead of as a separate `#[test]`.
     i_slint_backend_testing::init_integration_test_with_mock_time();
@@ -205,17 +189,16 @@ fn pill_bar_owns_a_horizontal_drag_and_gives_vertical_back_to_the_page() {
         );
     }
 
-    // A vertical drag that starts on the pill strip is handed back to the page:
-    // the row has nothing to pan vertically, and a 30px band of dead scrolling
-    // would be worse than the occasional mis-claimed swipe.
+    // A vertical drag on the fixed header neither pans its horizontal bar
+    // nor moves it out of view.
     {
         let app = setup();
         let before = row_pos(&app);
         drag_frames(&app, bar_point(&app, 0.2), 0.0, -120.0, 8);
         let after = row_pos(&app);
         assert!(
-            before.y - after.y > 100.0,
-            "a vertical drag on the pills must scroll the page (dy {:.1})",
+            (before.y - after.y).abs() < 0.5,
+            "a vertical drag must keep the filter header fixed (dy {:.1})",
             after.y - before.y
         );
         assert!(
@@ -229,6 +212,10 @@ fn pill_bar_owns_a_horizontal_drag_and_gives_vertical_back_to_the_page() {
     {
         let app = setup();
         let before = row_pos(&app);
+        let stream = ElementHandle::find_by_element_id(&app, "StreamList::touch_st")
+            .next()
+            .expect("first stream row");
+        let stream_y = stream.absolute_position().y;
         let start = bar_point(&app, 0.5);
         drag_frames(
             &app,
@@ -237,10 +224,14 @@ fn pill_bar_owns_a_horizontal_drag_and_gives_vertical_back_to_the_page() {
             -120.0,
             8,
         );
+        assert!(
+            stream.absolute_position().y < stream_y - 80.0,
+            "results must scroll"
+        );
         let after = row_pos(&app);
         assert!(
-            before.y - after.y > 100.0,
-            "dragging the page must still scroll it (dy {:.1})",
+            (before.y - after.y).abs() < 0.5,
+            "result scrolling must leave the filter header fixed (dy {:.1})",
             after.y - before.y
         );
         assert!(
