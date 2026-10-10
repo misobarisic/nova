@@ -36,6 +36,10 @@ fn back(app: &nova::AppWindow) {
         .dispatch_event(slint::platform::WindowEvent::KeyPressed {
             text: slint::platform::Key::Back.into(),
         });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+            text: slint::platform::Key::Back.into(),
+        });
 }
 fn key(app: &nova::AppWindow, key: slint::platform::Key) {
     app.window()

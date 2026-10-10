@@ -2244,6 +2244,7 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
+        app.invoke_preserve_back_focus();
         if app.get_detail_deep_stream() {
             app.set_modal_visible(false);
             self.modal_closed();

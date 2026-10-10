@@ -573,7 +573,7 @@ export component DetailPage {
         // edit state and leave focus on a control that survives that change.
         root.kb_edit = false;
         root.filter_focused = false;
-        if (!root.tracking_open && !root.popup_open) { nav_scope.focus(); }
+        if (!root.stream_selector_open && !root.tracking_open && !root.popup_open) { nav_scope.focus(); }
     }
 
     callback back();

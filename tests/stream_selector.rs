@@ -14,8 +14,11 @@ fn element(app: &nova::AppWindow, id: &str) -> ElementHandle {
 }
 
 fn key(app: &nova::AppWindow, key: slint::platform::Key) {
+    let text: SharedString = key.into();
     app.window()
-        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.into() });
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
     idle();
 }
 
@@ -141,6 +144,14 @@ fn responsive_selector_keeps_state_and_dispatches_movie_and_stream_actions() {
             backdrop.absolute_position().y.abs() < 0.5,
             "{width}x{height}: backdrop must begin at the top, not float behind results"
         );
+        if let Some(poster) =
+            ElementHandle::find_by_element_id(&app, "StreamSelector::compact_poster").next()
+        {
+            assert!(
+                (poster.size().height - poster.size().width * 1.5).abs() < 0.5,
+                "{width}x{height}: the header poster must retain its 2:3 frame"
+            );
+        }
         let viewport = element(&app, "StreamSelector::result_scroll");
         let p = viewport.absolute_position();
         let size = viewport.size();

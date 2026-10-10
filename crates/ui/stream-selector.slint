@@ -350,8 +350,9 @@ component StreamList {
                         spacing: 0px;
                         card_metadata := Text {
                             text: st.metadata;
-                            color: Theme.current.text_secondary;
-                            font-size: 14px;
+                            color: Theme.current.text_primary;
+                            font-size: 16px;
+                            font-weight: 700;
                             wrap: word-wrap;
                             vertical-alignment: center;
                             min-width: 0px;
@@ -362,8 +363,9 @@ component StreamList {
 
                     card_title := Text {
                         text: st.title != "" ? st.title : st.text;
-                        color: Theme.current.text_primary;
-                        font-size: 16px;
+                        color: Theme.current.text_secondary;
+                        font-size: 14px;
+                        font-weight: 400;
                         wrap: word-wrap;
                         vertical-alignment: center;
                         width: 100%;
@@ -452,7 +454,8 @@ component StreamList {
                             spacing: 0px;
                             Text {
                                 text: st.metadata;
-                                font-size: 14px;
+                                font-size: 16px;
+                                font-weight: 700;
                                 wrap: word-wrap;
                                 min-width: 0px;
                                 horizontal-stretch: 1;
@@ -462,7 +465,8 @@ component StreamList {
 
                         Text {
                             text: st.title != "" ? st.title : st.text;
-                            font-size: 16px;
+                            font-size: 14px;
+                            font-weight: 400;
                             wrap: word-wrap;
                             min-width: 0px;
                         }
@@ -790,10 +794,12 @@ export component StreamSelector inherits Rectangle {
         width: root.usable_width - 2 * root.margin - (root.narrow && !root.short ? 0px : 60px);
         height: root.short ? (root.episode_header ? 76px : 48px) : (root.narrow ? (root.episode_header ? 120px : 88px) : (root.episode_header ? 124px : 96px));
         spacing: 16px;
-        if root.poster.width > 0 && (!root.narrow || !root.short): Rectangle {
+        cross-axis-alignment: center;
+        if root.poster.width > 0 && (!root.narrow || !root.short): compact_poster := Rectangle {
             width: root.short ? 32px : (root.narrow ? 58px : 64px);
-            height: 100%;
+            height: self.width * 3 / 2;
             horizontal-stretch: 0;
+            vertical-stretch: 0;
             border-radius: Theme.card_corner_radius;
             clip: true;
             Image { width: 100%; height: 100%; source: root.poster; image-fit: cover; }
@@ -940,10 +946,21 @@ export component StreamSelector inherits Rectangle {
         }
     }
 
+    // Home/Detail teardown may clear focus assigned during this component's
+    // init. Recover on the next tick, before the entrance animation finishes.
+    return_focus_t := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => {
+            self.stop();
+            if !root.action_open { selector_scope.focus(); }
+        }
+    }
+
     selector_scope := FocusScope {
         width: 100%; height: 100%;
         focus-on-click: false;
-        init => { self.focus(); }
+        init => { self.focus(); return_focus_t.start(); }
         key-pressed(e) => {
             if (e.text == Key.Back && e.repeat) {
                 accept

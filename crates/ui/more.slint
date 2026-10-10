@@ -1,0 +1,102 @@
+import { Theme } from "theme.slint";
+import { ScrollView } from "scrollview.slint";
+import { BottomNav } from "bottomnav.slint";
+import { SettingsHeader, SettingsLink, SettingsCard, SettingsStyle } from "settings-controls.slint";
+
+// A root page, like Settings landing, rather than a sheet over another page.
+export component MorePage inherits Rectangle {
+    background: Theme.current.artwork_canvas;
+    in property <length> safe-top;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    in property <length> safe-bottom;
+    in property <int> system_back_request;
+    in-out property <bool> kb_active;
+    private property <int> last_back: 0;
+    private property <int> kb_zone: 1;
+    private property <int> kb_nav: 3;
+    private property <int> choice: 0;
+    callback home_picked();
+    callback discover_picked();
+    callback library_picked();
+    callback settings_picked();
+    callback about_picked();
+    changed system_back_request => {
+        if (root.last_back != root.system_back_request) {
+            root.last_back = root.system_back_request;
+            root.home_picked();
+        }
+    }
+    entry_focus := Timer { interval: 1ms; running: false; triggered => { self.stop(); nav_scope.focus(); } }
+    nav_scope := FocusScope {
+        width: 100%; height: 100%;
+        init => { root.last_back = root.system_back_request; self.focus(); entry_focus.start(); }
+        key-pressed(e) => {
+            root.kb_active = true;
+            SettingsStyle.keyboard-mode = true;
+            if (e.text == Key.Back || e.text == Key.Backspace || e.text == Key.Escape) {
+                if (!e.repeat) { root.home_picked(); }
+                accept
+            } else if (e.text == Key.UpArrow) {
+                if (root.kb_zone == 0) { root.kb_zone = 1; root.choice = 1; }
+                else { root.choice = 0; }
+                accept
+            } else if (e.text == Key.DownArrow || e.text == Key.Tab) {
+                if (root.kb_zone == 1 && root.choice == 0) { root.choice = 1; }
+                else { root.kb_zone = 0; }
+                accept
+            } else if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                if (root.kb_zone == 0) { root.kb_nav = Math.mod(root.kb_nav + (e.text == Key.LeftArrow ? 3 : 1), 4); }
+                accept
+            } else if (e.text == Key.Return || e.text == " ") {
+                if (!e.repeat) {
+                    if (root.kb_zone == 1) {
+                        if (root.choice == 0) { root.settings_picked(); } else { root.about_picked(); }
+                    } else if (root.kb_nav == 0) { root.home_picked(); }
+                    else if (root.kb_nav == 1) { root.discover_picked(); }
+                    else if (root.kb_nav == 2) { root.library_picked(); }
+                }
+                accept
+            } else { reject }
+        }
+    }
+    VerticalLayout {
+        padding-left: 18px + root.safe-left;
+        padding-right: 18px + root.safe-right;
+        padding-top: 18px + root.safe-top;
+        spacing: 0px;
+        ScrollView {
+            vertical-stretch: 1;
+            mouse-drag-pan-enabled: true;
+            content-width: self.visible-width;
+            VerticalLayout {
+                width: 100%; spacing: 12px;
+                SettingsHeader { title: @tr("More"); overview: true; }
+                SettingsCard { SettingsLink {
+                    destination-id: "more:settings";
+                    icon-kind: 14;
+                    title: @tr("Settings"); subtitle: @tr("Make Nova yours");
+                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 0;
+                    picked => { root.settings_picked(); }
+                } }
+                SettingsCard { SettingsLink {
+                    destination-id: "more:about";
+                    icon-kind: 15;
+                    title: @tr("About"); subtitle: @tr("Information about Nova");
+                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 1;
+                    picked => { root.about_picked(); }
+                } }
+                Rectangle { vertical-stretch: 1; }
+            }
+        }
+        BottomNav {
+            active: 3;
+            safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;
+            page-inset-left: 18px + root.safe-left; page-inset-right: 18px + root.safe-right;
+            kb_zone: root.kb_zone; kb_nav: root.kb_nav; kb_active <=> root.kb_active;
+            home_picked => { root.home_picked(); }
+            discover_picked => { root.discover_picked(); }
+            library_picked => { root.library_picked(); }
+        }
+    }
+}

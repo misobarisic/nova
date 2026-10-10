@@ -24,8 +24,6 @@ export component MenuSheet inherits Rectangle {
     in property <bool> open: false;
     in property <string> sheet_title: "";
     in property <[SheetItem]> items: [];
-    // The caller owns keyboard routing, including dismissal before page Back.
-    in property <int> focused_index: -1;
     // Bottom system-bar inset (Android gesture/nav bar), bound by the
     // page like `safe-top`. 0 on desktop/web.
     in property <length> safe-bottom: 0px;
@@ -175,8 +173,6 @@ export component MenuSheet inherits Rectangle {
                             for it[i] in root.items: Rectangle {
                                 height: 48px;
                                 border-radius: 8px;
-                                border-width: root.focused_index == i ? 2px : 0px;
-                                border-color: Theme.current.text_bright;
                                 background: btn_touch.has-hover ? Theme.current.control_hover : transparent;
                                 // Expose the row to the accessibility tree (and
                                 // headless tests, which locate a specific

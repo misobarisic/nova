@@ -1,4 +1,4 @@
-//! More-sheet routing and Settings/About chrome across the phone breakpoint.
+//! More-page routing and Settings/About chrome across the phone breakpoint.
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::{ComponentHandle, LogicalPosition};
 use std::{cell::Cell, rc::Rc, time::Duration};
@@ -59,6 +59,30 @@ fn open_more(app: &nova::AppWindow) {
             .unwrap(),
     );
     assert!(app.get_more_open());
+    assert!(
+        ElementHandle::find_by_element_type_name(app, "MorePage")
+            .next()
+            .is_some()
+    );
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(app, "BottomNav").count(),
+        1
+    );
+    assert!(
+        ElementHandle::find_by_element_type_name(app, "HomePage")
+            .next()
+            .is_none()
+    );
+    assert!(
+        ElementHandle::find_by_element_type_name(app, "DiscoverPage")
+            .next()
+            .is_none()
+    );
+    assert!(
+        ElementHandle::find_by_element_type_name(app, "LibraryPage")
+            .next()
+            .is_none()
+    );
 }
 
 fn assert_no_bar(app: &nova::AppWindow) {
@@ -94,16 +118,15 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     app.on_exit_to_background(move || count.set(count.get() + 1));
     settle(&app);
 
-    // More is available on all three root pages. Dismissing it preserves the
-    // underlying page and must not dispatch that page's own Back action.
+    // More replaces each root page and Back returns to Home without exiting.
     for page in 0..3 {
         switch(&app, page);
         settle(&app);
         open_more(&app);
         key(&app, slint::platform::Key::Back);
         assert!(!app.get_more_open());
-        assert_eq!(app.get_show_home(), page == 0);
-        assert_eq!(app.get_show_library(), page == 2);
+        assert!(app.get_show_home());
+        assert!(!app.get_show_library());
         assert_eq!(backgrounds.get(), 0);
     }
 
@@ -136,12 +159,15 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     key(&app, slint::platform::Key::Back);
     assert!(app.get_show_settings() && !app.get_settings_detail_open());
     assert_no_bar(&app);
-    // A visible header Back returns the Settings landing to Home too.
+    // Back returns a submenu to More, then the root page to Home.
     click(&app, button(&app, "Back"));
+    assert!(app.get_more_open());
+    assert!(!app.get_show_settings());
+    key(&app, slint::platform::Key::Back);
     assert!(app.get_show_home());
 
     open_more(&app);
-    // Keyboard selection is captured by the sheet, not Home underneath.
+    // Keyboard selection belongs to the More page.
     key(&app, slint::platform::Key::DownArrow);
     key(&app, slint::platform::Key::Return);
     assert!(app.get_show_about() && !app.get_more_open());
@@ -167,6 +193,8 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     }
     key(&app, slint::platform::Key::Back);
     assert!(app.get_show_about() && !app.get_about_licenses_open());
+    key(&app, slint::platform::Key::Back);
+    assert!(app.get_more_open());
     key(&app, slint::platform::Key::Back);
     assert!(app.get_show_home());
     assert_eq!(backgrounds.get(), 0);

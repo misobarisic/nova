@@ -14,11 +14,12 @@ import { LibraryDuplicates } from "library-duplicates.slint";
 import { LibraryPage } from "library.slint";
 import { SettingsPage } from "settings.slint";
 import { AboutPage } from "about.slint";
-import { MenuSheet } from "menusheet.slint";
+import { MorePage } from "more.slint";
 import { PlayerOverlay } from "player.slint";
 // Re-exported so the Rust backend can reach the animation switches (globals
 // are only accessible from Rust when exported by the root component's file).
 export { Anim } from "anim.slint";
+import { Anim } from "anim.slint";
 // Same re-export for the navigation bookkeeping the backend writes: which
 // section a page switch is leaving, for the incoming nav icon's feedback.
 import { NavMetrics } from "sidenav.slint";
@@ -35,6 +36,15 @@ import { TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMapp
 // guards live here so each page component stays self-contained.
 export component AppWindow inherits Window {
     default-font-family: "Roboto";
+    property <int> back_focus_request: 0;
+    changed back_focus_request => { system_back_scope.focus(); }
+    public function preserve_back_focus() {
+        // Incoming page init can replace focus before outgoing page teardown.
+        // The change handler runs after tree instantiation, keeping release and
+        // held-repeat events on a scope that survives the transition.
+        system_back_scope.focus();
+        root.back_focus_request += 1;
+    }
     in-out property <[TrackingAccountRow]> tracking_accounts;
     in-out property <[TrackingLinkRow]> tracking_links;
     in-out property <[TrackingCandidateRow]> tracking_candidates;
@@ -225,21 +235,43 @@ export component AppWindow inherits Window {
     in-out property <bool> about_licenses_open: false;
     in-out property <length> about_scroll_y: 0px;
     in-out property <length> about_licenses_scroll_y: 0px;
-    // More is UI-only and belongs to the window, not a destroyed root page.
+    // More is a root page on narrow layouts; its children retain a Back route.
     in-out property <bool> more_open: false;
-    private property <int> more_kb_index: 0;
+    private property <bool> more_parent: false;
+    private property <bool> more_subpage_entered: true;
+    private property <bool> more_subpage_motion: root.more_parent && root.narrow_ui && Anim.enabled && Anim.transitions;
+    more_entry_tick := Timer {
+        interval: 1ms; running: false;
+        triggered => { self.stop(); root.more_subpage_entered = true; }
+    }
     changed narrow_ui => { if (!root.narrow_ui) { root.more_open = false; } }
     changed show_about => { if (root.show_about) { root.discover_search_focused = false; root.more_open = false; } }
     function open_more() {
         if (root.narrow_ui && !root.player_open && !root.modal_visible && !root.show_settings && !root.show_about) {
-            root.more_kb_index = 0;
+            system_back_scope.focus();
+            root.discover_search_focused = false;
             root.more_open = true;
         }
     }
     function pick_more(index: int) {
+        root.preserve_back_focus();
+        root.more_subpage_entered = false;
+        root.more_parent = true;
         root.more_open = false;
         if (index == 0) { root.settings_picked(); }
         else { root.about_picked(); }
+        more_entry_tick.start();
+    }
+    function more_subpage_back() {
+        system_back_scope.focus();
+        if (root.narrow_ui && root.more_parent) {
+            root.show_settings = false;
+            root.show_about = false;
+            root.show_home = false;
+            root.show_library = false;
+            root.more_parent = false;
+            root.more_open = true;
+        } else { root.home_picked(); }
     }
     in-out property <string> license_catalog: "";
     in-out property <[LicenseSource]> license_sources: [];
@@ -251,7 +283,7 @@ export component AppWindow inherits Window {
     in-out property <bool> cache_enabled: false;
     in-out property <int> cache_format_index: 0;
     in-out property <float> cache_quality: 85.0;
-    in-out property <bool> cache_downscale: true;
+    in-out property <bool> cache_downscale: false;
     in-out property <bool> cache_date_relative: true;
     in-out property <bool> cache_show_unwatched_thumbs: true;
     in-out property <float> cache_lru_mb: 128.0;
@@ -279,6 +311,7 @@ export component AppWindow inherits Window {
     // page even while a text field owns focus. Per-page handlers remember
     // the last request so a newly mounted page cannot consume the same press.
     in-out property <int> system_back_request: 0;
+    private property <bool> system_back_held: false;
     // --- Settings (animations) ----------------------------------------
     // Master + per-category animation switches (Settings → Look and feel).
     in-out property <bool> true_black: false;
@@ -741,54 +774,43 @@ export component AppWindow inherits Window {
         height: 100%;
 
         capture-key-pressed(e) => {
-            if (e.text == Key.Back && e.repeat) {
+            if (e.text == Key.Back && (e.repeat || root.system_back_held)) {
                 // Keep repeat protection ahead of modal dismissal.
-                accept
-            } else if (root.more_open) {
-                // Capture before the page underneath can edit, navigate or
-                // background itself. Focus stays on a surviving page scope.
-                if (e.text == Key.Back || e.text == Key.Backspace || e.text == Key.Escape) {
-                    root.more_open = false;
-                } else if (e.text == Key.UpArrow || e.text == Key.LeftArrow) {
-                    root.kb_active = true;
-                    root.more_kb_index = Math.mod(root.more_kb_index + 1, 2);
-                } else if (e.text == Key.DownArrow || e.text == Key.RightArrow || e.text == Key.Tab) {
-                    root.kb_active = true;
-                    root.more_kb_index = Math.mod(root.more_kb_index + 1, 2);
-                } else if (e.text == Key.Return || e.text == " ") {
-                    if (!e.repeat) { root.pick_more(root.more_kb_index); }
-                }
                 accept
             } else if (e.text != Key.Back) {
                 reject
-            } else if (root.resume_prompt_visible) {
-                root.resume_cancel();
-                accept
-            } else if (root.library_duplicates_open) {
-                if root.library_duplicate_selection >= 0 { root.library_duplicate_selection = -1; }
-                else { root.library_duplicates_open = false; }
-                accept
-            } else if (root.categories_modal) {
-                root.categories_modal = false;
-                accept
-            } else if (root.modal_visible && !root.player_open && root.stream_selector_open) {
-                // The fullscreen selector owns Back independently of the hidden
-                // detail navigation, including when returning from playback.
-                if (root.stream_action_open) { root.stream_action_open = false; }
-                else { root.stream_selector_back(); }
-                accept
             } else {
-                root.system_back_request += 1;
-                accept
+                root.system_back_held = true;
+                if (root.resume_prompt_visible) {
+                    root.resume_cancel();
+                    accept
+                } else if (root.library_duplicates_open) {
+                    if root.library_duplicate_selection >= 0 { root.library_duplicate_selection = -1; }
+                    else { root.library_duplicates_open = false; }
+                    accept
+                } else if (root.categories_modal) {
+                    root.categories_modal = false;
+                    accept
+                } else if (root.modal_visible && !root.player_open && root.stream_selector_open) {
+                    // The fullscreen selector owns Back independently of the hidden
+                    // detail navigation, including when returning from playback.
+                    root.preserve_back_focus();
+                    if (root.stream_action_open) { root.stream_action_open = false; }
+                    else { root.stream_selector_back(); }
+                    accept
+                } else {
+                    root.system_back_request += 1;
+                    accept
+                }
             }
         }
 
         capture-key-released(e) => {
-            if (e.text == Key.Back) { accept } else { reject }
+            if (e.text == Key.Back) { root.system_back_held = false; accept } else { reject }
         }
 
         // ---- Discover page --------------------------------------------
-    if !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_home && !root.show_about: DiscoverPage {
+    if !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_home && !root.show_about && !root.more_open: DiscoverPage {
         nav-viewport-width: root.width;
         catalog <=> root.catalog;
         addon_names <=> root.addon_names;
@@ -857,16 +879,16 @@ export component AppWindow inherits Window {
         discover_picked => { root.discover_picked(); }
         home_picked => { root.home_picked(); }
         library_picked => { root.library_picked(); }
-        settings_picked => { root.more_open = false; root.settings_picked(); }
+        settings_picked => { root.more_parent = false; root.more_open = false; root.settings_picked(); }
         more_open: root.more_open;
         more_picked => { root.open_more(); }
-        about_picked => { root.more_open = false; root.about_picked(); }
+        about_picked => { root.more_parent = false; root.more_open = false; root.about_picked(); }
         load_more => { root.load_more(); }
         visible_range(f, l) => { root.visible_range(f, l); }
     }
 
     // ---- Home page (landing page, Continue Watching) --------------------
-    if root.show_home && !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_about: HomePage {
+    if root.show_home && !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_about && !root.more_open: HomePage {
         nav-viewport-width: root.width;
         continue_rows <=> root.home_continue;
         new_episode_rows <=> root.home_new_episodes;
@@ -919,10 +941,10 @@ export component AppWindow inherits Window {
         home_picked => { root.home_picked(); }
         discover_picked => { root.discover_picked(); }
         library_picked => { root.library_picked(); }
-        settings_picked => { root.more_open = false; root.settings_picked(); }
+        settings_picked => { root.more_parent = false; root.more_open = false; root.settings_picked(); }
         more_open: root.more_open;
         more_picked => { root.open_more(); }
-        about_picked => { root.more_open = false; root.about_picked(); }
+        about_picked => { root.more_parent = false; root.more_open = false; root.about_picked(); }
         continue_picked(i) => { root.continue_picked(i); }
         new_episode_picked(i) => { root.new_episode_picked(i); }
         new_episode_enter(i) => { root.new_episode_enter(i); }
@@ -1060,7 +1082,7 @@ export component AppWindow inherits Window {
         stream_action_requested(id) => { root.stream_action_requested(id); }
         stream_action_selected(id, a) => { root.stream_action_selected(id, a); }
         stream_filter_picked(i) => { root.stream_filter_picked(i); }
-        stream_selector_back => { root.stream_selector_back(); }
+        stream_selector_back => { root.preserve_back_focus(); root.stream_selector_back(); }
         detail_tab_picked(t) => { root.detail_tab_picked(t); }
         episode_filter_changed(t) => { root.episode_filter_changed(t); }
         watch_now => { root.watch_now(); }
@@ -1101,7 +1123,7 @@ export component AppWindow inherits Window {
     }
 
     // ---- Library page ---------------------------------------------------
-    if root.show_library && !root.player_open && !root.modal_visible && !root.show_settings && !root.show_home && !root.show_about: LibraryPage {
+    if root.show_library && !root.player_open && !root.modal_visible && !root.show_settings && !root.show_home && !root.show_about && !root.more_open: LibraryPage {
         nav-viewport-width: root.width;
         library <=> root.library;
         category_rows <=> root.category_rows;
@@ -1121,10 +1143,10 @@ export component AppWindow inherits Window {
         discover_picked => { root.discover_picked(); }
         home_picked => { root.home_picked(); }
         library_picked => { root.library_picked(); }
-        settings_picked => { root.more_open = false; root.settings_picked(); }
+        settings_picked => { root.more_parent = false; root.more_open = false; root.settings_picked(); }
         more_open: root.more_open;
         more_picked => { root.open_more(); }
-        about_picked => { root.more_open = false; root.about_picked(); }
+        about_picked => { root.more_parent = false; root.more_open = false; root.about_picked(); }
         library_filter_picked(c) => { root.library_filter_picked(c); }
         library_item_picked(i) => { root.library_item_picked(i); }
         remove_library_item(i) => { root.remove_library_item(i); }
@@ -1147,6 +1169,11 @@ export component AppWindow inherits Window {
 
     // ---- Settings page --------------------------------------------------
     if root.show_settings && !root.player_open && !root.modal_visible && !root.show_home && !root.show_about: SettingsPage {
+        width: root.width; height: root.height;
+        x: root.more_subpage_motion && !root.more_subpage_entered ? root.width * 0.28 : 0px;
+        opacity: root.more_subpage_motion && !root.more_subpage_entered ? 0.0 : 1.0;
+        animate x { duration: Anim.transition_slide; easing: ease-out; }
+        animate opacity { duration: Anim.transition_fade; }
         sel <=> root.settings_selected_id;
         sub_open <=> root.settings_detail_open;
         two_pane: root.settings_two_pane;
@@ -1267,10 +1294,10 @@ export component AppWindow inherits Window {
         scroll_y <=> root.settings_scroll_y;
 
         discover_picked => { root.discover_picked(); }
-        home_picked => { root.home_picked(); }
+        home_picked => { root.more_subpage_back(); }
         library_picked => { root.library_picked(); }
-        settings_picked => { root.more_open = false; root.settings_picked(); }
-        about_picked => { root.more_open = false; root.about_picked(); }
+        settings_picked => { root.more_parent = false; root.more_open = false; root.settings_picked(); }
+        about_picked => { root.more_parent = false; root.more_open = false; root.about_picked(); }
         addon_added(u) => { root.addon_added(u); }
         addon_toggled(i) => { root.addon_toggled(i); }
         addon_remove(i) => { root.addon_remove(i); }
@@ -1318,6 +1345,11 @@ export component AppWindow inherits Window {
 
     // ---- About (with nested Licenses) -----------------------------------
     if root.show_about && !root.player_open && !root.modal_visible && !root.show_home && !root.show_library && !root.show_settings: AboutPage {
+        width: root.width; height: root.height;
+        x: root.more_subpage_motion && !root.more_subpage_entered ? root.width * 0.28 : 0px;
+        opacity: root.more_subpage_motion && !root.more_subpage_entered ? 0.0 : 1.0;
+        animate x { duration: Anim.transition_slide; easing: ease-out; }
+        animate opacity { duration: Anim.transition_fade; }
         nav-viewport-width: root.width;
         narrow: root.narrow_ui;
         safe-top: root.safe-area-insets.top;
@@ -1331,25 +1363,26 @@ export component AppWindow inherits Window {
         licenses_scroll_y <=> root.about_licenses_scroll_y;
         license_catalog: root.license_catalog;
         license_sources: root.license_sources;
-        home_picked => { root.home_picked(); }
+        home_picked => { root.more_subpage_back(); }
         discover_picked => { root.discover_picked(); }
         library_picked => { root.library_picked(); }
-        settings_picked => { root.settings_picked(); }
-        about_picked => { root.about_picked(); }
+        settings_picked => { root.more_parent = false; root.settings_picked(); }
+        about_picked => { root.more_parent = false; root.about_picked(); }
         license_source_requested(url) => { root.license_source_requested(url); }
     }
 
-    more_sheet := MenuSheet {
-        open: root.more_open;
-        sheet_title: @tr("More");
-        items: [{ label: @tr("Settings"), enabled: true }, { label: @tr("About"), enabled: true }];
-        focused_index: root.kb_active ? root.more_kb_index : -1;
+    if root.more_open && !root.player_open && !root.modal_visible: MorePage {
+        safe-top: root.safe-area-insets.top;
         safe-bottom: root.safe-area-insets.bottom;
         safe-left: root.safe-area-insets.left;
         safe-right: root.safe-area-insets.right;
-        max_h: root.height * 0.85;
-        picked(index) => { root.kb_active = false; root.pick_more(index); }
-        closed => { root.more_open = false; }
+        kb_active <=> root.kb_active;
+        system_back_request: root.system_back_request;
+        home_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.home_picked(); }
+        discover_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.discover_picked(); }
+        library_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.library_picked(); }
+        settings_picked => { root.pick_more(0); }
+        about_picked => { root.pick_more(1); }
     }
 
     // ---- Player overlay --------------------------------------------------

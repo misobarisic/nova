@@ -527,7 +527,7 @@ impl Default for CacheSettings {
             enabled: false,
             format: CacheImageFormat::Webp,
             quality: 85,
-            downscale: true,
+            downscale: false,
             date_relative: true,
             show_unwatched_thumbs: true,
             // Keep in step with `default_lru_mb` (the serde default used for

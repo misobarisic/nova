@@ -2,7 +2,7 @@ import { SettingsSync, SettingSyncBadge } from "settings-sync.slint";
 import { Theme } from "theme.slint";
 import { SliderTouchArea } from "slider-touch.slint";
 import { SearchField } from "searchfield.slint";
-import { IcExtension, IcTag, IcImage, IcDisplay, IcPlay, IcChevronLeft, IcChevronRight, IcSettingsGear, IcSync, IcDelete, IcHome, IcVideoLibrary, IcLink } from "icons.slint";
+import { IcExtension, IcTag, IcImage, IcDisplay, IcPlay, IcChevronLeft, IcChevronRight, IcSettingsGear, IcSync, IcDelete, IcHome, IcInfo, IcVideoLibrary, IcLink } from "icons.slint";
 import { KbMark } from "kbnav.slint";
 import { Anim } from "anim.slint";
 
@@ -779,6 +779,7 @@ export component SettingsLink inherits Rectangle {
                 height: 20px;
                 fill: Theme.current.accent_soft;
             }
+            if root.icon-kind == 15: IcInfo { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
             if root.icon-kind == 13: IcHome { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
             if root.icon-kind == 6 || root.icon-kind == 10: IcSettingsGear { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
             if root.icon-kind == 9: IcVideoLibrary { x: 7px; y: 7px; width: 20px; height: 20px; fill: Theme.current.accent_soft; }
