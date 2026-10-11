@@ -418,7 +418,7 @@ fn corrupt_envelopes_checksum_and_encoded_bytes_refetch() {
                     metadata.checksum ^= 1;
                 }
                 let bytes = serde_json::to_vec(&metadata).unwrap();
-                damaged.truncate(0);
+                damaged.clear();
                 damaged.extend_from_slice(MAGIC);
                 damaged.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
                 damaged.extend_from_slice(&bytes);
@@ -977,4 +977,697 @@ fn settings_revision_discards_blocked_normal_and_refresh_completions() {
     assert_eq!(refresh_variant_count, 0);
     fs::remove_dir_all(dir).unwrap();
     fs::remove_dir_all(refresh_dir).unwrap();
+}
+
+#[test]
+fn newer_refresh_displaces_blocked_normal_load_even_without_pixel_retention() {
+    let _serial = serial();
+    for disk in [false, true] {
+        for budget in [0, 128] {
+            for old_download_fails in [false, true] {
+                decoded_cache_clear();
+                set_decoded_cache_budget(budget);
+                let dir = scratch("normal-refresh-order");
+                let url = "https://unit.test/normal-refresh-order";
+                let local = CacheSettings {
+                    cache_images: disk,
+                    enabled: false,
+                    ..settings()
+                };
+                let recipe = ImageRecipe::resolve(ImageUse::Fixed(None), &local);
+                let newest_bytes = source_image(24, 24, false);
+                let expected = process_source(newest_bytes.clone(), recipe).unwrap().pixels;
+                let (started_tx, started_rx) = std::sync::mpsc::channel();
+                let (release_tx, release_rx) = std::sync::mpsc::channel();
+                let worker_dir = dir.clone();
+                let worker_settings = local.clone();
+                let worker = std::thread::spawn(move || {
+                    cached_pixels_with(
+                        &worker_dir,
+                        url,
+                        ImageUse::Fixed(None),
+                        &worker_settings,
+                        || {
+                            started_tx.send(()).unwrap();
+                            release_rx.recv().unwrap();
+                            (!old_download_fails).then(|| source_image(32, 16, false))
+                        },
+                    )
+                });
+                started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                let refreshed = refresh_image_if_changed_with(
+                    &dir,
+                    url,
+                    ImageUse::Fixed(None),
+                    &local,
+                    LoadEpoch::capture(),
+                    || Some(newest_bytes),
+                )
+                .unwrap();
+                assert!(image_buffers_equal(&refreshed, &expected));
+                if budget == 0 {
+                    assert_eq!(decoded_cache_stats(), (0, 0));
+                }
+                // The newest pixels must remain available to older work even
+                // when neither the disk cache nor the decoded LRU holds them.
+                assert_eq!(PUBLICATIONS.lock().unwrap().len(), 1);
+                release_tx.send(()).unwrap();
+                let displaced = worker.join().unwrap().unwrap();
+                assert!(image_buffers_equal(&displaced, &expected));
+                assert!(PUBLICATIONS.lock().unwrap().is_empty());
+                if disk {
+                    let variant = read_variant(&recipe_disk_path(&dir, url, recipe)).unwrap();
+                    assert!(image_buffers_equal(
+                        &variant_pixels(&variant, url, recipe).unwrap(),
+                        &expected
+                    ));
+                } else {
+                    assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
+                }
+                if budget > 0 {
+                    assert!(image_buffers_equal(
+                        &decoded_cache_get(&image_recipe_cache_key(url, recipe)).unwrap(),
+                        &expected
+                    ));
+                }
+                fs::remove_dir_all(dir).unwrap();
+            }
+        }
+    }
+    decoded_cache_clear();
+    set_decoded_cache_budget(128);
+}
+
+#[test]
+fn ordinary_load_joins_active_refresh_instead_of_returning_old_cached_pixels() {
+    let _serial = serial();
+    decoded_cache_clear();
+    let dir = scratch("ordinary-joins-refresh");
+    let url = "https://unit.test/ordinary-joins-refresh";
+    let local = CacheSettings {
+        enabled: false,
+        ..settings()
+    };
+    let recipe = ImageRecipe::resolve(ImageUse::Fixed(None), &local);
+    cached_pixels_with(&dir, url, ImageUse::Fixed(None), &local, || {
+        Some(source_image(32, 16, false))
+    })
+    .unwrap();
+    let epoch = LoadEpoch::capture();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker_dir = dir.clone();
+    let worker_settings = local.clone();
+    let refresh = std::thread::spawn(move || {
+        refresh_image_if_changed_with(
+            &worker_dir,
+            url,
+            ImageUse::Fixed(None),
+            &worker_settings,
+            epoch,
+            || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Some(source_image(24, 24, false))
+            },
+        )
+    });
+    started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let worker_dir = dir.clone();
+    let normal = std::thread::spawn(move || {
+        cached_pixels_with(&worker_dir, url, ImageUse::Fixed(None), &local, || {
+            panic!("must join refresh")
+        })
+    });
+    let flight_key = format!(
+        "{}:{}:{}:{}",
+        dir.display(),
+        epoch.clear,
+        epoch.settings,
+        image_recipe_cache_key(url, recipe)
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let joined = REFRESH_IN_FLIGHT
+            .lock()
+            .unwrap()
+            .get(&flight_key)
+            .is_some_and(|flight| Arc::strong_count(flight) >= 3);
+        if joined {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "ordinary caller never joined active refresh"
+        );
+        std::thread::yield_now();
+    }
+    release_tx.send(()).unwrap();
+    let refreshed = refresh.join().unwrap().unwrap();
+    let loaded = normal.join().unwrap().unwrap();
+    assert!(image_buffers_equal(&refreshed, &loaded));
+    assert_eq!((loaded.width(), loaded.height()), (24, 24));
+    assert!(PUBLICATIONS.lock().unwrap().is_empty());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn failed_refresh_preserves_good_memory_and_disk_entries() {
+    let _serial = serial();
+    decoded_cache_clear();
+    let dir = scratch("failed-refresh-preserves");
+    let url = "https://unit.test/failed-refresh-preserves";
+    let local = settings();
+    let recipe = ImageRecipe::resolve(ImageUse::Fixed(Some(24)), &local);
+    let expected = cached_pixels_with(&dir, url, ImageUse::Fixed(Some(24)), &local, || {
+        Some(source_image(32, 16, false))
+    })
+    .unwrap();
+    let path = recipe_disk_path(&dir, url, recipe);
+    let before = fs::read(&path).unwrap();
+    for source in [None, Some(vec![0, 1, 2])] {
+        assert!(
+            refresh_image_if_changed_with(
+                &dir,
+                url,
+                ImageUse::Fixed(Some(24)),
+                &local,
+                LoadEpoch::capture(),
+                || source
+            )
+            .is_none()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(image_buffers_equal(
+            &decoded_cache_get(&image_recipe_cache_key(url, recipe)).unwrap(),
+            &expected
+        ));
+        assert!(PUBLICATIONS.lock().unwrap().is_empty());
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn old_maintenance_snapshot_cannot_retire_a_use_rebuilt_by_newer_settings() {
+    let _serial = serial();
+    let original = nova_config::image_settings_snapshot().0;
+    decoded_cache_clear();
+    let dir = scratch("maintenance-newer-registration");
+    let url = "https://unit.test/maintenance-newer-registration";
+    let initial = CacheSettings {
+        enabled: false,
+        detail_poster_max_side: Some(24),
+        ..settings()
+    };
+    nova_config::set_cache_settings(initial.clone());
+    let bytes = source_image(80, 40, false);
+    cached_pixels_with(&dir, url, ImageUse::DetailPoster, &initial, || {
+        Some(bytes.clone())
+    })
+    .unwrap();
+    let target = CacheSettings {
+        detail_poster_max_side: Some(32),
+        ..initial.clone()
+    };
+    let newer = CacheSettings {
+        detail_poster_max_side: Some(40),
+        ..initial
+    };
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker_dir = dir.clone();
+    let worker_bytes = bytes.clone();
+    let maintenance = std::thread::spawn(move || {
+        rewrite_entries_with(
+            &worker_dir,
+            &target,
+            &AtomicBool::new(false),
+            |_| {},
+            |_| {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Some(worker_bytes.clone())
+            },
+        )
+    });
+    started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    nova_config::set_cache_settings(newer.clone());
+    let expected =
+        cached_pixels_with(&dir, url, ImageUse::DetailPoster, &newer, || Some(bytes)).unwrap();
+    let recipe = ImageRecipe::resolve(ImageUse::DetailPoster, &newer);
+    let path = recipe_disk_path(&dir, url, recipe);
+    let before = fs::read(&path).unwrap();
+    release_tx.send(()).unwrap();
+    let progress = maintenance.join().unwrap();
+    nova_config::set_cache_settings(original);
+    assert_eq!(progress.converted, 0);
+    assert_eq!(progress.skipped, 1);
+    assert_eq!(progress.failed, 0);
+    assert_eq!(fs::read(path).unwrap(), before);
+    let variants = disk_variants(&dir);
+    assert_eq!(variants.len(), 1);
+    assert!(image_buffers_equal(
+        &variant_pixels(&variants[0].1, url, recipe).unwrap(),
+        &expected
+    ));
+    assert!(PUBLICATIONS.lock().unwrap().is_empty());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn maintenance_source_cannot_overwrite_a_newer_same_recipe_refresh() {
+    let _serial = serial();
+    decoded_cache_clear();
+    let dir = scratch("maintenance-refresh-order");
+    let url = "https://unit.test/maintenance-refresh-order";
+    let local = CacheSettings {
+        enabled: false,
+        ..settings()
+    };
+    cached_pixels_with(&dir, url, ImageUse::Fixed(None), &local, || {
+        Some(source_image(32, 16, false))
+    })
+    .unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker_dir = dir.clone();
+    let worker_settings = local.clone();
+    let maintenance = std::thread::spawn(move || {
+        rewrite_entries_with(
+            &worker_dir,
+            &worker_settings,
+            &AtomicBool::new(false),
+            |_| {},
+            |_| {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Some(source_image(40, 20, false))
+            },
+        )
+    });
+    started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let expected = refresh_image_if_changed_with(
+        &dir,
+        url,
+        ImageUse::Fixed(None),
+        &local,
+        LoadEpoch::capture(),
+        || Some(source_image(24, 24, false)),
+    )
+    .unwrap();
+    release_tx.send(()).unwrap();
+    let progress = maintenance.join().unwrap();
+    assert_eq!(progress.converted, 0);
+    assert_eq!(progress.skipped, 1);
+    let recipe = ImageRecipe::resolve(ImageUse::Fixed(None), &local);
+    let variant = read_variant(&recipe_disk_path(&dir, url, recipe)).unwrap();
+    assert!(image_buffers_equal(
+        &variant_pixels(&variant, url, recipe).unwrap(),
+        &expected
+    ));
+    assert!(PUBLICATIONS.lock().unwrap().is_empty());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn maintenance_snapshot_keeps_newer_publication_sequence_when_disk_replacement_fails() {
+    let _serial = serial();
+    decoded_cache_clear();
+    set_decoded_cache_budget(0);
+    let dir = scratch("maintenance-transient-publication");
+    let url = "https://unit.test/maintenance-transient-publication";
+    let local = CacheSettings {
+        enabled: false,
+        ..settings()
+    };
+    let recipe = ImageRecipe::resolve(ImageUse::Fixed(None), &local);
+    let old_source = source_image(32, 16, false);
+    cached_pixels_with(&dir, url, ImageUse::Fixed(None), &local, || {
+        Some(old_source.clone())
+    })
+    .unwrap();
+    let path = recipe_disk_path(&dir, url, recipe);
+    let before = fs::read(&path).unwrap();
+    let mut refreshed = false;
+    let progress = rewrite_entries_with(
+        &dir,
+        &local,
+        &AtomicBool::new(false),
+        |progress| {
+            if progress.processed != 0 || refreshed {
+                return;
+            }
+            refreshed = true;
+            // Maintenance already owns this recipe's ticket at its snapshot
+            // callback. Fail only the refresh's atomic disk replacement.
+            let sequence = TEMP_SEQUENCE.load(Ordering::Relaxed);
+            let blocker = path.with_file_name(format!(
+                "{}.tmp-{}-{sequence}",
+                path.file_name().unwrap().to_string_lossy(),
+                std::process::id(),
+            ));
+            fs::create_dir(&blocker).unwrap();
+            let newer = refresh_image_if_changed_with(
+                &dir,
+                url,
+                ImageUse::Fixed(None),
+                &local,
+                LoadEpoch::capture(),
+                || Some(source_image(24, 24, false)),
+            )
+            .unwrap();
+            assert_eq!((newer.width(), newer.height()), (24, 24));
+            assert_eq!(decoded_cache_stats(), (0, 0));
+            assert_eq!(fs::read(&path).unwrap(), before);
+            fs::remove_dir(blocker).unwrap();
+        },
+        |_| Some(old_source.clone()),
+    );
+    assert!(refreshed);
+    assert_eq!(progress.converted, 0);
+    assert_eq!(progress.skipped, 1);
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert!(PUBLICATIONS.lock().unwrap().is_empty());
+    set_decoded_cache_budget(128);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn old_maintenance_snapshot_cannot_reclaim_identical_registration_after_settings_aba() {
+    let _serial = serial();
+    let original = nova_config::image_settings_snapshot().0;
+    decoded_cache_clear();
+    let dir = scratch("maintenance-settings-aba");
+    let url = "https://unit.test/maintenance-settings-aba";
+    let initial = CacheSettings {
+        enabled: false,
+        detail_poster_max_side: Some(24),
+        ..settings()
+    };
+    nova_config::set_cache_settings(initial.clone());
+    let bytes = source_image(80, 40, false);
+    cached_pixels_with(&dir, url, ImageUse::DetailPoster, &initial, || {
+        Some(bytes.clone())
+    })
+    .unwrap();
+    let recipe = ImageRecipe::resolve(ImageUse::DetailPoster, &initial);
+    let path = recipe_disk_path(&dir, url, recipe);
+    let captured = fs::read(&path).unwrap();
+    let target = CacheSettings {
+        detail_poster_max_side: Some(32),
+        ..initial.clone()
+    };
+    let intermediate = CacheSettings {
+        detail_poster_max_side: Some(40),
+        ..initial.clone()
+    };
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker_dir = dir.clone();
+    let worker_bytes = bytes.clone();
+    let maintenance = std::thread::spawn(move || {
+        rewrite_entries_with(
+            &worker_dir,
+            &target,
+            &AtomicBool::new(false),
+            |_| {},
+            |_| {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Some(worker_bytes.clone())
+            },
+        )
+    });
+    started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    nova_config::set_cache_settings(intermediate.clone());
+    cached_pixels_with(&dir, url, ImageUse::DetailPoster, &intermediate, || {
+        Some(bytes.clone())
+    })
+    .unwrap();
+    nova_config::set_cache_settings(initial.clone());
+    cached_pixels_with(&dir, url, ImageUse::DetailPoster, &initial, || Some(bytes)).unwrap();
+    // Recipe, source checksum and envelope bytes recur, but ownership belongs
+    // to the newer successful settings load rather than the old snapshot.
+    assert_eq!(fs::read(&path).unwrap(), captured);
+    release_tx.send(()).unwrap();
+    let progress = maintenance.join().unwrap();
+    nova_config::set_cache_settings(original);
+    assert_eq!(progress.converted, 0);
+    assert_eq!(progress.skipped, 1);
+    assert_eq!(fs::read(path).unwrap(), captured);
+    assert_eq!(disk_variants(&dir).len(), 1);
+    assert!(PUBLICATIONS.lock().unwrap().is_empty());
+    assert!(REGISTRATION_WATCHERS.lock().unwrap().is_empty());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn queued_maintenance_keeps_only_sequences_except_while_an_older_reader_needs_pixels() {
+    let _serial = serial();
+    decoded_cache_clear();
+    set_decoded_cache_budget(0);
+    let dir = scratch("maintenance-metadata-only");
+    let disk_settings = CacheSettings {
+        enabled: false,
+        ..settings()
+    };
+    let memory_settings = CacheSettings {
+        cache_images: false,
+        ..disk_settings.clone()
+    };
+    let urls: Vec<_> = (0..24)
+        .map(|index| format!("https://unit.test/maintenance-metadata-only/{index}"))
+        .collect();
+    let old_source = source_image(32, 16, false);
+    for url in &urls {
+        cached_pixels_with(&dir, url, ImageUse::Fixed(None), &disk_settings, || {
+            Some(old_source.clone())
+        })
+        .unwrap();
+    }
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker_dir = dir.clone();
+    let worker_url = urls[0].clone();
+    let worker_settings = memory_settings.clone();
+    let mut old_reader = Some(std::thread::spawn(move || {
+        cached_pixels_with(
+            &worker_dir,
+            &worker_url,
+            ImageUse::Fixed(None),
+            &worker_settings,
+            || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Some(source_image(32, 16, false))
+            },
+        )
+    }));
+    started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let mut published = false;
+    let progress = rewrite_entries_with(
+        &dir,
+        &disk_settings,
+        &AtomicBool::new(false),
+        |progress| {
+            if progress.processed != 0 || published {
+                return;
+            }
+            published = true;
+            let newest = refresh_image_if_changed_with(
+                &dir,
+                &urls[0],
+                ImageUse::Fixed(None),
+                &memory_settings,
+                LoadEpoch::capture(),
+                || Some(source_image(24, 24, false)),
+            )
+            .unwrap();
+            for url in urls.iter().skip(1) {
+                let result =
+                    cached_pixels_with(&dir, url, ImageUse::Fixed(None), &memory_settings, || {
+                        Some(source_image(24, 24, false))
+                    })
+                    .unwrap();
+                assert_eq!((result.width(), result.height()), (24, 24));
+            }
+            assert_eq!(decoded_cache_stats(), (0, 0));
+            {
+                let publications = PUBLICATIONS.lock().unwrap();
+                assert_eq!(publications.len(), urls.len());
+                assert!(publications.values().all(|state| state.newest.is_some()));
+                // Only the blocked reader needs a pixel handoff. The other
+                // completed ordinary results leave sequence evidence alone.
+                assert_eq!(
+                    publications
+                        .values()
+                        .filter(|state| state.newest.as_ref().unwrap().pixels.is_some())
+                        .count(),
+                    1
+                );
+            }
+            release_tx.send(()).unwrap();
+            let displaced = old_reader.take().unwrap().join().unwrap().unwrap();
+            assert!(image_buffers_equal(&displaced, &newest));
+            let publications = PUBLICATIONS.lock().unwrap();
+            assert_eq!(publications.len(), urls.len());
+            assert!(
+                publications.values().all(|state| state.readers.is_empty()
+                    && state.newest.as_ref().unwrap().pixels.is_none())
+            );
+        },
+        |_| Some(old_source.clone()),
+    );
+    assert!(published);
+    assert_eq!(progress.converted, 0);
+    assert_eq!(progress.skipped, urls.len());
+    assert_eq!(progress.processed, urls.len());
+    assert!(PUBLICATIONS.lock().unwrap().is_empty());
+    assert!(REGISTRATION_WATCHERS.lock().unwrap().is_empty());
+    set_decoded_cache_budget(128);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn settings_change_while_source_commit_waits_for_url_lock_preserves_newer_use() {
+    let _serial = serial();
+    let original = nova_config::image_settings_snapshot().0;
+    for refresh in [false, true] {
+        decoded_cache_clear();
+        let dir = scratch("settings-change-url-lock");
+        let url = "https://unit.test/settings-change-url-lock";
+        let initial = CacheSettings {
+            enabled: false,
+            detail_poster_max_side: Some(24),
+            ..settings()
+        };
+        nova_config::set_cache_settings(initial.clone());
+        let old_recipe = ImageRecipe::resolve(ImageUse::DetailPoster, &initial);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker_dir = dir.clone();
+        let worker = std::thread::spawn(move || {
+            let download = || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Some(source_image(80, 40, false))
+            };
+            if refresh {
+                refresh_image_if_changed_with(
+                    &worker_dir,
+                    url,
+                    ImageUse::DetailPoster,
+                    &initial,
+                    LoadEpoch::capture(),
+                    download,
+                )
+            } else {
+                cached_pixels_with(&worker_dir, url, ImageUse::DetailPoster, &initial, download)
+            }
+        });
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let lock = url_lock(&dir, url);
+        let guard = lock.lock().unwrap();
+        release_tx.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while Arc::strong_count(&lock) < 2 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "old source never reached the held URL lock"
+            );
+            std::thread::yield_now();
+        }
+        // Publish a newer use while owning the lock the old commit is waiting
+        // for. This fixes the ordering without relying on mutex wake-up order.
+        let newer = CacheSettings {
+            enabled: false,
+            detail_poster_max_side: Some(40),
+            ..settings()
+        };
+        nova_config::set_cache_settings(newer.clone());
+        let recipe = ImageRecipe::resolve(ImageUse::DetailPoster, &newer);
+        let expected = process_source(source_image(80, 40, false), recipe).unwrap();
+        persist_processed(&dir, url, &[ImageUse::DetailPoster], recipe, &expected).unwrap();
+        decoded_cache_insert(
+            &image_recipe_cache_key(url, recipe),
+            expected.pixels.clone(),
+        );
+        let path = recipe_disk_path(&dir, url, recipe);
+        let before = fs::read(&path).unwrap();
+        drop(guard);
+        assert!(worker.join().unwrap().is_none());
+        assert_eq!(fs::read(path).unwrap(), before);
+        assert_eq!(disk_variants(&dir).len(), 1);
+        assert!(!recipe_disk_path(&dir, url, old_recipe).exists());
+        assert!(decoded_cache_get(&image_recipe_cache_key(url, old_recipe)).is_none());
+        assert!(image_buffers_equal(
+            &decoded_cache_get(&image_recipe_cache_key(url, recipe)).unwrap(),
+            &expected.pixels
+        ));
+        assert!(PUBLICATIONS.lock().unwrap().is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    nova_config::set_cache_settings(original);
+    decoded_cache_clear();
+}
+
+#[test]
+fn stale_follower_registration_waiting_for_url_lock_cannot_reclaim_newer_use() {
+    let _serial = serial();
+    let original = nova_config::image_settings_snapshot().0;
+    decoded_cache_clear();
+    let dir = scratch("settings-change-follower-lock");
+    let url = "https://unit.test/settings-change-follower-lock";
+    let initial = CacheSettings {
+        enabled: false,
+        detail_poster_max_side: Some(24),
+        ..settings()
+    };
+    nova_config::set_cache_settings(initial.clone());
+    let epoch = LoadEpoch::capture();
+    let old_recipe = ImageRecipe::resolve(ImageUse::DetailPoster, &initial);
+    let old = process_source(source_image(80, 40, false), old_recipe).unwrap();
+    // Another role keeps the old recipe available after DetailPoster moves.
+    persist_processed(&dir, url, &[ImageUse::Fixed(Some(24))], old_recipe, &old).unwrap();
+    let lock = url_lock(&dir, url);
+    let guard = lock.lock().unwrap();
+    let worker_dir = dir.clone();
+    let follower = std::thread::spawn(move || {
+        let _mutation = CACHE_MUTATION.read().unwrap();
+        assert!(epoch.current());
+        register_refreshed_use(
+            &worker_dir,
+            url,
+            ImageUse::DetailPoster,
+            old_recipe,
+            &old.pixels,
+            epoch,
+        );
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while Arc::strong_count(&lock) < 2 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "follower never reached the held URL lock"
+        );
+        std::thread::yield_now();
+    }
+    let newer = CacheSettings {
+        detail_poster_max_side: Some(40),
+        ..initial
+    };
+    nova_config::set_cache_settings(newer.clone());
+    let recipe = ImageRecipe::resolve(ImageUse::DetailPoster, &newer);
+    let expected = process_source(source_image(80, 40, false), recipe).unwrap();
+    persist_processed(&dir, url, &[ImageUse::DetailPoster], recipe, &expected).unwrap();
+    let path = recipe_disk_path(&dir, url, recipe);
+    let before = fs::read(&path).unwrap();
+    drop(guard);
+    follower.join().unwrap();
+    nova_config::set_cache_settings(original);
+    assert_eq!(fs::read(path).unwrap(), before);
+    let old_variant = read_variant(&recipe_disk_path(&dir, url, old_recipe)).unwrap();
+    assert_eq!(old_variant.metadata.uses, [ImageUse::Fixed(Some(24))]);
+    assert_eq!(disk_variants(&dir).len(), 2);
+    fs::remove_dir_all(dir).unwrap();
 }

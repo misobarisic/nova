@@ -476,6 +476,57 @@ fn retire_use_history(dir: &Path, url: &str, uses: &[ImageUse], keep: &Path) {
         }
     }
 }
+// Maintenance owns these watches only for the lifetime of its registration
+// snapshot. Marking successful registrations also catches settings ABA: the
+// same recipe/bytes can recur after ownership moved to a newer load.
+type RegistrationWatchKey = (PathBuf, String, ImageUse);
+type RegistrationWatchers = HashMap<RegistrationWatchKey, Vec<Weak<AtomicBool>>>;
+static REGISTRATION_WATCHERS: LazyLock<Mutex<RegistrationWatchers>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+struct RegistrationWatch {
+    key: RegistrationWatchKey,
+    stale: Arc<AtomicBool>,
+}
+impl RegistrationWatch {
+    fn capture(dir: &Path, url: &str, image_use: ImageUse) -> Self {
+        let key = (dir.to_owned(), url.to_owned(), image_use);
+        let stale = Arc::new(AtomicBool::new(false));
+        REGISTRATION_WATCHERS
+            .lock()
+            .unwrap()
+            .entry(key.clone())
+            .or_default()
+            .push(Arc::downgrade(&stale));
+        Self { key, stale }
+    }
+}
+impl Drop for RegistrationWatch {
+    fn drop(&mut self) {
+        let own = Arc::downgrade(&self.stale);
+        let mut watchers = REGISTRATION_WATCHERS.lock().unwrap();
+        if let Some(registered) = watchers.get_mut(&self.key) {
+            registered.retain(|watch| !watch.ptr_eq(&own) && watch.strong_count() > 0);
+            if registered.is_empty() {
+                watchers.remove(&self.key);
+            }
+        }
+    }
+}
+fn invalidate_registration_snapshots(dir: &Path, url: &str, uses: &[ImageUse]) {
+    let watchers = REGISTRATION_WATCHERS.lock().unwrap();
+    if watchers.is_empty() {
+        return;
+    }
+    for image_use in uses {
+        let key = (dir.to_owned(), url.to_owned(), *image_use);
+        if let Some(registered) = watchers.get(&key) {
+            for watch in registered.iter().filter_map(Weak::upgrade) {
+                watch.store(true, Ordering::Release);
+            }
+        }
+    }
+}
+
 fn persist_processed(
     dir: &Path,
     url: &str,
@@ -511,12 +562,16 @@ fn persist_processed(
         encoded: encoded.clone(),
     };
     write_variant(&path, &variant)?;
+    invalidate_registration_snapshots(dir, url, uses);
     retire_use_history(dir, url, uses, &path);
     Ok(())
 }
-fn register_cached_use(dir: &Path, url: &str, image_use: ImageUse, recipe: ImageRecipe) -> bool {
-    let lock = url_lock(dir, url);
-    let _guard = lock.lock().unwrap();
+fn register_cached_use_locked(
+    dir: &Path,
+    url: &str,
+    image_use: ImageUse,
+    recipe: ImageRecipe,
+) -> bool {
     let path = recipe_disk_path(dir, url, recipe);
     let Some(mut variant) =
         read_variant(&path).filter(|v| v.metadata.url == url && v.metadata.recipe == recipe)
@@ -526,6 +581,7 @@ fn register_cached_use(dir: &Path, url: &str, image_use: ImageUse, recipe: Image
     if !variant.metadata.uses.contains(&image_use) {
         variant.metadata.uses.push(image_use);
         if write_variant(&path, &variant).is_ok() {
+            invalidate_registration_snapshots(dir, url, &[image_use]);
             retire_use_history(dir, url, &[image_use], &path);
         }
     }
@@ -538,9 +594,22 @@ fn register_refreshed_use(
     image_use: ImageUse,
     recipe: ImageRecipe,
     pixels: &Pixels,
+    epoch: LoadEpoch,
 ) {
     let lock = url_lock(dir, url);
     let _guard = lock.lock().unwrap();
+    if !epoch.current() {
+        return;
+    }
+    register_refreshed_use_locked(dir, url, image_use, recipe, pixels);
+}
+fn register_refreshed_use_locked(
+    dir: &Path,
+    url: &str,
+    image_use: ImageUse,
+    recipe: ImageRecipe,
+    pixels: &Pixels,
+) {
     let path = recipe_disk_path(dir, url, recipe);
     let Some(mut variant) =
         read_variant(&path).filter(|v| v.metadata.url == url && v.metadata.recipe == recipe)
@@ -557,6 +626,7 @@ fn register_refreshed_use(
     if !variant.metadata.uses.contains(&image_use) {
         variant.metadata.uses.push(image_use);
         if write_variant(&path, &variant).is_ok() {
+            invalidate_registration_snapshots(dir, url, &[image_use]);
             retire_use_history(dir, url, &[image_use], &path);
         }
     }
@@ -587,6 +657,144 @@ static IN_FLIGHT: LazyLock<Mutex<HashMap<String, Flight>>> =
 static REFRESH_IN_FLIGHT: LazyLock<Mutex<HashMap<String, Flight>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+// Tickets order successful source publications across ordinary loads, forced
+// refreshes and maintenance. Maintenance keeps only sequence evidence. Pixels
+// live here only while an older load/refresh still needs its completion handed
+// off; queued maintenance must never become another retained pixel cache.
+struct PublishedSource {
+    sequence: u64,
+    pixels: Option<Pixels>,
+}
+struct PublicationState {
+    active: usize,
+    readers: HashSet<u64>,
+    newest: Option<PublishedSource>,
+}
+static PUBLICATIONS: LazyLock<Mutex<HashMap<String, PublicationState>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static PUBLICATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+struct PublicationTicket {
+    key: String,
+    sequence: u64,
+    recipe: ImageRecipe,
+    delivery: bool,
+}
+impl PublicationTicket {
+    fn acquire(dir: &Path, url: &str, recipe: ImageRecipe, clear: u64) -> Self {
+        Self::acquire_for(dir, url, recipe, clear, true)
+    }
+    fn acquire_maintenance(dir: &Path, url: &str, recipe: ImageRecipe, clear: u64) -> Self {
+        Self::acquire_for(dir, url, recipe, clear, false)
+    }
+    fn acquire_for(dir: &Path, url: &str, recipe: ImageRecipe, clear: u64, delivery: bool) -> Self {
+        let key = format!(
+            "{}:{clear}:{}",
+            dir.display(),
+            image_recipe_cache_key(url, recipe)
+        );
+        let mut publications = PUBLICATIONS.lock().unwrap();
+        let sequence = PUBLICATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let state = publications.entry(key.clone()).or_insert(PublicationState {
+            active: 0,
+            readers: HashSet::new(),
+            newest: None,
+        });
+        state.active += 1;
+        if delivery {
+            state.readers.insert(sequence);
+        }
+        Self {
+            key,
+            sequence,
+            recipe,
+            delivery,
+        }
+    }
+    // Call under the URL lock, together with the disk/LRU mutation below.
+    fn newer_pixels(&self) -> Option<Pixels> {
+        PUBLICATIONS
+            .lock()
+            .unwrap()
+            .get(&self.key)?
+            .newest
+            .as_ref()
+            .filter(|source| source.sequence > self.sequence)
+            .and_then(|source| source.pixels.clone())
+    }
+    fn newer_publication(&self) -> bool {
+        PUBLICATIONS
+            .lock()
+            .unwrap()
+            .get(&self.key)
+            .and_then(|state| state.newest.as_ref())
+            .is_some_and(|source| source.sequence > self.sequence)
+    }
+    fn published(&self, pixels: &Pixels) {
+        let mut publications = PUBLICATIONS.lock().unwrap();
+        let state = publications.get_mut(&self.key).unwrap();
+        let needs_handoff = state
+            .readers
+            .iter()
+            .any(|sequence| *sequence < self.sequence);
+        state.newest = Some(PublishedSource {
+            sequence: self.sequence,
+            pixels: needs_handoff.then(|| pixels.clone()),
+        });
+    }
+}
+
+impl Drop for PublicationTicket {
+    fn drop(&mut self) {
+        let mut publications = PUBLICATIONS.lock().unwrap();
+        let state = publications.get_mut(&self.key).unwrap();
+        state.active -= 1;
+        if self.delivery {
+            state.readers.remove(&self.sequence);
+        }
+        if let Some(source) = state.newest.as_mut()
+            && !state
+                .readers
+                .iter()
+                .any(|sequence| *sequence < source.sequence)
+        {
+            source.pixels = None;
+        }
+        if state.active == 0 {
+            publications.remove(&self.key);
+        }
+    }
+}
+fn publish_processed_locked(
+    dir: &Path,
+    url: &str,
+    uses: &[ImageUse],
+    disk: bool,
+    ticket: &PublicationTicket,
+    processed: Option<Processed>,
+) -> Option<Pixels> {
+    if let Some(newer) = ticket.newer_pixels() {
+        if disk {
+            for image_use in uses {
+                register_refreshed_use_locked(dir, url, *image_use, ticket.recipe, &newer);
+            }
+        }
+        return Some(newer);
+    }
+    let processed = processed?;
+    let recipe = ticket.recipe;
+    if processed.encoded.is_some() {
+        if disk {
+            let _ = persist_processed(dir, url, uses, recipe, &processed);
+        }
+        decoded_cache_insert(
+            &image_recipe_cache_key(url, recipe),
+            processed.pixels.clone(),
+        );
+        ticket.published(&processed.pixels);
+    }
+    Some(processed.pixels)
+}
+
 /// All transports call this core. The injected source fetch makes behavior tests
 /// independent of HTTP. Neither old variants nor originals can satisfy a new recipe.
 pub fn cached_pixels_with(
@@ -615,20 +823,6 @@ fn cached_pixels_at(
 ) -> Option<Pixels> {
     let recipe = ImageRecipe::resolve(image_use, settings);
     let key = image_recipe_cache_key(url, recipe);
-    if let Some(pixels) = decoded_cache_get(&key) {
-        if !settings.cache_images {
-            return epoch.current().then_some(pixels);
-        }
-        let _mutation = CACHE_MUTATION.read().unwrap();
-        if !epoch.current() {
-            return None;
-        }
-        if register_cached_use(dir, url, image_use, recipe) {
-            return Some(pixels);
-        }
-        // A memory entry from a disk-disabled load has no source bytes to save.
-        // Fetch its source rather than recompressing the decoded lossy image.
-    }
     let flight_key = format!(
         "{}:{}:{}:{}",
         dir.display(),
@@ -636,91 +830,137 @@ fn cached_pixels_at(
         epoch.settings,
         key
     );
-    let (flight, leader) = {
+    let (flight, ticket, joined_refresh) = {
+        // A forced refresh already underway owns the next source generation.
+        // Ordinary callers must wait for it even if an older cache hit exists.
+        let refreshes = REFRESH_IN_FLIGHT.lock().unwrap();
         let mut flights = IN_FLIGHT.lock().unwrap();
-        if let Some(flight) = flights.get(&flight_key) {
-            (flight.clone(), false)
+        if let Some(flight) = refreshes.get(&flight_key) {
+            (flight.clone(), None, true)
+        } else if let Some(flight) = flights.get(&flight_key) {
+            (flight.clone(), None, false)
         } else {
             let flight = Arc::new((Mutex::new(None), Condvar::new()));
+            let ticket = PublicationTicket::acquire(dir, url, recipe, epoch.clear);
             flights.insert(flight_key.clone(), flight.clone());
-            (flight, true)
+            (flight, Some(ticket), false)
         }
     };
-    if !leader {
+    let Some(ticket) = ticket else {
         let mut result = flight.0.lock().unwrap();
         while result.is_none() {
             result = flight.1.wait(result).unwrap();
         }
         let pixels = result.as_ref().unwrap().clone();
         drop(result);
-        if pixels.is_some() && settings.cache_images {
+        if pixels.is_none() && joined_refresh && epoch.current() {
+            // A failed refresh leaves valid old entries usable by ordinary loads.
+            return cached_pixels_at(dir, url, image_use, settings, epoch, download);
+        }
+        if let Some(pixels) = pixels.as_ref()
+            && settings.cache_images
+        {
             let _mutation = CACHE_MUTATION.read().unwrap();
             if epoch.current() {
-                register_cached_use(dir, url, image_use, recipe);
+                register_refreshed_use(dir, url, image_use, recipe, pixels, epoch);
             }
         }
         return if epoch.current() { pixels } else { None };
-    }
+    };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        load_recipe(dir, url, image_use, settings, &key, epoch, download)
+        load_recipe(dir, url, image_use, settings, epoch, &ticket, download)
     }))
     .ok()
     .flatten();
     {
+        let _mutation = CACHE_MUTATION.read().unwrap();
+        let lock = url_lock(dir, url);
+        let _guard = lock.lock().unwrap();
+        // A refresh can publish between the source commit and completion-slot
+        // delivery. Complete the flight under the same publication lock.
+        let result = if epoch.current() {
+            if let Some(newer) = ticket.newer_pixels() {
+                if settings.cache_images {
+                    register_refreshed_use_locked(dir, url, image_use, recipe, &newer);
+                }
+                Some(newer)
+            } else {
+                result
+            }
+        } else {
+            None
+        };
         let mut flights = IN_FLIGHT.lock().unwrap();
         *flight.0.lock().unwrap() = Some(result.clone());
         flights.remove(&flight_key);
         flight.1.notify_all();
+        result
     }
-    result
 }
 fn load_recipe(
     dir: &Path,
     url: &str,
     image_use: ImageUse,
     settings: &CacheSettings,
-    key: &str,
     epoch: LoadEpoch,
+    ticket: &PublicationTicket,
     download: impl FnOnce() -> Option<Vec<u8>>,
 ) -> Option<Pixels> {
     let recipe = ImageRecipe::resolve(image_use, settings);
     let disk = settings.cache_images;
-    if disk {
+    let key = image_recipe_cache_key(url, recipe);
+    {
         let _mutation = CACHE_MUTATION.read().unwrap();
         let lock = url_lock(dir, url);
         let _guard = lock.lock().unwrap();
         if !epoch.current() {
             return None;
         }
-        let path = recipe_disk_path(dir, url, recipe);
-        if let Some(mut variant) = read_variant(&path)
-            && let Some(pixels) = variant_pixels(&variant, url, recipe)
-        {
-            if !variant.metadata.uses.contains(&image_use) {
-                variant.metadata.uses.push(image_use);
-                if write_variant(&path, &variant).is_ok() {
-                    retire_use_history(dir, url, &[image_use], &path);
-                }
+        if let Some(newer) = ticket.newer_pixels() {
+            if disk {
+                register_refreshed_use_locked(dir, url, image_use, recipe, &newer);
             }
-            decoded_cache_insert(key, pixels.clone());
+            return Some(newer);
+        }
+        if let Some(pixels) = decoded_cache_get(&key)
+            && (!disk || register_cached_use_locked(dir, url, image_use, recipe))
+        {
             return Some(pixels);
         }
+        // A memory entry from a disk-disabled load has no source bytes to save.
+        // Fetch its source rather than recompressing the decoded lossy image.
+        if disk {
+            let path = recipe_disk_path(dir, url, recipe);
+            if let Some(mut variant) = read_variant(&path)
+                && let Some(pixels) = variant_pixels(&variant, url, recipe)
+            {
+                if !variant.metadata.uses.contains(&image_use) {
+                    variant.metadata.uses.push(image_use);
+                    if write_variant(&path, &variant).is_ok() {
+                        invalidate_registration_snapshots(dir, url, &[image_use]);
+                        retire_use_history(dir, url, &[image_use], &path);
+                    }
+                }
+                decoded_cache_insert(&key, pixels.clone());
+                return Some(pixels);
+            }
+        }
     }
-    let processed = process_source(download()?, recipe)?;
+    let processed = download().and_then(|bytes| process_source(bytes, recipe));
     let _mutation = CACHE_MUTATION.read().unwrap();
     if !epoch.current() {
         return None;
     }
-    if processed.encoded.is_some() {
-        if disk {
-            let lock = url_lock(dir, url);
-            let _guard = lock.lock().unwrap();
-            let _ = persist_processed(dir, url, &[image_use], recipe, &processed);
-        }
-        decoded_cache_insert(key, processed.pixels.clone());
+    let lock = url_lock(dir, url);
+    let _guard = lock.lock().unwrap();
+    // Settings can change while this source commit waits behind another use.
+    // A stale recipe must not retire that newer use's successful registration.
+    if !epoch.current() {
+        return None;
     }
-    Some(processed.pixels)
+    publish_processed_locked(dir, url, &[image_use], disk, ticket, processed)
 }
+
 pub fn display_pixels(url: &str, image_use: impl Into<ImageUse>) -> Option<Pixels> {
     let clear = CACHE_GENERATION.load(Ordering::Acquire);
     let (settings, revision) = nova_config::image_settings_snapshot();
@@ -789,43 +1029,63 @@ fn refresh_image_if_changed_with(
         epoch.settings,
         key
     );
-    let (flight, leader) = {
+    let (flight, ticket) = {
         let mut flights = REFRESH_IN_FLIGHT.lock().unwrap();
         if let Some(flight) = flights.get(&flight_key) {
-            (flight.clone(), false)
+            (flight.clone(), None)
         } else {
             let flight = Arc::new((Mutex::new(None), Condvar::new()));
+            let ticket = PublicationTicket::acquire(dir, url, recipe, epoch.clear);
             flights.insert(flight_key.clone(), flight.clone());
-            (flight, true)
+            (flight, Some(ticket))
         }
     };
 
-    let refreshed = if leader {
+    let refreshed = if let Some(ticket) = ticket {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let processed = process_source(download()?, recipe)?;
+            let processed = download().and_then(|bytes| process_source(bytes, recipe));
             let _mutation = CACHE_MUTATION.read().unwrap();
             if !epoch.current() {
                 return None;
             }
-            if processed.encoded.is_some() {
-                if settings.cache_images {
-                    let lock = url_lock(dir, url);
-                    let _guard = lock.lock().unwrap();
-                    let _ = persist_processed(dir, url, &[image_use], recipe, &processed);
-                }
-                decoded_cache_insert(&key, processed.pixels.clone());
+            let lock = url_lock(dir, url);
+            let _guard = lock.lock().unwrap();
+            if !epoch.current() {
+                return None;
             }
-            Some(processed.pixels)
+            publish_processed_locked(
+                dir,
+                url,
+                &[image_use],
+                settings.cache_images,
+                &ticket,
+                processed,
+            )
         }))
         .ok()
         .flatten();
         {
+            let _mutation = CACHE_MUTATION.read().unwrap();
+            let lock = url_lock(dir, url);
+            let _guard = lock.lock().unwrap();
+            let result = if epoch.current() {
+                if let Some(newer) = ticket.newer_pixels() {
+                    if settings.cache_images {
+                        register_refreshed_use_locked(dir, url, image_use, recipe, &newer);
+                    }
+                    Some(newer)
+                } else {
+                    result
+                }
+            } else {
+                None
+            };
             let mut flights = REFRESH_IN_FLIGHT.lock().unwrap();
             *flight.0.lock().unwrap() = Some(result.clone());
             flights.remove(&flight_key);
             flight.1.notify_all();
+            result
         }
-        result
     } else {
         let mut result = flight.0.lock().unwrap();
         while result.is_none() {
@@ -845,7 +1105,7 @@ fn refresh_image_if_changed_with(
         if !epoch.current() {
             return None;
         }
-        register_refreshed_use(dir, url, image_use, recipe, &refreshed);
+        register_refreshed_use(dir, url, image_use, recipe, &refreshed, epoch);
     }
     previous
         .as_ref()
@@ -906,6 +1166,48 @@ pub struct RewriteProgress {
     pub failed: usize,
     pub cancelled: bool,
 }
+#[derive(Clone, Copy, PartialEq)]
+struct UseRegistration {
+    recipe: ImageRecipe,
+    checksum: u64,
+}
+type UseRegistrations = HashMap<ImageUse, Vec<UseRegistration>>;
+fn use_registrations(dir: &Path, url: &str) -> UseRegistrations {
+    let prefix = format!("{:016x}", fnv1a(url.as_bytes()));
+    let mut registrations = HashMap::<ImageUse, Vec<UseRegistration>>::new();
+    for variant in variant_paths(dir)
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
+        })
+        .filter_map(|path| read_variant(&path))
+        .filter(|variant| variant.metadata.url == url)
+    {
+        for image_use in variant.metadata.uses {
+            registrations
+                .entry(image_use)
+                .or_default()
+                .push(UseRegistration {
+                    recipe: variant.metadata.recipe,
+                    checksum: variant.metadata.checksum,
+                });
+        }
+    }
+    registrations
+}
+fn registration_current(
+    captured: &UseRegistrations,
+    current: &UseRegistrations,
+    image_use: ImageUse,
+) -> bool {
+    let Some(captured) = captured.get(&image_use) else {
+        return false;
+    };
+    current.get(&image_use).is_some_and(|current| {
+        current.len() == captured.len() && current.iter().all(|entry| captured.contains(entry))
+    })
+}
+
 fn rewrite_entries_with(
     dir: &Path,
     settings: &CacheSettings,
@@ -914,18 +1216,51 @@ fn rewrite_entries_with(
     mut download: impl FnMut(&str) -> Option<Vec<u8>>,
 ) -> RewriteProgress {
     let mut result = RewriteProgress::default();
-    let mut urls: HashMap<String, HashSet<ImageUse>> = HashMap::new();
-    for (_, variant) in directory_variants(dir) {
-        urls.entry(variant.metadata.url)
-            .or_default()
-            .extend(variant.metadata.uses);
-    }
-    result.total = urls.len();
-    progress(result);
-    // A snapshot deliberately remains valid if settings are changed by another
-    // device during maintenance. Ordinary loads resolve their newer recipes.
     let generation = CACHE_GENERATION.load(Ordering::Acquire);
-    for (url, uses) in urls {
+    let urls: HashSet<String> = directory_variants(dir)
+        .map(|(_, variant)| variant.metadata.url)
+        .collect();
+    let mut snapshots = HashMap::new();
+    {
+        let _mutation = CACHE_MUTATION.read().unwrap();
+        for url in urls {
+            let lock = url_lock(dir, &url);
+            let _guard = lock.lock().unwrap();
+            let registrations = use_registrations(dir, &url);
+            let watches: HashMap<_, _> = registrations
+                .keys()
+                .copied()
+                .map(|image_use| (image_use, RegistrationWatch::capture(dir, &url, image_use)))
+                .collect();
+            let mut recipes: HashMap<String, (ImageRecipe, Vec<ImageUse>)> = HashMap::new();
+            for image_use in registrations.keys().copied() {
+                let recipe = ImageRecipe::resolve(image_use, settings);
+                recipes
+                    .entry(recipe.key())
+                    .or_insert_with(|| (recipe, Vec::new()))
+                    .1
+                    .push(image_use);
+            }
+            // Reserve every snapshot recipe now, including URLs processed later.
+            // A newer source published while another URL is downloading must
+            // also displace this snapshot. These tickets retain only sequence
+            // evidence, even if newer pixels cannot enter the LRU.
+            let recipes: Vec<_> = recipes
+                .into_values()
+                .map(|(recipe, uses)| {
+                    let ticket =
+                        PublicationTicket::acquire_maintenance(dir, &url, recipe, generation);
+                    (recipe, uses, ticket)
+                })
+                .collect();
+            snapshots.insert(url, (registrations, watches, recipes));
+        }
+    }
+    result.total = snapshots.len();
+    progress(result);
+    // Settings snapshots can finish after a settings change, but a use rebuilt
+    // since the registration snapshot belongs to that newer successful load.
+    for (url, (registrations, watches, recipes)) in snapshots {
         if cancel.load(Ordering::Acquire) {
             result.cancelled = true;
             break;
@@ -949,16 +1284,7 @@ fn rewrite_entries_with(
             progress(result);
             continue;
         };
-        let mut recipes: HashMap<String, (ImageRecipe, Vec<ImageUse>)> = HashMap::new();
-        for image_use in uses {
-            let recipe = ImageRecipe::resolve(image_use, settings);
-            recipes
-                .entry(recipe.key())
-                .or_insert_with(|| (recipe, Vec::new()))
-                .1
-                .push(image_use);
-        }
-        for (_, (recipe, uses)) in recipes {
+        for (recipe, uses, ticket) in recipes {
             if cancel.load(Ordering::Acquire) {
                 result.cancelled = true;
                 break;
@@ -994,8 +1320,24 @@ fn rewrite_entries_with(
             }
             let lock = url_lock(dir, &url);
             let _guard = lock.lock().unwrap();
-            if persist_processed(dir, &url, &uses, recipe, &processed).is_ok() {
-                decoded_cache_insert(&image_recipe_cache_key(&url, recipe), processed.pixels);
+            let current = use_registrations(dir, &url);
+            let uses: Vec<_> = uses
+                .into_iter()
+                .filter(|image_use| {
+                    watches
+                        .get(image_use)
+                        .is_some_and(|watch| !watch.stale.load(Ordering::Acquire))
+                        && registration_current(&registrations, &current, *image_use)
+                })
+                .collect();
+            if uses.is_empty() || ticket.newer_publication() {
+                result.skipped += 1;
+            } else if persist_processed(dir, &url, &uses, recipe, &processed).is_ok() {
+                decoded_cache_insert(
+                    &image_recipe_cache_key(&url, recipe),
+                    processed.pixels.clone(),
+                );
+                ticket.published(&processed.pixels);
                 result.converted += 1;
             } else {
                 result.failed += 1;
