@@ -651,7 +651,7 @@ impl Bridge {
     /// Load posters for the library grid off the UI thread: cached entries
     /// decode quickly, misses are downloaded once and file-cached. Updates
     /// are dropped if the card changed/vanished while the fetch ran.
-    pub(super) fn dispatch_library_posters(&self, entries: &[LibraryEntry]) {
+    pub(super) fn dispatch_library_posters(&self, entries: &[LibraryPosterRequest]) {
         let Some(app) = self.app() else { return };
         let model = app.get_library();
         for entry in entries {
@@ -1462,6 +1462,15 @@ impl Bridge {
             });
         });
     }
+}
+
+/// The image pipeline needs only the typed identity and the requested URL;
+/// carrying a whole saved entry here would copy its unrelated metadata.
+#[derive(Clone)]
+pub(super) struct LibraryPosterRequest {
+    pub id: String,
+    pub type_: String,
+    pub poster_url: String,
 }
 
 pub(crate) fn set_active_cache_settings(settings: CacheSettings) {

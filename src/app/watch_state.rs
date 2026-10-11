@@ -154,10 +154,6 @@ impl Bridge {
         if applying() {
             return;
         }
-        let (entries, progress) = {
-            let state = self.shared.lock().unwrap();
-            (state.entries.clone(), state.progress.clone())
-        };
         let mut activity = read_viewing_activity();
         let before = activity.clone();
         // A received domain may not have been projected yet. Never let a
@@ -174,21 +170,49 @@ impl Bridge {
                     .collect()
             })
             .unwrap_or_default();
-        let missing: Vec<_> = entries
-            .into_iter()
-            .filter(|e| match activity.get(&e.id) {
-                Some(value) => value.phase == ViewingPhase::Active,
-                None => !known.contains(&e.id),
-            })
-            .collect();
-        reconcile_viewing_activity(
-            &mut activity,
-            &missing,
-            &progress,
-            &progress,
-            |e| read_episodes_cache_for(&e.type_, &e.id).unwrap_or_default(),
-            today_days(),
-        );
+        // Cache reads must stay outside Shared's lock. Only identities are
+        // needed to preload metadata; neither full entries nor history are copied.
+        let identities: Vec<_> = {
+            let state = self.shared.lock().unwrap();
+            state
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| entry.type_ != "movie")
+                .filter(|(_, entry)| match activity.get(&entry.id) {
+                    Some(value) => value.phase == ViewingPhase::Active,
+                    None => !known.contains(&entry.id),
+                })
+                .map(|(index, entry)| (index, entry.id.clone(), entry.type_.clone()))
+                .collect()
+        };
+        let today = today_days();
+        for (index, id, type_) in identities {
+            // Keep addon JSON and episode lists transient instead of retaining
+            // every show's metadata throughout a library-sized projection.
+            let episodes = read_episodes_cache_for(&type_, &id).unwrap_or_default();
+            let complete = {
+                let state = self.shared.lock().unwrap();
+                if !state
+                    .entries
+                    .get(index)
+                    .is_some_and(|entry| entry.id == id && entry.type_ == type_)
+                {
+                    continue;
+                }
+                // Migration compares history with itself, so it can establish
+                // completion but must never treat existing playback as new activity.
+                available_completed(&id, &episodes, &state.progress, today)
+            };
+            if complete {
+                activity.insert(
+                    id,
+                    ViewingActivity {
+                        phase: ViewingPhase::AwaitingReturn,
+                    },
+                );
+            }
+        }
         if activity != before {
             write_json(VIEWING_ACTIVITY_KEY, &activity);
         }

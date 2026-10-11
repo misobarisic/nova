@@ -26,6 +26,21 @@ fn reserve_metadata_prefetch(
     true
 }
 
+fn visible_search_poster_identities(
+    previews: &[MetaPreview],
+    fetch: &[(usize, String)],
+    row_ids: &HashMap<usize, String>,
+) -> HashMap<usize, (String, String)> {
+    fetch
+        .iter()
+        .filter_map(|(index, _)| {
+            let preview = previews.get(*index)?;
+            (row_ids.get(index).is_some_and(|id| id == &preview.id))
+                .then(|| (*index, (preview.type_.clone(), preview.id.clone())))
+        })
+        .collect()
+}
+
 impl Bridge {
     pub(super) fn load_catalog(&self) {
         // Reset pagination state for a fresh catalog selection.
@@ -68,8 +83,6 @@ impl Bridge {
         } else {
             app.get_catalog()
         };
-        let search_previews =
-            searching.then(|| self.shared.lock().unwrap().search_previews.clone());
         let len = model.row_count();
         if len == 0 {
             return;
@@ -83,6 +96,7 @@ impl Bridge {
         let keep_l = (l + UNLOAD_EXTRA_CARDS).min(len.saturating_sub(1));
         let mut blank: Vec<usize> = Vec::new();
         let mut fetch: Vec<(usize, String)> = Vec::new();
+        let mut search_row_ids: HashMap<usize, String> = HashMap::new();
         for i in 0..len {
             let row = model.row_data(i);
             let loaded = row.as_ref().map(|c| c.is_loaded).unwrap_or(false);
@@ -97,6 +111,9 @@ impl Bridge {
                 && !card.poster_path.is_empty()
             {
                 fetch.push((i, card.poster_path.to_string()));
+                if searching {
+                    search_row_ids.insert(i, card.id.to_string());
+                }
             }
         }
         let unloaded = !blank.is_empty();
@@ -117,18 +134,27 @@ impl Bridge {
             let center = f + (l - f) / 2;
             fetch.sort_by_key(|(i, _)| i.abs_diff(center));
         }
-        for (i, url) in fetch {
-            if searching {
-                let generation = self.shared.lock().unwrap().search_generation;
-                if let Some(meta) = search_previews.as_ref().and_then(|metas| metas.get(i)) {
-                    self.fetch_search_card_poster(
-                        meta.type_.clone(),
-                        meta.id.clone(),
-                        url,
-                        generation,
-                    );
+        if searching && !fetch.is_empty() {
+            // Snapshot only identities for cards that are about to be fetched.
+            // Search previews can carry arbitrary addon JSON in `extra`, so a
+            // full result-list clone on every scroll callback is needlessly
+            // expensive. Matching row identities also drops stale candidates.
+            let (generation, mut candidates) = {
+                let state = self.shared.lock().unwrap();
+                let candidates = visible_search_poster_identities(
+                    &state.search_previews,
+                    &fetch,
+                    &search_row_ids,
+                );
+                (state.search_generation, candidates)
+            };
+            for (index, url) in fetch {
+                if let Some((type_, id)) = candidates.remove(&index) {
+                    self.fetch_search_card_poster(type_, id, url, generation);
                 }
-            } else {
+            }
+        } else if !searching {
+            for (i, url) in fetch {
                 self.fetch_card_poster(library, i, url);
             }
         }
@@ -2749,6 +2775,52 @@ mod tests {
         assert!(reserve_metadata_prefetch(
             &mut state, "movie", "saved", 2, now
         ));
+    }
+
+    #[test]
+    fn search_poster_snapshot_keeps_only_matching_sparse_visible_identities() {
+        let previews = vec![
+            MetaPreview {
+                id: "first".into(),
+                type_: "movie".into(),
+                poster: Some("/first.png".into()),
+                ..Default::default()
+            },
+            MetaPreview {
+                id: "stale".into(),
+                type_: "series".into(),
+                poster: Some("/old.png".into()),
+                ..Default::default()
+            },
+            MetaPreview {
+                id: "visible".into(),
+                type_: "series".into(),
+                poster: Some("/visible.png".into()),
+                ..Default::default()
+            },
+        ];
+        let fetch = vec![
+            // Reused header artwork can differ from the URL in the retained
+            // preview; matching the current row identity must still reload it.
+            (0, "/reused.png".into()),
+            (1, "/new.png".into()),
+            (2, "/visible.png".into()),
+            (9, "/out-of-bounds.png".into()),
+        ];
+        let row_ids = HashMap::from([
+            (0, "first".into()),
+            (1, "stale".into()),
+            (2, "different-row".into()),
+            (9, "missing".into()),
+        ]);
+
+        assert_eq!(
+            visible_search_poster_identities(&previews, &fetch, &row_ids),
+            HashMap::from([
+                (0, ("movie".into(), "first".into())),
+                (1, ("series".into(), "stale".into())),
+            ])
+        );
     }
 
     fn search_target(id: &str) -> SearchTarget {

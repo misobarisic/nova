@@ -1,4 +1,5 @@
 //! My Library: entries, categories and persistence.
+use super::posters::LibraryPosterRequest;
 use super::*;
 
 impl Bridge {
@@ -11,10 +12,16 @@ impl Bridge {
             .any(|e| e.id == id)
     }
 
-    /// The library entries currently shown in the grid, i.e. `Shared.entries`
-    /// filtered by category/title and sorted by the chosen order. The order matches
-    /// the Slint `library` model, so UI indices map 1:1 onto this list.
-    pub(super) fn current_library_view(&self) -> Vec<LibraryEntry> {
+    fn current_library_entry(&self, index: usize) -> Option<LibraryEntry> {
+        let candidates = self.current_library_candidates();
+        let candidate = candidates.get(index)?;
+        let state = self.shared.lock().unwrap();
+        selected_library_entry(&state.entries, candidate)
+    }
+
+    /// Keep only the fields needed to filter and order outside the shared
+    /// state lock. Episode-cache and activity reads must not happen under it.
+    fn current_library_candidates(&self) -> Vec<LibraryCandidate> {
         let (filter, query, sort) = self
             .app()
             .map(|a| {
@@ -25,39 +32,50 @@ impl Bridge {
                 )
             })
             .unwrap_or_default();
-        let (entries, progress) = {
+        let identities = {
             let state = self.shared.lock().unwrap();
-            (state.entries.clone(), state.progress.clone())
+            state
+                .entries
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| LibraryIdentitySnapshot::new(index, entry))
+                .collect::<Vec<_>>()
         };
         let activity = read_viewing_activity();
-        let entries = entries
-            .into_iter()
-            .filter(|e| {
-                if filter.is_empty() {
-                    true
-                } else if BUILTIN_FILTERS.contains(&filter.as_str()) {
-                    match filter.as_str() {
-                        "On Hold" => e.watch_status == WatchStatus::OnHold,
-                        "Dropped" => e.watch_status == WatchStatus::Dropped,
-                        bucket => {
-                            let episodes =
-                                read_episodes_cache_for(&e.type_, &e.id).unwrap_or_default();
-                            e.watch_status == WatchStatus::Auto
-                                && activity_bucket(
-                                    &e.id,
-                                    &episodes,
-                                    &progress,
-                                    activity.get(&e.id),
-                                    today_days(),
-                                ) == builtin_filter_label(bucket)
-                        }
-                    }
-                } else {
-                    e.categories.iter().any(|c| c == &filter)
-                }
-            })
-            .collect();
-        order_library_view(entries, &query, sort)
+        let dynamic_filter = !filter.is_empty()
+            && BUILTIN_FILTERS.contains(&filter.as_str())
+            && filter != "On Hold"
+            && filter != "Dropped";
+        let options = LibraryViewOptions {
+            filter: &filter,
+            needle: query.trim().to_lowercase(),
+            sort,
+        };
+        let mut candidates = Vec::new();
+        for identity in identities {
+            let episodes =
+                (dynamic_filter && identity.watch_status == WatchStatus::Auto).then(|| {
+                    read_episodes_cache_for(&identity.type_, &identity.id).unwrap_or_default()
+                });
+            let state = self.shared.lock().unwrap();
+            let Some(entry) = state.entries.get(identity.index) else {
+                continue;
+            };
+            if !identity.matches(entry) {
+                continue;
+            }
+            if let Some(candidate) = project_library_candidate(
+                entry,
+                identity.index,
+                episodes.as_deref(),
+                &state.progress,
+                &activity,
+                &options,
+            ) {
+                candidates.push(candidate);
+            }
+        }
+        order_library_candidates(candidates, options.sort)
     }
 
     pub(super) fn library_view_changed(&self) {
@@ -70,10 +88,16 @@ impl Bridge {
 
     /// Refresh the Slint `library` model from `Shared.entries`.
     pub(super) fn apply_library_to_ui(&self) {
-        let view = self.current_library_view();
         self.migrate_viewing_activity();
-        let map = self.shared.lock().unwrap().progress.clone();
-        let activity = read_viewing_activity();
+        let card_snapshots = self.library_card_snapshots();
+        let poster_requests: Vec<LibraryPosterRequest> = card_snapshots
+            .iter()
+            .map(|snapshot| LibraryPosterRequest {
+                id: snapshot.id.clone(),
+                type_: snapshot.type_.clone(),
+                poster_url: snapshot.poster_url.clone(),
+            })
+            .collect();
         // Search and sorting replace the model frequently. Retain decoded
         // artwork by identity so existing titles do not flash placeholders.
         let artwork: HashMap<String, MediaCard> = self
@@ -86,43 +110,91 @@ impl Bridge {
                     .collect()
             })
             .unwrap_or_default();
-        let cards: Vec<MediaCard> = view
-            .iter()
-            .map(|e| {
-                let episodes = read_episodes_cache_for(&e.type_, &e.id).unwrap_or_default();
-                let status = e.watch_status.badge_label().unwrap_or_else(|| {
-                    activity_bucket(&e.id, &episodes, &map, activity.get(&e.id), today_days())
-                });
-                let (watched_count, episode_count) = if e.type_ == "movie" {
-                    (0, 0)
-                } else {
-                    library_episode_counts(&e.id, &episodes, &map)
-                };
+        let cards: Vec<MediaCard> = card_snapshots
+            .into_iter()
+            .map(|snapshot| {
                 let previous = artwork
-                    .get(&e.id)
-                    .filter(|card| card.poster_path.as_str() == e.poster_url);
+                    .get(&snapshot.id)
+                    .filter(|card| card.poster_path.as_str() == snapshot.poster_url);
                 MediaCard {
-                    id: e.id.clone().into(),
-                    title: e.name.clone().into(),
-                    year: e.year.clone().into(),
-                    poster_path: e.poster_url.clone().into(),
+                    id: snapshot.id.into(),
+                    title: snapshot.title.into(),
+                    year: snapshot.year.into(),
+                    poster_path: snapshot.poster_url.into(),
                     poster: previous.map(|card| card.poster.clone()).unwrap_or_default(),
                     is_loaded: previous.is_some(),
-                    badge: library_badge_for(&e.id, &episodes, &map).into(),
-                    status: text::tr(status).into(),
-                    status_key: status.into(),
-                    activity_action: viewing_menu_action(e, &episodes, &map, activity.get(&e.id)),
-                    media_type: text::tr(if e.type_ == "movie" { "Movie" } else { "TV" }).into(),
-                    watched_count,
-                    episode_count,
-                    watched: available_completed(&e.id, &episodes, &map, today_days()),
+                    badge: snapshot.badge.into(),
+                    status: text::tr(snapshot.status).into(),
+                    status_key: snapshot.status.into(),
+                    activity_action: snapshot.activity_action,
+                    media_type: text::tr(if snapshot.is_movie { "Movie" } else { "TV" }).into(),
+                    watched_count: snapshot.watched_count,
+                    episode_count: snapshot.episode_count,
+                    watched: snapshot.watched,
                 }
             })
             .collect();
         if let Some(app) = self.app() {
             app.set_library(Rc::new(VecModel::from(cards)).into());
         }
-        self.dispatch_library_posters(&view);
+        self.dispatch_library_posters(&poster_requests);
+    }
+
+    /// Project display fields from current entries and borrowed progress.
+    /// Cache reads happen before acquiring Shared, and callers decide whether
+    /// to replace the model or patch its existing rows in place.
+    fn library_card_snapshots(&self) -> Vec<LibraryCardSnapshot> {
+        let view = self.current_library_candidates();
+        let activity = read_viewing_activity();
+        let mut snapshots = Vec::with_capacity(view.len());
+        for candidate in view {
+            let episodes =
+                read_episodes_cache_for(&candidate.type_, &candidate.id).unwrap_or_default();
+            let state = self.shared.lock().unwrap();
+            let Some(current) = state.entries.get(candidate.entry_index) else {
+                continue;
+            };
+            if !candidates_match_entry(&candidate, current) {
+                continue;
+            }
+            if let Some(snapshot) =
+                project_library_card(current, &candidate, &episodes, &state.progress, &activity)
+            {
+                snapshots.push(snapshot);
+            }
+        }
+        snapshots
+    }
+
+    /// Recompute Library card state in place so decoded posters and pending
+    /// poster loads survive playback progress updates.
+    pub(super) fn update_library_badges(&self) {
+        if self.shared.lock().unwrap().restoring_models {
+            return;
+        }
+        let Some(app) = self.app() else { return };
+        let cards = self.library_card_snapshots();
+        let model = app.get_library();
+        if model.row_count() != cards.len()
+            || cards.iter().enumerate().any(|(index, snapshot)| {
+                model
+                    .row_data(index)
+                    .is_none_or(|card| card.id.as_str() != snapshot.id)
+            })
+        {
+            // Progress can move a title between automatic filters. Refresh
+            // the model before indices can drift away from the displayed cards.
+            self.apply_library_to_ui();
+            return;
+        }
+        for (index, snapshot) in cards.into_iter().enumerate() {
+            let Some(mut card) = model.row_data(index) else {
+                continue;
+            };
+            if update_library_card_progress(&mut card, &snapshot) {
+                model.set_row_data(index, card);
+            }
+        }
     }
 
     /// Main thread: library card context-menu action. `index` is into the
@@ -131,9 +203,8 @@ impl Bridge {
     /// released episodes — unaired ones stay untouched (they surface on
     /// Home → Upcoming instead).
     pub(super) fn library_watch_action(&self, index: usize, action: i32) {
-        let view = self.current_library_view();
-        if let Some(entry) = view.get(index) {
-            self.library_entry_watch_action(entry, action);
+        if let Some(entry) = self.current_library_entry(index) {
+            self.library_entry_watch_action(&entry, action);
         }
     }
 
@@ -176,25 +247,32 @@ impl Bridge {
     /// 4 resume viewing. Pins override the derived bucket; activity actions
     /// leave watched history unchanged.
     pub(super) fn library_status_action(&self, index: usize, status: i32) {
-        let view = self.current_library_view();
-        if let Some(entry) = view.get(index) {
+        if let Some(entry) = self.current_library_entry(index) {
             self.library_entry_status_action(&entry.id, status);
         }
     }
 
     fn library_entry_status_action(&self, entry_id: &str, status: i32) {
         if status == 3 || status == 4 {
-            let (entry, progress) = {
+            let entry = {
                 let state = self.shared.lock().unwrap();
-                (
-                    state.entries.iter().find(|e| e.id == entry_id).cloned(),
-                    state.progress.clone(),
-                )
+                state.entries.iter().find(|e| e.id == entry_id).cloned()
             };
             let Some(entry) = entry else { return };
             let episodes = read_episodes_cache_for(&entry.type_, entry_id).unwrap_or_default();
             let mut activity = read_viewing_activity();
-            if viewing_menu_action(&entry, &episodes, &progress, activity.get(entry_id)) != status {
+            let action = {
+                let state = self.shared.lock().unwrap();
+                if !state
+                    .entries
+                    .iter()
+                    .any(|current| current.id == entry.id && current.type_ == entry.type_)
+                {
+                    return;
+                }
+                viewing_menu_action(&entry, &episodes, &state.progress, activity.get(entry_id))
+            };
+            if action != status {
                 return;
             }
             activity.insert(
@@ -269,28 +347,49 @@ impl Bridge {
     }
 
     pub(super) fn refresh_detail_library_watched(&self) {
-        let watched = {
+        let target = {
             let state = self.shared.lock().unwrap();
-            state.modal_item.as_ref().is_some_and(|item| {
-                let episodes = read_episodes_cache_for(&item.type_, &item.id).unwrap_or_default();
-                available_completed(&item.id, &episodes, &state.progress, today_days())
-            })
-        };
-        if let Some(app) = self.app() {
-            let state = self.shared.lock().unwrap();
-            let action = state
+            state
                 .modal_item
                 .as_ref()
-                .and_then(|item| state.entries.iter().find(|e| e.id == item.id))
-                .map(|entry| {
-                    viewing_menu_action(
-                        entry,
-                        &read_episodes_cache_for(&entry.type_, &entry.id).unwrap_or_default(),
-                        &state.progress,
-                        read_viewing_activity().get(&entry.id),
-                    )
+                .map(|item| (item.id.clone(), item.type_.clone()))
+        };
+        let episodes = target
+            .as_ref()
+            .and_then(|(id, type_)| read_episodes_cache_for(type_, id))
+            .unwrap_or_default();
+        let activity = read_viewing_activity();
+        let (watched, action) = {
+            let state = self.shared.lock().unwrap();
+            let current_target = state
+                .modal_item
+                .as_ref()
+                .map(|item| (item.id.as_str(), item.type_.as_str()));
+            if current_target
+                != target
+                    .as_ref()
+                    .map(|(id, type_)| (id.as_str(), type_.as_str()))
+            {
+                return;
+            }
+            let watched = target.as_ref().is_some_and(|(id, _)| {
+                available_completed(id, &episodes, &state.progress, today_days())
+            });
+            let action = target
+                .as_ref()
+                .and_then(|(id, type_)| {
+                    state
+                        .entries
+                        .iter()
+                        .find(|entry| entry.id == *id && entry.type_ == *type_)
+                        .map(|entry| {
+                            viewing_menu_action(entry, &episodes, &state.progress, activity.get(id))
+                        })
                 })
                 .unwrap_or(0);
+            (watched, action)
+        };
+        if let Some(app) = self.app() {
             app.set_detail_library_activity_action(action);
             app.set_detail_library_watched(watched);
         }
@@ -551,13 +650,13 @@ impl Bridge {
     }
 
     /// Remove the library card at `index` (badge on the library grid). The
-    /// index is into the *filtered* grid view (the `library` model), so it is
-    /// resolved against `current_library_view`.
+    /// index is into the filtered grid and resolves through the same ordered
+    /// candidate projection used to render the model.
     pub(super) fn remove_library_at(&self, index: usize) {
-        let view = self.current_library_view();
+        let selected = self.current_library_entry(index).map(|entry| entry.id);
         let removed_id = {
             let mut state = self.shared.lock().unwrap();
-            let id = view.get(index).map(|e| e.id.clone());
+            let id = selected.filter(|id| state.entries.iter().any(|entry| entry.id == *id));
             if let Some(id) = id.as_deref() {
                 remove_library_entry(&mut state.entries, id);
             }
@@ -581,19 +680,18 @@ impl Bridge {
 
     /// Open a saved library item: reuse the detail page and the normal
     /// movie -> streams / series -> episodes flow. The `index` is into the
-    /// *filtered* grid view (the `library` model), so it is resolved against
-    /// `current_library_view`.
+    /// filtered grid and resolves through the ordered candidate projection.
     pub(super) fn open_library_item(&self, index: usize) {
-        let entry = self.current_library_view().get(index).cloned();
+        let entry = self.current_library_entry(index);
         let Some(e) = entry else { return };
         self.open_library_entry(e);
     }
 
     pub(super) fn open_library_entry(&self, e: LibraryEntry) {
         let index = self
-            .current_library_view()
+            .current_library_candidates()
             .iter()
-            .position(|entry| entry.id == e.id)
+            .position(|entry| entry.id == e.id && entry.type_ == e.type_)
             .unwrap_or(0);
         let app = match self.app() {
             Some(a) => a,
@@ -1046,11 +1144,92 @@ pub(crate) fn merge_library_header_text(
     touched
 }
 
-/// Sort the same view used for both card rendering and actions, so search and
-/// sorting cannot make a displayed index open or remove a different entry.
-fn order_library_view(mut entries: Vec<LibraryEntry>, query: &str, sort: i32) -> Vec<LibraryEntry> {
-    let needle = query.trim().to_lowercase();
-    entries.retain(|entry| entry.name.to_lowercase().contains(&needle));
+#[derive(Clone)]
+struct LibraryCandidate {
+    entry_index: usize,
+    id: String,
+    type_: String,
+    name: String,
+    year: String,
+    poster_url: String,
+    categories: Vec<String>,
+    watch_status: WatchStatus,
+    added_at_secs: u64,
+}
+
+struct LibraryIdentitySnapshot {
+    index: usize,
+    id: String,
+    type_: String,
+    watch_status: WatchStatus,
+}
+
+struct LibraryViewOptions<'a> {
+    filter: &'a str,
+    needle: String,
+    sort: i32,
+}
+
+struct LibraryCardSnapshot {
+    id: String,
+    type_: String,
+    title: String,
+    year: String,
+    poster_url: String,
+    badge: String,
+    status: &'static str,
+    activity_action: i32,
+    is_movie: bool,
+    watched_count: i32,
+    episode_count: i32,
+    watched: bool,
+}
+
+impl LibraryIdentitySnapshot {
+    fn new(index: usize, entry: &LibraryEntry) -> Self {
+        Self {
+            index,
+            id: entry.id.clone(),
+            type_: entry.type_.clone(),
+            watch_status: entry.watch_status,
+        }
+    }
+
+    fn matches(&self, entry: &LibraryEntry) -> bool {
+        entry.id == self.id && entry.type_ == self.type_ && entry.watch_status == self.watch_status
+    }
+}
+
+impl LibraryCandidate {
+    fn from_entry(entry: &LibraryEntry, entry_index: usize) -> Self {
+        Self {
+            entry_index,
+            id: entry.id.clone(),
+            type_: entry.type_.clone(),
+            name: entry.name.clone(),
+            year: entry.year.clone(),
+            poster_url: entry.poster_url.clone(),
+            categories: entry.categories.clone(),
+            watch_status: entry.watch_status,
+            added_at_secs: entry.added_at_secs,
+        }
+    }
+}
+
+fn candidates_match_entry(candidate: &LibraryCandidate, entry: &LibraryEntry) -> bool {
+    candidate.id == entry.id
+        && candidate.type_ == entry.type_
+        && candidate.name == entry.name
+        && candidate.year == entry.year
+        && candidate.categories == entry.categories
+        && candidate.watch_status == entry.watch_status
+        && candidate.added_at_secs == entry.added_at_secs
+}
+
+fn order_library_candidates(
+    mut entries: Vec<LibraryCandidate>,
+    sort: i32,
+) -> Vec<LibraryCandidate> {
     // Newer insertions win ties, including older entries with no timestamp.
     entries.reverse();
     match sort {
@@ -1059,6 +1238,127 @@ fn order_library_view(mut entries: Vec<LibraryEntry>, query: &str, sort: i32) ->
         _ => entries.sort_by_key(|e| std::cmp::Reverse(e.added_at_secs)),
     }
     entries
+}
+
+#[cfg(test)]
+fn selected_library_entries(
+    entries: &[LibraryEntry],
+    candidates: &[LibraryCandidate],
+) -> Vec<LibraryEntry> {
+    candidates
+        .iter()
+        .filter_map(|candidate| selected_library_entry(entries, candidate))
+        .collect()
+}
+
+fn selected_library_entry(
+    entries: &[LibraryEntry],
+    candidate: &LibraryCandidate,
+) -> Option<LibraryEntry> {
+    let entry = entries.get(candidate.entry_index)?;
+    candidates_match_entry(candidate, entry).then(|| entry.clone())
+}
+
+fn project_library_candidate(
+    entry: &LibraryEntry,
+    entry_index: usize,
+    episodes: Option<&[Video]>,
+    progress: &HashMap<String, EpisodeProgress>,
+    activity: &HashMap<String, ViewingActivity>,
+    options: &LibraryViewOptions<'_>,
+) -> Option<LibraryCandidate> {
+    let today = today_days();
+    let matches_filter = if options.filter.is_empty() {
+        true
+    } else if BUILTIN_FILTERS.contains(&options.filter) {
+        match options.filter {
+            "On Hold" => entry.watch_status == WatchStatus::OnHold,
+            "Dropped" => entry.watch_status == WatchStatus::Dropped,
+            bucket => episodes.is_some_and(|videos| {
+                entry.watch_status == WatchStatus::Auto
+                    && activity_bucket(&entry.id, videos, progress, activity.get(&entry.id), today)
+                        == builtin_filter_label(bucket)
+            }),
+        }
+    } else {
+        entry
+            .categories
+            .iter()
+            .any(|category| category == options.filter)
+    };
+    (matches_filter && entry.name.to_lowercase().contains(&options.needle))
+        .then(|| LibraryCandidate::from_entry(entry, entry_index))
+}
+
+fn project_library_card(
+    current: &LibraryEntry,
+    candidate: &LibraryCandidate,
+    videos: &[Video],
+    progress: &HashMap<String, EpisodeProgress>,
+    activity: &HashMap<String, ViewingActivity>,
+) -> Option<LibraryCardSnapshot> {
+    if !candidates_match_entry(candidate, current) || current.poster_url != candidate.poster_url {
+        return None;
+    }
+    let today = today_days();
+    let status = candidate.watch_status.badge_label().unwrap_or_else(|| {
+        activity_bucket(
+            &candidate.id,
+            videos,
+            progress,
+            activity.get(&candidate.id),
+            today,
+        )
+    });
+    let (watched_count, episode_count) = if candidate.type_ == "movie" {
+        (0, 0)
+    } else {
+        library_episode_counts(&candidate.id, videos, progress)
+    };
+    Some(LibraryCardSnapshot {
+        id: candidate.id.clone(),
+        type_: candidate.type_.clone(),
+        title: candidate.name.clone(),
+        year: candidate.year.clone(),
+        poster_url: candidate.poster_url.clone(),
+        badge: library_badge_for(&candidate.id, videos, progress),
+        status,
+        activity_action: viewing_menu_action(
+            current,
+            videos,
+            progress,
+            activity.get(&candidate.id),
+        ),
+        is_movie: candidate.type_ == "movie",
+        watched_count,
+        episode_count,
+        watched: available_completed(&candidate.id, videos, progress, today),
+    })
+}
+
+fn update_library_card_progress(card: &mut MediaCard, snapshot: &LibraryCardSnapshot) -> bool {
+    let status = text::tr(snapshot.status);
+    let media_type = text::tr(if snapshot.is_movie { "Movie" } else { "TV" });
+    if card.badge.as_str() == snapshot.badge
+        && card.watched == snapshot.watched
+        && card.status.as_str() == status
+        && card.status_key.as_str() == snapshot.status
+        && card.activity_action == snapshot.activity_action
+        && card.media_type.as_str() == media_type
+        && card.watched_count == snapshot.watched_count
+        && card.episode_count == snapshot.episode_count
+    {
+        return false;
+    }
+    card.badge = snapshot.badge.clone().into();
+    card.status = status.into();
+    card.status_key = snapshot.status.into();
+    card.activity_action = snapshot.activity_action;
+    card.media_type = media_type.into();
+    card.watched = snapshot.watched;
+    card.watched_count = snapshot.watched_count;
+    card.episode_count = snapshot.episode_count;
+    true
 }
 
 fn builtin_filter_label(value: &str) -> &str {
@@ -1075,42 +1375,263 @@ mod tests {
 
     #[test]
     fn search_and_sort_keep_entries_and_action_indices_together() {
-        let entry = |id: &str, name: &str, year: &str, added: u64| LibraryEntry {
+        let entry = |id: &str, type_: &str, name: &str, year: &str, added: u64, category: &str| {
+            LibraryEntry {
+                id: id.into(),
+                type_: type_.into(),
+                name: name.into(),
+                year: year.into(),
+                poster_url: String::new(),
+                background_url: String::new(),
+                genres: vec![],
+                description: String::new(),
+                categories: vec![category.into()],
+                watch_status: WatchStatus::Auto,
+                added_at_secs: added,
+            }
+        };
+        let entries = vec![
+            entry("dup", "series", "Zebra", "2020", 10, "A"),
+            entry("dup", "movie", "alpha", "2026", 20, "A"),
+            entry("c", "series", "Beta", "2024", 20, "A"),
+        ];
+        let identities = entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| LibraryIdentitySnapshot::new(index, entry))
+            .collect::<Vec<_>>();
+        let progress = HashMap::new();
+        let activity = HashMap::new();
+        let project = |filter: &str, query: &str, sort| {
+            let options = LibraryViewOptions {
+                filter,
+                needle: query.trim().to_lowercase(),
+                sort,
+            };
+            order_library_candidates(
+                identities
+                    .iter()
+                    .filter_map(|identity| {
+                        let entry = entries.get(identity.index)?;
+                        if !identity.matches(entry) {
+                            return None;
+                        }
+                        project_library_candidate(
+                            entry,
+                            identity.index,
+                            None,
+                            &progress,
+                            &activity,
+                            &options,
+                        )
+                    })
+                    .collect(),
+                sort,
+            )
+        };
+        fn labels(rows: &[LibraryCandidate]) -> Vec<(&str, &str)> {
+            rows.iter()
+                .map(|entry| (entry.type_.as_str(), entry.id.as_str()))
+                .collect::<Vec<_>>()
+        }
+        assert_eq!(
+            labels(&project("", "", 0)),
+            [("series", "c"), ("movie", "dup"), ("series", "dup")]
+        );
+        assert_eq!(
+            labels(&project("", "", 1)),
+            [("movie", "dup"), ("series", "c"), ("series", "dup")]
+        );
+        assert_eq!(
+            labels(&project("", "", 2)),
+            [("movie", "dup"), ("series", "c"), ("series", "dup")]
+        );
+        assert_eq!(labels(&project("A", "  ALP  ", 0)), [("movie", "dup")]);
+        let selected = selected_library_entries(&entries, &project("A", "ZEB", 0));
+        assert_eq!(selected.len(), 1);
+        assert_eq!(
+            (selected[0].type_.as_str(), selected[0].name.as_str()),
+            ("series", "Zebra")
+        );
+        assert_eq!(project("missing-category", "", 0).len(), 0);
+        assert!(project("", "missing", 0).is_empty());
+    }
+
+    #[test]
+    fn card_projection_keeps_typed_episode_caches_and_badges_separate() {
+        let entry = |id: &str, type_: &str, name: &str| LibraryEntry {
             id: id.into(),
-            type_: "series".into(),
+            type_: type_.into(),
             name: name.into(),
-            year: year.into(),
+            year: String::new(),
             poster_url: String::new(),
             background_url: String::new(),
             genres: vec![],
             description: String::new(),
             categories: vec![],
             watch_status: WatchStatus::Auto,
-            added_at_secs: added,
+            added_at_secs: 1,
         };
         let entries = vec![
-            entry("a", "Zebra", "2020", 10),
-            entry("b", "alpha", "2026", 20),
-            entry("c", "Beta", "2024", 20),
+            entry("same", "series", "Series"),
+            entry("same", "movie", "Movie"),
+            entry("unknown", "series", "Unknown episodes"),
         ];
-        let ids = |rows: Vec<LibraryEntry>| rows.into_iter().map(|e| e.id).collect::<Vec<_>>();
-        assert_eq!(
-            ids(order_library_view(entries.clone(), "", 0)),
-            ["c", "b", "a"]
+        let view = entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| LibraryCandidate::from_entry(entry, index))
+            .collect::<Vec<_>>();
+        let video = |id: &str| Video {
+            id: id.into(),
+            released: Some("2000-01-01".into()),
+            ..Video::default()
+        };
+        let episodes = HashMap::from([
+            (("series", "same"), vec![video("one"), video("two")]),
+            (("movie", "same"), vec![]),
+        ]);
+        let mut progress = HashMap::new();
+        progress.insert(
+            progress_map_key("same", "one"),
+            EpisodeProgress {
+                series_id: "same".into(),
+                episode_id: "one".into(),
+                watched: true,
+                ..EpisodeProgress::default()
+            },
         );
-        assert_eq!(
-            ids(order_library_view(entries.clone(), "", 1)),
-            ["b", "c", "a"]
+        progress.insert(
+            progress_map_key("unknown", "old"),
+            EpisodeProgress {
+                series_id: "unknown".into(),
+                episode_id: "old".into(),
+                watched: true,
+                ..EpisodeProgress::default()
+            },
         );
+        let activity = HashMap::new();
+        let cards = view
+            .iter()
+            .filter_map(|candidate| {
+                let videos = episodes
+                    .get(&(candidate.type_.as_str(), candidate.id.as_str()))
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                project_library_card(
+                    &entries[candidate.entry_index],
+                    candidate,
+                    videos,
+                    &progress,
+                    &activity,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(cards.len(), 3);
         assert_eq!(
-            ids(order_library_view(entries.clone(), "", 2)),
-            ["b", "c", "a"]
+            cards[0].badge,
+            library_badge_for("same", &episodes[&("series", "same")], &progress)
         );
+        assert_eq!((cards[0].watched_count, cards[0].episode_count), (1, 2));
         assert_eq!(
-            ids(order_library_view(entries.clone(), "  ALP  ", 0)),
-            ["b"]
+            cards[1].badge,
+            library_badge_for("same", &episodes[&("movie", "same")], &progress)
         );
-        assert!(order_library_view(entries, "missing", 0).is_empty());
+        assert_eq!((cards[1].watched_count, cards[1].episode_count), (0, 0));
+        assert_eq!(cards[2].badge, library_badge_for("unknown", &[], &progress));
+
+        let mut loaded_card = MediaCard {
+            id: "same".into(),
+            title: "Series".into(),
+            year: String::new().into(),
+            poster_path: "poster-url".into(),
+            poster: Image::default(),
+            is_loaded: true,
+            badge: String::new().into(),
+            watched: false,
+            status: String::new().into(),
+            status_key: String::new().into(),
+            activity_action: 0,
+            media_type: "TV".into(),
+            watched_count: 0,
+            episode_count: 0,
+        };
+        assert!(update_library_card_progress(&mut loaded_card, &cards[0]));
+        assert_eq!(loaded_card.poster_path.as_str(), "poster-url");
+        assert!(loaded_card.is_loaded);
+    }
+
+    #[test]
+    fn built_in_bucket_uses_the_matching_media_types_episode_cache() {
+        let entry = |type_: &str| LibraryEntry {
+            id: "shared-id".into(),
+            type_: type_.into(),
+            name: type_.into(),
+            year: String::new(),
+            poster_url: String::new(),
+            background_url: String::new(),
+            genres: vec![],
+            description: String::new(),
+            categories: vec![],
+            watch_status: WatchStatus::Auto,
+            added_at_secs: 1,
+        };
+        let entries = vec![entry("series"), entry("movie")];
+        let identities = entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| LibraryIdentitySnapshot::new(index, entry))
+            .collect::<Vec<_>>();
+        let video = Video {
+            id: "episode".into(),
+            released: Some("2000-01-01".into()),
+            ..Video::default()
+        };
+        let episodes = HashMap::from([
+            (("series", "shared-id"), vec![video]),
+            (("movie", "shared-id"), vec![]),
+        ]);
+        let mut progress = HashMap::new();
+        progress.insert(
+            progress_map_key("shared-id", "episode"),
+            EpisodeProgress {
+                series_id: "shared-id".into(),
+                episode_id: "episode".into(),
+                watched: true,
+                ..EpisodeProgress::default()
+            },
+        );
+        let activity = HashMap::new();
+        let options = LibraryViewOptions {
+            filter: "Completed",
+            needle: String::new(),
+            sort: 0,
+        };
+        let candidates = order_library_candidates(
+            identities
+                .iter()
+                .filter_map(|identity| {
+                    let entry = entries.get(identity.index)?;
+                    if !identity.matches(entry) {
+                        return None;
+                    }
+                    let videos = episodes
+                        .get(&(identity.type_.as_str(), identity.id.as_str()))
+                        .map(Vec::as_slice);
+                    project_library_candidate(
+                        entry,
+                        identity.index,
+                        videos,
+                        &progress,
+                        &activity,
+                        &options,
+                    )
+                })
+                .collect(),
+            options.sort,
+        );
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].type_, "series");
     }
 }
 

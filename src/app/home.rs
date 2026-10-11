@@ -126,6 +126,38 @@ impl HomeShowcaseCache {
     }
 }
 
+struct ContinueRowDraft {
+    id: String,
+    title: String,
+    subtitle: String,
+    episode_title: String,
+    ep_no: String,
+    remaining: String,
+    art_url: String,
+    poster_url: String,
+    progress: f32,
+    badge: i32,
+}
+
+struct UpcomingRowDraft {
+    id: String,
+    title: String,
+    subtitle: String,
+    date: String,
+    episode_title: String,
+    ep_no: String,
+    art_url: String,
+    poster_url: String,
+    index: usize,
+}
+
+#[derive(Clone)]
+struct HomeLibraryIdentity {
+    index: usize,
+    type_: String,
+    id: String,
+}
+
 /// A sparse catalog or failed optional enrichment must not erase known fields.
 /// Supplied nonempty values still replace old values on a successful refresh.
 fn merge_home_showcase_preview(preview: &mut MetaPreview, fresh: &MetaPreview) {
@@ -1359,133 +1391,166 @@ impl Bridge {
         // Home is a glanceable landing page, not a second library: keep
         // the grid bounded no matter how many series carry progress.
         const CONTINUE_MAX: usize = 20;
-        let (entries, progress, hidden) = {
-            let state = self.shared.lock().unwrap();
-            (
-                state.entries.clone(),
-                state.progress.clone(),
-                state.continue_hidden.clone(),
-            )
-        };
-        // Newest progress entry per item, whatever its state: the latest
-        // activity decides whether we resume it or move to the next episode.
-        let mut latest: HashMap<String, &EpisodeProgress> = HashMap::new();
-        for p in progress.values() {
-            let newer = latest
-                .get(&p.series_id)
-                .map(|b| p.updated_at_secs > b.updated_at_secs)
-                .unwrap_or(true);
-            if newer {
-                latest.insert(p.series_id.clone(), p);
-            }
-        }
         self.migrate_viewing_activity();
+        // Capture typed positions and the latest record per library identity.
+        // The history map stays borrowed while indexing; only the selected
+        // latest records are copied for the later cache pass.
+        let (identities, latest) = {
+            let state = self.shared.lock().unwrap();
+            let mut latest_refs: HashMap<&str, &EpisodeProgress> = HashMap::new();
+            for record in state.progress.values() {
+                if latest_refs
+                    .get(record.series_id.as_str())
+                    .is_none_or(|previous| record.updated_at_secs > previous.updated_at_secs)
+                {
+                    latest_refs.insert(&record.series_id, record);
+                }
+            }
+            let identities = state
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| {
+                    e.watch_status == WatchStatus::Auto && latest_refs.contains_key(e.id.as_str())
+                })
+                .map(|(index, entry)| HomeLibraryIdentity {
+                    index,
+                    type_: entry.type_.clone(),
+                    id: entry.id.clone(),
+                })
+                .collect::<Vec<_>>();
+            let latest: HashMap<String, EpisodeProgress> = identities
+                .iter()
+                .filter_map(|identity| {
+                    let record = latest_refs.get(identity.id.as_str())?;
+                    Some((identity.id.clone(), (**record).clone()))
+                })
+                .collect::<HashMap<_, _>>();
+            (identities, latest)
+        };
         let activity = read_viewing_activity();
         let new_hidden: HashMap<String, Vec<String>> =
             read_json(NEW_EPISODES_HIDDEN_KEY).unwrap_or_default();
-        let mut new_episodes = Vec::new();
+        let today = today_days();
+        let mut new_episodes: Vec<(i64, ContinueEntry)> = Vec::new();
         let mut list: Vec<ContinueEntry> = Vec::new();
-        for e in &entries {
-            if e.watch_status != WatchStatus::Auto {
+        for identity in identities {
+            // Process each cache independently so a large metadata response
+            // never overlaps the next series' Video allocation.
+            let episodes = (identity.type_ != "movie")
+                .then(|| read_episodes_cache_for(&identity.type_, &identity.id))
+                .flatten();
+            let state = self.shared.lock().unwrap();
+            let Some(entry) = state.entries.get(identity.index).filter(|entry| {
+                entry.id == identity.id
+                    && entry.type_ == identity.type_
+                    && entry.watch_status == WatchStatus::Auto
+            }) else {
                 continue;
-            }
-            let Some(p) = latest.get(&e.id) else { continue };
-            // Explicitly removed from Home: stays hidden until a newer progress
-            // update (a resume, local or from a synced peer) appears.
-            let episodes = if e.type_ == "movie" {
-                None
-            } else {
-                read_episodes_cache_for(&e.type_, &e.id)
             };
+            let Some(p) = latest.get(&identity.id) else {
+                continue;
+            };
+            let episode_slice = episodes.as_deref().unwrap_or_default();
             let bucket = activity_bucket(
-                &e.id,
-                episodes.as_deref().unwrap_or_default(),
-                &progress,
-                activity.get(&e.id),
-                today_days(),
+                &entry.id,
+                episode_slice,
+                &state.progress,
+                activity.get(&entry.id),
+                today,
             );
             if bucket == "Completed" {
                 continue;
             }
-            let returning = e.type_ != "movie" && bucket == "New episodes";
+            let returning = entry.type_ != "movie" && bucket == "New episodes";
             let episode_id = if returning {
-                next_episode_to_watch(&e.id, episodes.as_deref().unwrap_or_default(), &progress)
+                next_episode_to_watch(&entry.id, episode_slice, &state.progress)
                     .map(|v| v.id.clone())
             } else {
-                continue_resume_id(&e.type_, &e.id, p, episodes.as_deref(), &progress)
+                continue_resume_id(
+                    &entry.type_,
+                    &entry.id,
+                    p,
+                    episodes.as_deref(),
+                    &state.progress,
+                )
             };
             let Some(episode_id) = episode_id else {
                 continue;
             };
             if returning {
-                let available =
-                    new_episode_ids(&e.id, episodes.as_deref().unwrap_or_default(), &progress);
+                let available = new_episode_ids(&entry.id, episode_slice, &state.progress);
                 if new_hidden
-                    .get(&e.id)
+                    .get(&entry.id)
                     .is_some_and(|hidden| available.iter().all(|id| hidden.contains(id)))
                 {
                     continue;
                 }
-            } else if hidden.get(&e.id).is_some_and(|at| *at >= p.updated_at_secs) {
+            } else if state
+                .continue_hidden
+                .get(&entry.id)
+                .is_some_and(|at| *at >= p.updated_at_secs)
+            {
                 continue;
             }
             let card = ContinueEntry {
-                series_id: e.id.clone(),
-                type_: e.type_.clone(),
+                series_id: entry.id.clone(),
+                type_: entry.type_.clone(),
                 episode_id,
                 updated_at_secs: p.updated_at_secs,
             };
             if returning {
-                new_episodes.push(card);
+                let newest = episode_slice
+                    .iter()
+                    .filter(|v| {
+                        episode_has_air_date(v)
+                            && episode_is_out(v, today)
+                            && !state
+                                .progress
+                                .get(&progress_map_key(&entry.id, &v.id))
+                                .is_some_and(|p| p.watched)
+                    })
+                    .filter_map(|v| v.released.as_deref().and_then(iso_days))
+                    .max()
+                    .unwrap_or(0);
+                new_episodes.push((newest, card));
             } else {
                 list.push(card);
             }
         }
-        new_episodes.sort_by_key(|entry| {
-            let episodes =
-                read_episodes_cache_for(&entry.type_, &entry.series_id).unwrap_or_default();
-            let newest = episodes
-                .iter()
-                .filter(|v| {
-                    episode_has_air_date(v)
-                        && episode_is_out(v, today_days())
-                        && !progress
-                            .get(&progress_map_key(&entry.series_id, &v.id))
-                            .is_some_and(|p| p.watched)
-                })
-                .filter_map(|v| v.released.as_deref().and_then(iso_days))
-                .max()
-                .unwrap_or(0);
-            (std::cmp::Reverse(newest), entry.series_id.clone())
-        });
+        new_episodes
+            .sort_by_key(|(newest, entry)| (std::cmp::Reverse(*newest), entry.series_id.clone()));
         new_episodes.truncate(CONTINUE_MAX);
-        self.shared.lock().unwrap().new_episodes_list = new_episodes;
         list.sort_by_key(|c| std::cmp::Reverse(c.updated_at_secs));
         list.truncate(CONTINUE_MAX);
-        self.shared.lock().unwrap().continue_list = list;
-
-        // Drop hide entries that no longer hide anything (progress advanced
-        // past them, or the item left the library), so the local map and the
-        // synced `continue_hidden` domain don't accumulate forever. The write
-        // tombstones the removed keys mesh-wide.
-        let stale: Vec<String> = hidden
-            .iter()
-            .filter(|(id, at)| {
-                latest
-                    .get(id.as_str())
-                    .map(|p| p.updated_at_secs > **at)
-                    .unwrap_or(true)
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
-        if !stale.is_empty() {
-            let map = {
-                let mut state = self.shared.lock().unwrap();
-                for id in &stale {
-                    state.continue_hidden.remove(id);
-                }
-                state.continue_hidden.clone()
-            };
+        let new_episodes = new_episodes.into_iter().map(|(_, entry)| entry).collect();
+        let stale_map = {
+            let mut state = self.shared.lock().unwrap();
+            let mut latest_times = HashMap::new();
+            for p in state.progress.values() {
+                latest_times
+                    .entry(p.series_id.as_str())
+                    .and_modify(|at: &mut u64| *at = (*at).max(p.updated_at_secs))
+                    .or_insert(p.updated_at_secs);
+            }
+            let stale: Vec<String> = state
+                .continue_hidden
+                .iter()
+                .filter(|(id, at)| {
+                    latest_times
+                        .get(id.as_str())
+                        .is_none_or(|updated| *updated > **at)
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in &stale {
+                state.continue_hidden.remove(id);
+            }
+            state.new_episodes_list = new_episodes;
+            state.continue_list = list;
+            (!stale.is_empty()).then(|| state.continue_hidden.clone())
+        };
+        if let Some(map) = stale_map {
             write_continue_hidden(&map);
         }
     }
@@ -1502,11 +1567,9 @@ impl Bridge {
     }
 
     fn current_episode_home_rows(&self, new: bool) -> Vec<ContinueRow> {
-        let (entries, progress, list, enabled, episode_artwork) = {
+        let (list, enabled) = {
             let state = self.shared.lock().unwrap();
             (
-                state.entries.clone(),
-                state.progress.clone(),
                 if new {
                     state.new_episodes_list.clone()
                 } else {
@@ -1517,65 +1580,105 @@ impl Bridge {
                 } else {
                     &HomeRowSource::ContinueWatching
                 }),
-                state.cache_settings.home_episode_artwork,
             )
         };
         if !enabled {
             return Vec::new();
         }
-        list.iter()
-            .filter_map(|c| {
-                let e = entries
-                    .iter()
-                    .find(|e| e.id == c.series_id && e.type_ == c.type_)?;
-                let episodes = read_episodes_cache_for(&c.type_, &c.series_id).unwrap_or_default();
-                let video = episodes.iter().find(|v| v.id == c.episode_id);
-                let subtitle = video
-                    .map(|v| format!("{} · {}", episode_badge(v), episode_row_label(v)))
-                    .unwrap_or_else(|| text::tr("Resume").to_string());
-                let record = progress.get(&progress_map_key(&c.series_id, &c.episode_id));
-                let fraction = record
-                    .map(|p| progress_fraction(p.position_secs, p.duration_secs))
-                    .unwrap_or(0.0);
-                let started = record
-                    .map(|p| !p.watched && p.position_secs > 0.0)
-                    .unwrap_or(false);
-                let badge = {
-                    let is_watched = |v: &Video| {
-                        progress
-                            .get(&progress_map_key(&c.series_id, &v.id))
-                            .is_some_and(|p| p.watched)
-                    };
-                    continue_badge(started, &c.episode_id, &episodes, is_watched)
-                };
-                let art_url = home_card_art_url(&e.poster_url, video, episode_artwork);
-                let (poster, is_loaded) = home_card_image(&art_url, &e.poster_url);
-                Some(ContinueRow {
-                    id: SharedString::from(&c.series_id),
-                    title: SharedString::from(&e.name),
-                    subtitle: SharedString::from(&subtitle),
-                    episode_title: video.map(episode_row_label).unwrap_or_default().into(),
-                    ep_no: video.map(episode_badge).unwrap_or_default().into(),
-                    remaining: if new {
-                        text::new_episodes(
-                            new_episode_ids(&c.series_id, &episodes, &progress).len(),
-                        )
-                        .into()
-                    } else {
-                        continue_remaining(record).into()
-                    },
-                    art_url: art_url.into(),
+        let mut drafts = Vec::with_capacity(list.len());
+        for c in &list {
+            let episodes = read_episodes_cache_for(&c.type_, &c.series_id).unwrap_or_default();
+            let state = self.shared.lock().unwrap();
+            if !state.cache_settings.home_row_enabled(if new {
+                &HomeRowSource::NewEpisodes
+            } else {
+                &HomeRowSource::ContinueWatching
+            }) {
+                return Vec::new();
+            }
+            let episode_artwork = state.cache_settings.home_episode_artwork;
+            let current = if new {
+                &state.new_episodes_list
+            } else {
+                &state.continue_list
+            };
+            if !current.iter().any(|item| {
+                item.series_id == c.series_id
+                    && item.type_ == c.type_
+                    && item.episode_id == c.episode_id
+            }) {
+                continue;
+            }
+            let Some(e) = state
+                .entries
+                .iter()
+                .find(|e| e.id == c.series_id && e.type_ == c.type_)
+            else {
+                continue;
+            };
+            let video = episodes.iter().find(|v| v.id == c.episode_id);
+            let subtitle = video
+                .map(|v| format!("{} · {}", episode_badge(v), episode_row_label(v)))
+                .unwrap_or_else(|| text::tr("Resume").to_string());
+            let record = state
+                .progress
+                .get(&progress_map_key(&c.series_id, &c.episode_id));
+            let fraction = record
+                .map(|p| progress_fraction(p.position_secs, p.duration_secs))
+                .unwrap_or(0.0);
+            let started = record
+                .map(|p| !p.watched && p.position_secs > 0.0)
+                .unwrap_or(false);
+            let is_watched = |v: &Video| {
+                state
+                    .progress
+                    .get(&progress_map_key(&c.series_id, &v.id))
+                    .is_some_and(|p| p.watched)
+            };
+            let badge = continue_badge(started, &c.episode_id, &episodes, is_watched);
+            let art_url = home_card_art_url(&e.poster_url, video, episode_artwork);
+            drafts.push(ContinueRowDraft {
+                id: c.series_id.clone(),
+                title: e.name.clone(),
+                subtitle,
+                episode_title: video.map(episode_row_label).unwrap_or_default(),
+                ep_no: video.map(episode_badge).unwrap_or_default(),
+                remaining: if new {
+                    text::new_episodes(
+                        new_episode_ids(&c.series_id, &episodes, &state.progress).len(),
+                    )
+                } else {
+                    continue_remaining(record)
+                },
+                art_url,
+                poster_url: e.poster_url.clone(),
+                progress: if new { 0.0 } else { fraction },
+                badge: if new {
+                    2
+                } else if badge == 2 {
+                    1
+                } else {
+                    badge
+                },
+            });
+        }
+        drafts
+            .into_iter()
+            .map(|d| {
+                let (poster, is_loaded) = home_card_image(&d.art_url, &d.poster_url);
+                ContinueRow {
+                    id: d.id.into(),
+                    title: d.title.into(),
+                    subtitle: d.subtitle.into(),
+                    episode_title: d.episode_title.into(),
+                    ep_no: d.ep_no.into(),
+                    remaining: d.remaining.into(),
+                    art_url: d.art_url.into(),
                     poster,
                     is_loaded,
-                    progress: if new { 0.0 } else { fraction },
-                    badge: if new {
-                        2
-                    } else if badge == 2 {
-                        1
-                    } else {
-                        badge
-                    },
-                })
+                    progress: d.progress,
+                    badge: d.badge,
+                }
             })
             .collect()
     }
@@ -1742,22 +1845,40 @@ impl Bridge {
     /// a quick glance.
     pub(super) fn rebuild_upcoming_list(&self) {
         const UPCOMING_MAX: usize = 20;
-        let (entries, progress) = {
+        let identities: Vec<HomeLibraryIdentity> = {
             let state = self.shared.lock().unwrap();
-            (state.entries.clone(), state.progress.clone())
+            state
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.type_ != "movie" && e.watch_status == WatchStatus::Auto)
+                .map(|(index, e)| HomeLibraryIdentity {
+                    index,
+                    type_: e.type_.clone(),
+                    id: e.id.clone(),
+                })
+                .collect()
         };
         let today = today_days();
         let mut upcoming: Vec<UpcomingEntry> = Vec::new();
-        for e in &entries {
-            if e.type_ == "movie" || e.watch_status != WatchStatus::Auto {
+        for identity in identities {
+            let episodes =
+                read_episodes_cache_for(&identity.type_, &identity.id).unwrap_or_default();
+            let state = self.shared.lock().unwrap();
+            let Some(e) = state.entries.get(identity.index).filter(|entry| {
+                entry.id == identity.id
+                    && entry.type_ == identity.type_
+                    && entry.watch_status == WatchStatus::Auto
+                    && entry.type_ != "movie"
+            }) else {
                 continue;
-            }
-            let episodes = read_episodes_cache_for(&e.type_, &e.id).unwrap_or_default();
+            };
             if episodes.is_empty() {
                 continue;
             }
             let is_watched = |v: &Video| {
-                progress
+                state
+                    .progress
                     .get(&progress_map_key(&e.id, &v.id))
                     .is_some_and(|p| p.watched)
             };
@@ -1780,50 +1901,93 @@ impl Bridge {
     /// Upcoming list, so filtered views (the calendar's selected day) still
     /// resolve picks.
     pub(super) fn current_upcoming_rows(&self) -> Vec<UpcomingRow> {
-        let (entries, list, date_relative, enabled, episode_artwork) = {
-            let state = self.shared.lock().unwrap();
-            (
-                state.entries.clone(),
-                state.upcoming_list.clone(),
-                state.cache_settings.date_relative,
-                state
-                    .cache_settings
-                    .home_row_enabled(&HomeRowSource::Upcoming),
-                state.cache_settings.home_episode_artwork,
-            )
-        };
-        if !enabled {
-            return Vec::new();
-        }
-        list.iter()
-            .enumerate()
-            .filter_map(|(i, u)| upcoming_row(&entries, u, i, date_relative, episode_artwork))
-            .collect()
+        self.current_upcoming_rows_for_day(None)
     }
 
     /// The Upcoming rows airing on one calendar day (epoch days). Same joins
     /// as [`Self::current_upcoming_rows`]; `index` still positions into the
     /// full Upcoming list, so card taps resolve through `upcoming_picked`.
     pub(super) fn current_upcoming_day_rows(&self, day: i64) -> Vec<UpcomingRow> {
-        let (entries, list, date_relative, enabled, episode_artwork) = {
+        self.current_upcoming_rows_for_day(Some(day))
+    }
+
+    fn current_upcoming_rows_for_day(&self, day: Option<i64>) -> Vec<UpcomingRow> {
+        let (list, enabled) = {
             let state = self.shared.lock().unwrap();
             (
-                state.entries.clone(),
                 state.upcoming_list.clone(),
-                state.cache_settings.date_relative,
                 state
                     .cache_settings
                     .home_row_enabled(&HomeRowSource::Upcoming),
-                state.cache_settings.home_episode_artwork,
             )
         };
         if !enabled {
             return Vec::new();
         }
-        list.iter()
-            .enumerate()
-            .filter(|(_, u)| u.air_days == day)
-            .filter_map(|(i, u)| upcoming_row(&entries, u, i, date_relative, episode_artwork))
+        let mut drafts = Vec::with_capacity(list.len());
+        for (i, u) in list.iter().enumerate() {
+            if day.is_some_and(|day| u.air_days != day) {
+                continue;
+            }
+            let episodes = read_episodes_cache_for(&u.type_, &u.series_id).unwrap_or_default();
+            let state = self.shared.lock().unwrap();
+            if !state
+                .cache_settings
+                .home_row_enabled(&HomeRowSource::Upcoming)
+            {
+                return Vec::new();
+            }
+            let date_relative = state.cache_settings.date_relative;
+            let episode_artwork = state.cache_settings.home_episode_artwork;
+            if !upcoming_entry_matches_at(&state.upcoming_list, i, u) {
+                continue;
+            }
+            let Some(e) = state
+                .entries
+                .iter()
+                .find(|e| e.id == u.series_id && e.type_ == u.type_)
+            else {
+                continue;
+            };
+            let Some(v) = episodes.iter().find(|v| v.id == u.episode_id) else {
+                continue;
+            };
+            let subtitle = format!("{} · {}", episode_badge(v), episode_row_label(v));
+            let date = v
+                .released
+                .as_deref()
+                .and_then(|d| Bridge::format_human_date(d, date_relative))
+                .unwrap_or_default();
+            let art_url = home_card_art_url(&e.poster_url, Some(v), episode_artwork);
+            drafts.push(UpcomingRowDraft {
+                id: u.series_id.clone(),
+                title: e.name.clone(),
+                subtitle,
+                date,
+                episode_title: episode_row_label(v),
+                ep_no: episode_badge(v),
+                art_url,
+                poster_url: e.poster_url.clone(),
+                index: i,
+            });
+        }
+        drafts
+            .into_iter()
+            .map(|d| {
+                let (poster, is_loaded) = home_card_image(&d.art_url, &d.poster_url);
+                UpcomingRow {
+                    id: d.id.into(),
+                    title: d.title.into(),
+                    subtitle: d.subtitle.into(),
+                    date: d.date.into(),
+                    episode_title: d.episode_title.into(),
+                    ep_no: d.ep_no.into(),
+                    art_url: d.art_url.into(),
+                    poster,
+                    is_loaded,
+                    index: d.index as i32,
+                }
+            })
             .collect()
     }
 
@@ -2332,6 +2496,19 @@ pub(super) fn upcoming_row(
     })
 }
 
+fn upcoming_entry_matches_at(
+    list: &[UpcomingEntry],
+    index: usize,
+    expected: &UpcomingEntry,
+) -> bool {
+    list.get(index).is_some_and(|current| {
+        current.series_id == expected.series_id
+            && current.type_ == expected.type_
+            && current.episode_id == expected.episode_id
+            && current.air_days == expected.air_days
+    })
+}
+
 /// Gregorian (year, month 1–12, day) from days since the Unix epoch (Howard
 /// Hinnant's `civil_from_days`). Inputs here are real air dates (≥ 1970), so
 /// the era division stays non-negative.
@@ -2557,6 +2734,29 @@ mod tests {
             Some("next")
         );
         assert!(next_upcoming_episode(&episodes, |_| false, today).is_none());
+    }
+
+    #[test]
+    fn upcoming_projection_keeps_full_list_index_and_typed_identity() {
+        let expected = UpcomingEntry {
+            series_id: "series".into(),
+            type_: "series".into(),
+            episode_id: "episode-2".into(),
+            air_days: 20_000,
+        };
+        let list = vec![
+            UpcomingEntry {
+                episode_id: "episode-1".into(),
+                air_days: 19_000,
+                ..expected.clone()
+            },
+            expected.clone(),
+        ];
+        assert!(upcoming_entry_matches_at(&list, 1, &expected));
+        assert!(!upcoming_entry_matches_at(&list, 0, &expected));
+        let mut wrong_type = expected.clone();
+        wrong_type.type_ = "movie".into();
+        assert!(!upcoming_entry_matches_at(&list, 1, &wrong_type));
     }
 
     #[test]
@@ -3385,6 +3585,247 @@ mod tests {
             play_count: 1,
             updated_at_secs: updated,
         }
+    }
+
+    fn library_entry(id: &str, type_: &str, name: &str, watch_status: WatchStatus) -> LibraryEntry {
+        LibraryEntry {
+            id: id.into(),
+            type_: type_.into(),
+            name: name.into(),
+            year: String::new(),
+            poster_url: String::new(),
+            background_url: String::new(),
+            genres: Vec::new(),
+            description: String::new(),
+            categories: Vec::new(),
+            watch_status,
+            added_at_secs: 1,
+        }
+    }
+
+    fn fixture_release(offset: i64) -> String {
+        let (year, month, day) = civil_from_days(today_days() + offset);
+        format!("{year:04}-{month:02}-{day:02}")
+    }
+
+    #[test]
+    fn home_projection_rebuilds_use_current_typed_rows_and_preserve_day_indices() {
+        const TEST_DIR: &str = "NOVA_HOME_PROJECTION_TEST_DIR";
+        let Some(root) = std::env::var_os(TEST_DIR) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-home-projection-test-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(TEST_DIR, &root)
+                .args(["--exact", "app::home::tests::home_projection_rebuilds_use_current_typed_rows_and_preserve_day_indices", "--nocapture"])
+                .output().unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        app.window().set_size(slint::PhysicalSize::new(360, 800));
+        app.window().show().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let downloads = DownloadCoordinator::new(root.join("downloads"));
+        #[cfg(feature = "desktop")]
+        let bridge = {
+            let (hi, _) = mpsc::channel();
+            let (lo, _) = mpsc::channel();
+            Bridge::new(
+                app.as_weak(),
+                PosterTx { hi, lo },
+                Arc::new(AtomicU64::new(0)),
+                player,
+                downloads,
+            )
+        };
+        #[cfg(not(feature = "desktop"))]
+        let bridge = Bridge::new(
+            app.as_weak(),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            downloads,
+        );
+
+        let aired = fixture_release(-1);
+        let future_a = fixture_release(2);
+        let future_b = fixture_release(3);
+        let future_dupe = fixture_release(4);
+        let episodes = |id: &str, future: &str| {
+            vec![
+                Video {
+                    id: format!("{id}:old"),
+                    name: "Old".into(),
+                    season: Some(1),
+                    episode: Some(1),
+                    released: Some(aired.clone()),
+                    ..Default::default()
+                },
+                Video {
+                    id: format!("{id}:future"),
+                    name: "Future".into(),
+                    season: Some(1),
+                    episode: Some(2),
+                    released: Some(future.into()),
+                    ..Default::default()
+                },
+            ]
+        };
+        write_episodes_cache_for("series", "up-a", &episodes("up-a", &future_a));
+        write_episodes_cache_for("series", "up-b", &episodes("up-b", &future_b));
+        write_episodes_cache_for("series", "up-c", &episodes("up-c", &future_b));
+        write_episodes_cache_for("series", "typed", &episodes("typed", &future_dupe));
+        write_episodes_cache_for("series", "cont", &[video("cont:1", 1, 1, Some(&aired))]);
+        write_episodes_cache_for("series", "stale", &[video("stale:1", 1, 1, Some(&aired))]);
+        write_episodes_cache_for("series", "kept", &[video("kept:1", 1, 1, Some(&aired))]);
+        write_episodes_cache_for("series", "manual", &[video("manual:1", 1, 1, Some(&aired))]);
+        write_episodes_cache_for(
+            "series",
+            "returning",
+            &vec![
+                video("returning:old", 1, 1, Some(&fixture_release(-10))),
+                video("returning:new", 1, 2, Some(&aired)),
+            ],
+        );
+
+        let mut history = HashMap::new();
+        for (series, episode, at, watched, position) in [
+            ("cont", "cont:1", 40, false, 600.0),
+            ("movie", "movie", 50, false, 300.0),
+            ("stale", "stale:1", 11, false, 600.0),
+            ("kept", "kept:1", 19, false, 600.0),
+            ("manual", "manual:1", 60, false, 600.0),
+            ("returning", "returning:old", 25, true, 3600.0),
+            ("up-a", "up-a:old", 30, true, 3600.0),
+            ("up-b", "up-b:old", 31, false, 600.0),
+            ("up-c", "up-c:old", 32, true, 3600.0),
+            ("typed", "typed:old", 33, true, 3600.0),
+        ] {
+            let record = progress(series, episode, position, watched, at);
+            history.insert(progress_map_key(series, episode), record);
+        }
+        write_json(EPISODE_PROGRESS_KEY, &history);
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.entries = vec![
+                library_entry("cont", "series", "Continue", WatchStatus::Auto),
+                library_entry("movie", "movie", "Movie", WatchStatus::Auto),
+                library_entry("stale", "series", "Stale hide", WatchStatus::Auto),
+                library_entry("kept", "series", "Kept hide", WatchStatus::Auto),
+                library_entry("manual", "series", "Manual", WatchStatus::OnHold),
+                library_entry("returning", "series", "Returning", WatchStatus::Auto),
+                library_entry("up-a", "series", "Up A", WatchStatus::Auto),
+                library_entry("up-b", "series", "Not caught up", WatchStatus::Auto),
+                library_entry("up-c", "series", "Up C", WatchStatus::Auto),
+                library_entry("typed", "movie", "Wrong typed entry", WatchStatus::Auto),
+                library_entry("typed", "series", "Typed TV", WatchStatus::Auto),
+            ];
+            state.progress = history;
+            state.continue_hidden = HashMap::from([("stale".into(), 10), ("kept".into(), 20)]);
+        }
+        write_json(
+            VIEWING_ACTIVITY_KEY,
+            &HashMap::from([
+                (
+                    "cont".to_string(),
+                    ViewingActivity {
+                        phase: ViewingPhase::Active,
+                    },
+                ),
+                (
+                    "returning".to_string(),
+                    ViewingActivity {
+                        phase: ViewingPhase::AwaitingReturn,
+                    },
+                ),
+            ]),
+        );
+        bridge.rebuild_continue_list();
+        {
+            let state = bridge.shared.lock().unwrap();
+            assert_eq!(
+                state
+                    .continue_list
+                    .iter()
+                    .map(|e| (e.series_id.as_str(), e.type_.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![
+                    ("movie", "movie"),
+                    ("cont", "series"),
+                    ("up-b", "series"),
+                    ("stale", "series")
+                ]
+            );
+            assert!(
+                !state
+                    .continue_list
+                    .iter()
+                    .any(|e| e.series_id == "manual" || e.series_id == "kept")
+            );
+            assert!(!state.continue_hidden.contains_key("stale"));
+            assert_eq!(state.continue_hidden.get("kept"), Some(&20));
+        }
+        let continue_rows = bridge.current_continue_rows();
+        let continue_row = continue_rows.iter().find(|row| row.id == "cont").unwrap();
+        assert_eq!(continue_row.progress, 1.0 / 6.0_f32);
+        assert!(continue_rows.iter().any(|row| row.id == "movie"));
+        assert!(
+            !continue_rows
+                .iter()
+                .any(|row| row.id == "manual" || row.id == "kept")
+        );
+        let returning_rows = bridge.current_new_episode_rows();
+        assert_eq!(returning_rows.len(), 1);
+        assert_eq!(returning_rows[0].id, "returning");
+        assert_eq!(returning_rows[0].badge, 2);
+        assert_eq!(returning_rows[0].remaining, "1 new episode");
+
+        bridge.rebuild_upcoming_list();
+        let upcoming = bridge.current_upcoming_rows();
+        assert_eq!(
+            upcoming
+                .iter()
+                .map(|row| row.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Up A", "Up C", "Typed TV"]
+        );
+        assert_eq!(
+            upcoming.iter().map(|row| row.index).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        let selected_day = bridge.current_upcoming_day_rows(today_days() + 3);
+        assert_eq!(selected_day.len(), 1);
+        assert_eq!(selected_day[0].title, "Up C");
+        assert_eq!(
+            selected_day[0].index, 1,
+            "calendar filtering preserves the full Upcoming list index"
+        );
+        assert!(
+            !upcoming
+                .iter()
+                .any(|row| row.title == "Wrong typed entry" || row.title == "Not caught up")
+        );
+
+        let activity = read_viewing_activity();
+        assert_eq!(
+            activity.get("cont").map(|v| v.phase),
+            Some(ViewingPhase::Active)
+        );
+        assert_eq!(
+            activity.get("up-a").map(|v| v.phase),
+            Some(ViewingPhase::AwaitingReturn)
+        );
     }
 
     fn video(id: &str, season: u32, number: u32, released: Option<&str>) -> Video {
