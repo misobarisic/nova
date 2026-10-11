@@ -2,10 +2,11 @@ import { Onboarding } from "../ui/onboarding.slint";
 import { OnboardingBridge } from "@NovaUiShared";
 
 export component OnboardingModule inherits Window {
+    public function focus_shell() { page.focus_shell(); }
     default-font-family: "Roboto";
     background: transparent;
     width: OnboardingBridge.viewport_width; height: OnboardingBridge.viewport_height;
-    Onboarding {
+    page := Onboarding {
         width: 100%; height: 100%;
         step <=> OnboardingBridge.step;
         language_index <=> OnboardingBridge.language_index;

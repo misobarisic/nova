@@ -121,7 +121,8 @@ fn episode_page_renders_totals_and_picks_globally() {
             let _ = ElementHandle::find_by_element_type_name(&app, "Text").count();
 
             // The first card of the page is episode 51 → global index 50.
-            let Some(card) = ElementHandle::find_by_element_id(&app, "DetailPage::ep_card").next()
+            let Some(card) =
+                ElementHandle::find_by_element_id(&app, "DetailEpisodesModule::ep_card").next()
             else {
                 fail(&failures1, false, "DIAG: no episode card rendered");
                 slint::quit_event_loop().unwrap();

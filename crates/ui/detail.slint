@@ -1254,12 +1254,20 @@ export component DetailPage {
                             // start-aligned: the grid must keep its natural
                             // height (see scroll content note).
                             if root.detail_tab == 3: Rectangle {
-                                width: 100%; height: DetailContent.episodes_height;
+                                // Percent-sized factory content has no intrinsic width.
+                                // Anchor the body to the shell viewport independently of
+                                // the leaf's own layout and reported preferred height.
+                                width: Math.max(0px, root.episode_content_w);
+                                height: DetailContent.episodes_height;
                                 vertical-stretch: 0;
                                 init => { DetailContent.episodes_slot_width = self.width; DetailContent.episodes_slot_height = self.height; }
                                 changed width => { DetailContent.episodes_slot_width = self.width; }
                                 changed height => { DetailContent.episodes_slot_height = self.height; }
-                                ComponentContainer { width: 100%; height: 100%; component-factory: DetailContent.episodes_factory; }
+                                ComponentContainer {
+                                    x: 0px; y: 0px;
+                                    width: 100%; height: 100%;
+                                    component-factory: DetailContent.episodes_factory;
+                                }
                             }
                         }
                     }

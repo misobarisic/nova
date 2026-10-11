@@ -88,13 +88,15 @@ async fn click_tab(app: &nova::AppWindow, label: &str) {
     let tabs = ElementHandle::find_by_element_type_name(app, "DetailTabs")
         .find(|e| e.size().height > 0.0 && e.absolute_position().y < 800.0)
         .expect("visible detail tabs");
-    tabs.query_descendants()
+    let target = tabs
+        .query_descendants()
         .match_predicate(move |e: &ElementHandle| {
             e.accessible_label().as_deref() == Some(label.as_str())
                 && e.accessible_role() == Some(AccessibleRole::Button)
         })
         .find_first()
-        .expect("tab button")
+        .expect("tab button");
+    target
         .single_click(slint::platform::PointerEventButton::Left)
         .await;
     settle().await;
@@ -163,14 +165,21 @@ fn tracking_preserves_detail_tab_with_reachable_confirmation() {
     slint::spawn_local(async move {
         let app = weak.upgrade().unwrap();
         settle().await;
+        let retained_episodes = ElementHandle::find_by_element_id(&app, "DetailEpisodesModule::root")
+            .next().expect("Episodes is mounted before opening Tracking");
         click_tab(&app, "Tracking").await;
         assert_eq!(app.get_detail_tab(), 3, "Tracking preserves the underlying Episodes tab");
-        assert_eq!(
-            ElementHandle::find_by_element_id(&app, "DetailEpisodesModule::root").count(),
-            1,
-            "the episode tree remains mounted beneath Tracking"
-        );
-        assert!(app.get_tracking_open());
+        // Accessibility queries omit invisible trees. The weak handle must
+        // still resolve to the same retained instance beneath the overlay.
+        assert!(retained_episodes.is_valid(), "the same episode tree remains mounted beneath Tracking");
+        assert!(app.get_tracking_open(), "Tracking click did not open the page; show callbacks: {}", shows.get());
+        for label in ["MyAnimeList", "AniList"] {
+            let service = ElementHandle::find_by_accessible_label(&app, label)
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+                .expect("service selector is visible as soon as Tracking opens");
+            assert!(service.size().width >= 44.0 && service.size().height >= 44.0);
+            assert!(service.absolute_position().y >= 0.0);
+        }
         assert_eq!(app.get_tracking_return_tab(), 3);
         assert_eq!(shows.get(), 1);
         assert_eq!(
@@ -230,7 +239,10 @@ fn tracking_preserves_detail_tab_with_reachable_confirmation() {
             let body = ElementHandle::find_by_element_id(&app, "TrackingPanel::tracking_body")
                 .next()
                 .unwrap();
-            assert!(body.size().width <= 1040.0, "Tracking has a readable content width");
+            let expected_width = (width as f32 - if width < 700 { 40.0 } else { 128.0 }).min(1040.0);
+            assert!(body.size().width > 0.0, "Tracking body cannot collapse to zero width");
+            assert!((body.size().width - expected_width).abs() <= 1.0,
+                "Tracking uses the available width up to its readable cap: {:?}", body.size());
             assert!(
                 scroll.size().height >= 80.0,
                 "review viewport at {width}x{height}: {:?}",
@@ -358,6 +370,7 @@ fn tracking_preserves_detail_tab_with_reachable_confirmation() {
         navbar_back(&app).await;
         assert_eq!(app.get_detail_tab(), 3, "Back reveals the preserved Episodes tab");
         assert!(!app.get_tracking_open());
+        assert!(retained_episodes.is_valid(), "Back reveals the original episode tree");
         click_tab(&app, "Overview").await;
         assert_eq!(app.get_detail_tab(), 0);
         assert!(!app.get_tracking_open());

@@ -103,6 +103,8 @@ nova-providers = { path = "crates/providers" }
 # Leaf/sub-crates (see their manifests): UI, storage, settings+paths, media,
 # player, torrent.
 nova-ui = { path = "crates/ui", default-features = false }
+# Inline UI test fixtures import the same compiled globals as the page leaves.
+nova-ui-shared = { path = "crates/ui-shared" }
 nova-storage = { path = "crates/storage" }
 nova-config = { path = "crates/config" }
 nova-media = { path = "crates/media" }

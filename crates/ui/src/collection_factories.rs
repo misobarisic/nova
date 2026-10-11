@@ -27,7 +27,15 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
                 context,
                 app.shared_globals_novauishared(),
             ) {
-                Ok(page) => Some(page),
+                Ok(page) => {
+                    let weak = page.as_weak();
+                    app.global::<LibraryBridge>().on_focus_shell(move || {
+                        if let Some(page) = weak.upgrade() {
+                            page.invoke_focus_shell();
+                        }
+                    });
+                    Some(page)
+                }
                 Err(error) => {
                     eprintln!("nova-ui: could not attach Library page: {error}");
                     None
@@ -53,7 +61,15 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
                 context,
                 app.shared_globals_novauishared(),
             ) {
-                Ok(page) => Some(page),
+                Ok(page) => {
+                    let weak = page.as_weak();
+                    app.global::<MoreBridge>().on_focus_shell(move || {
+                        if let Some(page) = weak.upgrade() {
+                            page.invoke_focus_shell();
+                        }
+                    });
+                    Some(page)
+                }
                 Err(error) => {
                     eprintln!("nova-ui: could not attach More page: {error}");
                     None
@@ -80,7 +96,15 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
                 context,
                 app.shared_globals_novauishared(),
             ) {
-                Ok(page) => Some(page),
+                Ok(page) => {
+                    let weak = page.as_weak();
+                    app.global::<AboutBridge>().on_focus_shell(move || {
+                        if let Some(page) = weak.upgrade() {
+                            page.invoke_focus_shell();
+                        }
+                    });
+                    Some(page)
+                }
                 Err(error) => {
                     eprintln!("nova-ui: could not attach About page: {error}");
                     None
@@ -113,7 +137,15 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
                 context,
                 app.shared_globals_novauishared(),
             ) {
-                Ok(page) => Some(page),
+                Ok(page) => {
+                    let weak = page.as_weak();
+                    app.global::<DownloadsBridge>().on_focus_shell(move || {
+                        if let Some(page) = weak.upgrade() {
+                            page.invoke_focus_shell();
+                        }
+                    });
+                    Some(page)
+                }
                 Err(error) => {
                     eprintln!("nova-ui: could not attach Downloads page: {error}");
                     None

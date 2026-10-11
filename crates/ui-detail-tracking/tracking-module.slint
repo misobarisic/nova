@@ -20,6 +20,7 @@ export component DetailTrackingModule inherits Window {
         width: 100%; height: 100%; spacing: 0px;
         padding-top: DetailBridge.safe-top;
         HorizontalLayout {
+            vertical-stretch: 0;
             padding-left: DetailBridge.safe-left + 16px;
             padding-right: DetailBridge.safe-right + 16px;
             spacing: 12px;
@@ -30,18 +31,22 @@ export component DetailTrackingModule inherits Window {
                 Text { text: DetailBridge.selected_title; color: Theme.current.text_detail_metadata; wrap: word-wrap; min-width: 0px; }
             }
         }
-        Flickable {
+        tracking_scroll := Flickable {
             min-height: 0px; vertical-stretch: 1;
             content-width: self.width;
-            VerticalLayout {
-                width: 100%; height: self.preferred-height; alignment: start;
-                padding-top: 16px;
-                padding-left: DetailBridge.safe-left + (DetailBridge.narrow ? 20px : 64px);
-                padding-right: DetailBridge.safe-right + (DetailBridge.narrow ? 20px : 64px);
-                HorizontalLayout {
-                alignment: center;
+            content-height: body.height;
+            // Size this wrapper from the viewport, independently of the panel's
+            // intrinsic width. A centered layout would preserve its zero
+            // preferred width instead of stretching it to the readable cap.
+            body := Rectangle {
+                width: tracking_scroll.width;
+                height: panel.preferred-height + 16px;
+                private property <length> inset_left: DetailBridge.safe-left + (DetailBridge.narrow ? 20px : 64px);
+                private property <length> inset_right: DetailBridge.safe-right + (DetailBridge.narrow ? 20px : 64px);
                 panel := TrackingPanel {
-                    max-width: 1040px; horizontal-stretch: 1;
+                    x: body.inset_left + Math.max(0px, (body.width - body.inset_left - body.inset_right - self.width) / 2);
+                    y: 16px;
+                    width: Math.min(1040px, Math.max(0px, body.width - body.inset_left - body.inset_right));
                     height: self.preferred-height;
                     compact: false;
                     focus_request: DetailContent.tracking_focus_request;
@@ -76,7 +81,6 @@ export component DetailTrackingModule inherits Window {
                     assign(row,value) => { DetailBridge.tracking_assign(row,value); }
                     edit(a0,a1,a2,a3,a4,a5,a6,a7) => { DetailBridge.tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7); }
                     action(a0,a1) => { DetailBridge.tracking_action(a0,a1); }
-                }
                 }
             }
         }

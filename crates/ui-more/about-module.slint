@@ -2,10 +2,11 @@ import { AboutPage } from "../ui/about.slint";
 import { AboutBridge } from "@NovaUiShared";
 
 export component AboutModule inherits Window {
+    public function focus_shell() { page.focus_shell(); }
     default-font-family: "Roboto";
     background: transparent;
     width: AboutBridge.viewport_width; height: AboutBridge.viewport_height;
-    AboutPage {
+    page := AboutPage {
         width: 100%; height: 100%;
         kb_zone <=> AboutBridge.kb_zone;
         kb_nav <=> AboutBridge.kb_nav;

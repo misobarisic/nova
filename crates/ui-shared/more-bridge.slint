@@ -1,5 +1,6 @@
 // Persistent bindings connect backend state once; embedded roots share this object.
 export global MoreBridge {
+    callback focus_shell();
     in-out property <component-factory> factory;
     in-out property <length> viewport_width;
     in-out property <length> viewport_height;

@@ -41,7 +41,7 @@ fn upcoming_calendar_shortcut_opens_full_planner() {
         let weak = app.as_weak();
         // Mirror the production callback: the shortcut changes destinations,
         // rather than mutating the Home calendar's embedded open state.
-        app.on_upcoming_cal_open(move || {
+        app.on_calendar_picked(move || {
             count.set(count.get() + 1);
             let app = weak.upgrade().unwrap();
             app.set_show_home(false);

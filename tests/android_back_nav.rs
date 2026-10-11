@@ -13,6 +13,24 @@ use slint::{ComponentHandle, SharedString, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+fn native_focus(app: &nova::AppWindow) -> String {
+    let focused = i_slint_core::window::WindowInner::from_pub(app.window())
+        .focus_item
+        .borrow()
+        .upgrade();
+    focused.map_or_else(
+        || "none".to_string(),
+        |item| {
+            format!(
+                "{:?} visible={} geometry={:?}",
+                item.element_type_names_and_ids(0),
+                item.is_visible(),
+                item.geometry()
+            )
+        },
+    )
+}
+
 fn back(app: &nova::AppWindow) {
     app.window()
         .dispatch_event(slint::platform::WindowEvent::KeyPressed {
@@ -213,11 +231,16 @@ fn system_back_pops_one_layer_at_a_time() {
                             let failures5 = failures4.clone();
                             after(400, move || {
                                 let app = app5.upgrade().unwrap();
+                                let focus_before_back = native_focus(&app);
+                                let request_before_back = app.get_system_back_request();
+                                let player_request_before_back = app.global::<nova::PlayerOsdBridge>().get_system_back_request();
                                 back(&app);
                                 fail(
                                     &failures5,
                                     !app.get_player_open(),
-                                    "Back must close the player",
+                                    &format!("Back must close the player: native focus before={focus_before_back}; after={}; system request {request_before_back}->{}; Player request {player_request_before_back}->{}",
+                                        native_focus(&app), app.get_system_back_request(),
+                                        app.global::<nova::PlayerOsdBridge>().get_system_back_request()),
                                 );
 
                                 app.set_show_home(true);
@@ -334,6 +357,13 @@ fn system_back_pops_one_layer_at_a_time() {
                                                             *went_home8.borrow(),
                                                             "the next Back with search unfocused must leave Discover",
                                                         );
+                                                        // The preceding Back deliberately routed Home.
+                                                        // Reenter Discover browse mode before testing its popup.
+                                                        app.invoke_navigate_section(1);
+                                                        app.set_discover_search_open(false);
+                                                        app.set_discover_search_filters_open(false);
+                                                        app.set_discover_search_focused(false);
+                                                        app.set_search_text(SharedString::default());
                                                         *went_home8.borrow_mut() = false;
                                                         app.set_type_names(
                                                             Rc::new(VecModel::from(vec![
@@ -342,11 +372,14 @@ fn system_back_pops_one_layer_at_a_time() {
                                                             ]))
                                                             .into(),
                                                         );
+                                                        let app_popup = app.as_weak();
+                                                        after(350, move || {
+                                                            let app = app_popup.upgrade().unwrap();
                                                         let Some(dropdown) = ElementHandle::find_by_element_type_name(
                                                             &app,
                                                             "Dropdown",
                                                         )
-                                                        .next() else {
+                                                        .find(|element| element.accessible_label().as_deref() == Some("Type")) else {
                                                             fail(&failures9, false, "Discover type dropdown must be present");
                                                             slint::quit_event_loop().unwrap();
                                                             return;
@@ -375,6 +408,9 @@ fn system_back_pops_one_layer_at_a_time() {
                                                                     popup_text_count > text_count_before,
                                                                     "opening the type dropdown must show its popup rows",
                                                                 );
+                                                                // Deferred factory cleanup can coincide with a native
+                                                                // popup. It must preserve the popup's input ownership.
+                                                                app.invoke_release_page_payloads();
                                                                 back(&app);
                                                                 fail(
                                                                     &failures10,
@@ -403,6 +439,7 @@ fn system_back_pops_one_layer_at_a_time() {
                                                             });
                                                         })
                                                         .unwrap();
+                                                        });
                                                     });
                                                 })
                                                 .unwrap();

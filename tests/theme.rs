@@ -4,10 +4,8 @@
 use slint::{Brush, Color, ComponentHandle};
 
 slint::slint! {
-    import { Theme } from "../crates/ui/theme.slint";
-    export { Theme } from "../crates/ui/theme.slint";
-    import { Anim } from "../crates/ui/anim.slint";
-    export { Anim } from "../crates/ui/anim.slint";
+    import { Theme, Anim } from "@NovaUiShared";
+    export { Theme, Anim } from "@NovaUiShared";
     import { PillButton, SettingsCard } from "../crates/ui/settings-controls.slint";
     import { Dropdown } from "../crates/ui/dropdown.slint";
     import { SearchField } from "../crates/ui/searchfield.slint";
@@ -154,7 +152,7 @@ fn existing_theme_defaults_and_live_palette_replacement_reach_shared_controls() 
     }
     let secondary_height = harness.get_secondary_height();
     theme.set_true_black(true);
-    // The separately compiled harness has its own generated struct type.
+    // The harness uses the canonical compiled palette type with its own globals.
     // Feed it the app's actual surface values rather than recreating the mode.
     let mut harness_black = original.clone();
     harness_black.card = black_theme.card.clone();

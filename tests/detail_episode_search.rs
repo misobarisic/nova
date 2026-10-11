@@ -96,24 +96,31 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
     app.window().set_size(slint::PhysicalSize::new(390, 1600));
     settle();
     assert_eq!(
-        element(&app, "DetailPage::episode_toolbar").size().height,
+        element(&app, "DetailEpisodesModule::episode_toolbar")
+            .size()
+            .height,
         64.0
     );
     assert!(
         ElementHandle::find_by_element_id(&app, "SearchField::inner")
             .all(|item| item.computed_opacity() < 0.1)
     );
-    click(&app, &element(&app, "DetailPage::episode_search_toggle"));
+    click(
+        &app,
+        &element(&app, "DetailEpisodesModule::episode_search_toggle"),
+    );
     assert_eq!(
-        element(&app, "DetailPage::episode_toolbar").size().height,
+        element(&app, "DetailEpisodesModule::episode_toolbar")
+            .size()
+            .height,
         120.0
     );
 
     for width in [320, 390, 620, 900, 1280] {
         app.window().set_size(slint::PhysicalSize::new(width, 1600));
         settle();
-        let toolbar = element(&app, "DetailPage::episode_toolbar");
-        let field = element(&app, "DetailPage::filter_line");
+        let toolbar = element(&app, "DetailEpisodesModule::episode_toolbar");
+        let field = element(&app, "DetailEpisodesModule::filter_line");
         let glyph = element(&app, "SearchField::search_glyph");
         let input = element(&app, "SearchField::input_viewport");
         let placeholder = element(&app, "SearchField::placeholder_label");
@@ -133,8 +140,8 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
             assert!(item.absolute_position().x + item.size().width <= width as f32 + 0.5);
         }
         // Search and paging share one compact row at every breakpoint.
-        let toggle = element(&app, "DetailPage::episode_search_toggle");
-        let pager = element(&app, "DetailPage::episode_top_pager");
+        let toggle = element(&app, "DetailEpisodesModule::episode_search_toggle");
+        let pager = element(&app, "DetailEpisodesModule::episode_top_pager");
         let toggle_pos = toggle.absolute_position();
         let pager_pos = pager.absolute_position();
         assert!((toggle_pos.y - pager_pos.y).abs() < 0.5);
@@ -148,7 +155,7 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
                 .abs()
                 < 0.5
         );
-        let count = element(&app, "DetailPage::episode_result_count");
+        let count = element(&app, "DetailEpisodesModule::episode_result_count");
         assert_eq!(
             count.accessible_label().as_deref(),
             Some("120 in this season")
@@ -158,8 +165,12 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
     app.window().set_size(slint::PhysicalSize::new(390, 1600));
     settle();
     click(&app, &element(&app, "SearchField::search_touch"));
-    let populated_width = element(&app, "DetailPage::episode_toolbar").size().width;
-    let populated_season_width = element(&app, "DetailPage::season_picker").size().width;
+    let populated_width = element(&app, "DetailEpisodesModule::episode_toolbar")
+        .size()
+        .width;
+    let populated_season_width = element(&app, "DetailEpisodesModule::season_picker")
+        .size()
+        .width;
     for _ in 0..3 {
         app.window()
             .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "f".into() });
@@ -171,13 +182,13 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
     assert_eq!(app.get_episode_page(), 0);
     assert_eq!(app.get_episode_page_count(), 1);
     assert_eq!(
-        element(&app, "DetailPage::episode_result_count")
+        element(&app, "DetailEpisodesModule::episode_result_count")
             .accessible_label()
             .as_deref(),
         Some("Found: 0")
     );
     assert!(
-        ElementHandle::find_by_element_id(&app, "DetailPage::episode_empty")
+        ElementHandle::find_by_element_id(&app, "DetailEpisodesModule::episode_empty")
             .next()
             .is_some()
     );
@@ -186,11 +197,20 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
         0
     );
     assert!(
-        (element(&app, "DetailPage::episode_toolbar").size().width - populated_width).abs() < 0.5,
+        (element(&app, "DetailEpisodesModule::episode_toolbar")
+            .size()
+            .width
+            - populated_width)
+            .abs()
+            < 0.5,
         "an empty result must not collapse the toolbar"
     );
     assert!(
-        (element(&app, "DetailPage::season_picker").size().width - populated_season_width).abs()
+        (element(&app, "DetailEpisodesModule::season_picker")
+            .size()
+            .width
+            - populated_season_width)
+            .abs()
             < 0.5,
         "an empty result must not collapse the season rail"
     );
@@ -198,8 +218,8 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
         app.window().set_size(slint::PhysicalSize::new(width, 1600));
         settle();
         let expected = width as f32 - if width < 700 { 40.0 } else { 128.0 };
-        let toolbar = element(&app, "DetailPage::episode_toolbar");
-        let empty = element(&app, "DetailPage::episode_empty");
+        let toolbar = element(&app, "DetailEpisodesModule::episode_toolbar");
+        let empty = element(&app, "DetailEpisodesModule::episode_empty");
         assert!((toolbar.size().width - expected).abs() < 0.5);
         assert!((empty.size().width - toolbar.size().width).abs() < 0.5);
         assert!(element(&app, "SearchField::input_viewport").size().width > 100.0);
@@ -208,8 +228,8 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
             assert!(item.absolute_position().x + item.size().width <= width as f32 + 0.5);
         }
         for id in [
-            "DetailPage::episode_empty_title",
-            "DetailPage::episode_empty_hint",
+            "DetailEpisodesModule::episode_empty_title",
+            "DetailEpisodesModule::episode_empty_hint",
         ] {
             let copy = element(&app, id);
             assert!(copy.absolute_position().x >= empty.absolute_position().x);
@@ -229,24 +249,32 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
     settle();
 
     // Hiding the field preserves an active query, and reopening restores it.
-    click(&app, &element(&app, "DetailPage::episode_search_toggle"));
+    click(
+        &app,
+        &element(&app, "DetailEpisodesModule::episode_search_toggle"),
+    );
     assert_eq!(
-        element(&app, "DetailPage::episode_toolbar").size().height,
+        element(&app, "DetailEpisodesModule::episode_toolbar")
+            .size()
+            .height,
         64.0
     );
     assert_eq!(app.get_episode_filter(), "fff");
-    click(&app, &element(&app, "DetailPage::episode_search_toggle"));
+    click(
+        &app,
+        &element(&app, "DetailEpisodesModule::episode_search_toggle"),
+    );
     assert_eq!(app.get_episode_filter(), "fff");
     click(&app, &element(&app, "SearchField::clear_button"));
     assert!(app.get_episode_filter().is_empty());
     assert_eq!(queries.borrow().last().map(|q| q.as_str()), Some(""));
     assert!(
-        ElementHandle::find_by_element_id(&app, "DetailPage::episode_empty")
+        ElementHandle::find_by_element_id(&app, "DetailEpisodesModule::episode_empty")
             .next()
             .is_none()
     );
     assert_eq!(
-        ElementHandle::find_by_element_id(&app, "DetailPage::ep_card").count(),
+        ElementHandle::find_by_element_id(&app, "DetailEpisodesModule::ep_card").count(),
         2
     );
     assert_eq!(
@@ -254,7 +282,10 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
         2
     );
     // The existing keyboard edit command must reveal and focus search too.
-    click(&app, &element(&app, "DetailPage::episode_search_toggle"));
+    click(
+        &app,
+        &element(&app, "DetailEpisodesModule::episode_search_toggle"),
+    );
     app.set_detail_kb_zone(3);
     app.set_detail_kb_ci(1);
     app.window()
@@ -267,7 +298,9 @@ fn search_icon_focuses_and_clear_restores_the_episode_list() {
         });
     settle();
     assert_eq!(
-        element(&app, "DetailPage::episode_toolbar").size().height,
+        element(&app, "DetailEpisodesModule::episode_toolbar")
+            .size()
+            .height,
         120.0
     );
     app.window()

@@ -120,9 +120,21 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
     let weak = app.as_weak();
     app.on_release_page_payloads(move || {
         if let Some(app) = weak.upgrade() {
-            i_slint_core::window::WindowInner::from_pub(app.window()).ensure_tree_instantiated();
+            let window = i_slint_core::window::WindowInner::from_pub(app.window());
+            window.ensure_tree_instantiated();
             for page in 0..11 {
                 release_unmounted_payloads(&app, page);
+            }
+            // Removing an outgoing factory tree can clear the focus that a
+            // mount guard established. Recover only absent focus; a live
+            // editor (even outside the scroll viewport) or separate popup
+            // retains its own native ownership.
+            let missing_focus = window.focus_item.borrow().upgrade().is_none();
+            if window.active_popups().is_empty() {
+                if missing_focus {
+                    app.invoke_preserve_back_focus();
+                }
+                app.invoke_focus_mounted_page();
             }
         }
     });
@@ -160,7 +172,15 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
                 context,
                 app.shared_globals_novauishared(),
             ) {
-                Ok(page) => Some(page),
+                Ok(page) => {
+                    let weak = page.as_weak();
+                    app.global::<HomeBridge>().on_focus_shell(move || {
+                        if let Some(page) = weak.upgrade() {
+                            page.invoke_focus_shell();
+                        }
+                    });
+                    Some(page)
+                }
                 Err(error) => {
                     eprintln!("nova-ui: could not attach Home page: {error}");
                     None
@@ -201,7 +221,15 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
                 context,
                 app.shared_globals_novauishared(),
             ) {
-                Ok(page) => Some(page),
+                Ok(page) => {
+                    let weak = page.as_weak();
+                    app.global::<DiscoverBridge>().on_focus_shell(move || {
+                        if let Some(page) = weak.upgrade() {
+                            page.invoke_focus_shell();
+                        }
+                    });
+                    Some(page)
+                }
                 Err(error) => {
                     eprintln!("nova-ui: could not attach Discover page: {error}");
                     None
@@ -234,7 +262,15 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
                 context,
                 app.shared_globals_novauishared(),
             ) {
-                Ok(page) => Some(page),
+                Ok(page) => {
+                    let weak = page.as_weak();
+                    app.global::<CalendarBridge>().on_focus_shell(move || {
+                        if let Some(page) = weak.upgrade() {
+                            page.invoke_focus_shell();
+                        }
+                    });
+                    Some(page)
+                }
                 Err(error) => {
                     eprintln!("nova-ui: could not attach Calendar page: {error}");
                     None

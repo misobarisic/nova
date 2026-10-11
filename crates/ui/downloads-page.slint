@@ -82,6 +82,9 @@ component DownloadSeriesCard inherits Rectangle {
     }
 }
 export component DownloadsPage inherits Rectangle {
+    // Called after publication only while AppWindow retains baseline focus.
+    public function focus_shell() { if root.active { page_scope.focus(); } }
+
     in property <bool> external_navigation: false;
     in property <bool> active: true;
     background: Theme.current.artwork_canvas;
@@ -115,7 +118,7 @@ export component DownloadsPage inherits Rectangle {
     callback group_toggled(string); callback action(string,int); callback back();
     callback home_picked(); callback discover_picked(); callback library_picked(); callback settings_picked(); callback about_picked(); callback more_picked();
     changed system_back_request => { if (root.active && root.last-back != root.system_back_request) { root.last-back = root.system_back_request; root.back(); } }
-    FocusScope { enabled: root.active; width: 100%; height: 100%; init => { root.last-back = root.system_back_request; self.focus(); }
+    page_scope := FocusScope { enabled: root.active; width: 100%; height: 100%; init => { root.last-back = root.system_back_request; self.focus(); }
         capture-key-pressed(e) => { if (e.text == Key.Back || e.text == Key.Escape) { if (!e.repeat) { root.back(); } accept } else { reject } }
     if !root.narrow && !root.external_navigation: SideNav {
         viewport-width: root.nav-viewport-width; active: 5; safe-top: root.safe-top; safe-left: root.safe-left; safe-bottom: root.safe-bottom; kb_active <=> root.kb_active;

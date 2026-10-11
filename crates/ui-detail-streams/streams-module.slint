@@ -3,7 +3,8 @@ import { StreamSelector } from "../ui/stream-selector.slint";
 export component DetailStreamsModule inherits Window {
     default-font-family: "Roboto"; background: transparent;
     width: DetailBridge.viewport_width; height: DetailBridge.viewport_height;
-        StreamSelector {
+    public function focus_shell() { if DetailBridge.stream_selector_open { selector.focus_shell(); } }
+        selector := StreamSelector {
             title: DetailBridge.selected_title;
             is_movie: DetailBridge.is_movie;
             year: DetailBridge.selected_year;

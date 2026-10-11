@@ -1258,6 +1258,9 @@ component FeaturedShowcase inherits Rectangle {
 }
 
 export component HomePage {
+    // Called after publication only while AppWindow retains baseline focus.
+    public function focus_shell() { nav_scope.focus(); }
+
     // Custom components placed in a Window are sized by their preferred size;
     // make this page fill the window (its parent).
     preferred-width: 100%;
@@ -1886,16 +1889,8 @@ export component HomePage {
         root.view = kind;
     }
 
-    // Detail and Home are swapped in one update. Detail's teardown can
-    // clear the focus assigned during Home's init, so reclaim it next tick.
-    return_focus_t := Timer {
-        interval: 1ms;
-        running: false;
-        triggered => {
-            self.stop();
-            nav_scope.focus();
-        }
-    }
+    // AppWindow restores native focus after publication and teardown. A
+    // local delayed reset could steal focus from an editor or onboarding.
 
     // Subpage row entrance. Deferred one tick (like the detail page fade):
     // flipping during creation would be treated as the baseline and not
@@ -1923,7 +1918,6 @@ export component HomePage {
             init => {
                 self.focus();
                 root.last_system_back_request = root.system_back_request;
-                return_focus_t.start();
             }
             key-pressed(e) => {
                 if (e.text == Key.UpArrow) {

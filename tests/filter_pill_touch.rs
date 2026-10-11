@@ -5,7 +5,7 @@ use slint::{ComponentHandle, LogicalPosition, platform::WindowEvent};
 slint::slint! {
     import { LibraryFilterChip } from "../crates/ui/library.slint";
     import { StreamFilterPill } from "../crates/ui/stream-selector.slint";
-    export { Theme } from "../crates/ui/theme.slint";
+    export { Theme } from "@NovaUiShared";
 
     export component PillHarness inherits Window {
         width: 280px;

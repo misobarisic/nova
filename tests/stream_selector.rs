@@ -6,7 +6,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 fn idle() {
-    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(200));
+    // Lazy factory publication can schedule a follow-up focus handoff. Drive
+    // a second UI tick rather than jumping past both phases in one frame.
+    for _ in 0..2 {
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    }
 }
 
 fn element(app: &nova::AppWindow, id: &str) -> ElementHandle {
@@ -292,7 +296,8 @@ fn responsive_selector_keeps_state_and_dispatches_movie_and_stream_actions() {
     // The changed handler arms the stopped timer in this frame; expire it
     // in the next frame after the updated episode layout has settled.
     idle();
-    let cards = ElementHandle::find_by_element_id(&app, "DetailPage::ep_card").collect::<Vec<_>>();
+    let cards = ElementHandle::find_by_element_id(&app, "DetailEpisodesModule::ep_card")
+        .collect::<Vec<_>>();
     // The testing backend enumerates cards intersecting the visible viewport.
     let title = ElementHandle::find_by_accessible_label(&app, "Episode 10")
         .next()

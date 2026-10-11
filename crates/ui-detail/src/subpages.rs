@@ -145,7 +145,20 @@ pub fn install_subpages(app: &DetailModule) {
         match nova_ui_detail_streams::DetailStreamsModule::new_embedded_with_shared_globals(
             context, shared,
         ) {
-            Ok(page) => Some(page),
+            Ok(page) => {
+                let shared = app.shared_globals_novauishared();
+                let content = DetailContent(
+                    shared.global_DetailContent.clone(),
+                    std::marker::PhantomData,
+                );
+                let weak = page.as_weak();
+                content.on_focus_streams(move || {
+                    if let Some(page) = weak.upgrade() {
+                        page.invoke_focus_shell();
+                    }
+                });
+                Some(page)
+            }
             Err(error) => {
                 eprintln!("nova-ui: could not attach Detail/streams: {error}");
                 None

@@ -23,6 +23,9 @@ component LanguageCard inherits Rectangle {
 // Mounted above the whole application. The footer stays reachable while the
 // body scrolls on phones, with no horizontal scrolling or desktop fixed widths.
 export component Onboarding inherits Rectangle {
+    // Called after publication only while AppWindow retains baseline focus.
+    public function focus_shell() { onboarding_scope.focus(); }
+
     in-out property <int> step: 0;
     in-out property <int> language_index: 0;
     in-out property <bool> true_black: false;

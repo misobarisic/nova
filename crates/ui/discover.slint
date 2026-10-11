@@ -137,6 +137,8 @@ component DiscoverFilters inherits Flickable {
 // the search-field refocus escapes through `search_done` (the page's
 // FocusScope id is not visible from inside this component).
 component DiscoverHeader {
+    in property <int> focus_request;
+    changed focus_request => { if root.searchable { search_line.focus(); } }
     // Only the browse hero collapses. Search Back/input/filter/history
     // controls remain available throughout the search session.
     out property <length> hero_height: root.search_mode ? 0px : context_heading.height + 12px;
@@ -756,6 +758,10 @@ component DiscoverGrid {
 }
 
 export component DiscoverPage {
+    // Called after publication only while AppWindow retains baseline focus.
+    public function focus_shell() { if root.searchable && (root.search_focused || root.kb_edit) { root.search_focus_request += 1; } else { nav_scope.focus(); } }
+    private property <int> search_focus_request;
+
     // Custom components placed in a Window are sized by their preferred size;
     // make this page fill the window (its parent).
     preferred-width: 100%;
@@ -1456,6 +1462,7 @@ export component DiscoverPage {
                     catalog_combo_idx <=> root.catalog_combo_idx;
                     genre_combo_idx <=> root.genre_combo_idx;
                     search_text <=> root.search_text;
+                    focus_request: root.search_focus_request;
                     search_focused <=> root.search_focused;
                     search_filters_open: root.search_filters_open;
                     search_addon_names: root.search_addon_names;
@@ -1693,6 +1700,7 @@ export component DiscoverPage {
                 catalog_combo_idx <=> root.catalog_combo_idx;
                 genre_combo_idx <=> root.genre_combo_idx;
                 search_text <=> root.search_text;
+                focus_request: root.search_focus_request;
                 search_focused <=> root.search_focused;
                 search_filters_open: root.search_filters_open;
                 search_addon_names: root.search_addon_names;

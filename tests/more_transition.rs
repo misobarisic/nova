@@ -20,6 +20,24 @@ fn button(app: &nova::AppWindow, label: &str) -> ElementHandle {
     found.unwrap_or_else(|| panic!("missing button {label}"))
 }
 
+// Calendar is a More link on phones; wide layouts expose it in the rail.
+// Enter through the reachable narrow link before checking retained transitions
+// and stationary chrome at the caller's original desktop size.
+fn calendar_from_more(app: &nova::AppWindow) {
+    let size = app.window().size();
+    if size.width >= 700 {
+        app.window()
+            .set_size(slint::PhysicalSize::new(699, size.height));
+        let _ = page(app, "MorePage").size();
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    }
+    tap(app, button(app, "Calendar"));
+    if size.width >= 700 {
+        app.window().set_size(size);
+        let _ = page(app, "CalendarPage").size();
+    }
+}
+
 fn assert_shared_back(app: &nova::AppWindow) {
     let back = button(app, "Back");
     let size = back.size();
@@ -193,10 +211,23 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
             let _ = page(&app, "MorePage").size();
             i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
             tap(&app, button(&app, label));
-            let _ = page(&app, component).size();
+            let incoming = page(&app, component);
+            let _ = incoming.size();
+            // The entry timer starts motion on the next UI tick. Render that
+            // first animated frame before advancing time within the animation;
+            // a single mock-time jump otherwise starts it at the jump's end.
+            let _ = incoming.computed_opacity();
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+            let _ = (incoming.absolute_position(), incoming.computed_opacity());
             i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
             let entry_x = page(&app, component).absolute_position().x;
             let entry_alpha = page(&app, component).computed_opacity();
+            if enabled && transitions {
+                assert!(
+                    entry_alpha > 0.01 && entry_alpha < 0.99,
+                    "{component}: Back must interrupt a visible entry frame, alpha={entry_alpha}, x={entry_x}"
+                );
+            }
             for event in [
                 WindowEvent::KeyPressed {
                     text: slint::platform::Key::Back.into(),
@@ -228,7 +259,14 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
                 assert!(outgoing.absolute_position().x > 0.1);
                 assert!(outgoing.computed_opacity() < 0.99);
                 let incoming = page(&app, "MorePage");
-                assert!(incoming.computed_opacity() > 0.01 && incoming.computed_opacity() < 0.99);
+                let incoming_alpha = incoming.computed_opacity();
+                assert!(
+                    incoming_alpha > 0.01 && incoming_alpha < 0.99,
+                    "{component}: reverse More alpha={incoming_alpha}, entry alpha={entry_alpha}, outgoing alpha={}, entry x={entry_x}, outgoing x={}, More open={}",
+                    outgoing.computed_opacity(),
+                    outgoing.absolute_position().x,
+                    app.get_more_open()
+                );
                 assert!(incoming.absolute_position().x < -0.1);
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(180));
             } else {
@@ -263,7 +301,14 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
                 assert!(outgoing.absolute_position().x > 0.1);
                 assert!(outgoing.computed_opacity() < 0.99);
                 let incoming = page(&app, "MorePage");
-                assert!(incoming.computed_opacity() > 0.01 && incoming.computed_opacity() < 0.99);
+                let incoming_alpha = incoming.computed_opacity();
+                assert!(
+                    incoming_alpha > 0.01 && incoming_alpha < 0.99,
+                    "{component}: reverse More alpha={incoming_alpha}, entry alpha={entry_alpha}, outgoing alpha={}, entry x={entry_x}, outgoing x={}, More open={}",
+                    outgoing.computed_opacity(),
+                    outgoing.absolute_position().x,
+                    app.get_more_open()
+                );
                 assert!(incoming.absolute_position().x < -0.1);
                 let mut previous_x = outgoing.absolute_position().x;
                 let mut previous_alpha = incoming.computed_opacity();
@@ -326,7 +371,7 @@ fn more_return_cancels_for_destination_navigation() {
     app.set_more_open(true);
     let _ = page(&app, "MorePage").size();
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
-    tap(&app, button(&app, "Calendar"));
+    calendar_from_more(&app);
     for _ in 0..35 {
         let _ = page(&app, "CalendarPage").absolute_position();
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(10));
@@ -363,7 +408,7 @@ fn more_return_animates_wide_and_motion_toggle_finishes_pending_return() {
     app.set_more_open(true);
     let _ = page(&app, "MorePage").size();
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
-    tap(&app, button(&app, "Calendar"));
+    calendar_from_more(&app);
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
     assert!(page(&app, "CalendarPage").absolute_position().x > 64.0);
     assert_eq!(
@@ -407,7 +452,7 @@ fn canonical_direct_routes_and_modal_interruptions() {
         app.set_more_open(true);
         let _ = page(&app, "MorePage").size();
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
-        tap(&app, button(&app, "Calendar"));
+        calendar_from_more(&app);
         let initial = page(&app, "CalendarPage");
         let initial_size = initial.size();
         let rail_position = if width >= 700 {
@@ -458,7 +503,7 @@ fn canonical_direct_routes_and_modal_interruptions() {
         app.invoke_navigate_section(3);
         let _ = page(&app, "MorePage").size();
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
-        tap(&app, button(&app, "Calendar"));
+        calendar_from_more(&app);
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
         app.set_system_back_request(app.get_system_back_request() + 1);
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(30));
@@ -470,7 +515,17 @@ fn canonical_direct_routes_and_modal_interruptions() {
         );
         app.set_modal_visible(false);
         assert!(app.get_show_calendar());
+        // Dismissing Detail recreates Calendar's factory product. Publish its
+        // tree before sending a new Back; entry init seeds the request counter
+        // to ignore requests from the page that was just dismissed.
+        let _ = page(&app, "CalendarPage").size();
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
         app.set_system_back_request(app.get_system_back_request() + 1);
+        // Deliver the changed request on a UI tick before timing the return.
+        // A single jump would begin the animation at the end of that jump.
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+        let returning = page(&app, "CalendarPage");
+        let _ = (returning.absolute_position(), returning.computed_opacity());
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
         assert!(
             app.get_more_open(),
@@ -479,7 +534,7 @@ fn canonical_direct_routes_and_modal_interruptions() {
         app.invoke_navigate_section(3);
         let _ = page(&app, "MorePage").size();
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
-        tap(&app, button(&app, "Calendar"));
+        calendar_from_more(&app);
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
         app.set_system_back_request(app.get_system_back_request() + 1);
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(30));
@@ -490,8 +545,14 @@ fn canonical_direct_routes_and_modal_interruptions() {
             "player invalidates pending More return"
         );
         app.set_player_open(false);
+        // Publish the restored destination, then deliver and render the Back
+        // request before measuring its full return duration, as for Detail.
+        let _ = page(&app, "CalendarPage").size();
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
         app.set_system_back_request(app.get_system_back_request() + 1);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+        let returning = page(&app, "CalendarPage");
+        let _ = (returning.absolute_position(), returning.computed_opacity());
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
         assert!(
             app.get_more_open(),
@@ -564,13 +625,41 @@ fn settings_navigation_has_six_desktop_targets() {
     app.invoke_navigate_section(6);
     let _ = page(&app, "SettingsPage").size();
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
-    for _ in 0..6 {
+    // Factory publication can schedule the guarded focus handoff on another
+    // UI tick. Let that frame finish before delivering native navigation keys.
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    let native_focus = i_slint_core::window::WindowInner::from_pub(app.window())
+        .focus_item
+        .borrow()
+        .upgrade()
+        .map(|item| {
+            let mut name = slint::SharedString::default();
+            slint::private_unstable_api::re_exports::VRc::borrow_pin(item.item_tree())
+                .as_ref()
+                .item_element_infos(item.index(), &mut name);
+            name
+        });
+    assert!(
+        native_focus
+            .as_ref()
+            .is_some_and(|name| name.contains("SettingsPage::nav-scope")),
+        "Settings must own native keyboard focus after publication: {native_focus:?}"
+    );
+    let navigation = app.global::<nova::SettingsBridge>();
+    assert_eq!(navigation.get_kb_zone(), 0);
+    assert_eq!(navigation.get_kb_nav(), 3);
+    for expected in [0, 1, 2, 4, 5, 3] {
         app.window().dispatch_event(WindowEvent::KeyPressed {
             text: slint::platform::Key::RightArrow.into(),
         });
         app.window().dispatch_event(WindowEvent::KeyReleased {
             text: slint::platform::Key::RightArrow.into(),
         });
+        assert_eq!(
+            navigation.get_kb_nav(),
+            expected,
+            "desktop keyboard cursor follows the sidebar order"
+        );
     }
     app.window().dispatch_event(WindowEvent::KeyPressed {
         text: slint::platform::Key::Return.into(),

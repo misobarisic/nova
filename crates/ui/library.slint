@@ -46,6 +46,9 @@ export component LibraryFilterChip inherits Rectangle {
 
 
 export component LibraryPage {
+    // Called after publication only while AppWindow retains baseline focus.
+    public function focus_shell() { nav_scope.focus(); }
+
     // Custom components placed in a Window are sized by their preferred size;
     // make this page fill the window (its parent).
     preferred-width: 100%;

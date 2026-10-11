@@ -1,6 +1,7 @@
 import { LicenseSource } from "../ui/types.slint";
 // Persistent bindings connect backend state once; embedded roots share this object.
 export global AboutBridge {
+    callback focus_shell();
     in-out property <component-factory> factory;
     in-out property <length> viewport_width;
     in-out property <length> viewport_height;

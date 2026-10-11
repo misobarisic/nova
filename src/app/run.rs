@@ -1334,17 +1334,18 @@ mod tests {
 
         for width in [700, 1100] {
             app.window().set_size(slint::PhysicalSize::new(width, 800));
-            for (index, label, component) in [
-                (4, "Calendar", "CalendarPage"),
-                (5, "Downloads", "DownloadsPage"),
+            for (index, slot, label, component) in [
+                (4, 3, "Calendar", "CalendarPage"),
+                (5, 4, "Downloads", "DownloadsPage"),
             ] {
+                app.window().set_size(slint::PhysicalSize::new(width, 800));
                 app.invoke_navigate_section(3);
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
                 assert!(app.get_more_open());
                 // Mouse rail selection reaches the exact production global
                 // NavState callback and must establish a direct Back origin.
                 let direct = ElementHandle::find_by_element_type_name(&app, "SideItem")
-                    .nth(index as usize)
+                    .nth(slot)
                     .unwrap();
                 tap(&app, direct);
                 assert!(!app.get_more_open(), "{label} must close desktop More");
@@ -1359,26 +1360,35 @@ mod tests {
                 assert!(app.get_show_home(), "direct {label} Back returns Home");
                 assert!(!app.get_more_open());
 
+                // Calendar/Downloads are More links only on narrow layouts;
+                // the wide shortcut above deliberately has a direct origin.
+                app.window().set_size(slint::PhysicalSize::new(699, 800));
                 app.invoke_navigate_section(3);
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
-                tap(&app, more_link(&app, label));
-                assert_eq!(current_nav(&app), index);
-                assert_one_rail(&app);
-                let rail = ElementHandle::find_by_element_type_name(&app, "SideNav")
+                let bar = ElementHandle::find_by_element_type_name(&app, "BottomNav")
                     .next()
                     .unwrap()
                     .absolute_position();
+                tap(&app, more_link(&app, label));
+                assert_eq!(current_nav(&app), index);
+                assert_eq!(
+                    ElementHandle::find_by_element_type_name(&app, "SideNav").count(),
+                    0
+                );
                 app.set_system_back_request(app.get_system_back_request() + 1);
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
                 assert!(app.get_more_open(), "More-link {label} Back returns More");
                 assert!(!app.get_show_home());
-                assert_one_rail(&app);
                 assert_eq!(
-                    ElementHandle::find_by_element_type_name(&app, "SideNav")
+                    ElementHandle::find_by_element_type_name(&app, "BottomNav").count(),
+                    1
+                );
+                assert_eq!(
+                    ElementHandle::find_by_element_type_name(&app, "BottomNav")
                         .next()
                         .unwrap()
                         .absolute_position(),
-                    rail
+                    bar
                 );
                 assert_eq!(
                     ElementHandle::find_by_element_type_name(&app, component).count(),

@@ -51,7 +51,7 @@ async fn click_id(app: &nova::AppWindow, id: &str, failures: &RefCell<Vec<String
 }
 
 async fn focus_episode_search(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) -> bool {
-    if !click_id(app, "DetailPage::episode_search_toggle", failures).await {
+    if !click_id(app, "DetailEpisodesModule::episode_search_toggle", failures).await {
         return false;
     }
     // The magnifier's deferred focus lands on SearchField's actual TextInput.
@@ -199,7 +199,7 @@ fn back_survives_focused_episode_search_tab_and_stream_teardown() {
             failures,
             app.get_detail_tab() == 0
                 && tab_picks.get() == 1
-                && ElementHandle::find_by_element_id(&app, "DetailPage::filter_line")
+                && ElementHandle::find_by_element_id(&app, "DetailEpisodesModule::filter_line")
                     .next()
                     .is_none(),
             "tapping Overview must remove the focused episode search subtree",
@@ -224,7 +224,7 @@ fn back_survives_focused_episode_search_tab_and_stream_teardown() {
         app.set_modal_visible(true);
         settle().await;
         if !focus_episode_search(&app, failures).await
-            || !click_id(&app, "DetailPage::touch_ep", failures).await
+            || !click_id(&app, "DetailEpisodesModule::touch_ep", failures).await
         {
             slint::quit_event_loop().unwrap();
             return;
@@ -234,7 +234,7 @@ fn back_survives_focused_episode_search_tab_and_stream_teardown() {
             episode_picks.get() == 1
                 && !app.get_modal_episodes()
                 && app.get_modal_visible()
-                && ElementHandle::find_by_element_id(&app, "DetailPage::filter_line")
+                && ElementHandle::find_by_element_id(&app, "DetailEpisodesModule::filter_line")
                     .next()
                     .is_none(),
             "tapping an episode must remove the focused search subtree and open its streams",

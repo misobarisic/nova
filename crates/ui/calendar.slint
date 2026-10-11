@@ -112,6 +112,9 @@ component PlannerPeriod inherits Rectangle {
     }
 }
 export component CalendarPage inherits Rectangle {
+    // Called after publication only while AppWindow retains baseline focus.
+    public function focus_shell() { if root.active { page_scope.focus(); } }
+
     in property <bool> external_navigation: false;
     in property <bool> active: true;
     background: Theme.current.artwork_canvas;

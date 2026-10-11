@@ -5,6 +5,17 @@ use std::process::Command;
 
 fn main() {
     generate_license_catalog();
+    // Cargo exposes library metadata to build scripts. Forward it to rustc so
+    // inline slint! test fixtures resolve the canonical compiled shared globals.
+    for field in ["NAME", "SOURCE", "PACKAGE", "MODULE"] {
+        let key = format!("DEP_NOVAUISHARED_SLINT_LIBRARY_{field}");
+        println!("cargo:rerun-if-env-changed={key}");
+        if let Ok(value) = env::var(&key) {
+            println!("cargo:rustc-env={key}={value}");
+        }
+    }
+    // Shared bridge declarations contain experimental ComponentFactory types.
+    println!("cargo:rustc-env=SLINT_ENABLE_EXPERIMENTAL_FEATURES=1");
     // The Slint UI is compiled by the `nova-ui` crate's build script. This
     // root script generates the About catalog and emits native link directives.
 

@@ -2,10 +2,11 @@ import { PlayerOverlay } from "../ui/player.slint";
 import { PlayerOsdBridge } from "@NovaUiShared";
 
 export component PlayerOsdModule inherits Window {
+    public function focus_shell() { page.focus_shell(); }
     default-font-family: "Roboto";
     background: transparent;
     width: PlayerOsdBridge.viewport_width; height: PlayerOsdBridge.viewport_height;
-    PlayerOverlay {
+    page := PlayerOverlay {
         width: 100%; height: 100%;
         next_episode_visible <=> PlayerOsdBridge.next_episode_visible;
         next_episode_token <=> PlayerOsdBridge.next_episode_token;

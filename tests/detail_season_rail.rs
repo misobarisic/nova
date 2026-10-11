@@ -10,7 +10,7 @@ fn idle(ms: u64) {
 }
 
 fn element(app: &nova::AppWindow, id: &str) -> ElementHandle {
-    ElementHandle::find_by_element_id(app, &format!("DetailPage::{id}"))
+    ElementHandle::find_by_element_id(app, &format!("DetailEpisodesModule::{id}"))
         .next()
         .unwrap_or_else(|| panic!("missing {id}"))
 }

@@ -505,6 +505,9 @@ component SelectorIconButton inherits Rectangle {
 // The three designs share live data and one focus scope. Resizing only changes
 // geometry, so active downloads, addon filters and the current page survive.
 export component StreamSelector inherits Rectangle {
+    // Factory initialization cannot change the adapter focus. The parent
+    // requests this stable target only after the subtree is published.
+    public function focus_shell() { selector_scope.focus(); }
     in property <string> title;
     in property <bool> is_movie;
     in property <string> year;
@@ -848,21 +851,13 @@ export component StreamSelector inherits Rectangle {
         }
     }
 
-    // Home/Detail teardown may clear focus assigned during this component's
-    // init. Recover on the next tick, before the entrance animation finishes.
-    return_focus_t := Timer {
-        interval: 1ms;
-        running: false;
-        triggered => {
-            self.stop();
-            if !root.action_open { selector_scope.focus(); }
-        }
-    }
+    // AppWindow restores the selector scope after factory publication. A local
+    // delayed reset could interrupt an action sheet that already owns focus.
 
     selector_scope := FocusScope {
         width: 100%; height: 100%;
         focus-on-click: false;
-        init => { self.focus(); return_focus_t.start(); }
+        init => { self.focus(); }
         key-pressed(e) => {
             if (e.text == Key.Back && e.repeat) {
                 accept

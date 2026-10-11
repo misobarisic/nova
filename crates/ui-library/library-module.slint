@@ -2,10 +2,11 @@ import { LibraryPage } from "../ui/library.slint";
 import { LibraryBridge } from "@NovaUiShared";
 
 export component LibraryModule inherits Window {
+    public function focus_shell() { page.focus_shell(); }
     default-font-family: "Roboto";
     background: transparent;
     width: LibraryBridge.viewport_width; height: LibraryBridge.viewport_height;
-    LibraryPage {
+    page := LibraryPage {
         width: 100%; height: 100%;
         library <=> LibraryBridge.library;
         category_rows <=> LibraryBridge.category_rows;

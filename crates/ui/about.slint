@@ -8,6 +8,9 @@ import { PillButton, SectionHeader, SettingsCard, SettingsHeader } from "setting
 // About has independent navigation and scroll state; opening it does not
 // mount Settings or trigger its storage and service refreshes.
 export component AboutPage inherits Rectangle {
+    // Called after publication only while AppWindow retains baseline focus.
+    public function focus_shell() { if root.active { nav_scope.focus(); } }
+
     in property <bool> external_navigation: false;
     in property <bool> active: true;
     preferred-width: 100%;
@@ -94,18 +97,13 @@ export component AboutPage inherits Rectangle {
         }
     }
 
-    // The old page can clear focus during teardown after this page's init.
-    // Recover on the next tick so Android Back has a surviving capture chain.
-    entry_focus_t := Timer {
-        interval: 1ms;
-        running: false;
-        triggered => { self.stop(); nav_scope.focus(); }
-    }
+    // AppWindow restores native focus after publication without interrupting
+    // a license search input that already owns focus on the first frame.
 
     nav_scope := FocusScope {
         enabled: root.active;
         width: 100%; height: 100%;
-        init => { root.last_system_back_request = root.system_back_request; self.focus(); entry_focus_t.start(); restore_scroll_t.start(); }
+        init => { root.last_system_back_request = root.system_back_request; self.focus(); restore_scroll_t.start(); }
         key-pressed(e) => {
             if (e.text == Key.Back || e.text == Key.Backspace || e.text == Key.Escape) {
                 if (!e.repeat) { root.back(); }

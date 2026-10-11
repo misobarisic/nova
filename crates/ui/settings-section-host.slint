@@ -9,5 +9,14 @@ export component SettingsSectionHost inherits Rectangle {
     min-height: SettingsContent.content_min_height;
     preferred-height: SettingsContent.content_preferred_height;
     vertical-stretch: 0;
-    ComponentContainer { width: 100%; height: 100%; component-factory: root.factory; }
+    // The embedded root measures wrapped content at our allocated width.
+    // Keep its intrinsic layout out of the host's own negotiation: consulting
+    // it there would read slot_width through the parent layout being solved.
+    // Explicit positioning makes this a visual child; the published heights
+    // above remain the only intrinsic submenu sizing contract.
+    ComponentContainer {
+        x: 0px; y: 0px;
+        width: 100%; height: 100%;
+        component-factory: root.factory;
+    }
 }

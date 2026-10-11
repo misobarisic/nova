@@ -590,6 +590,9 @@ component NextEpisodeBanner inherits Rectangle {
 }
 
 export component PlayerOverlay {
+    // Called after publication only while AppWindow retains baseline focus.
+    public function focus_shell() { key_scope.focus(); }
+
     in property <bool> next_episode_visible;
     in property <string> next_episode_title;
     in property <string> next_episode_context;

@@ -7,6 +7,9 @@ import { SettingsHeader, SettingsLink, SettingsCard } from "settings-controls.sl
 
 // A root page, like Settings landing, rather than a sheet over another page.
 export component MorePage inherits Rectangle {
+    // Called after publication only while AppWindow retains baseline focus.
+    public function focus_shell() { if root.active { nav_scope.focus(); } }
+
     background: Theme.current.artwork_canvas;
     in property <length> safe-top;
     in property <length> safe-left;

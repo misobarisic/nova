@@ -4,9 +4,7 @@ use slint::{ComponentHandle, LogicalPosition, platform::WindowEvent};
 
 slint::slint! {
     import { SettingsLink } from "../crates/ui/settings-controls.slint";
-    export { Theme } from "../crates/ui/theme.slint";
-    export { Anim } from "../crates/ui/anim.slint";
-    export { ControlInput } from "../crates/ui/control-input.slint";
+    export { Theme, Anim, ControlInput } from "@NovaUiShared";
     export component HoverProbe inherits Window {
         width: 320px; height: 320px;
         out property <brush> first_fill: first.background;

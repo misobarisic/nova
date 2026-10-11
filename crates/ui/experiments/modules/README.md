@@ -308,5 +308,10 @@ directory and normal incremental compilation:
 
 Before this split, AppWindow was about 14.4 MiB and Detail about 16.6 MiB.
 These measurements bound generated source per compilation unit; they are not
-a build-time or runtime benchmark. Runtime focus, input, rendering and memory
-measurements remain deferred while tests are paused.
+a build-time or runtime benchmark. Subsequent headless regressions cover native
+focus, touch, Back navigation, retained Detail state, Settings overflow and page
+transitions. Their first run exposed zero-width Tracking/Episodes bodies,
+Settings intrinsic-layout recursion and focus lost during factory attachment;
+the fixes explicitly size body slots and restore focus after publication while
+preserving active editors and popups. Runtime CPU/GPU and retained-memory
+measurements remain unmeasured.

@@ -3,6 +3,24 @@ use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::ComponentHandle;
 use std::{cell::Cell, rc::Rc, time::Duration};
 
+fn native_focus(app: &nova::AppWindow) -> String {
+    let focused = i_slint_core::window::WindowInner::from_pub(app.window())
+        .focus_item
+        .borrow()
+        .upgrade();
+    focused.map_or_else(
+        || "none".to_string(),
+        |item| {
+            format!(
+                "{:?} visible={} geometry={:?}",
+                item.element_type_names_and_ids(0),
+                item.is_visible(),
+                item.geometry()
+            )
+        },
+    )
+}
+
 fn settle(app: &nova::AppWindow) {
     for _ in 0..20 {
         for element in ElementQuery::from_root(app)
@@ -75,7 +93,74 @@ fn skip_language_back_and_finish_preserve_selection_and_footer() {
     let navigation = Rc::new(Cell::new(0));
     let recorded = navigation.clone();
     app.on_library_picked(move || recorded.set(recorded.get() + 1));
+
+    // A factory product must own native keyboard navigation before a pointer
+    // press can rescue its focus. Keep this in the existing backend instance.
+    let initial_language = app.get_language_index();
+    app.set_onboarding_step(1);
     settle(&app);
+    let focus_before_arrow = native_focus(&app);
+    for event in [
+        slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::RightArrow.into(),
+        },
+        slint::platform::WindowEvent::KeyReleased {
+            text: slint::platform::Key::RightArrow.into(),
+        },
+    ] {
+        let pressed = matches!(&event, slint::platform::WindowEvent::KeyPressed { .. });
+        let result = app.window().dispatch_event_with_result(event).unwrap();
+        // The wizard handles the press; the release has no action.
+        if pressed {
+            assert!(matches!(
+                result,
+                slint::platform::WindowEventDispatchResult::Accepted
+            ));
+        }
+    }
+    assert_eq!(
+        app.get_language_index(),
+        1 - initial_language,
+        "first wizard arrow: focus before={focus_before_arrow}; after={}",
+        native_focus(&app)
+    );
+    let request_before = app.get_system_back_request();
+    for event in [
+        slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        },
+        slint::platform::WindowEvent::KeyPressRepeated {
+            text: slint::platform::Key::Back.into(),
+        },
+        slint::platform::WindowEvent::KeyReleased {
+            text: slint::platform::Key::Back.into(),
+        },
+    ] {
+        assert!(matches!(
+            app.window().dispatch_event_with_result(event).unwrap(),
+            slint::platform::WindowEventDispatchResult::Accepted
+        ));
+    }
+    settle(&app);
+    assert_eq!(
+        app.get_onboarding_step(),
+        0,
+        "held Back pops one wizard step"
+    );
+    assert_eq!(app.get_system_back_request(), request_before + 1);
+    assert_eq!(
+        backgrounds.get(),
+        0,
+        "held Back must not reach Home at step zero"
+    );
+    assert_eq!(navigation.get(), 0);
+    assert_eq!(installs.get(), 0);
+    assert_eq!(finishes.get(), 0);
+    app.set_language_index(initial_language);
+    app.set_kb_active(false);
+    app.global::<nova::SettingsStyle>().set_keyboard_mode(false);
+    settle(&app);
+
     // Clicking the real underlying navigation must hit the overlay instead.
     let library = ElementHandle::find_by_accessible_label(&app, "Library")
         .next()

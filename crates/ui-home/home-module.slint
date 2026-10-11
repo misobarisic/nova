@@ -2,10 +2,11 @@ import { HomePage } from "../ui/home.slint";
 import { HomeBridge } from "@NovaUiShared";
 
 export component HomeModule inherits Window {
+    public function focus_shell() { page.focus_shell(); }
     default-font-family: "Roboto";
     background: transparent;
     width: HomeBridge.viewport_width; height: HomeBridge.viewport_height;
-    HomePage {
+    page := HomePage {
         width: 100%; height: 100%;
         nav-viewport-width <=> HomeBridge.nav-viewport-width;
         continue_rows <=> HomeBridge.continue_rows;

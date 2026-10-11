@@ -174,6 +174,14 @@ fn android_back_clears_both_modes_and_desktop_keyboard_remains_available() {
         "desktop Back preserves Settings marker mode"
     );
 
+    // Back from Settings landing routes to Home. Reopen Settings before
+    // asserting its keyboard mode; Home owns a different marker policy.
+    assert!(app.get_show_home() && !app.get_show_settings());
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    frame(&app);
+    assert!(ElementHandle::find_by_element_type_name(&app, "SettingsLink").count() > 0);
+    frame(&app);
     app.set_kb_active(false);
     app.global::<nova::SettingsStyle>().set_keyboard_mode(false);
     assert!(matches!(

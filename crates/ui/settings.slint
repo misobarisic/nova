@@ -1528,12 +1528,9 @@ export component SettingsPage {
         height: 100%;
         background: Theme.current.artwork_canvas;
 
-        // Recover after the previous page tears down its focus target.
-        entry_focus_t := Timer {
-            interval: 1ms;
-            running: false;
-            triggered => { self.stop(); nav_scope.focus(); }
-        }
+        // AppWindow restores this scope after factory publication only while
+        // its persistent baseline still owns focus; a delayed local reset
+        // would interrupt an editor clicked during the first attached frame.
         // 6-button scope: overlays the page without intercepting the mouse.
         nav_scope := FocusScope {
             enabled: root.active;
@@ -1542,7 +1539,6 @@ export component SettingsPage {
             init => {
                 SliderGesture.active = false; SliderGesture.hovered = false;
                 self.focus();
-                entry_focus_t.start();
                 if (root.two_pane) { root.sub_open = true; }
                 root.last_system_back_request = root.system_back_request;
             }

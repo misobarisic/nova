@@ -5,7 +5,7 @@ use slint::{ComponentHandle, VecModel};
 use std::{rc::Rc, time::Duration};
 
 fn elements(app: &nova::AppWindow, name: &str) -> Vec<ElementHandle> {
-    ElementHandle::find_by_element_id(app, &format!("DetailPage::{name}")).collect()
+    ElementHandle::find_by_element_id(app, &format!("DetailEpisodesModule::{name}")).collect()
 }
 
 #[test]

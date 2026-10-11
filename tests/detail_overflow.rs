@@ -25,7 +25,7 @@ fn max_right_edge(app: &nova::AppWindow) -> (f32, Vec<String>) {
     use i_slint_backend_testing::{ElementHandle, ElementQuery};
     // Season content deliberately extends inside its clipped horizontal
     // viewport. Its offscreen cards must not count as whole-page overflow.
-    let rail = ElementHandle::find_by_element_id(app, "DetailPage::season_flick").next();
+    let rail = ElementHandle::find_by_element_id(app, "DetailEpisodesModule::season_flick").next();
     let rail_children = rail
         .as_ref()
         .map(|rail| {

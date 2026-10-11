@@ -76,6 +76,12 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             match SettingsModule::new_embedded_with_shared_globals(context, shared) {
                 Ok(page) => {
                     nova_ui_settings::install_submenus(&page);
+                    let weak = page.as_weak();
+                    app.global::<SettingsBridge>().on_focus_shell(move || {
+                        if let Some(page) = weak.upgrade() {
+                            page.invoke_focus_shell();
+                        }
+                    });
                     Some(page)
                 }
                 Err(error) => {

@@ -37,7 +37,15 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
                 context,
                 app.shared_globals_novauishared(),
             ) {
-                Ok(page) => Some(page),
+                Ok(page) => {
+                    let weak = page.as_weak();
+                    app.global::<PlayerOsdBridge>().on_focus_shell(move || {
+                        if let Some(page) = weak.upgrade() {
+                            page.invoke_focus_shell();
+                        }
+                    });
+                    Some(page)
+                }
                 Err(error) => {
                     eprintln!("nova-ui: could not attach PlayerOsd page: {error}");
                     None
@@ -63,7 +71,36 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
                 context,
                 app.shared_globals_novauishared(),
             ) {
-                Ok(page) => Some(page),
+                Ok(page) => {
+                    let weak = page.as_weak();
+                    app.global::<OnboardingBridge>().on_focus_shell(move || {
+                        let Some(page) = weak.upgrade() else {
+                            return;
+                        };
+                        let window = i_slint_core::window::WindowInner::from_pub(page.window());
+                        // The wizard covers an underlying page that can still
+                        // own focus after lazy factory construction. Replace
+                        // that focus, but preserve wizard inputs and popups.
+                        if !window.active_popups().is_empty() {
+                            return;
+                        }
+                        let page_tree: i_slint_core::item_tree::ItemTreeRc =
+                            slint::private_unstable_api::re_exports::VRc::into_dyn(
+                                page.clone_strong().into(),
+                            );
+                        let mut focused = window.focus_item.borrow().upgrade();
+                        while let Some(item) = focused {
+                            if item.is_root_item_of(&page_tree) {
+                                return;
+                            }
+                            focused = item.parent_item(
+                                i_slint_core::item_tree::ParentItemTraversalMode::StopAtPopups,
+                            );
+                        }
+                        page.invoke_focus_shell();
+                    });
+                    Some(page)
+                }
                 Err(error) => {
                     eprintln!("nova-ui: could not attach Onboarding page: {error}");
                     None

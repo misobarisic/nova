@@ -2,10 +2,11 @@ import { CalendarPage } from "../ui/calendar.slint";
 import { CalendarBridge } from "@NovaUiShared";
 
 export component CalendarModule inherits Window {
+    public function focus_shell() { page.focus_shell(); }
     default-font-family: "Roboto";
     background: transparent;
     width: CalendarBridge.viewport_width; height: CalendarBridge.viewport_height;
-    CalendarPage {
+    page := CalendarPage {
         width: 100%; height: 100%;
         artwork-active <=> CalendarBridge.artwork-active;
         nav-viewport-width <=> CalendarBridge.nav-viewport-width;

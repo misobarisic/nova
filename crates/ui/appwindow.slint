@@ -1,5 +1,5 @@
 import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
-import { MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
+import { MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
 // Types and globals have one shared compiled definition. Page visual trees
 // live in independent factory products, never imported into AppWindow.
 
@@ -373,22 +373,27 @@ export component AppWindow inherits Window {
     // conditional hosts, so release their cached copies after page teardown.
     callback release_page_payloads();
     private property <bool> home_page_mounted: root.show_home && !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
-    changed home_page_mounted => { page_release_timer.start(); }
+    changed home_page_mounted => { if root.home_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
     private property <bool> discover_page_mounted: !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
-    changed discover_page_mounted => { page_release_timer.start(); }
+    changed discover_page_mounted => { if root.discover_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
     private property <bool> calendar_page_mounted: root.show_calendar && !root.player_open && !root.modal_visible && !root.more_open;
-    changed calendar_page_mounted => { page_release_timer.start(); }
+    changed calendar_page_mounted => { if root.calendar_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
     private property <bool> detail_page_mounted: root.modal_visible && !root.player_open;
-    changed detail_page_mounted => { page_release_timer.start(); }
+    changed detail_page_mounted => { if root.detail_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
     private property <bool> settings_page_mounted: root.show_settings && !root.more_open && !root.player_open && !root.modal_visible && !root.show_home && !root.show_about;
-    changed settings_page_mounted => { page_release_timer.start(); }
+    changed settings_page_mounted => { if root.settings_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
     private property <bool> library_page_mounted: root.show_library && !root.player_open && !root.modal_visible && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
+    changed library_page_mounted => { if root.library_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
     private property <bool> more_page_mounted: (root.more_open || root.more_parent) && !root.player_open && !root.modal_visible;
+    changed more_page_mounted => { if root.more_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
     private property <bool> about_page_mounted: root.show_about && !root.more_open && !root.player_open && !root.modal_visible && !root.show_home && !root.show_library && !root.show_settings;
-    changed about_page_mounted => { page_release_timer.start(); }
+    changed about_page_mounted => { if root.about_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
     private property <bool> downloads_page_mounted: root.show_downloads && !root.player_open && !root.modal_visible && !root.more_open;
-    changed downloads_page_mounted => { page_release_timer.start(); }
-    changed onboarding_visible => { page_release_timer.start(); }
+    changed downloads_page_mounted => { if root.downloads_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
+    changed onboarding_visible => {
+        root.preserve_back_focus();
+        page_release_timer.start();
+    }
 
     // The Rust handler forces pending tree updates before releasing payloads
     // and rechecks this guard in case navigation changed during child init.
@@ -407,7 +412,9 @@ export component AppWindow inherits Window {
     }
     page_release_timer := Timer {
         interval: 1ms;
-        running: false;
+        // Default Home is already mounted at construction, so its guard has
+        // no rising edge. Publish that initial factory and restore focus too.
+        running: true;
         triggered => {
             self.stop();
             root.release_page_payloads();
@@ -425,6 +432,33 @@ export component AppWindow inherits Window {
 
     property <int> back_focus_request: 0;
     changed back_focus_request => { system_back_scope.focus(); }
+    // Factory construction temporarily blocks focus changes. Recover native
+    // keyboard navigation after publication only while the persistent scope
+    // still owns focus, so a pointer-focused editor is never interrupted.
+    public function focus_mounted_page() {
+        // The wizard retains the underlying page visually. Its Rust callback
+        // excludes inputs already owned by the wizard before recovering focus
+        // from that underlying page, rather than relying on baseline ownership.
+        if root.onboarding_visible { OnboardingBridge.focus_shell(); return; }
+        if !system_back_scope.has-focus { return; }
+        if root.player_open { PlayerOsdBridge.focus_shell(); }
+        else if root.detail_page_mounted { root.focus_mounted_detail(); }
+        else if root.settings_page_mounted && !root.more_return_pending { SettingsBridge.focus_shell(); }
+        else if root.about_page_mounted && !root.more_return_pending { AboutBridge.focus_shell(); }
+        else if root.calendar_page_mounted && !root.more_return_pending { CalendarBridge.focus_shell(); }
+        else if root.downloads_page_mounted && !root.more_return_pending { DownloadsBridge.focus_shell(); }
+        else if root.more_open { MoreBridge.focus_shell(); }
+        else if root.library_page_mounted { LibraryBridge.focus_shell(); }
+        else if root.home_page_mounted { HomeBridge.focus_shell(); }
+        else if root.discover_page_mounted { DiscoverBridge.focus_shell(); }
+    }
+    public function focus_mounted_detail() {
+        if system_back_scope.has-focus && root.detail_page_mounted && !root.categories_modal && !root.library_duplicates_open {
+            if root.stream_selector_open { DetailContent.focus_streams(); }
+            else if root.tracking_open { DetailContent.focus_tracking(); }
+            else { DetailContent.focus_shell(); }
+        }
+    }
     public function preserve_back_focus() {
         // Incoming page init can replace focus before outgoing page teardown.
         // The change handler runs after tree instantiation, keeping release and
@@ -453,7 +487,12 @@ export component AppWindow inherits Window {
     in-out property <bool> tracking_busy;
     in-out property <bool> tracking_can_confirm;
     in-out property <bool> tracking_open: false;
-    // Tracking is a detail tab; Back returns to the tab that opened it.
+    changed tracking_open => {
+        root.preserve_back_focus();
+        page_release_timer.start();
+    }
+
+    // Tracking retains the underlying content tab while its page is open.
     in-out property <int> tracking_return_tab: 0;
     callback tracking_connect(int,string,string);
     callback tracking_complete(int,string);
@@ -535,6 +574,8 @@ export component AppWindow inherits Window {
     // Survives page recreation while opening a result's detail view.
     in-out property <bool> discover_search_animate_results: true;
     changed modal_visible => {
+        if !root.player_open && !root.onboarding_visible { root.preserve_back_focus(); }
+        page_release_timer.start();
         if (root.modal_visible && root.discover_search_open) {
             root.discover_search_animate_results = false;
         }
@@ -543,7 +584,11 @@ export component AppWindow inherits Window {
     changed show_home => { if (root.show_home) { root.cancel_more_subpage_back(); root.more_parent = false; root.more_subpage_entered = true; root.discover_search_focused = false; root.more_open = false; } }
     changed show_library => { if (root.show_library) { root.cancel_more_subpage_back(); root.more_parent = false; root.more_subpage_entered = true; root.discover_search_focused = false; root.more_open = false; } }
     changed show_settings => { if (root.show_settings) { root.discover_search_focused = false; root.more_open = false; if (root.settings_two_pane) { root.settings_detail_open = true; } } }
-    changed player_open => { if (root.player_open) { root.cancel_more_subpage_back(); root.more_subpage_entered = true; root.discover_search_focused = false; root.more_open = false; } }
+    changed player_open => {
+        if !root.onboarding_visible { root.preserve_back_focus(); }
+        page_release_timer.start();
+        if (root.player_open) { root.cancel_more_subpage_back(); root.more_subpage_entered = true; root.discover_search_focused = false; root.more_open = false; }
+    }
     in-out property <bool> search_loading: false;
     in-out property <bool> search_loading_more: false;
     in-out property <bool> search_can_load_more: false;
@@ -976,6 +1021,10 @@ export component AppWindow inherits Window {
     in-out property <bool> modal_visible: false;
     in-out property <bool> detail_is_movie: false;
     in-out property <bool> stream_selector_open: false;
+    changed stream_selector_open => {
+        root.preserve_back_focus();
+        page_release_timer.start();
+    }
     in-out property <int> selected_index: -1;
     // Detail tab bar: 0 = Overview, 3 = Episodes, 4 = Tracking.
     in-out property <int> detail_tab: 0;
@@ -1532,7 +1581,7 @@ export component AppWindow inherits Window {
     // Capture it at the shared window layer; separate PopupWindows (such as
     // Dropdown) install their own capture handler.
     system_back_scope := FocusScope {
-        enabled: !root.onboarding_visible;
+        init => { self.focus(); }
         x: 0;
         y: 0;
         width: 100%;
@@ -1553,7 +1602,12 @@ export component AppWindow inherits Window {
                     root.kb_active = false;
                     SettingsStyle.keyboard-mode = false;
                 }
-                if (root.resume_prompt_visible) {
+                if (root.onboarding_visible) {
+                    // First-launch navigation owns Back before any underlying
+                    // page or overlay, including before its first pointer press.
+                    root.system_back_request += 1;
+                    accept
+                } else if (root.resume_prompt_visible) {
                     root.resume_cancel();
                     accept
                 } else if (root.library_duplicates_open) {
@@ -1578,7 +1632,11 @@ export component AppWindow inherits Window {
         }
 
         capture-key-released(e) => {
-            if (e.text == Key.Back) { root.system_back_held = false; accept } else { reject }
+            if (e.text == Key.Back) {
+                root.system_back_held = false;
+                root.focus_mounted_page();
+                accept
+            } else { reject }
         }
 
         // ---- Discover page --------------------------------------------
@@ -1721,6 +1779,8 @@ export component AppWindow inherits Window {
     }
 
     more_content_host := Rectangle {
+        // Its focus-capture scope must not cover unrelated pages or Detail.
+        visible: !root.player_open && !root.modal_visible && (root.more_open || root.more_parent || root.show_settings || root.show_about || root.show_calendar || root.show_downloads);
         x: root.more_rail_width; y: 0px;
         width: root.width - root.more_rail_width; height: root.height;
         clip: true;
@@ -1912,7 +1972,8 @@ export component AppWindow inherits Window {
             }
         }
     }
-    }
+    // Keep the wizard inside the persistent capture scope so first-mount
+    // focus restoration and held-Back protection also cover onboarding.
     if root.onboarding_visible: OnboardingHost {
         width: 100%; height: 100%;
         viewport_width: self.width; viewport_height: self.height;
@@ -1930,6 +1991,7 @@ export component AppWindow inherits Window {
         safe_left: root.safe-area-insets.left;
         safe_right: root.safe-area-insets.right;
         system_back_request: root.system_back_request;
+    }
     }
 
 }

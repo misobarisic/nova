@@ -7,7 +7,13 @@ use std::rc::Rc;
 fn click(app: &nova::AppWindow, label: &str) {
     let element = ElementHandle::find_by_accessible_label(app, label)
         .next()
-        .unwrap();
+        .unwrap_or_else(|| {
+            panic!(
+                "missing Downloads control {label:?} at {:?}; downloads mounted: {}",
+                app.window().size(),
+                app.get_show_downloads()
+            )
+        });
     click_element(app, &element);
 }
 
@@ -28,6 +34,17 @@ fn click_element(app: &nova::AppWindow, element: &ElementHandle) {
     ] {
         app.window().dispatch_event(event);
     }
+}
+
+// Back really leaves this root destination. Re-enter it before exercising
+// another control; callbacks that record Home dispatch do not keep it mounted.
+fn reopen_downloads(app: &nova::AppWindow) {
+    app.invoke_navigate_section(5);
+    let _ = ElementHandle::find_by_element_type_name(app, "DownloadsPage")
+        .next()
+        .expect("Downloads remounted after Back")
+        .size();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(50));
 }
 
 fn key(app: &nova::AppWindow, text: SharedString) {
@@ -90,7 +107,8 @@ fn completed_episode_actions_keep_job_identity_across_layouts() {
         i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(50));
         assert_eq!(
             ElementHandle::find_by_element_type_name(&app, "BottomNav").count(),
-            usize::from(width < 700)
+            0,
+            "Downloads hides the phone bar and retains its header Back control"
         );
         assert_eq!(
             ElementHandle::find_by_element_type_name(&app, "SideNav").count(),
@@ -110,6 +128,8 @@ fn completed_episode_actions_keep_job_identity_across_layouts() {
             let before_back = *backs.borrow();
             click(&app, "Back");
             assert_eq!(*backs.borrow(), before_back + 1, "header Back routes Home");
+            assert!(!app.get_show_downloads());
+            reopen_downloads(&app);
         }
         assert_eq!(
             filters.borrow().last(),
@@ -137,6 +157,8 @@ fn completed_episode_actions_keep_job_identity_across_layouts() {
             before_back + 1,
             "Escape from search routes Back"
         );
+        assert!(!app.get_show_downloads());
+        reopen_downloads(&app);
         click(&app, "Resume");
         // The timer updates episode models in place: the existing focused
         // Resume control must continue to activate after a progress update.
@@ -155,6 +177,8 @@ fn completed_episode_actions_keep_job_identity_across_layouts() {
             before_back + 2,
             "Escape from control routes Back"
         );
+        assert!(!app.get_show_downloads());
+        reopen_downloads(&app);
         click(&app, "Remove download");
         click(&app, "Collapse series");
     }

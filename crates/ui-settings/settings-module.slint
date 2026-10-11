@@ -2,6 +2,7 @@ import { SettingsPage } from "../ui/settings.slint";
 import { SettingsBridge } from "@NovaUiShared";
 
 export component SettingsModule inherits Window {
+    public function focus_shell() { page.focus_shell(); }
     public function content_prepare() { page.prepare_submenu(); }
     public function content_focus_shell() { page.focus_shell(); }
     public function content_kb_player_audio_language_row() -> int { return page.kb_player_audio_language_row(); }

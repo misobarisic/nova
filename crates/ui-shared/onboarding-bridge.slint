@@ -2,6 +2,7 @@ import { TrackRow } from "../ui/types.slint";
 
 // Shared canonical data handles; this global owns no visual tree.
 export global OnboardingBridge {
+    callback focus_shell();
     in-out property <component-factory> factory;
     in-out property <length> viewport_width;
     in-out property <length> viewport_height;

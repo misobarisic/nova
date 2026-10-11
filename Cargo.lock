@@ -5260,6 +5260,7 @@ dependencies = [
  "nova-torrent",
  "nova-tracking",
  "nova-ui",
+ "nova-ui-shared",
  "qrcode",
  "rqrr",
  "serde",
