@@ -1,3 +1,4 @@
+import { ControlTouchArea } from "control-input.slint";
 import { Theme } from "theme.slint";
 import { SliderTouchArea } from "slider-touch.slint";
 // Shared playback-rate control.
@@ -39,7 +40,7 @@ component SpeedStepButton inherits Rectangle {
     width: root.roomy ? 44px : 32px;
     height: root.roomy ? 44px : 32px;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
-    background: step_touch.has-hover ? Theme.current.control_hover : Theme.current.control;
+    background: step_touch.feedback-active ? Theme.current.control_hover : Theme.current.control;
     border-width: focus.has-focus && root.keyboard-mode ? 2px : 1px;
     border-color: focus.has-focus && root.keyboard-mode ? Theme.current.focus_ring : Theme.current.step_border;
     accessible-role: button;
@@ -60,7 +61,7 @@ component SpeedStepButton inherits Rectangle {
             if (e.text == Key.Return || e.text == " ") { root.clicked(); accept } else { reject }
         }
     }
-    step_touch := TouchArea {
+    step_touch := ControlTouchArea {
         width: 100%;
         height: 100%;
         mouse-cursor: pointer;
@@ -82,7 +83,7 @@ component SpeedPreset inherits Rectangle {
     horizontal-stretch: 1;
     height: root.roomy ? 44px : 28px;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
-    background: root.selected ? Theme.current.selection_fill : (preset_touch.has-hover ? Theme.current.control_hover : Theme.current.control);
+    background: root.selected ? Theme.current.selection_fill : (preset_touch.feedback-active ? Theme.current.control_hover : Theme.current.control);
     border-width: focus.has-focus && root.keyboard-mode ? 2px : 1px;
     border-color: root.selected ? Theme.current.accent : Theme.current.step_border;
 
@@ -101,7 +102,7 @@ component SpeedPreset inherits Rectangle {
             if (e.text == Key.Return || e.text == " ") { root.clicked(); accept } else { reject }
         }
     }
-    preset_touch := TouchArea {
+    preset_touch := ControlTouchArea {
         width: 100%;
         height: 100%;
         mouse-cursor: pointer;

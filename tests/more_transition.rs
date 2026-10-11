@@ -1,4 +1,4 @@
-//! More destinations use page motion without delaying Android Back.
+//! More destinations animate into and back out of the page on narrow layouts.
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::{ComponentHandle, platform::WindowEvent};
 use std::time::Duration;
@@ -6,12 +6,12 @@ use std::time::Duration;
 fn page(app: &nova::AppWindow, name: &str) -> ElementHandle {
     ElementHandle::find_by_element_type_name(app, name)
         .next()
-        .unwrap()
+        .unwrap_or_else(|| panic!("missing page {name}"))
 }
 fn button(app: &nova::AppWindow, label: &str) -> ElementHandle {
     ElementHandle::find_by_accessible_label(app, label)
         .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
-        .unwrap()
+        .unwrap_or_else(|| panic!("missing button {label}"))
 }
 fn assert_shared_back(app: &nova::AppWindow) {
     let back = button(app, "Back");
@@ -178,8 +178,11 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
             if enabled && transitions {
                 assert!(slide && fade);
             }
-            // Reopen and press navbar Back while the entrance is in progress.
+            // Return to More, then press system Back during the next entry.
             tap(&app, button(&app, "Back"));
+            if enabled && transitions {
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(280));
+            }
             let _ = page(&app, "MorePage").size();
             i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
             tap(&app, button(&app, label));
@@ -201,6 +204,25 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
                     slint::platform::WindowEventDispatchResult::Accepted
                 ));
             }
+            if enabled && transitions {
+                assert!(!app.get_more_open());
+                assert!(page(&app, component).size().width > 0.0);
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(110));
+                let outgoing = page(&app, component);
+                assert!(outgoing.absolute_position().x > 0.1);
+                assert!(outgoing.computed_opacity() < 0.99);
+                assert_eq!(
+                    ElementHandle::find_by_element_type_name(&app, "MorePage").count(),
+                    0
+                );
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(180));
+            } else {
+                assert!(app.get_more_open());
+                assert_eq!(
+                    ElementHandle::find_by_element_type_name(&app, component).count(),
+                    0
+                );
+            }
             assert!(app.get_more_open());
             assert!(
                 !app.get_show_settings()
@@ -208,6 +230,122 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
                     && !app.get_show_calendar()
                     && !app.get_show_downloads()
             );
+
+            // A settled page also slides/fades out on the ordinary header or
+            // navbar Back path; disabled motion returns synchronously.
+            tap(&app, button(&app, label));
+            for _ in 0..35 {
+                let _ = page(&app, component).absolute_position();
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(10));
+            }
+            let settled = page(&app, component);
+            assert!(settled.absolute_position().x.abs() < 0.1);
+            assert!(settled.computed_opacity() > 0.99);
+            tap(&app, button(&app, "Back"));
+            if enabled && transitions {
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(110));
+                let outgoing = page(&app, component);
+                assert!(outgoing.absolute_position().x > 0.1);
+                assert!(outgoing.computed_opacity() < 0.99);
+                assert_eq!(
+                    ElementHandle::find_by_element_type_name(&app, "MorePage").count(),
+                    0
+                );
+                // A second Back must not restart the return timer.
+                tap(&app, button(&app, "Back"));
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(170));
+            }
+            assert!(app.get_more_open());
+            assert_eq!(
+                ElementHandle::find_by_element_type_name(&app, component).count(),
+                0
+            );
         }
     }
+    more_return_cancels_for_destination_navigation();
+    more_return_animates_wide_and_motion_toggle_finishes_pending_return();
+}
+
+fn more_return_cancels_for_destination_navigation() {
+    let app = nova::AppWindow::new().unwrap();
+    app.set_is_android(true);
+    app.window().set_size(slint::PhysicalSize::new(320, 800));
+    let weak = app.as_weak();
+    app.on_calendar_picked(move || {
+        let app = weak.upgrade().unwrap();
+        app.set_show_home(false);
+        app.set_show_calendar(true);
+    });
+    let weak = app.as_weak();
+    app.on_library_picked(move || {
+        let app = weak.upgrade().unwrap();
+        app.set_show_calendar(false);
+        app.set_show_downloads(false);
+        app.set_show_library(true);
+    });
+    app.show().unwrap();
+    app.set_more_open(true);
+    let _ = page(&app, "MorePage").size();
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    tap(&app, button(&app, "Calendar"));
+    for _ in 0..35 {
+        let _ = page(&app, "CalendarPage").absolute_position();
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(10));
+    }
+    tap(&app, button(&app, "Back"));
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(80));
+    assert!(!app.get_more_open());
+    let library = ElementHandle::find_by_element_id(&app, "BottomNav::tab_library")
+        .next()
+        .expect("the outgoing page's Library tab");
+    tap(&app, library);
+    assert!(app.get_show_library());
+    assert!(!app.get_show_calendar() && !app.get_more_open());
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(&app, "MorePage").count(),
+        0
+    );
+    assert!(app.get_show_library());
+}
+
+fn more_return_animates_wide_and_motion_toggle_finishes_pending_return() {
+    let app = nova::AppWindow::new().unwrap();
+    app.window().set_size(slint::PhysicalSize::new(1200, 800));
+    app.global::<nova::Anim>().set_enabled(true);
+    app.global::<nova::Anim>().set_transitions(true);
+    let weak = app.as_weak();
+    app.on_calendar_picked(move || {
+        let app = weak.upgrade().unwrap();
+        app.set_show_home(false);
+        app.set_show_calendar(true);
+    });
+    app.show().unwrap();
+    app.set_more_open(true);
+    let _ = page(&app, "MorePage").size();
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    tap(&app, button(&app, "Calendar"));
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    assert!(page(&app, "CalendarPage").absolute_position().x.abs() < 0.1);
+    tap(&app, button(&app, "Back"));
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(80));
+    let outgoing = page(&app, "CalendarPage");
+    assert!(outgoing.absolute_position().x > 0.1);
+    assert!(outgoing.computed_opacity() < 0.99);
+    assert!(!app.get_more_open());
+    app.global::<nova::Anim>().set_transitions(false);
+    // Slint delivers changed bindings on the next event-loop turn, without
+    // waiting out the original 260ms return timer.
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+    assert!(app.get_more_open());
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(&app, "CalendarPage").count(),
+        0
+    );
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+    assert!(app.get_more_open());
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(&app, "CalendarPage").count(),
+        0
+    );
 }

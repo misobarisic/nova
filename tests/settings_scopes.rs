@@ -1,5 +1,5 @@
 //! Scope badges open the comparison sheet without changing ordinary controls.
-use i_slint_backend_testing::{ElementHandle, ElementQuery};
+use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::{ComponentHandle, Model, VecModel};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
@@ -21,7 +21,21 @@ fn badge(app: &nova::AppWindow, key: &str) -> ElementHandle {
         .find_all()
         .into_iter()
         .next()
-        .expect("visible scope badge")
+        .unwrap_or_else(|| {
+            panic!(
+                "visible scope badge {key}; sync enabled {}",
+                app.get_sync_enabled()
+            )
+        })
+}
+fn has_badge(app: &nova::AppWindow, key: &str) -> bool {
+    let id = format!("setting-scope:{key}");
+    ElementQuery::from_root(app)
+        .match_predicate(move |e| e.accessible_id().as_deref() == Some(id.as_str()))
+        .find_all()
+        .into_iter()
+        .next()
+        .is_some()
 }
 fn click_label(app: &nova::AppWindow, label: &str) {
     ElementHandle::find_by_accessible_label(app, label)
@@ -71,6 +85,12 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
             local_value: "1×".into(),
             ..Default::default()
         },
+        nova::SettingSyncInfo {
+            key: "sync_enabled".into(),
+            status: 0,
+            local_value: "On".into(),
+            ..Default::default()
+        },
     ]));
     app.global::<nova::SettingsSync>()
         .set_rows(rows.clone().into());
@@ -97,6 +117,13 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
     app.set_settings_selected_id(2);
     app.set_settings_detail_open(true);
     app.window().show().unwrap();
+    settle(&app);
+    assert!(
+        !has_badge(&app, "quality"),
+        "scope badges stay hidden when sync is disabled"
+    );
+    app.set_sync_enabled(true);
+    settle(&app);
     for width in [320, 390, 1280] {
         app.window().set_size(slint::PhysicalSize::new(width, 1400));
         settle(&app);
@@ -157,6 +184,58 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
         click_label(&app, "Use synced value");
         assert_eq!(rows.row_data(0).unwrap().status, 1);
     }
+    // This real Sync enablement row has a long title, a short pill, and a
+    // narrow toggle. At 470px the combined line exceeds the old 62% text cap
+    // while fitting in the actual space before the toggle.
+    app.set_settings_selected_id(7);
+    app.set_settings_scroll_y(0.0);
+    app.window().set_size(slint::PhysicalSize::new(470, 1000));
+    settle(&app);
+    let sync_title = "Enable cross-device sync";
+    let sync_row = ElementHandle::find_by_element_type_name(&app, "SettingsRow")
+        .find(|row| {
+            let title = sync_title.to_owned();
+            row.query_descendants()
+                .match_predicate(move |e| e.accessible_label().as_deref() == Some(title.as_str()))
+                .find_first()
+                .is_some()
+        })
+        .expect("Sync enablement row");
+    let sync_badge = badge(&app, "sync_enabled");
+    let bp = sync_badge.absolute_position();
+    let title_element = sync_row
+        .query_descendants()
+        .match_predicate({
+            let title = sync_title.to_owned();
+            move |e| e.accessible_label().as_deref() == Some(title.as_str())
+        })
+        .find_all()
+        .into_iter()
+        .find(|title| {
+            let p = title.absolute_position();
+            let size = title.size();
+            p.x + size.width <= bp.x - 7.5
+                && (p.y + size.height / 2.0 - bp.y - sync_badge.size().height / 2.0).abs() < 0.5
+        })
+        .expect("the title and pill should share a line");
+    let toggle = sync_row
+        .query_descendants()
+        .match_accessible_role(AccessibleRole::Checkbox)
+        .find_first()
+        .expect("sync enablement toggle");
+    let inner_width = sync_row.size().width - 32.0;
+    let line_width = title_element.size().width + 8.0 + sync_badge.size().width;
+    let row_x = sync_row.absolute_position().x;
+    let actual_space = toggle.absolute_position().x - 16.0 - (row_x + 16.0);
+    assert!(
+        line_width > inner_width * 0.62,
+        "fixture must exceed the old text cap"
+    );
+    assert!(
+        line_width <= actual_space + 0.5,
+        "line must fit before the controls"
+    );
+
     assert_eq!(
         actions.borrow().as_slice(),
         [
@@ -168,6 +247,10 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
             ("quality".into(), false)
         ]
     );
+    app.set_settings_selected_id(2);
+    app.set_settings_scroll_y(0.0);
+    app.window().set_size(slint::PhysicalSize::new(1280, 1400));
+    settle(&app);
     let mut unsupported = rows.row_data(0).unwrap();
     unsupported.status = 2;
     unsupported.shared_supported = false;
@@ -288,6 +371,22 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
                 .as_deref(),
             Some("This device")
         );
+        if width == 320 {
+            let scope = badge(&app, "tracking_automatic_0");
+            let bp = scope.absolute_position();
+            assert!(
+                ElementHandle::find_by_accessible_label(
+                    &app,
+                    "Automatic tracking for linked releases"
+                )
+                .any(|title| {
+                    let p = title.absolute_position();
+                    let s = title.size();
+                    p.y + s.height <= bp.y - 2.0
+                }),
+                "a narrow row must stack its long title above the scope pill"
+            );
+        }
     }
     // The narrow sheet enters from below; its handle stays centred and
     // either animation preference can make the entrance immediate.
@@ -350,4 +449,38 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
             "disabled motion must open immediately"
         );
     }
+    app.global::<nova::SettingsSync>().set_open(false);
+    app.set_sync_enabled(false);
+    app.set_settings_selected_id(5);
+    settle(&app);
+    reveal_speed(&app);
+    assert!(
+        !has_badge(&app, "playback_speed"),
+        "the custom playback-speed caption hides its pill while sync is off"
+    );
+
+    app.set_sync_enabled(true);
+    app.set_settings_selected_id(3);
+    app.set_settings_scroll_y(0.0);
+    settle(&app);
+    badge(&app, "language").mock_single_click(slint::platform::PointerEventButton::Left);
+    settle(&app);
+    assert!(app.global::<nova::SettingsSync>().get_open());
+    let language_row = rows.iter().find(|row| row.key == "language").unwrap();
+    assert_eq!(language_row.status, 1);
+    app.set_sync_enabled(false);
+    settle(&app);
+    assert!(
+        !app.global::<nova::SettingsSync>().get_open(),
+        "disabling sync closes a comparison sheet before hiding its badge"
+    );
+    assert!(!has_badge(&app, "language"));
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.key == "language")
+            .unwrap()
+            .status,
+        language_row.status,
+        "display state leaves the stored scope policy unchanged"
+    );
 }

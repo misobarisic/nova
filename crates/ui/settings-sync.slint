@@ -4,12 +4,16 @@ import { SettingSyncInfo } from "types.slint";
 // Values are supplied by the backend; status describes policy, not connectivity.
 export global SettingsSync {
     in-out property <[SettingSyncInfo]> rows;
+    // Mirrors the device's actual cross-device sync setting. Scope badges are
+    // presentation only and disappear when syncing is disabled.
+    in-out property <bool> enabled: false;
     in-out property <bool> open: false;
     in-out property <string> selected_key;
     in-out property <string> selected_title;
     pure callback lookup(string) -> int;
     callback requested();
     callback override_changed(string, bool);
+    changed enabled => { if !self.enabled { self.open = false; } }
     public function show(key: string, title: string) {
         self.selected_key = key;
         self.selected_title = title;
@@ -24,8 +28,12 @@ export component SettingSyncBadge inherits Rectangle {
     property <SettingSyncInfo> info: SettingsSync.rows[SettingsSync.lookup(root.setting_key)];
     private property <bool> return_focus: false;
     property <bool> owns_modal: SettingsSync.open && SettingsSync.selected_key == root.setting_key;
+    visible: SettingsSync.enabled;
     changed owns_modal => {
-        if !self.owns_modal && root.return_focus { root.return_focus = false; badge_focus.focus(); }
+        if !self.owns_modal && root.return_focus {
+            root.return_focus = false;
+            if SettingsSync.enabled { badge_focus.focus(); }
+        }
     }
     property <int> status: self.info.status;
     property <string> label: status == 1 ? @tr("Synced") : status == 2 ? @tr("This device (overridden)") : @tr("This device");
@@ -34,7 +42,7 @@ export component SettingSyncBadge inherits Rectangle {
     accessible-description: root.setting_title;
     accessible-id: "setting-scope:" + root.setting_key;
     preferred-width: badge_text.preferred-width + 34px;
-    width: self.preferred-width;
+    horizontal-stretch: 0;
     height: 26px;
     border-radius: 6px;
     background: root.status == 1 ? Theme.current.scope_synced_fill : root.status == 2 ? Theme.current.scope_override_fill : Theme.current.scope_local_fill;

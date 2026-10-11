@@ -1,3 +1,4 @@
+import { ControlTouchArea } from "control-input.slint";
 import { Theme } from "theme.slint";
 // Touch-friendly dropdown replacing std-widgets ComboBox.
 //
@@ -56,8 +57,8 @@ export component Dropdown inherits Rectangle {
     border-width: 1px;
     border-color: Theme.current.control_border;
     background: root.prominent
-        ? (touch.has-hover && root.enabled ? Theme.current.settings_control_hover : Theme.current.settings_control)
-        : (touch.has-hover && root.enabled ? Theme.current.input_hover : Theme.current.popup);
+        ? (touch.feedback-active && root.enabled ? Theme.current.settings_control_hover : Theme.current.settings_control)
+        : (touch.feedback-active && root.enabled ? Theme.current.input_hover : Theme.current.popup);
 
     HorizontalLayout {
         padding-left: 12px;
@@ -85,7 +86,7 @@ export component Dropdown inherits Rectangle {
         }
     }
 
-    touch := TouchArea {
+    touch := ControlTouchArea {
         enabled: root.enabled;
         mouse-cursor: pointer;
         property <bool> dragged: false;
@@ -191,7 +192,7 @@ export component Dropdown inherits Rectangle {
                             width: 100%;
                             height: root.item-h;
                             border-radius: root.prominent ? 10px : 4px;
-                            background: index == root.current-index ? Theme.current.selection_wash : (item_touch.has-hover ? Theme.current.control_hover : transparent);
+                            background: index == root.current-index ? Theme.current.selection_wash : (item_touch.feedback-active ? Theme.current.control_hover : transparent);
 
                             HorizontalLayout {
                                 padding-left: 8px;
@@ -207,7 +208,7 @@ export component Dropdown inherits Rectangle {
                                 }
                             }
 
-                            item_touch := TouchArea {
+                            item_touch := ControlTouchArea {
                                 mouse-cursor: pointer;
                                 clicked => {
                                     root.current-index = index;

@@ -115,6 +115,7 @@ fn playback_defaults_reset_and_player_settings_fit() {
     ]));
     app.global::<nova::SettingsSync>()
         .set_rows(scope_rows.clone().into());
+    app.set_sync_enabled(true);
     let indexed_scope_rows = scope_rows.clone();
     app.global::<nova::SettingsSync>().on_lookup(move |key| {
         indexed_scope_rows

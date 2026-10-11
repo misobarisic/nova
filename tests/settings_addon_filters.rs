@@ -49,6 +49,8 @@ fn row(name: &str, url: &str) -> nova::AddonRow {
 fn installed_addon_filters_and_actions_survive_layout_changes() {
     i_slint_backend_testing::init_integration_test_with_system_time();
     let app = nova::AppWindow::new().unwrap();
+    // Filter actions need settled geometry; page motion is covered separately.
+    app.global::<nova::Anim>().set_enabled(false);
     app.on_settings_search_matches(|query, haystack| {
         nova_ui::settings_search_matches(&query, &haystack)
     });
@@ -117,6 +119,14 @@ fn installed_addon_filters_and_actions_survive_layout_changes() {
         assert!(!app.get_addon_rows().row_data(0).unwrap().enabled);
         app.window().set_size(slint::PhysicalSize::new(360, 800));
         settle().await;
+        // A renderer resolves the new layout after a resize. The headless
+        // backend needs geometry reads before targeting the split filters.
+        for element in ElementQuery::from_root(&app)
+            .match_predicate(|_| true)
+            .find_all()
+        {
+            let _ = (element.size(), element.absolute_position());
+        }
         assert!(
             app.get_settings_detail_open(),
             "Addons detail must remain open"
@@ -124,6 +134,7 @@ fn installed_addon_filters_and_actions_survive_layout_changes() {
         let streams = ElementHandle::find_by_accessible_label(&app, "Streams")
             .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button))
             .expect("phone streams capability filter");
+        assert!(streams.absolute_position().x + streams.size().width <= 360.5);
         settings::click(&app, &streams).await;
         settle().await;
         assert_eq!(app.get_addon_capability_filter(), 3);

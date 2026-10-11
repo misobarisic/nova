@@ -267,6 +267,10 @@ fn calendar_and_downloads_destinations_fit_desktop_and_phone() {
     });
     app.set_animations(false);
     app.set_anim_transitions(false);
+    // Headless fixtures do not run the backend that mirrors these settings
+    // into Anim. Motion itself is covered by more_transition.
+    app.global::<nova::Anim>().set_enabled(false);
+    app.global::<nova::Anim>().set_transitions(false);
     let weak = app.as_weak();
     app.global::<nova::NavState>()
         .on_calendar_picked(move || route(&weak.upgrade().unwrap(), false));

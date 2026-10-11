@@ -1,5 +1,6 @@
 import { SettingsSync, SettingSyncBadge } from "settings-sync.slint";
 import { Theme } from "theme.slint";
+import { ControlTouchArea } from "control-input.slint";
 import { SliderTouchArea } from "slider-touch.slint";
 import { SearchField } from "searchfield.slint";
 import { IcExtension, IcTag, IcImage, IcDisplay, IcPlay, IcChevronLeft, IcChevronRight, IcSettingsGear, IcSync, IcDelete, IcHome, IcInfo, IcVideoLibrary, IcLink } from "icons.slint";
@@ -37,7 +38,7 @@ export component PillButton inherits Rectangle {
     property <bool> keyboard_focused: (root.focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled;
     border-width: root.keyboard_focused ? 2px : (root.outlined ? 1px : 0px);
     border-color: root.keyboard_focused ? Theme.current.focus_ring : Theme.current.control_border;
-    background: root.destructive ? (touch.has-hover ? Theme.current.destructive_control_hover : Theme.current.destructive_control) : touch.has-hover
+    background: root.destructive ? (touch.feedback-active ? Theme.current.destructive_control_hover : Theme.current.destructive_control) : touch.feedback-active
     ? (primary ? Theme.current.accent_hover : Theme.current.settings_control_hover)
     : (primary ? Theme.current.accent : Theme.current.settings_control);
     animate background { duration: Anim.hover_fast; }
@@ -56,7 +57,7 @@ export component PillButton inherits Rectangle {
             if e.text == Key.Return || e.text == " " { root.clicked(); accept } else { reject }
         }
     }
-    touch := TouchArea {
+    touch := ControlTouchArea {
         enabled: root.enabled;
         width: 100%;
         height: 100%;
@@ -170,7 +171,7 @@ export component AddonIconButton inherits Rectangle {
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;
     border-color: Theme.current.focus_ring;
-    background: root.destructive ? (touch.has-hover ? Theme.current.destructive_control_hover : Theme.current.destructive_control) : (touch.has-hover ? Theme.current.settings_control_hover : Theme.current.settings_control);
+    background: root.destructive ? (touch.feedback-active ? Theme.current.destructive_control_hover : Theme.current.destructive_control) : (touch.feedback-active ? Theme.current.settings_control_hover : Theme.current.settings_control);
     animate background { duration: Anim.hover_fast; }
     accessible-role: button;
     accessible-label: root.name;
@@ -183,7 +184,7 @@ export component AddonIconButton inherits Rectangle {
             if e.text == Key.Return || e.text == " " { root.clicked(); accept } else { reject }
         }
     }
-    touch := TouchArea {
+    touch := ControlTouchArea {
         enabled: root.enabled;
         width: 100%;
         height: 100%;
@@ -287,14 +288,14 @@ export component AddonRowCard inherits Rectangle {
                 horizontal-stretch: 1; min-width: 0px; height: 44px;
                 border-radius: 12px; border-width: 1px;
                 border-color: root.kb_active && root.kb_focused_row && root.kb_col == 2 ? Theme.current.focus_ring : Theme.current.border_overlay;
-                background: copy_touch.has-hover ? Theme.current.settings_control_hover : Theme.current.settings_control;
+                background: copy_touch.feedback-active ? Theme.current.settings_control_hover : Theme.current.settings_control;
                 accessible-role: button; accessible-label: @tr("Copy link");
                 forward-focus: copy_focus;
                 IcLink { x:12px; y:12px; width:20px; height:20px; fill:Theme.current.accent_soft; }
                 Text { x:42px; width:Math.max(0px,parent.width - 66px); height:100%; text:@tr("Copy link"); color:Theme.current.text_bright; font-size:13px; vertical-alignment:center; overflow:elide; }
                 IcChevronRight { x:parent.width - 26px; y:13px; width:18px; height:18px; fill:Theme.current.text_secondary; }
                 copy_focus := FocusScope { key-pressed(e) => { if e.text == Key.Return || e.text == " " {root.copy_link();accept} else {reject} } }
-                copy_touch := TouchArea { mouse-cursor:pointer; clicked => {copy_focus.focus();root.copy_link();} }
+                copy_touch := ControlTouchArea { mouse-cursor:pointer; clicked => {copy_focus.focus();root.copy_link();} }
             }
             AddonIconButton {
                 name:@tr("Remove"); destructive:true; focused: root.kb_active && root.kb_focused_row && root.kb_col == 4;
@@ -392,17 +393,21 @@ export component MiniSlider inherits Rectangle {
 // Segmented option picker (e.g. JPEG | WebP).
 export component Segmented inherits HorizontalLayout {
     in property <[string]> labels;
-    in-out property <int> current_index: 0;
+    // The owning page updates the selection in picked(). Writing a mapped
+    // index here would destroy its binding and strand selections in split rows.
+    in property <int> current_index: 0;
     // 6-button nav highlight (Left/Right cycles when focused).
     in property <bool> enabled: true;
     in property <bool> focused: false;
     callback picked(int);
-    spacing: 0px;
+    spacing: 8px;
 
     for opt[i] in labels: Rectangle {
         accessible-role: button;
         accessible-label: opt;
         accessible-enabled: root.enabled;
+        accessible-checkable: true;
+        accessible-checked: root.current_index == i;
         width: seg_lbl.preferred-width + 28px;
         height: 44px;
         border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
@@ -432,7 +437,7 @@ export component Segmented inherits HorizontalLayout {
             enabled: root.enabled;
             key-pressed(e) => {
                 SettingsStyle.keyboard-mode = true;
-                if e.text == Key.Return || e.text == " " { root.current_index = i; root.picked(i); accept } else { reject }
+                if e.text == Key.Return || e.text == " " { root.picked(i); accept } else { reject }
             }
         }
         TouchArea {
@@ -442,7 +447,6 @@ export component Segmented inherits HorizontalLayout {
             mouse-cursor: pointer;
             clicked => {
                 SettingsStyle.keyboard-mode = false;
-                root.current_index = i;
                 root.picked(i);
             }
         }
@@ -549,12 +553,14 @@ export component SettingsRow inherits Rectangle {
     Math.max(0px, root.inner-width - root.control-width - 16px),
     root.inner-width * 0.62
     );
-    property <bool> stack-controls: root.side-text-width < (root.setting-key != "" && SettingsSync.rows[SettingsSync.lookup(root.setting-key)].status == 2 ? 200px : 150px);
+    property <bool> stack-controls: root.side-text-width < (root.setting-key != "" && SettingsSync.enabled && SettingsSync.rows[SettingsSync.lookup(root.setting-key)].status == 2 ? 200px : 150px);
+    property <length> badge-line-width: title_natural.preferred-width + badge_natural.preferred-width + 34px + 8px;
+    property <bool> badge-can-fit: root.setting-key != "" && SettingsSync.enabled
+        && root.badge-line-width <= (root.stack-controls ? root.inner-width : Math.max(0px, root.inner-width - root.control-width - 16px));
     property <length> text-width: root.stack-controls
-    ? root.inner-width
-    : root.side-text-width;
-    property <bool> inline-badge: root.setting-key != ""
-        && title_natural.preferred-width + badge_natural.preferred-width + 34px + 8px <= root.text-width;
+        ? root.inner-width
+        : (root.badge-can-fit ? Math.max(root.side-text-width, root.badge-line-width) : root.side-text-width);
+    property <bool> inline-badge: root.badge-can-fit && root.badge-line-width <= root.text-width;
     // Natural text sizes decide badge placement without widening the row.
     Rectangle {
         width: 0px;
@@ -595,7 +601,7 @@ export component SettingsRow inherits Rectangle {
 
         title_line := Rectangle {
             height: Math.max(title_text.preferred-height, root.inline-badge ? 26px : 0px)
-                + (root.setting-key != "" && !root.inline-badge ? 29px : 0px);
+                + (root.setting-key != "" && SettingsSync.enabled && !root.inline-badge ? 29px : 0px);
             title_text := Text {
                 x: 0px;
                 text: root.row-title; font-size: 16px; font-weight: 600;
@@ -604,7 +610,7 @@ export component SettingsRow inherits Rectangle {
                 height: self.preferred-height;
                 y: root.inline-badge ? (parent.height - self.height)/2 : 0px;
             }
-            if root.setting-key != "": scope_badge := SettingSyncBadge {
+            if root.setting-key != "" && SettingsSync.enabled: scope_badge := SettingSyncBadge {
                 setting_key: root.setting-key; setting_title: root.row-title;
                 width: Math.min(self.preferred-width, root.text-width);
                 x: root.inline-badge ? title_natural.preferred-width + 8px : 0px;
@@ -714,7 +720,7 @@ export component SettingsLink inherits Rectangle {
     border-radius: 8px;
     border-width: SettingsStyle.keyboard-mode && (root.focused || link_focus.has-focus) ? 2px : 0px;
     border-color: Theme.current.focus_ring;
-    background: root.selected ? Theme.current.settings_selected_wash : (touch.has-hover && interactive ? Theme.current.settings_control : Theme.current.card);
+    background: root.selected ? Theme.current.settings_selected_wash : (touch.feedback-active && interactive ? Theme.current.settings_control : Theme.current.card);
     animate background { duration: Anim.hover_fast; }
 
     HorizontalLayout {
@@ -856,7 +862,7 @@ export component SettingsLink inherits Rectangle {
             if (e.text == Key.Return || e.text == " ") { root.picked(); accept } else { reject }
         }
     }
-    touch := TouchArea {
+    touch := ControlTouchArea {
         enabled: root.interactive;
         width: 100%;
         height: 100%;
@@ -926,7 +932,7 @@ export component SettingsBackButton inherits Rectangle {
     width: 44px;
     height: 44px;
     border-radius: 22px;
-    background: back_touch.has-hover ? Theme.current.settings_control_hover : Theme.current.settings_control;
+    background: back_touch.feedback-active ? Theme.current.settings_control_hover : Theme.current.settings_control;
     border-width: root.focused || (back_focus.has-focus && SettingsStyle.keyboard-mode) ? 2px : 0px;
     border-color: Theme.current.focus_ring;
     accessible-role: button;
@@ -939,7 +945,7 @@ export component SettingsBackButton inherits Rectangle {
             if e.text == Key.Return || e.text == " " { root.clicked(); accept } else { reject }
         }
     }
-    back_touch := TouchArea {
+    back_touch := ControlTouchArea {
         width: 100%; height: 100%; mouse-cursor: pointer;
         clicked => { SettingsStyle.keyboard-mode = false; back_focus.focus(); root.clicked(); }
     }

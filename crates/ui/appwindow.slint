@@ -29,6 +29,8 @@ import { Anim } from "anim.slint";
 import { NavMetrics } from "sidenav.slint";
 export { NavState } from "sidenav.slint";
 import { SettingsStyle } from "settings-controls.slint";
+import { ControlInput } from "control-input.slint";
+export { ControlInput } from "control-input.slint";
 export { SettingsStyle } from "settings-controls.slint";
 
 // Shared structs used by the property declarations below; they are exported
@@ -276,7 +278,7 @@ export component AppWindow inherits Window {
     in-out property <int> home_view: 0;
     // Touch-driven platform (Android): card menus open as bottom sheets
     // on hold; desktop keeps native right-click popups. Set once from Rust.
-    in-out property <bool> touch_menus: false;
+    in-out property <bool> touch_menus <=> ControlInput.touch-feedback;
     in-out property <string> home_empty_hint: @tr("Nothing to continue — start watching a show or movie and it will show up here.");
 
     // --- Settings (image cache) ---------------------------------------
@@ -289,22 +291,41 @@ export component AppWindow inherits Window {
     in-out property <bool> more_open: false;
     private property <bool> more_parent: false;
     private property <bool> more_subpage_entered: true;
-    private property <bool> more_subpage_motion: root.more_parent && root.narrow_ui && Anim.enabled && Anim.transitions;
+    private property <bool> more_subpage_exiting: false;
+    private property <bool> more_return_pending: false;
+    private property <bool> more_subpage_motion: root.more_parent && (root.narrow_ui || root.more_subpage_exiting) && Anim.enabled && Anim.transitions;
     more_entry_tick := Timer {
         interval: 1ms; running: false;
         triggered => { self.stop(); root.more_subpage_entered = true; }
     }
+    more_return_tick := Timer {
+        interval: Anim.transition_slide; running: false;
+        triggered => { self.stop(); root.finish_more_subpage_back(); }
+    }
+    changed more_subpage_motion => {
+        if (!root.more_subpage_motion && root.more_return_pending) {
+            more_return_tick.stop();
+            if (root.more_parent) { root.finish_more_subpage_back(); }
+            else { root.cancel_more_subpage_back(); }
+        }
+    }
     changed show_about => { if (root.show_about) { root.discover_search_focused = false; root.more_open = false; } }
     function open_more() {
-        if (!root.player_open && !root.modal_visible) {
+        if (!root.player_open && !root.modal_visible && root.more_parent) {
+            root.more_subpage_back();
+        } else if (!root.player_open && !root.modal_visible) {
             system_back_scope.focus();
             root.discover_search_focused = false;
+            root.cancel_more_subpage_back();
             root.more_parent = false;
             root.more_open = true;
         }
     }
     function pick_more(index: int) {
         root.preserve_back_focus();
+        more_return_tick.stop();
+        root.more_return_pending = false;
+        root.more_subpage_exiting = false;
         root.more_subpage_entered = false;
         root.more_parent = true;
         root.more_open = false;
@@ -314,17 +335,36 @@ export component AppWindow inherits Window {
         else { root.about_picked(); }
         more_entry_tick.start();
     }
+    function finish_more_subpage_back() {
+        if (!root.more_return_pending) { return; }
+        root.more_return_pending = false;
+        root.more_subpage_exiting = false;
+        root.show_settings = false;
+        root.show_calendar = false;
+        root.show_downloads = false;
+        root.show_about = false;
+        root.show_home = false;
+        root.show_library = false;
+        root.more_parent = false;
+        root.more_open = true;
+    }
+    function cancel_more_subpage_back() {
+        more_return_tick.stop();
+        root.more_return_pending = false;
+        root.more_subpage_exiting = false;
+    }
     function more_subpage_back() {
         system_back_scope.focus();
         if (root.more_parent) {
-            root.show_settings = false;
-            root.show_calendar = false;
-            root.show_downloads = false;
-            root.show_about = false;
-            root.show_home = false;
-            root.show_library = false;
-            root.more_parent = false;
-            root.more_open = true;
+            if (root.more_return_pending) { return; }
+            if (Anim.enabled && Anim.transitions) {
+                root.more_return_pending = true;
+                root.more_subpage_exiting = true;
+                more_return_tick.start();
+            } else {
+                root.more_return_pending = true;
+                root.finish_more_subpage_back();
+            }
         } else { root.home_picked(); }
     }
     in-out property <string> license_catalog: "";
@@ -423,7 +463,7 @@ export component AppWindow inherits Window {
     // Settings → Downloads → Downloaded episodes (completed episode files).
     in-out property <[DownloadRow]> downloads_rows: [];
     // --- Settings (cross-device sync) ---------------------------------
-    in-out property <bool> sync_enabled: false;
+    in-out property <bool> sync_enabled <=> SettingsSync.enabled;
     in-out property <string> sync_identity: "";
     in-out property <[SyncPeer]> sync_peers: [];
     in-out property <string> sync_peer_input: "";
@@ -1263,8 +1303,8 @@ export component AppWindow inherits Window {
     // ---- Settings page --------------------------------------------------
     if root.show_settings && !root.player_open && !root.modal_visible && !root.show_home && !root.show_about: SettingsPage {
         width: root.width; height: root.height;
-        x: root.more_subpage_motion && !root.more_subpage_entered ? root.width * 0.28 : 0px;
-        opacity: root.more_subpage_motion && !root.more_subpage_entered ? 0.0 : 1.0;
+        x: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? root.width * 0.28 : 0px;
+        opacity: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? 0.0 : 1.0;
         animate x { duration: Anim.transition_slide; easing: ease-out; }
         animate opacity { duration: Anim.transition_fade; }
         sel <=> root.settings_selected_id;
@@ -1400,11 +1440,12 @@ export component AppWindow inherits Window {
         safe-bottom: root.safe-area-insets.bottom;
         scroll_y <=> root.settings_scroll_y;
 
-        discover_picked => { root.discover_picked(); }
-        home_picked => { root.more_subpage_back(); }
-        library_picked => { root.library_picked(); }
-        settings_picked => { root.more_parent = false; root.more_open = false; root.settings_picked(); }
-        about_picked => { root.more_parent = false; root.more_open = false; root.about_picked(); }
+        discover_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.discover_picked(); }
+        home_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.more_open = false; root.home_picked(); }
+        back_picked => { root.more_subpage_back(); }
+        library_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.library_picked(); }
+        settings_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.more_open = false; root.settings_picked(); }
+        about_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.more_open = false; root.about_picked(); }
         more_picked => { root.open_more(); }
         addon_added(u) => { root.addon_added(u); }
         addon_toggled(i) => { root.addon_toggled(i); }
@@ -1460,8 +1501,8 @@ export component AppWindow inherits Window {
     // ---- About (with nested Licenses) -----------------------------------
     if root.show_about && !root.player_open && !root.modal_visible && !root.show_home && !root.show_library && !root.show_settings: AboutPage {
         width: root.width; height: root.height;
-        x: root.more_subpage_motion && !root.more_subpage_entered ? root.width * 0.28 : 0px;
-        opacity: root.more_subpage_motion && !root.more_subpage_entered ? 0.0 : 1.0;
+        x: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? root.width * 0.28 : 0px;
+        opacity: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? 0.0 : 1.0;
         animate x { duration: Anim.transition_slide; easing: ease-out; }
         animate opacity { duration: Anim.transition_fade; }
         nav-viewport-width: root.width;
@@ -1477,11 +1518,12 @@ export component AppWindow inherits Window {
         licenses_scroll_y <=> root.about_licenses_scroll_y;
         license_catalog: root.license_catalog;
         license_sources: root.license_sources;
-        home_picked => { root.more_subpage_back(); }
-        discover_picked => { root.discover_picked(); }
-        library_picked => { root.library_picked(); }
-        settings_picked => { root.more_parent = false; root.settings_picked(); }
-        about_picked => { root.more_parent = false; root.about_picked(); }
+        home_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.more_open = false; root.home_picked(); }
+        back_picked => { root.more_subpage_back(); }
+        discover_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.discover_picked(); }
+        library_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.library_picked(); }
+        settings_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.settings_picked(); }
+        about_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.about_picked(); }
         more_picked => { root.open_more(); }
         license_source_requested(url) => { root.license_source_requested(url); }
     }
@@ -1507,8 +1549,8 @@ export component AppWindow inherits Window {
 
     if root.show_calendar && !root.player_open && !root.modal_visible && !root.more_open: CalendarPage {
         width: root.width; height: root.height;
-        x: root.more_subpage_motion && !root.more_subpage_entered ? root.width * 0.28 : 0px;
-        opacity: root.more_subpage_motion && !root.more_subpage_entered ? 0.0 : 1.0;
+        x: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? root.width * 0.28 : 0px;
+        opacity: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? 0.0 : 1.0;
         animate x { duration: Anim.transition_slide; easing: ease-out; }
         animate opacity { duration: Anim.transition_fade; }
         cells: root.calendar_cells; week_cells: root.calendar_week; rows: root.calendar_rows; later: root.calendar_later;
@@ -1519,17 +1561,17 @@ export component AppWindow inherits Window {
         safe-top: root.safe-area-insets.top; safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right; safe-bottom: root.safe-area-insets.bottom;
         system_back_request: root.page_back_request; kb_active <=> root.kb_active;
         back => { root.more_subpage_back(); }
-        home_picked => { root.more_parent = false; root.home_picked(); }
-        discover_picked => { root.more_parent = false; root.discover_picked(); }
-        library_picked => { root.more_parent = false; root.library_picked(); }
-        settings_picked => { root.more_parent = false; root.settings_picked(); }
-        about_picked => { root.more_parent = false; root.about_picked(); }
+        home_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.home_picked(); }
+        discover_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.discover_picked(); }
+        library_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.library_picked(); }
+        settings_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.settings_picked(); }
+        about_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.about_picked(); }
         more_picked => { root.open_more(); }
     }
     if root.show_downloads && !root.player_open && !root.modal_visible && !root.more_open: DownloadsPage {
         width: root.width; height: root.height;
-        x: root.more_subpage_motion && !root.more_subpage_entered ? root.width * 0.28 : 0px;
-        opacity: root.more_subpage_motion && !root.more_subpage_entered ? 0.0 : 1.0;
+        x: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? root.width * 0.28 : 0px;
+        opacity: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? 0.0 : 1.0;
         animate x { duration: Anim.transition_slide; easing: ease-out; }
         animate opacity { duration: Anim.transition_fade; }
         groups: root.downloads_page_groups; transfers: root.downloads_page_transfers; summary: root.downloads_page_summary; counts: root.downloads_page_counts;
@@ -1540,11 +1582,11 @@ export component AppWindow inherits Window {
         safe-top: root.safe-area-insets.top; safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right; safe-bottom: root.safe-area-insets.bottom;
         system_back_request: root.page_back_request; kb_active <=> root.kb_active;
         back => { root.more_subpage_back(); }
-        home_picked => { root.more_parent = false; root.home_picked(); }
-        discover_picked => { root.more_parent = false; root.discover_picked(); }
-        library_picked => { root.more_parent = false; root.library_picked(); }
-        settings_picked => { root.more_parent = false; root.settings_picked(); }
-        about_picked => { root.more_parent = false; root.about_picked(); }
+        home_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.home_picked(); }
+        discover_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.discover_picked(); }
+        library_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.library_picked(); }
+        settings_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.settings_picked(); }
+        about_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.about_picked(); }
         more_picked => { root.open_more(); }
     }
 

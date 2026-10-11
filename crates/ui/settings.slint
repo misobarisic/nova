@@ -182,6 +182,7 @@ export component SettingsPage {
 
     callback discover_picked();
     callback home_picked();
+    callback back_picked();
     callback library_picked();
     callback settings_picked();
     callback about_picked();
@@ -671,11 +672,11 @@ export component SettingsPage {
             }
             nav_scope.focus();
         } else if (root.two_pane && root.kb_zone == 8) {
-            root.home_picked();
+            root.back_picked();
         } else if (root.sub_open) {
             root.close_page();
         } else {
-            root.home_picked();
+            root.back_picked();
         }
     }
 
@@ -2062,11 +2063,11 @@ export component SettingsPage {
                                     }
                                     if !root.narrow: Segmented {
                                         labels: [@tr("All"), @tr("Searchable catalogs"), @tr("Metadata"), @tr("Streams")];
-                                        current_index <=> root.addon_capability_filter;
+                                        current_index: root.addon_capability_filter;
                                         picked(index) => { nav_scope.focus(); root.addon_capability_filter = index; root.addon_filter_changed(); }
                                     }
                                     if root.narrow: VerticalLayout {
-                                        spacing: 0px;
+                                        spacing: 8px;
                                         Segmented {
                                             labels: [@tr("All"), @tr("Searchable catalogs")];
                                             current_index: root.addon_capability_filter < 2 ? root.addon_capability_filter : -1;
@@ -2403,9 +2404,9 @@ export component SettingsPage {
                                             setting-key: "format";
                                             row-title: @tr("Format");
                                             row-desc: @tr("JPEG or WebP for compressed artwork.");
-                                            Segmented { labels: root.cache_format_names; current_index <=> root.cache_format_index; enabled: root.cache_images && root.cache_enabled && !root.cache_busy;
+                                            Segmented { labels: root.cache_format_names; current_index: root.cache_format_index; enabled: root.cache_images && root.cache_enabled && !root.cache_busy;
                                                 focused: root.kb_active && root.kb_zone == 5 && root.kb_hr == 2;
-                                                picked(i) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 2; root.schedule_save(); } }
+                                                picked(i) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 2; root.cache_format_index = i; root.schedule_save(); } }
                                         }
                                         SettingsRow {
                                             setting-key: "quality";
@@ -3041,7 +3042,7 @@ export component SettingsPage {
 
                                             Segmented {
                                                 labels: [@tr("Built-in"), @tr("External")];
-                                                current_index <=> root.player_backend_index;
+                                                current_index: root.player_backend_index;
                                                 focused: root.kb_zone == 9 && root.kb_pr == 0 && root.kb_active;
                                                 picked(i) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 9; root.kb_pr = 0; root.player_backend_index = i; root.schedule_save(); }
                                             }
@@ -3059,7 +3060,7 @@ export component SettingsPage {
 
                                             Segmented {
                                                 labels: [@tr("Start over"), @tr("Resume"), @tr("Ask")];
-                                                current_index <=> root.episode_start_index;
+                                                current_index: root.episode_start_index;
                                                 focused: root.kb_zone == 9 && root.kb_pr == 1 && root.kb_active;
                                                 picked(i) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 9; root.kb_pr = 1; root.episode_start_index = i; root.schedule_save(); }
                                             }
@@ -3077,7 +3078,7 @@ export component SettingsPage {
 
                                             Segmented {
                                                 labels: [@tr("System default"), "VLC", "mpv"];
-                                                current_index <=> root.desktop_external_app_index;
+                                                current_index: root.desktop_external_app_index;
                                                 focused: root.kb_zone == 9 && root.kb_pr == 2 && root.kb_active;
                                                 picked(i) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 9; root.kb_pr = 2; root.desktop_external_app_index = i; root.schedule_save(); }
                                             }
@@ -3091,7 +3092,7 @@ export component SettingsPage {
 
                                             Segmented {
                                                 labels: ["HW+", "HW", "SW"];
-                                                current_index <=> root.android_hwdec_index;
+                                                current_index: root.android_hwdec_index;
                                                 focused: root.kb_zone == 9 && root.kb_pr == 2 && root.kb_active;
                                                 picked(i) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 9; root.kb_pr = 2; root.android_hwdec_index = i; root.schedule_save(); }
                                             }
@@ -3236,8 +3237,8 @@ export component SettingsPage {
                                                     speed_title_line := Rectangle {
                                                         // Match ordinary settings rows without forcing
                                                         // translated titles and badges onto one line.
-                                                        property <bool> inline-badge: speed_title_natural.preferred-width + speed_scope_badge.preferred-width + 8px <= self.width;
-                                                        height: self.inline-badge ? Math.max(speed_title.preferred-height, 26px) : speed_title.preferred-height + 29px;
+                                                        property <bool> inline-badge: SettingsSync.enabled && speed_title_natural.preferred-width + speed_scope_badge.preferred-width + 8px <= self.width;
+                                                        height: self.inline-badge ? Math.max(speed_title.preferred-height, 26px) : speed_title.preferred-height + (SettingsSync.enabled ? 29px : 0px);
 
                                                         Rectangle {
                                                             width: 0px; height: 0px; clip: true;
@@ -3325,7 +3326,7 @@ export component SettingsPage {
                                             picked(i) => { root.pick_card_radius(i); }
                                         }
                                         if root.narrow: VerticalLayout {
-                                            spacing: 0px;
+                                            spacing: 8px;
                                             Segmented {
                                                 labels: [@tr("Square"), @tr("Subtle"), @tr("Soft")];
                                                 current_index: root.radius_preset_index < 3 ? root.radius_preset_index : -1;
@@ -3351,7 +3352,7 @@ export component SettingsPage {
                                             picked(i) => { root.pick_button_radius(i); }
                                         }
                                         if root.narrow: VerticalLayout {
-                                            spacing: 0px;
+                                            spacing: 8px;
                                             Segmented {
                                                 labels: [@tr("Square"), @tr("Subtle"), @tr("Soft")];
                                                 current_index: root.button_radius_preset_index < 3 ? root.button_radius_preset_index : -1;
@@ -3377,7 +3378,7 @@ export component SettingsPage {
                                             picked(i) => { root.pick_card_spacing(i); }
                                         }
                                         if root.narrow: VerticalLayout {
-                                            spacing: 0px;
+                                            spacing: 8px;
                                             Segmented {
                                                 labels: [@tr("None"), @tr("Tight"), @tr("Compact")];
                                                 current_index: root.spacing_preset_index < 3 ? root.spacing_preset_index : -1;
@@ -3414,11 +3415,12 @@ export component SettingsPage {
                                         row-desc: @tr("Choose how tall the featured artwork is. Sizes adapt to screen width.");
                                         Segmented {
                                             labels: [@tr("Small"), @tr("Medium"), @tr("Large")];
-                                            current_index <=> root.home_backdrop_size;
+                                            current_index: root.home_backdrop_size;
                                             focused: root.kb_zone == 17 && root.kb_theme == 5 && root.kb_active;
                                             picked(i) => {
                                                 root.kb_active = SettingsStyle.keyboard-mode;
                                                 root.kb_zone = 17; root.kb_theme = 5;
+                                                root.home_backdrop_size = i;
                                                 root.schedule_setting("home_backdrop_size");
                                             }
                                         }
@@ -3429,11 +3431,12 @@ export component SettingsPage {
                                         row-desc: @tr("Choose how tall the Detail artwork is. Sizes adapt to screen width.");
                                         Segmented {
                                             labels: [@tr("Small"), @tr("Medium"), @tr("Large")];
-                                            current_index <=> root.detail_backdrop_size;
+                                            current_index: root.detail_backdrop_size;
                                             focused: root.kb_zone == 17 && root.kb_theme == 6 && root.kb_active;
                                             picked(i) => {
                                                 root.kb_active = SettingsStyle.keyboard-mode;
                                                 root.kb_zone = 17; root.kb_theme = 6;
+                                                root.detail_backdrop_size = i;
                                                 root.schedule_setting("detail_backdrop_size");
                                             }
                                         }
@@ -3444,11 +3447,12 @@ export component SettingsPage {
                                         row-desc: @tr("Align titles on narrow Home and Detail screens, plus Home featured metadata.");
                                         Segmented {
                                             labels: [@tr("Left"), @tr("Center"), @tr("Right")];
-                                            current_index <=> root.hero_title_alignment;
+                                            current_index: root.hero_title_alignment;
                                             focused: root.kb_zone == 17 && root.kb_theme == 7 && root.kb_active;
                                             picked(i) => {
                                                 root.kb_active = SettingsStyle.keyboard-mode;
                                                 root.kb_zone = 17; root.kb_theme = 7;
+                                                root.hero_title_alignment = i;
                                                 root.schedule_setting("hero_title_alignment");
                                             }
                                         }
@@ -3806,8 +3810,8 @@ export component SettingsPage {
 
                                                     Segmented {
                                                         labels: [@tr("30s"), @tr("1m"), @tr("5m"), @tr("15m")];
-                                                        current_index <=> root.sync_interval_index;
-                                                        picked(i) => { root.sync_interval_picked(i); }
+                                                        current_index: root.sync_interval_index;
+                                                        picked(i) => { root.sync_interval_index = i; root.sync_interval_picked(i); }
                                                     }
                                                 }
 

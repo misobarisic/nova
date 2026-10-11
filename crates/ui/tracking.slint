@@ -1,3 +1,4 @@
+import { ControlTouchArea } from "control-input.slint";
 import { Theme } from "theme.slint";
 import { CheckBox, Spinner } from "std-widgets.slint";
 import { ScrollView } from "scrollview.slint";
@@ -24,7 +25,7 @@ component TrackingButton inherits Rectangle {
     min-width: 0px;
     vertical-stretch: 0;
     border-radius: root.icon == 1 ? 22px : 12px;
-    background: root.destructive ? Theme.current.destructive_control : root.primary ? Theme.current.primary_button : (root.selected ? Theme.current.selection_wash : root.quiet ? transparent : (touch.has-hover ? Theme.current.tracking_control_hover : Theme.current.tracking_control));
+    background: root.destructive ? Theme.current.destructive_control : root.primary ? Theme.current.primary_button : (root.selected ? Theme.current.selection_wash : root.quiet ? transparent : (touch.feedback-active ? Theme.current.tracking_control_hover : Theme.current.tracking_control));
     opacity: root.enabled ? 1 : 0.45;
     border-width: focus.has-focus ? 2px : (root.quiet ? 0px : 1px);
     border-color: focus.has-focus || root.selected ? Theme.current.accent_vivid : Theme.current.border_overlay;
@@ -60,7 +61,7 @@ component TrackingButton inherits Rectangle {
             if e.text == Key.Return || e.text == " " { root.clicked(); accept } else { reject }
         }
     }
-    touch := TouchArea {
+    touch := ControlTouchArea {
         enabled: root.enabled; mouse-cursor: pointer;
         clicked => { focus.focus(); root.clicked(); }
     }

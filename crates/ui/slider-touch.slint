@@ -1,3 +1,4 @@
+import { ControlTouchArea } from "control-input.slint";
 // Shared by the numeric settings sliders and playback-speed control. The
 // Settings page yields its vertical pan for the entire slider gesture.
 export global SliderGesture {
@@ -5,7 +6,7 @@ export global SliderGesture {
     in-out property <bool> hovered: false;
 }
 
-export component SliderTouchArea inherits TouchArea {
+export component SliderTouchArea inherits ControlTouchArea {
     private property <bool> owns-gesture: false;
 
     function release() {
@@ -29,6 +30,6 @@ export component SliderTouchArea inherits TouchArea {
     changed pressed => { if (!root.pressed) { root.release(); } }
     // Yield before a mouse press too: otherwise a quick diagonal drag can
     // reach the Flickable's capture threshold before its delayed press arrives.
-    changed has-hover => { SliderGesture.hovered = root.has-hover; }
+    changed feedback-active => { SliderGesture.hovered = root.feedback-active; }
     changed enabled => { if (!root.enabled) { root.release(); } }
 }
