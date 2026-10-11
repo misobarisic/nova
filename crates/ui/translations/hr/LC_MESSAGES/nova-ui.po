@@ -2131,3 +2131,30 @@ msgstr "Ovaj dodatak ne pruža sadržaj dok su obje opcije isključene."
 
 msgid "Retry"
 msgstr "Pokušaj ponovno"
+
+msgid "Search languages"
+msgstr "Pretražite jezike"
+
+msgid "Default audio language"
+msgstr "Zadani jezik zvuka"
+
+msgid "Search for the language the built-in player should use by default."
+msgstr "Pretražite jezik koji ugrađeni reproduktor treba zadano koristiti."
+
+msgid "Default subtitle language"
+msgstr "Zadani jezik titlova"
+
+msgid "Search for the subtitle language the built-in player should use by default."
+msgstr "Pretražite jezik titlova koji ugrađeni reproduktor treba zadano koristiti."
+
+msgid "Default playback speed"
+msgstr "Zadana brzina reprodukcije"
+
+msgid "Use global default"
+msgstr "Koristite globalnu zadanu vrijednost"
+
+msgid "Saved for this title"
+msgstr "Spremljeno za ovaj naslov"
+
+msgid "Using global default"
+msgstr "Koristi se globalna zadana vrijednost"

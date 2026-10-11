@@ -300,6 +300,9 @@ struct Shared {
     entries: Vec<LibraryEntry>,
     /// Current image-cache settings (mirrored from the KV store).
     cache_settings: CacheSettings,
+    playback_preference_edits:
+        HashMap<String, Option<nova_config::playback_preferences::PreferenceValue>>,
+    playback_preference_save_at: Option<std::time::Instant>,
     download_settings: DownloadSettings,
     downloads_page_query: String,
     downloads_page_filter: i32,
@@ -781,6 +784,7 @@ mod home;
 mod library;
 mod next_episode;
 mod playback;
+mod playback_preferences;
 mod posters;
 mod run;
 mod settings;

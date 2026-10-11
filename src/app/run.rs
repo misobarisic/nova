@@ -918,6 +918,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.migrate_viewing_activity();
     // Only unapplied records need replay; snapshots already materialized
     // by previous launches/local writes are authoritative and cheap to load.
+    bridge.restore_playback_preferences_schema();
+    bridge.seed_playback_default_settings();
     bridge.sync_seed();
     bridge.restore_sync_projection();
     bridge.settings_to_ui();
@@ -1010,18 +1012,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let p = player.clone();
     app.on_toggle_mute(move || p.toggle_mute());
 
-    // Playback rate: one per-device value, edited from the player's settings
-    // panel (here) and Settings → Player. Both paths store it and push it into
-    // the running session immediately; the KV write is debounced so a slider
-    // drag persists once when the user pauses.
-    let schedule_speed_save = schedule_settings_save;
-
+    // Settings edits defaults; OSD edits only the active title's override.
     let b = bridge.clone();
-    let schedule_speed_save1 = schedule_speed_save.clone();
-    app.on_playback_speed_changed(move |speed| {
-        b.apply_playback_speed(speed);
-        schedule_speed_save1();
+    app.on_playback_speed_changed(move |speed| b.apply_playback_speed(speed));
+    let b = bridge.clone();
+    app.on_default_playback_speed_stepped(move |d| {
+        let speed = nova_config::active_cache_settings().playback_speed;
+        b.apply_default_playback_speed(nova_config::quantize_playback_speed(
+            speed + d as f32 * nova_config::PLAYBACK_SPEED_STEP,
+        ));
+        schedule_settings_save();
     });
+    let b = bridge.clone();
+    app.on_playback_language_search(move |query, subtitles| {
+        b.filter_playback_languages(query.as_str(), subtitles)
+    });
+    let b = bridge.clone();
+    app.on_playback_language_picked(move |code, subtitles| {
+        b.pick_default_playback_language(code.as_str(), subtitles)
+    });
+    let b = bridge.clone();
+    app.on_restore_playback_default(move |control| b.restore_playback_default(control));
 
     // Transient rate preview (press-and-hold 2×): session only, never stored.
     let b = bridge.clone();
@@ -1038,14 +1049,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_playback_speed_stepped(move |d| {
         b.nudge_playback_speed(d);
-        schedule_speed_save();
     });
 
-    let p = player.clone();
-    app.on_pick_audio_track(move |idx| p.pick_audio_track(idx));
-
-    let p = player.clone();
-    app.on_pick_sub_track(move |idx| p.pick_sub_track(idx));
+    let b = bridge.clone();
+    app.on_pick_audio_track(move |idx| b.pick_playback_track(true, idx));
+    let b = bridge.clone();
+    app.on_pick_sub_track(move |idx| b.pick_playback_track(false, idx));
 
     // Android runtime decoder picker (settings modal → decoder submenu). A
     // no-op where the gear/modal is hidden.
@@ -1136,6 +1145,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 tick_bridge.refresh_library_progress_ui();
             }
             tick_player.tick();
+            tick_bridge.flush_playback_preferences(false);
             tick_bridge.note_player_progress_from_ui();
             tick_bridge.note_torrent_progress_from_ui();
             tick_bridge.refresh_download_rows();

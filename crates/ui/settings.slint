@@ -16,6 +16,71 @@ import { SliderGesture } from "slider-touch.slint";
 
 import { PillButton, ToggleSwitch, AddonIconButton, AddonRowCard, MiniSlider, Segmented, SectionHeader, SettingsRow, ValueBox, SettingsLink, SettingsStyle, SettingsDestinations, NumericSetting, SettingsCard, SettingsHeader } from "settings-controls.slint";
 
+// Search plus a compact result picker for one built-in playback language.
+// The selected label remains visible when the backend's result list is
+// filtered and therefore no longer contains the current code.
+component PlaybackLanguagePicker inherits Rectangle {
+    in property <bool> subtitle: false;
+    in property <bool> edit-requested: false;
+    in property <bool> keyboard-mode: false;
+    in property <string> current-label: "";
+    in property <[string]> codes: [];
+    in property <[string]> names: [];
+    in-out property <int> current-index: -1;
+
+    callback search(string, bool);
+    callback picked(string, bool);
+    callback accepted();
+    callback focus_changed(bool);
+
+    property <string> query: "";
+
+    preferred-width: 360px;
+    preferred-height: 44px;
+    min-width: 1px;
+    height: 44px;
+
+    HorizontalLayout {
+        width: 100%;
+        height: 44px;
+        spacing: 8px;
+
+        search_field := SearchField {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            roomy: true;
+            search-icon: true;
+            show-pointer-focus: false;
+            keyboard-mode: root.keyboard-mode;
+            text <=> root.query;
+            placeholder-text: @tr("Search languages");
+            focus_changed(focused) => { root.focus_changed(focused); }
+            edited(text) => {
+                root.current-index = -1;
+                root.search(text, root.subtitle);
+            }
+            accepted(text) => { root.accepted(); }
+        }
+
+        Dropdown {
+            width: 180px;
+            roomy: true;
+            model: root.codes;
+            labels: root.names;
+            current-index <=> root.current-index;
+            placeholder-text: root.current-label;
+            selected(code) => { root.picked(code, root.subtitle); }
+        }
+    }
+
+    edit_timer := Timer {
+        interval: 80ms;
+        running: root.edit-requested;
+        triggered => { search_field.focus(); }
+    }
+
+}
+
 export component SettingsPage {
     in property <[TrackingAccountRow]> tracking_accounts;
     in property <string> tracking_notice;
@@ -89,9 +154,21 @@ export component SettingsPage {
     in-out property <int> android_hwdec_index: 0;
     in-out property <int> player_backend_index: 0;
     in-out property <int> desktop_external_app_index: 0;
-    // Playback rate (Settings → Player → Playback speed). The same per-device
-    // value the player's own settings panel edits; the ± buttons ask the
-    // backend for a quantized step.
+    // Built-in playback language defaults. The backend supplies search
+    // results and the current selected labels; codes remain semantic values.
+    in-out property <string> default_audio_language: "";
+    in-out property <string> default_subtitle_language: "";
+    in property <string> audio_language_label: "";
+    in property <string> subtitle_language_label: "";
+    in property <[string]> audio_language_codes: [];
+    in property <[string]> audio_language_names: [];
+    in property <[string]> subtitle_language_codes: [];
+    in property <[string]> subtitle_language_names: [];
+    in-out property <int> audio_language_choice_index: -1;
+    in-out property <int> subtitle_language_choice_index: -1;
+    // Global default playback rate (Settings → Player). The player's OSD
+    // title override is separate; ± steps ask the backend for a quantized
+    // change to this default.
     in-out property <float> playback_speed: 1.0;
     in-out property <bool> android_auto_continue: false;
     in-out property <int> episode_start_index: 1;
@@ -196,6 +273,8 @@ export component SettingsPage {
     // Playback rate ± one 0.05 step (Settings → Player). The backend
     // quantizes it and writes the property back.
     callback playback_speed_stepped(int);
+    callback playback_language_search(string, bool);
+    callback playback_language_picked(string, bool);
     // Capture edits immediately; the application owns persistence debouncing.
     callback save_settings();
     in property <bool> persistence_failed: false;
@@ -425,6 +504,7 @@ export component SettingsPage {
     property <int> kb_dr: 5;
     property <int> kb_tr: 0; // torrent rows 0..5 (only 0 when streaming is off)
     property <int> kb_pr: 0; // player rows (see kb_player_n)
+    property <bool> player_language_input_focused: false;
     property <int> kb_anr: 0; // look-and-feel rows 0..4
     property <int> kb_theme: 0; // true black, radius, spacing, status fade, Home/Detail size, title alignment, reset
     property <int> kb_dl: 0; // downloads rows 0 delete-after-watched, 1 episodes
@@ -625,9 +705,14 @@ export component SettingsPage {
             root.sync_respond_pair(root.sync_pair_prompt_id, false);
         } else if (root.sel==12 && root.tracking_input_focused){
             root.tracking_blur=!root.tracking_blur;
-        } else if (root.input_focused || root.kb_edit != 0) {
+        } else if (root.input_focused || root.player_language_input_focused || root.kb_edit != 0) {
             root.kb_edit = 0;
             root.input_focused = false;
+            root.player_language_input_focused = false;
+            if (root.is_android) {
+                root.kb_active = false;
+                SettingsStyle.keyboard-mode = false;
+            }
             nav_scope.focus();
         } else if (root.two_pane && root.kb_zone == 8) {
             root.home_picked();
@@ -1091,21 +1176,29 @@ export component SettingsPage {
     }
 
     // Player rows: row 0 is always the backend picker (built-in vs
-    // external). The second row is the Android decoder (only when built-in
-    // is selected), or the desktop external-app picker when the backend is
-    // external (hidden when built-in is selected on desktop). The playback
-    // rate follows the built-in player on both platforms: last on Android
-    // (after the decoder), first-and-only control row on desktop.
+    // external), followed by episode start behavior. Decoder / external-app
+    // controls come next, then the built-in player's language defaults and
+    // global speed. The player's OSD title override remains separate.
     function kb_player_speed_row() -> int {
         if (root.is_android) {
-            return root.player_backend_index == 0 ? 4 : -1;
+            return root.player_backend_index == 0 ? 6 : -1;
         }
-        return root.player_backend_index == 0 ? 2 : -1;
+        return root.player_backend_index == 0 ? 4 : -1;
+    }
+
+    function kb_player_audio_language_row() -> int {
+        if (root.player_backend_index != 0) { return -1; }
+        return root.is_android ? 4 : 2;
+    }
+
+    function kb_player_subtitle_language_row() -> int {
+        let audio_row = root.kb_player_audio_language_row();
+        return audio_row < 0 ? -1 : audio_row + 1;
     }
 
     function kb_player_n() -> int {
-        if (root.is_android) { return root.player_backend_index == 0 ? 5 : 2; }
-        return 3;
+        if (root.is_android) { return root.player_backend_index == 0 ? 7 : 2; }
+        return root.player_backend_index == 0 ? 5 : 3;
     }
 
     function kb_player_clamp() {
@@ -1125,6 +1218,10 @@ export component SettingsPage {
         } else if (root.is_android && root.player_backend_index == 0 && root.kb_pr == 3) {
             root.android_auto_continue = d > 0;
             root.schedule_save();
+        } else if (root.kb_pr == root.kb_player_audio_language_row()) {
+            root.kb_player_language_step(root.audio_language_choice_index, d, false);
+        } else if (root.kb_pr == root.kb_player_subtitle_language_row()) {
+            root.kb_player_language_step(root.subtitle_language_choice_index, d, true);
         } else if (root.kb_pr == root.kb_player_speed_row()) {
             // The backend applies ± a step and re-quantizes; the property
             // comes back with the snapped value.
@@ -1136,6 +1233,30 @@ export component SettingsPage {
         } else {
             root.desktop_external_app_index = Math.max(0, Math.min(2, root.desktop_external_app_index + d));
             root.schedule_save();
+        }
+    }
+
+    // Left/Right can choose directly from the current backend search results.
+    // A query clears the dropdown index; the first step then selects the
+    // first/last result, while a selected result steps normally.
+    function kb_player_language_step(current_index: int, d: int, subtitle: bool) {
+        let count = subtitle ? root.subtitle_language_codes.length : root.audio_language_codes.length;
+        if (count == 0) { return; }
+        let next_index = current_index < 0
+            ? (d > 0 ? 0 : count - 1)
+            : Math.max(0, Math.min(count - 1, current_index + d));
+        if (subtitle) {
+            root.subtitle_language_choice_index = next_index;
+            let code = root.subtitle_language_codes[next_index];
+            root.playback_language_picked(code, true);
+            root.default_subtitle_language = code;
+            root.schedule_setting("default_subtitle_language");
+        } else {
+            root.audio_language_choice_index = next_index;
+            let code = root.audio_language_codes[next_index];
+            root.playback_language_picked(code, false);
+            root.default_audio_language = code;
+            root.schedule_setting("default_audio_language");
         }
     }
 
@@ -1344,6 +1465,12 @@ export component SettingsPage {
                 root.clear_torrent_cache();
             } else {
                 root.kb_torrent_flip(root.kb_tr);
+            }
+        } else if (root.kb_zone == 9) {
+            if (root.kb_pr == root.kb_player_audio_language_row()) {
+                root.kb_edit = 4;
+            } else if (root.kb_pr == root.kb_player_subtitle_language_row()) {
+                root.kb_edit = 5;
             }
         } else if (root.kb_zone == 12) {
             if (root.kb_dl == 0) {
@@ -2973,18 +3100,87 @@ export component SettingsPage {
                                             }
                                         }
 
-                                        // Playback rate: only the built-in player uses
-                                        // it (an external app has its own controls).
-                                        // The same value the player's own settings
-                                        // panel edits; ± steps by 0.05, quantized by
-                                        // the backend.
+                                        if root.player_backend_index == 0: SettingsRow {
+                                            setting-key: "default_audio_language";
+                                            row-title: @tr("Default audio language");
+                                            row-desc: @tr("Search for the language the built-in player should use by default.");
+
+                                            HorizontalLayout {
+                                                width: 100%;
+                                                height: 44px;
+                                                spacing: 8px;
+                                                KbMark { on: root.kb_zone == 9 && root.kb_pr == root.kb_player_audio_language_row(); active: root.kb_active; }
+                                                PlaybackLanguagePicker {
+                                                    horizontal-stretch: 1;
+                                                    min-width: 0px;
+                                                    subtitle: false;
+                                                    edit-requested: root.kb_edit == 4;
+                                                    keyboard-mode: root.kb_active;
+                                                    current-label: root.audio_language_label;
+                                                    codes: root.audio_language_codes;
+                                                    names: root.audio_language_names;
+                                                    current-index <=> root.audio_language_choice_index;
+                                                    search(query, is_subtitle) => { root.playback_language_search(query, is_subtitle); }
+                                                    picked(code, is_subtitle) => {
+                                                        root.playback_language_picked(code, is_subtitle);
+                                                        root.default_audio_language = code;
+                                                        root.schedule_setting("default_audio_language");
+                                                    }
+                                                    focus_changed(focused) => {
+                                                        root.player_language_input_focused = focused;
+                                                        if (focused && root.kb_active) { root.reveal_detail_control(self.absolute-position.y, self.height); }
+                                                    }
+                                                    accepted => { root.kb_edit = 0; root.player_language_input_focused = false; nav_scope.focus(); }
+                                                }
+                                            }
+                                        }
+
+                                        if root.player_backend_index == 0: SettingsRow {
+                                            tinted: true;
+                                            setting-key: "default_subtitle_language";
+                                            row-title: @tr("Default subtitle language");
+                                            row-desc: @tr("Search for the subtitle language the built-in player should use by default.");
+
+                                            HorizontalLayout {
+                                                width: 100%;
+                                                height: 44px;
+                                                spacing: 8px;
+                                                KbMark { on: root.kb_zone == 9 && root.kb_pr == root.kb_player_subtitle_language_row(); active: root.kb_active; }
+                                                PlaybackLanguagePicker {
+                                                    horizontal-stretch: 1;
+                                                    min-width: 0px;
+                                                    subtitle: true;
+                                                    edit-requested: root.kb_edit == 5;
+                                                    keyboard-mode: root.kb_active;
+                                                    current-label: root.subtitle_language_label;
+                                                    codes: root.subtitle_language_codes;
+                                                    names: root.subtitle_language_names;
+                                                    current-index <=> root.subtitle_language_choice_index;
+                                                    search(query, is_subtitle) => { root.playback_language_search(query, is_subtitle); }
+                                                    picked(code, is_subtitle) => {
+                                                        root.playback_language_picked(code, is_subtitle);
+                                                        root.default_subtitle_language = code;
+                                                        root.schedule_setting("default_subtitle_language");
+                                                    }
+                                                    focus_changed(focused) => {
+                                                        root.player_language_input_focused = focused;
+                                                        if (focused && root.kb_active) { root.reveal_detail_control(self.absolute-position.y, self.height); }
+                                                    }
+                                                    accepted => { root.kb_edit = 0; root.player_language_input_focused = false; nav_scope.focus(); }
+                                                }
+                                            }
+                                        }
+
+                                        // Global default rate for the built-in player;
+                                        // its OSD title override is a separate setting.
+                                        // ± steps by 0.05, quantized by the backend.
                                         if !root.narrow && root.player_backend_index == 0: SettingsRow {
                                             // Alternate with the row above: the
                                             // Android decoder row (built-in) is
                                             // already tinted.
                                             tinted: !root.is_android;
                                             setting-key: "playback_speed";
-                                            row-title: @tr("Playback speed");
+                                            row-title: @tr("Default playback speed");
                                             row-desc: @tr("Rate the built-in player starts at. The slider covers 0.5×–2.0×; ± moves in 0.05× steps.");
 
                                             VerticalLayout {
@@ -3037,13 +3233,13 @@ export component SettingsPage {
 
                                                         Rectangle {
                                                             width: 0px; height: 0px; clip: true;
-                                                            speed_title_natural := Text { width: 0px; height: 0px; text: @tr("Playback speed"); font-size: 14px; font-weight: 600; }
+                                                            speed_title_natural := Text { width: 0px; height: 0px; text: @tr("Default playback speed"); font-size: 14px; font-weight: 600; }
                                                         }
                                                         speed_title := Text {
                                                             // Plain Rectangle children center by default.
                                                             // Anchor the title before the inline scope badge.
                                                             x: 0px;
-                                                            text: @tr("Playback speed");
+                                                            text: @tr("Default playback speed");
                                                             font-size: 14px;
                                                             font-weight: 600;
                                                             color: Theme.current.text_bright;
@@ -3055,7 +3251,7 @@ export component SettingsPage {
                                                         }
                                                         speed_scope_badge := SettingSyncBadge {
                                                             setting_key: "playback_speed";
-                                                            setting_title: @tr("Playback speed");
+                                                            setting_title: @tr("Default playback speed");
                                                             width: Math.min(self.preferred-width, parent.width);
                                                             x: speed_title_line.inline-badge ? speed_title_natural.preferred-width + 8px : 0px;
                                                             y: speed_title_line.inline-badge ? (parent.height - self.height) / 2 : speed_title.preferred-height + 3px;

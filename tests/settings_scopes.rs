@@ -30,6 +30,23 @@ fn click_label(app: &nova::AppWindow, label: &str) {
         .mock_single_click(slint::platform::PointerEventButton::Left);
     settle(app);
 }
+fn reveal_speed(app: &nova::AppWindow) {
+    // The new language defaults precede speed. Queries omit clipped controls,
+    // so reveal the caption before comparing its bounds with the scope badge.
+    for _ in 0..24 {
+        if let Some(title) =
+            ElementHandle::find_by_element_id(app, "SettingsPage::speed_title").next()
+        {
+            let y = title.absolute_position().y;
+            app.set_settings_scroll_y(app.get_settings_scroll_y() + 250.0 - y);
+            settle(app);
+            return;
+        }
+        app.set_settings_scroll_y(app.get_settings_scroll_y() - 100.0);
+        settle(app);
+    }
+    panic!("missing speed caption after scrolling");
+}
 #[test]
 fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
     i_slint_backend_testing::init_integration_test_with_mock_time();
@@ -181,6 +198,7 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
                 speed.status = status;
                 rows.set_row_data(1, speed);
                 settle(&app);
+                reveal_speed(&app);
                 let title = ElementHandle::find_by_element_id(&app, "SettingsPage::speed_title")
                     .next()
                     .expect("narrow playback speed title");
@@ -203,6 +221,7 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
     rows.set_row_data(1, speed);
     app.window().set_size(slint::PhysicalSize::new(390, 844));
     settle(&app);
+    reveal_speed(&app);
     badge(&app, "playback_speed").mock_single_click(slint::platform::PointerEventButton::Left);
     settle(&app);
     assert!(

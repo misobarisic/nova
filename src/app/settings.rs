@@ -170,6 +170,10 @@ impl Bridge {
             app.set_player_backend_index(if settings.player_external { 1 } else { 0 });
             app.set_desktop_external_app_index(settings.desktop_external_app.index());
             app.set_playback_speed(settings.playback_speed);
+            app.set_default_audio_language(settings.default_audio_language.clone().into());
+            app.set_default_subtitle_language(settings.default_subtitle_language.clone().into());
+            self.filter_playback_languages("", false);
+            self.filter_playback_languages("", true);
             app.set_android_auto_continue(settings.android_auto_continue);
             app.set_episode_start_index(match settings.episode_start_behavior {
                 EpisodeStartBehavior::StartOver => 0,
@@ -361,6 +365,8 @@ impl Bridge {
                     app.get_desktop_external_app_index(),
                 ),
                 playback_speed: nova_config::round_playback_speed(app.get_playback_speed()),
+                default_audio_language: app.get_default_audio_language().to_string(),
+                default_subtitle_language: app.get_default_subtitle_language().to_string(),
                 android_auto_continue: app.get_android_auto_continue(),
                 episode_start_behavior: match app.get_episode_start_index() {
                     0 => EpisodeStartBehavior::StartOver,
@@ -401,6 +407,8 @@ impl Bridge {
         }
         set_active_cache_settings(settings.clone());
         if !applying() {
+            self.player.update_playback_defaults(&settings);
+            self.refresh_effective_speed();
             notify_settings(&settings);
         }
         self.apply_theme(&settings);
@@ -1063,6 +1071,7 @@ mod tests {
         );
         let schedule = bridge.wire_settings_autosave();
         bridge.sync_seed();
+        bridge.seed_playback_default_settings();
         let owner = nova_sync::local_store().unwrap();
         assert!(
             owner.lock().unwrap().records(DOMAIN_SETTINGS).is_empty(),
@@ -1312,7 +1321,7 @@ mod tests {
         // or controls that existed before the UI refresh.
         bridge.shared.lock().unwrap().cache_settings.date_relative = false;
         bridge.settings_to_ui();
-        bridge.apply_playback_speed(1.25);
+        bridge.apply_default_playback_speed(1.25);
         schedule();
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(601));
         let saved = read_settings();

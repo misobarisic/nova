@@ -99,11 +99,40 @@ Press-and-hold and swipe gestures cancel pending taps when recognized. Small
 finger movement within the tap threshold does not reveal controls early.
 
 A 500 ms hold temporarily previews 2× speed and shows only the speed readout,
-without waking the OSD. Releasing restores the stored playback speed and leaves
+without waking the OSD. Releasing restores the effective title/default playback speed and leaves
 OSD visibility unchanged.
 
 Implementation and headless input coverage: `crates/ui/player.slint` and
 `tests/{player_gestures,player_double_tap}.rs`.
+
+## Playback defaults and title preferences
+
+Settings → Player sets the built-in player's default audio language, subtitle
+language and playback speed. Language controls use the existing Settings search
+and dropdown styles, including sync badges and optional device overrides.
+Automatic keeps mpv's normal track selection; subtitles also offer Off.
+
+Choosing audio, subtitles or speed in the OSD saves that control for the series
+(across episodes) or movie, even outside the library. Each submenu has
+**Use global default**, which clears only that control and immediately reapplies
+its current default. Speed previews from holding the video never save a choice.
+
+Track preferences store language and track kind (normal/commentary audio or
+full/forced/signs subtitles), not stream-local track numbers. A missing saved
+track falls back to the global language; unavailable subtitles fall back to Off.
+The saved choice remains available for a later stream that supplies it. Untagged
+tracks can match only a unique title, rather than guessing a language.
+
+Global defaults and independent title controls sync through the existing account
+records. Remote changes take effect at the next playback opening, without
+switching tracks or speed during an active session. Local default edits affect
+only controls that still inherit. Streams, downloads, episode changes and
+Android playback recovery use the same session preferences.
+
+Implementation: `src/app/playback_preferences.rs` owns persistence and OSD
+callbacks; `crates/config/src/playback_preferences.rs` matches semantic choices;
+`crates/player/src/track_preferences.rs` reads mpv metadata. Regression coverage
+includes their unit tests and `tests/playback_preferences_ui.rs`.
 
 ## Next-episode banner
 

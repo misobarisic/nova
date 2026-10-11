@@ -3,6 +3,8 @@
 //! Split out so the media/cache and player crates can read settings and
 //! platform paths without depending on the whole app.
 
+pub mod playback_preferences;
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
@@ -450,10 +452,12 @@ pub struct CacheSettings {
     /// never synced.
     #[serde(default)]
     pub desktop_external_app: DesktopExternalApp,
-    /// Playback rate for the built-in player, 0.5–2.0 (Settings → Player and
-    /// the player's own settings panel edit the same value). Local-only: the
-    /// rate is a property of this device's listening setup, so it is never
-    /// synced (see `UNSYNCED_SETTINGS_FIELDS` in `src/app/sync.rs`).
+    /// Synced global playback defaults. Empty language means Automatic;
+    /// subtitle language "off" disables subtitles. OSD edits override per title.
+    #[serde(default)]
+    pub default_audio_language: String,
+    #[serde(default)]
+    pub default_subtitle_language: String,
     #[serde(default = "default_playback_speed")]
     pub playback_speed: f32,
     /// How to start episodes that have resumable watch history. Local-only.
@@ -550,6 +554,8 @@ impl Default for CacheSettings {
             player_external: false,
             desktop_external_app: DesktopExternalApp::SystemDefault,
             playback_speed: 1.0,
+            default_audio_language: String::new(),
+            default_subtitle_language: String::new(),
             episode_start_behavior: EpisodeStartBehavior::Resume,
             android_auto_continue: false,
             animations: true,

@@ -342,11 +342,23 @@ export component AppWindow inherits Window {
     in-out property <int> desktop_external_app_index: 0;
     in-out property <int> android_hwdec_index: 0;
     in-out property <bool> is_android: false;
-    // --- Player: playback rate (per device) ---------------------------
-    // One value edited from both Settings → Player and the player's own
-    // settings panel: the slider may sit anywhere in 0.5–2.0, the ± buttons
-    // step by 0.05 (quantized by the backend). Local-only, never synced.
+    // Settings edits the synced global rate; the OSD edits the effective
+    // title rate separately. Both sliders cover 0.5–2.0; ± steps by 0.05.
     in-out property <float> playback_speed: 1.0;
+    in-out property <float> effective_playback_speed: 1.0;
+    in property <bool> audio_preference_saved: false;
+    in property <bool> subtitle_preference_saved: false;
+    in property <bool> speed_preference_saved: false;
+    in-out property <string> default_audio_language: "";
+    in-out property <string> default_subtitle_language: "";
+    in-out property <int> audio_language_choice_index: -1;
+    in-out property <int> subtitle_language_choice_index: -1;
+    in property <string> audio_language_label;
+    in property <string> subtitle_language_label;
+    in property <[string]> audio_language_codes;
+    in property <[string]> audio_language_names;
+    in property <[string]> subtitle_language_codes;
+    in property <[string]> subtitle_language_names;
     in-out property <bool> android_auto_continue: false;
     in-out property <int> episode_start_index: 1;
     in-out property <bool> resume_prompt_visible: false;
@@ -679,9 +691,12 @@ export component AppWindow inherits Window {
     callback pick_sub_track(int);
     // Android runtime decoder pick (0 = HW+, 1 = HW, 2 = SW).
     callback pick_decoder(int);
-    // Playback rate (player settings panel / Settings → Player, same value):
-    // a slider value, or ± one step (the backend quantizes it onto the 0.05
-    // grid, applies it to the running session and persists it, debounced).
+    // Global-default and OSD title controls have separate rate callbacks.
+    // The backend quantizes ± steps and debounces persistence of slider edits.
+    callback default_playback_speed_stepped(int);
+    callback playback_language_search(string, bool);
+    callback playback_language_picked(string, bool);
+    callback restore_playback_default(int);
     callback playback_speed_changed(float);
     callback playback_speed_stepped(int);
     // Transient rate preview (press-and-hold 2×): applied to the running
@@ -1298,6 +1313,18 @@ export component AppWindow inherits Window {
         android_hwdec_index <=> root.android_hwdec_index;
         player_backend_index <=> root.player_backend_index;
         desktop_external_app_index <=> root.desktop_external_app_index;
+        default_audio_language <=> root.default_audio_language;
+        default_subtitle_language <=> root.default_subtitle_language;
+        audio_language_choice_index <=> root.audio_language_choice_index;
+        subtitle_language_choice_index <=> root.subtitle_language_choice_index;
+        audio_language_label: root.audio_language_label;
+        subtitle_language_label: root.subtitle_language_label;
+        audio_language_codes: root.audio_language_codes;
+        audio_language_names: root.audio_language_names;
+        subtitle_language_codes: root.subtitle_language_codes;
+        subtitle_language_names: root.subtitle_language_names;
+        playback_language_search(query, subtitles) => { root.playback_language_search(query, subtitles); }
+        playback_language_picked(code, subtitles) => { root.playback_language_picked(code, subtitles); }
         playback_speed <=> root.playback_speed;
         android_auto_continue <=> root.android_auto_continue;
         episode_start_index <=> root.episode_start_index;
@@ -1373,7 +1400,7 @@ export component AppWindow inherits Window {
         addon_configure(u) => { root.addon_configure(u); }
         addon_refresh(i) => { root.addon_refresh(i); }
         addon_copy_link(u) => { root.addon_copy_link(u); }
-        playback_speed_stepped(d) => { root.playback_speed_stepped(d); }
+        playback_speed_stepped(d) => { root.default_playback_speed_stepped(d); }
         category_added(n) => { root.category_added(n); }
         category_removed(i) => { root.category_removed(i); }
         home_catalog_add_requested => { root.home_catalog_add_requested(); }
@@ -1518,7 +1545,11 @@ export component AppWindow inherits Window {
         audio_label <=> root.audio_track_label;
         volume <=> root.volume;
         muted <=> root.muted;
-        playback_speed <=> root.playback_speed;
+        playback_speed <=> root.effective_playback_speed;
+        audio_preference_saved: root.audio_preference_saved;
+        subtitle_preference_saved: root.subtitle_preference_saved;
+        speed_preference_saved: root.speed_preference_saved;
+        restore_playback_default(control) => { root.restore_playback_default(control); }
         player_brightness <=> root.player_brightness;
         is_fullscreen <=> root.is_fullscreen;
         audio_tracks <=> root.audio_tracks;

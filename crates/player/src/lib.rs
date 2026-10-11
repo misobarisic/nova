@@ -29,7 +29,11 @@ mod android_recovery;
 #[cfg(any(target_os = "android", test))]
 mod mpv_load;
 
+mod track_preferences;
 use libmpv2::Mpv;
+use nova_config::playback_preferences::{
+    SessionPreferences, TitlePreferences, TrackChoice, select_track,
+};
 use nova_ui::{AppWindow, TrackRow};
 use slint::{ComponentHandle, GraphicsAPI, RenderingState, VecModel};
 use std::ffi::CStr;
@@ -501,13 +505,6 @@ pub fn format_time(seconds: f64) -> String {
     }
 }
 
-/// The saved playback rate for this device (Settings → Player), clamped into
-/// the selectable range. Read on every `play` so a rate change applies to the
-/// next stream even if the player was never told about it.
-fn saved_playback_speed() -> f32 {
-    nova_config::clamp_playback_speed(nova_config::active_cache_settings().playback_speed)
-}
-
 /// Effective presentation rate for the Android display frame-rate hint: the
 /// container's nominal rate scaled by the playback rate (at 2× a 24 fps stream
 /// presents 48 frames/s). `None` while the container rate is still unknown.
@@ -717,7 +714,52 @@ unsafe extern "C" fn on_mpv_update(ctx: *mut c_void) {
 /// Shared state behind [`Player`]: the mpv core, its render context and the
 /// per-playback flags. All access happens on the UI/event-loop thread except
 /// the render context, which the rendering notifier touches.
+fn apply_track_options(mpv: &Mpv, prefs: &SessionPreferences, audio: bool) {
+    let (saved, global) = if audio {
+        (prefs.title.audio.as_ref(), prefs.audio_language.as_str())
+    } else {
+        (
+            prefs.title.subtitles.as_ref(),
+            prefs.subtitle_language.as_str(),
+        )
+    };
+    let language = match saved {
+        Some(TrackChoice::Track(track)) => track.language.as_deref().unwrap_or(global),
+        _ => global,
+    };
+    let _ = mpv.set_property(
+        if audio { "alang" } else { "slang" },
+        if language == "off" { "" } else { language },
+    );
+    let off = matches!(saved, Some(TrackChoice::Off)) || (saved.is_none() && global == "off");
+    let _ = mpv.set_property(
+        if audio { "aid" } else { "sid" },
+        if off { "no" } else { "auto" },
+    );
+    if !audio {
+        let _ = mpv.set_property(
+            "subs-fallback",
+            if language.is_empty() { "default" } else { "no" },
+        );
+    }
+}
+
+fn apply_preference_options(mpv: &Mpv, prefs: &SessionPreferences) {
+    apply_track_options(mpv, prefs, true);
+    apply_track_options(mpv, prefs, false);
+    let _ = mpv.set_property("speed", prefs.speed() as f64);
+}
+
+struct PreferenceSession {
+    preferences: SessionPreferences,
+    tracks: String,
+    manual_audio: bool,
+    manual_subtitles: bool,
+}
+
 struct State {
+    preferences: Mutex<PreferenceSession>,
+    preference_source: Mutex<String>,
     mpv: Mutex<Option<Mpv>>,
     /// Set when mpv could not be initialized / the renderer is not OpenGL.
     mpv_error: Mutex<Option<String>>,
@@ -951,6 +993,16 @@ impl Player {
         };
 
         let state = Arc::new(State {
+            preference_source: Mutex::new(String::new()),
+            preferences: Mutex::new(PreferenceSession {
+                preferences: SessionPreferences::from_settings(
+                    &nova_config::active_cache_settings(),
+                    TitlePreferences::default(),
+                ),
+                tracks: String::new(),
+                manual_audio: false,
+                manual_subtitles: false,
+            }),
             mpv: Mutex::new(mpv.ok()),
             mpv_error: Mutex::new(mpv_error),
             underlay: Mutex::new(None),
@@ -1202,6 +1254,13 @@ impl Player {
                                 // Set pause once, before loadfile: restoring a
                                 // paused frame must not briefly start playback.
                                 let result = (|| -> libmpv2::Result<()> {
+                                    {
+                                        let mut session = notifier_state.preferences.lock().unwrap();
+                                        session.tracks.clear();
+                                        session.manual_audio = false;
+                                        session.manual_subtitles = false;
+                                        apply_preference_options(mpv, &session.preferences);
+                                    }
                                     set_http_header_fields(mpv, &headers)?;
                                     set_string_list(mpv, c"sub-files", subtitles)?;
                                     mpv.set_property("pause", paused)?;
@@ -1382,6 +1441,37 @@ impl Player {
         headers: &[(String, String)],
         subtitles: &[String],
     ) -> Result<(), String> {
+        self.play_with_preferences(
+            url,
+            start_pos_secs,
+            headers,
+            subtitles,
+            SessionPreferences::from_settings(
+                &nova_config::active_cache_settings(),
+                TitlePreferences::default(),
+            ),
+        )
+    }
+
+    /// Queue a new session with semantic defaults and title overrides.
+    pub fn play_with_preferences(
+        &self,
+        url: &str,
+        start_pos_secs: f64,
+        headers: &[(String, String)],
+        subtitles: &[String],
+        preferences: SessionPreferences,
+    ) -> Result<(), String> {
+        if let Some(app) = self.state.app.upgrade() {
+            app.set_effective_playback_speed(preferences.speed());
+        }
+        *self.state.preferences.lock().unwrap() = PreferenceSession {
+            preferences,
+            tracks: String::new(),
+            manual_audio: false,
+            manual_subtitles: false,
+        };
+        *self.state.preference_source.lock().unwrap() = url.to_owned();
         self.state.external_handoff.store(false, Ordering::SeqCst);
         if let Some(err) = self.state.mpv_error.lock().unwrap().as_ref() {
             return Err(err.clone());
@@ -1449,7 +1539,10 @@ impl Player {
             // settings panel); `speed` also survives stop/EOF, so set it
             // from the saved value on every play instead of letting the
             // previous session's rate leak into this one.
-            let _ = mpv.set_property("speed", saved_playback_speed() as f64);
+            let _ = mpv.set_property(
+                "speed",
+                self.state.preferences.lock().unwrap().preferences.speed() as f64,
+            );
         }
 
         // Android: immersive playback — hide the status and navigation bars
@@ -1577,9 +1670,8 @@ impl Player {
         }
     }
 
-    /// Set the playback rate (0.5–2.0×). The caller owns the value (it is a
-    /// per-device setting); this only pushes it into the running session — the
-    /// next `play` re-reads the saved rate, so an idle player needs no state.
+    /// Apply a live rate, including transient gesture previews. The semantic
+    /// base rate lives in the session and is restored after previews/reloads.
     pub fn set_speed(&self, speed: f32) {
         let Ok(mpv) = self.state.mpv.lock() else {
             return;
@@ -1612,42 +1704,200 @@ impl Player {
         }
     }
 
-    /// Select an audio track by its mpv track id.
-    pub fn pick_audio_track(&self, track_id: i32) {
-        {
-            let Ok(mpv) = self.state.mpv.lock() else {
-                return;
+    /// Select a stream-local id, returning metadata only after a valid pick.
+    pub fn pick_track_preference(&self, audio: bool, track_id: i32) -> Option<TrackChoice> {
+        if self.state.pending.lock().unwrap().is_some() {
+            return None;
+        }
+        let choice = {
+            let mpv = self.state.mpv.lock().ok()?;
+            let mpv = mpv.as_ref()?;
+            if mpv.get_property::<String>("path").ok().as_deref()
+                != Some(self.state.preference_source.lock().unwrap().as_str())
+            {
+                return None;
+            }
+            let choice = if track_id < 0 {
+                TrackChoice::Off
+            } else {
+                let raw = mpv.get_property::<String>("track-list").ok()?;
+                let track = track_preferences::parse_tracks(&raw)
+                    .into_iter()
+                    .find(|t| t.audio == audio && t.id == track_id)?;
+                TrackChoice::Track(track.descriptor)
             };
-            if let Some(mpv) = mpv.as_ref() {
-                let val = if track_id < 0 {
-                    "no".to_string()
+            mpv.set_property(
+                if audio { "aid" } else { "sid" },
+                if track_id < 0 {
+                    "no".to_owned()
                 } else {
                     track_id.to_string()
-                };
-                let _ = mpv.set_property("aid", val.as_str());
+                },
+            )
+            .ok()?;
+            let mut session = self.state.preferences.lock().ok()?;
+            if audio {
+                session.preferences.title.audio = Some(choice.clone());
+                session.manual_audio = true;
+            } else {
+                session.preferences.title.subtitles = Some(choice.clone());
+                session.manual_subtitles = true;
+            }
+            choice
+        };
+        self.refresh_tracks();
+        Some(choice)
+    }
+
+    pub fn pick_audio_track(&self, track_id: i32) {
+        let _ = self.pick_track_preference(true, track_id);
+    }
+    pub fn pick_sub_track(&self, track_id: i32) {
+        let _ = self.pick_track_preference(false, track_id);
+    }
+
+    /// Reset just one field; all other session choices remain untouched.
+    pub fn restore_playback_default(&self, control: i32, settings: &nova_config::CacheSettings) {
+        {
+            let mpv = self.state.mpv.lock().unwrap();
+            let mut session = self.state.preferences.lock().unwrap();
+            match control {
+                0 => {
+                    session.preferences.title.audio = None;
+                    session.manual_audio = false;
+                    session.preferences.audio_language = settings.default_audio_language.clone();
+                }
+                1 => {
+                    session.preferences.title.subtitles = None;
+                    session.manual_subtitles = false;
+                    session.preferences.subtitle_language =
+                        settings.default_subtitle_language.clone();
+                }
+                2 => {
+                    session.preferences.title.speed = None;
+                    session.preferences.default_speed = settings.playback_speed;
+                }
+                _ => return,
+            }
+            session.tracks.clear();
+            if let Some(mpv) = mpv.as_ref() {
+                if control == 2 {
+                    let _ = mpv.set_property("speed", session.preferences.speed() as f64);
+                } else {
+                    apply_track_options(mpv, &session.preferences, control == 0);
+                }
             }
         }
-        // Re-read the track list so the popup's checkmark follows the pick.
+        self.resolve_preferred_tracks();
         self.refresh_tracks();
     }
 
-    /// Select a subtitle track by its mpv track id. Negative = off.
-    pub fn pick_sub_track(&self, track_id: i32) {
-        {
-            let Ok(mpv) = self.state.mpv.lock() else {
-                return;
-            };
-            if let Some(mpv) = mpv.as_ref() {
-                let val = if track_id < 0 {
-                    "no".to_string()
-                } else {
-                    track_id.to_string()
-                };
-                let _ = mpv.set_property("sid", val.as_str());
+    pub fn effective_playback_speed(&self) -> f32 {
+        self.state.preferences.lock().unwrap().preferences.speed()
+    }
+
+    pub fn set_title_speed(&self, speed: f32) {
+        self.state
+            .preferences
+            .lock()
+            .unwrap()
+            .preferences
+            .title
+            .speed = Some(speed);
+        self.set_speed(speed);
+    }
+
+    /// Local global edits affect only fields still inheriting in this session.
+    pub fn update_playback_defaults(&self, settings: &nova_config::CacheSettings) {
+        let inherited = {
+            let session = self.state.preferences.lock().unwrap();
+            [
+                session.preferences.title.audio.is_none()
+                    && session.preferences.audio_language != settings.default_audio_language,
+                session.preferences.title.subtitles.is_none()
+                    && session.preferences.subtitle_language != settings.default_subtitle_language,
+                session.preferences.title.speed.is_none()
+                    && session.preferences.default_speed != settings.playback_speed,
+            ]
+        };
+        for (control, inherits) in inherited.into_iter().enumerate() {
+            if inherits {
+                self.restore_playback_default(control as i32, settings);
             }
         }
-        // Re-read the track list so the popup's checkmark follows the pick.
-        self.refresh_tracks();
+    }
+
+    fn resolve_preferred_tracks(&self) {
+        if self.resolve_preferred_tracks_inner() {
+            self.refresh_tracks();
+        }
+    }
+
+    fn resolve_preferred_tracks_inner(&self) -> bool {
+        // A queued load still exposes the previous file's tracks.
+        if self.state.pending.lock().unwrap().is_some() {
+            return false;
+        }
+        let mpv = self.state.mpv.lock().unwrap();
+        let Some(mpv) = mpv.as_ref() else {
+            return false;
+        };
+        if mpv.get_property::<String>("path").ok().as_deref()
+            != Some(self.state.preference_source.lock().unwrap().as_str())
+        {
+            return false;
+        }
+        let Ok(raw) = mpv.get_property::<String>("track-list") else {
+            return false;
+        };
+        let mut session = self.state.preferences.lock().unwrap();
+        if raw == session.tracks {
+            return false;
+        }
+        session.tracks = raw.clone();
+        let tracks = track_preferences::parse_tracks(&raw);
+        if tracks.is_empty() {
+            return false;
+        }
+        for audio in [true, false] {
+            if if audio {
+                session.manual_audio
+            } else {
+                session.manual_subtitles
+            } {
+                continue;
+            }
+            let (saved, global) = if audio {
+                (
+                    session.preferences.title.audio.as_ref(),
+                    session.preferences.audio_language.as_str(),
+                )
+            } else {
+                (
+                    session.preferences.title.subtitles.as_ref(),
+                    session.preferences.subtitle_language.as_str(),
+                )
+            };
+            if let Some(id) = select_track(&tracks, audio, saved, global) {
+                let _ = mpv.set_property(
+                    if audio { "aid" } else { "sid" },
+                    if id < 0 {
+                        "no".to_owned()
+                    } else {
+                        id.to_string()
+                    },
+                );
+            } else if saved.is_some() || !global.is_empty() {
+                // Clear a failed load-time language hint before Automatic;
+                // otherwise a saved kind that is missing could pick commentary.
+                let _ = mpv.set_property(if audio { "alang" } else { "slang" }, "");
+                if !audio {
+                    let _ = mpv.set_property("subs-fallback", "default");
+                }
+                let _ = mpv.set_property(if audio { "aid" } else { "sid" }, "auto");
+            }
+        }
+        true
     }
 
     /// Current-selection summary for a track list: the selected track's
@@ -1700,9 +1950,13 @@ impl Player {
         // read the selection properties directly and fall back to the
         // track-list flag when they don't name a numeric track (`no`/`auto`).
         let track_id_prop = |name: &str| -> Option<i32> {
-            mpv.get_property::<String>(name)
-                .ok()
-                .and_then(|raw| raw.parse::<i32>().ok())
+            mpv.get_property::<String>(name).ok().and_then(|raw| {
+                if raw == "no" {
+                    Some(-1)
+                } else {
+                    raw.parse::<i32>().ok()
+                }
+            })
         };
         let sid = track_id_prop("sid");
         let aid = track_id_prop("aid");
@@ -1865,6 +2119,8 @@ impl Player {
         if !app.get_player_open() {
             return;
         }
+
+        self.resolve_preferred_tracks();
 
         /// One tick's worth of mpv state.
         struct Snapshot {
@@ -2360,7 +2616,13 @@ impl Player {
         } else {
             effective_frame_rate(
                 *self.state.content_fps.lock().unwrap(),
-                saved_playback_speed(),
+                self.state
+                    .mpv
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(|mpv| mpv.get_property::<f64>("speed").ok())
+                    .unwrap_or(1.0) as f32,
             )
         };
 

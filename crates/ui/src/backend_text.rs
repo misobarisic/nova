@@ -65,6 +65,7 @@ pub fn tr(english: &'static str) -> &'static str {
     match english {
         "On" => "Uključeno",
         "Off" => "Isključeno",
+        "Automatic" => "Automatski",
         "Unlimited" => "Neograničeno",
         "Not received yet" => "Još nije primljeno",
         "Every minute" => "Svake minute",
@@ -1196,6 +1197,13 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
             _ => format!("{number} px"),
         },
         "playback_speed" => format!("{}×", value),
+        "default_audio_language" if value.as_str() == Some("") => tr("Automatic").into(),
+        "default_subtitle_language" if value.as_str() == Some("") => tr("Automatic").into(),
+        "default_subtitle_language" if value.as_str() == Some("off") => tr("Off").into(),
+        "default_audio_language" | "default_subtitle_language" => value
+            .as_str()
+            .map(nova_config::playback_preferences::language_label)
+            .unwrap_or_else(|| value.to_string()),
         "torrent_down_limit" if value.as_f64() == Some(0.0) => tr("Unlimited").into(),
         "torrent_down_limit" => format!("{number} KB/s"),
         "home_catalog_sources" | "home_row_sources" | "home_rows" => {
@@ -1355,11 +1363,35 @@ mod tests {
                 setting_sync_value("episode_start_behavior", &serde_json::json!("StartOver")),
                 "Start over"
             );
+            assert_eq!(
+                setting_sync_value("default_audio_language", &serde_json::json!("")),
+                "Automatic"
+            );
+            assert_eq!(
+                setting_sync_value("default_subtitle_language", &serde_json::json!("off")),
+                "Off"
+            );
+            assert_eq!(
+                setting_sync_value("default_audio_language", &serde_json::json!("en")),
+                "English (en)"
+            );
         });
         with_language(Language::Croatian, || {
             assert_eq!(
                 setting_sync_value("animations", &serde_json::json!(false)),
                 "Isključeno"
+            );
+            assert_eq!(
+                setting_sync_value("default_audio_language", &serde_json::json!("")),
+                "Automatski"
+            );
+            assert_eq!(
+                setting_sync_value("default_subtitle_language", &serde_json::json!("off")),
+                "Isključeno"
+            );
+            assert_eq!(
+                setting_sync_value("default_subtitle_language", &serde_json::json!("hr")),
+                "Croatian (hr)"
             );
             assert_eq!(tr("Not received yet"), "Još nije primljeno");
         });

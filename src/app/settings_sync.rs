@@ -183,6 +183,9 @@ impl Bridge {
         }
         self.shared.lock().unwrap().cache_settings = settings.clone();
         set_active_cache_settings(settings.clone());
+        // This is a local policy change, even though publication is guarded.
+        self.player.update_playback_defaults(&settings);
+        self.refresh_effective_speed();
         write_settings(&settings);
         self.settings_to_ui();
         self.refresh_setting_sync();

@@ -6,6 +6,7 @@ struct PlaybackContext {
     title: String,
     episode_label: String,
     use_modal_poster: bool,
+    media_type: String,
     media_id: String,
     request_id: String,
     is_episode: bool,
@@ -82,6 +83,7 @@ impl Bridge {
                     title: modal.name.clone(),
                     episode_label,
                     use_modal_poster: true,
+                    media_type: modal.type_.clone(),
                     media_id: modal.id.clone(),
                     request_id: modal.request_id.clone(),
                     is_episode: !modal.seasons.is_empty(),
@@ -138,25 +140,36 @@ impl Bridge {
         }
     }
 
-    // ---- Playback rate (Settings → Player + the player's settings panel) ---
-    //
-    // One per-device value (`CacheSettings::playback_speed`) edits the same
-    // number from both UIs. It is applied to the running mpv session live and
-    // written to the KV store on a short debounce, so a slider drag persists
-    // once instead of per pointer move.
+    pub(super) fn playback_preference_identity(
+        &self,
+        include_pending: bool,
+    ) -> Option<(String, String)> {
+        let state = self.shared.lock().unwrap();
+        let intent = state.playback_intent.as_ref()?;
+        if !intent.token.is_current() || (!include_pending && (intent.pending || !intent.in_app)) {
+            return None;
+        }
+        let context = &intent.context;
+        (!context.media_id.is_empty()
+            && (context.is_episode
+                || context.is_movie
+                || matches!(context.media_type.as_str(), "series" | "movie")))
+        .then(|| (context.media_type.clone(), context.media_id.clone()))
+    }
 
-    /// Main thread: a new playback rate came from a slider. Clamped and
-    /// rounded to hundredths, stored per device, applied to the running
-    /// session, and mirrored back so both UIs show the same number.
-    pub(super) fn apply_playback_speed(&self, speed: f32) {
+    // Settings edits the synced global default; OSD edits are title overrides.
+    /// Apply a global rate only to sessions that have not overridden speed.
+    pub(super) fn apply_default_playback_speed(&self, speed: f32) {
         let speed = nova_config::round_playback_speed(speed);
         self.store_playback_speed(speed);
-        self.player.set_speed(speed);
+        self.player
+            .update_playback_defaults(&nova_config::active_cache_settings());
+        self.refresh_effective_speed();
     }
 
     /// Main thread: transient rate preview (press-and-hold 2× on the video).
     /// Pushes straight into the running session without touching the stored
-    /// per-device value, the UI mirror or the debounced save — the release
+    /// default/title value, the UI mirror or the debounced save — the release
     /// restores the stored rate through this same path.
     pub(super) fn preview_playback_speed(&self, speed: f32) {
         self.player.set_speed(speed);
@@ -187,7 +200,10 @@ impl Bridge {
     /// 0.05 grid, so the rate always lands on an exact multiple — even when
     /// the slider left a free value like 1.234 behind.
     pub(super) fn nudge_playback_speed(&self, d: i32) {
-        let current = self.app().map(|a| a.get_playback_speed()).unwrap_or(1.0);
+        let current = self
+            .app()
+            .map(|a| a.get_effective_playback_speed())
+            .unwrap_or(1.0);
         let next = nova_config::quantize_playback_speed(
             current + d as f32 * nova_config::PLAYBACK_SPEED_STEP,
         );
@@ -365,6 +381,7 @@ impl Bridge {
                     .map(|video| stream_episode_context_label(&video))
                     .unwrap_or_default(),
                 use_modal_poster: false,
+                media_type: job.media_type.clone(),
                 media_id: job.media_id.clone(),
                 request_id: job.request_id.clone(),
                 is_episode: job.media_type == "series",
@@ -427,6 +444,7 @@ impl Bridge {
 
     /// Save the last observation before another episode replaces its target.
     pub(super) fn persist_outgoing_playback(&self) {
+        self.flush_playback_preferences(true);
         let map = {
             let mut state = self.shared.lock().unwrap();
             let Some(target) = state.playback.clone() else {
@@ -647,9 +665,10 @@ impl Bridge {
             }
         }
 
+        let preferences = self.prepare_playback_preferences();
         match self
             .player
-            .play_with_options(&url, start_at, &headers, &subtitles)
+            .play_with_preferences(&url, start_at, &headers, &subtitles, preferences)
         {
             Ok(()) => {
                 self.mark_playback_opened(true);
@@ -1488,5 +1507,221 @@ mod home_return_tests {
             "malformed remote activity must retain the local snapshot"
         );
         assert!(!writable_key(VIEWING_ACTIVITY_KEY));
+    }
+}
+
+#[cfg(all(test, feature = "desktop"))]
+mod preference_tests {
+    use super::*;
+    use nova_config::playback_preferences::{PreferenceValue, TrackChoice, preference_key};
+
+    #[test]
+    fn title_speed_persists_without_editing_defaults_and_remote_changes_wait() {
+        const ROOT: &str = "NOVA_PLAYBACK_PREFERENCES_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-preferences-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .args(["--exact", "app::playback::preference_tests::title_speed_persists_without_editing_defaults_and_remote_changes_wait", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(Mutex::new(PosterStore::new(1))),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.cache_settings.playback_speed = 1.15;
+            state.cache_settings.default_audio_language = "ja".into();
+            state.cache_settings.default_subtitle_language = "en".into();
+            state.playback_intent = Some(PlaybackIntent {
+                token: Default::default(),
+                modal_token: None,
+                request_id: "episode-one".into(),
+                pending: false,
+                in_app: true,
+                context: PlaybackContext {
+                    media_type: "series".into(),
+                    media_id: "title".into(),
+                    ..Default::default()
+                },
+            });
+        }
+        bridge.settings_to_ui();
+        bridge.apply_playback_speed(1.4);
+        bridge.flush_playback_preferences(true);
+        assert_eq!(
+            app.get_playback_speed(),
+            1.15,
+            "OSD must not edit the default"
+        );
+        assert_eq!(app.get_effective_playback_speed(), 1.4);
+        assert_eq!(
+            bridge.shared.lock().unwrap().cache_settings.playback_speed,
+            1.15
+        );
+        let prefs = bridge.prepare_playback_preferences();
+        assert_eq!(prefs.title.speed, Some(1.4));
+        assert!(prefs.title.audio.is_none());
+        assert_eq!(prefs.audio_language, "ja");
+        bridge.preview_playback_speed(2.0);
+        assert_eq!(bridge.prepare_playback_preferences().title.speed, Some(1.4));
+        assert_eq!(app.get_effective_playback_speed(), 1.4);
+        let owner = nova_sync::local_store().unwrap();
+        let speed_key = preference_key("series", "title", 2);
+        let sub_key = preference_key("series", "title", 1);
+        {
+            let mut store = owner.lock().unwrap();
+            store.set(
+                DOMAIN_PLAYBACK_PREFERENCES,
+                &speed_key,
+                Some(serde_json::to_string(&PreferenceValue::Speed(1.8)).unwrap()),
+                0,
+                999,
+            );
+            store.set(
+                DOMAIN_PLAYBACK_PREFERENCES,
+                &sub_key,
+                Some(serde_json::to_string(&PreferenceValue::Subtitles(TrackChoice::Off)).unwrap()),
+                0,
+                999,
+            );
+            store.save().unwrap();
+        }
+        bridge.sync_apply(vec![DOMAIN_PLAYBACK_PREFERENCES.into()]);
+        assert_eq!(
+            app.get_effective_playback_speed(),
+            1.4,
+            "remote edits must not interrupt playback"
+        );
+        let next = bridge.prepare_playback_preferences();
+        assert_eq!(next.title.speed, Some(1.8));
+        assert_eq!(next.title.subtitles, Some(TrackChoice::Off));
+        bridge.restore_playback_default(2);
+        assert_eq!(app.get_effective_playback_speed(), 1.15);
+        let next = bridge.prepare_playback_preferences();
+        assert!(next.title.speed.is_none());
+        assert_eq!(next.title.subtitles, Some(TrackChoice::Off));
+        assert!(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_PLAYBACK_PREFERENCES, &speed_key)
+                .unwrap()
+                .value
+                .is_none()
+        );
+        assert!(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_PLAYBACK_PREFERENCES, &sub_key)
+                .unwrap()
+                .value
+                .is_some()
+        );
+        bridge.apply_playback_speed(1.6);
+        // Replacing/closing flushes the pending slider change even before its debounce.
+        bridge.persist_outgoing_playback();
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_mut()
+            .unwrap()
+            .context
+            .request_id = "episode-two".into();
+        assert_eq!(bridge.prepare_playback_preferences().title.speed, Some(1.6));
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_mut()
+            .unwrap()
+            .context
+            .media_type = "movie".into();
+        assert!(bridge.prepare_playback_preferences().title.speed.is_none());
+        assert_eq!(bridge.prepare_playback_preferences().speed(), 1.15);
+        assert_eq!(
+            read_json::<HashMap<String, PreferenceValue>>(playback_preferences::PREFERENCES_KEY)
+                .unwrap()
+                .get(&speed_key),
+            Some(&PreferenceValue::Speed(1.6))
+        );
+        // Upgrade a legacy settings snapshot whose baseline excluded speed.
+        {
+            let mut store = owner.lock().unwrap();
+            store.queue_extra("settings", Some(r#"{"playback_speed":1.15}"#.into()));
+            store.queue_extra("sync:baseline:settings", Some("{}".into()));
+            store.save().unwrap();
+        }
+        bridge.seed_playback_default_settings();
+        assert_eq!(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_SETTINGS, "playback_speed")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("1.15")
+        );
+        {
+            let mut store = owner.lock().unwrap();
+            store.set(
+                DOMAIN_SETTINGS,
+                "playback_speed",
+                Some("1.9".into()),
+                0,
+                999,
+            );
+            store.save().unwrap();
+        }
+        bridge.seed_playback_default_settings();
+        assert_eq!(
+            bridge.shared.lock().unwrap().cache_settings.playback_speed,
+            1.9,
+            "migration must adopt an existing shared speed"
+        );
+        // An older app can have acknowledged an unknown domain without its KV
+        // snapshot. Upgrading must import those records even without a replay.
+        {
+            let mut store = owner.lock().unwrap();
+            store.queue_extra(playback_preferences::PREFERENCES_KEY, None);
+            store.queue_extra("sync:baseline:playback_preferences", None);
+            store.save().unwrap();
+        }
+        bridge.restore_playback_preferences_schema();
+        assert_eq!(
+            read_json::<HashMap<String, PreferenceValue>>(playback_preferences::PREFERENCES_KEY)
+                .unwrap()
+                .get(&speed_key),
+            Some(&PreferenceValue::Speed(1.6))
+        );
     }
 }

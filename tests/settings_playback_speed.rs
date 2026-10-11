@@ -1,12 +1,11 @@
 //! Playback-speed control (headless).
 //!
-//! Settings → Player and the player's own settings panel edit one per-device
-//! rate through the shared `SpeedControl`. Guards that the control renders in
-//! both hosts, that the ± buttons report a step to the backend (which owns the
-//! 0.05 quantization — see the `nova-config` unit tests), that a press on the
-//! slider reports a value that tracks the pointer, and that the readout shows
-//! the shared value with two decimals. One test function: the testing backend
-//! initializes once per process.
+//! Settings → Player edits the global default rate, while the player's own
+//! settings panel edits its effective rate (which may include a title
+//! override). Guards that the control renders in both hosts, that the two ±
+//! paths stay separate, that a press on the OSD slider reports a value that
+//! tracks the pointer, and that the readout shows two decimals. One test
+//! function: the testing backend initializes once per process.
 
 #[path = "support/settings.rs"]
 mod settings_support;
@@ -36,6 +35,13 @@ fn tap(app: &nova::AppWindow, position: LogicalPosition) {
     ] {
         let _ = app.window().dispatch_event_with_result(event);
     }
+}
+
+fn key(app: &nova::AppWindow, key: slint::platform::Key) {
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.into() });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key.into() });
 }
 
 /// Click `element`, then run `body` on the UI thread once the page has had a
@@ -106,13 +112,19 @@ fn playback_speed_control_renders_and_reports_steps() {
     app.set_show_settings(true);
     app.set_show_home(false);
     app.set_playback_speed(1.0);
+    app.set_effective_playback_speed(1.0);
 
     let failures: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
-    let steps: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
+    let default_steps: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
+    let osd_steps: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
     let changes: Rc<RefCell<Vec<f32>>> = Rc::new(RefCell::new(Vec::new()));
     {
-        let steps = steps.clone();
-        app.on_playback_speed_stepped(move |d| steps.borrow_mut().push(d));
+        let default_steps = default_steps.clone();
+        app.on_default_playback_speed_stepped(move |d| default_steps.borrow_mut().push(d));
+    }
+    {
+        let osd_steps = osd_steps.clone();
+        app.on_playback_speed_stepped(move |d| osd_steps.borrow_mut().push(d));
     }
     {
         let changes = changes.clone();
@@ -121,7 +133,8 @@ fn playback_speed_control_renders_and_reports_steps() {
 
     let app1 = app.as_weak();
     let failures1 = failures.clone();
-    let steps1 = steps.clone();
+    let default_steps1 = default_steps.clone();
+    let osd_steps1 = osd_steps.clone();
     let changes1 = changes.clone();
     after(400, move || {
         let app = app1.upgrade().unwrap();
@@ -141,7 +154,8 @@ fn playback_speed_control_renders_and_reports_steps() {
             return;
         };
         let failures2 = failures1.clone();
-        let steps2 = steps1.clone();
+        let default_steps2 = default_steps1.clone();
+        let osd_steps2 = osd_steps1.clone();
         let changes2 = changes1.clone();
         open_player_settings(&app, player_link, move |app| {
             let controls = ElementHandle::find_by_element_type_name(&app, "SpeedControl").count();
@@ -159,7 +173,14 @@ fn playback_speed_control_renders_and_reports_steps() {
                     "the speed control must offer the 1× / 1.25× / 1.5× / 2× presets",
                 );
             }
-            // The readout reflects the shared value, two decimals.
+            fail(
+                &failures2,
+                ElementHandle::find_by_accessible_label(&app, "Default playback speed")
+                    .next()
+                    .is_some(),
+                "Settings → Player must label this control as the global default playback speed",
+            );
+            // The readout reflects the global default, to two decimals.
             fail(
                 &failures2,
                 ElementHandle::find_by_accessible_label(&app, "1.00×")
@@ -178,13 +199,19 @@ fn playback_speed_control_renders_and_reports_steps() {
                 return;
             };
             let failures3 = failures2.clone();
-            let steps3 = steps2.clone();
+            let default_steps3 = default_steps2.clone();
+            let osd_steps3 = osd_steps2.clone();
             let changes3 = changes2.clone();
             click_then(&app, faster, 250, move |app| {
                 fail(
                     &failures3,
-                    steps3.borrow().as_slice() == [1],
-                    "the + button must report a +1 step to the backend",
+                    default_steps3.borrow().as_slice() == [1] && osd_steps3.borrow().is_empty(),
+                    "Settings + must report only to the global-default step callback",
+                );
+                fail(
+                    &failures3,
+                    (app.get_playback_speed() - 1.0).abs() < f32::EPSILON,
+                    "the test backend should leave the global default unchanged until it applies the step",
                 );
 
                 // ---- The player's own settings panel ----
@@ -193,7 +220,8 @@ fn playback_speed_control_renders_and_reports_steps() {
                 app.set_playback_started(false);
                 let app4 = app.as_weak();
                 let failures4 = failures3.clone();
-                let steps4 = steps3.clone();
+                let default_steps4 = default_steps3.clone();
+                let osd_steps4 = osd_steps3.clone();
                 let changes4 = changes3.clone();
                 after(300, move || {
                     let app = app4.upgrade().unwrap();
@@ -210,7 +238,8 @@ fn playback_speed_control_renders_and_reports_steps() {
                         return;
                     };
                     let failures5 = failures4.clone();
-                    let steps5 = steps4.clone();
+                    let default_steps5 = default_steps4.clone();
+                    let osd_steps5 = osd_steps4.clone();
                     let changes5 = changes4.clone();
                     click_then(&app, gear, 300, move |app| {
                         // Root page of the panel: the rate row opens its own
@@ -227,9 +256,29 @@ fn playback_speed_control_renders_and_reports_steps() {
                             return;
                         };
                         let failures6 = failures5.clone();
-                        let steps6 = steps5.clone();
+                        let default_steps6 = default_steps5.clone();
+                        let osd_steps6 = osd_steps5.clone();
                         let changes6 = changes5.clone();
                         click_then(&app, row, 300, move |app| {
+                            // The submenu's new reset item is row 0. The first
+                            // Down moves focus to slider row 1; its Left/Right
+                            // keys must use the OSD callback, not the global
+                            // Settings default callback.
+                            key(&app, slint::platform::Key::DownArrow);
+                            key(&app, slint::platform::Key::RightArrow);
+                            key(&app, slint::platform::Key::LeftArrow);
+                            fail(
+                                &failures6,
+                                osd_steps6.borrow().as_slice() == [1, -1]
+                                    && default_steps6.borrow().as_slice() == [1],
+                                "OSD slider row 1 must send ± steps only to the effective-rate callback",
+                            );
+                            fail(
+                                &failures6,
+                                (app.get_playback_speed() - 1.0).abs() < f32::EPSILON,
+                                "OSD step keys must not change the global default property",
+                            );
+
                             let controls =
                                 ElementHandle::find_by_element_type_name(&app, "SpeedControl")
                                     .count();
@@ -294,9 +343,10 @@ fn playback_speed_control_renders_and_reports_steps() {
                                 return;
                             };
                             let failures7 = failures6.clone();
-                            let steps7 = steps6.clone();
+                            let default_steps7 = default_steps6.clone();
+                            let osd_steps7 = osd_steps6.clone();
                             let changes7 = changes6.clone();
-                            click_then(&app, preset, 250, move |_app| {
+                            click_then(&app, preset, 250, move |app| {
                                 fail(
                                     &failures7,
                                     changes7.borrow().last() == Some(&2.0),
@@ -304,8 +354,14 @@ fn playback_speed_control_renders_and_reports_steps() {
                                 );
                                 fail(
                                     &failures7,
-                                    steps7.borrow().as_slice() == [1],
+                                    osd_steps7.borrow().as_slice() == [1, -1]
+                                        && default_steps7.borrow().as_slice() == [1],
                                     "a preset must not be reported as a ± step",
+                                );
+                                fail(
+                                    &failures7,
+                                    (app.get_playback_speed() - 1.0).abs() < f32::EPSILON,
+                                    "OSD slider and presets must leave the global default untouched",
                                 );
                                 slint::quit_event_loop().unwrap();
                             });

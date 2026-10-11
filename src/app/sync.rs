@@ -19,6 +19,9 @@ use std::collections::BTreeSet;
 
 pub(crate) const DOMAIN_LIBRARY: &str = "library";
 pub(crate) const DOMAIN_PROGRESS: &str = "progress";
+pub(crate) const DOMAIN_PLAYBACK_PREFERENCES: &str = "playback_preferences";
+use super::playback_preferences::PREFERENCES_KEY;
+use nova_config::playback_preferences::PreferenceValue;
 pub(crate) const DOMAIN_VIEWING_ACTIVITY: &str = "viewing_activity";
 pub(crate) const DOMAIN_NEW_EPISODES_HIDDEN: &str = "new_episodes_hidden";
 pub(crate) const DOMAIN_ADDONS: &str = "addons";
@@ -94,6 +97,7 @@ fn sync_records(domain: &str, records: Vec<(String, String, u64)>) {
     let key = match domain {
         DOMAIN_LIBRARY => "library",
         DOMAIN_PROGRESS => "episode_progress",
+        DOMAIN_PLAYBACK_PREFERENCES => PREFERENCES_KEY,
         DOMAIN_VIEWING_ACTIVITY => VIEWING_ACTIVITY_KEY,
         DOMAIN_NEW_EPISODES_HIDDEN => NEW_EPISODES_HIDDEN_KEY,
         DOMAIN_ADDONS => "addons",
@@ -129,6 +133,15 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
                 entries
                     .iter()
                     .map(|e| Ok((e.id.clone(), serde_json::to_string(e)?, 0)))
+                    .collect::<Result<_, serde_json::Error>>()?,
+            )]
+        }
+        PREFERENCES_KEY => {
+            let map: HashMap<String, PreferenceValue> = serde_json::from_str(raw)?;
+            vec![(
+                DOMAIN_PLAYBACK_PREFERENCES,
+                map.into_iter()
+                    .map(|(key, value)| Ok((key, serde_json::to_string(&value)?, 0)))
                     .collect::<Result<_, serde_json::Error>>()?,
             )]
         }
@@ -438,14 +451,13 @@ pub(crate) fn sort_by_order(current: Vec<String>, order: &[String]) -> Vec<Strin
 
 /// `CacheSettings` fields that are never synced: device-specific
 /// (`android_hwdec`, `player_external`, `desktop_external_app`,
-/// `playback_speed`) or local-only
+/// Android return behavior) or local-only
 /// (`rewrite_existing`);
 /// `categories` sync as their own domain so concurrent additions union.
 const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
     "android_hwdec",
     "player_external",
     "desktop_external_app",
-    "playback_speed",
     "android_auto_continue",
     "sync_overrides",
     "rewrite_existing",
@@ -729,6 +741,7 @@ impl Bridge {
         for (key, domain) in [
             ("library", DOMAIN_LIBRARY),
             ("episode_progress", DOMAIN_PROGRESS),
+            (PREFERENCES_KEY, DOMAIN_PLAYBACK_PREFERENCES),
             ("continue_hidden", DOMAIN_CONTINUE_HIDDEN),
             (VIEWING_ACTIVITY_KEY, DOMAIN_VIEWING_ACTIVITY),
             (NEW_EPISODES_HIDDEN_KEY, DOMAIN_NEW_EPISODES_HIDDEN),
@@ -743,6 +756,10 @@ impl Bridge {
                 let raw = match key {
                     "library" => serde_json::to_string(&state.entries)?,
                     "episode_progress" => serde_json::to_string(&state.progress)?,
+                    PREFERENCES_KEY => serde_json::to_string(
+                        &read_json::<HashMap<String, PreferenceValue>>(PREFERENCES_KEY)
+                            .unwrap_or_default(),
+                    )?,
                     "continue_hidden" => serde_json::to_string(&state.continue_hidden)?,
                     "addons" => serde_json::to_string(
                         &state
@@ -770,6 +787,87 @@ impl Bridge {
             if let Err(e) = result {
                 storage::report(storage::Error::new(storage::ErrorKind::Transaction, e));
             }
+        }
+    }
+
+    /// Upgrade an existing settings baseline with newly supported defaults.
+    pub(super) fn seed_playback_default_settings(&self) {
+        if !writable_key("settings") {
+            return;
+        }
+        let settings = self.shared.lock().unwrap().cache_settings.clone();
+        let stored: serde_json::Value = storage::try_get_str("settings")
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default();
+        let fields: Vec<_> = live_settings_fields(&settings)
+            .into_iter()
+            .filter(|(key, _, _)| {
+                matches!(
+                    key.as_str(),
+                    "playback_speed" | "default_audio_language" | "default_subtitle_language"
+                )
+            })
+            .collect();
+        let result = (|| -> nova_sync::Result<()> {
+            let owner = nova_sync::local_store()?;
+            let dev = nova_sync::local_device()?;
+            let mut store = owner.lock().unwrap();
+            let baseline: std::collections::BTreeMap<String, String> = store
+                .extra_value("sync:baseline:settings")?
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default();
+            let mut changed = false;
+            for (key, value, _) in fields {
+                // Existing projection-only defaults are not user edits. Only
+                // backfill a legacy field absent from its materialized baseline.
+                if stored.get(&key).is_some()
+                    && !baseline.contains_key(&key)
+                    && store.record(DOMAIN_SETTINGS, &key).is_none()
+                {
+                    changed |= store.set(DOMAIN_SETTINGS, &key, Some(value), 0, dev);
+                }
+            }
+            if changed {
+                store.save()?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            storage::report(storage::Error::new(storage::ErrorKind::Transaction, error));
+        }
+        // An older build may already have acknowledged these records while
+        // treating speed as device-local. Re-read just the newly supported
+        // fields even when their projection digest was previously acknowledged.
+        let records: Vec<_> = account_setting_records()
+            .into_iter()
+            .filter(|(key, _)| {
+                matches!(
+                    key.as_str(),
+                    "playback_speed" | "default_audio_language" | "default_subtitle_language"
+                )
+            })
+            .collect();
+        let settings = {
+            let mut state = self.shared.lock().unwrap();
+            state.cache_settings = merge_settings_fields(&state.cache_settings, &records);
+            state.cache_settings.clone()
+        };
+        set_active_cache_settings(settings);
+    }
+
+    /// Older apps acknowledge unfamiliar domains without materializing them.
+    /// Import a stored preference domain when upgrading such a device.
+    pub(super) fn restore_playback_preferences_schema(&self) {
+        if storage::try_get_str(PREFERENCES_KEY)
+            .ok()
+            .flatten()
+            .is_none()
+            && projection_store()
+                .is_some_and(|store| !store.records(DOMAIN_PLAYBACK_PREFERENCES).is_empty())
+        {
+            self.sync_apply_inner(vec![DOMAIN_PLAYBACK_PREFERENCES.into()], false);
         }
     }
 
@@ -807,6 +905,9 @@ impl Bridge {
         if domains.is_empty() {
             return;
         }
+        // Flush a slider edit before projecting a remote snapshot; independent
+        // fields then merge in the record owner instead of losing the local edit.
+        self.flush_playback_preferences(true);
         let library_changed = domains.iter().any(|d| d == DOMAIN_LIBRARY);
         let models_changed = domains.iter().any(|d| {
             matches!(
@@ -830,6 +931,10 @@ impl Bridge {
             match domain.as_str() {
                 DOMAIN_LIBRARY => self.sync_apply_library(),
                 DOMAIN_PROGRESS => self.sync_apply_progress(),
+                DOMAIN_PLAYBACK_PREFERENCES => self.sync_apply_json_map::<PreferenceValue>(
+                    DOMAIN_PLAYBACK_PREFERENCES,
+                    PREFERENCES_KEY,
+                ),
                 DOMAIN_VIEWING_ACTIVITY => self.sync_apply_viewing_activity(),
                 DOMAIN_NEW_EPISODES_HIDDEN => self.sync_apply_new_episodes_hidden(),
                 DOMAIN_ADDONS => self.sync_apply_addons(),
@@ -1987,7 +2092,9 @@ mod tests {
         assert!(!fields.contains_key("android_hwdec"));
         assert!(!fields.contains_key("player_external"));
         assert!(!fields.contains_key("desktop_external_app"));
-        assert!(!fields.contains_key("playback_speed"));
+        assert!(fields.contains_key("playback_speed"));
+        assert!(fields.contains_key("default_audio_language"));
+        assert!(fields.contains_key("default_subtitle_language"));
         assert!(!fields.contains_key("android_auto_continue"));
         assert!(!fields.contains_key("rewrite_existing"));
         assert_eq!(fields.get("true_black").map(String::as_str), Some("false"));

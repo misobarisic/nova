@@ -2,9 +2,8 @@ import { Theme } from "theme.slint";
 import { SliderTouchArea } from "slider-touch.slint";
 // Shared playback-rate control.
 //
-// Settings → Player and the player's own settings panel both edit the same
-// per-device value (`AppWindow.playback_speed`), so the widget lives here and
-// the two hosts only differ in how they route the callbacks.
+// Settings → Player edits the global default; the OSD edits the title's
+// effective rate. Both hosts share this widget and route edits separately.
 //
 // The slider covers the whole 0.5–2.0 range and may sit anywhere inside it;
 // the ± buttons step by 0.05 and are resolved by the backend, which

@@ -204,7 +204,10 @@ component SettingsMenu inherits Rectangle {
     in property <[TrackRow]> audio_tracks;
     in property <string> sub_label: "";
     in property <string> audio_label: "";
-    // Playback rate: the same per-device value Settings → Player edits.
+    in property <bool> audio_preference_saved: false;
+    in property <bool> subtitle_preference_saved: false;
+    in property <bool> speed_preference_saved: false;
+    // Effective base rate: title override or the global default.
     in-out property <float> playback_speed: 1.0;
     // Android-only decoder section; hidden elsewhere.
     in property <bool> is_android: false;
@@ -213,6 +216,7 @@ component SettingsMenu inherits Rectangle {
     callback pick_decoder(int);
     callback pick_sub(int);
     callback pick_audio(int);
+    callback restore_playback_default(int);
     // Playback rate: a slider value (drags/live) or ± one 0.05 step.
     callback speed_changed(float);
     callback speed_stepped(int);
@@ -423,9 +427,17 @@ component SettingsMenu inherits Rectangle {
                         width: 100%;
                         spacing: 4px;
                         MenuRow {
+                            label: @tr("Use global default");
+                            value: root.subtitle_preference_saved
+                                ? @tr("Saved for this title") : @tr("Using global default");
+                            selected: !root.subtitle_preference_saved;
+                            focused: root.focused_idx == 0;
+                            activate => { root.restore_playback_default(1); }
+                        }
+                        MenuRow {
                             icon_kind: 2;
                             label: @tr("Off");
-                            focused: root.focused_idx == 0;
+                            focused: root.focused_idx == 1;
                             activate => { root.pick_sub(-1); }
                         }
                         for t[i] in root.sub_tracks: MenuRow {
@@ -433,7 +445,7 @@ component SettingsMenu inherits Rectangle {
                             label: t.lang + (t.title != "" ? " — " + t.title : "");
                             value: t.codec;
                             selected: t.selected;
-                            focused: root.focused_idx == i + 1;
+                            focused: root.focused_idx == i + 2;
                             activate => { root.pick_sub(t.index); }
                         }
                     }
@@ -442,6 +454,14 @@ component SettingsMenu inherits Rectangle {
                     if root.page == 3: VerticalLayout {
                         width: 100%;
                         spacing: 4px;
+                        MenuRow {
+                            label: @tr("Use global default");
+                            value: root.audio_preference_saved
+                                ? @tr("Saved for this title") : @tr("Using global default");
+                            selected: !root.audio_preference_saved;
+                            focused: root.focused_idx == 0;
+                            activate => { root.restore_playback_default(0); }
+                        }
                         if root.audio_tracks.length == 0: Rectangle {
                             height: 44px;
 
@@ -458,17 +478,24 @@ component SettingsMenu inherits Rectangle {
                             label: t.lang + (t.title != "" ? " — " + t.title : "");
                             value: t.codec;
                             selected: t.selected;
-                            focused: root.focused_idx == i;
+                            focused: root.focused_idx == i + 1;
                             activate => { root.pick_audio(t.index); }
                         }
                     }
 
                     // Playback rate: the shared slider + ± 0.05 step buttons
-                    // (the same control Settings → Player shows). Up/Down
-                    // arrow keys step it; the slider is what takes focus.
+                    // (the same control Settings → Player shows).
                     if root.page == 4: VerticalLayout {
                         width: 100%; spacing: 16px;
                         padding-top: 8px; padding-bottom: 8px;
+                        MenuRow {
+                            label: @tr("Use global default");
+                            value: root.speed_preference_saved
+                                ? @tr("Saved for this title") : @tr("Using global default");
+                            selected: !root.speed_preference_saved;
+                            focused: root.focused_idx == 0;
+                            activate => { root.restore_playback_default(2); }
+                        }
                         Text {
                             text: PlaybackSpeed.label(root.playback_speed);
                             color: Theme.current.text_bright;
@@ -479,7 +506,7 @@ component SettingsMenu inherits Rectangle {
                             speed <=> root.playback_speed;
                             roomy: true;
                             show_readout: false;
-                            focused: root.focused_idx == 0;
+                            focused: root.focused_idx == 1;
                             changed(v) => { root.speed_changed(v); }
                             stepped(d) => { root.speed_stepped(d); }
                         }
@@ -596,10 +623,12 @@ export component PlayerOverlay {
     // Current-selection summaries shown on the settings panel's root rows.
     in-out property <string> sub_label: "";
     in-out property <string> audio_label: "";
+    in property <bool> audio_preference_saved: false;
+    in property <bool> subtitle_preference_saved: false;
+    in property <bool> speed_preference_saved: false;
     in-out property <float> volume: 100.0;
     in-out property <bool> muted: false;
-    // Playback rate: the per-device value both this panel and Settings →
-    // Player edit (AppWindow owns it).
+    // Effective title/default rate, separate from the Settings default.
     in-out property <float> playback_speed: 1.0;
     in-out property <bool> is_fullscreen: false;
     in-out property <[TrackRow]> audio_tracks: [];
@@ -633,6 +662,7 @@ export component PlayerOverlay {
     callback toggle_mute();
     callback pick_audio_track(int);
     callback pick_sub_track(int);
+    callback restore_playback_default(int);
     // Android runtime decoder pick (0 = HW+, 1 = HW, 2 = SW).
     callback pick_decoder(int);
     // Playback rate: slider value / ± one 0.05 step (quantized in the backend).
@@ -699,15 +729,14 @@ export component PlayerOverlay {
                 return 3;
             }
             if (root.settings_page == 2) {
-                return root.sub_tracks.length + 1;
+                return root.sub_tracks.length + 2;
             }
             if (root.settings_page == 3) {
-                return root.audio_tracks.length;
+                return root.audio_tracks.length + 1;
             }
             if (root.settings_page == 4) {
-                // The playback-rate page: the slider is the focusable row
-                // (Up/Down step it).
-                return 1;
+                // Reset row + playback-rate slider.
+                return 2;
             }
         }
         return 0;
@@ -858,16 +887,23 @@ export component PlayerOverlay {
                 root.open_popup = 0;
             } else if (root.settings_page == 2) {
                 if (root.kb_menu == 0) {
+                    root.restore_playback_default(1);
+                } else if (root.kb_menu == 1) {
                     root.pick_sub_track(-1);
-                } else if (root.kb_menu - 1 < root.sub_tracks.length) {
-                    root.pick_sub_track(root.sub_tracks[root.kb_menu - 1].index);
+                    root.open_popup = 0;
+                } else if (root.kb_menu - 2 < root.sub_tracks.length) {
+                    root.pick_sub_track(root.sub_tracks[root.kb_menu - 2].index);
+                    root.open_popup = 0;
                 }
-                root.open_popup = 0;
             } else if (root.settings_page == 3) {
-                if (root.kb_menu < root.audio_tracks.length) {
-                    root.pick_audio_track(root.audio_tracks[root.kb_menu].index);
+                if (root.kb_menu == 0) {
+                    root.restore_playback_default(0);
+                } else if (root.kb_menu - 1 < root.audio_tracks.length) {
+                    root.pick_audio_track(root.audio_tracks[root.kb_menu - 1].index);
+                    root.open_popup = 0;
                 }
-                root.open_popup = 0;
+            } else if (root.settings_page == 4 && root.kb_menu == 0) {
+                root.restore_playback_default(2);
             }
         }
     }
@@ -1117,20 +1153,24 @@ export component PlayerOverlay {
                     accept
                 } else if (root.open_popup != 0) {
                     if (root.open_popup == 4) {
-                        // Settings panel: Up/Down move the focused row, or
-                        // step the playback rate on its own page; Right/Enter
-                        // open the focused submenu, Left/Back step back a page
-                        // then close.
+                        // Settings panel: Up/Down move the focused row;
+                        // Left/Right step playback speed only while its slider
+                        // is focused. Right/Enter open submenus, and Left/Back
+                        // step back a page then close.
                         if (e.text == Key.UpArrow) {
                             if (root.settings_page == 4) {
-                                root.playback_speed_stepped(1);
+                                if (root.kb_menu > 0) {
+                                    root.kb_menu -= 1;
+                                }
                             } else if (root.kb_menu > 0) {
                                 root.kb_menu -= 1;
                             }
                             accept
                         } else if (e.text == Key.DownArrow) {
                             if (root.settings_page == 4) {
-                                root.playback_speed_stepped(-1);
+                                if (root.kb_menu + 1 < root.kb_menu_n()) {
+                                    root.kb_menu += 1;
+                                }
                             } else if (root.kb_menu + 1 < root.kb_menu_n()) {
                                 root.kb_menu += 1;
                             }
@@ -1138,13 +1178,19 @@ export component PlayerOverlay {
                         } else if (e.text == Key.RightArrow) {
                             if (root.settings_page == 0) {
                                 root.kb_menu_pick();
+                            } else if (root.settings_page == 4 && root.kb_menu == 1) {
+                                root.playback_speed_stepped(1);
                             }
                             accept
                         } else if (e.text == Key.Return) {
                             root.kb_menu_pick();
                             accept
                         } else if (e.text == Key.LeftArrow) {
-                            root.settings_back();
+                            if (root.settings_page == 4 && root.kb_menu == 1) {
+                                root.playback_speed_stepped(-1);
+                            } else {
+                                root.settings_back();
+                            }
                             accept
                         } else if (e.text == Key.Backspace || e.text == Key.Back) {
                             root.settings_back();
@@ -2134,6 +2180,9 @@ export component PlayerOverlay {
             audio_tracks: root.audio_tracks;
             sub_label: root.sub_label;
             audio_label: root.audio_label;
+            audio_preference_saved: root.audio_preference_saved;
+            subtitle_preference_saved: root.subtitle_preference_saved;
+            speed_preference_saved: root.speed_preference_saved;
             playback_speed <=> root.playback_speed;
             is_android: root.is_android;
             pick_decoder(i) => { root.open_popup = 0; root.pick_decoder(i); }
@@ -2141,8 +2190,9 @@ export component PlayerOverlay {
             // moves to the chosen row (Android's gear is the only picker).
             pick_sub(i) => { root.pick_sub_track(i); }
             pick_audio(i) => { root.pick_audio_track(i); }
+            restore_playback_default(kind) => { root.restore_playback_default(kind); }
             // Rate edits stay on the page (the value moves live) and go
-            // straight to the backend, which owns the per-device setting.
+            // straight to the backend, which owns the title preference.
             speed_changed(v) => { root.playback_speed_changed(v); }
             speed_stepped(d) => { root.playback_speed_stepped(d); }
             closed => { root.open_popup = 0; }

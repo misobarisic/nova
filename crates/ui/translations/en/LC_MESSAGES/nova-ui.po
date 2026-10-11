@@ -116,3 +116,30 @@ msgstr "This addon provides no content while both options are off."
 
 msgid "Retry"
 msgstr "Retry"
+
+msgid "Search languages"
+msgstr "Search languages"
+
+msgid "Default audio language"
+msgstr "Default audio language"
+
+msgid "Search for the language the built-in player should use by default."
+msgstr "Search for the language the built-in player should use by default."
+
+msgid "Default subtitle language"
+msgstr "Default subtitle language"
+
+msgid "Search for the subtitle language the built-in player should use by default."
+msgstr "Search for the subtitle language the built-in player should use by default."
+
+msgid "Default playback speed"
+msgstr "Default playback speed"
+
+msgid "Use global default"
+msgstr "Use global default"
+
+msgid "Saved for this title"
+msgstr "Saved for this title"
+
+msgid "Using global default"
+msgstr "Using global default"
