@@ -13,6 +13,8 @@ export component MorePage inherits Rectangle {
     in property <length> safe-bottom;
     in property <length> nav-viewport-width;
     in property <bool> narrow: true;
+    // The destination can paint during return without taking input or focus.
+    in property <bool> active: true;
     in property <int> system_back_request;
     in-out property <bool> kb_active;
     private property <int> last_back: 0;
@@ -28,15 +30,20 @@ export component MorePage inherits Rectangle {
     callback calendar_picked();
     callback downloads_picked();
     changed system_back_request => {
-        if (root.last_back != root.system_back_request) {
+        if (root.active && root.last_back != root.system_back_request) {
             root.last_back = root.system_back_request;
             root.home_picked();
         }
     }
-    entry_focus := Timer { interval: 1ms; running: false; triggered => { self.stop(); nav_scope.focus(); } }
+    entry_focus := Timer { interval: 1ms; running: false; triggered => { self.stop(); if (root.active) { nav_scope.focus(); } } }
+    changed active => {
+        root.last_back = root.system_back_request;
+        if (root.active) { entry_focus.start(); } else { entry_focus.stop(); }
+    }
     nav_scope := FocusScope {
+        enabled: root.active;
         width: 100%; height: 100%;
-        init => { root.last_back = root.system_back_request; self.focus(); entry_focus.start(); }
+        init => { root.last_back = root.system_back_request; if (root.active) { self.focus(); entry_focus.start(); } }
         key-pressed(e) => {
             root.kb_active = true;
             SettingsStyle.keyboard-mode = true;
@@ -79,18 +86,18 @@ export component MorePage inherits Rectangle {
             content-width: self.visible-width;
             VerticalLayout {
                 width: 100%; spacing: 12px;
-                SettingsHeader { title: @tr("More"); overview: true; show-back: true; back => { root.home_picked(); } }
-                SettingsCard { SettingsLink { destination-id: "more:calendar"; title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 0; picked => { root.calendar_picked(); } } }
-                SettingsCard { SettingsLink { destination-id: "more:downloads"; title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 1; picked => { root.downloads_picked(); } } }
+                SettingsHeader { title: @tr("More"); overview: true; show-back: true; back => { if (root.active) { root.home_picked(); } } }
+                SettingsCard { SettingsLink { interactive: root.active; destination-id: "more:calendar"; title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 0; picked => { root.calendar_picked(); } } }
+                SettingsCard { SettingsLink { interactive: root.active; destination-id: "more:downloads"; title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 1; picked => { root.downloads_picked(); } } }
                 SettingsCard { SettingsLink {
-                    destination-id: "more:settings";
+                    interactive: root.active; destination-id: "more:settings";
                     icon-kind: 14;
                     title: @tr("Settings"); subtitle: @tr("Make Nova yours");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 2;
                     picked => { root.settings_picked(); }
                 } }
                 SettingsCard { SettingsLink {
-                    destination-id: "more:about";
+                    interactive: root.active; destination-id: "more:about";
                     icon-kind: 15;
                     title: @tr("About"); subtitle: @tr("Information about Nova");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 3;
@@ -104,9 +111,9 @@ export component MorePage inherits Rectangle {
             safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;
             page-inset-left: 18px + root.safe-left; page-inset-right: 18px + root.safe-right;
             kb_zone: root.kb_zone; kb_nav: root.kb_nav; kb_active <=> root.kb_active;
-            home_picked => { root.home_picked(); }
-            discover_picked => { root.discover_picked(); }
-            library_picked => { root.library_picked(); }
+            home_picked => { if (root.active) { root.home_picked(); } }
+            discover_picked => { if (root.active) { root.discover_picked(); } }
+            library_picked => { if (root.active) { root.library_picked(); } }
         }
     }
     if !root.narrow: SideNav {
@@ -118,9 +125,13 @@ export component MorePage inherits Rectangle {
         kb_zone: root.kb_zone;
         kb_nav: root.kb_nav;
         kb_active <=> root.kb_active;
-        home_picked => { root.home_picked(); }
-        discover_picked => { root.discover_picked(); }
-        library_picked => { root.library_picked(); }
+        home_picked => { if (root.active) { root.home_picked(); } }
+        discover_picked => { if (root.active) { root.discover_picked(); } }
+        library_picked => { if (root.active) { root.library_picked(); } }
         more_picked => { }
+    }
+    if !root.active: TouchArea {
+        width: 100%; height: 100%;
+        clicked => { }
     }
 }

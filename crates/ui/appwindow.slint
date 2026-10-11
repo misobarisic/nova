@@ -293,7 +293,23 @@ export component AppWindow inherits Window {
     private property <bool> more_subpage_entered: true;
     private property <bool> more_subpage_exiting: false;
     private property <bool> more_return_pending: false;
+    private property <float> more_entry_progress: root.more_subpage_entered ? 1.0 : 0.0;
+    animate more_entry_progress {
+        duration: root.more_subpage_entered ? Anim.transition_slide : 0ms;
+        easing: ease-out;
+    }
+    private property <float> more_return_start: 1.0;
+    // Reveal the destination under the outgoing page for the entire return.
+    // One progress value avoids a blank gap between unequal slide/fade times.
+    private property <float> more_return_progress: root.more_return_pending ? 1.0 : 0.0;
+    animate more_return_progress {
+        duration: root.more_return_pending ? Anim.transition_slide : 0ms;
+        easing: ease-out;
+    }
     private property <bool> more_subpage_motion: root.more_parent && (root.narrow_ui || root.more_subpage_exiting) && Anim.enabled && Anim.transitions;
+    private property <float> more_subpage_offset: root.more_subpage_motion
+        ? (root.more_subpage_exiting ? 1.0 - root.more_return_start * (1.0 - root.more_return_progress) : 1.0 - root.more_entry_progress)
+        : 0.0;
     more_entry_tick := Timer {
         interval: 1ms; running: false;
         triggered => { self.stop(); root.more_subpage_entered = true; }
@@ -358,6 +374,9 @@ export component AppWindow inherits Window {
         if (root.more_parent) {
             if (root.more_return_pending) { return; }
             if (Anim.enabled && Anim.transitions) {
+                // Reverse from the current entry frame if Back arrives early.
+                root.more_return_start = root.more_subpage_motion ? root.more_entry_progress : 1.0;
+                more_entry_tick.stop();
                 root.more_return_pending = true;
                 root.more_subpage_exiting = true;
                 more_return_tick.start();
@@ -1303,13 +1322,34 @@ export component AppWindow inherits Window {
         touch_menus: root.touch_menus;
     }
 
+    if (root.more_open || root.more_return_pending) && !root.player_open && !root.modal_visible: MorePage {
+        width: root.width; height: root.height;
+        // Keep this layer behind every subpage, including Settings/About.
+        x: root.width * 0.08 * (root.more_return_progress - (root.more_return_pending ? 1.0 : 0.0));
+        opacity: root.more_return_progress + (root.more_open ? 1.0 : 0.0);
+        active: root.more_open;
+        narrow: root.narrow_ui;
+        nav-viewport-width: root.width;
+        safe-top: root.safe-area-insets.top;
+        safe-bottom: root.safe-area-insets.bottom;
+        safe-left: root.safe-area-insets.left;
+        safe-right: root.safe-area-insets.right;
+        kb_active <=> root.kb_active;
+        system_back_request: root.page_back_request;
+        home_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.home_picked(); }
+        discover_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.discover_picked(); }
+        library_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.library_picked(); }
+        calendar_picked => { root.pick_more(0); }
+        downloads_picked => { root.pick_more(1); }
+        settings_picked => { root.pick_more(2); }
+        about_picked => { root.pick_more(3); }
+    }
+
     // ---- Settings page --------------------------------------------------
     if root.show_settings && !root.player_open && !root.modal_visible && !root.show_home && !root.show_about: SettingsPage {
         width: root.width; height: root.height;
-        x: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? root.width * 0.28 : 0px;
-        opacity: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? 0.0 : 1.0;
-        animate x { duration: Anim.transition_slide; easing: ease-out; }
-        animate opacity { duration: Anim.transition_fade; }
+        x: root.width * 0.28 * root.more_subpage_offset;
+        opacity: 1.0 - root.more_subpage_offset;
         sel <=> root.settings_selected_id;
         sub_open <=> root.settings_detail_open;
         two_pane: root.settings_two_pane;
@@ -1507,10 +1547,8 @@ export component AppWindow inherits Window {
     // ---- About (with nested Licenses) -----------------------------------
     if root.show_about && !root.player_open && !root.modal_visible && !root.show_home && !root.show_library && !root.show_settings: AboutPage {
         width: root.width; height: root.height;
-        x: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? root.width * 0.28 : 0px;
-        opacity: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? 0.0 : 1.0;
-        animate x { duration: Anim.transition_slide; easing: ease-out; }
-        animate opacity { duration: Anim.transition_fade; }
+        x: root.width * 0.28 * root.more_subpage_offset;
+        opacity: 1.0 - root.more_subpage_offset;
         nav-viewport-width: root.width;
         narrow: root.narrow_ui;
         safe-top: root.safe-area-insets.top;
@@ -1534,31 +1572,11 @@ export component AppWindow inherits Window {
         license_source_requested(url) => { root.license_source_requested(url); }
     }
 
-    if root.more_open && !root.player_open && !root.modal_visible: MorePage {
-        width: root.width; height: root.height;
-        narrow: root.narrow_ui;
-        nav-viewport-width: root.width;
-        safe-top: root.safe-area-insets.top;
-        safe-bottom: root.safe-area-insets.bottom;
-        safe-left: root.safe-area-insets.left;
-        safe-right: root.safe-area-insets.right;
-        kb_active <=> root.kb_active;
-        system_back_request: root.page_back_request;
-        home_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.home_picked(); }
-        discover_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.discover_picked(); }
-        library_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.library_picked(); }
-        calendar_picked => { root.pick_more(0); }
-        downloads_picked => { root.pick_more(1); }
-        settings_picked => { root.pick_more(2); }
-        about_picked => { root.pick_more(3); }
-    }
 
     if root.show_calendar && !root.player_open && !root.modal_visible && !root.more_open: CalendarPage {
         width: root.width; height: root.height;
-        x: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? root.width * 0.28 : 0px;
-        opacity: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? 0.0 : 1.0;
-        animate x { duration: Anim.transition_slide; easing: ease-out; }
-        animate opacity { duration: Anim.transition_fade; }
+        x: root.width * 0.28 * root.more_subpage_offset;
+        opacity: 1.0 - root.more_subpage_offset;
         cells: root.calendar_cells; week_cells: root.calendar_week; rows: root.calendar_rows; later: root.calendar_later;
         title: root.calendar_title; day_title: root.calendar_day_title; count: root.calendar_count;
         search <=> root.calendar_search; view <=> root.calendar_view; all <=> root.calendar_all;
@@ -1576,10 +1594,8 @@ export component AppWindow inherits Window {
     }
     if root.show_downloads && !root.player_open && !root.modal_visible && !root.more_open: DownloadsPage {
         width: root.width; height: root.height;
-        x: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? root.width * 0.28 : 0px;
-        opacity: root.more_subpage_motion && (root.more_subpage_exiting || !root.more_subpage_entered) ? 0.0 : 1.0;
-        animate x { duration: Anim.transition_slide; easing: ease-out; }
-        animate opacity { duration: Anim.transition_fade; }
+        x: root.width * 0.28 * root.more_subpage_offset;
+        opacity: 1.0 - root.more_subpage_offset;
         groups: root.downloads_page_groups; transfers: root.downloads_page_transfers; summary: root.downloads_page_summary; counts: root.downloads_page_counts;
         query <=> root.downloads_page_query; filter <=> root.downloads_page_filter; sort_recent <=> root.downloads_page_sort_recent;
         query_changed(q) => { root.downloads_page_query_changed(q); } filter_changed(f) => { root.downloads_page_filter_changed(f); }

@@ -9,10 +9,17 @@ fn page(app: &nova::AppWindow, name: &str) -> ElementHandle {
         .unwrap_or_else(|| panic!("missing page {name}"))
 }
 fn button(app: &nova::AppWindow, label: &str) -> ElementHandle {
-    ElementHandle::find_by_accessible_label(app, label)
-        .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
-        .unwrap_or_else(|| panic!("missing button {label}"))
+    let mut matches = ElementHandle::find_by_accessible_label(app, label)
+        .filter(|e| e.accessible_role() == Some(AccessibleRole::Button));
+    // During return the inactive More header is below the outgoing header.
+    let found = if label == "Back" {
+        matches.last()
+    } else {
+        matches.next()
+    };
+    found.unwrap_or_else(|| panic!("missing button {label}"))
 }
+
 fn assert_shared_back(app: &nova::AppWindow) {
     let back = button(app, "Back");
     let size = back.size();
@@ -188,6 +195,8 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
             tap(&app, button(&app, label));
             let _ = page(&app, component).size();
             i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+            let entry_x = page(&app, component).absolute_position().x;
+            let entry_alpha = page(&app, component).computed_opacity();
             for event in [
                 WindowEvent::KeyPressed {
                     text: slint::platform::Key::Back.into(),
@@ -206,15 +215,20 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
             }
             if enabled && transitions {
                 assert!(!app.get_more_open());
-                assert!(page(&app, component).size().width > 0.0);
+                let reversing = page(&app, component);
+                assert!(reversing.size().width > 0.0);
+                assert!((reversing.absolute_position().x - entry_x).abs() < 0.5);
+                assert!(
+                    (reversing.computed_opacity() - entry_alpha).abs() < 0.01,
+                    "Back during entry must not flash a fully opaque subpage"
+                );
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(110));
                 let outgoing = page(&app, component);
                 assert!(outgoing.absolute_position().x > 0.1);
                 assert!(outgoing.computed_opacity() < 0.99);
-                assert_eq!(
-                    ElementHandle::find_by_element_type_name(&app, "MorePage").count(),
-                    0
-                );
+                let incoming = page(&app, "MorePage");
+                assert!(incoming.computed_opacity() > 0.01 && incoming.computed_opacity() < 0.99);
+                assert!(incoming.absolute_position().x < -0.1);
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(180));
             } else {
                 assert!(app.get_more_open());
@@ -247,13 +261,33 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
                 let outgoing = page(&app, component);
                 assert!(outgoing.absolute_position().x > 0.1);
                 assert!(outgoing.computed_opacity() < 0.99);
-                assert_eq!(
-                    ElementHandle::find_by_element_type_name(&app, "MorePage").count(),
-                    0
-                );
+                let incoming = page(&app, "MorePage");
+                assert!(incoming.computed_opacity() > 0.01 && incoming.computed_opacity() < 0.99);
+                assert!(incoming.absolute_position().x < -0.1);
+                let mut previous_x = outgoing.absolute_position().x;
+                let mut previous_alpha = incoming.computed_opacity();
+                assert!((outgoing.computed_opacity() + previous_alpha - 1.0).abs() < 0.01);
                 // A second Back must not restart the return timer.
                 tap(&app, button(&app, "Back"));
-                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(170));
+                for _ in 0..8 {
+                    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+                    let outgoing = page(&app, component);
+                    let incoming = page(&app, "MorePage");
+                    let x = outgoing.absolute_position().x;
+                    let alpha = incoming.computed_opacity();
+                    assert!(x >= previous_x && alpha >= previous_alpha);
+                    assert!(
+                        (outgoing.computed_opacity() + alpha - 1.0).abs() < 0.01,
+                        "return must not have a blank frame before More appears"
+                    );
+                    previous_x = x;
+                    previous_alpha = alpha;
+                }
+                assert!(
+                    previous_alpha > 0.98,
+                    "More should be revealed before teardown"
+                );
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(42));
             }
             assert!(app.get_more_open());
             assert_eq!(
@@ -296,7 +330,7 @@ fn more_return_cancels_for_destination_navigation() {
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(80));
     assert!(!app.get_more_open());
     let library = ElementHandle::find_by_element_id(&app, "BottomNav::tab_library")
-        .next()
+        .last()
         .expect("the outgoing page's Library tab");
     tap(&app, library);
     assert!(app.get_show_library());
