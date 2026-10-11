@@ -377,13 +377,16 @@ export component AppWindow inherits Window {
     in-out property <bool> cache_enabled: false;
     in-out property <int> cache_format_index: 0;
     in-out property <float> cache_quality: 85.0;
-    in-out property <bool> cache_downscale: false;
+    in-out property <int> detail_poster_resolution_index: 3;
+    in-out property <int> detail_backdrop_resolution_index: 5;
+    in-out property <int> episode_thumbnail_resolution_index: 2;
+    in-out property <int> player_episode_backdrop_resolution_index: 0;
     in-out property <bool> cache_date_relative: true;
     in-out property <bool> cache_show_unwatched_thumbs: true;
     in-out property <float> cache_lru_mb: 128.0;
     in-out property <bool> cache_prefetch_metadata: false;
-    // Lazily re-encode images on load to the configured format/quality.
-    in-out property <bool> cache_lazy_reencode: false;
+    // Image-use limits (Original plus the shared resolution presets).
+    in-out property <[string]> image_resolution_names: [@tr("Original"), "240 px", "360 px", "480 px", "720 px", "960 px", "1024 px", "1280 px", "1920 px", "2560 px"];
     in-out property <[string]> cache_format_names: ["JPEG", "WebP"];
     // Player backend (Settings → Player): 0 = built-in mpv, 1 = external
     // app. Desktop external target: 0 = system default, 1 = VLC, 2 = mpv.
@@ -1358,13 +1361,16 @@ export component AppWindow inherits Window {
         cache_enabled <=> root.cache_enabled;
         cache_format_index <=> root.cache_format_index;
         cache_quality <=> root.cache_quality;
-        cache_downscale <=> root.cache_downscale;
+        detail_poster_resolution_index <=> root.detail_poster_resolution_index;
+        detail_backdrop_resolution_index <=> root.detail_backdrop_resolution_index;
+        episode_thumbnail_resolution_index <=> root.episode_thumbnail_resolution_index;
+        player_episode_backdrop_resolution_index <=> root.player_episode_backdrop_resolution_index;
         cache_date_relative <=> root.cache_date_relative;
         cache_show_unwatched_thumbs <=> root.cache_show_unwatched_thumbs;
         cache_lru_mb <=> root.cache_lru_mb;
         cache_prefetch_metadata <=> root.cache_prefetch_metadata;
         discover_catalog_addon_names <=> root.discover_catalog_addon_names;
-        cache_lazy_reencode <=> root.cache_lazy_reencode;
+        image_resolution_names <=> root.image_resolution_names;
         discover_min_cols <=> root.discover_min_cols;
         library_min_cols <=> root.library_min_cols;
         cache_format_names <=> root.cache_format_names;

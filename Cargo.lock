@@ -5306,6 +5306,8 @@ dependencies = [
  "nova-providers",
  "reqwest",
  "rustls",
+ "serde",
+ "serde_json",
  "slint",
  "webp",
  "webpki-roots",

@@ -203,7 +203,6 @@ mod tests {
             Bridge::new(
                 app.as_weak(),
                 PosterTx { hi, lo },
-                Arc::new(Mutex::new(PosterStore::new(1))),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,

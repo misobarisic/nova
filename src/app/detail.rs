@@ -8,6 +8,18 @@ pub(crate) fn page_count(total: usize) -> usize {
     total.div_ceil(EPISODE_PAGE_SIZE).max(1)
 }
 
+/// A preview cannot exceed the player's selected maximum even when its list
+/// thumbnail was decoded at a larger resolution.
+fn player_episode_preview(
+    pixels: &SharedPixelBuffer<Rgba8Pixel>,
+    settings: &CacheSettings,
+) -> SharedPixelBuffer<Rgba8Pixel> {
+    match ImageRecipe::resolve(ImageUse::PlayerEpisodeBackdrop, settings).max_side {
+        Some(side) => downscale_for_display(pixels, side),
+        None => pixels.clone(),
+    }
+}
+
 impl Bridge {
     pub(super) fn item_selected(&self, index: usize) {
         let searching = self.app().is_some_and(|app| app.get_discover_search_open());
@@ -46,9 +58,6 @@ impl Bridge {
         discover_index: Option<usize>,
         watch_now: bool,
     ) {
-        // The indexed poster fast path is desktop-only; Android relies on
-        // the decoded LRU via load_detail_poster instead.
-        #[cfg(not(feature = "desktop"))]
         let _ = (generation, searching);
         let app = match self.app() {
             Some(a) => a,
@@ -152,24 +161,10 @@ impl Bridge {
         app.set_detail_tab(0);
         app.set_episode_filter(SharedString::default());
 
-        // Reset the detail poster first so an item without one never keeps
-        // showing the previously selected poster; fill it from the cache if
-        // the grid download already finished (the poster worker also updates
-        // it once a not-yet-cached download completes). On Android the decoded
-        // LRU (filled by the grid fetch) plays the same role via
-        // load_detail_poster's fast path.
+        // Detail always resolves its own recipe: a grid-sized completion must
+        // not become the selected image when Detail requests another size.
         app.set_selected_poster(Image::default());
-        // The player's loading screen falls back to the show poster, so it
-        // must be reset alongside (a stale episode thumb from the previous
-        // item would otherwise survive).
         app.set_player_poster(Image::default());
-        #[cfg(feature = "desktop")]
-        if !searching
-            && let Some(index) = discover_index
-            && let Some(buffer) = self.poster_cache.lock().unwrap().get(&(generation, index))
-        {
-            app.set_selected_poster(Image::from_rgba8(buffer.clone()));
-        }
 
         app.set_in_library(self.library_contains(&preview.id));
         self.refresh_detail_library_watched();
@@ -1018,26 +1013,7 @@ impl Bridge {
                     && !app.get_player_open()
                     && let Some(url) = video.thumbnail.filter(|url| !url.is_empty())
                 {
-                    let bridge = self.clone();
-                    net::fetch_image(url, None, move |pixels| {
-                        let Some(pixels) = pixels else {
-                            return;
-                        };
-                        let _ = slint::invoke_from_event_loop(move || {
-                            let current = bridge
-                                .shared
-                                .lock()
-                                .unwrap()
-                                .modal_item
-                                .as_ref()
-                                .is_some_and(|modal| {
-                                    modal.id == id && modal.request_id == video.id
-                                });
-                            if current && let Some(app) = bridge.app() {
-                                app.set_player_poster(Image::from_rgba8(pixels));
-                            }
-                        });
-                    });
+                    self.load_player_episode_backdrop(id, video.id, url);
                 }
             }
         }
@@ -1381,8 +1357,8 @@ impl Bridge {
                         Self::estimate_stream_lines(&seed.details)
                     };
                 let lines = reserved_lines.max(1);
-                // Episode rows display the downscaled variant, which the
-                // pump stores under the sized key (see EPISODE_THUMB_SIDE).
+                // Episode rows use the configured thumbnail recipe, matching
+                // the pump's cache key even when Original is selected.
                 // Hidden by the `show_unwatched_thumbs` setting for fresh
                 // episodes (placeholder instead).
                 let (thumb, has_thumb) = if !seed.show_thumb {
@@ -1390,8 +1366,10 @@ impl Bridge {
                 } else {
                     match &seed.thumb_url {
                         Some(url) => {
-                            match decoded_cache_get(&sized_cache_key(url, Some(EPISODE_THUMB_SIDE)))
-                            {
+                            match decoded_cache_get(&image_cache_key(
+                                url,
+                                ImageUse::EpisodeThumbnail,
+                            )) {
                                 Some(buf) => (Image::from_rgba8(buf), true),
                                 None => (Image::default(), false),
                             }
@@ -1540,7 +1518,7 @@ impl Bridge {
                 let (thumb, has_thumb) = match season_thumb_url(&m.videos, &m.season_backdrops, s)
                     .as_deref()
                     .and_then(|url| {
-                        decoded_cache_get(&sized_cache_key(url, Some(EPISODE_THUMB_SIDE)))
+                        decoded_cache_get(&image_cache_key(url, ImageUse::EpisodeThumbnail))
                     }) {
                     Some(buf) => (Image::from_rgba8(buf), true),
                     None => (Image::default(), false),
@@ -2015,36 +1993,75 @@ impl Bridge {
             app.set_detail_kb_ci(2);
             app.set_detail_kb_ep(local_index as i32);
             app.set_detail_kb_s(0);
+            app.set_player_poster(
+                app.get_selected_poster()
+                    .to_rgba8()
+                    .map(|pixels| {
+                        Image::from_rgba8(player_episode_preview(&pixels, &active_cache_settings()))
+                    })
+                    .unwrap_or_default(),
+            );
             // Use the episode's thumbnail as the player's loading-screen
             // background once it has decoded (row order matches the list).
             if let Some(row) = app.get_episode_rows().row_data(local_index)
                 && row.has_thumb
+                && let Some(pixels) = row.thumb.to_rgba8()
             {
-                app.set_player_poster(row.thumb);
+                let pixels = player_episode_preview(&pixels, &active_cache_settings());
+                app.set_player_poster(Image::from_rgba8(pixels));
             }
         }
-        // Full-res backdrop for the player loading screen: the list rows
-        // carry downscaled thumbs, so fetch the original and upgrade the
-        // poster — but only if the user hasn't moved on meanwhile.
+        // Keep the immediate list thumbnail, then upgrade through the player's recipe.
         if let Some(url) = video.thumbnail.clone() {
-            let ctx = stream_episode_context_label(&video);
-            let app_weak = self.app.clone();
-            net::fetch_image(url, None, move |pixels| {
-                let Some(pixels) = pixels else {
-                    return;
-                };
-                let _ = slint::invoke_from_event_loop(move || {
-                    let Some(app) = app_weak.upgrade() else {
-                        return;
-                    };
-                    if app.get_episode_context().as_str() != ctx.as_str() {
-                        return; // picked another episode since
-                    }
-                    app.set_player_poster(Image::from_rgba8(pixels));
-                });
-            });
+            let series_id = self
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .map(|item| item.id.clone());
+            if let Some(series_id) = series_id {
+                self.load_player_episode_backdrop(series_id, video.id, url);
+            }
         }
         self.start_stream_search(request_id);
+    }
+
+    fn load_player_episode_backdrop(&self, series_id: String, episode_id: String, url: String) {
+        let token = self
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .filter(|item| item.id == series_id)
+            .map(|item| item.open_token.clone());
+        let Some(token) = token else { return };
+        let bridge = self.clone();
+        let revision = image_settings_revision();
+        let requested_url = url.clone();
+        net::fetch_image(url, ImageUse::PlayerEpisodeBackdrop, move |pixels| {
+            let Some(pixels) = pixels else { return };
+            let _ = slint::invoke_from_event_loop(move || {
+                let state = bridge.shared.lock().unwrap();
+                let current = state.modal_item.as_ref().is_some_and(|item| {
+                    Arc::ptr_eq(&item.open_token, &token)
+                        && item.id == series_id
+                        && item.request_id == episode_id
+                        && item.videos.iter().any(|video| {
+                            video.id == episode_id
+                                && video.thumbnail.as_deref() == Some(&requested_url)
+                        })
+                });
+                drop(state);
+                if current
+                    && image_settings_revision() == revision
+                    && let Some(app) = bridge.app()
+                {
+                    app.set_player_poster(Image::from_rgba8(pixels));
+                }
+            });
+        });
     }
 
     /// Main thread: go back from an episode's streams to the episode list.
@@ -3585,7 +3602,6 @@ mod tests {
         let bridge = Bridge::new(
             app.as_weak(),
             PosterTx { hi, lo },
-            Arc::new(Mutex::new(PosterStore::new(1))),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -4068,7 +4084,6 @@ mod series_open_tests {
         let bridge = Bridge::new(
             app.as_weak(),
             PosterTx { hi, lo },
-            Arc::new(Mutex::new(PosterStore::new(1))),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -4197,5 +4212,36 @@ mod series_open_tests {
             read_episodes_cache_for("series", "kitsu:1415").unwrap()[0].id,
             "tt0994314:1:1"
         );
+    }
+}
+
+#[cfg(test)]
+mod player_art_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn player_preview_obeys_all_presets_and_original_without_upscaling() {
+        let source = SharedPixelBuffer::<Rgba8Pixel>::new(640, 360);
+        for maximum in nova_config::IMAGE_RESOLUTION_PRESETS
+            .iter()
+            .copied()
+            .map(Some)
+            .chain([None])
+        {
+            let settings = CacheSettings {
+                player_episode_backdrop_max_side: maximum,
+                ..CacheSettings::default()
+            };
+            let preview = player_episode_preview(&source, &settings);
+            let longest = maximum.unwrap_or(640).min(640);
+            assert_eq!(preview.width(), longest);
+            assert!(
+                (preview.height() as f64 / preview.width() as f64 - 360.0 / 640.0).abs() < 0.005
+            );
+            assert_eq!(
+                preview.as_bytes().len(),
+                preview.width() as usize * preview.height() as usize * 4
+            );
+        }
     }
 }

@@ -184,6 +184,20 @@ fn home_showcase_art_urls(preview: &MetaPreview) -> Vec<String> {
     urls
 }
 
+fn home_showcase_backdrop_image(
+    candidate: Option<SharedPixelBuffer<Rgba8Pixel>>,
+    same_slide: bool,
+    current: Image,
+) -> Image {
+    candidate.map(Image::from_rgba8).unwrap_or_else(|| {
+        if same_slide {
+            current
+        } else {
+            Image::default()
+        }
+    })
+}
+
 fn home_showcase_meta_urls(state: &Shared, preview: &MetaPreview) -> Vec<String> {
     let owner = preview
         .extra
@@ -243,25 +257,32 @@ fn restore_home_showcase_header(preview: &mut MetaPreview) {
 }
 
 impl HomeShowcaseArtwork {
-    fn request(&mut self, preview: &MetaPreview, now: std::time::Instant) -> Option<String> {
+    fn request(
+        &mut self,
+        preview: &MetaPreview,
+        now: std::time::Instant,
+    ) -> (Option<String>, Option<SharedPixelBuffer<Rgba8Pixel>>, bool) {
+        self.request_with(preview, now, |url| {
+            decoded_cache_get(&image_cache_key(url, ImageUse::Fixed(None)))
+        })
+    }
+
+    fn request_with(
+        &mut self,
+        preview: &MetaPreview,
+        now: std::time::Instant,
+        mut cached: impl FnMut(&str) -> Option<SharedPixelBuffer<Rgba8Pixel>>,
+    ) -> (Option<String>, Option<SharedPixelBuffer<Rgba8Pixel>>, bool) {
         if self.loading_url.is_some() {
-            return None;
+            return (None, None, false);
         }
         let urls = home_showcase_art_urls(preview);
-        // A cached poster can paint while an uncached backdrop is fetched.
-        if self.backdrop.is_none() {
-            for url in &urls {
-                if let Some(pixels) = decoded_cache_get(url) {
-                    self.backdrop = Some(pixels);
-                    self.backdrop_url.clone_from(url);
-                    self.backdrop_done = true;
-                    break;
-                }
-            }
-        }
         for url in urls {
-            if self.backdrop.is_some() && self.backdrop_url == url {
-                return None;
+            // A prior successful fetch may have been evicted. Check the shared
+            // cache on every visit before treating this URL as ready.
+            if let Some(pixels) = cached(&url) {
+                self.backdrop_url = url;
+                return (None, Some(pixels), true);
             }
             if self
                 .failed_urls
@@ -270,20 +291,12 @@ impl HomeShowcaseArtwork {
             {
                 continue;
             }
-            if let Some(pixels) = decoded_cache_get(&url) {
-                self.backdrop = Some(pixels);
-                self.backdrop_url = url;
-                self.backdrop_done = true;
-                return None;
-            }
-            self.backdrop_done = self.backdrop.is_some();
             self.loading_url = Some(url.clone());
-            return Some(url);
+            return (Some(url), None, false);
         }
         // No available image must never stall the carousel. A later visit or
         // rotation can retry failed URLs once their cooldown has elapsed.
-        self.backdrop_done = true;
-        None
+        (None, None, true)
     }
 }
 
@@ -657,7 +670,10 @@ impl Bridge {
                 let poster_url = preview.poster.as_deref().unwrap_or_default();
                 let pixels = (!poster_url.is_empty())
                     .then(|| {
-                        decoded_cache_get(&sized_cache_key(poster_url, Some(DISPLAY_POSTER_SIDE)))
+                        decoded_cache_get(&image_cache_key(
+                            poster_url,
+                            ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+                        ))
                     })
                     .flatten();
                 cards.push(HomeCatalogCard {
@@ -745,7 +761,7 @@ impl Bridge {
             if let Some(url) = prefetch.filter(|url| !url.is_empty()) {
                 // Warm the ordinary image cache without changing visible
                 // state. The next index change can commit cached pixels.
-                net::fetch_image(url, None, |_| {});
+                net::fetch_image(url, ImageUse::Fixed(None), |_| {});
             }
         }
     }
@@ -787,9 +803,11 @@ impl Bridge {
             app.set_home_featured_refresh_pending(false);
             app.set_home_featured_title(SharedString::from(first.title()));
             app.set_home_featured_logo(
-                transparent_title_logo(first.logo.as_deref().and_then(decoded_cache_get))
-                    .map(Image::from_rgba8)
-                    .unwrap_or_default(),
+                transparent_title_logo(first.logo.as_deref().and_then(|url| {
+                    decoded_cache_get(&image_cache_key(url, ImageUse::Fixed(None)))
+                }))
+                .map(Image::from_rgba8)
+                .unwrap_or_default(),
             );
             app.set_home_featured_type(SharedString::from(&first.type_));
             app.set_home_featured_rating(SharedString::from(Self::showcase_rating(&first)));
@@ -811,7 +829,7 @@ impl Bridge {
             ));
             let backdrop = home_showcase_art_urls(&first)
                 .iter()
-                .find_map(|url| decoded_cache_get(url));
+                .find_map(|url| decoded_cache_get(&image_cache_key(url, ImageUse::Fixed(None))));
             app.set_home_featured_backdrop(backdrop.map(Image::from_rgba8).unwrap_or_default());
             app.set_home_featured_index(0);
             app.set_home_featured_count(count as i32);
@@ -987,7 +1005,7 @@ impl Bridge {
     fn ensure_home_showcase_art(&self, index: usize, generation: u64) {
         self.ensure_home_showcase_metadata(index, generation);
         self.ensure_home_showcase_logo(index, generation);
-        let (backdrop, ready) = {
+        let (fetch, backdrop, ready) = {
             let mut state = self.shared.lock().unwrap();
             if generation != state.home_showcase_list_generation {
                 return;
@@ -996,18 +1014,17 @@ impl Bridge {
                 return;
             };
             let artwork = state.home_showcase_artwork.entry(index).or_default();
-            let backdrop = artwork.request(&preview, std::time::Instant::now());
-            (backdrop, artwork.backdrop_done)
+            artwork.request(&preview, std::time::Instant::now())
         };
 
         if ready {
             let should_commit =
                 self.shared.lock().unwrap().home_showcase_pending_index == Some(index);
             if should_commit {
-                self.commit_home_showcase_index(index, generation);
+                self.commit_home_showcase_index(index, generation, backdrop);
             }
         }
-        if let Some(url) = backdrop {
+        if let Some(url) = fetch {
             self.fetch_home_showcase_artwork(index, generation, url);
         }
     }
@@ -1031,36 +1048,53 @@ impl Bridge {
             let artwork = state.home_showcase_artwork.entry(index).or_default();
             if artwork.logo_url != url {
                 artwork.logo_url = url.clone();
-                artwork.logo = None;
                 artwork.logo_loading = false;
                 artwork.logo_failed_at = None;
             }
-            if artwork.logo.is_some()
-                || artwork.logo_loading
+            if artwork.logo_loading
                 || artwork
                     .logo_failed_at
                     .is_some_and(|at| at.elapsed() < HOME_SHOWCASE_RETRY_DELAY)
             {
                 return;
             }
-            if let Some(pixels) = transparent_title_logo(decoded_cache_get(&url)) {
-                artwork.logo = Some(pixels);
+            if transparent_title_logo(decoded_cache_get(&image_cache_key(
+                &url,
+                ImageUse::Fixed(None),
+            )))
+            .is_some()
+            {
+                // Logo pixels are borrowed from the shared cache when the
+                // current slide is committed; this state keeps only identity.
                 return;
             }
             artwork.logo_loading = true;
             url
         };
         let bridge = self.clone();
-        net::fetch_image(request.clone(), None, move |pixels| {
+        let image_revision = image_settings_revision();
+        net::fetch_image(request.clone(), ImageUse::Fixed(None), move |pixels| {
             let pixels = transparent_title_logo(pixels);
             let _ = slint::invoke_from_event_loop(move || {
                 let mut state = bridge.shared.lock().unwrap();
-                if state.home_showcase_list_generation != generation
-                    || state
-                        .home_showcase
-                        .get(index)
-                        .and_then(|preview| preview.logo.as_deref())
-                        != Some(request.as_str())
+                if state.home_showcase_list_generation != generation {
+                    return;
+                }
+                if image_revision != image_settings_revision() {
+                    if let Some(artwork) = state.home_showcase_artwork.get_mut(&index)
+                        && artwork.logo_url == request
+                    {
+                        artwork.logo_loading = false;
+                    }
+                    drop(state);
+                    bridge.ensure_home_showcase_art(index, generation);
+                    return;
+                }
+                if state
+                    .home_showcase
+                    .get(index)
+                    .and_then(|preview| preview.logo.as_deref())
+                    != Some(request.as_str())
                 {
                     return;
                 }
@@ -1070,7 +1104,6 @@ impl Bridge {
                 }
                 artwork.logo_loading = false;
                 artwork.logo_failed_at = pixels.is_none().then(std::time::Instant::now);
-                artwork.logo = pixels.clone();
                 let displayed = state.home_showcase_index == index
                     && state.home_showcase_pending_index.is_none();
                 drop(state);
@@ -1086,11 +1119,12 @@ impl Bridge {
 
     fn fetch_home_showcase_artwork(&self, index: usize, generation: u64, url: String) {
         let bridge = self.clone();
+        let image_revision = image_settings_revision();
         // Keep the add-on-provided source resolution for the large hero rather
         // than using the smaller detail-banner derivative.
-        net::fetch_image(url.clone(), None, move |pixels| {
+        net::fetch_image(url.clone(), ImageUse::Fixed(None), move |pixels| {
             let _ = slint::invoke_from_event_loop(move || {
-                bridge.finish_home_showcase_artwork(index, generation, url, pixels);
+                bridge.finish_home_showcase_artwork(index, generation, image_revision, url, pixels);
             });
         });
     }
@@ -1099,6 +1133,7 @@ impl Bridge {
         &self,
         index: usize,
         generation: u64,
+        image_revision: u64,
         url: String,
         pixels: Option<SharedPixelBuffer<Rgba8Pixel>>,
     ) {
@@ -1117,13 +1152,17 @@ impl Bridge {
             if artwork.loading_url.as_deref() != Some(&url) {
                 return;
             }
+            if image_revision != image_settings_revision() {
+                artwork.loading_url = None;
+                drop(state);
+                self.ensure_home_showcase_art(index, generation);
+                return;
+            }
             artwork.loading_url = None;
             if valid_url {
-                if let Some(pixels) = pixels {
-                    artwork.backdrop = Some(pixels);
+                if pixels.is_some() {
                     artwork.backdrop_url = url.clone();
                     artwork.failed_urls.remove(&url);
-                    artwork.backdrop_done = true;
                 } else {
                     artwork.failed_urls.insert(url, std::time::Instant::now());
                 }
@@ -1135,8 +1174,13 @@ impl Bridge {
         self.ensure_home_showcase_art(index, generation);
     }
 
-    fn commit_home_showcase_index(&self, index: usize, generation: u64) {
-        let (preview, backdrop, logo, count) = {
+    fn commit_home_showcase_index(
+        &self,
+        index: usize,
+        generation: u64,
+        backdrop: Option<SharedPixelBuffer<Rgba8Pixel>>,
+    ) {
+        let (preview, logo, count, same_slide) = {
             let mut state = self.shared.lock().unwrap();
             if generation != state.home_showcase_list_generation {
                 return;
@@ -1144,22 +1188,26 @@ impl Bridge {
             if state.home_showcase_pending_index != Some(index) {
                 return;
             }
-            let Some(artwork) = state.home_showcase_artwork.get(&index) else {
-                return;
-            };
-            if !artwork.backdrop_done {
+            if !state.home_showcase_artwork.contains_key(&index) {
                 return;
             }
             let Some(preview) = state.home_showcase.get(index).cloned() else {
                 return;
             };
-            let backdrop = artwork.backdrop.clone();
-            let logo = artwork.logo.clone();
+            let logo = preview
+                .logo
+                .as_deref()
+                .and_then(|url| decoded_cache_get(&image_cache_key(url, ImageUse::Fixed(None))))
+                .and_then(|pixels| transparent_title_logo(Some(pixels)));
             let count = state.home_showcase.len();
+            let same_slide = state
+                .home_showcase_displayed
+                .as_ref()
+                .is_some_and(|displayed| home_showcase_same_identity(displayed, &preview));
             state.home_showcase_index = index;
             state.home_showcase_pending_index = None;
             state.home_showcase_displayed = Some(preview.clone());
-            (preview, backdrop, logo, count)
+            (preview, logo, count, same_slide)
         };
 
         self.refresh_home_watch_action();
@@ -1185,7 +1233,12 @@ impl Bridge {
             app.set_home_featured_description(SharedString::from(
                 preview.description.as_deref().unwrap_or_default(),
             ));
-            app.set_home_featured_backdrop(backdrop.map(Image::from_rgba8).unwrap_or_default());
+            let image = home_showcase_backdrop_image(
+                backdrop,
+                same_slide,
+                app.get_home_featured_backdrop(),
+            );
+            app.set_home_featured_backdrop(image);
             app.set_home_featured_index(index as i32);
             app.set_home_featured_count(count as i32);
             app.set_home_featured_revision(app.get_home_featured_revision().wrapping_add(1));
@@ -1472,7 +1525,9 @@ impl Bridge {
         }
         list.iter()
             .filter_map(|c| {
-                let e = entries.iter().find(|e| e.id == c.series_id)?;
+                let e = entries
+                    .iter()
+                    .find(|e| e.id == c.series_id && e.type_ == c.type_)?;
                 let episodes = read_episodes_cache_for(&c.type_, &c.series_id).unwrap_or_default();
                 let video = episodes.iter().find(|v| v.id == c.episode_id);
                 let subtitle = video
@@ -2126,32 +2181,10 @@ fn replace_home_showcase_list(state: &mut Shared, mut previews: Vec<MetaPreview>
     for preview in &mut previews {
         restore_home_showcase_header(preview);
     }
-    let mut cached_art = HashMap::new();
-    for artwork in std::mem::take(&mut state.home_showcase_artwork).into_values() {
-        if artwork.backdrop_done && artwork.backdrop.is_some() && !artwork.backdrop_url.is_empty() {
-            // Request state belongs to an identity/list generation, not to a
-            // shared image URL. Reuse only successful pixels on replacement.
-            cached_art.insert(artwork.backdrop_url.clone(), artwork.backdrop);
-        }
-    }
     state.home_showcase_artwork = previews
         .iter()
         .enumerate()
-        .filter_map(|(index, preview)| {
-            home_showcase_art_urls(preview).into_iter().find_map(|url| {
-                cached_art.get(&url).cloned().flatten().map(|backdrop| {
-                    (
-                        index,
-                        HomeShowcaseArtwork {
-                            backdrop: Some(backdrop),
-                            backdrop_url: url,
-                            backdrop_done: true,
-                            ..Default::default()
-                        },
-                    )
-                })
-            })
-        })
+        .map(|(index, _)| (index, HomeShowcaseArtwork::default()))
         .collect();
     state.home_showcase_index = index.min(previews.len().saturating_sub(1));
     state.home_showcase = previews;
@@ -2228,10 +2261,18 @@ fn home_card_art_url(poster_url: &str, video: Option<&Video>, episode_artwork: b
 }
 
 fn home_card_image(url: &str, fallback: &str) -> (Image, bool) {
-    decoded_cache_get(&sized_cache_key(url, Some(DISPLAY_POSTER_SIDE)))
-        .or_else(|| decoded_cache_get(&sized_cache_key(fallback, Some(DISPLAY_POSTER_SIDE))))
-        .map(|buf| (Image::from_rgba8(buf), true))
-        .unwrap_or_else(|| (Image::default(), false))
+    decoded_cache_get(&image_cache_key(
+        url,
+        ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+    ))
+    .or_else(|| {
+        decoded_cache_get(&image_cache_key(
+            fallback,
+            ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+        ))
+    })
+    .map(|buf| (Image::from_rgba8(buf), true))
+    .unwrap_or_else(|| (Image::default(), false))
 }
 
 fn continue_remaining(record: Option<&EpisodeProgress>) -> String {
@@ -2264,7 +2305,9 @@ pub(super) fn upcoming_row(
     date_relative: bool,
     episode_artwork: bool,
 ) -> Option<UpcomingRow> {
-    let e = entries.iter().find(|e| e.id == u.series_id)?;
+    let e = entries
+        .iter()
+        .find(|e| e.id == u.series_id && e.type_ == u.type_)?;
     let episodes = read_episodes_cache_for(&u.type_, &u.series_id).unwrap_or_default();
     let v = episodes.iter().find(|v| v.id == u.episode_id)?;
     let subtitle = format!("{} · {}", episode_badge(v), episode_row_label(v));
@@ -2572,14 +2615,14 @@ mod tests {
         let primary = "https://example.invalid/home-card-cache-episode.jpg";
         let fallback = "https://example.invalid/home-card-cache-poster.jpg";
         decoded_cache_insert(
-            &sized_cache_key(fallback, Some(DISPLAY_POSTER_SIDE)),
+            &image_cache_key(fallback, ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE))),
             SharedPixelBuffer::<Rgba8Pixel>::new(3, 2),
         );
         let (image, loaded) = home_card_image(primary, fallback);
         assert!(loaded);
         assert_eq!(image.size().width, 3);
         decoded_cache_insert(
-            &sized_cache_key(primary, Some(DISPLAY_POSTER_SIDE)),
+            &image_cache_key(primary, ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE))),
             SharedPixelBuffer::<Rgba8Pixel>::new(4, 2),
         );
         let (image, loaded) = home_card_image(primary, fallback);
@@ -2701,7 +2744,7 @@ mod tests {
     }
 
     #[test]
-    fn featured_artwork_falls_back_and_retries_without_losing_successful_pixels() {
+    fn featured_artwork_reacquires_after_eviction_and_retries_failures() {
         let mut preview = showcase_preview("any-provider:show");
         preview.poster = Some("https://images.example/fallback.jpg".into());
         preview.background = Some("  ".into());
@@ -2711,38 +2754,35 @@ mod tests {
         );
         let mut artwork = HomeShowcaseArtwork::default();
         let now = std::time::Instant::now();
+        let (request, candidate, ready) = artwork.request(&preview, now);
         assert_eq!(
-            artwork.request(&preview, now).as_deref(),
+            request.as_deref(),
             Some("https://images.example/fallback.jpg")
         );
-        assert!(!artwork.backdrop_done);
+        assert!(candidate.is_none());
+        assert!(!ready);
         assert!(
-            artwork.request(&preview, now).is_none(),
+            artwork.request(&preview, now).0.is_none(),
             "in-flight downloads are not duplicated"
         );
         artwork.loading_url = None;
-        artwork.backdrop = Some(SharedPixelBuffer::new(2, 2));
+        // A remembered URL is only a key. If the shared LRU no longer has its
+        // pixels, a later visit queues the image again.
         artwork.backdrop_url = preview.poster.clone().unwrap();
-        artwork.backdrop_done = true;
-        preview.background = Some("https://images.example/upgrade.jpg".into());
-        assert_eq!(artwork.request(&preview, now), preview.background);
-        assert!(
-            artwork.backdrop_done && artwork.backdrop.is_some(),
-            "poster stays usable during an upgrade"
-        );
+        assert_eq!(artwork.request(&preview, now).0, preview.poster);
         artwork.loading_url = None;
         artwork
             .failed_urls
-            .insert(preview.background.clone().unwrap(), now);
+            .insert(preview.poster.clone().unwrap(), now);
+        let (request, candidate, ready) = artwork.request(&preview, now + Duration::from_secs(1));
+        assert!(candidate.is_none());
         assert!(
-            artwork
-                .request(&preview, now + Duration::from_secs(1))
-                .is_none()
+            request.is_none() && ready,
+            "cooldowns do not stall rotation"
         );
-        assert_eq!(artwork.backdrop_url, preview.poster.clone().unwrap());
         assert_eq!(
-            artwork.request(&preview, now + HOME_SHOWCASE_RETRY_DELAY),
-            preview.background
+            artwork.request(&preview, now + HOME_SHOWCASE_RETRY_DELAY).0,
+            preview.poster
         );
 
         let mut unavailable = HomeShowcaseArtwork::default();
@@ -2752,17 +2792,44 @@ mod tests {
         unavailable
             .failed_urls
             .insert(preview.poster.clone().unwrap(), now);
-        assert!(unavailable.request(&preview, now).is_none());
-        assert!(
-            unavailable.backdrop_done,
-            "failed images never stop navigation"
-        );
+        assert!(unavailable.request(&preview, now).0.is_none());
         assert_eq!(
-            unavailable.request(&preview, now + HOME_SHOWCASE_RETRY_DELAY),
-            preview.background
+            unavailable
+                .request(&preview, now + HOME_SHOWCASE_RETRY_DELAY)
+                .0,
+            preview.poster,
+            "whitespace-only background URLs are ignored in favor of the poster"
         );
         preview.poster.clone_from(&preview.background);
-        assert_eq!(home_showcase_art_urls(&preview).len(), 1);
+        assert!(home_showcase_art_urls(&preview).is_empty());
+    }
+
+    #[test]
+    fn featured_candidate_survives_cache_eviction_until_slint_publish() {
+        let mut preview = showcase_preview("evicted-candidate");
+        preview.background = Some("https://images.example/evicted-candidate.jpg".into());
+        let pixels = SharedPixelBuffer::<Rgba8Pixel>::new(7, 4);
+        let mut cache_entry = Some(pixels);
+        let mut artwork = HomeShowcaseArtwork::default();
+        let (fetch, candidate, ready) =
+            artwork.request_with(&preview, std::time::Instant::now(), |_| {
+                let acquired = cache_entry.clone();
+                cache_entry = None; // Simulate LRU eviction before publish.
+                acquired
+            });
+        assert!(fetch.is_none() && ready);
+        assert!(cache_entry.is_none());
+        let published = home_showcase_backdrop_image(candidate, false, Image::default());
+        assert_eq!((published.size().width, published.size().height), (7, 4));
+    }
+
+    #[test]
+    fn same_slide_failure_keeps_current_backdrop_until_a_replacement_is_ready() {
+        let current = Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::new(9, 5));
+        let retained = home_showcase_backdrop_image(None, true, current.clone());
+        assert_eq!((retained.size().width, retained.size().height), (9, 5));
+        let next_slide = home_showcase_backdrop_image(None, false, current);
+        assert_eq!((next_slide.size().width, next_slide.size().height), (0, 0));
     }
 
     #[test]
@@ -2916,10 +2983,9 @@ mod tests {
     }
 
     #[test]
-    fn featured_list_reuses_artwork_by_url_and_anchors_navigation_by_identity() {
+    fn featured_list_reacquires_shared_artwork_by_url_and_anchors_navigation_by_identity() {
         let mut old = showcase_preview("old");
         old.background = Some("https://images.example/old.jpg".into());
-        let pixels = SharedPixelBuffer::<Rgba8Pixel>::new(2, 2);
         let mut state = Shared {
             home_showcase: vec![old.clone(), showcase_preview("other")],
             home_showcase_displayed: Some(old.clone()),
@@ -2927,9 +2993,7 @@ mod tests {
             home_showcase_artwork: HashMap::from([(
                 0,
                 HomeShowcaseArtwork {
-                    backdrop: Some(pixels),
                     backdrop_url: "https://images.example/old.jpg".into(),
-                    backdrop_done: true,
                     ..Default::default()
                 },
             )]),
@@ -2940,13 +3004,22 @@ mod tests {
         assert_eq!(home_showcase_refreshed_index(&state, &fresh, -1), 0);
         replace_home_showcase_list(&mut state, fresh, 2);
         assert_eq!(state.home_showcase_list_generation, 8);
-        assert!(state.home_showcase_artwork[&1].backdrop.is_some());
+        assert_eq!(state.home_showcase_artwork[&1].backdrop_url, "");
+        let reentered = state.home_showcase[1].clone();
+        let (request, _pixels, ready) = state
+            .home_showcase_artwork
+            .get_mut(&1)
+            .unwrap()
+            .request(&reentered, std::time::Instant::now());
+        assert_eq!(request.as_deref(), Some("https://images.example/old.jpg"));
+        assert!(!ready);
         assert_eq!(
             state.home_showcase_displayed.as_ref().unwrap().id,
             "old",
             "actions retain the visible preview until new artwork commits"
         );
-        assert!(!state.home_showcase_artwork.contains_key(&0));
+        assert!(state.home_showcase_artwork.contains_key(&0));
+        assert_eq!(state.home_showcase_artwork[&0].backdrop_url, "");
         assert_eq!(home_showcase_refreshed_index(&state, &[], 1), 0);
     }
 
@@ -2989,7 +3062,6 @@ mod tests {
             Bridge::new(
                 app.as_weak(),
                 PosterTx { hi, lo },
-                Arc::new(Mutex::new(PosterStore::new(1))),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,
@@ -3104,7 +3176,13 @@ mod tests {
         assert_eq!(app.get_home_featured_index(), 2);
         assert_eq!(app.get_home_featured_count(), 3);
         assert!(!app.get_home_featured_refresh_pending());
-        bridge.finish_home_showcase_artwork(0, old_art_generation, String::new(), None);
+        bridge.finish_home_showcase_artwork(
+            0,
+            old_art_generation,
+            image_settings_revision(),
+            String::new(),
+            None,
+        );
         assert_eq!(
             app.get_home_featured_title(),
             "fresh-b",
@@ -3205,7 +3283,7 @@ mod tests {
             .insert("novaSourceUrl".into(), serde_json::json!(source.addon_url));
         native.poster = Some("https://images.example/home-native-fixture.jpg".into());
         decoded_cache_insert(
-            native.poster.as_ref().unwrap(),
+            &image_cache_key(native.poster.as_ref().unwrap(), ImageUse::Fixed(None)),
             SharedPixelBuffer::new(2, 2),
         );
         let mut cached = HomeShowcaseCache::default();
@@ -3224,7 +3302,10 @@ mod tests {
         detail.preview.background = Some("https://images.example/home-detail-fixture.jpg".into());
         detail.preview.description = Some("Fetched through the shared detail pipeline".into());
         decoded_cache_insert(
-            detail.preview.background.as_ref().unwrap(),
+            &image_cache_key(
+                detail.preview.background.as_ref().unwrap(),
+                ImageUse::Fixed(None),
+            ),
             SharedPixelBuffer::new(3, 2),
         );
         bridge.finish_home_showcase_metadata(
@@ -3243,6 +3324,7 @@ mod tests {
         bridge.finish_home_showcase_artwork(
             0,
             current_generation,
+            image_settings_revision(),
             native.poster.clone().unwrap(),
             None,
         );

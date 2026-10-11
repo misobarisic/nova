@@ -8,6 +8,8 @@ license.workspace = true
 nova-config = { path = "../config" }
 nova-providers = { path = "../providers" }
 slint = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 # Image decode: desktop cache pipeline and Android fetch path; keep only artwork
 # formats used by the app.
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }

@@ -329,7 +329,10 @@ impl Bridge {
                         }
                     })
                     .unwrap_or_default();
-                let cached = backdrop_pixels_cached(&artwork_url);
+                let cached = decoded_cache_get(&image_cache_key(
+                    &artwork_url,
+                    ImageUse::Fixed(Some(DETAIL_BACKDROP_SIDE)),
+                ));
                 if cached.is_none() && !artwork_url.is_empty() {
                     artwork_requests.push((
                         id.clone(),
@@ -409,52 +412,58 @@ impl Bridge {
         app.set_downloads_page_filter(filter);
         app.set_downloads_page_sort_recent(recent);
         for (id, media_type, media_id, url) in artwork_requests.into_iter().take(80) {
+            let cache_key = image_cache_key(&url, ImageUse::Fixed(Some(DETAIL_BACKDROP_SIDE)));
             let now = std::time::Instant::now();
             let mut attempts = ARTWORK_ATTEMPTS.lock().unwrap();
             if attempts
-                .get(&url)
+                .get(&cache_key)
                 .is_some_and(|last| now.duration_since(*last) < Duration::from_secs(30))
             {
                 continue;
             }
-            attempts.insert(url.clone(), now);
+            attempts.insert(cache_key, now);
             drop(attempts);
             let bridge = self.clone();
-            net::fetch_image(url.clone(), Some(DETAIL_BACKDROP_SIDE), move |pixels| {
-                let Some(pixels) = pixels else { return };
-                let _ = slint::invoke_from_event_loop(move || {
-                    let Some(app) = bridge.app() else { return };
-                    if !app.get_show_downloads() {
-                        return;
-                    }
-                    let same_url = bridge
-                        .shared
-                        .lock()
-                        .unwrap()
-                        .entries
-                        .iter()
-                        .find(|entry| entry.id == media_id && entry.type_ == media_type)
-                        .is_some_and(|entry| {
-                            if entry.background_url.is_empty() {
-                                entry.poster_url == url
-                            } else {
-                                entry.background_url == url
-                            }
-                        });
-                    if !same_url {
-                        return;
-                    }
-                    let model = app.get_downloads_page_groups();
-                    for index in 0..model.row_count() {
-                        if let Some(mut row) = model.row_data(index)
-                            && row.id.as_str() == id.as_str()
-                        {
-                            row.artwork = Image::from_rgba8(pixels.clone());
-                            model.set_row_data(index, row);
+            let revision = image_settings_revision();
+            net::fetch_image(
+                url.clone(),
+                ImageUse::Fixed(Some(DETAIL_BACKDROP_SIDE)),
+                move |pixels| {
+                    let Some(pixels) = pixels else { return };
+                    let _ = slint::invoke_from_event_loop(move || {
+                        let Some(app) = bridge.app() else { return };
+                        if !app.get_show_downloads() || image_settings_revision() != revision {
+                            return;
                         }
-                    }
-                });
-            });
+                        let same_url = bridge
+                            .shared
+                            .lock()
+                            .unwrap()
+                            .entries
+                            .iter()
+                            .find(|entry| entry.id == media_id && entry.type_ == media_type)
+                            .is_some_and(|entry| {
+                                if entry.background_url.is_empty() {
+                                    entry.poster_url == url
+                                } else {
+                                    entry.background_url == url
+                                }
+                            });
+                        if !same_url {
+                            return;
+                        }
+                        let model = app.get_downloads_page_groups();
+                        for index in 0..model.row_count() {
+                            if let Some(mut row) = model.row_data(index)
+                                && row.id.as_str() == id.as_str()
+                            {
+                                row.artwork = Image::from_rgba8(pixels.clone());
+                                model.set_row_data(index, row);
+                            }
+                        }
+                    });
+                },
+            );
         }
     }
 }

@@ -526,17 +526,32 @@ msgstr "Kvaliteta"
 msgid "Encoding quality — lower values mean smaller files."
 msgstr "Kvaliteta kodiranja — niže vrijednosti znače manje datoteke."
 
-msgid "Downscale images"
-msgstr "Smanjite slike"
+msgid "Original"
+msgstr "Izvorna veličina"
 
-msgid "Cap the longest side at 1024 px before encoding (smaller cache)."
-msgstr "Ograničite najdulju stranicu na 1024 px prije kodiranja (manja predmemorija)."
+msgid "Detail posters"
+msgstr "Plakati detalja"
 
-msgid "Re-encode on load"
-msgstr "Ponovno kodirajte pri učitavanju"
+msgid "Maximum size of show and movie posters in Detail."
+msgstr "Najveća veličina plakata serija i filmova u detaljima."
 
-msgid "When an image is loaded, re-encode it to the format/quality above and replace the on-disk cache entry."
-msgstr "Kad se slika učita, ponovno je kodirajte u gore navedeni format/kvalitetu i zamijenite zapis u predmemoriji na disku."
+msgid "Detail backdrops"
+msgstr "Pozadine detalja"
+
+msgid "Maximum size of wide show and movie banners in Detail."
+msgstr "Najveća veličina širokih pozadina serija i filmova u detaljima."
+
+msgid "Episode thumbnails"
+msgstr "Sličice epizoda"
+
+msgid "Maximum size of episode-list and season-picker images."
+msgstr "Najveća veličina slika u popisu epizoda i odabiru sezone."
+
+msgid "Player episode backdrops"
+msgstr "Pozadine epizoda u reproduktoru"
+
+msgid "Maximum size of episode artwork while the player loads."
+msgstr "Najveća veličina slike epizode tijekom učitavanja reproduktora."
 
 msgid "Cache memory"
 msgstr "Predmemorija u RAM-u"
@@ -553,8 +568,14 @@ msgstr "Prepišite slike već predmemorirane na disku u gore navedeni format/kva
 msgid "Re-encode now"
 msgstr "Ponovno kodirajte sada"
 
-msgid "Changes save automatically and apply to newly cached images. Use “Re-encode on load” to convert existing images as they are accessed, or “Re-encode now” to rewrite all at once."
-msgstr "Promjene se spremaju automatski i primjenjuju se na novo predmemorirane slike. Upotrijebite „Ponovno kodirajte pri učitavanju“ za pretvorbu postojećih slika pri njihovu otvaranju ili „Ponovno kodirajte sada“ za prepisivanje svih odjednom."
+msgid "Convert existing images"
+msgstr "Pretvorite postojeće slike"
+
+msgid "Rebuild cached images with the current compression and resolution settings. This downloads the source images again."
+msgstr "Ponovno obradi slike u predmemoriji s trenutačnim postavkama kompresije i razlučivosti. Izvorne slike ponovno će se preuzeti."
+
+msgid "Changes save automatically and apply to newly cached images. Re-encode now also downloads uncached images."
+msgstr "Promjene se spremaju automatski i primjenjuju na nove slike u predmemoriji. Ponovno kodiranje sada preuzima i slike koje nisu predmemorirane."
 
 msgid "Disk usage"
 msgstr "Iskorištenost diska"
@@ -1478,6 +1499,9 @@ msgstr "Komprimiraj nova preuzimanja. Postojeće se datoteke mijenjaju samo na z
 msgid "Compression"
 msgstr "Kompresija"
 
+msgid "Enable disk caching and compression to adjust format and quality."
+msgstr "Omogućite predmemoriranje na disku i kompresiju za promjenu formata i kvalitete."
+
 msgid "Continue watching Upcoming Home sections featured catalogs Add catalog Remove"
 msgstr "Nastavi gledati Uskoro odjeljci početne stranice istaknuti katalozi Dodaj katalog Ukloni"
 
@@ -1498,9 +1522,6 @@ msgstr "Predmemorija na disku"
 
 msgid "Downloads offline media downloaded episodes delete Remove"
 msgstr "Preuzimanja izvanmrežni sadržaj preuzete epizode brisanje Ukloni"
-
-msgid "Downscale"
-msgstr "Smanji dimenzije"
 
 msgid "Enable This device Automatic sync Pairing Connected peers Invite ticket QR code confirmation remove"
 msgstr "Omogući Ovaj uređaj Automatska sinkronizacija Uparivanje Povezani uređaji Pozivnica QR kod potvrda ukloni"
@@ -1586,8 +1607,8 @@ msgstr "Postavke pohrane i kompresije zaključane su tijekom održavanja. Memori
 msgid "Storage and network"
 msgstr "Pohrana i mreža"
 
-msgid "Storage disk caching Compression JPEG WebP Quality Downscale Re-encode on load Memory decoded-image budget Clear cache Re-encode now"
-msgstr "Pohrana predmemorija na disku Kompresija JPEG WebP Kvaliteta Smanji dimenzije Ponovno kodiraj pri učitavanju Memorija dekodirane slike Očisti predmemoriju Ponovno kodiraj sada"
+msgid "Storage disk caching Compression JPEG WebP Quality Detail posters Detail backdrops Episode thumbnails Player episode backdrops Memory decoded-image budget Clear cache Re-encode now"
+msgstr "Pohrana predmemorija na disku Kompresija JPEG WebP Kvaliteta Plakati detalja Pozadine detalja Sličice epizoda Pozadine epizoda u reproduktoru Memorija dekodirane slike Očisti predmemoriju Ponovno kodiraj sada"
 
 msgid "Streaming torrents Cache location folder limits size disk usage cleanup rate limit"
 msgstr "Reprodukcija torrenti Mjesto predmemorije mapa ograničenja veličina zauzeće diska čišćenje ograničenje brzine"
@@ -2222,3 +2243,9 @@ msgstr "Zasad preskočite"
 
 msgid "Start using Nova"
 msgstr "Počnite koristiti Novu"
+
+msgid "Image resolution"
+msgstr "Razlučivost slika"
+
+msgid "Limit the longest side without stretching or enlarging images. Original keeps the source dimensions."
+msgstr "Ograničite najdulju stranu bez rastezanja ili povećavanja slika. Izvorno zadržava dimenzije izvora."

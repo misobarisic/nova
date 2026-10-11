@@ -1164,6 +1164,16 @@ pub fn watch_action(episode: &str, continuing: bool) -> String {
 
 /// Readable values for setting-scope comparisons; identifiers remain untranslated.
 pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
+    if matches!(
+        field,
+        "detail_poster_max_side"
+            | "detail_backdrop_max_side"
+            | "episode_thumbnail_max_side"
+            | "player_episode_backdrop_max_side"
+    ) && value.is_null()
+    {
+        return tr("Original").into();
+    }
     if let Some(enabled) = value.as_bool() {
         return tr(if enabled { "On" } else { "Off" }).into();
     }
@@ -1183,6 +1193,10 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
             _ => tr("Medium").into(),
         },
         "lru_cache_mb" | "torrent_max_mb" => format!("{number} MB"),
+        "detail_poster_max_side"
+        | "detail_backdrop_max_side"
+        | "episode_thumbnail_max_side"
+        | "player_episode_backdrop_max_side" => format!("{number} px"),
         "quality" | "status_bar_gradient" => format!("{}%", value),
         "card_corner_radius" => match value.as_u64() {
             Some(0) => tr("Square").into(),

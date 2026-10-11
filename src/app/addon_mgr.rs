@@ -889,7 +889,8 @@ impl Bridge {
                 .iter()
                 .filter_map(|addon| addon.manifest.logo.clone())
                 .filter(|url| {
-                    !url.is_empty() && nova_media::cache::decoded_cache_get(url).is_none()
+                    !url.is_empty()
+                        && decoded_cache_get(&image_cache_key(url, ImageUse::Fixed(None))).is_none()
                 })
                 .collect();
             urls.into_iter()
@@ -928,7 +929,7 @@ impl Bridge {
                     .manifest
                     .logo
                     .as_deref()
-                    .and_then(nova_media::cache::decoded_cache_get)
+                    .and_then(|url| decoded_cache_get(&image_cache_key(url, ImageUse::Fixed(None))))
                     .map(Image::from_rgba8)
                     .unwrap_or_default(),
                 url: SharedString::from(&a.url),
@@ -951,10 +952,11 @@ impl Bridge {
         for url in logo_requests {
             let bridge = self.clone();
             // Use the shared transport so Android also warms the decoded cache.
-            net::fetch_image(url.clone(), None, move |pixels| {
+            let revision = image_settings_revision();
+            net::fetch_image(url.clone(), ImageUse::Fixed(None), move |pixels| {
                 let loaded = pixels.is_some();
                 let _ = slint::invoke_from_event_loop(move || {
-                    if loaded {
+                    if loaded || image_settings_revision() != revision {
                         bridge
                             .shared
                             .lock()
@@ -962,7 +964,9 @@ impl Bridge {
                             .addon_logo_requested
                             .remove(&url);
                     }
-                    bridge.apply_addon_rows();
+                    if image_settings_revision() == revision {
+                        bridge.apply_addon_rows();
+                    }
                 });
             });
         }

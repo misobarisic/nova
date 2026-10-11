@@ -25,7 +25,6 @@ impl Bridge {
     pub(super) fn new(
         app: slint::Weak<AppWindow>,
         #[cfg(feature = "desktop")] poster_tx: PosterTx,
-        #[cfg(feature = "desktop")] poster_cache: PosterCache,
         catalog_gen: Arc<AtomicU64>,
         player: crate::player::Player,
         downloads: DownloadCoordinator,
@@ -41,8 +40,6 @@ impl Bridge {
             home_catalog_rows_gen: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "desktop")]
             poster_tx,
-            #[cfg(feature = "desktop")]
-            poster_cache,
             player,
             downloads,
             tracking: Arc::new(tracking::TrackingHandle::new()),

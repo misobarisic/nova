@@ -265,9 +265,25 @@ fn settings_navigation_survives_search_back_breakpoints_and_recreation() {
         key(&app, slint::platform::Key::DownArrow);
         key(&app, slint::platform::Key::RightArrow);
         assert_eq!(
+            app.get_detail_poster_resolution_index(),
+            4,
+            "keyboard skips disabled compression and reaches image resolution"
+        );
+        key(&app, slint::platform::Key::DownArrow);
+        key(&app, slint::platform::Key::RightArrow);
+        assert_eq!(app.get_detail_backdrop_resolution_index(), 6);
+        key(&app, slint::platform::Key::DownArrow);
+        key(&app, slint::platform::Key::RightArrow);
+        assert_eq!(app.get_episode_thumbnail_resolution_index(), 3);
+        key(&app, slint::platform::Key::DownArrow);
+        key(&app, slint::platform::Key::RightArrow);
+        assert_eq!(app.get_player_episode_backdrop_resolution_index(), 1);
+        key(&app, slint::platform::Key::DownArrow);
+        key(&app, slint::platform::Key::RightArrow);
+        assert_eq!(
             app.get_cache_lru_mb(),
             144.0,
-            "keyboard skips disabled compression and reaches memory"
+            "keyboard reaches memory after all four resolution controls"
         );
         assert_eq!(app.get_cache_quality(), 85.0);
         assert!(app.get_settings_page_scrolls().row_count() >= 14);

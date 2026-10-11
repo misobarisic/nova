@@ -46,6 +46,43 @@ resized dimensions. This fix needs no ID migration, metadata remapping or
 image-cache clearing. Regression coverage checks pixel storage against the
 reported dimensions for portrait, landscape, narrow and already-small images.
 
+## Image processing and cache contract
+
+The cache key combines the source URL with the resolved processing recipe.
+Detail poster, detail backdrop, episode thumbnail and player episode image
+uses each have an optional longest-side limit (defaults: 480, 960, 360 and
+Original). Settings offer Original and 240, 360, 480, 720, 960, 1024, 1280,
+1920 and 2560 pixel limits. Equal recipes share decoded entries even when the
+consumer names differ. The decoded LRU is byte-budgeted.
+
+Each disk variant is one atomic `.variant` file containing `NVIMAGE2` magic, a
+length-prefixed JSON header and processed encoded bytes. Its versioned header
+records the source URL, registered uses, dimensions, resolved recipe and an
+encoded-payload checksum. There are no separate metadata/use files or
+original-image backup. Downloaded source pixels are transient and are resized
+before reaching Slint. Compression writes JPEG or WebP at the selected quality,
+falling back to PNG when JPEG cannot retain alpha; resizing without compression
+writes PNG, while Original with compression off keeps source bytes. Disabling
+disk caching makes the cache memory-only. Concurrent requests
+for the same recipe coalesce. A fresh result is encoded and decoded at the
+selected quality before publication so visible pixels match the disk variant.
+Writes replace variants atomically and preserve the old valid file on failure.
+Changing a recipe fetches its source again, so a smaller stored variant is
+never upscaled. Per-URL locks serialize disk changes. Legacy `.img`/`.cfg`
+files are invalidated only after a successful new write, with no startup sweep.
+Clear advances a cache generation, and loads capture the image-settings
+revision, so stale work cannot repopulate cleared cache state or publish pixels
+for superseded settings.
+
+The resolution controls autosave immediately and work independently of disk
+caching and compression. The re-encode command snapshots settings, fetches
+each registered source URL once, and reconstructs its registered uses under
+current recipes; it supports cancellation, and any source may need to download
+again. Per-entry failures do not discard the previous valid variant. Clear
+cache removes every image variant file and its usage metadata. Home retains
+its fixed image behavior: original-size showcase artwork and logos, and 480px
+poster cards.
+
 ## Synced series opening whole-series streams
 
 A separate cold-cache issue affected saved Kitsu entries. AIOMetadata accepts
@@ -99,8 +136,8 @@ after the correction.
 | Episode alignment | `crates/providers/src/{sequence,matching}.rs` | Match native available episodes to external episodes using IDs, release context, sequence/count evidence and unique title anchors. Split seasons/cours and continuous numbering share one mapper. A contiguous available prefix may match a larger canonical season only for an exact family, the same season and its first part, with no known later source season/part or contradictory declared total. A shorter declared first-cour total is allowed when only a contiguous aired prefix has servers; only episodes actually available at the source map. Repeated generic episode prefixes are placeholders, not title evidence. Gaps, remakes, duplicate editions and conflicting identities reject speculative aliases. |
 | Field selection | `crates/providers/src/metadata.rs` | Keep native playback IDs and availability. Treat blank strings as absent. Select display fields only from accepted, nonconflicting connections. Later accepted providers may fill missing thumbnails/overview without replacing the first accepted display numbering. Duplicate external aliases retain independent provenance until conflicts are checked, then are deduplicated. |
 | Cinemeta correction | `crates/providers/src/metadata/cinemeta.rs` | Its existing official-endpoint repair uses one-to-one episode-title/date evidence to correct image numbering while retaining native episode IDs. Confirmed corrections survive failed, malformed, unrelated and partial refreshes; new confirmed images take precedence. |
-| UI publication | `src/app/{home,detail,posters}.rs` | Slint updates run on the event loop. Home checks list generation and requested identity; image completions also check the in-flight URL. Detail uses opening tokens and stream generations. Successful Detail poster loads publish to matching Discover browse/search and Library rows, retaining corrected URLs through scroll unloading. Grid image completions check current URLs before painting or caching pixels. Episode thumbnail repainting targets the currently visible list. |
-| Image delivery | `crates/media/src/{net,cache}.rs`, `src/app/posters.rs` | URL-keyed decoded LRU and validated disk files are shared by desktop/Android. Display derivatives have separate size keys. Corrupt cached bytes permit refetching; cache replacements are atomic. Desktop and Android image downloads reject HTTP errors and retry transient failures. |
+| UI publication | `src/app/{home,detail,posters}.rs` | Slint updates run on the event loop. Home workers retain image identity/load/failure state; Slint owns live, current and crossfade pixels, and reacquires evicted images with generation, identity and revision guards. Detail has its own recipe-scoped requests and cannot overwrite a different grid use. Detail uses opening tokens and stream generations. Successful Detail poster loads publish to matching Discover browse/search and Library rows, retaining corrected URLs through scroll unloading. Grid image completions check current URLs before painting or caching pixels. Episode thumbnail repainting targets the currently visible list. |
+| Image delivery | `crates/media/src/{net,cache}.rs`, `src/app/posters.rs` | A byte-budgeted decoded LRU and processed disk variants use URL + resolved recipe keys; matching recipes share entries and same-recipe work coalesces. Each `.variant` atomically contains `NVIMAGE2`, a length-prefixed versioned JSON header (URL, registered use vector, dimensions, resolved recipe, payload checksum), and encoded bytes. No sidecar metadata/use files or original backup are retained. Per-URL locks, clear-generation and settings-revision guards protect concurrent changes. Source pixels are transient and resized before Slint. JPEG/WebP compression falls back to PNG for alpha; resizing without compression writes PNG, while Original/no-compression keeps source bytes. Disk-off is memory-only. Desktop and Android downloads reject HTTP errors and retry transient failures. The root app retains poster priority scheduling and at most four episode-thumbnail workers; the removed app-level PosterStore is not a cache owner. |
 | Tracking | `src/app/tracking.rs`, `crates/tracking/src/{cache,resolution,mapping}.rs` | Tracking remembers source identity/aliases and resolves tracker releases separately. Artwork enrichment does not activate a tracker mapping or alter watched/native playback identities. |
 
 ## Cache layers
@@ -115,7 +152,7 @@ after the correction.
 | Home request state | Per-list generation; current/next metadata and artwork | Failed images and incomplete/failed metadata have a 30-second cooldown. Rotation or returning Home retries them after the cooldown. In-flight duplicates are suppressed; absent/unavailable artwork does not stop paging. |
 | Grid repair request state | Shared typed identity/failed-URL cooldown (60 seconds) | Browse/search/Library/Home suppress duplicate repair requests. Stale catalog generations and search targets cannot start repairs for replacement cards. |
 | Metadata prefetch request state | Session-only typed identity, addon revision and next retry time | Library prefetch eligibility checks missing header/episode fields; failed artwork recovery remains independent of populated legacy caches. Discover and Library coalesce queued/fetching pairs; no retry window is spent before a matching enabled, available metadata source exists. Confirmed mappings still use the broker's persistent cache. |
-| Images | Local URL hash, encoded source bytes and optional display derivatives; decoded memory budget | Caching can be disabled independently of metadata persistence. Failed refreshes keep displayed pixels. Detail refresh checks compare decoded pixels before replacing the displayed image. |
+| Images | URL + resolved recipe; processed `.variant` envelope plus byte-budgeted decoded memory entries. Versioned JSON metadata and registered use vector share an atomic file with encoded bytes; no metadata/use sidecars or original backup exist. | Disk caching can be disabled independently of metadata persistence, leaving a memory-only cache. Failures keep the previous valid file and displayed pixels. Recipe changes redownload source bytes and never upscale a processed variant; successful fresh encodes are decoded back at selected quality before display. Per-URL locks and clear-generation/settings-revision guards reject stale changes. Legacy cache invalidation happens on successful access/replacement only, not at startup. |
 
 ## Reliability boundaries and follow-ons
 
@@ -128,7 +165,7 @@ work when the user revisits or rotates the relevant content.
 
 The remaining architectural improvements are:
 
-- **Shared scheduling and cancellation.** Home bounds active detail chains and
+- **Shared metadata scheduling and cancellation.** Home bounds active detail chains and
   episode thumbnails have a four-worker pump. Catalog and Library prefetch now
   coalesce typed requests, but Home, Detail and independent artwork repair can
   still request the same title independently. Generation guards

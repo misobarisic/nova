@@ -184,9 +184,6 @@ pub struct HomeRow {
 // Image-cache settings
 // ---------------------------------------------------------------------------
 
-/// Longest side used when downscaling before a cache write.
-pub const IMAGE_DOWNSCALE_MAX: u32 = 1024;
-
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CacheImageFormat {
@@ -355,22 +352,37 @@ impl CacheImageFormat {
     }
 }
 
-/// How images should be stored in the on-disk poster cache.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CacheSettings {
+// Keep a single field declaration for serialization and the migration decoder.
+// The remote derive constructs CacheSettings after legacy JSON has been normalized.
+macro_rules! cache_settings_type {
+    ($($fields:tt)*) => {
+        #[derive(Clone, Debug, PartialEq, Serialize)]
+        pub struct CacheSettings { $($fields)* }
+        #[derive(Deserialize)]
+        #[serde(remote = "CacheSettings")]
+        struct CacheSettingsWire { $($fields)* }
+    };
+}
+cache_settings_type! {
     /// Master switch for on-disk image caching: when false, posters and
     /// thumbnails are never read from nor written to disk (each launch
     /// re-downloads them; the in-memory decoded cache still applies within
     /// a run). On by default.
     #[serde(default = "default_true")]
     pub cache_images: bool,
-    /// Master switch: when false the cache stores raw source bytes (default).
+    /// Encode processed variants lossily when enabled; otherwise resizing is lossless.
     pub enabled: bool,
     pub format: CacheImageFormat,
     /// Encoding quality 1-100 (WebP lossy / JPEG).
     pub quality: u8,
-    /// Downscale the longest side to `IMAGE_DOWNSCALE_MAX` before encoding.
-    pub downscale: bool,
+    /// Longest side of Detail posters; None preserves original dimensions.
+    pub detail_poster_max_side: Option<u32>,
+    /// Longest side of Detail banners; None preserves original dimensions.
+    pub detail_backdrop_max_side: Option<u32>,
+    /// Longest side of episode-list and season-picker images.
+    pub episode_thumbnail_max_side: Option<u32>,
+    /// Longest side of the episode image on the player loading screen.
+    pub player_episode_backdrop_max_side: Option<u32>,
     /// Show episode release dates as relative ("3 days ago") vs absolute ("Mar 15, 2024").
     #[serde(default = "default_true")]
     pub date_relative: bool,
@@ -385,16 +397,6 @@ pub struct CacheSettings {
     /// Prefetch season/episode metadata for visible catalog items in the background.
     #[serde(default)]
     pub prefetch_metadata: bool,
-    /// Lazily re-encode images to the configured format/quality as they are
-    /// loaded, replacing the on-disk cache entry. Off by default.
-    #[serde(default)]
-    pub lazy_reencode: bool,
-    /// One-shot migration request kept for backwards compatibility with
-    /// older saved settings (previously set by a toggle, applied on save, then
-    /// cleared). No longer exposed in the UI — the "Re-encode
-    /// now" button runs immediately instead. Always written as false.
-    #[serde(default)]
-    pub rewrite_existing: bool,
     /// User-defined library category names (managed in Settings).
     #[serde(default)]
     pub categories: Vec<String>,
@@ -516,6 +518,43 @@ pub struct CacheSettings {
     pub sync_overrides: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
+pub const IMAGE_RESOLUTION_PRESETS: &[u32] = &[240, 360, 480, 720, 960, 1024, 1280, 1920, 2560];
+
+impl<'de> Deserialize<'de> for CacheSettings {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| serde::de::Error::custom("settings must be an object"))?;
+        let legacy_player =
+            if object.get("downscale").and_then(serde_json::Value::as_bool) == Some(true) {
+                serde_json::json!(1024)
+            } else {
+                serde_json::Value::Null
+            };
+        for (key, fallback) in [
+            ("detail_poster_max_side", serde_json::json!(480)),
+            ("detail_backdrop_max_side", serde_json::json!(960)),
+            ("episode_thumbnail_max_side", serde_json::json!(360)),
+            ("player_episode_backdrop_max_side", legacy_player),
+        ] {
+            let setting = object.entry(key).or_insert(fallback);
+            if !setting.is_null()
+                && !setting.as_u64().is_some_and(|n| {
+                    IMAGE_RESOLUTION_PRESETS
+                        .iter()
+                        .any(|preset| u64::from(*preset) == n)
+                })
+            {
+                return Err(serde::de::Error::custom(format!(
+                    "invalid image resolution for {key}"
+                )));
+            }
+        }
+        CacheSettingsWire::deserialize(value).map_err(serde::de::Error::custom)
+    }
+}
+
 const fn default_card_corner_radius() -> u32 {
     10
 }
@@ -539,15 +578,16 @@ impl Default for CacheSettings {
             enabled: false,
             format: CacheImageFormat::Webp,
             quality: 85,
-            downscale: false,
+            detail_poster_max_side: Some(480),
+            detail_backdrop_max_side: Some(960),
+            episode_thumbnail_max_side: Some(360),
+            player_episode_backdrop_max_side: None,
             date_relative: true,
             show_unwatched_thumbs: true,
             // Keep in step with `default_lru_mb` (the serde default used for
             // settings files written before the field existed).
             lru_cache_mb: 128,
             prefetch_metadata: false,
-            lazy_reencode: false,
-            rewrite_existing: false,
             categories: Vec::new(),
             discover_min_cols: 2,
             discover_catalog_addon_names: true,
@@ -651,14 +691,13 @@ impl CacheSettings {
             .collect()
     }
 
-    /// Stable key describing the active encoding config; the cache sidecar
-    /// stores it so entries are lazily re-encoded when it changes.
+    /// Encoding summary for compatibility with callers displaying the configuration.
     pub fn config_key(&self) -> String {
         let format = match self.format {
             CacheImageFormat::Jpeg => "jpeg",
             CacheImageFormat::Webp => "webp",
         };
-        format!("{format}:q{}:d{}", self.quality, self.downscale as u8)
+        format!("{format}:q{}", self.quality)
     }
 }
 
@@ -706,13 +745,37 @@ static CURRENT_CACHE_SETTINGS: LazyLock<Mutex<CacheSettings>> =
 
 /// The active image-cache settings.
 pub fn active_cache_settings() -> CacheSettings {
-    CURRENT_CACHE_SETTINGS.lock().unwrap().clone()
+    image_settings_snapshot().0
+}
+
+pub fn image_settings_snapshot() -> (CacheSettings, u64) {
+    let settings = CURRENT_CACHE_SETTINGS.lock().unwrap();
+    (settings.clone(), image_settings_revision())
 }
 
 /// Store the active image-cache settings (the decoded LRU budget is a
 /// separate concern — see `nova-media`).
+static IMAGE_SETTINGS_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Revision used to discard image completions started before a recipe change.
+pub fn image_settings_revision() -> u64 {
+    IMAGE_SETTINGS_REVISION.load(std::sync::atomic::Ordering::Acquire)
+}
+
 pub fn set_cache_settings(settings: CacheSettings) {
-    *CURRENT_CACHE_SETTINGS.lock().unwrap() = settings;
+    let mut current = CURRENT_CACHE_SETTINGS.lock().unwrap();
+    if current.cache_images != settings.cache_images
+        || current.enabled != settings.enabled
+        || current.format != settings.format
+        || current.quality != settings.quality
+        || current.detail_poster_max_side != settings.detail_poster_max_side
+        || current.detail_backdrop_max_side != settings.detail_backdrop_max_side
+        || current.episode_thumbnail_max_side != settings.episode_thumbnail_max_side
+        || current.player_episode_backdrop_max_side != settings.player_episode_backdrop_max_side
+    {
+        IMAGE_SETTINGS_REVISION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+    *current = settings;
 }
 
 // ---------------------------------------------------------------------------
@@ -1110,5 +1173,78 @@ mod tests {
                 "genre": "Action"
             })
         );
+    }
+}
+
+#[cfg(test)]
+mod image_resolution_tests {
+    use super::*;
+
+    fn settings(extra: serde_json::Value) -> serde_json::Value {
+        let mut value = serde_json::json!({"enabled":false,"format":"webp","quality":85});
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        value
+    }
+
+    #[test]
+    fn missing_fields_migrate_but_explicit_original_wins() {
+        let defaults: CacheSettings =
+            serde_json::from_value(settings(serde_json::json!({}))).unwrap();
+        assert_eq!(defaults.detail_poster_max_side, Some(480));
+        assert_eq!(defaults.detail_backdrop_max_side, Some(960));
+        assert_eq!(defaults.episode_thumbnail_max_side, Some(360));
+        assert_eq!(defaults.player_episode_backdrop_max_side, None);
+        let legacy: CacheSettings = serde_json::from_value(settings(
+            serde_json::json!({"downscale":true,"lazy_reencode":true,"rewrite_existing":true}),
+        ))
+        .unwrap();
+        assert_eq!(legacy.player_episode_backdrop_max_side, Some(1024));
+        assert_eq!(legacy.detail_poster_max_side, Some(480));
+        let explicit: CacheSettings = serde_json::from_value(settings(serde_json::json!({"downscale":true,"player_episode_backdrop_max_side":null,"detail_poster_max_side":1920}))).unwrap();
+        assert_eq!(explicit.player_episode_backdrop_max_side, None);
+        assert_eq!(explicit.detail_poster_max_side, Some(1920));
+        let serialized = serde_json::to_value(&legacy).unwrap();
+        for key in ["downscale", "lazy_reencode", "rewrite_existing"] {
+            assert!(serialized.get(key).is_none());
+        }
+    }
+
+    #[test]
+    fn all_resolution_fields_validate_and_round_trip() {
+        for field in [
+            "detail_poster_max_side",
+            "detail_backdrop_max_side",
+            "episode_thumbnail_max_side",
+            "player_episode_backdrop_max_side",
+        ] {
+            for preset in IMAGE_RESOLUTION_PRESETS
+                .iter()
+                .copied()
+                .map(Some)
+                .chain([None])
+            {
+                let mut value = settings(serde_json::json!({}));
+                value[field] = serde_json::to_value(preset).unwrap();
+                let parsed: CacheSettings = serde_json::from_value(value).unwrap();
+                assert_eq!(
+                    serde_json::to_value(&parsed).unwrap()[field],
+                    serde_json::to_value(preset).unwrap()
+                );
+            }
+            for invalid in [
+                serde_json::json!(0),
+                serde_json::json!(999),
+                serde_json::json!(-240),
+                serde_json::json!(480.5),
+                serde_json::json!("480"),
+            ] {
+                let mut value = settings(serde_json::json!({}));
+                value[field] = invalid;
+                assert!(serde_json::from_value::<CacheSettings>(value).is_err());
+            }
+        }
     }
 }

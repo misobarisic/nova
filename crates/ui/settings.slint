@@ -64,13 +64,16 @@ export component SettingsPage {
     in-out property <bool> cache_enabled: false;
     in-out property <int> cache_format_index: 0;
     in-out property <float> cache_quality: 85.0;
-    in-out property <bool> cache_downscale: false;
+    in-out property <int> detail_poster_resolution_index: 3;
+    in-out property <int> detail_backdrop_resolution_index: 5;
+    in-out property <int> episode_thumbnail_resolution_index: 2;
+    in-out property <int> player_episode_backdrop_resolution_index: 0;
     in-out property <bool> cache_date_relative: true;
     in-out property <bool> cache_show_unwatched_thumbs: true;
     in-out property <float> cache_lru_mb: 128.0;
     in-out property <bool> cache_prefetch_metadata: false;
     in-out property <bool> discover_catalog_addon_names: true;
-    in-out property <bool> cache_lazy_reencode: false;
+    in-out property <[string]> image_resolution_names: [@tr("Original"), "240 px", "360 px", "480 px", "720 px", "960 px", "1024 px", "1280 px", "1920 px", "2560 px"];
     // Minimum grid columns (Settings → Display below); autosaved.
     in-out property <int> discover_min_cols: 2;
     in-out property <int> library_min_cols: 2;
@@ -251,8 +254,8 @@ export component SettingsPage {
     callback sync_respond_pair(string, bool);
 
     function schedule_save() {
-        if (root.kb_zone == 5 && root.kb_hr < 7) {
-            root.settings_edited(["cache_images", "enabled", "format", "quality", "downscale", "lazy_reencode", "lru_cache_mb"][root.kb_hr]);
+        if (root.kb_zone == 5 && root.kb_hr < 9) {
+            root.settings_edited(["cache_images", "enabled", "format", "quality", "detail_poster_max_side", "detail_backdrop_max_side", "episode_thumbnail_max_side", "player_episode_backdrop_max_side", "lru_cache_mb"][root.kb_hr]);
         } else if (root.kb_zone == 6) {
             root.settings_edited(["date_relative", "prefetch_metadata", "show_unwatched_thumbs", "discover_min_cols", "library_min_cols", "language", "discover_catalog_addon_names"][root.kb_dr]);
         } else if (root.kb_zone == 10) {
@@ -691,18 +694,45 @@ export component SettingsPage {
 
     function kb_has_addons() -> bool { return root.addon_rows.length > 0; }
     function kb_has_cats() -> bool { return root.category_rows.length > 0; }
-    // Cache rows: 0 images, 1 enable, 2 format, 3 quality, 4 downscale,
-    // 5 lazy, 6 memory, 7 re-encode button, 8 clear. Only row 0 when disk
-    // caching or re-encoding is off. Rows 7/8 activate on Enter
+    // Cache rows: 0 images, 1 enable, 2 format, 3 quality, 4-7 image sizes,
+    // 8 memory, 9 re-encode button, 10 clear. Sizes and memory remain available when disk
+    // caching or re-encoding is off. Rows 9/10 activate on Enter
     // (Left/Right no-op).
-    function kb_cache_n() -> int { return 9; }
+    function kb_cache_n() -> int { return 11; }
     function kb_cache_available(r: int) -> bool {
-        if (r == 6) { return true; }
-        if (r == 7 && root.cache_rewriting) { return true; }
+        if (r == 8) { return true; }
+        if (r == 9 && root.cache_rewriting) { return true; }
         if (root.cache_busy) { return false; }
-        if (r == 0 || r == 8) { return true; }
+        if (r == 0 || r == 10) { return true; }
+        if (r == 9) { return root.cache_images; }
         if (r == 1) { return root.cache_images; }
+        if (r >= 4 && r <= 7) { return true; }
         return root.cache_images && root.cache_enabled;
+    }
+    function kb_cache_previous(r: int) -> int {
+        if (root.cache_busy) {
+            if (r == 8) { return 0; }
+            if (r == 9 || r == 10) { return 8; }
+            return 0;
+        }
+        if (r == 10) { return root.cache_images ? 9 : 8; }
+        if (r == 9) { return 8; }
+        if (r == 8) { return 7; }
+        if (r == 4) { return root.cache_images ? (root.cache_enabled ? 3 : 1) : 0; }
+        if ((r == 2 || r == 3) && !root.cache_enabled) { return 1; }
+        return Math.max(0, r - 1);
+    }
+    function kb_cache_next(r: int) -> int {
+        if (root.cache_busy) {
+            if (r == 0) { return 8; }
+            if (r == 8) { return root.cache_images ? 9 : 10; }
+            return 10;
+        }
+        if (r == 0) { return root.cache_images ? 1 : 4; }
+        if (r == 1) { return root.cache_enabled ? 2 : 4; }
+        if (r == 8) { return root.cache_images ? 9 : 10; }
+        if (r == 9) { return 10; }
+        return Math.min(root.kb_cache_n() - 1, r + 1);
     }
 
     // Torrent rows: 0 enable, 1 folder field, 2 size cap, 3 rate limit,
@@ -891,8 +921,7 @@ export component SettingsPage {
             }
         } else if (root.kb_zone == 5) {
             if (root.kb_hr > 0) {
-                root.kb_hr -= 1;
-                if (!root.kb_cache_available(root.kb_hr)) { root.kb_hr = root.cache_busy ? 6 : (root.cache_images ? 1 : 0); }
+                root.kb_hr = root.kb_cache_previous(root.kb_hr);
                 root.kb_nudge(50px);
             } else {
                 root.kb_zone = 0;
@@ -967,8 +996,7 @@ export component SettingsPage {
             }
         } else if (root.kb_zone == 5) {
             if (root.kb_hr + 1 < root.kb_cache_n()) {
-                root.kb_hr += 1;
-                if (!root.kb_cache_available(root.kb_hr)) { root.kb_hr = root.kb_hr < 6 ? 6 : (root.cache_busy ? (root.cache_rewriting ? 7 : 6) : 8); }
+                root.kb_hr = root.kb_cache_next(root.kb_hr);
                 root.kb_nudge(-50px);
             }
         } else if (root.kb_zone == 6) {
@@ -1071,8 +1099,8 @@ export component SettingsPage {
         }
     }
 
-    // Cache-row adjusters (Left/Right and Enter-for-toggles). Row 7 is
-    // the Re-encode button and row 8 is Clear: both are Enter-only.
+    // Cache-row adjusters (Left/Right and Enter-for-toggles). Row 9 is
+    // the Re-encode button and row 10 is Clear: both are Enter-only.
     function kb_cache_flip(r: int) {
         if (!root.kb_cache_available(r)) { return; }
         if (r == 0) {
@@ -1081,18 +1109,12 @@ export component SettingsPage {
         } else if (r == 1) {
             root.cache_enabled = !root.cache_enabled;
             root.schedule_save();
-        } else if (r == 4) {
-            root.cache_downscale = !root.cache_downscale;
-            root.schedule_save();
-        } else if (r == 5) {
-            root.cache_lazy_reencode = !root.cache_lazy_reencode;
-            root.schedule_save();
         }
     }
 
     function kb_cache_step(r: int, d: int) {
         if (!root.kb_cache_available(r)) { return; }
-        if (r == 0 || r == 1 || r == 4 || r == 5) {
+        if (r == 0 || r == 1) {
             root.kb_cache_flip(r);
         } else if (r == 2) {
             let n = root.cache_format_names.length;
@@ -1103,7 +1125,14 @@ export component SettingsPage {
         } else if (r == 3) {
             root.cache_quality = Math.max(1, Math.min(100, root.cache_quality + d));
             root.schedule_save();
-        } else if (r == 6) {
+        } else if (r >= 4 && r <= 7) {
+            let index = r == 4 ? root.detail_poster_resolution_index : r == 5 ? root.detail_backdrop_resolution_index : r == 6 ? root.episode_thumbnail_resolution_index : root.player_episode_backdrop_resolution_index;
+            let next = Math.max(0, Math.min(root.image_resolution_names.length - 1, index + d));
+            if (r == 4) { root.detail_poster_resolution_index = next; root.schedule_setting("detail_poster_max_side"); }
+            else if (r == 5) { root.detail_backdrop_resolution_index = next; root.schedule_setting("detail_backdrop_max_side"); }
+            else if (r == 6) { root.episode_thumbnail_resolution_index = next; root.schedule_setting("episode_thumbnail_max_side"); }
+            else { root.player_episode_backdrop_resolution_index = next; root.schedule_setting("player_episode_backdrop_max_side"); }
+        } else if (r == 8) {
             root.cache_lru_mb = Math.max(32, Math.min(512, root.cache_lru_mb + d * 16));
             root.schedule_save();
         }
@@ -1389,9 +1418,9 @@ export component SettingsPage {
             root.category_removed(root.kb_cr);
         } else if (root.kb_zone == 5) {
             if (!root.kb_cache_available(root.kb_hr)) { return; }
-            if (root.kb_hr == 7) {
+            if (root.kb_hr == 9) {
                 if (root.cache_rewriting) { root.cancel_reencode(); } else { root.reencode_cache(); }
-            } else if (root.kb_hr == 8) {
+            } else if (root.kb_hr == 10) {
                 root.clear_cache();
             } else {
                 root.kb_cache_flip(root.kb_hr);
@@ -2394,7 +2423,7 @@ export component SettingsPage {
                                         SettingsRow {
                                             setting-key: "enabled";
                                             row-title: @tr("Compress images");
-                                            row-desc: root.cache_images ? @tr("Compress new downloads. Existing files change only when requested.") : @tr("Enable disk caching to use compression.");
+                                            row-desc: @tr("Compress new downloads. Existing files change only when requested.");
                                             ToggleSwitch {
                                                 name: @tr("Compress images"); checked <=> root.cache_enabled; enabled: root.cache_images && !root.cache_busy;
                                                 focused: root.kb_active && root.kb_zone == 5 && root.kb_hr == 1;
@@ -2415,45 +2444,53 @@ export component SettingsPage {
                                                 focused: root.kb_active && root.kb_zone == 5 && root.kb_hr == 3;
                                                 changed(v) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 3; root.schedule_save(); } }
                                         }
+                                    }
+                                    if !root.cache_enabled || !root.cache_images: Text { text: @tr("Enable disk caching and compression to adjust format and quality."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+                                    SectionHeader { label: @tr("Image resolution"); }
+                                    Text { text: @tr("Limit the longest side without stretching or enlarging images. Original keeps the source dimensions."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+                                    SettingsCard {
                                         SettingsRow {
-                                            setting-key: "downscale";
-                                            row-title: @tr("Downscale"); row-desc: @tr("Limit the longest side of compressed images to 1024 pixels.");
-                                            ToggleSwitch {
-                                                name: @tr("Downscale"); checked <=> root.cache_downscale; enabled: root.cache_images && root.cache_enabled && !root.cache_busy;
-                                                focused: root.kb_active && root.kb_zone == 5 && root.kb_hr == 4;
-                                                toggled => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 4; root.schedule_save(); } }
+                                            setting-key: "detail_poster_max_side"; row-title: @tr("Detail posters"); row-desc: @tr("Maximum size of show and movie posters in Detail.");
+                                            Dropdown { width: 100%; model: root.image_resolution_names; current-index <=> root.detail_poster_resolution_index; enabled: !root.cache_busy; roomy: true;
+                                                selected(_) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 4; root.schedule_setting("detail_poster_max_side"); } }
                                         }
                                         SettingsRow {
-                                            setting-key: "lazy_reencode";
-                                            row-title: @tr("Re-encode on load"); row-desc: @tr("Convert existing disk entries when accessed, using the current compression settings.");
-                                            ToggleSwitch {
-                                                name: @tr("Re-encode on load"); checked <=> root.cache_lazy_reencode; enabled: root.cache_images && root.cache_enabled && !root.cache_busy;
-                                                focused: root.kb_active && root.kb_zone == 5 && root.kb_hr == 5;
-                                                toggled => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 5; root.schedule_save(); } }
+                                            setting-key: "detail_backdrop_max_side"; row-title: @tr("Detail backdrops"); row-desc: @tr("Maximum size of wide show and movie banners in Detail.");
+                                            Dropdown { width: 100%; model: root.image_resolution_names; current-index <=> root.detail_backdrop_resolution_index; enabled: !root.cache_busy; roomy: true;
+                                                selected(_) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 5; root.schedule_setting("detail_backdrop_max_side"); } }
+                                        }
+                                        SettingsRow {
+                                            setting-key: "episode_thumbnail_max_side"; row-title: @tr("Episode thumbnails"); row-desc: @tr("Maximum size of episode-list and season-picker images.");
+                                            Dropdown { width: 100%; model: root.image_resolution_names; current-index <=> root.episode_thumbnail_resolution_index; enabled: !root.cache_busy; roomy: true;
+                                                selected(_) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 6; root.schedule_setting("episode_thumbnail_max_side"); } }
+                                        }
+                                        SettingsRow {
+                                            setting-key: "player_episode_backdrop_max_side"; row-title: @tr("Player episode backdrops"); row-desc: @tr("Maximum size of episode artwork while the player loads.");
+                                            Dropdown { width: 100%; model: root.image_resolution_names; current-index <=> root.player_episode_backdrop_resolution_index; enabled: !root.cache_busy; roomy: true;
+                                                selected(_) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 7; root.schedule_setting("player_episode_backdrop_max_side"); } }
                                         }
                                     }
-                                    if !root.cache_enabled || !root.cache_images: Text { text: @tr("Enable disk caching and compression to adjust encoding options."); color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; min-width: 0px; }
                                     SectionHeader { label: @tr("Memory"); }
                                     SettingsCard {
                                         SettingsRow {
                                             setting-key: "lru_cache_mb";
                                             row-title: @tr("Decoded-image budget"); row-desc: @tr("Memory available for decoded artwork, independent of disk caching.");
                                             NumericSetting { value <=> root.cache_lru_mb; minimum: 32; maximum: 512; step: 16; suffix: " MB";
-                                                focused: root.kb_active && root.kb_zone == 5 && root.kb_hr == 6;
-                                                changed(v) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 6; root.schedule_save(); } }
+                                                focused: root.kb_active && root.kb_zone == 5 && root.kb_hr == 8;
+                                                changed(v) => { root.kb_active = SettingsStyle.keyboard-mode; root.kb_zone = 5; root.kb_hr = 8; root.schedule_save(); } }
                                         }
                                     }
                                     SectionHeader { label: @tr("Maintenance"); }
                                     SettingsCard {
                                         SettingsRow { row-title: @tr("Disk usage"); row-desc: root.cache_disk_usage;
                                             PillButton { label: @tr("Clear cache"); destructive: true; enabled: !root.cache_busy;
-                                                focused: root.kb_active && root.kb_zone == 5 && root.kb_hr == 8;
+                                                focused: root.kb_active && root.kb_zone == 5 && root.kb_hr == 10;
                                                 clicked => { root.kb_active = SettingsStyle.keyboard-mode; root.clear_cache(); } }
                                         }
-                                        SettingsRow { row-title: @tr("Convert existing images"); row-desc: @tr("Run a background sweep with the current compression settings.");
+                                        SettingsRow { row-title: @tr("Convert existing images"); row-desc: @tr("Rebuild cached images with the current compression and resolution settings. This downloads the source images again.");
                                             PillButton { label: root.cache_rewriting ? @tr("Stop") : @tr("Re-encode now"); primary: !root.cache_rewriting;
-                                                enabled: root.cache_rewriting || (!root.cache_busy && root.cache_images && root.cache_enabled);
-                                                focused: root.kb_active && root.kb_zone == 5 && root.kb_hr == 7;
+                                                enabled: root.cache_rewriting || (!root.cache_busy && root.cache_images);
+                                                focused: root.kb_active && root.kb_zone == 5 && root.kb_hr == 9;
                                                 clicked => { root.kb_active = SettingsStyle.keyboard-mode; if (root.cache_rewriting) { root.cancel_reencode(); } else { root.reencode_cache(); } } }
                                         }
                                     }

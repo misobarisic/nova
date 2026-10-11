@@ -42,7 +42,7 @@ impl Bridge {
         let mut rows = Vec::new();
         if let Some(fields) = values.as_object() {
             for (key, value) in fields {
-                if key == "sync_overrides" || key == "categories" || key == "rewrite_existing" {
+                if key == "sync_overrides" || key == "categories" {
                     continue;
                 }
                 let synced = sync::setting_can_override(key);

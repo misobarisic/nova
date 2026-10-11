@@ -308,10 +308,14 @@ impl Bridge {
                 }
                 let bridge = self.clone();
                 let key = row.key;
+                let revision = image_settings_revision();
                 net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
                     let Some(pixels) = pixels else { return };
                     let _ = slint::invoke_from_event_loop(move || {
                         let Some(app) = bridge.app() else { return };
+                        if image_settings_revision() != revision {
+                            return;
+                        }
                         for model in [app.get_calendar_rows(), app.get_calendar_later()] {
                             for index in 0..model.row_count() {
                                 if let Some(mut row) = model.row_data(index)

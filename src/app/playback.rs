@@ -1201,7 +1201,6 @@ mod home_return_tests {
         let bridge = Bridge::new(
             app.as_weak(),
             PosterTx { hi, lo },
-            Arc::new(Mutex::new(PosterStore::new(1))),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -1547,7 +1546,6 @@ mod preference_tests {
         let bridge = Bridge::new(
             app.as_weak(),
             PosterTx { hi, lo },
-            Arc::new(Mutex::new(PosterStore::new(1))),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),

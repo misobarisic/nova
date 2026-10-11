@@ -1,349 +1,150 @@
-//! Decoded-image LRU + on-disk poster cache pipeline.
-//!
-//! Extracted from the app crate so poster loading and the disk cache can be
-//! reused by `nova-player` without pulling in the whole app. Encoding, atomic
-//! file replacement and maintenance are shared by desktop and Android; only
-//! HTTP transport and desktop display derivatives are platform-specific.
-
+//! One recipe-keyed decoded LRU and processed disk-variant pipeline on all platforms.
+//! Downloads and source decodes are transient; only bounded, processed pixels enter
+//! the cache. The transport lives in `net`, independent of this processing core.
 use nova_config::{
-    CacheImageFormat, CacheSettings, IMAGE_DOWNSCALE_MAX, active_cache_settings, fnv1a,
+    CacheImageFormat, CacheSettings, active_cache_settings, fnv1a, image_settings_revision,
     poster_cache_dir,
 };
+use serde::{Deserialize, Serialize};
 use slint::{Rgba8Pixel, SharedPixelBuffer};
-use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, LazyLock, Mutex, Weak};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Condvar, LazyLock, Mutex, RwLock, Weak,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+};
 
-/// Set the decoded-image LRU byte budget (mirrors `lru_cache_mb`).
-pub fn set_decoded_cache_budget(mb: u32) {
-    let mut cache = DECODED_POSTERS.lock().unwrap();
-    cache.max_bytes = mb as usize * 1024 * 1024;
-    cache.evict();
-}
-
-/// Longest side for grid/library/detail display images (3x hidpi headroom
-/// on 160px cards; ~8x under typical originals).
+type Pixels = SharedPixelBuffer<Rgba8Pixel>;
 pub const DISPLAY_POSTER_SIDE: u32 = 480;
-/// Unload hysteresis beyond the fetch window, in cards. The Slint grids
-/// report a fetch window of visible ±2 rows; posters are blanked only
-/// outside `[first - H, last + H]`, so just-preloaded rows above/below the
-/// viewport are never immediately evicted on scroll jitter. Sized to match
-/// the Slint `> 48 cards` report gate.
-pub const UNLOAD_EXTRA_CARDS: usize = 48;
-/// Longest side for episode-list thumbnails (112px display).
 pub const EPISODE_THUMB_SIDE: u32 = 360;
-/// Longest side for the detail-page backdrop banner (260px tall, full-bleed).
 pub const DETAIL_BACKDROP_SIDE: u32 = 960;
+pub const UNLOAD_EXTRA_CARDS: usize = 48;
 
-/// Synchronously return cached backdrop pixels for `url` when the decoded
-/// LRU already holds the `DETAIL_BACKDROP_SIDE` derivative. Lets detail
-/// opens paint instantly on reentry instead of flashing through the
-/// placeholder + an async fetch round-trip.
-pub fn backdrop_pixels_cached(url: &str) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
-    if url.is_empty() {
-        return None;
-    }
-    decoded_cache_get(&sized_cache_key(url, Some(DETAIL_BACKDROP_SIDE)))
+/// Semantic uses resolve preferences at the start of each load; fixed uses keep
+/// their existing display sizes. Uses with identical recipes share pixels/files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ImageUse {
+    DetailPoster,
+    DetailBackdrop,
+    EpisodeThumbnail,
+    PlayerEpisodeBackdrop,
+    Fixed(Option<u32>),
 }
-
-fn source_url(key: &str) -> &str {
-    key.rsplit_once('#')
-        .filter(|(_, size)| size.parse::<u32>().is_ok())
-        .map_or(key, |(url, _)| url)
-}
-
-/// Cache key for a display-sized derivative: the plain URL serves
-/// full-fidelity buffers, suffixed keys serve downscaled ones. The suffix
-/// keeps small buffers from ever shadowing the full-res entry the player
-/// backdrop and re-encode path read.
-pub fn sized_cache_key(url: &str, max_side: Option<u32>) -> String {
-    match max_side {
-        Some(m) => format!("{url}#{m}"),
-        None => url.to_string(),
+impl From<Option<u32>> for ImageUse {
+    fn from(value: Option<u32>) -> Self {
+        Self::Fixed(value)
     }
 }
 
-/// Downscale `pixels` so the longest side is at most `max_side`, for
-/// display purposes. Returns the original buffer unchanged when already
-/// small enough, and on any failure. Triangle is cheap and plenty for
-/// downscaling. Shared by both platform pipelines.
-pub fn downscale_for_display(
-    pixels: &SharedPixelBuffer<Rgba8Pixel>,
-    max_side: u32,
-) -> SharedPixelBuffer<Rgba8Pixel> {
-    let (w, h) = (pixels.width(), pixels.height());
-    let longest = w.max(h);
-    if longest <= max_side || longest == 0 {
-        return pixels.clone();
-    }
-    let raw = match image::RgbaImage::from_raw(w, h, pixels.as_bytes().to_vec()) {
-        Some(raw) => raw,
-        None => return pixels.clone(),
-    };
-    // Fit once, then use the image's actual dimensions. Fitting a second
-    // time into pre-rounded bounds can drop a row/column; labelling those
-    // bytes with the larger bounds makes Skia reject an otherwise valid image.
-    let resized = image::DynamicImage::ImageRgba8(raw).resize(
-        max_side,
-        max_side,
-        image::imageops::FilterType::Triangle,
-    );
-    let (nw, nh) = (resized.width(), resized.height());
-    SharedPixelBuffer::clone_from_slice(resized.as_bytes(), nw, nh)
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ImageRecipe {
+    pub max_side: Option<u32>,
+    pub compress: bool,
+    pub format: Option<CacheImageFormat>,
+    pub quality: u8,
 }
-
-/// Return freed heap pages to the OS. On glibc this releases fully-free
-/// top chunks, countering the classic "first load stays fat, restart is
-/// lean" symptom. On Linux desktop builds the global allocator is jemalloc
-/// (see main.rs), whose decay-based purge handles this on its own — the
-/// trim then degrades to a cheap no-op against glibc's (nearly unused)
-/// arenas, so the call sites stay unconditional.
-#[cfg(target_os = "linux")]
-pub fn trim_heap() {
-    // SAFETY: malloc_trim(0) only releases fully-free pages.
-    unsafe {
-        libc::malloc_trim(0);
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn trim_heap() {}
-
-/// File name for a display-sized derivative: same URL hash as the original
-/// plus the target size, so it never collides with `<hash>.img` (and stays
-/// invisible to the `*.img` re-encode sweep). No `.cfg` sidecar: the size
-/// is baked into the name. Desktop only; Android uses the shared source tier.
-#[cfg(not(target_os = "android"))]
-pub fn display_file_name(url: &str, max_side: u32) -> String {
-    format!("{:016x}.d{max_side}.jpg", fnv1a(url.as_bytes()))
-}
-
-/// Read and publish a derivative under its source lock so conversion cannot
-/// invalidate it between decoding and inserting a verified memory entry.
-#[cfg(not(target_os = "android"))]
-fn read_display_pixels(url: &str, max_side: u32) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
-    let dir = poster_cache_dir();
-    let lock = entry_lock(&poster_cache_path_in(&dir, url));
-    let _guard = lock.lock().unwrap();
-    let bytes = fs::read(dir.join(display_file_name(url, max_side))).ok()?;
-    let pixels = decode_image_bytes(&bytes).ok()?;
-    decoded_cache_insert(&sized_cache_key(url, Some(max_side)), pixels.clone());
-    Some(pixels)
-}
-
-/// Persist a display-sized derivative as JPEG (best-effort cache; failures
-/// are silent). Desktop only.
-#[cfg(not(target_os = "android"))]
-fn write_display_poster(
-    url: &str,
-    max_side: u32,
-    pixels: &SharedPixelBuffer<Rgba8Pixel>,
-    source_bytes: &[u8],
-) {
-    write_display_poster_in(&poster_cache_dir(), url, max_side, pixels, source_bytes);
-}
-
-#[cfg(not(target_os = "android"))]
-fn write_display_poster_in(
-    dir: &Path,
-    url: &str,
-    max_side: u32,
-    pixels: &SharedPixelBuffer<Rgba8Pixel>,
-    source_bytes: &[u8],
-) {
-    let _permit = EncodingPermit::acquire();
-    let (w, h) = (pixels.width(), pixels.height());
-    let raw = match image::RgbaImage::from_raw(w, h, pixels.as_bytes().to_vec()) {
-        Some(raw) => raw,
-        None => return,
-    };
-    let rgb = image::DynamicImage::ImageRgba8(raw).to_rgb8();
-    let mut out: Vec<u8> = Vec::new();
-    let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 80);
-    if image::ImageEncoder::write_image(enc, &rgb, w, h, image::ExtendedColorType::Rgb8).is_err() {
-        return;
-    }
-    // Conversion holds the source lock while acquiring an encoding slot.
-    // Do not hold a slot while waiting for that lock in the opposite order.
-    drop(_permit);
-    if fs::create_dir_all(dir).is_err() {
-        return;
-    }
-    let source = poster_cache_path_in(dir, url);
-    let lock = entry_lock(&source);
-    let _guard = lock.lock().unwrap();
-    if fs::read(&source).ok().as_deref() != Some(source_bytes) {
-        return;
-    }
-    let path = dir.join(display_file_name(url, max_side));
-    let tmp = path.with_extension("tmp");
-    if fs::write(&tmp, &out)
-        .and_then(|_| fs::rename(&tmp, &path))
-        .is_err()
-    {
-        eprintln!("nova: could not write display poster for {url}");
-    }
-}
-
-/// Display-sized pixels for `url`: sized-LRU hit → small-file disk hit →
-/// full pipeline → downscale → populate both caches. `None` = full fidelity
-/// (LRU full entry only; never reads or writes small files) — used for the
-/// episode-pick player backdrop. Desktop only; the `fetch_image` wrappers on
-/// both targets route through the same cascade shape.
-#[cfg(not(target_os = "android"))]
-pub fn display_pixels(url: &str, max_side: Option<u32>) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
-    ensure_lazy_conversion(url);
-    let key = sized_cache_key(url, max_side);
-    if let Some(pixels) = decoded_cache_get(&key) {
-        return Some(pixels);
-    }
-    if let Some(m) = max_side
-        && active_cache_settings().cache_images
-        && let Some(pixels) = read_display_pixels(url, m)
-    {
-        return Some(pixels);
-    }
-    // Full pipeline, deliberately NOT via poster_pixels: grid loads must
-    // never insert full-res buffers into the shared LRU (it serves genuine
-    // full-res consumers — episode backdrops, detail source, re-encode).
-    let bytes = original_bytes(url)?;
-    let pixels = decode_image_bytes(&bytes).ok()?;
-    // Preserve lazy re-encode semantics: the hook sees every load, as it
-    // did when this path still ran through poster_pixels.
-    ensure_lazy_conversion(url);
-    match max_side {
-        Some(m) => {
-            let small = downscale_for_display(&pixels, m);
-            cache_source_pixels(
-                &poster_cache_dir(),
-                url,
-                &key,
-                &small,
-                &bytes,
-                active_cache_settings().cache_images,
-            );
-            if active_cache_settings().cache_images {
-                write_display_poster(url, m, &small, &bytes);
-            }
-            Some(small)
+impl ImageRecipe {
+    pub fn resolve(image_use: impl Into<ImageUse>, settings: &CacheSettings) -> Self {
+        let max_side = match image_use.into() {
+            ImageUse::DetailPoster => settings.detail_poster_max_side,
+            ImageUse::DetailBackdrop => settings.detail_backdrop_max_side,
+            ImageUse::EpisodeThumbnail => settings.episode_thumbnail_max_side,
+            ImageUse::PlayerEpisodeBackdrop => settings.player_episode_backdrop_max_side,
+            ImageUse::Fixed(side) => side,
+        };
+        Self {
+            max_side,
+            compress: settings.enabled,
+            format: settings.enabled.then_some(settings.format),
+            quality: if settings.enabled {
+                settings.quality.clamp(1, 100)
+            } else {
+                0
+            },
         }
-        // Full fidelity: poster_pixels owns the full-tier LRU path.
-        None => poster_pixels(url).ok(),
+    }
+    fn key(self) -> String {
+        serde_json::to_string(&self).expect("image recipe is serializable")
     }
 }
-
-/// Decode source bytes into a pixel buffer on a worker on either platform.
-pub fn decode_image_bytes(
-    bytes: &[u8],
-) -> Result<SharedPixelBuffer<Rgba8Pixel>, Box<dyn std::error::Error + Send + Sync>> {
-    let dynamic_img = image::load_from_memory(bytes)?;
-    // Move (not copy) when the decoded image is already RGBA8; one full-size
-    // transient fewer per poster.
-    let rgba = dynamic_img.into_rgba8();
-    let (width, height) = rgba.dimensions();
-    Ok(SharedPixelBuffer::clone_from_slice(
-        rgba.as_raw(),
-        width,
-        height,
-    ))
+fn image_recipe_cache_key(url: &str, recipe: ImageRecipe) -> String {
+    format!("{url}\u{1f}nova-image-v2:{}", recipe.key())
+}
+pub fn image_cache_key(url: &str, image_use: impl Into<ImageUse>) -> String {
+    image_recipe_cache_key(
+        url,
+        ImageRecipe::resolve(image_use, &active_cache_settings()),
+    )
+}
+pub fn sized_cache_key(url: &str, max_side: Option<u32>) -> String {
+    image_cache_key(url, ImageUse::Fixed(max_side))
+}
+pub fn backdrop_pixels_cached(url: &str) -> Option<Pixels> {
+    decoded_cache_get(&image_cache_key(url, ImageUse::DetailBackdrop))
 }
 
-/// Poster pixels for `url`: try the on-disk cache under `~/.cache/nova/posters`
-/// first; on a miss, download the image once and store its raw bytes so later
-/// runs never refetch the same poster. Bounded by a timeout so one
-/// unresponsive image host cannot stall a poster worker forever; failures are
-/// swallowed by the caller and the card simply keeps its placeholder.
-/// A decoded image (poster / episode thumbnail) in the runtime LRU cache.
 struct ImageCacheEntry {
-    pixels: SharedPixelBuffer<Rgba8Pixel>,
-    /// Approximate footprint (width * height * 4), used for the byte budget.
+    pixels: Pixels,
     bytes: usize,
-    /// Monotonic last-use stamp (LRU eviction).
     last_use: u64,
-    /// Sidecar observed when these pixels were decoded. Lazy mode rejects
-    /// unverified hits and lets the worker convert the full disk source.
-    disk_config: Option<String>,
 }
-
-/// Byte-budgeted LRU of decoded images keyed by URL. Decodes are expensive
-/// (JXL in particular), so re-renders reuse them — but the cache is bounded
-/// by `max_bytes` and evicts least-recently-used entries instead of letting
-/// RAM grow without limit.
 struct DecodedImageCache {
     map: HashMap<String, ImageCacheEntry>,
     total_bytes: usize,
     max_bytes: usize,
     clock: u64,
 }
-
 impl DecodedImageCache {
-    fn touch_get(&mut self, key: &str) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+    fn touch_get(&mut self, key: &str) -> Option<Pixels> {
         self.clock = self.clock.wrapping_add(1);
         let entry = self.map.get_mut(key)?;
-        let settings = active_cache_settings();
-        if settings.cache_images
-            && settings.enabled
-            && settings.lazy_reencode
-            && entry.disk_config.as_deref().map(str::trim) != Some(settings.config_key().as_str())
-        {
-            return None;
-        }
         entry.last_use = self.clock;
         Some(entry.pixels.clone())
     }
-
-    fn insert(&mut self, key: String, pixels: SharedPixelBuffer<Rgba8Pixel>) {
-        let bytes = (pixels.width() as usize)
-            .saturating_mul(pixels.height() as usize)
-            .saturating_mul(core::mem::size_of::<Rgba8Pixel>());
-        if bytes > self.max_bytes {
-            return; // a single image this big isn't worth caching
-        }
+    fn insert(&mut self, key: String, pixels: Pixels) {
         if let Some(old) = self.map.remove(&key) {
             self.total_bytes = self.total_bytes.saturating_sub(old.bytes);
         }
+        let bytes = pixels.as_bytes().len();
+        if bytes > self.max_bytes {
+            return;
+        }
         self.clock = self.clock.wrapping_add(1);
-        let disk_config = fs::read_to_string(
-            poster_cache_path_in(&poster_cache_dir(), source_url(&key)).with_extension("cfg"),
-        )
-        .ok();
         self.map.insert(
             key,
             ImageCacheEntry {
-                pixels: pixels.clone(),
+                pixels,
                 bytes,
                 last_use: self.clock,
-                disk_config,
             },
         );
-        self.total_bytes += bytes;
+        self.total_bytes = self.total_bytes.saturating_add(bytes);
         self.evict();
     }
-
     fn evict(&mut self) {
-        while self.total_bytes > self.max_bytes && !self.map.is_empty() {
-            let oldest = self
+        while self.total_bytes > self.max_bytes {
+            let Some(key) = self
                 .map
                 .iter()
-                .min_by_key(|(_, e)| e.last_use)
-                .map(|(k, _)| k.clone());
-            if let Some(key) = oldest
-                && let Some(entry) = self.map.remove(&key)
-            {
-                self.total_bytes = self.total_bytes.saturating_sub(entry.bytes);
+                .min_by_key(|(_, entry)| entry.last_use)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(old) = self.map.remove(&key) {
+                self.total_bytes = self.total_bytes.saturating_sub(old.bytes);
             }
         }
     }
-
-    /// Drop every decoded image (used by "Clear cache").
     fn clear(&mut self) {
         self.map.clear();
         self.total_bytes = 0;
     }
 }
-
 static DECODED_POSTERS: LazyLock<Mutex<DecodedImageCache>> = LazyLock::new(|| {
     Mutex::new(DecodedImageCache {
         map: HashMap::new(),
@@ -352,244 +153,68 @@ static DECODED_POSTERS: LazyLock<Mutex<DecodedImageCache>> = LazyLock::new(|| {
         clock: 0,
     })
 });
-
-pub fn decoded_cache_get(url: &str) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
-    DECODED_POSTERS.lock().unwrap().touch_get(url)
+pub fn set_decoded_cache_budget(mb: u32) {
+    let mut cache = DECODED_POSTERS.lock().unwrap();
+    cache.max_bytes = (mb as usize).saturating_mul(1024 * 1024);
+    cache.evict();
 }
-
-pub fn decoded_cache_contains(url: &str) -> bool {
-    decoded_cache_get(url).is_some()
+pub fn decoded_cache_stats() -> (usize, usize) {
+    let cache = DECODED_POSTERS.lock().unwrap();
+    (cache.map.len(), cache.total_bytes)
 }
-
-pub fn decoded_cache_insert(url: &str, pixels: SharedPixelBuffer<Rgba8Pixel>) {
+pub fn decoded_cache_get(key: &str) -> Option<Pixels> {
+    DECODED_POSTERS.lock().unwrap().touch_get(key)
+}
+pub fn decoded_cache_contains(key: &str) -> bool {
+    decoded_cache_get(key).is_some()
+}
+pub fn decoded_cache_insert(key: &str, pixels: Pixels) {
     DECODED_POSTERS
         .lock()
         .unwrap()
-        .insert(url.to_string(), pixels);
+        .insert(key.to_owned(), pixels);
 }
-
-// A sweep can replace a source while a worker decodes its old snapshot. Only
-// publish pixels if that source is still current; otherwise the next load must
-// decode the replacement rather than stamp old pixels with its new sidecar.
-fn cache_source_pixels(
-    dir: &Path,
-    url: &str,
-    key: &str,
-    pixels: &SharedPixelBuffer<Rgba8Pixel>,
-    source: &[u8],
-    disk_enabled: bool,
-) {
-    let path = poster_cache_path_in(dir, url);
-    let lock = entry_lock(&path);
-    let _guard = lock.lock().unwrap();
-    if !disk_enabled || fs::read(path).ok().as_deref() == Some(source) {
-        decoded_cache_insert(key, pixels.clone());
-    }
-}
-
-/// Drop all decoded images from memory (used by "Clear cache"; disk is
-/// wiped separately — in-flight downloads may repopulate either after).
 pub fn decoded_cache_clear() {
     DECODED_POSTERS.lock().unwrap().clear();
 }
-
-/// Freshly downloaded image that bypassed every cache tier (used for
-/// refresh checks: compare against the cached pixels before swapping).
-pub struct FreshImage {
-    pub(crate) pixels: SharedPixelBuffer<Rgba8Pixel>,
-    /// Raw download bytes (persisted as the new on-disk original when the
-    /// pixels changed; unused on web).
-    pub(crate) bytes: Vec<u8>,
-}
-
-/// Download + decode `url` bypassing every cache tier (memory LRU and, on
-/// desktop, the disk files), downscaled to `max_side`. Nothing is cached —
-/// the caller decides what to do with the pixels. Desktop only.
-#[cfg(not(target_os = "android"))]
-pub fn download_image_fresh(url: &str, max_side: Option<u32>) -> Option<FreshImage> {
-    // Always downloads: unlike `original_bytes`, the disk cache is
-    // deliberately not consulted, so same-URL art changes are detected.
-    let bytes = addons::http_get_blocking(url).ok()?;
-    let pixels = decode_image_bytes(&bytes).ok()?;
-    let pixels = match max_side {
-        Some(m) => downscale_for_display(&pixels, m),
-        None => pixels,
-    };
-    Some(FreshImage { pixels, bytes })
-}
-/// Byte-identical decoded pixels (same dimensions and RGBA bytes).
-pub fn image_buffers_equal(
-    a: &SharedPixelBuffer<Rgba8Pixel>,
-    b: &SharedPixelBuffer<Rgba8Pixel>,
-) -> bool {
+pub fn image_buffers_equal(a: &Pixels, b: &Pixels) -> bool {
     a.width() == b.width() && a.height() == b.height() && a.as_bytes() == b.as_bytes()
 }
-
-/// Refresh check for one image URL: fetch fresh bytes bypassing every cache
-/// tier and swap them in only when the decoded pixels actually differ from
-/// what's cached. `then` receives the new pixels on change (already stored
-/// in every tier) and `None` when unchanged or on any failure — so callers
-/// repaint only on real changes and never flash a placeholder for
-/// identical art. The download runs off the UI thread (desktop worker) or
-/// via the browser fetch (web); `then` inherits that context, so UI updates
-/// must be marshalled to the event loop by the caller.
-pub fn refresh_image_if_changed(
-    url: String,
-    max_side: Option<u32>,
-    then: impl FnOnce(Option<SharedPixelBuffer<Rgba8Pixel>>) + Send + 'static,
-) {
-    let key = sized_cache_key(&url, max_side);
-    crate::net::fetch_image_fresh(url.clone(), max_side, move |fresh| {
-        let Some(fresh) = fresh else {
-            // Download or decode failed: keep serving the cached art. Logged
-            // (unlike unchanged images) so throttled hosts and dead URLs are
-            // visible instead of silently stale.
-            eprintln!("nova: image refresh failed: {url}");
-            then(None);
-            return;
-        };
-        let changed = match decoded_cache_get(&key) {
-            Some(cached) => !image_buffers_equal(&cached, &fresh.pixels),
-            // Nothing cached: adopt the fresh pixels (first paint path).
-            None => true,
-        };
-        if !changed {
-            then(None);
-            return;
-        }
-        if active_cache_settings().cache_images {
-            let _ = store_download(
-                &poster_cache_dir(),
-                &url,
-                &fresh.bytes,
-                &active_cache_settings(),
-            );
-        }
-        let disk_enabled = active_cache_settings().cache_images;
-        let source = disk_enabled
-            .then(|| read_poster_bytes(&poster_cache_dir(), &url))
-            .flatten();
-        let pixels = if disk_enabled {
-            source
-                .as_ref()
-                .and_then(|bytes| decode_image_bytes(bytes).ok())
-                .map(|pixels| {
-                    max_side.map_or_else(
-                        || pixels.clone(),
-                        |side| downscale_for_display(&pixels, side),
-                    )
-                })
-                .unwrap_or(fresh.pixels)
-        } else {
-            fresh.pixels
-        };
-        cache_source_pixels(
-            &poster_cache_dir(),
-            &url,
-            &key,
-            &pixels,
-            source.as_deref().unwrap_or(&fresh.bytes),
-            disk_enabled,
-        );
-        eprintln!("nova: image refreshed (pixels changed): {url}");
-        then(Some(pixels));
-    });
-}
-/// Target dimensions when downscaling before a cache write; None when the
-/// image already fits.
-pub fn downscale_dims(w: u32, h: u32) -> Option<(u32, u32)> {
-    let longest = w.max(h);
-    if longest <= IMAGE_DOWNSCALE_MAX {
-        return None;
-    }
-    let scale = IMAGE_DOWNSCALE_MAX as f64 / longest as f64;
-    Some((
-        ((w as f64 * scale).round() as u32).max(1),
-        ((h as f64 * scale).round() as u32).max(1),
+pub fn decode_image_bytes(
+    bytes: &[u8],
+) -> Result<Pixels, Box<dyn std::error::Error + Send + Sync>> {
+    let rgba = image::load_from_memory(bytes)?.into_rgba8();
+    Ok(SharedPixelBuffer::clone_from_slice(
+        rgba.as_raw(),
+        rgba.width(),
+        rgba.height(),
     ))
 }
-
-/// Re-encode `rgba` (optionally downscaled first) to the configured cache
-/// format/quality. Returns the encoded bytes, or None when re-encoding is
-/// disabled or encoding fails (callers then keep the raw bytes).
-pub fn encode_for_cache(
-    settings: &CacheSettings,
-    rgba: &SharedPixelBuffer<Rgba8Pixel>,
-) -> Option<Vec<u8>> {
-    if !settings.enabled {
-        return None;
+pub fn downscale_for_display(pixels: &Pixels, max_side: u32) -> Pixels {
+    if max_side == 0 || pixels.width().max(pixels.height()) <= max_side {
+        return pixels.clone();
     }
-    let (w, h) = (rgba.width(), rgba.height());
-    let _permit = EncodingPermit::acquire();
-    let target = if settings.downscale {
-        downscale_dims(w, h).unwrap_or((w, h))
-    } else {
-        (w, h)
+    let Some(rgba) =
+        image::RgbaImage::from_raw(pixels.width(), pixels.height(), pixels.as_bytes().to_vec())
+    else {
+        return pixels.clone();
     };
-
-    let mut buf = rgba.clone();
-    let raw = buf.make_mut_bytes().to_vec();
-    let source = image::RgbaImage::from_raw(w, h, raw)?;
-    let img = if target != (w, h) {
-        image::DynamicImage::ImageRgba8(source).resize(
-            target.0,
-            target.1,
-            image::imageops::FilterType::Triangle,
-        )
-    } else {
-        image::DynamicImage::ImageRgba8(source)
-    };
-
-    let mut out: Vec<u8> = Vec::new();
-    match settings.format {
-        CacheImageFormat::Jpeg if img.to_rgba8().pixels().any(|pixel| pixel.0[3] < 255) => {
-            // Transparent title artwork must survive a JPEG cache preference.
-            // PNG also keeps its alpha intact during maintenance re-encoding.
-            let rgba = img.to_rgba8();
-            let encoder = image::codecs::png::PngEncoder::new(&mut out);
-            image::ImageEncoder::write_image(
-                encoder,
-                rgba.as_raw(),
-                rgba.width(),
-                rgba.height(),
-                image::ExtendedColorType::Rgba8,
-            )
-            .ok()?;
-        }
-        CacheImageFormat::Jpeg => {
-            let rgb = img.to_rgb8();
-            let enc =
-                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, settings.quality);
-            image::ImageEncoder::write_image(
-                enc,
-                &rgb,
-                rgb.width(),
-                rgb.height(),
-                image::ExtendedColorType::Rgb8,
-            )
-            .ok()?;
-        }
-        CacheImageFormat::Webp => {
-            // Lossy WebP via libwebp bindings (image's own WebP encoder is
-            // lossless-only), at the configured quality.
-            let rgba = img.to_rgba8();
-            let encoder = webp::Encoder::from_rgba(rgba.as_raw(), rgba.width(), rgba.height());
-            let memory = encoder.encode_simple(false, settings.quality as f32).ok()?;
-            out = memory.to_vec();
-        }
-    }
-    // Native encoder failures must never replace valid stored bytes.
-    image::load_from_memory(&out).ok()?;
-    Some(out)
+    let resized = image::DynamicImage::ImageRgba8(rgba)
+        .resize(max_side, max_side, image::imageops::FilterType::Triangle)
+        .into_rgba8();
+    SharedPixelBuffer::clone_from_slice(resized.as_raw(), resized.width(), resized.height())
 }
+#[cfg(target_os = "linux")]
+pub fn trim_heap() {
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+#[cfg(not(target_os = "linux"))]
+pub fn trim_heap() {}
 
-// Entry locks serialize downloads, lazy conversion and sweeps without retaining
-// one mutex per URL forever. Readers see complete files through atomic rename.
 static ENTRY_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-static ENCODINGS: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
-static MAINTENANCE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
-
 fn entry_lock(path: &Path) -> Arc<Mutex<()>> {
     let mut locks = ENTRY_LOCKS.lock().unwrap();
     locks.retain(|_, lock| lock.strong_count() > 0);
@@ -600,7 +225,13 @@ fn entry_lock(path: &Path) -> Arc<Mutex<()>> {
     locks.insert(path.to_owned(), Arc::downgrade(&lock));
     lock
 }
-
+fn url_lock(dir: &Path, url: &str) -> Arc<Mutex<()>> {
+    entry_lock(&dir.join(format!("{:016x}.lock", fnv1a(url.as_bytes()))))
+}
+static CACHE_MUTATION: LazyLock<RwLock<()>> = LazyLock::new(|| RwLock::new(()));
+static CACHE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static ENCODINGS: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
 struct EncodingPermit;
 impl EncodingPermit {
     fn acquire() -> Self {
@@ -619,7 +250,610 @@ impl Drop for EncodingPermit {
     }
 }
 
-/// One clear/rewrite job across platforms. Held until all atomic writes finish.
+struct Processed {
+    pixels: Pixels,
+    encoded: Option<Vec<u8>>,
+}
+fn encode_rgba(rgba: &image::RgbaImage, recipe: ImageRecipe) -> Option<Vec<u8>> {
+    let _permit = EncodingPermit::acquire();
+    let mut bytes = Vec::new();
+    match recipe.format {
+        Some(CacheImageFormat::Webp) => {
+            bytes = webp::Encoder::from_rgba(rgba.as_raw(), rgba.width(), rgba.height())
+                .encode_simple(false, recipe.quality as f32)
+                .ok()?
+                .to_vec();
+        }
+        Some(CacheImageFormat::Jpeg) if rgba.pixels().all(|p| p.0[3] == 255) => {
+            let rgb = image::DynamicImage::ImageRgba8(rgba.clone()).into_rgb8();
+            image::ImageEncoder::write_image(
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, recipe.quality),
+                rgb.as_raw(),
+                rgb.width(),
+                rgb.height(),
+                image::ExtendedColorType::Rgb8,
+            )
+            .ok()?;
+        }
+        _ => {
+            image::ImageEncoder::write_image(
+                image::codecs::png::PngEncoder::new(&mut bytes),
+                rgba.as_raw(),
+                rgba.width(),
+                rgba.height(),
+                image::ExtendedColorType::Rgba8,
+            )
+            .ok()?;
+        }
+    }
+    Some(bytes)
+}
+fn process_source(bytes: Vec<u8>, recipe: ImageRecipe) -> Option<Processed> {
+    process_source_with(bytes, recipe, encode_rgba)
+}
+fn process_source_with(
+    bytes: Vec<u8>,
+    recipe: ImageRecipe,
+    encoder: impl FnOnce(&image::RgbaImage, ImageRecipe) -> Option<Vec<u8>>,
+) -> Option<Processed> {
+    let source = image::load_from_memory(&bytes).ok()?;
+    let resized = match recipe.max_side {
+        Some(0) => return None,
+        Some(side) if source.width().max(source.height()) > side => {
+            let fitted = source.resize(side, side, image::imageops::FilterType::Triangle);
+            // The full-size decode is only a resize input, never a second
+            // retained buffer while encoding or constructing Slint pixels.
+            drop(source);
+            fitted
+        }
+        _ => source,
+    };
+    let rgba = resized.into_rgba8();
+    let encoded = if !recipe.compress && recipe.max_side.is_none() {
+        Some(bytes)
+    } else {
+        drop(bytes);
+        encoder(&rgba, recipe)
+    };
+    // Construct only processed-size Slint buffers, and prefer the decoded encoded
+    // representation so cold, memory and disk hits have exactly the same quality.
+    if let Some(encoded) = encoded
+        && let Ok(pixels) = decode_image_bytes(&encoded)
+    {
+        return Some(Processed {
+            pixels,
+            encoded: Some(encoded),
+        });
+    }
+    Some(Processed {
+        pixels: SharedPixelBuffer::clone_from_slice(rgba.as_raw(), rgba.width(), rgba.height()),
+        encoded: None,
+    })
+}
+
+const MAGIC: &[u8; 8] = b"NVIMAGE2";
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct VariantMetadata {
+    version: u32,
+    url: String,
+    uses: Vec<ImageUse>,
+    width: u32,
+    height: u32,
+    recipe: ImageRecipe,
+    checksum: u64,
+}
+struct DiskVariant {
+    metadata: VariantMetadata,
+    encoded: Vec<u8>,
+}
+fn recipe_disk_path(dir: &Path, url: &str, recipe: ImageRecipe) -> PathBuf {
+    dir.join(format!(
+        "{:016x}-{:016x}.variant",
+        fnv1a(url.as_bytes()),
+        fnv1a(recipe.key().as_bytes())
+    ))
+}
+fn read_variant(path: &Path) -> Option<DiskVariant> {
+    let data = fs::read(path).ok()?;
+    if data.get(..8)? != MAGIC {
+        return None;
+    }
+    let length = u32::from_le_bytes(data.get(8..12)?.try_into().ok()?) as usize;
+    if length > 64 * 1024 {
+        return None;
+    }
+    let end = 12usize.checked_add(length)?;
+    let metadata: VariantMetadata = serde_json::from_slice(data.get(12..end)?).ok()?;
+    let encoded = data.get(end..)?.to_vec();
+    if metadata.version != 2 || metadata.uses.is_empty() || metadata.checksum != fnv1a(&encoded) {
+        return None;
+    }
+    Some(DiskVariant { metadata, encoded })
+}
+fn variant_pixels(variant: &DiskVariant, url: &str, recipe: ImageRecipe) -> Option<Pixels> {
+    if variant.metadata.url != url || variant.metadata.recipe != recipe {
+        return None;
+    }
+    let pixels = decode_image_bytes(&variant.encoded).ok()?;
+    if pixels.width() != variant.metadata.width
+        || pixels.height() != variant.metadata.height
+        || recipe
+            .max_side
+            .is_some_and(|side| pixels.width().max(pixels.height()) > side)
+    {
+        return None;
+    }
+    Some(pixels)
+}
+fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("missing cache filename"))?
+        .to_string_lossy();
+    let temp = path.with_file_name(format!(
+        "{name}.tmp-{}-{}",
+        std::process::id(),
+        TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temp, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+fn write_variant(path: &Path, variant: &DiskVariant) -> std::io::Result<()> {
+    let metadata = serde_json::to_vec(&variant.metadata)?;
+    let mut data = Vec::with_capacity(12 + metadata.len() + variant.encoded.len());
+    data.extend_from_slice(MAGIC);
+    data.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+    data.extend_from_slice(&metadata);
+    data.extend_from_slice(&variant.encoded);
+    atomic_write(path, &data)
+}
+fn variant_paths(dir: &Path) -> impl Iterator<Item = PathBuf> {
+    fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "variant"))
+}
+fn directory_variants(dir: &Path) -> impl Iterator<Item = (PathBuf, DiskVariant)> {
+    // Stream files rather than retaining the entire compressed disk cache while
+    // collecting metadata for maintenance.
+    variant_paths(dir).filter_map(|p| read_variant(&p).map(|v| (p, v)))
+}
+/// Move a use only after its replacement succeeded. Other consumers of an old
+/// recipe keep that file until their own successful load migrates them.
+fn retire_use_history(dir: &Path, url: &str, uses: &[ImageUse], keep: &Path) {
+    let prefix = format!("{:016x}", fnv1a(url.as_bytes()));
+    // Most loads replace one URL's variants. Do not read every other URL's
+    // payload just to retire that URL's older processing settings.
+    let history = variant_paths(dir)
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
+        })
+        .filter_map(|path| read_variant(&path).map(|variant| (path, variant)));
+    for (path, mut variant) in history {
+        if path == keep || variant.metadata.url != url {
+            continue;
+        }
+        let previous = variant.metadata.uses.len();
+        variant
+            .metadata
+            .uses
+            .retain(|image_use| !uses.contains(image_use));
+        if previous == variant.metadata.uses.len() {
+            continue;
+        }
+        if variant.metadata.uses.is_empty() {
+            let _ = fs::remove_file(path);
+        } else {
+            let _ = write_variant(&path, &variant);
+        }
+    }
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name == format!("{prefix}.img")
+                || name == format!("{prefix}.cfg")
+                || name.starts_with(&format!("{prefix}.d"))
+            {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+fn persist_processed(
+    dir: &Path,
+    url: &str,
+    uses: &[ImageUse],
+    recipe: ImageRecipe,
+    processed: &Processed,
+) -> std::io::Result<()> {
+    let encoded = processed
+        .encoded
+        .as_ref()
+        .ok_or_else(|| std::io::Error::other("image encoding failed"))?;
+    fs::create_dir_all(dir)?;
+    let path = recipe_disk_path(dir, url, recipe);
+    let mut registered = read_variant(&path)
+        .filter(|v| v.metadata.url == url && v.metadata.recipe == recipe)
+        .map(|v| v.metadata.uses)
+        .unwrap_or_default();
+    for image_use in uses {
+        if !registered.contains(image_use) {
+            registered.push(*image_use);
+        }
+    }
+    let variant = DiskVariant {
+        metadata: VariantMetadata {
+            version: 2,
+            url: url.into(),
+            uses: registered,
+            width: processed.pixels.width(),
+            height: processed.pixels.height(),
+            recipe,
+            checksum: fnv1a(encoded),
+        },
+        encoded: encoded.clone(),
+    };
+    write_variant(&path, &variant)?;
+    retire_use_history(dir, url, uses, &path);
+    Ok(())
+}
+fn register_cached_use(dir: &Path, url: &str, image_use: ImageUse, recipe: ImageRecipe) -> bool {
+    let lock = url_lock(dir, url);
+    let _guard = lock.lock().unwrap();
+    let path = recipe_disk_path(dir, url, recipe);
+    let Some(mut variant) =
+        read_variant(&path).filter(|v| v.metadata.url == url && v.metadata.recipe == recipe)
+    else {
+        return false;
+    };
+    if !variant.metadata.uses.contains(&image_use) {
+        variant.metadata.uses.push(image_use);
+        if write_variant(&path, &variant).is_ok() {
+            retire_use_history(dir, url, &[image_use], &path);
+        }
+    }
+    true
+}
+
+fn register_refreshed_use(
+    dir: &Path,
+    url: &str,
+    image_use: ImageUse,
+    recipe: ImageRecipe,
+    pixels: &Pixels,
+) {
+    let lock = url_lock(dir, url);
+    let _guard = lock.lock().unwrap();
+    let path = recipe_disk_path(dir, url, recipe);
+    let Some(mut variant) =
+        read_variant(&path).filter(|v| v.metadata.url == url && v.metadata.recipe == recipe)
+    else {
+        return;
+    };
+    // A failed atomic replacement leaves the previous valid variant in place.
+    // Do not attach a new caller role to that older generation.
+    if !variant_pixels(&variant, url, recipe)
+        .is_some_and(|stored| image_buffers_equal(&stored, pixels))
+    {
+        return;
+    }
+    if !variant.metadata.uses.contains(&image_use) {
+        variant.metadata.uses.push(image_use);
+        if write_variant(&path, &variant).is_ok() {
+            retire_use_history(dir, url, &[image_use], &path);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LoadEpoch {
+    clear: u64,
+    settings: u64,
+}
+impl LoadEpoch {
+    fn capture() -> Self {
+        Self {
+            clear: CACHE_GENERATION.load(Ordering::Acquire),
+            settings: image_settings_revision(),
+        }
+    }
+    fn current(self) -> bool {
+        self.clear == CACHE_GENERATION.load(Ordering::Acquire)
+            && self.settings == image_settings_revision()
+    }
+}
+type Flight = Arc<(Mutex<Option<Option<Pixels>>>, Condvar)>;
+static IN_FLIGHT: LazyLock<Mutex<HashMap<String, Flight>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+// Refreshes must always consult the transport, so they share completion slots
+// with other refreshes but never join ordinary cache loads.
+static REFRESH_IN_FLIGHT: LazyLock<Mutex<HashMap<String, Flight>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// All transports call this core. The injected source fetch makes behavior tests
+/// independent of HTTP. Neither old variants nor originals can satisfy a new recipe.
+pub fn cached_pixels_with(
+    dir: &Path,
+    url: &str,
+    image_use: impl Into<ImageUse>,
+    settings: &CacheSettings,
+    download: impl FnOnce() -> Option<Vec<u8>>,
+) -> Option<Pixels> {
+    cached_pixels_at(
+        dir,
+        url,
+        image_use.into(),
+        settings,
+        LoadEpoch::capture(),
+        download,
+    )
+}
+fn cached_pixels_at(
+    dir: &Path,
+    url: &str,
+    image_use: ImageUse,
+    settings: &CacheSettings,
+    epoch: LoadEpoch,
+    download: impl FnOnce() -> Option<Vec<u8>>,
+) -> Option<Pixels> {
+    let recipe = ImageRecipe::resolve(image_use, settings);
+    let key = image_recipe_cache_key(url, recipe);
+    if let Some(pixels) = decoded_cache_get(&key) {
+        if !settings.cache_images {
+            return epoch.current().then_some(pixels);
+        }
+        let _mutation = CACHE_MUTATION.read().unwrap();
+        if !epoch.current() {
+            return None;
+        }
+        if register_cached_use(dir, url, image_use, recipe) {
+            return Some(pixels);
+        }
+        // A memory entry from a disk-disabled load has no source bytes to save.
+        // Fetch its source rather than recompressing the decoded lossy image.
+    }
+    let flight_key = format!(
+        "{}:{}:{}:{}",
+        dir.display(),
+        epoch.clear,
+        epoch.settings,
+        key
+    );
+    let (flight, leader) = {
+        let mut flights = IN_FLIGHT.lock().unwrap();
+        if let Some(flight) = flights.get(&flight_key) {
+            (flight.clone(), false)
+        } else {
+            let flight = Arc::new((Mutex::new(None), Condvar::new()));
+            flights.insert(flight_key.clone(), flight.clone());
+            (flight, true)
+        }
+    };
+    if !leader {
+        let mut result = flight.0.lock().unwrap();
+        while result.is_none() {
+            result = flight.1.wait(result).unwrap();
+        }
+        let pixels = result.as_ref().unwrap().clone();
+        drop(result);
+        if pixels.is_some() && settings.cache_images {
+            let _mutation = CACHE_MUTATION.read().unwrap();
+            if epoch.current() {
+                register_cached_use(dir, url, image_use, recipe);
+            }
+        }
+        return if epoch.current() { pixels } else { None };
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        load_recipe(dir, url, image_use, settings, &key, epoch, download)
+    }))
+    .ok()
+    .flatten();
+    {
+        let mut flights = IN_FLIGHT.lock().unwrap();
+        *flight.0.lock().unwrap() = Some(result.clone());
+        flights.remove(&flight_key);
+        flight.1.notify_all();
+    }
+    result
+}
+fn load_recipe(
+    dir: &Path,
+    url: &str,
+    image_use: ImageUse,
+    settings: &CacheSettings,
+    key: &str,
+    epoch: LoadEpoch,
+    download: impl FnOnce() -> Option<Vec<u8>>,
+) -> Option<Pixels> {
+    let recipe = ImageRecipe::resolve(image_use, settings);
+    let disk = settings.cache_images;
+    if disk {
+        let _mutation = CACHE_MUTATION.read().unwrap();
+        let lock = url_lock(dir, url);
+        let _guard = lock.lock().unwrap();
+        if !epoch.current() {
+            return None;
+        }
+        let path = recipe_disk_path(dir, url, recipe);
+        if let Some(mut variant) = read_variant(&path)
+            && let Some(pixels) = variant_pixels(&variant, url, recipe)
+        {
+            if !variant.metadata.uses.contains(&image_use) {
+                variant.metadata.uses.push(image_use);
+                if write_variant(&path, &variant).is_ok() {
+                    retire_use_history(dir, url, &[image_use], &path);
+                }
+            }
+            decoded_cache_insert(key, pixels.clone());
+            return Some(pixels);
+        }
+    }
+    let processed = process_source(download()?, recipe)?;
+    let _mutation = CACHE_MUTATION.read().unwrap();
+    if !epoch.current() {
+        return None;
+    }
+    if processed.encoded.is_some() {
+        if disk {
+            let lock = url_lock(dir, url);
+            let _guard = lock.lock().unwrap();
+            let _ = persist_processed(dir, url, &[image_use], recipe, &processed);
+        }
+        decoded_cache_insert(key, processed.pixels.clone());
+    }
+    Some(processed.pixels)
+}
+pub fn display_pixels(url: &str, image_use: impl Into<ImageUse>) -> Option<Pixels> {
+    let clear = CACHE_GENERATION.load(Ordering::Acquire);
+    let (settings, revision) = nova_config::image_settings_snapshot();
+    cached_pixels_at(
+        &poster_cache_dir(),
+        url,
+        image_use.into(),
+        &settings,
+        LoadEpoch {
+            clear,
+            settings: revision,
+        },
+        || crate::net::blocking_image_bytes(url),
+    )
+}
+
+/// Refresh the exact same processing recipe. Comparison happens after encoding;
+/// unchanged lossy pixels do not cause a visible swap on every refresh.
+pub fn refresh_image_if_changed(
+    url: String,
+    image_use: impl Into<ImageUse>,
+    then: impl FnOnce(Option<Pixels>) + Send + 'static,
+) {
+    let image_use = image_use.into();
+    let clear = CACHE_GENERATION.load(Ordering::Acquire);
+    let (settings, revision) = nova_config::image_settings_snapshot();
+    let epoch = LoadEpoch {
+        clear,
+        settings: revision,
+    };
+    std::thread::Builder::new()
+        .name("image-refresh".into())
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                refresh_image_if_changed_with(
+                    &poster_cache_dir(),
+                    &url,
+                    image_use,
+                    &settings,
+                    epoch,
+                    || crate::net::blocking_image_bytes(&url),
+                )
+            }))
+            .ok()
+            .flatten();
+            then(result);
+        })
+        .expect("spawn image refresh worker");
+}
+
+fn refresh_image_if_changed_with(
+    dir: &Path,
+    url: &str,
+    image_use: ImageUse,
+    settings: &CacheSettings,
+    epoch: LoadEpoch,
+    download: impl FnOnce() -> Option<Vec<u8>>,
+) -> Option<Pixels> {
+    let recipe = ImageRecipe::resolve(image_use, settings);
+    let key = image_recipe_cache_key(url, recipe);
+    let previous = decoded_cache_get(&key);
+    let flight_key = format!(
+        "{}:{}:{}:{}",
+        dir.display(),
+        epoch.clear,
+        epoch.settings,
+        key
+    );
+    let (flight, leader) = {
+        let mut flights = REFRESH_IN_FLIGHT.lock().unwrap();
+        if let Some(flight) = flights.get(&flight_key) {
+            (flight.clone(), false)
+        } else {
+            let flight = Arc::new((Mutex::new(None), Condvar::new()));
+            flights.insert(flight_key.clone(), flight.clone());
+            (flight, true)
+        }
+    };
+
+    let refreshed = if leader {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let processed = process_source(download()?, recipe)?;
+            let _mutation = CACHE_MUTATION.read().unwrap();
+            if !epoch.current() {
+                return None;
+            }
+            if processed.encoded.is_some() {
+                if settings.cache_images {
+                    let lock = url_lock(dir, url);
+                    let _guard = lock.lock().unwrap();
+                    let _ = persist_processed(dir, url, &[image_use], recipe, &processed);
+                }
+                decoded_cache_insert(&key, processed.pixels.clone());
+            }
+            Some(processed.pixels)
+        }))
+        .ok()
+        .flatten();
+        {
+            let mut flights = REFRESH_IN_FLIGHT.lock().unwrap();
+            *flight.0.lock().unwrap() = Some(result.clone());
+            flights.remove(&flight_key);
+            flight.1.notify_all();
+        }
+        result
+    } else {
+        let mut result = flight.0.lock().unwrap();
+        while result.is_none() {
+            result = flight.1.wait(result).unwrap();
+        }
+        result.as_ref().unwrap().clone()
+    };
+
+    let refreshed = refreshed?;
+    if !epoch.current() {
+        return None;
+    }
+    // A refresh may be requested by another semantic use that resolves to the
+    // same recipe. Record each caller's use after the shared generation ends.
+    if settings.cache_images {
+        let _mutation = CACHE_MUTATION.read().unwrap();
+        if !epoch.current() {
+            return None;
+        }
+        register_refreshed_use(dir, url, image_use, recipe, &refreshed);
+    }
+    previous
+        .as_ref()
+        .is_none_or(|old| !image_buffers_equal(old, &refreshed))
+        .then_some(refreshed)
+}
+
+static MAINTENANCE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 pub struct MaintenanceGuard;
 impl MaintenanceGuard {
     pub fn try_acquire() -> Option<Self> {
@@ -648,101 +882,21 @@ impl MaintenanceGuard {
         cancel: &AtomicBool,
         progress: impl FnMut(RewriteProgress),
     ) -> RewriteProgress {
-        rewrite_entries(dir, settings, cancel, progress)
+        rewrite_entries_with(
+            dir,
+            settings,
+            cancel,
+            progress,
+            crate::net::blocking_image_bytes,
+        )
     }
 }
 impl Drop for MaintenanceGuard {
     fn drop(&mut self) {
         *MAINTENANCE.0.lock().unwrap() = false;
-        MAINTENANCE.1.notify_one();
+        MAINTENANCE.1.notify_all();
     }
 }
-
-fn invalidate_entry(path: &Path) {
-    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-        return;
-    };
-    let mut cache = DECODED_POSTERS.lock().unwrap();
-    let keys: Vec<_> = cache
-        .map
-        .keys()
-        .filter(|key| {
-            let url = key
-                .rsplit_once('#')
-                .filter(|(_, size)| size.parse::<u32>().is_ok())
-                .map_or(key.as_str(), |(url, _)| url);
-            format!("{:016x}", fnv1a(url.as_bytes())) == stem
-        })
-        .cloned()
-        .collect();
-    for key in keys {
-        if let Some(entry) = cache.map.remove(&key) {
-            cache.total_bytes = cache.total_bytes.saturating_sub(entry.bytes);
-        }
-    }
-    drop(cache);
-    if let Some(dir) = path.parent()
-        && let Ok(entries) = fs::read_dir(dir)
-    {
-        for entry in entries.flatten() {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(&format!("{stem}.d"))
-            {
-                let _ = fs::remove_file(entry.path());
-            }
-        }
-    }
-}
-
-// The caller holds the entry lock. Remove the old marker before replacing the
-// image: a failed marker write must never claim raw/new bytes use an old config.
-fn replace_entry(path: &Path, bytes: &[u8], key: Option<&str>) -> std::io::Result<()> {
-    fs::create_dir_all(path.parent().unwrap())?;
-    let tmp = path.with_extension("img.tmp");
-    fs::write(&tmp, bytes)?;
-    let meta = path.with_extension("cfg");
-    if meta.exists() {
-        fs::remove_file(&meta)?;
-    }
-    if let Err(error) = fs::rename(&tmp, path) {
-        let _ = fs::remove_file(&tmp);
-        return Err(error);
-    }
-    invalidate_entry(path);
-    if let Some(key) = key {
-        let tmp = meta.with_extension("cfg.tmp");
-        fs::write(&tmp, key)?;
-        fs::rename(tmp, meta)?;
-    }
-    Ok(())
-}
-
-/// Persist a valid full-resolution download, compressing independently of lazy
-/// conversion. Encoding failure preserves the downloaded bytes.
-pub fn store_download(
-    dir: &Path,
-    url: &str,
-    bytes: &[u8],
-    settings: &CacheSettings,
-) -> std::io::Result<()> {
-    if !settings.cache_images {
-        return Ok(());
-    }
-    let pixels = decode_image_bytes(bytes)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let encoded = encode_for_cache(settings, &pixels);
-    let path = poster_cache_path_in(dir, url);
-    let lock = entry_lock(&path);
-    let _guard = lock.lock().unwrap();
-    replace_entry(
-        &path,
-        encoded.as_deref().unwrap_or(bytes),
-        encoded.as_ref().map(|_| settings.config_key()).as_deref(),
-    )
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RewriteProgress {
     pub processed: usize,
@@ -752,88 +906,110 @@ pub struct RewriteProgress {
     pub failed: usize,
     pub cancelled: bool,
 }
-
-fn convert_entry(path: &Path, settings: &CacheSettings) -> std::io::Result<bool> {
-    let lock = entry_lock(path);
-    let _guard = lock.lock().unwrap();
-    let key = settings.config_key();
-    let bytes = fs::read(path)?;
-    let pixels = decode_image_bytes(&bytes)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    if fs::read_to_string(path.with_extension("cfg")).is_ok_and(|s| s.trim() == key) {
-        return Ok(false);
-    }
-    let encoded = encode_for_cache(settings, &pixels)
-        .ok_or_else(|| std::io::Error::other("image encoding failed"))?;
-    replace_entry(path, &encoded, Some(&key))?;
-    Ok(true)
-}
-
-/// Check disk configuration before *any* decoded/derivative cache hit. The
-/// source is always the .img entry, never the caller's display thumbnail.
-pub fn ensure_lazy_conversion_in(dir: &Path, url: &str, settings: &CacheSettings) {
-    if settings.cache_images && settings.enabled && settings.lazy_reencode {
-        let path = poster_cache_path_in(dir, url);
-        if fs::read_to_string(path.with_extension("cfg"))
-            .is_ok_and(|key| key.trim() == settings.config_key())
-        {
-            return;
-        }
-        let _ = convert_entry(&path, settings);
-    }
-}
-pub fn ensure_lazy_conversion(url: &str) {
-    ensure_lazy_conversion_in(&poster_cache_dir(), url, &active_cache_settings());
-}
-
-/// Snapshot settings are supplied by the job owner. Stop is checked between
-/// entries; an in-progress atomic replacement always completes first.
-fn rewrite_entries(
+fn rewrite_entries_with(
     dir: &Path,
     settings: &CacheSettings,
     cancel: &AtomicBool,
     mut progress: impl FnMut(RewriteProgress),
+    mut download: impl FnMut(&str) -> Option<Vec<u8>>,
 ) -> RewriteProgress {
     let mut result = RewriteProgress::default();
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) => {
-            result.failed = usize::from(error.kind() != std::io::ErrorKind::NotFound);
-            progress(result);
-            return result;
-        }
-    };
-    let mut paths: Vec<_> = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|e| e == "img"))
-        .collect();
-    paths.sort();
-    result.total = paths.len();
+    let mut urls: HashMap<String, HashSet<ImageUse>> = HashMap::new();
+    for (_, variant) in directory_variants(dir) {
+        urls.entry(variant.metadata.url)
+            .or_default()
+            .extend(variant.metadata.uses);
+    }
+    result.total = urls.len();
     progress(result);
-    for path in paths {
+    // A snapshot deliberately remains valid if settings are changed by another
+    // device during maintenance. Ordinary loads resolve their newer recipes.
+    let generation = CACHE_GENERATION.load(Ordering::Acquire);
+    for (url, uses) in urls {
         if cancel.load(Ordering::Acquire) {
             result.cancelled = true;
             break;
         }
-        if !settings.cache_images || !settings.enabled {
+        if !settings.cache_images {
             result.skipped += 1;
-        } else {
-            match convert_entry(&path, settings) {
-                Ok(true) => result.converted += 1,
-                Ok(false) => result.skipped += 1,
-                Err(_) => result.failed += 1,
+            result.processed += 1;
+            progress(result);
+            continue;
+        }
+        let Some(bytes) = download(&url) else {
+            result.failed += 1;
+            result.processed += 1;
+            progress(result);
+            continue;
+        };
+        // Decode the source once per URL; no recipe starts from a cached derivative.
+        let Ok(source) = image::load_from_memory(&bytes) else {
+            result.failed += 1;
+            result.processed += 1;
+            progress(result);
+            continue;
+        };
+        let mut recipes: HashMap<String, (ImageRecipe, Vec<ImageUse>)> = HashMap::new();
+        for image_use in uses {
+            let recipe = ImageRecipe::resolve(image_use, settings);
+            recipes
+                .entry(recipe.key())
+                .or_insert_with(|| (recipe, Vec::new()))
+                .1
+                .push(image_use);
+        }
+        for (_, (recipe, uses)) in recipes {
+            if cancel.load(Ordering::Acquire) {
+                result.cancelled = true;
+                break;
+            }
+            let fitted = match recipe.max_side {
+                Some(side) if source.width().max(source.height()) > side => {
+                    source.resize(side, side, image::imageops::FilterType::Triangle)
+                }
+                _ => source.clone(),
+            };
+            let rgba = fitted.into_rgba8();
+            let encoded = if !recipe.compress && recipe.max_side.is_none() {
+                Some(bytes.clone())
+            } else {
+                encode_rgba(&rgba, recipe)
+            };
+            let Some(encoded) = encoded else {
+                result.failed += 1;
+                continue;
+            };
+            let Ok(pixels) = decode_image_bytes(&encoded) else {
+                result.failed += 1;
+                continue;
+            };
+            let processed = Processed {
+                pixels,
+                encoded: Some(encoded),
+            };
+            let _mutation = CACHE_MUTATION.read().unwrap();
+            if CACHE_GENERATION.load(Ordering::Acquire) != generation {
+                result.cancelled = true;
+                break;
+            }
+            let lock = url_lock(dir, &url);
+            let _guard = lock.lock().unwrap();
+            if persist_processed(dir, &url, &uses, recipe, &processed).is_ok() {
+                decoded_cache_insert(&image_recipe_cache_key(&url, recipe), processed.pixels);
+                result.converted += 1;
+            } else {
+                result.failed += 1;
             }
         }
         result.processed += 1;
         progress(result);
+        if result.cancelled {
+            break;
+        }
     }
     progress(result);
     result
 }
-
-/// Serialize background maintenance for non-UI callers too. UI owners acquire
-/// the guard before spawning and call `MaintenanceGuard::rewrite` directly.
 pub fn rewrite_cache_dir_with_progress(
     dir: &Path,
     settings: &CacheSettings,
@@ -842,191 +1018,70 @@ pub fn rewrite_cache_dir_with_progress(
 ) -> RewriteProgress {
     MaintenanceGuard::acquire().rewrite(dir, settings, cancel, progress)
 }
-
-/// Compatibility helper for callers that only need the converted count.
 pub fn rewrite_cache_dir_to_format(dir: &Path, settings: &CacheSettings) -> usize {
     rewrite_cache_dir_with_progress(dir, settings, &AtomicBool::new(false), |_| {}).converted
 }
-
-/// Original (full-resolution) bytes for `url`: disk cache hit, else
-/// download once and store original or compressed source bytes according to
-/// settings. Validation prevents corrupt disk entries from blocking refetches.
-/// Desktop HTTP transport; encoding and atomic storage are shared.
-#[cfg(not(target_os = "android"))]
-fn original_bytes(url: &str) -> Option<Vec<u8>> {
-    let cache_images = active_cache_settings().cache_images;
-    if cache_images
-        && let Some(bytes) = read_poster_bytes(&poster_cache_dir(), url)
-        && decode_image_bytes(&bytes).is_ok()
-    {
-        return Some(bytes);
-    }
-    // Share the pooled addon client and Android's retry/status policy instead
-    // of treating a transient server error as permanently missing artwork.
-    let bytes = addons::http_get_blocking(url).ok()?;
-    if cache_images {
-        write_cached_poster(url, &bytes);
-        if let Some(stored) = read_poster_bytes(&poster_cache_dir(), url) {
-            return Some(stored);
-        }
-    }
-    Some(bytes.to_vec())
-}
-
-#[cfg(not(target_os = "android"))]
-pub fn poster_pixels(
-    url: &str,
-) -> Result<SharedPixelBuffer<Rgba8Pixel>, Box<dyn std::error::Error + Send + Sync>> {
-    ensure_lazy_conversion(url);
-    // In-memory LRU cache: avoids re-decoding posters seen earlier this run.
-    if let Some(pixels) = decoded_cache_get(url) {
-        return Ok(pixels);
-    }
-
-    let bytes =
-        original_bytes(url).ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
-            "poster download failed".into()
-        })?;
-    let pixels = decode_image_bytes(&bytes)?;
-
-    // If image re-encoding is enabled, store the encoded (optionally
-    // downscaled) bytes on disk and tag the entry with the config key.
-    ensure_lazy_conversion(url);
-
-    cache_source_pixels(
-        &poster_cache_dir(),
-        url,
-        url,
-        &pixels,
-        &bytes,
-        active_cache_settings().cache_images,
-    );
-    Ok(pixels)
-}
-/// Full source first, then display fit. Android supplies its existing rustls
-/// transport; the injectable download also tests new-image behavior without HTTP.
-pub fn cached_pixels_with(
-    dir: &Path,
-    url: &str,
-    max_side: Option<u32>,
-    settings: &CacheSettings,
-    download: impl FnOnce() -> Option<Vec<u8>>,
-) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
-    ensure_lazy_conversion_in(dir, url, settings);
-    let key = sized_cache_key(url, max_side);
-    if let Some(pixels) = decoded_cache_get(&key) {
-        return Some(pixels);
-    }
-    let cached = settings
-        .cache_images
-        .then(|| read_poster_bytes(dir, url))
-        .flatten()
-        .filter(|bytes| decode_image_bytes(bytes).is_ok());
-    let bytes = match cached {
-        Some(bytes) => bytes,
-        None => {
-            let bytes = download()?;
-            if settings.cache_images {
-                let _ = store_download(dir, url, &bytes, settings);
-                read_poster_bytes(dir, url).unwrap_or(bytes)
-            } else {
-                bytes
-            }
-        }
-    };
-    let pixels = decode_image_bytes(&bytes).ok()?;
-    let pixels = max_side.map_or_else(
-        || pixels.clone(),
-        |side| downscale_for_display(&pixels, side),
-    );
-    cache_source_pixels(dir, url, &key, &pixels, &bytes, settings.cache_images);
-    Some(pixels)
-}
-
-/// Cache file name for a poster URL (shared with the testable core helpers).
-fn poster_file_name(url: &str) -> String {
-    format!("{:016x}.img", fnv1a(url.as_bytes()))
-}
-
-/// Core: path of the poster cache file for `url` inside `dir`.
-pub fn poster_cache_path_in(dir: &Path, url: &str) -> PathBuf {
-    dir.join(poster_file_name(url))
-}
-
-/// Core: persist raw poster bytes under `dir`.
-pub fn write_poster_bytes(dir: &Path, url: &str, bytes: &[u8]) {
-    if decode_image_bytes(bytes).is_err() {
-        return;
-    }
-    let path = poster_cache_path_in(dir, url);
-    let lock = entry_lock(&path);
-    let _guard = lock.lock().unwrap();
-    if let Err(error) = replace_entry(&path, bytes, None) {
-        eprintln!("nova: could not write poster cache for {url}: {error}");
-    }
-}
-
-/// Core: read raw poster bytes cached under `dir`.
-pub fn read_poster_bytes(dir: &Path, url: &str) -> Option<Vec<u8>> {
-    fs::read(poster_cache_path_in(dir, url)).ok()
-}
-
-/// Store the raw bytes of a freshly downloaded poster for later runs.
-#[cfg(not(target_os = "android"))]
-fn write_cached_poster(url: &str, bytes: &[u8]) {
-    let _ = store_download(&poster_cache_dir(), url, bytes, &active_cache_settings());
-}
-
-#[cfg(test)]
-#[path = "cache_tests.rs"]
-mod tests;
-
-/// Remove cache-owned files under their entry lock, including orphan markers.
-/// Non-UI callers share the same maintenance gate as rewriting.
 pub fn clear_poster_cache_dir(dir: &Path) -> (u64, usize) {
     MaintenanceGuard::acquire().clear(dir)
 }
-
 fn clear_cache_entries(dir: &Path) -> (u64, usize) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return (0, 0);
-    };
-    let mut bytes = 0u64;
-    let mut files = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        // All cache artifacts begin with the original URL hash. Taking the
-        // same lock for images, derivatives, markers and temporaries prevents
-        // a clear from tearing an in-flight atomic image/marker replacement.
-        let Some(stem) = name.split('.').next() else {
-            continue;
-        };
-        let lock = entry_lock(&dir.join(format!("{stem}.img")));
-        let _guard = lock.lock().unwrap();
-        if let Ok(meta) = fs::metadata(&path)
-            && meta.is_file()
-            && fs::remove_file(&path).is_ok()
-        {
-            bytes = bytes.saturating_add(meta.len());
-            files += 1;
+    let _mutation = CACHE_MUTATION.write().unwrap();
+    CACHE_GENERATION.fetch_add(1, Ordering::AcqRel);
+    decoded_cache_clear();
+    let mut total = (0u64, 0);
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Ok(metadata) = entry.metadata()
+                && metadata.is_file()
+                && fs::remove_file(path).is_ok()
+            {
+                total.0 = total.0.saturating_add(metadata.len());
+                total.1 += 1;
+            }
         }
     }
-    decoded_cache_clear();
-    (bytes, files)
+    total
 }
-
-/// Actual original/derivative/sidecar disk footprint; no estimate from pixels.
 pub fn poster_cache_disk_usage(dir: &Path) -> (u64, usize) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return (0, 0);
-    };
-    entries
+    fs::read_dir(dir)
+        .ok()
+        .into_iter()
         .flatten()
+        .filter_map(Result::ok)
         .filter_map(|entry| entry.metadata().ok())
-        .filter(|meta| meta.is_file())
-        .fold((0u64, 0), |(bytes, count), meta| {
-            (bytes.saturating_add(meta.len()), count + 1)
+        .filter(|metadata| metadata.is_file())
+        .fold((0u64, 0), |(bytes, count), metadata| {
+            (bytes.saturating_add(metadata.len()), count + 1)
         })
 }
+
+/// Compatibility byte helpers use processed Original variants, never a backup.
+pub fn poster_cache_path_in(dir: &Path, url: &str) -> PathBuf {
+    recipe_disk_path(
+        dir,
+        url,
+        ImageRecipe::resolve(ImageUse::Fixed(None), &active_cache_settings()),
+    )
+}
+pub fn read_poster_bytes(dir: &Path, url: &str) -> Option<Vec<u8>> {
+    let recipe = ImageRecipe::resolve(ImageUse::Fixed(None), &active_cache_settings());
+    let _mutation = CACHE_MUTATION.read().unwrap();
+    let lock = url_lock(dir, url);
+    let _guard = lock.lock().unwrap();
+    read_variant(&recipe_disk_path(dir, url, recipe))
+        .filter(|v| v.metadata.url == url && v.metadata.recipe == recipe)
+        .map(|v| v.encoded)
+}
+pub fn write_poster_bytes(dir: &Path, url: &str, bytes: &[u8]) {
+    let recipe = ImageRecipe::resolve(ImageUse::Fixed(None), &active_cache_settings());
+    if let Some(processed) = process_source(bytes.to_vec(), recipe) {
+        let _mutation = CACHE_MUTATION.read().unwrap();
+        let lock = url_lock(dir, url);
+        let _guard = lock.lock().unwrap();
+        let _ = persist_processed(dir, url, &[ImageUse::Fixed(None)], recipe, &processed);
+    }
+}
+#[cfg(test)]
+#[path = "cache_tests.rs"]
+mod tests;

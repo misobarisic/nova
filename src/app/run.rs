@@ -112,12 +112,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let catalog_gen = Arc::new(AtomicU64::new(0));
 
     #[cfg(feature = "desktop")]
-    // Poster download pipeline (off-thread decode + per-generation cache).
+    // Poster download pipeline; pixels live only in the shared byte-budgeted cache.
     // Dual intake: `hi` carries near-viewport (pre)loads from `visible_range`,
     // `lo` carries the background full-grid sweeps. Workers always drain `hi`
     // first so scrolling into new rows never waits behind far-away images.
-    let (poster_cache, tx): (PosterCache, PosterTx) = {
-        let poster_cache: PosterCache = Arc::new(Mutex::new(PosterStore::new(400)));
+    let tx = {
         let (hi_tx, hi_rx) = mpsc::channel::<PosterJob>();
         let (lo_tx, lo_rx) = mpsc::channel::<PosterJob>();
         let hi_rx = Arc::new(Mutex::new(hi_rx));
@@ -178,7 +177,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let hi_rx = hi_rx.clone();
             let lo_rx = lo_rx.clone();
             let app_weak = app.as_weak();
-            let cache_clone = poster_cache.clone();
             let catalog_gen = catalog_gen.clone();
 
             thread::spawn(move || {
@@ -190,14 +188,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     if job.generation != catalog_gen.load(Ordering::Relaxed) {
                         continue;
                     }
-                    if let Some(display) = display_pixels(&job.url, Some(DISPLAY_POSTER_SIDE)) {
-                        let cache_clone = cache_clone.clone();
+                    let revision = image_settings_revision();
+                    if let Some(display) =
+                        display_pixels(&job.url, ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)))
+                    {
                         let app_weak = app_weak.clone();
                         let catalog_gen = catalog_gen.clone();
 
                         let _ = slint::invoke_from_event_loop(move || {
                             // Drop stale posters (catalog changed since dispatch).
-                            if job.generation != catalog_gen.load(Ordering::Relaxed) {
+                            if job.generation != catalog_gen.load(Ordering::Relaxed)
+                                || image_settings_revision() != revision
+                            {
                                 return;
                             }
                             if let Some(app) = app_weak.upgrade() {
@@ -212,22 +214,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 {
                                     return;
                                 }
-                                cache_clone
-                                    .lock()
-                                    .unwrap()
-                                    .insert((job.generation, job.index), display.clone());
                                 let img = Image::from_rgba8(display);
                                 if job.library {
                                     app.invoke_set_library_poster(job.index as i32, img);
                                 } else {
                                     app.invoke_set_card_poster(job.index as i32, img.clone());
-                                    // The detail modal may be showing this same item;
-                                    // fill its poster too (it was reset on open).
-                                    if app.get_modal_visible()
-                                        && app.get_selected_index() == job.index as i32
-                                    {
-                                        app.set_selected_poster(img);
-                                    }
                                 }
                             }
                         });
@@ -241,13 +232,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
         }
-        (
-            poster_cache,
-            PosterTx {
-                hi: hi_tx,
-                lo: lo_tx,
-            },
-        )
+        PosterTx {
+            hi: hi_tx,
+            lo: lo_tx,
+        }
     };
 
     // In-app player (same window, like the reference prototype): mpv underlay
@@ -274,7 +262,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let bridge = Bridge::new(
         app.as_weak(),
         tx,
-        poster_cache.clone(),
         catalog_gen.clone(),
         player.clone(),
         downloads,

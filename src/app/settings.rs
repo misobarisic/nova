@@ -36,6 +36,26 @@ pub(super) fn cancel_cache_rewrite() {
 
 static UNSUPPORTED_SETTINGS: Mutex<Option<HashMap<String, serde_json::Value>>> = Mutex::new(None);
 
+fn resolution_index(value: Option<u32>) -> i32 {
+    match value {
+        None => 0,
+        Some(px) => nova_config::IMAGE_RESOLUTION_PRESETS
+            .iter()
+            .position(|candidate| *candidate == px)
+            .map(|index| index as i32 + 1)
+            .unwrap_or(0),
+    }
+}
+
+fn resolution_value(index: i32) -> Option<u32> {
+    match index {
+        1..=9 => nova_config::IMAGE_RESOLUTION_PRESETS
+            .get(index as usize - 1)
+            .copied(),
+        _ => None,
+    }
+}
+
 pub(crate) fn protect_setting_field(field: &str, raw: serde_json::Value) {
     UNSUPPORTED_SETTINGS
         .lock()
@@ -52,8 +72,10 @@ pub(crate) fn allow_setting_field(field: &str) {
                 "enabled",
                 "format",
                 "quality",
-                "downscale",
-                "lazy_reencode",
+                "detail_poster_max_side",
+                "detail_backdrop_max_side",
+                "episode_thumbnail_max_side",
+                "player_episode_backdrop_max_side",
                 "lru_cache_mb",
             ] {
                 fields.remove(key);
@@ -86,6 +108,14 @@ pub(crate) fn recover_settings(value: serde_json::Value) -> Option<CacheSettings
         return None;
     }
     let mut current = serde_json::to_value(CacheSettings::default()).ok()?;
+    // Recovery starts from a fully populated default object. Preserve the
+    // deserializer's legacy rule by restoring the historical player size only
+    // when the old key is true and the newer field was absent in the source.
+    if !source.contains_key("player_episode_backdrop_max_side")
+        && source.get("downscale").and_then(serde_json::Value::as_bool) == Some(true)
+    {
+        current["player_episode_backdrop_max_side"] = serde_json::json!(1024);
+    }
     for (key, value) in source {
         let mut trial = current.clone();
         trial.as_object_mut()?.insert(key.clone(), value.clone());
@@ -152,12 +182,22 @@ impl Bridge {
                 CacheImageFormat::Webp => 1,
             });
             app.set_cache_quality(settings.quality as f32);
-            app.set_cache_downscale(settings.downscale);
+            app.set_detail_poster_resolution_index(resolution_index(
+                settings.detail_poster_max_side,
+            ));
+            app.set_detail_backdrop_resolution_index(resolution_index(
+                settings.detail_backdrop_max_side,
+            ));
+            app.set_episode_thumbnail_resolution_index(resolution_index(
+                settings.episode_thumbnail_max_side,
+            ));
+            app.set_player_episode_backdrop_resolution_index(resolution_index(
+                settings.player_episode_backdrop_max_side,
+            ));
             app.set_cache_date_relative(settings.date_relative);
             app.set_cache_show_unwatched_thumbs(settings.show_unwatched_thumbs);
             app.set_cache_lru_mb(settings.lru_cache_mb as f32);
             app.set_cache_prefetch_metadata(settings.prefetch_metadata);
-            app.set_cache_lazy_reencode(settings.lazy_reencode);
             app.set_discover_min_cols(settings.discover_min_cols as i32);
             app.set_discover_catalog_addon_names(settings.discover_catalog_addon_names);
             app.set_home_continue_enabled(
@@ -343,13 +383,20 @@ impl Bridge {
                 enabled: app.get_cache_enabled(),
                 format,
                 quality,
-                downscale: app.get_cache_downscale(),
+                detail_poster_max_side: resolution_value(app.get_detail_poster_resolution_index()),
+                detail_backdrop_max_side: resolution_value(
+                    app.get_detail_backdrop_resolution_index(),
+                ),
+                episode_thumbnail_max_side: resolution_value(
+                    app.get_episode_thumbnail_resolution_index(),
+                ),
+                player_episode_backdrop_max_side: resolution_value(
+                    app.get_player_episode_backdrop_resolution_index(),
+                ),
                 date_relative: app.get_cache_date_relative(),
                 show_unwatched_thumbs: app.get_cache_show_unwatched_thumbs(),
                 lru_cache_mb: (app.get_cache_lru_mb().round() as i32).clamp(32, 512) as u32,
                 prefetch_metadata: app.get_cache_prefetch_metadata(),
-                rewrite_existing: false,
-                lazy_reencode: app.get_cache_lazy_reencode(),
                 categories: state.cache_settings.categories.clone(),
                 home_catalog_sources: state.cache_settings.home_catalog_sources.clone(),
                 home_row_sources: state.cache_settings.home_row_sources.clone(),
@@ -834,7 +881,7 @@ impl Bridge {
         };
         self.save_settings();
         let settings = self.shared.lock().unwrap().cache_settings.clone();
-        if !settings.cache_images || !settings.enabled {
+        if !settings.cache_images {
             return;
         }
         CACHE_CANCEL.store(false, std::sync::atomic::Ordering::Release);
@@ -1016,6 +1063,24 @@ mod tests {
     }
 
     #[test]
+    fn settings_recovery_preserves_image_resolution_migration_precedence() {
+        let migrated = recover_settings(serde_json::json!({"downscale": true})).unwrap();
+        assert_eq!(migrated.player_episode_backdrop_max_side, Some(1024));
+        let explicit_original = recover_settings(serde_json::json!({
+            "downscale": true,
+            "player_episode_backdrop_max_side": null
+        }))
+        .unwrap();
+        assert_eq!(explicit_original.player_episode_backdrop_max_side, None);
+        let explicit_value = recover_settings(serde_json::json!({
+            "downscale": true,
+            "player_episode_backdrop_max_side": 720
+        }))
+        .unwrap();
+        assert_eq!(explicit_value.player_episode_backdrop_max_side, Some(720));
+    }
+
+    #[test]
     fn autosave_survives_navigation_and_preserves_current_memory() {
         // Storage and Slint initialize once per process. Isolate this test
         // from unit tests that intentionally run with an uninitialized KV
@@ -1060,7 +1125,6 @@ mod tests {
             Bridge::new(
                 app.as_weak(),
                 PosterTx { hi, lo },
-                Arc::new(Mutex::new(PosterStore::new(1))),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,
@@ -1247,7 +1311,9 @@ mod tests {
                 DOMAIN_SETTINGS,
                 "cache",
                 nova_sync::Record {
-                    value: Some(r#"{"quality":60,"format":"webp","downscale":true}"#.into()),
+                    value: Some(
+                        r#"{"quality":60,"format":"webp","detail_poster_max_side":720}"#.into(),
+                    ),
                     version: nova_sync::Version::new(nova_config::now_ms() + 1000, 0, 999, false),
                 },
             );
@@ -1256,8 +1322,8 @@ mod tests {
         bridge.sync_apply(vec![DOMAIN_SETTINGS.into()]);
         assert_eq!(app.get_cache_quality(), 95.0);
         assert_eq!(read_settings().sync_overrides["quality"], 60);
-        app.set_cache_downscale(false);
-        app.invoke_settings_edited("downscale".into());
+        app.set_detail_poster_resolution_index(0);
+        app.invoke_settings_edited("detail_poster_max_side".into());
         let raw = owner
             .lock()
             .unwrap()
@@ -1268,7 +1334,7 @@ mod tests {
             .unwrap();
         let shared: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(shared["quality"], 60);
-        assert_eq!(shared["downscale"], false);
+        assert!(shared["detail_poster_max_side"].is_null());
         bridge.set_setting_override("quality", false);
         assert_eq!(app.get_cache_quality(), 60.0);
         assert!(!read_settings().sync_overrides.contains_key("quality"));
@@ -1339,12 +1405,21 @@ mod tests {
         bridge.shared.lock().unwrap().cache_settings.date_relative = false;
         bridge.settings_to_ui();
         bridge.apply_default_playback_speed(1.25);
+        app.set_detail_poster_resolution_index(1);
+        app.set_detail_backdrop_resolution_index(2);
+        app.set_episode_thumbnail_resolution_index(3);
+        app.set_player_episode_backdrop_resolution_index(9);
+        app.invoke_settings_edited("player_episode_backdrop_max_side".into());
         schedule();
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(601));
         let saved = read_settings();
         assert_eq!(saved.discover_min_cols, 6);
         assert!(!saved.date_relative);
         assert_eq!(saved.playback_speed, 1.25);
+        assert_eq!(saved.detail_poster_max_side, Some(240));
+        assert_eq!(saved.detail_backdrop_max_side, Some(360));
+        assert_eq!(saved.episode_thumbnail_max_side, Some(480));
+        assert_eq!(saved.player_episode_backdrop_max_side, Some(2560));
         assert_eq!(read_torrent_settings().dir, "pending-torrent-dir");
         // A queued save must not replay stale values over a newer projection.
         app.set_show_settings(true);

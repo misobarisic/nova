@@ -452,7 +452,7 @@ pub(crate) fn sort_by_order(current: Vec<String>, order: &[String]) -> Vec<Strin
 /// `CacheSettings` fields that are never synced: device-specific
 /// (`android_hwdec`, `player_external`, `desktop_external_app`,
 /// Android return behavior) or local-only
-/// (`rewrite_existing`);
+/// (device-local preferences);
 /// `categories` sync as their own domain so concurrent additions union.
 const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
     "android_hwdec",
@@ -460,12 +460,11 @@ const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
     "desktop_external_app",
     "android_auto_continue",
     "sync_overrides",
-    "rewrite_existing",
     "categories",
 ];
 
 /// Image-cache controls are interdependent (re-encoding only applies to the
-/// chosen format/quality/downscale, and "re-encode on load" rewrites entries
+/// chosen format/quality/resolution, and re-encoding rewrites entries
 /// under that config), so they sync as one whole record under `settings/cache`
 /// with whole-value LWW instead of field-by-field.
 const SETTINGS_GROUP_CACHE: &[&str] = &[
@@ -473,8 +472,10 @@ const SETTINGS_GROUP_CACHE: &[&str] = &[
     "enabled",
     "format",
     "quality",
-    "downscale",
-    "lazy_reencode",
+    "detail_poster_max_side",
+    "detail_backdrop_max_side",
+    "episode_thumbnail_max_side",
+    "player_episode_backdrop_max_side",
     "lru_cache_mb",
 ];
 
@@ -611,9 +612,20 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
             continue;
         }
         if let Some(allowed) = settings_group_fields(name) {
-            if let Ok(serde_json::Value::Object(group)) =
+            if let Ok(serde_json::Value::Object(mut group)) =
                 serde_json::from_str::<serde_json::Value>(json)
             {
+                // Older peers grouped `downscale` in this record. The local
+                // settings object already contains the new field, so make
+                // the old group's migration explicit before overlaying it.
+                if !group.contains_key("player_episode_backdrop_max_side")
+                    && group.get("downscale").and_then(serde_json::Value::as_bool) == Some(true)
+                {
+                    group.insert(
+                        "player_episode_backdrop_max_side".into(),
+                        serde_json::json!(1024),
+                    );
+                }
                 for (field, value) in group {
                     if allowed.contains(&field.as_str()) {
                         let mut trial = map.clone();
@@ -679,7 +691,6 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
     merged.android_hwdec = base.android_hwdec;
     merged.player_external = base.player_external;
     merged.desktop_external_app = base.desktop_external_app;
-    merged.rewrite_existing = false;
     merged
 }
 
@@ -2058,12 +2069,15 @@ mod tests {
     fn settings_fields_split_per_field_and_group_cache() {
         let settings = CacheSettings {
             quality: 91,
+            detail_poster_max_side: Some(720),
+            detail_backdrop_max_side: None,
+            episode_thumbnail_max_side: Some(360),
+            player_episode_backdrop_max_side: None,
             animations: false,
             categories: vec!["Anime".into()],
             android_hwdec: AndroidHwdec::Sw,
             player_external: true,
             desktop_external_app: DesktopExternalApp::Vlc,
-            rewrite_existing: true,
             playback_speed: 1.5,
             home_catalog_sources: vec![HomeCatalogSource {
                 addon_url: "https://example.test/manifest.json".into(),
@@ -2085,6 +2099,13 @@ mod tests {
             serde_json::from_str(fields.get("cache").expect("cache group")).unwrap();
         assert_eq!(cache["quality"], 91);
         assert_eq!(cache["cache_images"], true);
+        assert_eq!(cache["detail_poster_max_side"], 720);
+        assert_eq!(cache["detail_backdrop_max_side"], serde_json::Value::Null);
+        assert_eq!(cache["episode_thumbnail_max_side"], 360);
+        assert_eq!(
+            cache["player_episode_backdrop_max_side"],
+            serde_json::Value::Null
+        );
         assert!(!fields.contains_key("quality"));
         // Categories use their own union domain; player and display choices
         // below are device-specific.
@@ -2096,7 +2117,6 @@ mod tests {
         assert!(fields.contains_key("default_audio_language"));
         assert!(fields.contains_key("default_subtitle_language"));
         assert!(!fields.contains_key("android_auto_continue"));
-        assert!(!fields.contains_key("rewrite_existing"));
         assert_eq!(fields.get("true_black").map(String::as_str), Some("false"));
         let base = CacheSettings {
             true_black: true,
@@ -2253,6 +2273,30 @@ mod tests {
     }
 
     #[test]
+    fn legacy_cache_group_migrates_player_resolution_but_explicit_value_wins() {
+        let base = CacheSettings::default();
+        let migrated =
+            merge_settings_fields(&base, &[("cache".into(), r#"{"downscale":true}"#.into())]);
+        assert_eq!(migrated.player_episode_backdrop_max_side, Some(1024));
+        let explicit_original = merge_settings_fields(
+            &base,
+            &[(
+                "cache".into(),
+                r#"{"downscale":true,"player_episode_backdrop_max_side":null}"#.into(),
+            )],
+        );
+        assert_eq!(explicit_original.player_episode_backdrop_max_side, None);
+        let explicit_value = merge_settings_fields(
+            &base,
+            &[(
+                "cache".into(),
+                r#"{"downscale":true,"player_episode_backdrop_max_side":720}"#.into(),
+            )],
+        );
+        assert_eq!(explicit_value.player_episode_backdrop_max_side, Some(720));
+    }
+
+    #[test]
     fn merge_settings_fields_prefers_remote_and_keeps_local_device_fields() {
         let base = CacheSettings {
             android_hwdec: AndroidHwdec::Sw,
@@ -2277,7 +2321,6 @@ mod tests {
             ("android_hwdec".to_string(), "\"hw+\"".to_string()),
             ("player_external".to_string(), "false".to_string()),
             ("desktop_external_app".to_string(), "\"system\"".to_string()),
-            ("rewrite_existing".to_string(), "true".to_string()),
             (
                 "home_catalog_sources".to_string(),
                 serde_json::to_string(&remote_home_sources).unwrap(),
@@ -2290,7 +2333,6 @@ mod tests {
         assert!(merged.player_external);
         assert_eq!(merged.desktop_external_app, DesktopExternalApp::Mpv);
         assert_eq!(merged.home_catalog_sources, remote_home_sources);
-        assert!(!merged.rewrite_existing);
     }
 
     #[test]

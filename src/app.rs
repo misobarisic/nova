@@ -80,8 +80,8 @@ use crate::storage;
 use nova_config::{
     AndroidHwdec, BackdropSize, CacheImageFormat, CacheSettings, DesktopExternalApp,
     DownloadSettings, EpisodeStartBehavior, HomeCatalogSource, HomeRow, HomeRowSource, Language,
-    active_cache_settings, app_cache_dir, app_data_dir, now_secs, poster_cache_dir,
-    set_cache_settings,
+    active_cache_settings, app_cache_dir, app_data_dir, image_settings_revision, now_secs,
+    poster_cache_dir, set_cache_settings,
 };
 // Everything from the image-cache subsystem now lives in `nova-media`.
 use nova_media::cache::*;
@@ -220,18 +220,16 @@ struct StreamUi {
     download: Option<DownloadJob>,
 }
 
-/// Decoded artwork retained for an item in Home's small featured carousel.
+/// Request state for an item in Home's featured carousel. Decoded pixels live
+/// only in the shared image cache; the visible Slint image owns active pixels.
 /// Failed URLs are cooled down rather than becoming permanent session misses.
-/// Existing pixels stay visible while richer metadata/artwork is loaded.
 #[derive(Default)]
 struct HomeShowcaseArtwork {
-    backdrop: Option<SharedPixelBuffer<Rgba8Pixel>>,
+    /// Last selected source URL. Pixels live only in the shared byte-budgeted cache.
     backdrop_url: String,
-    logo: Option<SharedPixelBuffer<Rgba8Pixel>>,
     logo_url: String,
     logo_loading: bool,
     logo_failed_at: Option<std::time::Instant>,
-    backdrop_done: bool,
     loading_url: Option<String>,
     failed_urls: HashMap<String, std::time::Instant>,
     metadata_loading: bool,
@@ -619,65 +617,6 @@ const PROGRESS_SAVE_INTERVAL_SECS: u64 = 30;
 const PROGRESS_MIN_DELTA_SECS: f64 = 5.0;
 
 #[cfg(feature = "desktop")]
-/// Per-(generation, index) decoded poster store backing the grid + detail
-/// fast paths. Entries are deliberately NOT scoped to the current
-/// generation — going back to a previous search/addon must stay instant —
-/// so the store is globally capped instead (oldest-inserted evicted first).
-/// Evicted entries transparently fall back to the decoded LRU / disk cache.
-#[cfg(feature = "desktop")]
-struct PosterStore {
-    map: HashMap<(u64, usize), SharedPixelBuffer<Rgba8Pixel>>,
-    /// Insertion order (oldest first) for cap eviction.
-    order: VecDeque<(u64, usize)>,
-    cap: usize,
-}
-
-#[cfg(feature = "desktop")]
-impl PosterStore {
-    fn new(cap: usize) -> Self {
-        Self {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-            cap: cap.max(1),
-        }
-    }
-
-    fn get(&self, key: &(u64, usize)) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
-        self.map.get(key).cloned()
-    }
-
-    fn insert(&mut self, key: (u64, usize), pixels: SharedPixelBuffer<Rgba8Pixel>) {
-        if !self.map.contains_key(&key) {
-            self.order.push_back(key);
-        }
-        self.map.insert(key, pixels);
-        while self.map.len() > self.cap {
-            match self.order.pop_front() {
-                Some(old) => {
-                    self.map.remove(&old);
-                }
-                None => break,
-            }
-        }
-    }
-
-    /// Drop one entry, if present (used to invalidate a grid card whose
-    /// poster art changed upstream).
-    fn remove(&mut self, key: &(u64, usize)) {
-        if self.map.remove(key).is_some() {
-            self.order.retain(|k| k != key);
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.map.len()
-    }
-}
-
-#[cfg(feature = "desktop")]
-type PosterCache = Arc<Mutex<PosterStore>>;
-
-#[cfg(feature = "desktop")]
 struct PosterJob {
     generation: u64,
     index: usize,
@@ -716,10 +655,12 @@ impl PosterTx {
 static EPISODE_INFLIGHT: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
-/// A queued episode-thumbnail fetch. Completed pixels are cached by URL;
+/// A queued episode-thumbnail fetch. Completed pixels are cached by recipe;
 /// the debounced render always reads the currently visible episode list.
 struct EpisodeThumbJob {
     url: String,
+    cache_key: String,
+    settings_revision: u64,
     /// Refresh check (not a plain fetch): the URL is already cached, so
     /// fresh bytes download in the background and the pixels swap only
     /// when they actually changed — unchanged art never flashes through
@@ -754,8 +695,6 @@ struct Bridge {
     // `PosterTx`). Android fetches each grid poster via net::fetch_image instead.
     #[cfg(feature = "desktop")]
     poster_tx: PosterTx,
-    #[cfg(feature = "desktop")]
-    poster_cache: PosterCache,
     /// In-app player overlay (same window; mpv on desktop, HTML5 video on web).
     player: crate::player::Player,
     downloads: DownloadCoordinator,

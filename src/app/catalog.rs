@@ -459,7 +459,7 @@ impl Bridge {
                 ));
                 #[cfg(feature = "desktop")]
                 {
-                    let cached = self.poster_cache.lock().unwrap().len();
+                    let cached = decoded_cache_stats().0;
                     crate::web_log(&format!(
                         "nova: memory posters-cached={cached} cards={total}"
                     ));
@@ -2626,7 +2626,6 @@ mod tests {
             Bridge::new(
                 app.as_weak(),
                 PosterTx { hi, lo },
-                Arc::new(Mutex::new(PosterStore::new(1))),
                 Arc::new(AtomicU64::new(0)),
                 player,
                 downloads,

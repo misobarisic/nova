@@ -185,9 +185,14 @@ impl Bridge {
         }
         let bridge = self.clone();
         let poster_url = url.clone();
+        let image_revision = image_settings_revision();
         net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
             if let Some(pixels) = pixels {
                 let _ = slint::invoke_from_event_loop(move || {
+                    if image_settings_revision() != image_revision {
+                        bridge.load_discover_poster(type_, id, poster_url);
+                        return;
+                    }
                     bridge.publish_discover_poster(&type_, &id, &poster_url, &pixels);
                 });
             }
@@ -226,14 +231,7 @@ impl Bridge {
         let update_detail = {
             let mut state = self.shared.lock().unwrap();
             state.modal_item.as_mut().is_some_and(|item| {
-                if item.id != id
-                    || item.type_ != type_
-                    || (item.poster_url != url
-                        && decoded_cache_contains(&sized_cache_key(
-                            &item.poster_url,
-                            Some(DISPLAY_POSTER_SIDE),
-                        )))
-                {
+                if item.id != id || item.type_ != type_ || item.poster_url == url {
                     return false;
                 }
                 item.poster_url = url.into();
@@ -241,7 +239,8 @@ impl Bridge {
             })
         };
         if update_detail && app.get_modal_visible() {
-            app.set_selected_poster(image.clone());
+            // Grid publication carries a grid recipe. Detail reacquires its own.
+            self.load_detail_poster(url.into(), id.into());
         }
         paint_poster_rows(&app.get_catalog(), &browse, id, url, &image);
         paint_poster_rows(&app.get_search_results(), &search, id, url, &image);
@@ -274,14 +273,6 @@ impl Bridge {
                 self.dispatch_upcoming_posters();
             }
         }
-        #[cfg(feature = "desktop")]
-        for index in browse {
-            let generation = self.catalog_gen.load(Ordering::Relaxed);
-            self.poster_cache
-                .lock()
-                .unwrap()
-                .remove(&(generation, index));
-        }
     }
 
     fn detail_poster_stale(&self, id: &str, url: &str) -> bool {
@@ -295,8 +286,7 @@ impl Bridge {
             .map(|item| item.poster_url.clone());
         desired.is_some_and(|desired| {
             desired != url
-                && decoded_cache_get(&sized_cache_key(&desired, Some(DISPLAY_POSTER_SIDE)))
-                    .is_some()
+                && decoded_cache_get(&image_cache_key(&desired, ImageUse::DetailPoster)).is_some()
         })
     }
 
@@ -327,6 +317,7 @@ impl Bridge {
         let app_weak = self.app.clone();
         let bridge = self.clone();
         let requested_url = url.clone();
+        let image_revision = image_settings_revision();
         net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
             let _ = slint::invoke_from_event_loop(move || {
                 let index = {
@@ -343,7 +334,18 @@ impl Bridge {
                         None
                     }
                 };
-                if let (Some(index), Some(app)) = (index, app_weak.upgrade())
+                let Some(index) = index else { return };
+                if image_settings_revision() != image_revision {
+                    if app_weak.upgrade().is_some_and(|app| {
+                        app.get_search_results().row_data(index).is_some_and(|row| {
+                            row.id.as_str() == id && row.poster_path.as_str() == requested_url
+                        })
+                    }) {
+                        bridge.fetch_search_card_poster(type_, id, requested_url, generation);
+                    }
+                    return;
+                }
+                if let Some(app) = app_weak.upgrade()
                     && app.get_search_results().row_data(index).is_some_and(|row| {
                         row.id.as_str() == id && row.poster_path.as_str() == requested_url
                     })
@@ -383,8 +385,24 @@ impl Bridge {
             let generation = gen_counter.load(Ordering::Relaxed);
             let bridge = self.clone();
             let requested_url = url.clone();
+            let image_revision = image_settings_revision();
             net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
                 let _ = slint::invoke_from_event_loop(move || {
+                    if image_settings_revision() != image_revision {
+                        if let Some(app) = app_weak.upgrade() {
+                            let model = if library {
+                                app.get_library()
+                            } else {
+                                app.get_catalog()
+                            };
+                            if model.row_data(index).is_some_and(|row| {
+                                row.poster_path.as_str() == requested_url && !row.is_loaded
+                            }) {
+                                bridge.fetch_card_poster(library, index, requested_url);
+                            }
+                        }
+                        return;
+                    }
                     let Some(pixels) = pixels else {
                         if !library {
                             bridge.recover_catalog_artwork(generation, index, &requested_url);
@@ -470,16 +488,20 @@ impl Bridge {
                 }
                 if let Some(url) = &v.thumbnail
                     && {
-                        let cached =
-                            decoded_cache_contains(&sized_cache_key(url, Some(EPISODE_THUMB_SIDE)));
+                        let cached = decoded_cache_contains(&image_cache_key(
+                            url,
+                            ImageUse::EpisodeThumbnail,
+                        ));
                         // Normal pass takes the missing ones, verify pass
                         // the cached ones — disjoint by construction.
                         cached == verify
                     }
-                    && inflight.insert(url.clone())
+                    && inflight.insert(image_cache_key(url, ImageUse::EpisodeThumbnail))
                 {
                     jobs.push(EpisodeThumbJob {
                         url: url.clone(),
+                        cache_key: image_cache_key(url, ImageUse::EpisodeThumbnail),
+                        settings_revision: image_settings_revision(),
                         verify,
                     });
                 }
@@ -512,31 +534,39 @@ impl Bridge {
             let Some(job) = job else {
                 break;
             };
+            if image_settings_revision() != job.settings_revision {
+                EPISODE_INFLIGHT.lock().unwrap().remove(&job.cache_key);
+                continue;
+            }
             EPISODE_ACTIVE.fetch_add(1, Ordering::SeqCst);
             if job.verify {
                 // Refresh check: the cached art stays painted while fresh
                 // bytes download; rows repaint only on a real pixel change.
                 let worker = bridge.clone();
-                refresh_image_if_changed(job.url.clone(), Some(EPISODE_THUMB_SIDE), move |fresh| {
-                    EPISODE_INFLIGHT.lock().unwrap().remove(&job.url);
-                    EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
-                    // Kick off the next queued download.
-                    Bridge::pump_episode_thumbs(worker.clone());
-                    if fresh.is_none() {
-                        return; // unchanged or failed: cached art is shown
-                    }
-                    Bridge::schedule_episode_thumb_render(worker);
-                });
+                refresh_image_if_changed(
+                    job.url.clone(),
+                    ImageUse::EpisodeThumbnail,
+                    move |fresh| {
+                        EPISODE_INFLIGHT.lock().unwrap().remove(&job.cache_key);
+                        EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
+                        // Kick off the next queued download.
+                        Bridge::pump_episode_thumbs(worker.clone());
+                        if fresh.is_none() || image_settings_revision() != job.settings_revision {
+                            return; // unchanged or failed: cached art is shown
+                        }
+                        Bridge::schedule_episode_thumb_render(worker);
+                    },
+                );
                 continue;
             }
             let worker = bridge.clone();
-            net::fetch_image(job.url.clone(), Some(EPISODE_THUMB_SIDE), move |pixels| {
+            net::fetch_image(job.url.clone(), ImageUse::EpisodeThumbnail, move |pixels| {
                 let loaded = pixels.is_some();
-                EPISODE_INFLIGHT.lock().unwrap().remove(&job.url);
+                EPISODE_INFLIGHT.lock().unwrap().remove(&job.cache_key);
                 EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
                 // Kick off the next queued download.
                 Bridge::pump_episode_thumbs(worker.clone());
-                if !loaded {
+                if !loaded || image_settings_revision() != job.settings_revision {
                     return; // keep the placeholder
                 }
                 Bridge::schedule_episode_thumb_render(worker);
@@ -584,7 +614,7 @@ impl Bridge {
             let mut urls = Vec::new();
             for &s in &m.seasons {
                 if let Some(url) = season_thumb_url(&m.videos, &m.season_backdrops, s)
-                    && !decoded_cache_contains(&sized_cache_key(&url, Some(EPISODE_THUMB_SIDE)))
+                    && !decoded_cache_contains(&image_cache_key(&url, ImageUse::EpisodeThumbnail))
                     && !urls.contains(&url)
                 {
                     urls.push(url);
@@ -593,10 +623,11 @@ impl Bridge {
             (m.id.clone(), m.seasons.clone(), urls)
         };
         for url in urls {
+            let revision = image_settings_revision();
             let bridge = self.clone();
             let item_id = item_id.clone();
             let seasons = seasons.clone();
-            net::fetch_image(url, Some(EPISODE_THUMB_SIDE), move |pixels| {
+            net::fetch_image(url, ImageUse::EpisodeThumbnail, move |pixels| {
                 if pixels.is_none() {
                     return; // keep the placeholder
                 }
@@ -609,7 +640,7 @@ impl Bridge {
                         .as_ref()
                         .map(|m| m.id == item_id && m.seasons == seasons)
                         .unwrap_or(false);
-                    if same {
+                    if same && image_settings_revision() == revision {
                         bridge.apply_season_cards();
                     }
                 });
@@ -648,6 +679,8 @@ impl Bridge {
                 continue;
             }
             let bridge = self.clone();
+            let image_revision = image_settings_revision();
+            let entry_for_retry = entry.clone();
             net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
                 let _ = slint::invoke_from_event_loop(move || {
                     let mut state = bridge.shared.lock().unwrap();
@@ -657,6 +690,10 @@ impl Bridge {
                     });
                     drop(state);
                     if !current {
+                        return;
+                    }
+                    if image_settings_revision() != image_revision {
+                        bridge.dispatch_library_posters(&[entry_for_retry]);
                         return;
                     }
                     let Some(app) = bridge.app() else { return };
@@ -859,14 +896,37 @@ impl Bridge {
 
     fn dispatch_episode_home_posters(&self, new: bool) {
         let Some(app) = self.app() else { return };
-        let fallbacks: HashMap<_, _> = self
-            .shared
-            .lock()
-            .unwrap()
-            .entries
-            .iter()
-            .map(|entry| (entry.id.clone(), entry.poster_url.clone()))
-            .collect();
+        let (fallbacks, row_sources) = {
+            let state = self.shared.lock().unwrap();
+            let sources = if new {
+                &state.new_episodes_list
+            } else {
+                &state.continue_list
+            };
+            let fallbacks = state
+                .entries
+                .iter()
+                .map(|entry| {
+                    (
+                        (entry.type_.clone(), entry.id.clone()),
+                        entry.poster_url.clone(),
+                    )
+                })
+                .collect::<HashMap<_, _>>();
+            let row_sources = sources
+                .iter()
+                // These are the same rows retained by current_episode_home_rows:
+                // the source entry must have a typed library join.
+                .filter(|source| {
+                    state
+                        .entries
+                        .iter()
+                        .any(|entry| entry.id == source.series_id && entry.type_ == source.type_)
+                })
+                .map(|source| (source.series_id.clone(), source.type_.clone()))
+                .collect::<Vec<_>>();
+            (fallbacks, row_sources)
+        };
         let model = if new {
             app.get_home_new_episodes()
         } else {
@@ -880,19 +940,32 @@ impl Bridge {
                     .is_none()
             })
             .map(|(index, row)| {
-                let fallback = fallbacks.get(row.id.as_str()).cloned().unwrap_or_default();
-                (index, row.id, row.art_url, fallback)
+                let type_ = row_sources
+                    .get(index)
+                    .filter(|(source_id, _)| source_id.as_str() == row.id.as_str())
+                    .map(|(_, type_)| type_.clone())
+                    .unwrap_or_default();
+                let fallback = fallbacks
+                    .get(&(type_.clone(), row.id.to_string()))
+                    .cloned()
+                    .unwrap_or_default();
+                (index, row.id, row.art_url, type_, fallback)
             })
             .collect();
         let app_weak = self.app.clone();
-        for (_index, id, url, fallback) in items {
+        for (_index, id, url, type_, fallback) in items {
             let weak = app_weak.clone();
             let bridge = self.clone();
             let failed_poster = fallback.clone();
+            let image_revision = image_settings_revision();
             fetch_home_card_art(url.to_string(), fallback, move |pixels| {
                 let _ = slint::invoke_from_event_loop(move || {
+                    if image_settings_revision() != image_revision {
+                        bridge.dispatch_episode_home_posters(new);
+                        return;
+                    }
                     let Some(pixels) = pixels else {
-                        bridge.recover_library_artwork(id.as_str(), &failed_poster);
+                        bridge.recover_missing_artwork(&type_, id.as_str(), &failed_poster);
                         return;
                     };
                     let Some(app) = weak.upgrade() else { return };
@@ -921,14 +994,25 @@ impl Bridge {
     /// Upcoming and its selected calendar day share the same guarded image.
     pub(super) fn dispatch_upcoming_posters(&self) {
         let Some(app) = self.app() else { return };
-        let fallbacks: HashMap<_, _> = self
-            .shared
-            .lock()
-            .unwrap()
-            .entries
-            .iter()
-            .map(|entry| (entry.id.clone(), entry.poster_url.clone()))
-            .collect();
+        let (fallbacks, row_sources) = {
+            let state = self.shared.lock().unwrap();
+            let fallbacks = state
+                .entries
+                .iter()
+                .map(|entry| {
+                    (
+                        (entry.type_.clone(), entry.id.clone()),
+                        entry.poster_url.clone(),
+                    )
+                })
+                .collect::<HashMap<_, _>>();
+            let row_sources = state
+                .upcoming_list
+                .iter()
+                .map(|source| (source.series_id.clone(), source.type_.clone()))
+                .collect::<Vec<_>>();
+            (fallbacks, row_sources)
+        };
         let items: Vec<_> = app
             .get_home_upcoming()
             .iter()
@@ -938,19 +1022,32 @@ impl Bridge {
                     .is_none()
             })
             .map(|(index, row)| {
-                let fallback = fallbacks.get(row.id.as_str()).cloned().unwrap_or_default();
-                (index, row.id, row.art_url, fallback)
+                let type_ = row_sources
+                    .get(row.index as usize)
+                    .filter(|(source_id, _)| source_id.as_str() == row.id.as_str())
+                    .map(|(_, type_)| type_.clone())
+                    .unwrap_or_default();
+                let fallback = fallbacks
+                    .get(&(type_.clone(), row.id.to_string()))
+                    .cloned()
+                    .unwrap_or_default();
+                (index, row.id, row.art_url, type_, fallback)
             })
             .collect();
         let app_weak = self.app.clone();
-        for (_index, id, url, fallback) in items {
+        for (_index, id, url, type_, fallback) in items {
             let weak = app_weak.clone();
             let bridge = self.clone();
             let failed_poster = fallback.clone();
+            let image_revision = image_settings_revision();
             fetch_home_card_art(url.to_string(), fallback, move |pixels| {
                 let _ = slint::invoke_from_event_loop(move || {
+                    if image_settings_revision() != image_revision {
+                        bridge.dispatch_upcoming_posters();
+                        return;
+                    }
                     let Some(pixels) = pixels else {
-                        bridge.recover_library_artwork(id.as_str(), &failed_poster);
+                        bridge.recover_missing_artwork(&type_, id.as_str(), &failed_poster);
                         return;
                     };
                     let Some(app) = weak.upgrade() else { return };
@@ -1012,6 +1109,7 @@ impl Bridge {
             }
             let bridge = self.clone();
             let requested_url = url.clone();
+            let image_revision = image_settings_revision();
             net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(app) = bridge.app() else { return };
@@ -1021,6 +1119,10 @@ impl Bridge {
                             && card.media_type == type_
                             && card.poster_url == requested_url
                     });
+                    if current && image_settings_revision() != image_revision {
+                        bridge.dispatch_home_catalog_posters();
+                        return;
+                    }
                     if let Some(pixels) = pixels {
                         if current {
                             bridge.publish_discover_poster(&type_, &id, &requested_url, &pixels);
@@ -1120,17 +1222,22 @@ impl Bridge {
             .as_ref()
             .map(|item| (item.open_token.clone(), item.logo_url.clone()));
         let Some((token, url)) = request else { return };
-        let cached = transparent_title_logo(decoded_cache_get(&url));
+        let cached = transparent_title_logo(decoded_cache_get(&image_cache_key(
+            &url,
+            ImageUse::Fixed(None),
+        )));
         app.set_selected_logo(cached.map(Image::from_rgba8).unwrap_or_default());
         if url.is_empty() || app.get_selected_logo().size().width > 0 {
             return;
         }
         let bridge = self.clone();
-        net::fetch_image(url.clone(), None, move |pixels| {
+        let revision = image_settings_revision();
+        net::fetch_image(url.clone(), ImageUse::Fixed(None), move |pixels| {
             let pixels = transparent_title_logo(pixels);
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(app) = bridge.app() else { return };
-                let valid = app.get_modal_visible()
+                let valid = image_settings_revision() == revision
+                    && app.get_modal_visible()
                     && bridge
                         .shared
                         .lock()
@@ -1147,173 +1254,209 @@ impl Bridge {
         });
     }
 
-    /// Load the detail page backdrop off the UI thread (same guards as the
-    /// poster path). Missing/failed backdrops simply keep the gradient
-    /// placeholder.
-    pub(super) fn load_detail_backdrop(&self, url: String, item_id: String) {
+    fn detail_image_request(&self, id: &str) -> Option<Arc<()>> {
+        self.shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .filter(|item| item.id == id)
+            .map(|item| item.open_token.clone())
+    }
+
+    fn detail_image_current(
+        &self,
+        token: &Arc<()>,
+        id: &str,
+        url: &str,
+        image_use: ImageUse,
+        revision: u64,
+    ) -> bool {
+        image_settings_revision() == revision
+            && self
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .is_some_and(|item| {
+                    Arc::ptr_eq(&item.open_token, token)
+                        && item.id == id
+                        && match image_use {
+                            ImageUse::DetailPoster => item.poster_url == url,
+                            ImageUse::DetailBackdrop => item.background_url == url,
+                            _ => false,
+                        }
+                })
+    }
+
+    /// Detail and grids load separate recipes, even when they share a source URL.
+    fn load_detail_grid_poster(&self, type_: String, id: String, url: String, refresh: bool) {
+        let settings = active_cache_settings();
+        let grid_use = ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE));
+        if let Some(pixels) = decoded_cache_get(&image_cache_key(&url, grid_use)) {
+            // Refresh returns None for unchanged pixels. Rows that have not
+            // painted yet still need the matching cached grid representation.
+            self.publish_discover_poster(&type_, &id, &url, &pixels);
+        }
         let bridge = self.clone();
-        net::fetch_image(url, Some(DETAIL_BACKDROP_SIDE), move |pixels| {
-            let Some(pixels) = pixels else {
-                return; // keep the placeholder
-            };
+        let requested_url = url.clone();
+        let revision = image_settings_revision();
+        let publish = move |pixels: Option<SharedPixelBuffer<Rgba8Pixel>>| {
+            if let Some(pixels) = pixels {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if image_settings_revision() == revision {
+                        bridge.publish_discover_poster(&type_, &id, &requested_url, &pixels);
+                    }
+                });
+            }
+        };
+        if refresh
+            && ImageRecipe::resolve(ImageUse::DetailPoster, &settings)
+                != ImageRecipe::resolve(grid_use, &settings)
+        {
+            refresh_image_if_changed(url, ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)), publish);
+        } else {
+            net::fetch_image(url, ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)), publish);
+        }
+    }
+
+    pub(super) fn load_detail_backdrop(&self, url: String, item_id: String) {
+        let Some(token) = self.detail_image_request(&item_id) else {
+            return;
+        };
+        let bridge = self.clone();
+        let revision = image_settings_revision();
+        let requested_url = url.clone();
+        net::fetch_image(url, ImageUse::DetailBackdrop, move |pixels| {
+            let Some(pixels) = pixels else { return };
             let _ = slint::invoke_from_event_loop(move || {
-                let Some(app) = bridge.app() else {
-                    return;
-                };
-                if !app.get_modal_visible() {
-                    return;
-                }
-                let still_current = {
-                    let state = bridge.shared.lock().unwrap();
-                    state
-                        .modal_item
-                        .as_ref()
-                        .map(|m| m.id == item_id)
-                        .unwrap_or(false)
-                };
-                if still_current {
+                if bridge.detail_image_current(
+                    &token,
+                    &item_id,
+                    &requested_url,
+                    ImageUse::DetailBackdrop,
+                    revision,
+                ) && let Some(app) = bridge.app().filter(|app| app.get_modal_visible())
+                {
                     app.set_selected_backdrop(Image::from_rgba8(pixels));
                 }
             });
         });
     }
 
-    /// Load the detail page poster off the UI thread so opening an item is
-    /// instant even when the cached image still needs decoding (or the poster
-    /// must be downloaded). Successful art also updates matching grid rows;
-    /// only the detail-view update is dropped after closing or switching items.
     pub(super) fn load_detail_poster(&self, url: String, item_id: String) {
+        let Some(token) = self.detail_image_request(&item_id) else {
+            return;
+        };
         let media_type = self
             .shared
             .lock()
             .unwrap()
             .modal_item
             .as_ref()
-            .filter(|item| item.id == item_id)
             .map(|item| item.type_.clone());
+        let revision = image_settings_revision();
+        if let Some(pixels) = decoded_cache_get(&image_cache_key(&url, ImageUse::DetailPoster))
+            && let Some(app) = self.app()
+        {
+            app.set_selected_poster(Image::from_rgba8(pixels));
+        }
         let poster_url = url.clone();
         let bridge = self.clone();
-        net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
+        net::fetch_image(url, ImageUse::DetailPoster, move |pixels| {
             let _ = slint::invoke_from_event_loop(move || {
+                if !bridge.detail_image_current(
+                    &token,
+                    &item_id,
+                    &poster_url,
+                    ImageUse::DetailPoster,
+                    revision,
+                ) {
+                    return;
+                }
                 let Some(pixels) = pixels else {
                     if let Some(type_) = &media_type {
                         bridge.recover_missing_artwork(type_, &item_id, &poster_url);
                     }
                     return;
                 };
-                if bridge.detail_poster_stale(&item_id, &poster_url) {
-                    return;
-                }
-                let Some(app) = bridge.app() else {
-                    return;
-                };
-                if let Some(type_) = &media_type {
-                    bridge.publish_discover_poster(type_, &item_id, &poster_url, &pixels);
-                }
-                if !app.get_modal_visible() {
-                    return;
-                }
-                let still_current = {
-                    let state = bridge.shared.lock().unwrap();
-                    state
-                        .modal_item
-                        .as_ref()
-                        .map(|m| m.id == item_id)
-                        .unwrap_or(false)
-                };
-                if still_current {
+                if let Some(app) = bridge.app().filter(|app| app.get_modal_visible()) {
                     app.set_selected_poster(Image::from_rgba8(pixels));
+                }
+                if let Some(type_) = media_type {
+                    bridge.load_detail_grid_poster(type_, item_id, poster_url, false);
                 }
             });
         });
     }
 
-    /// Refresh the detail-page poster without flashing: fresh bytes download
-    /// in the background and the image repaints only when the pixels
-    /// actually changed (identical art keeps the currently shown poster).
-    /// Matching grid rows also receive changed art after Detail closes;
-    /// the detail-view update still checks the currently selected item.
     pub(super) fn refresh_detail_poster(&self, url: String, item_id: String) {
+        let Some(token) = self.detail_image_request(&item_id) else {
+            return;
+        };
         let media_type = self
             .shared
             .lock()
             .unwrap()
             .modal_item
             .as_ref()
-            .filter(|item| item.id == item_id)
             .map(|item| item.type_.clone());
+        let revision = image_settings_revision();
         let poster_url = url.clone();
         let bridge = self.clone();
-        refresh_image_if_changed(url, Some(DISPLAY_POSTER_SIDE), move |fresh| {
-            let Some(pixels) = fresh else {
-                // None also means unchanged. Only a missing decoded image
-                // needs recovery, such as an expired URL after clearing cache.
-                if !decoded_cache_contains(&sized_cache_key(&poster_url, Some(DISPLAY_POSTER_SIDE)))
-                {
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(type_) = &media_type {
-                            bridge.recover_missing_artwork(type_, &item_id, &poster_url);
-                        }
-                    });
-                }
-                return;
-            };
+        refresh_image_if_changed(url, ImageUse::DetailPoster, move |fresh| {
             let _ = slint::invoke_from_event_loop(move || {
-                if bridge.detail_poster_stale(&item_id, &poster_url) {
+                if image_settings_revision() != revision
+                    || bridge.detail_poster_stale(&item_id, &poster_url)
+                {
                     return;
                 }
-                // Grids bake poster Images into their row models: push the
-                // fresh art there too, or the library/catalog card would
-                // keep stale pixels until a rebuild or restart. Runs even
-                // when the modal already closed (keyed by id, not by view).
-                if let Some(type_) = &media_type {
-                    bridge.publish_discover_poster(type_, &item_id, &poster_url, &pixels);
-                }
-                let Some(app) = bridge.app() else {
+                let Some(pixels) = fresh else {
+                    if !decoded_cache_contains(&image_cache_key(
+                        &poster_url,
+                        ImageUse::DetailPoster,
+                    )) && let Some(type_) = &media_type
+                    {
+                        bridge.recover_missing_artwork(type_, &item_id, &poster_url);
+                    }
                     return;
                 };
-                if !app.get_modal_visible() {
-                    return;
-                }
-                let still_current = {
-                    let state = bridge.shared.lock().unwrap();
-                    state
-                        .modal_item
-                        .as_ref()
-                        .map(|m| m.id == item_id)
-                        .unwrap_or(false)
-                };
-                if still_current {
+                if bridge.detail_image_current(
+                    &token,
+                    &item_id,
+                    &poster_url,
+                    ImageUse::DetailPoster,
+                    revision,
+                ) && let Some(app) = bridge.app().filter(|app| app.get_modal_visible())
+                {
                     app.set_selected_poster(Image::from_rgba8(pixels));
+                }
+                if let Some(type_) = media_type {
+                    bridge.load_detail_grid_poster(type_, item_id, poster_url, true);
                 }
             });
         });
     }
 
-    /// Refresh the detail-page backdrop without flashing (same contract as
-    /// `refresh_detail_poster`).
     pub(super) fn refresh_detail_backdrop(&self, url: String, item_id: String) {
+        let Some(token) = self.detail_image_request(&item_id) else {
+            return;
+        };
         let bridge = self.clone();
-        refresh_image_if_changed(url, Some(DETAIL_BACKDROP_SIDE), move |fresh| {
-            let Some(pixels) = fresh else {
-                return; // unchanged or failed: keep showing the current art
-            };
+        let revision = image_settings_revision();
+        let requested_url = url.clone();
+        refresh_image_if_changed(url, ImageUse::DetailBackdrop, move |fresh| {
+            let Some(pixels) = fresh else { return };
             let _ = slint::invoke_from_event_loop(move || {
-                let Some(app) = bridge.app() else {
-                    return;
-                };
-                if !app.get_modal_visible() {
-                    return;
-                }
-                let still_current = {
-                    let state = bridge.shared.lock().unwrap();
-                    state
-                        .modal_item
-                        .as_ref()
-                        .map(|m| m.id == item_id)
-                        .unwrap_or(false)
-                };
-                if still_current {
+                if bridge.detail_image_current(
+                    &token,
+                    &item_id,
+                    &requested_url,
+                    ImageUse::DetailBackdrop,
+                    revision,
+                ) && let Some(app) = bridge.app().filter(|app| app.get_modal_visible())
+                {
                     app.set_selected_backdrop(Image::from_rgba8(pixels));
                 }
             });
@@ -1342,7 +1485,7 @@ mod discover_artwork_tests {
                 std::process::id(),
                 nova_config::now_ms()
             ));
-            for mode in ["0", "1", "2", "3", "4", "5"] {
+            for mode in ["0", "1", "2", "3", "4", "5", "6"] {
                 let child_root = root.join(mode);
                 let output = std::process::Command::new(std::env::current_exe().unwrap())
                     .env(ROOT, &child_root)
@@ -1368,7 +1511,7 @@ mod discover_artwork_tests {
         use std::io::{Read, Write};
         let root = PathBuf::from(root);
         let mode = std::env::var("NOVA_ARTWORK_MAP_TEST").unwrap();
-        let detail = mode == "3";
+        let detail = mode == "3" || mode == "6";
         let cached_alternative = mode == "4";
         let pending_failure = mode == "5";
         let library = mode == "2" || detail || cached_alternative || pending_failure;
@@ -1382,7 +1525,8 @@ mod discover_artwork_tests {
         let good = format!("{base}/good.png");
         let old = format!("{base}/old.png");
         let mut png = std::io::Cursor::new(vec![]);
-        image::DynamicImage::new_rgba8(1, 1)
+        let (png_width, png_height) = if mode == "6" { (640, 360) } else { (1, 1) };
+        image::DynamicImage::new_rgba8(png_width, png_height)
             .write_to(&mut png, image::ImageFormat::Png)
             .unwrap();
         let png = png.into_inner();
@@ -1469,7 +1613,6 @@ mod discover_artwork_tests {
         let bridge = Bridge::new(
             app.as_weak(),
             PosterTx { hi, lo },
-            Arc::new(Mutex::new(PosterStore::new(1))),
             Arc::new(AtomicU64::new(0)),
             player,
             DownloadCoordinator::new(root.join("downloads")),
@@ -1612,6 +1755,13 @@ mod discover_artwork_tests {
             );
             assert!(app.get_library().row_data(0).unwrap().is_loaded);
             if detail {
+                if mode == "6" {
+                    let current = active_cache_settings();
+                    set_active_cache_settings(CacheSettings {
+                        detail_poster_max_side: Some(240),
+                        ..current
+                    });
+                }
                 // A healthy movie still rechecks metadata when explicitly
                 // opened, while Library itself stays on its cached content.
                 bridge.open_library_item(0);
@@ -1679,16 +1829,20 @@ mod discover_artwork_tests {
                         retry_bridge.retry_pending_artwork();
                     }
                 }
-                if weak
-                    .upgrade()
-                    .unwrap()
-                    .get_catalog()
-                    .row_data(0)
-                    .unwrap()
-                    .poster_path
-                    .as_str()
-                    == expected_poster
-                    || started.elapsed() > Duration::from_secs(10)
+                let app = weak.upgrade().unwrap();
+                // Detail and grids now publish separate image-use requests.
+                // A metadata URL update alone does not finish the grid decode.
+                if [
+                    app.get_catalog(),
+                    app.get_search_results(),
+                    app.get_library(),
+                ]
+                .iter()
+                .all(|model| {
+                    model.row_data(0).is_some_and(|row| {
+                        row.is_loaded && row.poster_path.as_str() == expected_poster
+                    })
+                }) || started.elapsed() > Duration::from_secs(10)
                 {
                     slint::quit_event_loop().unwrap();
                 }
@@ -1710,7 +1864,21 @@ mod discover_artwork_tests {
                     .poster_url,
                 good
             );
-            assert!(app.get_selected_poster().size().width > 0);
+            if mode == "6" {
+                let selected = app.get_selected_poster().size();
+                assert_eq!((selected.width, selected.height), (240, 135));
+                for model in [
+                    app.get_catalog(),
+                    app.get_search_results(),
+                    app.get_library(),
+                ] {
+                    let row = model.row_data(0).unwrap();
+                    let size = row.poster.size();
+                    assert_eq!((size.width, size.height), (480, 270));
+                }
+            } else {
+                assert!(app.get_selected_poster().size().width > 0);
+            }
         }
         for model in [
             app.get_catalog(),

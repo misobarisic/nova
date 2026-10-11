@@ -1213,7 +1213,6 @@ mod settings_tests {
             enabled: true,
             format: CacheImageFormat::Jpeg,
             quality: 62,
-            downscale: false,
             ..CacheSettings::default()
         };
         let json = serde_json::to_string(&custom).unwrap();
@@ -1698,37 +1697,6 @@ mod stream_display_tests {
 mod poster_memory_tests {
     use super::super::*;
 
-    fn buf() -> SharedPixelBuffer<Rgba8Pixel> {
-        SharedPixelBuffer::new(10, 10)
-    }
-
-    #[test]
-    fn evicts_oldest_first_over_cap() {
-        let mut s = PosterStore::new(3);
-        s.insert((1, 0), buf());
-        s.insert((1, 1), buf());
-        s.insert((1, 2), buf());
-        assert_eq!(s.len(), 3);
-        s.insert((1, 3), buf());
-        assert_eq!(s.len(), 3);
-        assert!(s.get(&(1, 0)).is_none());
-        assert!(s.get(&(1, 3)).is_some());
-    }
-
-    #[test]
-    fn keeps_old_generations_until_cap() {
-        // Returning to a previous search/addon must stay instant: a
-        // generation bump alone must never evict anything.
-        let mut s = PosterStore::new(10);
-        s.insert((1, 0), buf());
-        s.insert((1, 1), buf());
-        s.insert((2, 0), buf());
-        assert_eq!(s.len(), 3);
-        assert!(s.get(&(1, 0)).is_some());
-        assert!(s.get(&(1, 1)).is_some());
-        assert!(s.get(&(2, 0)).is_some());
-    }
-
     #[test]
     fn downscale_caps_longest_side_and_keeps_aspect() {
         let big = SharedPixelBuffer::<Rgba8Pixel>::new(1000, 1500);
@@ -1746,29 +1714,13 @@ mod poster_memory_tests {
     fn sized_keys_never_shadow_full_entries() {
         // Display derivatives must not collide with the full-fidelity
         // entry the player backdrop and re-encode path read.
-        assert_eq!(sized_cache_key("https://x/y.jpg", None), "https://x/y.jpg");
-        assert_eq!(
-            sized_cache_key("https://x/y.jpg", Some(480)),
-            "https://x/y.jpg#480"
-        );
-        assert_eq!(
-            sized_cache_key("https://x/y.jpg", Some(360)),
-            "https://x/y.jpg#360"
-        );
-    }
-
-    #[test]
-    fn display_file_names_dodge_the_img_sweep() {
-        // The re-encode sweep processes every `*.img`; derivatives use a
-        // distinct suffix so they are never rewritten.
-        let name = display_file_name("https://x/y.jpg", 480);
-        assert!(name.ends_with(".d480.jpg"), "{name}");
-        assert!(!name.ends_with(".img"));
-        assert_ne!(name, display_file_name("https://x/y.jpg", 360));
-        // Same URL, distinct sizes, distinct files.
         assert_ne!(
-            display_file_name("https://x/y.jpg", 480),
-            display_file_name("https://x/z.jpg", 480)
+            sized_cache_key("https://x/y.jpg", None),
+            sized_cache_key("https://x/y.jpg", Some(480))
+        );
+        assert_ne!(
+            sized_cache_key("https://x/y.jpg", Some(480)),
+            sized_cache_key("https://x/y.jpg", Some(360))
         );
     }
 }
