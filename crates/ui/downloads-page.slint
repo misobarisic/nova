@@ -3,6 +3,7 @@ import { ScrollView } from "scrollview.slint";
 import { SearchField } from "searchfield.slint";
 import { SideNav, NavMetrics } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
+import { SettingsBackButton } from "settings-controls.slint";
 
 export struct DownloadEpisode {
     id: string, title: string, badge: string, details: string,
@@ -17,7 +18,7 @@ component DownloadButton inherits Rectangle {
     in property <bool> selected: false;
     callback picked();
     width: Math.max(44px, label-text.preferred-width + 20px); height: 44px;
-    border-radius: 8px;
+    border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     background: root.selected ? Theme.current.accent : (touch.has-hover ? Theme.current.control_hover : Theme.current.control);
     accessible-role: button; accessible-label: root.label;
     label-text := Text { text: root.label; color: root.selected ? Theme.current.on_accent : Theme.current.text_bright; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
@@ -106,8 +107,8 @@ export component DownloadsPage inherits Rectangle {
     FocusScope { width: 100%; height: 100%; init => { root.last-back = root.system_back_request; self.focus(); }
         capture-key-pressed(e) => { if (e.text == Key.Back || e.text == Key.Escape) { if (!e.repeat) { root.back(); } accept } else { reject } }
     if !root.narrow: SideNav {
-        viewport-width: root.nav-viewport-width; active: 6; safe-top: root.safe-top; safe-left: root.safe-left; safe-bottom: root.safe-bottom; kb_active <=> root.kb_active;
-        home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } settings_picked => { root.settings_picked(); } about_picked => { root.about_picked(); }
+        viewport-width: root.nav-viewport-width; active: 5; safe-top: root.safe-top; safe-left: root.safe-left; safe-bottom: root.safe-bottom; kb_active <=> root.kb_active;
+        home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } more_picked => { root.more_picked(); }
     }
     content := VerticalLayout {
         x: root.narrow ? 0px : NavMetrics.width-for(root.nav-viewport-width) + root.safe-left;
@@ -117,7 +118,7 @@ export component DownloadsPage inherits Rectangle {
         if root.narrow: HorizontalLayout {
             height: 56px; vertical-stretch: 0; spacing: 12px;
             padding-top: 12px; padding-left: 12px + root.safe-left; padding-right: 12px + root.safe-right;
-            DownloadButton { width: 44px; label: "‹"; accessible-label: @tr("Back"); picked => { root.back(); } }
+            SettingsBackButton { clicked => { root.back(); } }
             Text { min-width: 0; text: @tr("Downloads"); color: Theme.current.text_bright; font-size: 28px; font-weight: 700; vertical-alignment: center; overflow: elide; }
         }
         ScrollView { vertical-stretch: 1; content-width: self.visible-width; mouse-drag-pan-enabled: true;

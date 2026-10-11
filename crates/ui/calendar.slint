@@ -3,6 +3,7 @@ import { ScrollView } from "scrollview.slint";
 import { SearchField } from "searchfield.slint";
 import { SideNav, NavMetrics } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
+import { SettingsBackButton } from "settings-controls.slint";
 import { CalendarDay, CalendarRelease } from "types.slint";
 
 component PlannerButton inherits Rectangle {
@@ -12,7 +13,7 @@ component PlannerButton inherits Rectangle {
     height: 44px;
     min-width: 44px;
     background: root.selected ? Theme.current.accent : Theme.current.control;
-    border-radius: 8px;
+    border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     border-width: scope.has-focus ? 2px : 1px;
     border-color: scope.has-focus ? Theme.current.text_bright : Theme.current.control_hover;
     accessible-role: button;
@@ -29,7 +30,7 @@ component PlannerDay inherits Rectangle {
     background: root.item.cell.selected ? Theme.current.accent : Theme.current.control;
     border-width: root.item.cell.today || scope.has-focus ? 2px : 1px;
     border-color: root.item.cell.today || scope.has-focus ? Theme.current.text_bright : Theme.current.control_hover;
-    border-radius: 5px;
+    border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     accessible-role: button;
     accessible-label: root.item.weekday + " " + root.item.cell.day;
     VerticalLayout {
@@ -50,7 +51,7 @@ component ReleaseCard inherits Rectangle {
     callback picked(string);
     height: 86px;
     background: Theme.current.control;
-    border-radius: 10px;
+    border-radius: Theme.card_corner_radius;
     border-width: scope.has-focus ? 2px : 1px;
     border-color: scope.has-focus ? Theme.current.accent : Theme.current.control_hover;
     accessible-role: button;
@@ -136,7 +137,7 @@ export component CalendarPage inherits Rectangle {
         // for all six calendar weeks at ordinary desktop window heights.
         HorizontalLayout {
             height: 54px; spacing: 12px;
-            PlannerButton { width: 44px; label: "‹"; accessible-label: @tr("Back"); picked => { root.back(); } }
+            SettingsBackButton { clicked => { root.back(); } }
             VerticalLayout { spacing: 2px;
                 Text { vertical-stretch: 0; min-width: 0; text: @tr("Calendar"); color: Theme.current.text_bright; font-size: 25px; font-weight: 700; }
                 Text { vertical-stretch: 0; min-width: 0; text: @tr("{n} episode release" | "{n} episode releases" % root.count); color: Theme.current.text_muted; font-size: 12px; }
@@ -187,6 +188,6 @@ export component CalendarPage inherits Rectangle {
         }
         if root.narrow: BottomNav { active: 3; safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right; page-inset-left: 14px + root.safe-left; page-inset-right: 14px + root.safe-right; kb_active <=> root.kb_active; home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } more_picked => { root.more_picked(); } }
     }
-    if !root.narrow: SideNav { active: 5; viewport-width: root.width; safe-top: root.safe-top; safe-left: root.safe-left; safe-bottom: root.safe-bottom; kb_active <=> root.kb_active; home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } settings_picked => { root.settings_picked(); } about_picked => { root.about_picked(); } }
+    if !root.narrow: SideNav { active: 4; viewport-width: root.width; safe-top: root.safe-top; safe-left: root.safe-left; safe-bottom: root.safe-bottom; kb_active <=> root.kb_active; home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } more_picked => { root.more_picked(); } }
     }
 }

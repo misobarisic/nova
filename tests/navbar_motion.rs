@@ -23,7 +23,7 @@ fn marker(app: &nova::AppWindow, wide: bool) -> ElementHandle {
             0
         } else if app.get_show_library() {
             2
-        } else if app.get_show_settings() {
+        } else if app.get_show_settings() || app.get_show_about() {
             3
         } else {
             1
@@ -55,8 +55,9 @@ fn icon(app: &nova::AppWindow, wide: bool, index: usize) -> ElementHandle {
             "icon_home",
             "icon_discover",
             "icon_library",
-            "icon_settings",
-            "icon_about",
+            "icon_more",
+            "icon_calendar",
+            "icon_download",
         ][index]
     } else {
         ["icon_home", "icon_discover", "icon_library", "icon_more"][index]
@@ -72,21 +73,19 @@ fn idle(app: &nova::AppWindow, wide: bool, ms: u64) {
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
         let m = marker(app, wide);
         let _ = (m.absolute_position(), m.size());
-        for index in 0..if wide { 5 } else { 4 } {
+        for index in 0..if wide { 6 } else { 4 } {
             let _ = icon(app, wide, index).size();
         }
     }
 }
 
 fn switch(app: &nova::AppWindow, next: i32) {
-    let from = if app.get_show_home() {
+    let from = if app.get_more_open() || app.get_show_settings() || app.get_show_about() {
+        3
+    } else if app.get_show_home() {
         0
     } else if app.get_show_library() {
         2
-    } else if app.get_show_settings() {
-        3
-    } else if app.get_show_about() {
-        4
     } else {
         1
     };
@@ -94,10 +93,23 @@ fn switch(app: &nova::AppWindow, next: i32) {
         app.global::<nova::NavState>().set_from(from);
     }
     app.set_more_open(false);
-    app.set_show_about(next == 4);
+    app.set_show_about(next == 5);
     app.set_show_home(next == 0);
     app.set_show_library(next == 2);
-    app.set_show_settings(next == 3);
+    app.set_show_settings(next == 4);
+    app.set_more_open(next == 3);
+    app.set_show_calendar(false);
+    app.set_show_downloads(false);
+}
+
+fn switch_calendar_or_download(app: &nova::AppWindow, calendar: bool) {
+    app.set_more_open(false);
+    app.set_show_home(false);
+    app.set_show_library(false);
+    app.set_show_settings(false);
+    app.set_show_about(false);
+    app.set_show_calendar(calendar);
+    app.set_show_downloads(!calendar);
 }
 
 fn click(app: &nova::AppWindow, wide: bool, index: usize) {
@@ -144,9 +156,15 @@ fn nav_icons_pop_while_highlights_snap() {
     let weak = app.as_weak();
     app.on_library_picked(move || switch(&weak.upgrade().unwrap(), 2));
     let weak = app.as_weak();
-    app.on_settings_picked(move || switch(&weak.upgrade().unwrap(), 3));
+    app.on_settings_picked(move || switch(&weak.upgrade().unwrap(), 4));
     let weak = app.as_weak();
-    app.on_about_picked(move || switch(&weak.upgrade().unwrap(), 4));
+    app.on_about_picked(move || switch(&weak.upgrade().unwrap(), 5));
+    let weak = app.as_weak();
+    app.global::<nova::NavState>()
+        .on_calendar_picked(move || switch_calendar_or_download(&weak.upgrade().unwrap(), true));
+    let weak = app.as_weak();
+    app.global::<nova::NavState>()
+        .on_downloads_picked(move || switch_calendar_or_download(&weak.upgrade().unwrap(), false));
 
     for wide in [true, false] {
         let anim = app.global::<nova::Anim>();
@@ -158,11 +176,11 @@ fn nav_icons_pop_while_highlights_snap() {
         idle(&app, wide, 400);
         let axis = |p: LogicalPosition| if wide { p.y } else { p.x };
         let home = axis(center(&marker(&app, wide)));
-        let target = if wide { 4 } else { 2 };
+        let target = if wide { 3 } else { 2 };
         click(&app, wide, target);
         // The page switch is immediate, even while feedback is in flight.
         assert!(if wide {
-            app.get_show_about()
+            app.get_more_open()
         } else {
             app.get_show_library()
         });
@@ -184,7 +202,7 @@ fn nav_icons_pop_while_highlights_snap() {
             size > 24.5 && size <= 26.0,
             "selected icon pops: wide={wide}, size={size}"
         );
-        for index in 0..if wide { 5 } else { 4 } {
+        for index in 0..if wide { 6 } else { 4 } {
             if index != target {
                 assert_eq!(icon(&app, wide, index).size().width, 24.0);
             }
@@ -250,6 +268,27 @@ fn nav_icons_pop_while_highlights_snap() {
         assert_eq!(icon(&app, wide, 0).size().width, 24.0);
     }
 
+    // The dedicated wide Calendar and Downloads icons use the same vector
+    // sizing and incoming-item feedback as the other rail destinations.
+    let anim = app.global::<nova::Anim>();
+    anim.set_enabled(true);
+    anim.set_nav_slide(true);
+    switch(&app, 0);
+    app.window().set_size(slint::PhysicalSize::new(1100, 800));
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(400));
+    click(&app, true, 4);
+    assert!(app.get_show_calendar());
+    idle(&app, true, 90);
+    assert!(icon(&app, true, 4).size().width > 24.5);
+    idle(&app, true, 300);
+    assert_eq!(icon(&app, true, 4).size().width, 24.0);
+    click(&app, true, 5);
+    assert!(app.get_show_downloads());
+    idle(&app, true, 90);
+    assert!(icon(&app, true, 5).size().width > 24.5);
+    idle(&app, true, 300);
+    assert_eq!(icon(&app, true, 5).size().width, 24.0);
+
     // Padded page hosts and Home's edge-to-edge host must produce the same
     // full-width bar. Cutouts protect the labels rather than inset the panel.
     app.global::<nova::Anim>().set_enabled(false);
@@ -294,7 +333,7 @@ fn nav_icons_pop_while_highlights_snap() {
         app.window().set_size(slint::PhysicalSize::new(width, 900));
         for scroll_page in [false, true] {
             app.set_discover_scroll_page(scroll_page);
-            for page in 0..5 {
+            for page in 0..6 {
                 switch(&app, page);
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
                 let labels =
@@ -310,7 +349,7 @@ fn nav_icons_pop_while_highlights_snap() {
                         ElementHandle::find_by_element_type_name(&app, "BottomNav")
                             .next()
                             .is_some(),
-                        page < 3,
+                        page < 4,
                         "Settings and About hide the phone bar throughout their pages"
                     );
                     continue;
@@ -332,9 +371,19 @@ fn nav_icons_pop_while_highlights_snap() {
                     highlight.absolute_position().x + highlight.size().width
                         <= panel.absolute_position().x + panel.size().width
                 );
-                assert!(
-                    (center(&highlight).y - center(&icon(&app, true, page as usize)).y).abs() < 0.5
-                );
+                let active_slot = if page == 0 {
+                    0
+                } else if page == 1 {
+                    1
+                } else if page == 2 {
+                    2
+                } else {
+                    3
+                };
+                let item = ElementHandle::find_by_element_type_name(&app, "SideItem")
+                    .nth(active_slot)
+                    .unwrap();
+                assert!((center(&highlight).y - center(&item).y).abs() < 0.5);
                 assert!(labels.is_empty());
             }
         }
@@ -342,7 +391,10 @@ fn nav_icons_pop_while_highlights_snap() {
             switch(&app, 0);
             i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
             click(&app, true, 3);
-            assert!(app.get_show_settings(), "the compact rail navigates too");
+            assert!(
+                app.get_more_open(),
+                "the compact rail opens the full More page"
+            );
         }
     }
 }

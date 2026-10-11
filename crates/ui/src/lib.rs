@@ -73,6 +73,7 @@ pub fn apply_theme(app: &AppWindow, true_black: bool) {
         palette.border_card = slint::Color::from_argb_u8(32, 255, 255, 255);
         palette.border_subtle = slint::Color::from_argb_u8(24, 255, 255, 255);
     }
+    theme.set_button_corner_radius(app.get_button_corner_radius().round().clamp(0.0, 24.0));
     theme.set_card_corner_radius(app.get_card_corner_radius().round().clamp(0.0, 24.0));
     theme.set_card_spacing(app.get_card_spacing().round().clamp(0.0, 32.0));
     theme.set_status_bar_gradient(app.get_status_bar_gradient().round().clamp(0.0, 100.0));

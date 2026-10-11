@@ -13,6 +13,59 @@ fn button(app: &nova::AppWindow, label: &str) -> ElementHandle {
         .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
         .unwrap()
 }
+fn assert_shared_back(app: &nova::AppWindow) {
+    let back = button(app, "Back");
+    let size = back.size();
+    assert!(
+        (size.width - 44.0).abs() < 0.1,
+        "Back target width: {}",
+        size.width
+    );
+    assert!(
+        (size.height - 44.0).abs() < 0.1,
+        "Back target height: {}",
+        size.height
+    );
+}
+fn assert_settings_header_spacing(
+    app: &nova::AppWindow,
+    title_label: &str,
+    subtitle_label: &str,
+    language: &str,
+) {
+    let in_header = |element: &ElementHandle| {
+        let position = element.absolute_position();
+        let size = element.size();
+        position.y >= 12.0 && position.y < 110.0 && size.width > 100.0 && size.height > 0.0
+    };
+    let title = ElementHandle::find_by_accessible_label(app, title_label)
+        .find(&in_header)
+        .unwrap_or_else(|| panic!("{language}: missing Settings overview title"));
+    let subtitle = ElementHandle::find_by_accessible_label(app, subtitle_label)
+        .find(&in_header)
+        .unwrap_or_else(|| panic!("{language}: missing Settings overview subtitle"));
+    let title_bottom = title.absolute_position().y + title.size().height;
+    let subtitle_position = subtitle.absolute_position();
+    let subtitle_size = subtitle.size();
+    assert!(
+        subtitle_position.y >= title_bottom + 7.0,
+        "{language}: Settings subtitle must clear title by 7px (title bottom {title_bottom:.1}, subtitle y {:.1})",
+        subtitle_position.y
+    );
+    assert!(
+        subtitle_position.x >= -0.5 && subtitle_position.x + subtitle_size.width <= 320.5,
+        "{language}: Settings subtitle must fit the 320px viewport ({:.1}..{:.1})",
+        subtitle_position.x,
+        subtitle_position.x + subtitle_size.width
+    );
+    let search = ElementHandle::find_by_element_id(app, "SettingsPage::settings_search")
+        .next()
+        .expect("Settings landing search field");
+    assert!(
+        subtitle_position.y + subtitle_size.height + 7.0 <= search.absolute_position().y,
+        "{language}: wrapped Settings subtitle must clear search by 7px"
+    );
+}
 fn tap(app: &nova::AppWindow, item: ElementHandle) {
     let p = item.absolute_position();
     let s = item.size();
@@ -44,7 +97,7 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
             let app = nova::AppWindow::new().unwrap();
             app.set_is_android(true);
             app.set_touch_menus(true);
-            app.window().set_size(slint::PhysicalSize::new(390, 800));
+            app.window().set_size(slint::PhysicalSize::new(320, 800));
             app.global::<nova::Anim>().set_enabled(enabled);
             app.global::<nova::Anim>().set_transitions(transitions);
             app.on_settings_search_matches(|_, _| true);
@@ -77,6 +130,7 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
             app.show().unwrap();
             app.set_more_open(true);
             let _ = page(&app, "MorePage").size();
+            assert_shared_back(&app);
             i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
             tap(&app, button(&app, label));
             let start = page(&app, component);
@@ -103,6 +157,24 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
             }
             let p = page(&app, component);
             assert!(p.absolute_position().x.abs() < 0.1 && p.computed_opacity() > 0.99);
+            assert_shared_back(&app);
+            if label == "Settings" {
+                let catalogs = slint::select_bundled_translation("en").is_ok();
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(400));
+                assert_settings_header_spacing(&app, "Settings", "Make Nova yours", "English");
+                if catalogs {
+                    let _ = slint::select_bundled_translation("hr");
+                    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(400));
+                    assert_settings_header_spacing(
+                        &app,
+                        "Postavke",
+                        "Prilagodi Novu sebi",
+                        "Croatian",
+                    );
+                    let _ = slint::select_bundled_translation("en");
+                    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(400));
+                }
+            }
             if enabled && transitions {
                 assert!(slide && fade);
             }

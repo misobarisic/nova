@@ -783,6 +783,7 @@ mod downloads_page;
 mod home;
 mod library;
 mod next_episode;
+mod onboarding;
 mod playback;
 mod playback_preferences;
 mod posters;

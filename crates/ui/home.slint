@@ -1404,7 +1404,7 @@ export component HomePage {
     callback about_picked();
     callback more_picked();
     in property <bool> more_open: false;
-    private property <int> nav_count: root.narrow ? 4 : 7;
+    private property <int> nav_count: root.narrow ? 4 : 6;
     changed narrow => { root.kb_nav = Math.min(root.kb_nav, root.nav_count - 1); }
     callback continue_picked(int);
     callback new_episode_picked(int);
@@ -1690,11 +1690,8 @@ export component HomePage {
                 root.discover_picked();
             } else if (root.kb_nav == 2) {
                 root.library_picked();
-            } else if (root.kb_nav == 3) {
-                if (root.narrow) { root.more_picked(); } else { root.settings_picked(); }
-            } else if root.kb_nav == 4 {
-                root.about_picked();
-            } else if root.kb_nav == 5 { NavState.calendar_picked(); }
+            } else if (root.kb_nav == 3) { root.more_picked(); }
+            else if root.kb_nav == 4 { NavState.calendar_picked(); }
             else { NavState.downloads_picked(); }
         } else if (root.kb_zone == 1) {
             if (root.kb_idx >= 0 && root.kb_idx < root.continue_rows.length) {
@@ -2862,8 +2859,7 @@ export component HomePage {
             home_picked => { root.home_picked(); }
             discover_picked => { root.discover_picked(); }
             library_picked => { root.library_picked(); }
-            settings_picked => { root.settings_picked(); }
-            about_picked => { root.about_picked(); }
+            more_picked => { root.more_picked(); }
         }
 
         // Card menu (single instance, page-level overlay): the dim

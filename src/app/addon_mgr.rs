@@ -52,7 +52,29 @@ impl Bridge {
     /// Validate + normalise the URL on the main thread, then fetch the
     /// manifest on a worker thread. New UI addons are installed enabled.
     pub(super) fn add_addon(&self, raw: &str) {
+        if let Some(app) = self.app().filter(|app| app.get_onboarding_visible()) {
+            let Ok(addon) = Addon::new(raw) else {
+                app.set_onboarding_error(text::tr("Enter a valid add-on URL.").into());
+                return;
+            };
+            app.set_onboarding_pending_url(addon.base_url().into());
+            app.set_onboarding_busy(true);
+            app.set_onboarding_error("".into());
+        }
         self.install_new(raw, true, None);
+    }
+
+    fn onboarding_install_result(&self, url: &str, error: Option<&str>) {
+        let Some(app) = self.app() else { return };
+        if app.get_onboarding_pending_url().as_str() != url {
+            return;
+        }
+        app.set_onboarding_busy(false);
+        app.set_onboarding_pending_url("".into());
+        app.set_onboarding_error(error.unwrap_or_default().into());
+        if error.is_none() {
+            app.set_onboarding_addon_ready(true);
+        }
     }
 
     pub(super) fn install_new(&self, raw: &str, enabled: bool, label: Option<String>) {
@@ -76,6 +98,7 @@ impl Bridge {
                 } else {
                     drop(state);
                 }
+                self.onboarding_install_result(&base, None);
                 return;
             }
         }
@@ -104,14 +127,20 @@ impl Bridge {
                         Ok(bytes) => match Addon::parse_manifest(&bytes) {
                             Ok(manifest) => {
                                 crate::web_log("nova: addon manifest OK — installing");
-                                bridge2.install_ok(base, manifest, enabled, None, label.clone());
+                                bridge2.install_ok(
+                                    base.clone(),
+                                    manifest,
+                                    enabled,
+                                    None,
+                                    label.clone(),
+                                );
                                 None
                             }
                             Err(e) => Some(text::invalid_manifest(&e.to_string())),
                         },
                         Err(e) => Some(text::addon_unreachable(&e.to_message())),
                     }));
-                let _msg = match outcome {
+                let msg = match outcome {
                     Ok(None) => return,
                     Ok(Some(msg)) => msg,
                     Err(payload) => {
@@ -125,6 +154,7 @@ impl Bridge {
                         text::install_failed(&detail)
                     }
                 };
+                bridge2.onboarding_install_result(&base, Some(&msg));
                 crate::web_log("nova: addon installation failed");
             });
         });
@@ -216,6 +246,7 @@ impl Bridge {
             // Stay on "All addons" so the new addon's catalogs are visible.
             state.chosen_addon = usize::MAX;
         }
+        self.onboarding_install_result(&url, None);
         write_cached_manifest_for(&url, &manifest);
         self.persist_installed();
         // Resolve any label collisions deterministically (identical across
@@ -865,6 +896,14 @@ impl Bridge {
                 .filter(|url| shared.addon_logo_requested.insert(url.clone()))
                 .collect::<Vec<_>>()
         };
+        app.set_cinemeta_installed(
+            self.shared
+                .lock()
+                .unwrap()
+                .installed
+                .iter()
+                .any(|addon| addon.url == DEFAULT_ADDON),
+        );
         let query = app.get_addon_search_text().trim().to_lowercase();
         let filter = app.get_addon_capability_filter();
         let rows = self

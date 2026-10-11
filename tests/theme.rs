@@ -9,6 +9,7 @@ slint::slint! {
     import { Anim } from "../crates/ui/anim.slint";
     export { Anim } from "../crates/ui/anim.slint";
     import { PillButton, SettingsCard } from "../crates/ui/settings-controls.slint";
+    import { Dropdown } from "../crates/ui/dropdown.slint";
     import { SearchField } from "../crates/ui/searchfield.slint";
     import { SideNav } from "../crates/ui/sidenav.slint";
 
@@ -16,6 +17,8 @@ slint::slint! {
         width: 480px;
         height: 360px;
         out property <length> card_radius: card.border-radius;
+        out property <length> button_radius: button.border-radius;
+        out property <length> dropdown_radius: dropdown.border-radius;
         out property <brush> card_fill: card.background;
         out property <brush> card_border: card.border-color;
         out property <brush> button_fill: button.background;
@@ -33,6 +36,7 @@ slint::slint! {
         button := PillButton { x: 100px; y: 30px; label: "Theme test"; primary: true; focused: true; }
         input := SearchField { x: 100px; y: 100px; width: 220px; }
         secondary := PillButton { x: 100px; y: 170px; label: "Secondary"; }
+        dropdown := Dropdown { x: 100px; y: 290px; width: 200px; model: ["One", "Two"]; current-index: 0; }
         nav := SideNav { viewport-width: root.width; }
     }
 }
@@ -46,6 +50,15 @@ fn existing_theme_defaults_and_live_palette_replacement_reach_shared_controls() 
     let theme = harness.global::<Theme>();
     let original = theme.get_current();
     assert_eq!(harness.get_card_radius(), 10.0);
+    assert_eq!(harness.get_button_radius(), 8.0);
+    assert_eq!(harness.get_dropdown_radius(), 8.0);
+    theme.set_button_corner_radius(0.0);
+    assert_eq!(harness.get_button_radius(), 0.0);
+    assert_eq!(harness.get_dropdown_radius(), 0.0);
+    theme.set_button_corner_radius(24.0);
+    assert_eq!(harness.get_button_radius(), 22.0);
+    assert_eq!(harness.get_dropdown_radius(), 16.0);
+    theme.set_button_corner_radius(8.0);
     for radius in [0.0, 24.0, 10.0] {
         theme.set_card_corner_radius(radius);
         assert_eq!(harness.get_card_radius(), radius);

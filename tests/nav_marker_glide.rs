@@ -46,16 +46,6 @@ const RAIL: fn(f32, f32) -> bool = |cx, cy| cx < 70.0 && cy < 408.0;
 
 fn rail_icons(app: &nova::AppWindow) -> Vec<(f32, f32)> {
     let mut icons = centres(app, 24.0, 24.0, RAIL);
-    // The new destinations use glyphs rather than 24px icon components.
-    // Their accessible item slots share the same centered marker geometry.
-    for label in ["Calendar", "Downloads"] {
-        let item = ElementHandle::find_by_accessible_label(app, label)
-            .next()
-            .expect(label);
-        let p = item.absolute_position();
-        let s = item.size();
-        icons.push((p.x + s.width / 2.0, p.y + s.height / 2.0));
-    }
     icons.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
     icons
 }
@@ -97,7 +87,7 @@ fn check_marker(
     vertical: bool,
     failures: &Rc<RefCell<Vec<String>>>,
 ) {
-    let expected = if vertical { 7 } else { 4 };
+    let expected = if vertical { 6 } else { 4 };
     if icons.len() != expected {
         failures.borrow_mut().push(format!(
             "{label}: expected {expected} nav icons, found {}",

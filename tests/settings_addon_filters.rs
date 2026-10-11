@@ -4,7 +4,7 @@
 mod destinations;
 #[path = "support/settings.rs"]
 mod settings;
-use i_slint_backend_testing::ElementHandle;
+use i_slint_backend_testing::{ElementHandle, ElementQuery};
 use slint::{ComponentHandle, Model, SharedString, VecModel};
 use std::{
     cell::{Cell, RefCell},
@@ -133,11 +133,55 @@ fn installed_addon_filters_and_actions_survive_layout_changes() {
         settings::click(&app, &metadata).await;
         settle().await;
         assert_eq!(app.get_addon_capability_filter(), 2);
-        app.set_settings_scroll_y(-500.0);
-        settle().await;
-        let remove = ElementHandle::find_by_accessible_label(&app, "Remove")
-            .find(|e| e.size().width > 0.0)
-            .expect("filtered remove action");
+        // Resolve the newly wrapped suggestion and row layout before changing
+        // the viewport; the headless backend has no renderer to do this for us.
+        for element in ElementQuery::from_root(&app)
+            .match_predicate(|_| true)
+            .find_all()
+        {
+            let _ = (element.size(), element.absolute_position());
+        }
+        app.set_settings_scroll_y(0.0);
+        let viewport = ElementHandle::find_by_element_id(&app, "SettingsPage::set_scroll")
+            .next()
+            .expect("the Addons detail scroll viewport");
+        let mut visible_remove = None;
+        for _ in 0..20 {
+            settle().await;
+            let remove = ElementHandle::find_by_accessible_label(&app, "Remove").find(|e| {
+                e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)
+            });
+            if let Some(remove) = remove {
+                let top = remove.absolute_position().y;
+                let viewport_top = viewport.absolute_position().y;
+                let viewport_bottom = viewport_top + viewport.size().height;
+                if top >= viewport_top && top + remove.size().height <= viewport_bottom {
+                    visible_remove = Some(remove);
+                    break;
+                }
+                app.set_settings_scroll_y(
+                    app.get_settings_scroll_y() + (viewport_top + viewport_bottom) / 2.0
+                        - top
+                        - remove.size().height / 2.0,
+                );
+            } else {
+                app.window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                        position: slint::LogicalPosition::new(180.0, 400.0),
+                        delta_x: 0.0,
+                        delta_y: -80.0,
+                    });
+            }
+        }
+        let remove = visible_remove.expect("filtered remove action must be reachable by scrolling");
+        let remove_position = remove.absolute_position();
+        let viewport_position = viewport.absolute_position();
+        assert!(remove_position.y >= viewport_position.y - 0.5);
+        assert!(
+            remove_position.y + remove.size().height
+                <= viewport_position.y + viewport.size().height + 0.5,
+            "the whole Remove target must be reachable after the Cinemeta description wraps"
+        );
         settings::click(&app, &remove).await;
         settle().await;
         assert_eq!(&*removed.borrow(), &["https://metadata.example"]);

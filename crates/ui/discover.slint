@@ -835,7 +835,7 @@ export component DiscoverPage {
     callback about_picked();
     callback more_picked();
     in property <bool> more_open: false;
-    private property <int> nav_count: root.narrow ? 4 : 7;
+    private property <int> nav_count: root.narrow ? 4 : 6;
     changed narrow => { root.kb_nav = Math.min(root.kb_nav, root.nav_count - 1); }
     callback load_more();
     // Preload fetch window (visible ±2 rows) for poster loading/unloading
@@ -867,7 +867,7 @@ export component DiscoverPage {
     in property <bool> touch_menus: false;
 
     // ---- 6-button keyboard nav (arrows + Enter + Backspace) ----
-    // Zones: 0 page-nav (Home, Discover, Library, then More or Settings/About),
+    // Zones: 0 page-nav (Home, Discover, Library, More, Calendar, Downloads),
     // 1 addon combo, 2 type/catalog/search row, 3 grid.
     // Left/Right moves within a row (combos cycle options in place);
     // Up/Down moves between zones; Enter activates; Backspace returns to
@@ -1118,11 +1118,8 @@ export component DiscoverPage {
                 root.discover_picked();
             } else if (root.kb_nav == 2) {
                 root.library_picked();
-            } else if (root.kb_nav == 3) {
-                if (root.narrow) { root.more_picked(); } else { root.settings_picked(); }
-            } else if root.kb_nav == 4 {
-                root.about_picked();
-            } else if root.kb_nav == 5 { NavState.calendar_picked(); }
+            } else if (root.kb_nav == 3) { root.more_picked(); }
+            else if root.kb_nav == 4 { NavState.calendar_picked(); }
             else { NavState.downloads_picked(); }
         } else if (root.kb_zone == 1) {
             root.kb_cycle_addon(1);
@@ -1785,8 +1782,7 @@ export component DiscoverPage {
         home_picked => { root.home_picked(); }
         discover_picked => { root.discover_picked(); }
         library_picked => { root.library_picked(); }
-        settings_picked => { root.settings_picked(); }
-        about_picked => { root.about_picked(); }
+        more_picked => { root.more_picked(); }
     }
 
     // Fade-through gives the switch between browse and results a brief,

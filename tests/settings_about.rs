@@ -208,7 +208,7 @@ fn about_opens_nested_licenses_and_centers_source_buttons() {
     assert!(app.get_about_licenses_open());
     assert_eq!(
         ElementHandle::find_by_element_type_name(&app, "SideItem").count(),
-        7
+        6
     );
     check_alignment(&app, "wide layout", &failures);
     back(&app);

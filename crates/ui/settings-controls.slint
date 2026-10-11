@@ -32,7 +32,7 @@ export component PillButton inherits Rectangle {
     accessible-enabled: root.enabled;
     width: Math.max(pill_lbl.preferred-width + (root.compact ? 20px : 28px), self.btn_min_width);
     height: 44px;
-    border-radius: 8px;
+    border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     property <bool> outlined: Theme.true_black && !root.primary;
     property <bool> keyboard_focused: (root.focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled;
     border-width: root.keyboard_focused ? 2px : (root.outlined ? 1px : 0px);
@@ -167,7 +167,7 @@ export component AddonIconButton inherits Rectangle {
     callback clicked();
     width: 44px;
     height: 44px;
-    border-radius: 16px;
+    border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;
     border-color: Theme.current.focus_ring;
     background: root.destructive ? (touch.has-hover ? Theme.current.destructive_control_hover : Theme.current.destructive_control) : (touch.has-hover ? Theme.current.settings_control_hover : Theme.current.settings_control);
@@ -405,7 +405,7 @@ export component Segmented inherits HorizontalLayout {
         accessible-enabled: root.enabled;
         width: seg_lbl.preferred-width + 28px;
         height: 44px;
-        border-radius: 8px;
+        border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
         border-width: self.focus_visible ? 2px : (Theme.true_black ? 1px : 0px);
         border-color: self.focus_visible ? Theme.current.focus_ring : Theme.current.control_border;
         background: root.current_index == i ? Theme.current.selection_fill : transparent;
@@ -905,7 +905,7 @@ export global SettingsDestinations {
     out property <[SettingsDestination]> entries: [
     { id: 13, stable-id: "settings:home", group: 0, title: @tr("Home"), description: @tr("Featured titles and catalog rows"), terms: @tr("HOME CATALOGS") + " " + @tr("Built-in") + " " + @tr("Move up") + " " + @tr("Move down") + " " + @tr("Continue watching Upcoming Home sections featured catalogs catalog rows poster rows Add catalog Remove") + " " + @tr("HOME ROWS") + " " + @tr("Continue Watching") + " " + @tr("Upcoming") + " " + @tr("Episode artwork on Home") + " " + @tr("Episode artwork") + " " + @tr("FEATURED SHOWCASE") + " " + @tr("CATALOG ROWS") + " " + @tr("Add catalog row") + " " + @tr("Remove") + " " + @tr("Add catalog"), aliases: "Home catalogs Built-in visibility reorder move up move down Home Featured titles and catalog rows Continue watching Upcoming episode artwork episode thumbnails show posters catalog rows poster rows below Upcoming Add catalog row Remove HOME ROWS Continue Watching Upcoming Episode artwork on Home Episode artwork FEATURED SHOWCASE CATALOG ROWS Add catalog row Add catalog", parent: -1 },
     { id: 3, stable-id: "settings:display", group: 0, title: @tr("Display"), description: @tr("Dates, metadata, grid layout and language"), terms: @tr("Language artwork metadata relative dates Discover Library grid columns catalog addon names unwatched thumbnails prefetch") + " " + @tr("Language") + " " + @tr("Artwork and metadata") + " " + @tr("Relative episode dates") + " " + @tr("Prefetch episode metadata") + " " + @tr("Show unwatched thumbnails") + " " + @tr("Discover layout") + " " + @tr("Discover grid columns") + " " + @tr("Show addon names in catalogs") + " " + @tr("Library layout") + " " + @tr("Library grid columns") + " " + @tr("Language") + " " + @tr("Artwork and metadata") + " " + @tr("Relative episode dates") + " " + @tr("Prefetch episode metadata") + " " + @tr("Show unwatched thumbnails") + " " + @tr("Discover layout") + " " + @tr("Discover grid columns") + " " + @tr("Show addon names in catalogs") + " " + @tr("Library layout") + " " + @tr("Library grid columns") + " 2 3 4 5 6 English Hrvatski", aliases: "Display Dates, metadata, grid layout and language Language artwork metadata relative dates Discover Library grid columns catalog addon names unwatched thumbnails prefetch Language Artwork and metadata Relative episode dates Prefetch episode metadata Show unwatched thumbnails Discover layout Discover grid columns Show addon names in catalogs Library layout Library grid columns", parent: -1 },
-    { id: 14, stable-id: "settings:theme", group: 0, title: @tr("Theme"), description: @tr("Background colours and artwork fades"), terms: @tr("True black") + " " + @tr("Use pure black backgrounds and artwork fades.") + " " + @tr("Card corner radius") + " " + @tr("Choose how rounded cards look. Soft is the default.") + " " + @tr("Square") + " " + @tr("Subtle") + " " + @tr("Soft") + " " + @tr("Rounded") + " " + @tr("Extra rounded") + " " + @tr("Card spacing") + " " + @tr("Choose how much space sits between cards. Compact is the default.") + " " + @tr("None") + " " + @tr("Tight") + " " + @tr("Compact") + " " + @tr("Comfortable") + " " + @tr("Spacious") + " " + @tr("Status bar gradient") + " " + @tr("Darken the top of Home and Detail on narrow screens. Set to 0 to turn off.") + " " + @tr("Home backdrop size") + " " + @tr("Detail backdrop size") + " " + @tr("Small") + " " + @tr("Medium") + " " + @tr("Large") + " " + @tr("Choose how tall the featured artwork is. Sizes adapt to screen width.") + " " + @tr("Choose how tall the Detail artwork is. Sizes adapt to screen width.") + " " + @tr("Title alignment") + " " + @tr("Align titles on narrow Home and Detail screens, plus Home featured metadata.") + " " + @tr("Left") + " " + @tr("Center") + " " + @tr("Right") + " " + @tr("Restore theme defaults"), aliases: "Theme True black AMOLED OLED backgrounds colours colors artwork fades card corner radius rounding rounded square none presets buttons spacing margins gap rows grids season episode status bar gradient top darken opacity strength fade home detail backdrop size height small medium large title logo fallback metadata alignment left center right reset restore defaults", parent: -1 },
+    { id: 14, stable-id: "settings:theme", group: 0, title: @tr("Theme"), description: @tr("Background colours and artwork fades"), terms: @tr("True black") + " " + @tr("Use pure black backgrounds and artwork fades.") + " " + @tr("Card corner radius") + " " + @tr("Choose how rounded cards look. Soft is the default.") + " " + @tr("Button corner radius") + " " + @tr("Choose how rounded buttons look. Soft is the default.") + " " + @tr("Square") + " " + @tr("Subtle") + " " + @tr("Soft") + " " + @tr("Rounded") + " " + @tr("Extra rounded") + " " + @tr("Card spacing") + " " + @tr("Choose how much space sits between cards. Compact is the default.") + " " + @tr("None") + " " + @tr("Tight") + " " + @tr("Compact") + " " + @tr("Comfortable") + " " + @tr("Spacious") + " " + @tr("Status bar gradient") + " " + @tr("Darken the top of Home and Detail on narrow screens. Set to 0 to turn off.") + " " + @tr("Home backdrop size") + " " + @tr("Detail backdrop size") + " " + @tr("Small") + " " + @tr("Medium") + " " + @tr("Large") + " " + @tr("Choose how tall the featured artwork is. Sizes adapt to screen width.") + " " + @tr("Choose how tall the Detail artwork is. Sizes adapt to screen width.") + " " + @tr("Title alignment") + " " + @tr("Align titles on narrow Home and Detail screens, plus Home featured metadata.") + " " + @tr("Left") + " " + @tr("Center") + " " + @tr("Right") + " " + @tr("Restore theme defaults"), aliases: "Theme True black AMOLED OLED backgrounds colours colors artwork fades card corner radius button corner radius button rounding rounded square none presets buttons spacing margins gap rows grids season episode status bar gradient top darken opacity strength fade home detail backdrop size height small medium large title logo fallback metadata alignment left center right reset restore defaults", parent: -1 },
     { id: 6, stable-id: "settings:look-and-feel", group: 0, title: @tr("Look and feel"), description: @tr("Motion, transitions and hover effects"), terms: @tr("Enable animations Page transitions Hover effects Player OSD Navigation feedback") + " " + @tr("Animations") + " " + @tr("Enable animations") + " " + @tr("Motion options") + " " + @tr("Page transitions") + " " + @tr("Hover effects") + " " + @tr("Player OSD") + " " + @tr("Navigation feedback"), aliases: "Look and feel Motion, transitions and hover effects Enable animations Page transitions Hover effects Player OSD Navigation feedback", parent: -1 },
     { id: 5, stable-id: "settings:player", group: 0, title: @tr("Player"), description: @tr("Built-in or external player"), terms: @tr("Player choice Episode playback decoder hardware mpv external app Playback speed presets") + " " + @tr("Player") + " " + @tr("Episode playback") + " " + @tr("External app") + " " + @tr("Video decoder") + " " + @tr("Playback speed") + " " + @tr("Player choice") + " " + @tr("Player") + " " + @tr("Episode playback") + " " + @tr("Playback controls") + " " + @tr("External app") + " " + @tr("Video decoder") + " " + @tr("Playback speed") + " " + @tr("Built-in") + " " + @tr("External") + " " + @tr("Start over") + " " + @tr("Resume") + " " + @tr("Ask") + " " + @tr("System default") + " " + @tr("Default audio language") + " " + @tr("Default subtitle language") + " " + @tr("Default playback speed") + " Built-in External Start over Resume Ask System default VLC mpv HW+ HW SW 1× 1.25× 1.5× 2× 1x 1.25x 1.5x 2x", aliases: "Player Built-in or external player Player choice Episode playback decoder hardware mpv external app Playback speed presets Player Episode playback External app Video decoder Playback speed Default audio language Default subtitle language Default playback speed", parent: -1 },
     { id: 0, stable-id: "settings:addons", group: 1, title: @tr("Addons"), description: @tr("Installed addons and catalog sources"), terms: @tr("Install addon URL sources Enable Configure Copy link Refresh Remove Move up Move down") + " " + @tr("Add") + " " + @tr("Copy link") + " " + @tr("Installation") + " " + @tr("Addon install URL — e.g. https://v3-cinemeta.strem.io") + " " + @tr("Add") + " " + @tr("Installed sources") + " " + @tr("Copy link"), aliases: "Addons Installed addons and catalog sources Install addon URL sources Enable Configure Copy link Refresh Remove Move up Move down Add Copy link", parent: -1 },
@@ -919,11 +919,47 @@ export global SettingsDestinations {
     ];
 }
 
+// The same 44px chevron target is used on pages opened from Settings and More.
+export component SettingsBackButton inherits Rectangle {
+    in property <bool> focused: false;
+    callback clicked();
+    width: 44px;
+    height: 44px;
+    border-radius: 22px;
+    background: back_touch.has-hover ? Theme.current.settings_control_hover : Theme.current.settings_control;
+    border-width: root.focused || (back_focus.has-focus && SettingsStyle.keyboard-mode) ? 2px : 0px;
+    border-color: Theme.current.focus_ring;
+    accessible-role: button;
+    accessible-label: @tr("Back");
+    forward-focus: back_focus;
+    IcChevronLeft { width: 20px; height: 20px; x: 12px; y: 12px; fill: Theme.current.text_settings; }
+    back_focus := FocusScope {
+        key-pressed(e) => {
+            SettingsStyle.keyboard-mode = true;
+            if e.text == Key.Return || e.text == " " { root.clicked(); accept } else { reject }
+        }
+    }
+    back_touch := TouchArea {
+        width: 100%; height: 100%; mouse-cursor: pointer;
+        clicked => { SettingsStyle.keyboard-mode = false; back_focus.focus(); root.clicked(); }
+    }
+    property <bool> focus_visible: SettingsStyle.keyboard-mode && (root.focused || back_focus.has-focus);
+    changed focus_visible => {
+        if (self.focus_visible) {
+            SettingsStyle.focus-y = root.absolute-position.y;
+            SettingsStyle.focus-height = root.height;
+            SettingsStyle.navigation-focus = false;
+            SettingsStyle.focus-request += 1;
+        }
+    }
+}
+
 // Header captions and controls; SettingsPage owns the edge-to-edge artwork.
 export component SettingsHeader inherits Rectangle {
     in property <string> title;
     in property <string> introduction;
     in property <bool> overview: false;
+    in property <bool> show-back: !root.overview;
     in property <bool> back_focused: false;
     callback back();
     vertical-stretch: 0;
@@ -931,29 +967,14 @@ export component SettingsHeader inherits Rectangle {
     clip: true;
     Rectangle {
         height: 0px; clip: true;
-        heading_measure := Text { width: Math.max(0px, root.width - (root.overview ? 32px : 88px)); text: root.title; font-size: root.overview ? 32px : 24px; font-weight: 700; wrap: word-wrap; }
+        heading_measure := Text { width: Math.max(0px, root.width - (root.show-back ? 88px : 32px)); text: root.title; font-size: root.overview ? 32px : 24px; font-weight: 700; wrap: word-wrap; }
         intro_measure := Text { width: Math.max(0px, root.width - 32px); text: root.introduction; font-size: 14px; wrap: word-wrap; }
     }
     VerticalLayout {
         padding: 16px; spacing: 8px;
         HorizontalLayout {
             spacing: 12px;
-            if !root.overview: Rectangle {
-                width: 44px; height: 44px; border-radius: 22px;
-                background: back_touch.has-hover ? Theme.current.settings_control_hover : Theme.current.settings_control;
-                border-width: root.back_focused || (back_focus.has-focus && SettingsStyle.keyboard-mode) ? 2px : 0px;
-                border-color: Theme.current.focus_ring;
-                accessible-role: button; accessible-label: @tr("Back");
-                forward-focus: back_focus;
-                IcChevronLeft { width: 20px; height: 20px; x: 12px; y: 12px; fill: Theme.current.text_settings; }
-                back_focus := FocusScope {
-                    key-pressed(e) => {
-                        SettingsStyle.keyboard-mode = true;
-                        if e.text == Key.Return || e.text == " " { root.back(); accept } else { reject }
-                    }
-                }
-                back_touch := TouchArea { width: 100%; height: 100%; mouse-cursor: pointer; clicked => { SettingsStyle.keyboard-mode = false; root.back(); } }
-            }
+            if root.show-back: SettingsBackButton { focused: root.back_focused; clicked => { root.back(); } }
             Text { text: root.title; font-size: root.overview ? 32px : 24px; font-weight: 700; color: Theme.current.text_bright; wrap: word-wrap; min-width: 0px; vertical-alignment: center; }
         }
         Text { text: root.introduction; font-size: 14px; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }

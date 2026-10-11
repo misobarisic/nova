@@ -1,0 +1,70 @@
+import { SearchField } from "searchfield.slint";
+import { Dropdown } from "dropdown.slint";
+
+// Search plus a compact result picker for one built-in playback language.
+// The selected label remains visible when the backend's result list is
+// filtered and therefore no longer contains the current code.
+export component PlaybackLanguagePicker inherits Rectangle {
+    // Caller-controlled size avoids feeding row intrinsic width back into itself.
+    in property <length> dropdown-width: 180px;
+    in property <bool> subtitle: false;
+    in property <bool> edit-requested: false;
+    in property <bool> keyboard-mode: false;
+    in property <string> current-label: "";
+    in property <[string]> codes: [];
+    in property <[string]> names: [];
+    in-out property <int> current-index: -1;
+
+    callback search(string, bool);
+    callback picked(string, bool);
+    callback accepted();
+    callback focus_changed(bool);
+
+    property <string> query: "";
+
+    preferred-width: 360px;
+    preferred-height: 44px;
+    min-width: 1px;
+    height: 44px;
+
+    HorizontalLayout {
+        width: 100%;
+        height: 44px;
+        spacing: 8px;
+
+        search_field := SearchField {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            roomy: true;
+            search-icon: true;
+            show-pointer-focus: false;
+            keyboard-mode: root.keyboard-mode;
+            text <=> root.query;
+            placeholder-text: @tr("Search languages");
+            focus_changed(focused) => { root.focus_changed(focused); }
+            edited(text) => {
+                root.current-index = -1;
+                root.search(text, root.subtitle);
+            }
+            accepted(text) => { root.accepted(); }
+        }
+
+        Dropdown {
+            width: root.dropdown-width;
+            roomy: true;
+            model: root.codes;
+            labels: root.names;
+            current-index <=> root.current-index;
+            placeholder-text: root.current-label;
+            selected(code) => { root.picked(code, root.subtitle); }
+        }
+    }
+
+    edit_timer := Timer {
+        interval: 80ms;
+        running: root.edit-requested;
+        triggered => { search_field.focus(); }
+    }
+
+}
+

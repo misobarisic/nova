@@ -38,7 +38,7 @@ component SpeedStepButton inherits Rectangle {
 
     width: root.roomy ? 44px : 32px;
     height: root.roomy ? 44px : 32px;
-    border-radius: 8px;
+    border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     background: step_touch.has-hover ? Theme.current.control_hover : Theme.current.control;
     border-width: focus.has-focus && root.keyboard-mode ? 2px : 1px;
     border-color: focus.has-focus && root.keyboard-mode ? Theme.current.focus_ring : Theme.current.step_border;
@@ -81,7 +81,7 @@ component SpeedPreset inherits Rectangle {
 
     horizontal-stretch: 1;
     height: root.roomy ? 44px : 28px;
-    border-radius: 8px;
+    border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     background: root.selected ? Theme.current.selection_fill : (preset_touch.has-hover ? Theme.current.control_hover : Theme.current.control);
     border-width: focus.has-focus && root.keyboard-mode ? 2px : 1px;
     border-color: root.selected ? Theme.current.accent : Theme.current.step_border;

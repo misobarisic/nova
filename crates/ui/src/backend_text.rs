@@ -63,6 +63,10 @@ pub fn tr(english: &'static str) -> &'static str {
         return english;
     }
     match english {
+        "Enter a valid add-on URL." => "Unesite valjan URL dodatka.",
+        "Could not save your preferences. Please try again." => {
+            "Postavke nije moguće spremiti. Pokušajte ponovno."
+        }
         "On" => "Uključeno",
         "Off" => "Isključeno",
         "Automatic" => "Automatski",
@@ -1185,6 +1189,14 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
             Some(4) => tr("Subtle").into(),
             Some(10) => tr("Soft").into(),
             Some(16) => tr("Rounded").into(),
+            Some(24) => tr("Extra rounded").into(),
+            _ => format!("{number} px"),
+        },
+        "button_corner_radius" => match value.as_u64() {
+            Some(0) => tr("Square").into(),
+            Some(4) => tr("Subtle").into(),
+            Some(8) => tr("Soft").into(),
+            Some(12) => tr("Rounded").into(),
             Some(24) => tr("Extra rounded").into(),
             _ => format!("{number} px"),
         },

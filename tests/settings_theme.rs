@@ -95,8 +95,8 @@ fn theme_search_toggle_resize_and_android_back() {
     settle(&app);
     assert!((initial_mask_y - mask.absolute_position().y - 108.0).abs() < 1.0);
     assert!((mask.size().height - 124.0).abs() < 1.0);
-    // Both preset controls are keyboard-reachable and feed the mounted
-    // theme immediately. Zero must produce genuinely square cards/no gaps.
+    // Theme presets are keyboard-reachable and feed the mounted theme
+    // immediately. Zero must produce square corners and no card gaps.
     key(&app, slint::platform::Key::DownArrow.into());
     for _ in 0..10 {
         key(&app, slint::platform::Key::LeftArrow.into());
@@ -104,12 +104,19 @@ fn theme_search_toggle_resize_and_android_back() {
     assert_eq!(app.get_card_corner_radius(), 0.0);
     assert_eq!(app.global::<nova::Theme>().get_card_corner_radius(), 0.0);
     key(&app, slint::platform::Key::DownArrow.into());
+    for _ in 0..10 {
+        key(&app, slint::platform::Key::LeftArrow.into());
+    }
+    assert_eq!(app.get_button_corner_radius(), 0.0);
+    assert_eq!(app.global::<nova::Theme>().get_button_corner_radius(), 0.0);
+    key(&app, slint::platform::Key::DownArrow.into());
     for _ in 0..8 {
         key(&app, slint::platform::Key::LeftArrow.into());
     }
     assert_eq!(app.get_card_spacing(), 0.0);
     assert_eq!(app.global::<nova::Theme>().get_card_spacing(), 0.0);
     assert!(edits.borrow().iter().any(|f| f == "card_corner_radius"));
+    assert!(edits.borrow().iter().any(|f| f == "button_corner_radius"));
     assert!(edits.borrow().iter().any(|f| f == "card_spacing"));
 
     // Reset covers the full Theme section and remains contained at phone
@@ -145,17 +152,20 @@ fn theme_search_toggle_resize_and_android_back() {
     assert!(!app.get_true_black());
     assert!(!app.global::<nova::Theme>().get_true_black());
     assert_eq!(app.get_card_corner_radius(), 10.0);
+    assert_eq!(app.get_button_corner_radius(), 8.0);
     assert_eq!(app.get_card_spacing(), 8.0);
     assert_eq!(app.get_hero_title_alignment(), 1);
     assert_eq!(app.global::<nova::Theme>().get_card_corner_radius(), 10.0);
+    assert_eq!(app.global::<nova::Theme>().get_button_corner_radius(), 8.0);
     assert_eq!(app.global::<nova::Theme>().get_card_spacing(), 8.0);
     assert_eq!(app.global::<nova::Theme>().get_hero_title_alignment(), 1);
     assert!(!app.get_animations());
     assert_eq!(
-        &edits.borrow()[edits.borrow().len() - 7..],
+        &edits.borrow()[edits.borrow().len() - 8..],
         [
             "true_black",
             "card_corner_radius",
+            "button_corner_radius",
             "card_spacing",
             "status_bar_gradient",
             "home_backdrop_size",

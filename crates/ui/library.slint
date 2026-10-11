@@ -21,7 +21,7 @@ export component LibraryFilterChip inherits Rectangle {
     changed width => { if (root.selected) { root.reveal(root.x, root.width); } }
     height: 40px;
     width: chip_text.preferred-width + 28px;
-    border-radius: 20px;
+    border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     border-width: 1px;
     border-color: root.selected ? Theme.current.accent : Theme.current.border_strong;
     // Android keeps the touch pointer over the last tapped item after Up.
@@ -111,7 +111,7 @@ export component LibraryPage {
     callback about_picked();
     callback more_picked();
     in property <bool> more_open: false;
-    private property <int> nav_count: root.narrow ? 4 : 7;
+    private property <int> nav_count: root.narrow ? 4 : 6;
     changed narrow => { root.kb_nav = Math.min(root.kb_nav, root.nav_count - 1); }
     callback library_filter_picked(string);
     callback library_item_picked(int);
@@ -187,7 +187,7 @@ export component LibraryPage {
     in property <bool> touch_menus: false;
 
     // ---- 6-button keyboard nav (arrows + Enter + Backspace) ----
-    // Zones: 0 page-nav (0 Home, 1 Discover, 2 Library, 3 Settings),
+    // Zones: 0 page-nav (Home, Discover, Library, More, Calendar, Downloads),
     // 1 category filter, 2 grid. Backspace returns to Home. The filter
     // cycles All + categories (kb_f = -1 is All);
     // kb_f follows category_index so pointer and keyboard picks stay in sync.
@@ -291,11 +291,8 @@ export component LibraryPage {
                 root.discover_picked();
             } else if (root.kb_nav == 2) {
                 root.library_picked();
-            } else if (root.kb_nav == 3) {
-                if (root.narrow) { root.more_picked(); } else { root.settings_picked(); }
-            } else if root.kb_nav == 4 {
-                root.about_picked();
-            } else if root.kb_nav == 5 { NavState.calendar_picked(); }
+            } else if (root.kb_nav == 3) { root.more_picked(); }
+            else if root.kb_nav == 4 { NavState.calendar_picked(); }
             else { NavState.downloads_picked(); }
         } else if (root.kb_zone == 1) {
             root.kb_cycle_filter(1);
@@ -308,9 +305,19 @@ export component LibraryPage {
 
     property <length> card-height: root.list_view ? 140px : root.item-width * 3 / 2 + 76px;
     property <length> row_stride: root.card-height + root.item-gap;
+    property <bool> restoring_viewport: true;
+    property <bool> keyboard_scroll_pending: false;
+    function prepare_keyboard_scroll() {
+        if root.restoring_viewport {
+            if root.grid_ready { root.restoring_viewport = false; }
+            else { root.keyboard_scroll_pending = true; }
+        }
+    }
     changed list_view => {
-        lib_scroll.content-y = 0px;
-        root.kb_follow();
+        if !root.restoring_viewport {
+            lib_scroll.content-y = 0px;
+            root.kb_follow();
+        }
     }
     changed scroll_y => {
         if (Math.abs(lib_scroll.content-y - root.scroll_y) > 0.5px) {
@@ -329,7 +336,10 @@ export component LibraryPage {
     // (content-height 0) — the one-shot restore timer in the grid
     // container retries.
     function kb_follow() {
-        if (root.kb_zone != 2 || root.library.length == 0) {
+        // Pointer activation updates the return target too. Only keyboard
+        // navigation should move the viewport, and initial lifted properties
+        // must preserve its saved offset while the page is being recreated.
+        if (!root.kb_active || root.restoring_viewport || root.kb_zone != 2 || root.library.length == 0) {
             return;
         }
         if (!root.grid_ready) {
@@ -403,18 +413,22 @@ export component LibraryPage {
                     accept
                 } else if (e.text == Key.UpArrow) {
                     root.kb_active = true;
+                    root.prepare_keyboard_scroll();
                     root.kb_up();
                     accept
                 } else if (e.text == Key.DownArrow) {
                     root.kb_active = true;
+                    root.prepare_keyboard_scroll();
                     root.kb_down();
                     accept
                 } else if (e.text == Key.LeftArrow) {
                     root.kb_active = true;
+                    root.prepare_keyboard_scroll();
                     root.kb_left();
                     accept
                 } else if (e.text == Key.RightArrow) {
                     root.kb_active = true;
+                    root.prepare_keyboard_scroll();
                     root.kb_right();
                     accept
                 } else if (e.text == Key.Return) {
@@ -459,11 +473,17 @@ export component LibraryPage {
                                 return; // layout not there yet: keep trying
                             }
                             self.running = false;
+                            root.restoring_viewport = false;
                             return;
                         }
                         self.running = false;
                         root.kb_clamp_idx();
                         root.kb_clamp_view();
+                        root.restoring_viewport = false;
+                        if root.keyboard_scroll_pending {
+                            root.keyboard_scroll_pending = false;
+                            root.kb_follow();
+                        }
                     }
                 }
 
@@ -1051,8 +1071,7 @@ export component LibraryPage {
             home_picked => { root.home_picked(); }
             discover_picked => { root.discover_picked(); }
             library_picked => { root.library_picked(); }
-            settings_picked => { root.settings_picked(); }
-            about_picked => { root.about_picked(); }
+            more_picked => { root.more_picked(); }
         }
 
         // Card bottom sheet (single instance, page-level overlay): the

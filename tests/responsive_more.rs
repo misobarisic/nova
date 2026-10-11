@@ -168,7 +168,9 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
 
     open_more(&app);
     // Keyboard selection belongs to the More page.
-    key(&app, slint::platform::Key::DownArrow);
+    for _ in 0..3 {
+        key(&app, slint::platform::Key::DownArrow);
+    }
     key(&app, slint::platform::Key::Return);
     assert!(app.get_show_about() && !app.get_more_open());
     assert_no_bar(&app);
@@ -188,7 +190,7 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
         assert_no_bar(&app);
         assert_eq!(
             ElementHandle::find_by_element_type_name(&app, "SideItem").count(),
-            if width >= 700 { 7 } else { 0 }
+            if width >= 700 { 6 } else { 0 }
         );
     }
     key(&app, slint::platform::Key::Back);
@@ -199,33 +201,53 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     assert!(app.get_show_home());
     assert_eq!(backgrounds.get(), 0);
 
-    // Crossing to a wide layout replaces More with separate destinations.
+    // More remains a full page when the layout crosses to wide.
     open_more(&app);
     app.window().set_size(slint::PhysicalSize::new(700, 850));
     settle(&app);
-    assert!(!app.get_more_open());
+    assert!(app.get_more_open());
+    assert!(
+        ElementHandle::find_by_element_type_name(&app, "MorePage")
+            .next()
+            .is_some()
+    );
     assert_eq!(
         ElementHandle::find_by_element_type_name(&app, "SideItem").count(),
-        7
+        6
     );
     assert_no_bar(&app);
-    click(
-        &app,
-        ElementHandle::find_by_element_type_name(&app, "SideItem")
-            .nth(4)
-            .unwrap(),
-    );
-    assert!(app.get_show_about());
+    let calendar_y = button(&app, "Calendar").absolute_position().y;
+    let downloads_y = button(&app, "Downloads").absolute_position().y;
+    let settings_y = button(&app, "Settings").absolute_position().y;
+    let about_y = button(&app, "About").absolute_position().y;
+    assert!(calendar_y < downloads_y && downloads_y < settings_y && settings_y < about_y);
+    click(&app, button(&app, "Settings"));
+    assert!(app.get_show_settings());
+    assert!(!app.get_more_open());
     click(
         &app,
         ElementHandle::find_by_element_type_name(&app, "SideItem")
             .nth(3)
             .unwrap(),
     );
-    assert!(app.get_show_settings());
+    assert!(
+        app.get_more_open(),
+        "Settings rail More opens the full page"
+    );
+    click(&app, button(&app, "Settings"));
+    assert!(app.get_show_settings() && !app.get_more_open());
+    key(&app, slint::platform::Key::Back);
+    assert!(
+        app.get_more_open(),
+        "desktop destination Back returns to More"
+    );
+    click(&app, button(&app, "About"));
+    assert!(app.get_show_about() && !app.get_more_open());
+    key(&app, slint::platform::Key::Back);
+    assert!(app.get_more_open(), "About Back returns to desktop More");
     assert_eq!(
         ElementHandle::find_by_element_type_name(&app, "SideItem").count(),
-        7,
-        "wide Android Settings retains its rail"
+        6,
+        "wide More retains the six-item rail"
     );
 }

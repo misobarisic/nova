@@ -2,20 +2,18 @@
 use super::*;
 
 /// Nav index of the page currently shown: 0 Home, 1 Discover, 2 Library,
-/// 3 Settings, 4 About, 5 Calendar, 6 Downloads (Discover is the fallback).
+/// 3 More (including Settings/About), 4 Calendar, 5 Downloads (Discover is the fallback).
 fn current_nav(app: &AppWindow) -> i32 {
-    if app.get_show_calendar() {
-        5
+    if app.get_more_open() || app.get_show_settings() || app.get_show_about() {
+        3
+    } else if app.get_show_calendar() {
+        4
     } else if app.get_show_downloads() {
-        6
+        5
     } else if app.get_show_home() {
         0
     } else if app.get_show_library() {
         2
-    } else if app.get_show_settings() {
-        3
-    } else if app.get_show_about() {
-        4
     } else {
         1
     }
@@ -66,7 +64,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .into(),
     );
+    // Inspect existence before redb creates the file; an empty old install
+    // still deserves the upgrade path rather than being treated as first run.
+    let database_existed = app_data_dir()
+        .join("nova.redb")
+        .try_exists()
+        .unwrap_or(true);
     storage::init_at(&app_data_dir());
+    let onboarding_visible = onboarding::begin(database_existed);
+    let owns_addon_setup = onboarding::owns_addon_setup();
+    app.set_onboarding_visible(onboarding_visible);
     nova_providers::set_metadata_cache(Arc::new(io::ProviderMetadataCache));
     crate::web_log("nova: window created");
 
@@ -691,6 +698,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Application-lifetime debounce, shared with the player's rate controls.
     // Capture first so page destruction and remote UI refresh cannot lose edits.
     let schedule_settings_save = bridge.wire_settings_autosave();
+    let b = bridge.clone();
+    app.on_onboarding_addon_added(move |url| b.add_addon(&url));
+    let b = bridge.clone();
+    app.on_onboarding_finished(move || b.finish_onboarding());
 
     let b = bridge.clone();
     app.on_clear_cache(move || b.clear_image_cache());
@@ -840,7 +851,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // populated by a live fetch the first time an addon is installed.
     let persisted = read_persisted_addons();
     let mut extra = configured_addon_urls();
-    if persisted.is_empty() && extra.is_empty() {
+    if !owns_addon_setup && persisted.is_empty() && extra.is_empty() {
         // First run with no configuration at all: seed with the default.
         extra.push(DEFAULT_ADDON.to_string());
     }
@@ -878,7 +889,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Register this bundled-source generation once. Its ordinary addon row
     // preserves disable/remove choices on subsequent launches.
     for provider in nova_providers::bundled_providers() {
-        if nova_storage::get_str(provider.registration_key).is_none() {
+        if !owns_addon_setup && nova_storage::get_str(provider.registration_key).is_none() {
             let manifest = Addon::parse_manifest(provider.addon_manifest.as_bytes())
                 .expect("valid bundled addon manifest");
             bridge.install_persisted(provider.url, true, Some(false), Some(manifest.name));

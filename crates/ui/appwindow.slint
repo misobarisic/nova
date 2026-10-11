@@ -12,6 +12,7 @@ import { DetailPage } from "detail.slint";
 import { CategoryPickerPopup } from "categories.slint";
 import { LibraryDuplicates } from "library-duplicates.slint";
 import { LibraryPage } from "library.slint";
+import { Onboarding } from "onboarding.slint";
 import { SettingsPage } from "settings.slint";
 import { AboutPage } from "about.slint";
 import { CalendarPage } from "calendar.slint";
@@ -41,6 +42,16 @@ import { TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMapp
 // guards live here so each page component stays self-contained.
 export component AppWindow inherits Window {
     default-font-family: "Roboto";
+    in-out property <bool> onboarding_visible: false;
+    in-out property <int> onboarding_step: 0;
+    in-out property <string> onboarding_pending_url: "";
+    in-out property <bool> onboarding_busy: false;
+    in-out property <bool> onboarding_addon_ready: false;
+    in-out property <string> onboarding_error: "";
+    in property <bool> cinemeta_installed: false;
+    callback onboarding_addon_added(string);
+    callback onboarding_finished();
+
     property <int> back_focus_request: 0;
     changed back_focus_request => { system_back_scope.focus(); }
     public function preserve_back_focus() {
@@ -274,7 +285,7 @@ export component AppWindow inherits Window {
     in-out property <bool> about_licenses_open: false;
     in-out property <length> about_scroll_y: 0px;
     in-out property <length> about_licenses_scroll_y: 0px;
-    // More is a root page on narrow layouts; its children retain a Back route.
+    // More is a root page; narrow children retain a Back route.
     in-out property <bool> more_open: false;
     private property <bool> more_parent: false;
     private property <bool> more_subpage_entered: true;
@@ -283,12 +294,12 @@ export component AppWindow inherits Window {
         interval: 1ms; running: false;
         triggered => { self.stop(); root.more_subpage_entered = true; }
     }
-    changed narrow_ui => { if (!root.narrow_ui) { root.more_open = false; } }
     changed show_about => { if (root.show_about) { root.discover_search_focused = false; root.more_open = false; } }
     function open_more() {
-        if (root.narrow_ui && !root.player_open && !root.modal_visible && !root.show_settings && !root.show_about) {
+        if (!root.player_open && !root.modal_visible) {
             system_back_scope.focus();
             root.discover_search_focused = false;
+            root.more_parent = false;
             root.more_open = true;
         }
     }
@@ -297,15 +308,15 @@ export component AppWindow inherits Window {
         root.more_subpage_entered = false;
         root.more_parent = true;
         root.more_open = false;
-        if (index == 0) { root.settings_picked(); }
-        else if index == 1 { root.about_picked(); }
-        else if index == 2 { root.calendar_picked(); }
-        else { root.downloads_picked(); }
+        if (index == 0) { root.calendar_picked(); }
+        else if index == 1 { root.downloads_picked(); }
+        else if index == 2 { root.settings_picked(); }
+        else { root.about_picked(); }
         more_entry_tick.start();
     }
     function more_subpage_back() {
         system_back_scope.focus();
-        if (root.narrow_ui && root.more_parent) {
+        if (root.more_parent) {
             root.show_settings = false;
             root.show_calendar = false;
             root.show_downloads = false;
@@ -366,11 +377,16 @@ export component AppWindow inherits Window {
     // page even while a text field owns focus. Per-page handlers remember
     // the last request so a newly mounted page cannot consume the same press.
     in-out property <int> system_back_request: 0;
+    private property <int> page_back_request: 0;
+    changed system_back_request => {
+        if !root.onboarding_visible { root.page_back_request += 1; }
+    }
     private property <bool> system_back_held: false;
     // --- Settings (animations) ----------------------------------------
     // Master + per-category animation switches (Settings → Look and feel).
     in-out property <bool> true_black: false;
     in-out property <float> card_corner_radius: 10;
+    in-out property <float> button_corner_radius: 8;
     in-out property <float> card_spacing: 8;
     in-out property <float> status_bar_gradient: 80;
     in-out property <int> home_backdrop_size: 1;
@@ -834,6 +850,7 @@ export component AppWindow inherits Window {
     // Capture it at the shared window layer; separate PopupWindows (such as
     // Dropdown) install their own capture handler.
     system_back_scope := FocusScope {
+        enabled: !root.onboarding_visible;
         x: 0;
         y: 0;
         width: 100%;
@@ -913,7 +930,7 @@ export component AppWindow inherits Window {
         search_type_combo_idx <=> root.search_type_combo_idx;
         search_catalog_combo_idx <=> root.search_catalog_combo_idx;
         search_genre_combo_idx <=> root.search_genre_combo_idx;
-        system_back_request: root.system_back_request;
+        system_back_request: root.page_back_request;
         animate_search_results: root.discover_search_animate_results;
         search_loading <=> root.search_loading;
         search_loading_more <=> root.search_loading_more;
@@ -1001,7 +1018,7 @@ export component AppWindow inherits Window {
         kb_active <=> root.kb_active;
         scroll_y <=> root.home_scroll_y;
         view <=> root.home_view;
-        system_back_request: root.system_back_request;
+        system_back_request: root.page_back_request;
         all_scroll_y <=> root.home_all_scroll_y;
         continue_x <=> root.home_continue_x;
         new_episodes_x <=> root.home_new_episodes_x;
@@ -1119,7 +1136,7 @@ export component AppWindow inherits Window {
         stream_episode_title: root.stream_episode_title;
         watch_label: root.detail_watch_label;
         deep_stream: root.detail_deep_stream;
-        system_back_request: root.system_back_request;
+        system_back_request: root.page_back_request;
         popup_open: root.categories_modal || root.library_duplicates_open;
         kb_zone <=> root.detail_kb_zone;
         kb_top <=> root.detail_kb_top;
@@ -1214,7 +1231,7 @@ export component AppWindow inherits Window {
         view_changed => { root.library_view_changed(); }
         min_cols: root.library_min_cols;
         library_empty_hint <=> root.library_empty_hint;
-        system_back_request: root.system_back_request;
+        system_back_request: root.page_back_request;
 
         discover_picked => { root.discover_picked(); }
         home_picked => { root.home_picked(); }
@@ -1279,6 +1296,7 @@ export component AppWindow inherits Window {
         addon_search_text <=> root.addon_search_text;
         addon_capability_filter <=> root.addon_capability_filter;
         addon_filter_changed => { root.addon_filter_changed(); }
+        cinemeta_installed: root.cinemeta_installed;
         addon_url <=> root.addon_url;
         category_rows <=> root.category_rows;
         category_input <=> root.category_input;
@@ -1293,7 +1311,7 @@ export component AppWindow inherits Window {
         home_catalog_genre_index <=> root.home_catalog_genre_index;
         home_catalog_add_open <=> root.home_catalog_add_open;
         home_catalog_add_target <=> root.home_catalog_add_target;
-        system_back_request: root.system_back_request;
+        system_back_request: root.page_back_request;
         home_catalog_add_error <=> root.home_catalog_add_error;
         cache_images <=> root.cache_images;
         cache_disk_usage <=> root.cache_disk_usage;
@@ -1331,6 +1349,7 @@ export component AppWindow inherits Window {
         is_android: root.is_android;
         true_black <=> root.true_black;
         card_corner_radius <=> root.card_corner_radius;
+        button_corner_radius <=> root.button_corner_radius;
         card_spacing <=> root.card_spacing;
         status_bar_gradient <=> root.status_bar_gradient;
         home_backdrop_size <=> root.home_backdrop_size;
@@ -1386,6 +1405,7 @@ export component AppWindow inherits Window {
         library_picked => { root.library_picked(); }
         settings_picked => { root.more_parent = false; root.more_open = false; root.settings_picked(); }
         about_picked => { root.more_parent = false; root.more_open = false; root.about_picked(); }
+        more_picked => { root.open_more(); }
         addon_added(u) => { root.addon_added(u); }
         addon_toggled(i) => { root.addon_toggled(i); }
         addon_remove(i) => { root.addon_remove(i); }
@@ -1451,7 +1471,7 @@ export component AppWindow inherits Window {
         safe-right: root.safe-area-insets.right;
         safe-bottom: root.safe-area-insets.bottom;
         kb_active <=> root.kb_active;
-        system_back_request: root.system_back_request;
+        system_back_request: root.page_back_request;
         licenses_open <=> root.about_licenses_open;
         scroll_y <=> root.about_scroll_y;
         licenses_scroll_y <=> root.about_licenses_scroll_y;
@@ -1462,23 +1482,27 @@ export component AppWindow inherits Window {
         library_picked => { root.library_picked(); }
         settings_picked => { root.more_parent = false; root.settings_picked(); }
         about_picked => { root.more_parent = false; root.about_picked(); }
+        more_picked => { root.open_more(); }
         license_source_requested(url) => { root.license_source_requested(url); }
     }
 
     if root.more_open && !root.player_open && !root.modal_visible: MorePage {
+        width: root.width; height: root.height;
+        narrow: root.narrow_ui;
+        nav-viewport-width: root.width;
         safe-top: root.safe-area-insets.top;
         safe-bottom: root.safe-area-insets.bottom;
         safe-left: root.safe-area-insets.left;
         safe-right: root.safe-area-insets.right;
         kb_active <=> root.kb_active;
-        system_back_request: root.system_back_request;
+        system_back_request: root.page_back_request;
         home_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.home_picked(); }
         discover_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.discover_picked(); }
         library_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.library_picked(); }
-        calendar_picked => { root.pick_more(2); }
-        downloads_picked => { root.pick_more(3); }
-        settings_picked => { root.pick_more(0); }
-        about_picked => { root.pick_more(1); }
+        calendar_picked => { root.pick_more(0); }
+        downloads_picked => { root.pick_more(1); }
+        settings_picked => { root.pick_more(2); }
+        about_picked => { root.pick_more(3); }
     }
 
     if root.show_calendar && !root.player_open && !root.modal_visible && !root.more_open: CalendarPage {
@@ -1493,7 +1517,7 @@ export component AppWindow inherits Window {
         refreshed => { root.calendar_changed(); } step(d) => { root.calendar_step(d); } today => { root.calendar_today(); }
         day_picked(d) => { root.calendar_pick(d); } release_picked(k) => { root.calendar_release_picked(k); }
         safe-top: root.safe-area-insets.top; safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right; safe-bottom: root.safe-area-insets.bottom;
-        system_back_request: root.system_back_request; kb_active <=> root.kb_active;
+        system_back_request: root.page_back_request; kb_active <=> root.kb_active;
         back => { root.more_subpage_back(); }
         home_picked => { root.more_parent = false; root.home_picked(); }
         discover_picked => { root.more_parent = false; root.discover_picked(); }
@@ -1514,7 +1538,7 @@ export component AppWindow inherits Window {
         sort_changed(r) => { root.downloads_page_sort_changed(r); } group_toggled(k) => { root.downloads_page_group_toggled(k); }
         action(k,a) => { root.downloads_page_action(k,a); }
         safe-top: root.safe-area-insets.top; safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right; safe-bottom: root.safe-area-insets.bottom;
-        system_back_request: root.system_back_request; kb_active <=> root.kb_active;
+        system_back_request: root.page_back_request; kb_active <=> root.kb_active;
         back => { root.more_subpage_back(); }
         home_picked => { root.more_parent = false; root.home_picked(); }
         discover_picked => { root.more_parent = false; root.discover_picked(); }
@@ -1560,7 +1584,7 @@ export component AppWindow inherits Window {
         scrim_image <=> root.scrim_image;
         player_poster <=> root.player_poster;
         kb_active <=> root.kb_active;
-        system_back_request: root.system_back_request;
+        system_back_request: root.page_back_request;
         is_android: root.is_android;
         narrow: root.narrow_ui;
         safe-top: root.safe-area-insets.top;
@@ -1624,4 +1648,35 @@ export component AppWindow inherits Window {
         }
     }
     }
+    if root.onboarding_visible: onboarding := Onboarding {
+        width: 100%; height: 100%;
+        step <=> root.onboarding_step;
+        language_index <=> root.language_index;
+        true_black <=> root.true_black;
+        addon_url <=> root.addon_url;
+        busy: root.onboarding_busy;
+        addon_ready: root.onboarding_addon_ready;
+        error: root.onboarding_error;
+        audio_label: root.audio_language_label;
+        subtitle_label: root.subtitle_language_label;
+        audio_codes: root.audio_language_codes;
+        audio_names: root.audio_language_names;
+        subtitle_codes: root.subtitle_language_codes;
+        subtitle_names: root.subtitle_language_names;
+        audio_index <=> root.audio_language_choice_index;
+        subtitle_index <=> root.subtitle_language_choice_index;
+        safe_top: root.safe-area-insets.top;
+        safe_bottom: root.safe-area-insets.bottom;
+        safe_left: root.safe-area-insets.left;
+        safe_right: root.safe-area-insets.right;
+        system_back_request: root.system_back_request;
+        add_addon(url) => { root.onboarding_addon_added(url); }
+        cinemeta => { root.onboarding_addon_added("https://v3-cinemeta.strem.io"); }
+        setting_edited(field) => { root.settings_edited(field); }
+        language_search(query, subtitle) => { root.playback_language_search(query, subtitle); }
+        language_picked(code, subtitle) => { root.playback_language_picked(code, subtitle); }
+        finished => { root.onboarding_finished(); }
+        background_requested => { root.exit_to_background(); }
+    }
+
 }

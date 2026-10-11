@@ -22,7 +22,7 @@ export component StreamFilterPill inherits Rectangle {
     property <length> pad: 14px;
 
     height: 40px;
-    border-radius: 20px;
+    border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     // A released Android touch can retain has-hover without a pointer exit.
     background: root.selected ? Theme.current.primary_button : ((root.touch_feedback ? pill_touch.pressed : pill_touch.has-hover) ? Theme.current.control_hover : Theme.current.hero_control);
     clip: true;
@@ -84,7 +84,7 @@ export component PageButton inherits Rectangle {
     width: root.roomy ? 44px : 28px;
     height: self.width;
     horizontal-stretch: 0;
-    border-radius: root.roomy ? 12px : 8px;
+    border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     background: root.minimal || !root.enabled ? transparent : (pg_touch.has-hover ? Theme.current.pager_hover : (root.roomy ? Theme.current.pager_roomy : Theme.current.control));
     border-width: root.minimal ? 0px : 1px;
     border-color: root.enabled ? Theme.current.step_border : Theme.current.pager_disabled_border;

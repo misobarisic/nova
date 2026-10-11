@@ -1,4 +1,5 @@
 # English — the source language of the interface.
+# First-launch onboarding also uses the source strings directly.
 #
 # Every user-facing string in crates/ui/*.slint is written in English inside
 # `@tr("…")`, so this catalog is deliberately empty: no msgid needs a translation,
@@ -143,3 +144,9 @@ msgstr "Saved for this title"
 
 msgid "Using global default"
 msgstr "Using global default"
+
+msgid "Button corner radius"
+msgstr "Button corner radius"
+
+msgid "Choose how rounded buttons look. Soft is the default."
+msgstr "Choose how rounded buttons look. Soft is the default."

@@ -1,0 +1,211 @@
+import { Theme } from "theme.slint";
+import { Anim } from "anim.slint";
+import { ScrollView } from "scrollview.slint";
+import { SearchField } from "searchfield.slint";
+import { PillButton, Segmented, SettingsStyle } from "settings-controls.slint";
+import { PlaybackLanguagePicker } from "playback-language-picker.slint";
+
+component LanguageCard inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    callback clicked();
+    height: 64px; min-width: 0px;
+    border-width: 1px; border-radius: 8px;
+    border-color: root.selected ? Theme.current.accent : Theme.current.control_border;
+    background: Theme.current.settings_control;
+    HorizontalLayout { padding: 10px;
+        PillButton { label: root.label; horizontal-stretch: 1; primary: root.selected; clicked => { root.clicked(); } }
+        if root.selected: Text { text: "✓"; color: Theme.current.accent; vertical-alignment: center; }
+    }
+}
+
+// Mounted above the whole application. The footer stays reachable while the
+// body scrolls on phones, with no horizontal scrolling or desktop fixed widths.
+export component Onboarding inherits Rectangle {
+    in-out property <int> step: 0;
+    in-out property <int> language_index: 0;
+    in-out property <bool> true_black: false;
+    in-out property <string> addon_url: "";
+    in property <int> system_back_request: 0;
+    property <int> last_back_request: 0;
+    changed system_back_request => {
+        if root.system_back_request != root.last_back_request {
+            root.last_back_request = root.system_back_request;
+            SettingsStyle.keyboard-mode = false;
+            root.back();
+        }
+    }
+    in property <bool> busy: false;
+    in property <bool> addon_ready: false;
+    in property <string> error: "";
+    in property <string> audio_label;
+    in property <string> subtitle_label;
+    in property <[string]> audio_codes;
+    in property <[string]> audio_names;
+    in property <[string]> subtitle_codes;
+    in property <[string]> subtitle_names;
+    in-out property <int> audio_index: -1;
+    in-out property <int> subtitle_index: -1;
+    in property <length> safe_top: 0px;
+    in property <length> safe_bottom: 0px;
+    in property <length> safe_left: 0px;
+    in property <length> safe_right: 0px;
+    callback add_addon(string);
+    callback cinemeta();
+    callback setting_edited(string);
+    callback language_search(string, bool);
+    callback language_picked(string, bool);
+    callback finished();
+    callback background_requested();
+    public function back() {
+        if root.step > 0 { root.step -= 1; } else { root.background_requested(); }
+    }
+    property <bool> narrow: root.width < 600px;
+    forward-focus: onboarding_scope;
+    background: Theme.current.canvas;
+    onboarding_scope := FocusScope {
+        width: 100%; height: 100%;
+        init => { root.last_back_request = root.system_back_request; self.focus(); }
+        property <bool> back_held: false;
+        capture-key-pressed(event) => {
+            if event.text == Key.Back {
+                SettingsStyle.keyboard-mode = false;
+                if !event.repeat && !self.back_held { self.back_held = true; root.back(); }
+                accept
+            } else { reject }
+        }
+        capture-key-released(event) => {
+            if event.text == Key.Back { self.back_held = false; accept } else { reject }
+        }
+        key-pressed(event) => {
+            if event.text == Key.Tab { SettingsStyle.keyboard-mode = true; reject }
+            else if root.step == 1 && (event.text == Key.LeftArrow || event.text == Key.RightArrow) {
+                SettingsStyle.keyboard-mode = true;
+                root.language_index = 1 - root.language_index;
+                root.setting_edited("language"); accept
+            } else if event.text == Key.Return && root.step > 0 {
+                SettingsStyle.keyboard-mode = true;
+                if root.step == 2 { root.finished(); } else { root.step += 1; } accept
+            } else { reject }
+        }
+
+    // Eat pointer input in the backdrop as well as inside the panel.
+    TouchArea { width: 100%; height: 100%; }
+    panel := Rectangle {
+        x: root.safe_left + (root.width - root.safe_left - root.safe_right - self.width) / 2;
+        y: root.safe_top + (root.height - root.safe_top - root.safe_bottom - self.height) / 2;
+        width: Math.min(800px, Math.max(1px, root.width - root.safe_left - root.safe_right - (root.narrow ? 20px : 64px)));
+        height: Math.min(610px, Math.max(1px, root.height - root.safe_top - root.safe_bottom - (root.narrow ? 16px : 48px)));
+        border-radius: root.narrow ? 12px : 16px;
+        border-width: 1px;
+        border-color: Theme.current.border_card;
+        background: Theme.current.card;
+        VerticalLayout {
+            padding: 0px;
+            spacing: 0px;
+            ScrollView {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                content-width: panel.width;
+                VerticalLayout {
+                    width: panel.width;
+                    min-width: 0px;
+                    padding: root.narrow ? 20px : 40px;
+                    spacing: 20px;
+                    Text { text: "N O V A"; font-size: 20px; color: Theme.current.text_bright; horizontal-alignment: center; }
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 8px;
+                        for dot[i] in 3: Rectangle {
+                            width: 10px; height: 10px; border-radius: 5px;
+                            background: root.step == i ? Theme.current.accent : Theme.current.text_muted;
+                            animate background { duration: Anim.hover_fast; }
+                        }
+                    }
+                    Text { text: @tr("{} of 3", root.step + 1); color: Theme.current.text_muted; horizontal-alignment: center; font-size: 12px; }
+                    Text {
+                        text: root.step == 0 ? @tr("Connect your first add-on") : root.step == 1 ? @tr("Choose your language") : @tr("Make playback yours");
+                        color: Theme.current.text_bright; font-size: root.narrow ? 25px : 32px; font-weight: 700;
+                        horizontal-alignment: center; wrap: word-wrap;
+                    }
+                    Text {
+                        text: root.step == 0 ? @tr("Add an add-on to bring catalogs and streams into Nova.") : root.step == 1 ? @tr("Use Nova in the language that feels right.") : @tr("Choose defaults. You can fine-tune them later.");
+                        color: Theme.current.text_secondary; horizontal-alignment: center; wrap: word-wrap;
+                    }
+                    if root.step == 0: VerticalLayout {
+                        spacing: 16px;
+                        url := SearchField {
+                            roomy: true; text <=> root.addon_url; placeholder-text: @tr("Paste add-on URL");
+                            enabled: !root.busy; show-pointer-focus: false; keyboard-mode: SettingsStyle.keyboard-mode;
+                            accepted(value) => { if !root.busy { root.add_addon(value); } }
+                        }
+                        HorizontalLayout { alignment: center;
+                            PillButton { label: root.busy ? @tr("Adding…") : @tr("Add add-on"); primary: true; enabled: !root.busy && url.full-text != ""; clicked => { root.add_addon(url.full-text); } }
+                        }
+                        Rectangle { height: 1px; background: Theme.current.border_subtle; }
+                        Text { text: @tr("Cinemeta supplies movie and series catalogs and metadata. It does not provide streams."); wrap: word-wrap; color: Theme.current.text_secondary; }
+                        HorizontalLayout { alignment: center;
+                            PillButton { label: @tr("Add Cinemeta"); enabled: !root.busy; clicked => { root.cinemeta(); } }
+                        }
+                        if root.addon_ready: Text { text: @tr("Add-on ready. Continue, or add another URL."); wrap: word-wrap; color: Theme.current.text_secondary; horizontal-alignment: center; }
+                    }
+                    if root.step == 1 && root.narrow: VerticalLayout {
+                        spacing: 12px;
+                        for name[i] in ["English", "Hrvatski"]: LanguageCard {
+                            label: name; selected: root.language_index == i;
+                            clicked => { root.language_index = i; root.setting_edited("language"); }
+                        }
+                    }
+                    if root.step == 1 && !root.narrow: HorizontalLayout {
+                        spacing: 16px;
+                        for name[i] in ["English", "Hrvatski"]: LanguageCard {
+                            horizontal-stretch: 1;
+                            label: name; selected: root.language_index == i;
+                            clicked => { root.language_index = i; root.setting_edited("language"); }
+                        }
+                    }
+                    if root.step == 2: VerticalLayout {
+                        spacing: 12px;
+                        Text { text: @tr("Audio language"); color: Theme.current.text_primary; }
+                        PlaybackLanguagePicker {
+                            dropdown-width: Math.min(180px, Math.max(100px, (panel.width - (root.narrow ? 40px : 80px)) / 2));
+                            current-label: root.audio_label; codes: root.audio_codes; names: root.audio_names; current-index <=> root.audio_index;
+                            keyboard-mode: SettingsStyle.keyboard-mode;
+                            search(query, subtitle) => { root.language_search(query, subtitle); }
+                            picked(code, subtitle) => { root.language_picked(code, subtitle); root.setting_edited("default_audio_language"); }
+                        }
+                        Text { text: @tr("Subtitles"); color: Theme.current.text_primary; }
+                        PlaybackLanguagePicker {
+                            dropdown-width: Math.min(180px, Math.max(100px, (panel.width - (root.narrow ? 40px : 80px)) / 2));
+                            subtitle: true; current-label: root.subtitle_label; codes: root.subtitle_codes; names: root.subtitle_names; current-index <=> root.subtitle_index;
+                            keyboard-mode: SettingsStyle.keyboard-mode;
+                            search(query, subtitle) => { root.language_search(query, subtitle); }
+                            picked(code, subtitle) => { root.language_picked(code, subtitle); root.setting_edited("default_subtitle_language"); }
+                        }
+                        Text { text: @tr("Appearance"); color: Theme.current.text_primary; }
+                        Segmented { labels: [@tr("Dark"), @tr("True black")]; current_index: root.true_black ? 1 : 0;
+                            picked(index) => { root.true_black = index == 1; root.setting_edited("true_black"); }
+                        }
+                    }
+                    if root.step > 0: Text { text: @tr("You can change this any time in Settings."); wrap: word-wrap; color: Theme.current.text_muted; horizontal-alignment: center; }
+                    if root.error != "": Text { text: root.error; wrap: word-wrap; color: Theme.current.text_error; }
+                }
+            }
+            Rectangle { height: 1px; background: Theme.current.border_subtle; }
+            HorizontalLayout {
+                padding: root.narrow ? 12px : 24px;
+                spacing: 8px;
+                PillButton {
+                    label: root.step == 0 ? @tr("Skip for now") : @tr("Back"); compact: root.narrow;
+                    clicked => { if root.step == 0 { root.step = 1; } else { root.back(); } }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                if root.step > 0 || root.addon_ready: PillButton {
+                    label: root.step == 2 ? @tr("Start using Nova") : @tr("Continue"); primary: true; compact: root.narrow;
+                    clicked => { if root.step == 2 { root.finished(); } else { root.step += 1; } }
+                }
+            }
+        }
+    }
+    }
+}

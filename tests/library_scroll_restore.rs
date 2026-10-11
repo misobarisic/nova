@@ -122,6 +122,35 @@ fn detail_return_then_pointer_scroll_survives_root_tab_recreation() {
             settle(&app);
             let latest = app.get_library_scroll_y();
             assert!(latest < -600.0);
+            app.set_library_kb_zone(0);
+            app.set_kb_active(false);
+            // Pointer activation records a return target before opening the
+            // detail page. That bookkeeping must not scroll to the old card.
+            app.set_library_kb_zone(2);
+            assert!((app.get_library_scroll_y() - latest).abs() < 2.0);
+            // Stream/detail navigation recreates Library with lifted keyboard
+            // state. Restoring that state must not reveal a stale target even
+            // for one frame before the final viewport settles.
+            app.set_modal_visible(true);
+            app.set_stream_selector_open(true);
+            app.set_library_kb_idx(40);
+            settle(&app);
+            app.set_stream_selector_open(false);
+            app.set_modal_visible(false);
+            for frame in 0..16 {
+                for e in ElementQuery::from_root(&app)
+                    .match_predicate(|_| true)
+                    .find_all()
+                {
+                    let _ = (e.size(), e.absolute_position());
+                }
+                assert!(
+                    (app.get_library_scroll_y() - latest).abs() < 2.0,
+                    "stream return moved viewport on frame {frame}: {latest} -> {} ({width}px, list={list})",
+                    app.get_library_scroll_y()
+                );
+                idle(16);
+            }
             for tab in ["home", "discover", "settings"] {
                 app.set_show_library(false);
                 app.set_show_home(tab == "home");
@@ -141,6 +170,7 @@ fn detail_return_then_pointer_scroll_survives_root_tab_recreation() {
             settle(&app);
             assert!((app.get_library_scroll_y() - latest).abs() < 2.0);
             // Real keyboard navigation still reveals the newly selected row.
+            app.set_kb_active(true);
             app.set_library_kb_idx(60);
             settle(&app);
             assert!(app.get_library_scroll_y() < latest - 100.0);

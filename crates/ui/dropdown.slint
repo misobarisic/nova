@@ -52,7 +52,7 @@ export component Dropdown inherits Rectangle {
     property <string> shown-text: root.has_selection ? root.text_at(root.current-index) : root.placeholder-text;
 
     height: root.item-h;
-    border-radius: root.prominent ? 12px : (root.pill ? 22px : 6px);
+    border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     border-width: 1px;
     border-color: Theme.current.control_border;
     background: root.prominent

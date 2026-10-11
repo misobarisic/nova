@@ -1839,6 +1839,12 @@ msgstr "Svi ugrađeni katalozi već su dodani. Omogućite dodatak za više katal
 msgid "Card corner radius"
 msgstr "Polumjer kutova kartica"
 
+msgid "Button corner radius"
+msgstr "Zaobljenost kutova gumba"
+
+msgid "Choose how rounded buttons look. Soft is the default."
+msgstr "Odaberite zaobljenost gumba. Meko je zadana vrijednost."
+
 msgid "Adjust media, season and episode card corners. Set to 0 for square corners."
 msgstr "Prilagodite kutove kartica naslova, sezona i epizoda. Postavite na 0 za ravne kutove."
 
@@ -2158,3 +2164,61 @@ msgstr "Spremljeno za ovaj naslov"
 
 msgid "Using global default"
 msgstr "Koristi se globalna zadana vrijednost"
+
+# First-launch onboarding and explicit Cinemeta suggestion.
+msgid "{} of 3"
+msgstr "{} od 3"
+
+msgid "Connect your first add-on"
+msgstr "Povežite svoj prvi dodatak"
+
+msgid "Choose your language"
+msgstr "Odaberite jezik"
+
+msgid "Make playback yours"
+msgstr "Prilagodite reprodukciju"
+
+msgid "Add an add-on to bring catalogs and streams into Nova."
+msgstr "Dodajte dodatak za kataloge i streamove u Novi."
+
+msgid "Use Nova in the language that feels right."
+msgstr "Koristite Novu na jeziku koji vam odgovara."
+
+msgid "Choose defaults. You can fine-tune them later."
+msgstr "Odaberite zadane postavke. Možete ih promijeniti kasnije."
+
+msgid "Paste add-on URL"
+msgstr "Zalijepite URL dodatka"
+
+msgid "Adding…"
+msgstr "Dodavanje…"
+
+msgid "Add add-on"
+msgstr "Dodajte dodatak"
+
+msgid "Cinemeta supplies movie and series catalogs and metadata. It does not provide streams."
+msgstr "Cinemeta pruža kataloge i metapodatke za filmove i serije. Ne pruža streamove."
+
+msgid "Add Cinemeta"
+msgstr "Dodajte Cinemetu"
+
+msgid "Add-on ready. Continue, or add another URL."
+msgstr "Dodatak je spreman. Nastavite ili dodajte drugi URL."
+
+msgid "Audio language"
+msgstr "Jezik zvuka"
+
+msgid "Appearance"
+msgstr "Izgled"
+
+msgid "Dark"
+msgstr "Tamno"
+
+msgid "You can change this any time in Settings."
+msgstr "Ovo možete promijeniti u bilo kojem trenutku u Postavkama."
+
+msgid "Skip for now"
+msgstr "Zasad preskočite"
+
+msgid "Start using Nova"
+msgstr "Počnite koristiti Novu"

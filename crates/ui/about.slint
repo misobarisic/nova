@@ -25,7 +25,7 @@ export component AboutPage inherits Rectangle {
     in-out property <bool> kb_active: false;
     private property <int> last_system_back_request: 0;
     private property <int> kb_zone: 1;
-    private property <int> kb_nav: 4;
+    private property <int> kb_nav: 3;
     private property <int> source_index: 0;
     private property <bool> restore_pending: true;
     private property <length> rail_w: root.narrow ? 0px : NavMetrics.width-for(root.nav-viewport-width);
@@ -36,6 +36,7 @@ export component AboutPage inherits Rectangle {
     callback library_picked();
     callback settings_picked();
     callback about_picked();
+    callback more_picked();
     callback license_source_requested(string);
 
     changed license_sources => { root.source_index = Math.min(root.source_index, Math.max(0, root.license_sources.length - 1)); }
@@ -107,7 +108,7 @@ export component AboutPage inherits Rectangle {
             } else if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
                 root.kb_active = true;
                 if (root.kb_zone == 0 && !root.narrow) {
-                    root.kb_nav = Math.mod(root.kb_nav + (e.text == Key.LeftArrow ? 6 : 1), 7);
+                    root.kb_nav = Math.mod(root.kb_nav + (e.text == Key.LeftArrow ? 5 : 1), 6);
                 }
                 accept
             } else if (e.text == Key.UpArrow) {
@@ -132,9 +133,8 @@ export component AboutPage inherits Rectangle {
                     else if (root.kb_nav == 0) { root.home_picked(); }
                     else if (root.kb_nav == 1) { root.discover_picked(); }
                     else if (root.kb_nav == 2) { root.library_picked(); }
-                    else if (root.kb_nav == 3) { root.settings_picked(); }
-                    else if root.kb_nav == 4 { root.about_picked(); }
-                    else if root.kb_nav == 5 { NavState.calendar_picked(); }
+                    else if (root.kb_nav == 3) { root.more_picked(); }
+                    else if root.kb_nav == 4 { NavState.calendar_picked(); }
                     else { NavState.downloads_picked(); }
                 } else if (!root.licenses_open) { root.open_licenses(); }
                 else if (root.source_index < root.license_sources.length) {
@@ -307,7 +307,7 @@ export component AboutPage inherits Rectangle {
     if !root.narrow: rail := SideNav {
         viewport-width: root.nav-viewport-width;
         panel-background: transparent;
-        active: 4;
+        active: 3;
         safe-top: root.safe-top;
         safe-left: root.safe-left;
         safe-bottom: root.safe-bottom;
@@ -317,7 +317,6 @@ export component AboutPage inherits Rectangle {
         home_picked => { root.home_picked(); }
         discover_picked => { root.discover_picked(); }
         library_picked => { root.library_picked(); }
-        settings_picked => { root.settings_picked(); }
-        about_picked => { root.about_picked(); }
+        more_picked => { root.more_picked(); }
     }
 }

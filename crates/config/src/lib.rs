@@ -491,6 +491,10 @@ pub struct CacheSettings {
     /// Pure black backgrounds (Settings → Theme), synced unless overridden.
     #[serde(default)]
     pub true_black: bool,
+    /// Corner radius in logical pixels for shared buttons and controls.
+    /// Synced unless overridden; individual controls cap it at half their size.
+    #[serde(default = "default_button_corner_radius")]
+    pub button_corner_radius: u32,
     /// Corner radius in logical pixels for media and detail cards. Synced unless overridden.
     #[serde(default = "default_card_corner_radius")]
     pub card_corner_radius: u32,
@@ -514,6 +518,10 @@ pub struct CacheSettings {
 
 const fn default_card_corner_radius() -> u32 {
     10
+}
+
+const fn default_button_corner_radius() -> u32 {
+    8
 }
 
 const fn default_card_spacing() -> u32 {
@@ -565,6 +573,7 @@ impl Default for CacheSettings {
             anim_nav_slide: true,
             language: Language::English,
             true_black: false,
+            button_corner_radius: default_button_corner_radius(),
             card_corner_radius: default_card_corner_radius(),
             card_spacing: default_card_spacing(),
             status_bar_gradient: default_status_bar_gradient(),
@@ -1036,6 +1045,17 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(restored.card_corner_radius, 0);
         assert_eq!(restored.card_spacing, 0);
+    }
+
+    #[test]
+    fn button_radius_defaults_for_older_settings_and_round_trips() {
+        let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
+        let mut settings: CacheSettings = serde_json::from_str(older).unwrap();
+        assert_eq!(settings.button_corner_radius, 8);
+        settings.button_corner_radius = 24;
+        let restored: CacheSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.button_corner_radius, 24);
     }
 
     #[test]

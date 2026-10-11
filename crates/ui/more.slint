@@ -1,6 +1,7 @@
 import { Theme } from "theme.slint";
 import { ScrollView } from "scrollview.slint";
 import { BottomNav } from "bottomnav.slint";
+import { SideNav, NavMetrics } from "sidenav.slint";
 import { SettingsHeader, SettingsLink, SettingsCard, SettingsStyle } from "settings-controls.slint";
 
 // A root page, like Settings landing, rather than a sheet over another page.
@@ -10,12 +11,15 @@ export component MorePage inherits Rectangle {
     in property <length> safe-left;
     in property <length> safe-right;
     in property <length> safe-bottom;
+    in property <length> nav-viewport-width;
+    in property <bool> narrow: true;
     in property <int> system_back_request;
     in-out property <bool> kb_active;
     private property <int> last_back: 0;
     private property <int> kb_zone: 1;
     private property <int> kb_nav: 3;
     private property <int> choice: 0;
+    private property <int> nav_count: root.narrow ? 4 : 6;
     callback home_picked();
     callback discover_picked();
     callback library_picked();
@@ -48,22 +52,24 @@ export component MorePage inherits Rectangle {
                 else { root.kb_zone = 0; }
                 accept
             } else if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
-                if (root.kb_zone == 0) { root.kb_nav = Math.mod(root.kb_nav + (e.text == Key.LeftArrow ? 3 : 1), 4); }
+                if (root.kb_zone == 0) { root.kb_nav = Math.mod(root.kb_nav + (e.text == Key.LeftArrow ? root.nav_count - 1 : 1), root.nav_count); }
                 accept
             } else if (e.text == Key.Return || e.text == " ") {
                 if (!e.repeat) {
                     if (root.kb_zone == 1) {
-                        if (root.choice == 0) { root.settings_picked(); } else if root.choice == 1 { root.about_picked(); } else if root.choice == 2 { root.calendar_picked(); } else { root.downloads_picked(); }
+                        if (root.choice == 0) { root.calendar_picked(); } else if root.choice == 1 { root.downloads_picked(); } else if root.choice == 2 { root.settings_picked(); } else { root.about_picked(); }
                     } else if (root.kb_nav == 0) { root.home_picked(); }
                     else if (root.kb_nav == 1) { root.discover_picked(); }
                     else if (root.kb_nav == 2) { root.library_picked(); }
+                    else if (!root.narrow && root.kb_nav == 4) { root.calendar_picked(); }
+                    else if (!root.narrow && root.kb_nav == 5) { root.downloads_picked(); }
                 }
                 accept
             } else { reject }
         }
     }
     VerticalLayout {
-        padding-left: 18px + root.safe-left;
+        padding-left: 18px + root.safe-left + (root.narrow ? 0px : NavMetrics.width-for(root.nav-viewport-width));
         padding-right: 18px + root.safe-right;
         padding-top: 18px + root.safe-top;
         spacing: 0px;
@@ -73,27 +79,27 @@ export component MorePage inherits Rectangle {
             content-width: self.visible-width;
             VerticalLayout {
                 width: 100%; spacing: 12px;
-                SettingsHeader { title: @tr("More"); overview: true; }
+                SettingsHeader { title: @tr("More"); overview: true; show-back: true; back => { root.home_picked(); } }
+                SettingsCard { SettingsLink { destination-id: "more:calendar"; title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 0; picked => { root.calendar_picked(); } } }
+                SettingsCard { SettingsLink { destination-id: "more:downloads"; title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 1; picked => { root.downloads_picked(); } } }
                 SettingsCard { SettingsLink {
                     destination-id: "more:settings";
                     icon-kind: 14;
                     title: @tr("Settings"); subtitle: @tr("Make Nova yours");
-                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 0;
+                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 2;
                     picked => { root.settings_picked(); }
                 } }
                 SettingsCard { SettingsLink {
                     destination-id: "more:about";
                     icon-kind: 15;
                     title: @tr("About"); subtitle: @tr("Information about Nova");
-                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 1;
+                    focused: root.kb_active && root.kb_zone == 1 && root.choice == 3;
                     picked => { root.about_picked(); }
                 } }
-                SettingsCard { SettingsLink { destination-id: "more:calendar"; title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 2; picked => { root.calendar_picked(); } } }
-                SettingsCard { SettingsLink { destination-id: "more:downloads"; title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 3; picked => { root.downloads_picked(); } } }
                 Rectangle { vertical-stretch: 1; }
             }
         }
-        BottomNav {
+        if root.narrow: BottomNav {
             active: 3;
             safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;
             page-inset-left: 18px + root.safe-left; page-inset-right: 18px + root.safe-right;
@@ -102,5 +108,19 @@ export component MorePage inherits Rectangle {
             discover_picked => { root.discover_picked(); }
             library_picked => { root.library_picked(); }
         }
+    }
+    if !root.narrow: SideNav {
+        viewport-width: root.nav-viewport-width;
+        active: 3;
+        safe-top: root.safe-top;
+        safe-left: root.safe-left;
+        safe-bottom: root.safe-bottom;
+        kb_zone: root.kb_zone;
+        kb_nav: root.kb_nav;
+        kb_active <=> root.kb_active;
+        home_picked => { root.home_picked(); }
+        discover_picked => { root.discover_picked(); }
+        library_picked => { root.library_picked(); }
+        more_picked => { }
     }
 }
