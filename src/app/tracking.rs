@@ -57,6 +57,7 @@ struct SourceContext {
     source: SourceRef,
     title: String,
     ids: providers::ExternalIds,
+    historical_ids: Vec<providers::ExternalId>,
     aliases: Vec<String>,
     year: Option<u16>,
     episodes: Vec<(String, String)>,
@@ -96,6 +97,10 @@ impl Bridge {
 #[derive(Serialize, Deserialize)]
 struct SourceEvidence {
     ids: providers::ExternalIds,
+    /// Older observations can suggest releases, but cannot contradict the
+    /// latest snapshot or establish a current source identity.
+    #[serde(default)]
+    historical_ids: Vec<providers::ExternalId>,
     title: String,
     #[serde(default)]
     aliases: Vec<String>,
@@ -110,29 +115,202 @@ fn evidence_key(type_: &str, id: &str) -> String {
     )
 }
 pub(super) fn remember_source(preview: &MetaPreview) {
-    let mut ids = providers::normalize_external_ids(&preview.extra, &preview.id, &preview.type_);
-    if let Ok(Some(previous)) =
-        read_json_result::<SourceEvidence>(&evidence_key(&preview.type_, &preview.id))
-    {
-        for id in previous.ids.typed {
-            if !ids.typed.contains(&id) && ids.typed.len() < 32 {
-                ids.typed.push(id);
-            }
-        }
-    }
-    let evidence = SourceEvidence {
-        ids,
-        title: preview.title(),
-        aliases: source_aliases(&preview.extra),
-        year: preview
-            .year_str()
-            .and_then(|y| y.get(..4).and_then(|y| y.parse().ok())),
-        retrieved_at: now_secs(),
-    };
+    let previous = read_json_result::<SourceEvidence>(&evidence_key(&preview.type_, &preview.id))
+        .ok()
+        .flatten();
+    let evidence = source_evidence(preview, previous.as_ref(), now_secs());
     if let Ok(raw) = serde_json::to_string(&evidence)
         && let Err(error) = storage::try_set_str(&evidence_key(&preview.type_, &preview.id), &raw)
     {
         storage::report(error);
+    }
+}
+
+fn source_evidence(
+    preview: &MetaPreview,
+    previous: Option<&SourceEvidence>,
+    retrieved_at: u64,
+) -> SourceEvidence {
+    let ids = providers::normalize_external_ids(&preview.extra, &preview.id, &preview.type_);
+    let current_ids = evidence_ids(&ids);
+    let mut historical_ids = Vec::new();
+    if let Some(previous) = previous {
+        // A catalog preview can be sparse. Keep displaced IDs as discovery
+        // hints, rather than inventing a simultaneous conflict or forgetting
+        // useful metadata. Newer observations take precedence within the bound.
+        for id in evidence_ids(&previous.ids)
+            .into_iter()
+            .chain(previous.historical_ids.iter().cloned())
+        {
+            if !current_ids.contains(&id)
+                && !historical_ids.contains(&id)
+                && historical_ids.len() < 32
+            {
+                historical_ids.push(id);
+            }
+        }
+    }
+    let mut aliases = source_aliases(&preview.extra);
+    if aliases.is_empty() {
+        aliases = previous.map(|e| e.aliases.clone()).unwrap_or_default();
+    }
+    let title = preview.title();
+    SourceEvidence {
+        ids,
+        historical_ids,
+        title: if title.is_empty() {
+            previous.map(|e| e.title.clone()).unwrap_or_default()
+        } else {
+            title
+        },
+        aliases,
+        year: preview
+            .year_str()
+            .and_then(|y| y.get(..4).and_then(|y| y.parse().ok()))
+            .or_else(|| previous.and_then(|e| e.year)),
+        retrieved_at,
+    }
+}
+
+fn evidence_ids(ids: &providers::ExternalIds) -> Vec<providers::ExternalId> {
+    let mut claims = Vec::new();
+    for namespace in [
+        providers::IdNamespace::Imdb,
+        providers::IdNamespace::TmdbTv,
+        providers::IdNamespace::TmdbMovie,
+        providers::IdNamespace::MalAnime,
+        providers::IdNamespace::MalManga,
+        providers::IdNamespace::AnilistAnime,
+        providers::IdNamespace::AnilistManga,
+    ] {
+        match ids.resolve_id(namespace) {
+            providers::IdResolution::Unique(id) => claims.push(id),
+            providers::IdResolution::Conflict(ids) => claims.extend(ids),
+            providers::IdResolution::Missing => {}
+        }
+    }
+    claims
+}
+
+#[cfg(test)]
+mod source_evidence_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn preview(extra: serde_json::Value) -> MetaPreview {
+        let mut value =
+            json!({"id":"tt26743760", "type":"series", "name":"The Apothecary Diaries"});
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn fresh_release_ids_replace_historical_identity_without_losing_hints() {
+        let first = source_evidence(&preview(json!({"_malId":54492, "year":"2023"})), None, 1);
+        let latest = source_evidence(&preview(json!({"_malId":61987})), Some(&first), 2);
+        assert_eq!(
+            latest.ids.resolve_id(providers::IdNamespace::MalAnime),
+            providers::IdResolution::Unique(providers::ExternalId::parse("mal:61987").unwrap())
+        );
+        assert_eq!(
+            latest.historical_ids,
+            [providers::ExternalId::parse("mal:54492").unwrap()]
+        );
+        assert_eq!(latest.year, Some(2023));
+        let repeated = source_evidence(&preview(json!({"_malId":61987})), Some(&latest), 3);
+        assert_eq!(repeated.historical_ids, latest.historical_ids);
+    }
+
+    #[test]
+    fn simultaneous_claims_stay_ambiguous_and_service_namespaces_stay_separate() {
+        let evidence = source_evidence(
+            &preview(json!({"mal_id":54492,"_malId":61987,"anilist_id":195516})),
+            None,
+            1,
+        );
+        assert!(
+            matches!(evidence.ids.resolve_id(providers::IdNamespace::MalAnime), providers::IdResolution::Conflict(ids) if ids.len()==2)
+        );
+        assert_eq!(
+            evidence
+                .ids
+                .resolve_id(providers::IdNamespace::AnilistAnime),
+            providers::IdResolution::Unique(
+                providers::ExternalId::parse("anilist:195516").unwrap()
+            )
+        );
+        assert!(evidence.historical_ids.is_empty());
+    }
+
+    #[test]
+    fn sparse_preview_demotes_ids_to_hints_and_preserves_aliases_and_year() {
+        let first = source_evidence(
+            &preview(json!({"mal_id":54492,"year":"2023","aliases":["Kusuriya no Hitorigoto"]})),
+            None,
+            1,
+        );
+        let sparse = source_evidence(&preview(json!({})), Some(&first), 2);
+        assert_eq!(
+            sparse.ids.resolve_id(providers::IdNamespace::MalAnime),
+            providers::IdResolution::Missing
+        );
+        assert_eq!(
+            sparse.historical_ids,
+            [providers::ExternalId::parse("mal:54492").unwrap()]
+        );
+        assert_eq!(sparse.aliases, first.aliases);
+        assert_eq!(sparse.year, first.year);
+    }
+
+    #[test]
+    fn legacy_combined_evidence_is_readable_and_refresh_separates_its_claims() {
+        let legacy: SourceEvidence = serde_json::from_value(json!({
+            "ids":{"mal":"61987","typed":[{"namespace":"mal_anime","value":54492},{"namespace":"mal_anime","value":61987}]},
+            "title":"The Apothecary Diaries","retrieved_at":1
+        })).unwrap();
+        assert!(legacy.historical_ids.is_empty());
+        assert!(matches!(
+            legacy.ids.resolve_id(providers::IdNamespace::MalAnime),
+            providers::IdResolution::Conflict(_)
+        ));
+        let fresh = source_evidence(&preview(json!({"_malId":61987})), Some(&legacy), 2);
+        assert_eq!(
+            fresh.historical_ids,
+            [providers::ExternalId::parse("mal:54492").unwrap()]
+        );
+        assert!(matches!(
+            fresh.ids.resolve_id(providers::IdNamespace::MalAnime),
+            providers::IdResolution::Unique(_)
+        ));
+        let roundtrip: SourceEvidence =
+            serde_json::from_str(&serde_json::to_string(&fresh).unwrap()).unwrap();
+        assert_eq!(roundtrip.ids, fresh.ids);
+        assert_eq!(roundtrip.historical_ids, fresh.historical_ids);
+    }
+
+    #[test]
+    fn retained_hints_are_bounded_and_exclude_current_and_duplicate_claims() {
+        let mut previous = source_evidence(&preview(json!({"mal_id":1})), None, 1);
+        previous.historical_ids = (1..=100)
+            .map(|id| providers::ExternalId::parse(&format!("mal:{id}")).unwrap())
+            .collect();
+        let next = source_evidence(&preview(json!({"mal_id":2})), Some(&previous), 2);
+        assert_eq!(next.historical_ids.len(), 32);
+        assert!(
+            !next
+                .historical_ids
+                .contains(&providers::ExternalId::parse("mal:2").unwrap())
+        );
+        assert_eq!(
+            next.historical_ids
+                .iter()
+                .filter(|id| **id == providers::ExternalId::parse("mal:1").unwrap())
+                .count(),
+            1
+        );
     }
 }
 

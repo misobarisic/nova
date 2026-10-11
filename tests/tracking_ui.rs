@@ -321,8 +321,46 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
                 .is_none()
         );
         assert_eq!(a.get(), 1, "Back cannot submit another history update");
+        // Ambiguous source IDs leave release choices instead of a draft. They
+        // must stay reachable when adding coverage to an already linked title.
+        click(&app, "Add missing releases").await;
+        assert_eq!(*searches.borrow(), vec![(0, String::new())]);
+        app.set_tracking_candidates(
+            Rc::new(VecModel::from(vec![
+                nova::TrackingCandidateRow {
+                    title: s("First Apothecary release"),
+                    ..Default::default()
+                },
+                nova::TrackingCandidateRow {
+                    title: s("Another Apothecary release"),
+                    ..Default::default()
+                },
+            ]))
+            .into(),
+        );
+        settle().await;
+        assert!(
+            picks.borrow().is_empty(),
+            "choices must not select themselves"
+        );
+        click(&app, "Another Apothecary release").await;
+        assert_eq!(*picks.borrow(), vec![1]);
+        assert_eq!(
+            confirms.get(),
+            0,
+            "release selection cannot confirm alignment"
+        );
+        assert!(
+            accepts.borrow().is_empty(),
+            "choices cannot activate tracking"
+        );
+        searches.borrow_mut().clear();
+        picks.borrow_mut().clear();
         navbar_back(&app).await;
         assert!(!app.get_tracking_open());
+        // The real coordinator clears candidates after closing Tracking; do
+        // not delete the focused choice while this callback-only mock is open.
+        app.set_tracking_candidates(Rc::new(VecModel::default()).into());
         assert!(
             app.get_modal_visible(),
             "Back leaves Tracking before detail"

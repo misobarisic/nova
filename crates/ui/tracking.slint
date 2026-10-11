@@ -647,7 +647,7 @@ export component TrackingPanel inherits Rectangle {
                         enabled: !root.busy;
                         clicked => { root.search(root.selected_service, root.query_text); }
                     }
-                    if root.manual_search || (!root.has_setup && root.links.length == 0 && root.candidate_title == ""): VerticalLayout {
+                    if root.manual_search || (!root.has_setup && root.candidate_title == ""): VerticalLayout {
                         spacing: 12px;
                         vertical-stretch: 0;
                         for candidate[index] in root.candidates: Rectangle {

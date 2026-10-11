@@ -141,6 +141,21 @@ it. Use **Choose another release** to see alternatives and search by title, ID o
 official URL if the default does not match. Switching the service rebuilds that
 service's independent proposal.
 
+Addon metadata may describe a whole show while its tracker IDs identify individual
+releases. Nova keeps the latest observed IDs separate from up to 32 older ID
+hints. Different IDs in the same tracker namespace observed together remain
+ambiguous. Older saved records remain readable; the next metadata observation
+separates their accumulated IDs.
+Sparse catalog previews preserve older IDs as hints, plus known aliases and year.
+
+Ambiguous IDs and historical hints are used only to discover official release
+choices, with at most eight ID lookups. Select a release before reviewing its
+alignment; these inputs do not automatically seed a proposal or enable tracking.
+Available choices remain visible when another lookup fails, and partial results
+are not cached. Authentication and rate-limit failures stop discovery. If all
+historical hints are rejected, Nova falls back to title search. A manual title,
+tracker ID or official URL bypasses these source hints.
+
 If episode numbering or release boundaries cannot produce an automatic draft,
 the ranked suggestions remain visible for selection and manual alignment. An
 empty draft does not hide matches or expose a Start tracking action.
@@ -186,9 +201,11 @@ and unlink still require confirmation; remaps discard old unsent work.
 Several sources can contribute to the same release without counting an ordinal
 twice. Films use one source row. Existing links, pending work and tracker account
 separation retain the previous local schema. Newly discovered episodes and changed
-coverage require another review; reloading suggestions captures fresh source
-metadata. Source changes invalidate an open review even if the episode IDs stay
-the same.
+coverage require another review. **Reload suggestions** rereads the latest saved
+source evidence and fetches tracker search results again, bypassing their search
+cache. It does not refetch addon metadata; use Detail refresh for that. Changes to
+episode numbering, dates or titles invalidate an open review even if the episode
+IDs stay the same.
 
 ## Progress and edits
 

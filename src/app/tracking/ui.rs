@@ -101,6 +101,10 @@ impl Bridge {
             .ok()
             .flatten();
         let ids = evidence.as_ref().map(|e| e.ids.clone()).unwrap_or_default();
+        let historical_ids = evidence
+            .as_ref()
+            .map(|e| e.historical_ids.clone())
+            .unwrap_or_default();
         let aliases = evidence
             .as_ref()
             .map(|e| e.aliases.clone())
@@ -125,6 +129,7 @@ impl Bridge {
             },
             title: modal.name.clone(),
             ids,
+            historical_ids,
             aliases,
             year,
             episodes,
@@ -211,6 +216,7 @@ impl Bridge {
             service,
             query,
             generation,
+            refresh: true,
         });
     }
     pub(in crate::app) fn tracking_pick(&self, index: i32) {

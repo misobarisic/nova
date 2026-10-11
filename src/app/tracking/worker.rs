@@ -109,6 +109,7 @@ pub(super) enum Command {
         service: Service,
         query: String,
         generation: u64,
+        refresh: bool,
     },
     Pick {
         index: usize,
@@ -732,7 +733,7 @@ impl Coordinator {
                             text::tr("Tracking is ready. Add any missing releases below.").into();
                         Ok(())
                     } else {
-                        self.suggest(service, generation)
+                        self.suggest(service, generation, false)
                     }
                 } else {
                     self.notice =
@@ -754,12 +755,13 @@ impl Coordinator {
                 service,
                 query,
                 generation,
+                refresh,
             } => {
                 self.context = Some(context);
                 if query.trim().is_empty() {
-                    self.suggest(service, generation)
+                    self.suggest(service, generation, refresh)
                 } else {
-                    self.search(service, query, generation)
+                    self.search(service, query, generation, refresh)
                 }
             }
             Command::CancelAdjust { generation } => {
@@ -981,12 +983,19 @@ impl Coordinator {
         self.notice = text::tr("Connected. Sign-in will sync with paired devices.").into();
         Ok(())
     }
-    fn suggest(&mut self, service: Service, generation: u64) -> Result<(), String> {
-        self.search(service, String::new(), generation)?;
+    fn suggest(&mut self, service: Service, generation: u64, refresh: bool) -> Result<(), String> {
+        self.search(service, String::new(), generation, refresh)?;
         if !self.current(generation) {
             return Ok(());
         }
-        self.suggest_seed(service, generation)?;
+        let requires_selection = self.context.as_ref().is_some_and(|context| {
+            source_discovery(context, tracker_namespace(service)).requires_selection
+        });
+        // Several release claims may describe different seasons of one show.
+        // Keep their alternatives visible until the user chooses an anchor.
+        if !requires_selection {
+            self.suggest_seed(service, generation)?;
+        }
         if !self.current(generation) {
             return Ok(());
         }
@@ -1012,6 +1021,9 @@ impl Coordinator {
         {
             return Ok(());
         }
+        if requires_selection && !self.candidates.is_empty() {
+            return Ok(());
+        }
         self.notice = text::tr(if self.candidates.is_empty() {
             "No new suggestions. Search a title or enter a tracker ID to link another release."
         } else {
@@ -1020,7 +1032,13 @@ impl Coordinator {
         .into();
         Ok(())
     }
-    fn search(&mut self, service: Service, query: String, generation: u64) -> Result<(), String> {
+    fn search(
+        &mut self,
+        service: Service,
+        query: String,
+        generation: u64,
+        refresh: bool,
+    ) -> Result<(), String> {
         if self
             .bridge
             .tracking
@@ -1041,10 +1059,7 @@ impl Coordinator {
             .context
             .clone()
             .ok_or_else(|| text::tr("Open a title first.").to_string())?;
-        let namespace = match service {
-            Service::MyAnimeList => providers::IdNamespace::MalAnime,
-            Service::AniList => providers::IdNamespace::AnilistAnime,
-        };
+        let namespace = tracker_namespace(service);
         let input = query.trim();
         self.session(service)?;
         if let Some(retry_at) = self
@@ -1062,6 +1077,7 @@ impl Coordinator {
                     &context.source,
                     &context.title,
                     &context.ids,
+                    &context.historical_ids,
                     &context.aliases,
                     context.year,
                     context.episodes.len()
@@ -1071,43 +1087,16 @@ impl Coordinator {
         } else {
             format!("search:{input}")
         };
-        if let Some(cached) = self.cache.get(service, &cache_key, now_secs()) {
+        if !refresh && let Some(cached) = self.cache.get(service, &cache_key, now_secs()) {
             self.candidate_service = service;
             self.candidates = cached;
             self.busy = false;
             self.notice = text::tr("Select a release, then confirm its episode alignment.").into();
             return Ok(());
         }
-        let explicit = if input.bytes().all(|b| b.is_ascii_digit()) && !input.is_empty() {
-            input
-                .parse::<u32>()
-                .ok()
-                .filter(|id| *id <= i32::MAX as u32)
-                .and_then(NonZeroU32::new)
-        } else {
-            providers::ExternalId::parse(input).and_then(|id| {
-                if id.namespace() == namespace {
-                    numeric(id)
-                } else {
-                    None
-                }
-            })
-        };
-        let supplied = if input.is_empty() {
-            match context.ids.resolve_id(namespace) {
-                providers::IdResolution::Unique(id) => numeric(id),
-                providers::IdResolution::Conflict(_) => {
-                    return Err(text::tr(
-                        "Conflicting source IDs. Enter a tracker ID or search manually.",
-                    )
-                    .into());
-                }
-                providers::IdResolution::Missing => None,
-            }
-        } else {
-            None
-        };
-        let cross = if input.is_empty() && explicit.or(supplied).is_none() {
+        let explicit = explicit_tracker_id(input, namespace);
+        let discovery = search_discovery(&context, namespace, input);
+        let cross = if input.is_empty() && discovery.ids.is_empty() {
             match service {
                 Service::AniList => {
                     match context.ids.resolve_id(providers::IdNamespace::MalAnime) {
@@ -1144,16 +1133,45 @@ impl Coordinator {
         } else {
             None
         };
+        let mut partial_error = None;
         let mut results = if let Some(media) = cross {
             vec![media]
-        } else if let Some(id) = explicit.or(supplied) {
+        } else if let Some(id) = explicit {
             vec![
                 self.session(service)?
                     .client
                     .media(id, now_secs())
                     .map_err(api_message)?,
             ]
+        } else if !discovery.ids.is_empty() {
+            let tracking = self.bridge.tracking.clone();
+            let reply = {
+                let client = &self.session(service)?.client;
+                collect_discovery(&discovery.ids, |id| {
+                    if tracking.context_generation.load(Ordering::Acquire) != generation {
+                        return Err(ApiError::InvalidInput);
+                    }
+                    client.media(id, now_secs())
+                })
+            };
+            let (results, error) =
+                if discovery.historical && matches!(reply, Err(ApiError::Rejected)) {
+                    // A retained hint may refer to a removed release. Search the
+                    // title instead; an explicit/current ID keeps its own error.
+                    (vec![], Some(ApiError::Rejected))
+                } else {
+                    self.service_result(service, reply)?
+                };
+            partial_error = error;
+            results
         } else {
+            vec![]
+        };
+        if results.is_empty()
+            && explicit.is_none()
+            && (discovery.ids.is_empty()
+                || (discovery.historical && partial_error == Some(ApiError::Rejected)))
+        {
             let mut titles = vec![if input.is_empty() {
                 context.title.clone()
             } else {
@@ -1175,8 +1193,8 @@ impl Coordinator {
                     }
                 }
             }
-            found
-        };
+            results = found;
+        }
         if !self.current(generation) {
             return Ok(());
         }
@@ -1189,8 +1207,12 @@ impl Coordinator {
             context.source.media_type == "movie",
             context.episodes.len(),
         );
-        self.cache
-            .insert(service, cache_key, results.clone(), now_secs());
+        // A partial lookup must be retried on reload; never cache the omitted
+        // release as though the service had definitively rejected that claim.
+        if partial_error.is_none() {
+            self.cache
+                .insert(service, cache_key, results.clone(), now_secs());
+        }
         if let Ok(raw) = serde_json::to_string(&self.cache) {
             let _ = storage::try_set_cached_str(CATALOG_CACHE_KEY, &raw);
         }
@@ -1198,6 +1220,10 @@ impl Coordinator {
         self.candidates = results;
         self.busy = false;
         self.notice = text::tr("Select a release, then confirm its episode alignment.").into();
+        if let Some(error) = partial_error {
+            self.notice.push(' ');
+            self.notice.push_str(&api_message(error));
+        }
         Ok(())
     }
     fn pick(&mut self, index: usize, generation: u64) -> Result<(), String> {
@@ -2891,6 +2917,119 @@ fn numeric(id: providers::ExternalId) -> Option<NonZeroU32> {
     }
 }
 
+const SOURCE_DISCOVERY_LIMIT: usize = 8;
+
+fn tracker_namespace(service: Service) -> providers::IdNamespace {
+    match service {
+        Service::MyAnimeList => providers::IdNamespace::MalAnime,
+        Service::AniList => providers::IdNamespace::AnilistAnime,
+    }
+}
+
+fn explicit_tracker_id(input: &str, namespace: providers::IdNamespace) -> Option<NonZeroU32> {
+    if !input.is_empty() && input.bytes().all(|b| b.is_ascii_digit()) {
+        input
+            .parse::<u32>()
+            .ok()
+            .filter(|id| *id <= i32::MAX as u32)
+            .and_then(NonZeroU32::new)
+    } else {
+        providers::ExternalId::parse(input)
+            .filter(|id| id.namespace() == namespace)
+            .and_then(numeric)
+    }
+}
+
+#[derive(Default)]
+struct SourceDiscovery {
+    ids: Vec<NonZeroU32>,
+    requires_selection: bool,
+    historical: bool,
+}
+
+fn source_discovery(context: &SourceContext, namespace: providers::IdNamespace) -> SourceDiscovery {
+    let (claims, requires_selection, historical) = match context.ids.resolve_id(namespace) {
+        providers::IdResolution::Unique(id) => (vec![id], false, false),
+        providers::IdResolution::Conflict(ids) => (ids, true, false),
+        providers::IdResolution::Missing => (
+            context
+                .historical_ids
+                .iter()
+                .filter(|id| id.namespace() == namespace)
+                .cloned()
+                .collect(),
+            true,
+            true,
+        ),
+    };
+    let mut ids = Vec::new();
+    for id in claims.into_iter().filter_map(numeric) {
+        if id.get() <= i32::MAX as u32 && !ids.contains(&id) && ids.len() < SOURCE_DISCOVERY_LIMIT {
+            ids.push(id);
+        }
+    }
+    SourceDiscovery {
+        requires_selection: requires_selection && !ids.is_empty(),
+        ids,
+        historical,
+    }
+}
+
+fn search_discovery(
+    context: &SourceContext,
+    namespace: providers::IdNamespace,
+    input: &str,
+) -> SourceDiscovery {
+    if input.is_empty() {
+        source_discovery(context, namespace)
+    } else {
+        // Manual searches and explicit IDs never inherit source ambiguity.
+        SourceDiscovery::default()
+    }
+}
+
+fn collect_discovery(
+    ids: &[NonZeroU32],
+    mut fetch: impl FnMut(NonZeroU32) -> Result<Media, ApiError>,
+) -> Result<(Vec<Media>, Option<ApiError>), ApiError> {
+    let mut results = Vec::new();
+    let mut partial_error = None;
+    for &id in ids.iter().take(SOURCE_DISCOVERY_LIMIT) {
+        let reply = fetch(id).and_then(|media| {
+            if media.id == id {
+                Ok(media)
+            } else {
+                Err(ApiError::InvalidResponse)
+            }
+        });
+        match reply {
+            Ok(media) => {
+                if !results.iter().any(|m: &Media| m.id == media.id) {
+                    results.push(media);
+                }
+            }
+            Err(
+                error @ (ApiError::Authentication
+                | ApiError::WrongAccount
+                | ApiError::RateLimited { .. }),
+            ) => {
+                return Err(error);
+            }
+            Err(error) => {
+                if partial_error.is_none() || partial_error == Some(ApiError::Rejected) {
+                    partial_error = Some(error);
+                }
+            }
+        }
+    }
+    if results.is_empty()
+        && let Some(error) = partial_error
+    {
+        return Err(error);
+    }
+    Ok((results, partial_error))
+}
+
 fn update_rows<T: Clone + PartialEq + 'static>(
     current: slint::ModelRc<T>,
     rows: Vec<T>,
@@ -2959,6 +3098,177 @@ fn candidate_reason(context: &SourceContext, service: Service, media: &Media) ->
 #[cfg(test)]
 mod suggestion_tests {
     use super::*;
+
+    fn context(claims: &[&str], hints: &[&str]) -> SourceContext {
+        SourceContext {
+            source: SourceRef {
+                provider_id: "nova".into(),
+                source_id: "tt26743760".into(),
+                media_type: "series".into(),
+            },
+            title: "The Apothecary Diaries".into(),
+            aliases: vec![],
+            year: Some(2023),
+            episodes: vec![],
+            episode_info: vec![],
+            ids: providers::ExternalIds {
+                typed: claims
+                    .iter()
+                    .map(|id| providers::ExternalId::parse(id).unwrap())
+                    .collect(),
+                ..Default::default()
+            },
+            historical_ids: hints
+                .iter()
+                .map(|id| providers::ExternalId::parse(id).unwrap())
+                .collect(),
+        }
+    }
+
+    fn media(id: NonZeroU32) -> Media {
+        Media {
+            id,
+            mal_id: Some(id),
+            title: "Release".into(),
+            format: "TV".into(),
+            episodes: None,
+            finished: false,
+            year: None,
+        }
+    }
+
+    #[test]
+    fn ambiguous_releases_require_selection_and_do_not_conflict_across_services() {
+        let context = context(&["mal:54492", "mal:61987", "anilist:195516"], &[]);
+        let mal = source_discovery(&context, tracker_namespace(Service::MyAnimeList));
+        assert_eq!(
+            mal.ids.iter().map(|id| id.get()).collect::<Vec<_>>(),
+            [54492, 61987]
+        );
+        assert!(
+            mal.requires_selection,
+            "suggest must not automatically seed an ambiguous proposal"
+        );
+        let anilist = source_discovery(&context, tracker_namespace(Service::AniList));
+        assert_eq!(anilist.ids[0].get(), 195516);
+        assert!(!anilist.requires_selection);
+        assert!(!mal.historical);
+    }
+
+    #[test]
+    fn current_snapshot_takes_precedence_but_hints_never_authorize_automatic_seed() {
+        let namespace = tracker_namespace(Service::MyAnimeList);
+        let current = source_discovery(&context(&["mal:61987"], &["mal:54492"]), namespace);
+        assert_eq!(current.ids[0].get(), 61987);
+        assert_eq!(current.ids.len(), 1);
+        assert!(!current.requires_selection);
+        let sparse = source_discovery(&context(&["imdb:tt26743760"], &["mal:54492"]), namespace);
+        assert_eq!(sparse.ids[0].get(), 54492);
+        assert!(sparse.requires_selection);
+        assert!(sparse.historical);
+        assert_eq!(
+            candidate_reason(
+                &context(&[], &["mal:54492"]),
+                Service::MyAnimeList,
+                &media(sparse.ids[0])
+            ),
+            text::tr("Search result; verify the release and episode coverage.")
+        );
+    }
+
+    #[test]
+    fn manual_ids_and_titles_bypass_source_claims_and_respect_service_namespace() {
+        let context = context(&["mal:54492", "mal:61987"], &["mal:58514"]);
+        let namespace = tracker_namespace(Service::MyAnimeList);
+        for input in [
+            "58514",
+            "https://myanimelist.net/anime/58514/title",
+            "The Apothecary Diaries",
+        ] {
+            assert!(search_discovery(&context, namespace, input).ids.is_empty());
+        }
+        assert_eq!(
+            explicit_tracker_id("58514", namespace).unwrap().get(),
+            58514
+        );
+        assert_eq!(
+            explicit_tracker_id("https://myanimelist.net/anime/58514/title", namespace)
+                .unwrap()
+                .get(),
+            58514
+        );
+        assert_eq!(explicit_tracker_id("anilist:58514", namespace), None);
+    }
+
+    #[test]
+    fn discovery_is_bounded_deduplicated_and_keeps_partial_success_for_review() {
+        let mut context = context(&[], &[]);
+        context.historical_ids = (1..=40)
+            .map(|id| providers::ExternalId::parse(&format!("mal:{id}")).unwrap())
+            .collect();
+        context
+            .historical_ids
+            .push(providers::ExternalId::parse("mal:1").unwrap());
+        let discovery = source_discovery(&context, tracker_namespace(Service::MyAnimeList));
+        assert_eq!(discovery.ids.len(), SOURCE_DISCOVERY_LIMIT);
+        let mut calls = Vec::new();
+        let (results, error) = collect_discovery(&discovery.ids, |id| {
+            calls.push(id);
+            if id.get() == 2 {
+                Err(ApiError::Offline)
+            } else {
+                Ok(media(id))
+            }
+        })
+        .unwrap();
+        assert_eq!(calls.len(), SOURCE_DISCOVERY_LIMIT);
+        assert_eq!(results.len(), SOURCE_DISCOVERY_LIMIT - 1);
+        assert_eq!(
+            error,
+            Some(ApiError::Offline),
+            "partial responses must not enter the search cache"
+        );
+        assert!(
+            discovery.requires_selection,
+            "partial results must stay behind explicit release selection"
+        );
+    }
+
+    #[test]
+    fn failed_discovery_keeps_transport_errors_and_stops_on_authentication_or_cooldown() {
+        let ids = [NonZeroU32::new(1).unwrap(), NonZeroU32::new(2).unwrap()];
+        assert_eq!(
+            collect_discovery(&ids, |_| Err(ApiError::Rejected)),
+            Err(ApiError::Rejected)
+        );
+        assert_eq!(
+            collect_discovery(&ids, |id| if id.get() == 1 {
+                Err(ApiError::Rejected)
+            } else {
+                Err(ApiError::Offline)
+            }),
+            Err(ApiError::Offline)
+        );
+        for error in [
+            ApiError::Authentication,
+            ApiError::WrongAccount,
+            ApiError::RateLimited { retry_at: 100 },
+        ] {
+            let mut calls = 0;
+            assert_eq!(
+                collect_discovery(&ids, |_| {
+                    calls += 1;
+                    Err(error)
+                }),
+                Err(error)
+            );
+            assert_eq!(calls, 1);
+        }
+        assert_eq!(
+            collect_discovery(&ids[..1], |_| Ok(media(ids[1]))),
+            Err(ApiError::InvalidResponse)
+        );
+    }
     #[test]
     fn candidate_evidence_requires_the_correct_namespace_and_exact_id() {
         let mut context = SourceContext {
@@ -2973,6 +3283,7 @@ mod suggestion_tests {
             episodes: vec![],
             episode_info: vec![],
             ids: providers::ExternalIds::default(),
+            historical_ids: vec![],
         };
         let id = NonZeroU32::new(12).unwrap();
         let media = Media {
