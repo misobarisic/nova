@@ -75,6 +75,17 @@ pub fn tr(english: &'static str) -> &'static str {
         "System default" => "Zadano sustava",
         "Movie" => "Film",
         "TV" => "TV",
+        "Metadata and streams" => "Metapodaci i streamovi",
+        "Metadata" => "Metapodaci",
+        "Streams" => "Streamovi",
+        "No capabilities enabled" => "Nijedna mogućnost nije uključena",
+        "Season" => "Sezona",
+        "Episodes" => "Epizode",
+        "Files" => "Datoteke",
+        "Recovered files" => "Oporavljene datoteke",
+        "Downloads" => "Preuzimanja",
+        "Series" => "Serije",
+        "Play" => "Reproduciraj",
         "Streams for other sources" => "Streamovi za druge izvore",
         // ---- Anime tracking -------------------------------------------
         "Add tracking or align another release" => "Dodajte praćenje ili uskladite drugo izdanje",
@@ -912,8 +923,7 @@ pub fn relative_days(diff: i64) -> String {
     }
 }
 
-/// Absolute air date: `"Mar 15, 2024"` / `"15. ožu 2024."`.
-pub fn absolute_date(day: u32, month: u32, year: i64) -> String {
+fn month_abbreviation(month: u32) -> &'static str {
     const EN: &[&str] = &[
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
@@ -921,10 +931,16 @@ pub fn absolute_date(day: u32, month: u32, year: i64) -> String {
         "sij", "velj", "ožu", "tra", "svi", "lip", "srp", "kol", "ruj", "lis", "stu", "pro",
     ];
     let index = (month.clamp(1, 12) - 1) as usize;
+    if croatian() { HR[index] } else { EN[index] }
+}
+
+/// Absolute air date: `"Mar 15, 2024"` / `"15. ožu 2024."`.
+pub fn absolute_date(day: u32, month: u32, year: i64) -> String {
+    let month = month_abbreviation(month);
     if croatian() {
-        format!("{day}. {} {year}.", HR[index])
+        format!("{day}. {month} {year}.")
     } else {
-        format!("{} {day}, {year}", EN[index])
+        format!("{month} {day}, {year}")
     }
 }
 
@@ -1243,6 +1259,75 @@ pub fn new_episodes(count: usize) -> String {
             "{count} new {}",
             if count == 1 { "episode" } else { "episodes" }
         )
+    }
+}
+
+/// Release planner day heading, using the active UI language.
+pub fn calendar_date(day: u32, month: u32, year: i64) -> String {
+    if croatian() {
+        format!("{day}. {} {year}.", month_name(month))
+    } else {
+        format!("{} {day}, {year}", month_name(month))
+    }
+}
+
+/// A downloaded stack contains episodes, or local files without episode metadata.
+pub fn downloads_item_count(count: usize, episodes: bool) -> String {
+    let noun = if croatian() {
+        if episodes {
+            plural(count as u64, "epizoda", "epizode", "epizoda")
+        } else {
+            plural(count as u64, "datoteka", "datoteke", "datoteka")
+        }
+    } else if episodes {
+        if count == 1 { "episode" } else { "episodes" }
+    } else if count == 1 {
+        "file"
+    } else {
+        "files"
+    };
+    format!("{count} {noun}")
+}
+
+pub fn downloads_summary(files: usize, series: usize, bytes: &str) -> String {
+    let downloads = if croatian() {
+        plural(files as u64, "preuzimanje", "preuzimanja", "preuzimanja")
+    } else if files == 1 {
+        "download"
+    } else {
+        "downloads"
+    };
+    let shows = if croatian() {
+        plural(series as u64, "serija", "serije", "serija")
+    } else {
+        "series"
+    };
+    format!("{files} {downloads} · {series} {shows} · {bytes}")
+}
+
+/// Compact release-planner range, avoiding repeated months and years.
+pub fn calendar_week_title(first: (i64, u32, u32), last: (i64, u32, u32)) -> String {
+    let (year, month, day) = first;
+    let (end_year, end_month, end_day) = last;
+    if year != end_year {
+        return format!(
+            "{} – {}",
+            absolute_date(day, month, year),
+            absolute_date(end_day, end_month, end_year)
+        );
+    }
+    let name = month_abbreviation(month);
+    let end_name = month_abbreviation(end_month);
+    if croatian() {
+        if month == end_month {
+            format!("{day}.–{end_day}. {name} {year}.")
+        } else {
+            format!("{day}. {name} – {end_day}. {end_name} {year}.")
+        }
+    } else if month == end_month {
+        format!("{name} {day}–{end_day}, {year}")
+    } else {
+        format!("{name} {day} – {end_name} {end_day}, {year}")
     }
 }
 

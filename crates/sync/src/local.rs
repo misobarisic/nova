@@ -37,8 +37,13 @@ pub fn commit_snapshot(
     let owner = local_store()?;
     let dev = local_device()?;
     let mut store = owner.lock().unwrap_or_else(|e| e.into_inner());
-    prepare_snapshot(&mut store, dev, domain, records, snapshot, projection, seed)?;
-    store.save()
+    let changed = prepare_snapshot(&mut store, dev, domain, records, snapshot, projection, seed)?;
+    store.save()?;
+    drop(store);
+    if changed && !projection && !seed {
+        crate::request_local_sync();
+    }
+    Ok(())
 }
 
 pub fn prepare_snapshot(
@@ -49,7 +54,8 @@ pub fn prepare_snapshot(
     snapshot: Option<(&str, String)>,
     projection: bool,
     seed: bool,
-) -> Result<()> {
+) -> Result<bool> {
+    let mut changed = false;
     let baseline_key = format!("sync:baseline:{domain}");
     let baseline: BTreeMap<String, String> = store
         .extra_value(&baseline_key)?
@@ -64,17 +70,17 @@ pub fn prepare_snapshot(
     if !projection {
         for key in baseline.keys() {
             if !current.contains_key(key) && !seed {
-                store.set(domain, key, None, 0, dev);
+                changed |= store.set(domain, key, None, 0, dev);
             }
         }
         for (key, value, ts) in records {
-            let changed = baseline.get(key) != Some(value);
-            if (seed && store.record(domain, key).is_none()) || (!seed && changed) {
+            let differs = baseline.get(key) != Some(value);
+            if (seed && store.record(domain, key).is_none()) || (!seed && differs) {
                 let value = preserve_unknown(
                     store.record(domain, key).and_then(|r| r.value.as_deref()),
                     value,
                 );
-                store.set(domain, key, Some(value), *ts, dev);
+                changed |= store.set(domain, key, Some(value), *ts, dev);
             }
         }
     }
@@ -82,7 +88,7 @@ pub fn prepare_snapshot(
     if let Some((key, raw)) = snapshot {
         store.queue_extra(key, Some(raw));
     }
-    Ok(())
+    Ok(changed)
 }
 
 /// Typed clients may update known object fields without erasing newer fields.
@@ -95,5 +101,27 @@ pub fn preserve_unknown(old: Option<&str>, new: &str) -> String {
             serde_json::Value::Object(old).to_string()
         }
         _ => new.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_noops_and_remote_projections_do_not_request_publication() {
+        let mut store = Store::default();
+        store.queue_extra("sync:baseline:library", Some("{}".into()));
+        let records = vec![("a".into(), r#"{"title":"a"}"#.into(), 0)];
+        assert!(prepare_snapshot(&mut store, 1, "library", &records, None, false, false).unwrap());
+        assert!(!prepare_snapshot(&mut store, 1, "library", &records, None, false, false).unwrap());
+        let projected = vec![("b".into(), r#"{"title":"remote"}"#.into(), 0)];
+        assert!(
+            !prepare_snapshot(&mut store, 1, "library", &projected, None, true, false).unwrap()
+        );
+        assert!(store.record("library", "b").is_none());
+        assert!(
+            !prepare_snapshot(&mut store, 1, "library", &projected, None, false, false).unwrap()
+        );
     }
 }

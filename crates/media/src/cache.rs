@@ -142,6 +142,17 @@ fn write_display_poster(
     pixels: &SharedPixelBuffer<Rgba8Pixel>,
     source_bytes: &[u8],
 ) {
+    write_display_poster_in(&poster_cache_dir(), url, max_side, pixels, source_bytes);
+}
+
+#[cfg(not(target_os = "android"))]
+fn write_display_poster_in(
+    dir: &Path,
+    url: &str,
+    max_side: u32,
+    pixels: &SharedPixelBuffer<Rgba8Pixel>,
+    source_bytes: &[u8],
+) {
     let _permit = EncodingPermit::acquire();
     let (w, h) = (pixels.width(), pixels.height());
     let raw = match image::RgbaImage::from_raw(w, h, pixels.as_bytes().to_vec()) {
@@ -154,11 +165,13 @@ fn write_display_poster(
     if image::ImageEncoder::write_image(enc, &rgb, w, h, image::ExtendedColorType::Rgb8).is_err() {
         return;
     }
-    let dir = poster_cache_dir();
-    if fs::create_dir_all(&dir).is_err() {
+    // Conversion holds the source lock while acquiring an encoding slot.
+    // Do not hold a slot while waiting for that lock in the opposite order.
+    drop(_permit);
+    if fs::create_dir_all(dir).is_err() {
         return;
     }
-    let source = poster_cache_path_in(&dir, url);
+    let source = poster_cache_path_in(dir, url);
     let lock = entry_lock(&source);
     let _guard = lock.lock().unwrap();
     if fs::read(&source).ok().as_deref() != Some(source_bytes) {

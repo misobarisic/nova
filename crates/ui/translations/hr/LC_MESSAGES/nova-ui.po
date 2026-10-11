@@ -2044,3 +2044,90 @@ msgstr "Učitavanje zapisa…"
 
 msgid "No streams found."
 msgstr "Nema pronađenih zapisa."
+
+msgid "Search series"
+msgstr "Pretraži serije"
+
+msgid "Month"
+msgstr "Mjesec"
+
+msgid "Week"
+msgstr "Tjedan"
+
+msgid "Agenda"
+msgstr "Raspored"
+
+msgid "All scheduled"
+msgstr "Sve zakazano"
+
+msgid "Today"
+msgstr "Danas"
+
+msgid "No releases on this day"
+msgstr "Nema izdanja ovog dana"
+
+msgid "No scheduled releases"
+msgstr "Nema zakazanih izdanja"
+
+msgid "Upcoming episodes from your library"
+msgstr "Nadolazeće epizode iz vaše zbirke"
+
+msgid "Watch your saved episodes"
+msgstr "Gledajte spremljene epizode"
+
+msgid "On this device"
+msgstr "Na ovom uređaju"
+
+msgid "Search downloaded episodes"
+msgstr "Pretraži preuzete epizode"
+
+msgid "Remove download"
+msgstr "Ukloni preuzimanje"
+
+msgid "Expand series"
+msgstr "Proširi seriju"
+
+msgid "Collapse series"
+msgstr "Sažmi seriju"
+
+msgid "Newest first"
+msgstr "Najnovije prvo"
+
+msgid "Series & episode"
+msgstr "Serija i epizoda"
+
+msgid "Your completed downloads will appear here."
+msgstr "Dovršena preuzimanja pojavit će se ovdje."
+
+msgid "No downloads match your search or filter."
+msgstr "Nema preuzimanja koja odgovaraju pretrazi ili filtru."
+
+msgid "Transfers"
+msgstr "Prijenosi"
+
+msgid "{n} scheduled episode"
+msgid_plural "{n} scheduled episodes"
+msgstr[0] "{n} zakazana epizoda"
+msgstr[1] "{n} zakazane epizode"
+msgstr[2] "{n} zakazanih epizoda"
+
+msgid "Previous period"
+msgstr "Prethodno razdoblje"
+
+msgid "Next period"
+msgstr "Sljedeće razdoblje"
+
+msgid "Addon configuration"
+msgstr "Postavke dodatka"
+
+msgid "Provide playable streams, including for other metadata sources."
+msgstr "Pruža streamove za reprodukciju, uključujući druge izvore metapodataka."
+
+msgid "Provide metadata, catalogs and search results."
+msgstr "Pruža metapodatke, kataloge i rezultate pretrage."
+
+msgid "This addon provides no content while both options are off."
+msgstr "Ovaj dodatak ne pruža sadržaj dok su obje opcije isključene."
+
+msgid "Retry"
+msgstr "Pokušaj ponovno"

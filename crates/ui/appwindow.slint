@@ -14,6 +14,9 @@ import { LibraryDuplicates } from "library-duplicates.slint";
 import { LibraryPage } from "library.slint";
 import { SettingsPage } from "settings.slint";
 import { AboutPage } from "about.slint";
+import { CalendarPage } from "calendar.slint";
+import { DownloadsPage, DownloadGroup, DownloadEpisode } from "downloads-page.slint";
+import { CalendarDay, CalendarRelease } from "types.slint";
 import { MorePage } from "more.slint";
 import { PlayerOverlay } from "player.slint";
 // Re-exported so the Rust backend can reach the animation switches (globals
@@ -114,6 +117,7 @@ export component AppWindow inherits Window {
     in-out property <[MediaCard]> catalog: [];
     in-out property <[MediaCard]> search_results: [];
     in-out property <[string]> discover_search_history: [];
+    in-out property <[string]> discover_search_history_contexts: [];
     in-out property <[string]> addon_names: [];
     in-out property <[string]> type_names: [];
     in-out property <[string]> catalog_names: [];
@@ -190,6 +194,39 @@ export component AppWindow inherits Window {
     // --- Home (landing page, Continue Watching) ------------------------
     in-out property <[ContinueRow]> home_continue: [];
     in-out property <[ContinueRow]> home_new_episodes: [];
+    in-out property <bool> show_calendar: false;
+    in-out property <bool> show_downloads: false;
+    in-out property <[CalendarDay]> calendar_cells;
+    in-out property <[CalendarDay]> calendar_week;
+    in-out property <[CalendarRelease]> calendar_rows;
+    in-out property <[CalendarRelease]> calendar_later;
+    in-out property <string> calendar_title;
+    in-out property <string> calendar_day_title;
+    in-out property <string> calendar_search;
+    in-out property <int> calendar_count;
+    in-out property <int> calendar_first;
+    in-out property <int> calendar_selected;
+    in-out property <int> calendar_view;
+    in-out property <bool> calendar_all;
+    callback calendar_picked();
+    callback calendar_changed();
+    callback calendar_step(int);
+    callback calendar_today();
+    callback calendar_pick(int);
+    callback calendar_release_picked(string);
+    in-out property <[DownloadGroup]> downloads_page_groups;
+    in-out property <[DownloadEpisode]> downloads_page_transfers;
+    in-out property <string> downloads_page_summary;
+    in-out property <[int]> downloads_page_counts;
+    in-out property <string> downloads_page_query;
+    in-out property <int> downloads_page_filter;
+    in-out property <bool> downloads_page_sort_recent: true;
+    callback downloads_picked();
+    callback downloads_page_query_changed(string);
+    callback downloads_page_filter_changed(int);
+    callback downloads_page_sort_changed(bool);
+    callback downloads_page_group_toggled(string);
+    callback downloads_page_action(string, int);
     in-out property <[UpcomingRow]> home_upcoming: [];
     in-out property <[HomeCatalogSection]> home_catalog_sections: [];
     in-out property <[int]> home_catalog_order: [-1, -3, -2];
@@ -259,13 +296,17 @@ export component AppWindow inherits Window {
         root.more_parent = true;
         root.more_open = false;
         if (index == 0) { root.settings_picked(); }
-        else { root.about_picked(); }
+        else if index == 1 { root.about_picked(); }
+        else if index == 2 { root.calendar_picked(); }
+        else { root.downloads_picked(); }
         more_entry_tick.start();
     }
     function more_subpage_back() {
         system_back_scope.focus();
         if (root.narrow_ui && root.more_parent) {
             root.show_settings = false;
+            root.show_calendar = false;
+            root.show_downloads = false;
             root.show_about = false;
             root.show_home = false;
             root.show_library = false;
@@ -532,6 +573,12 @@ export component AppWindow inherits Window {
     callback addon_remove(int);
     callback addon_move_up(int);
     callback addon_move_down(int);
+    in-out property <bool> addon_config_open: false;
+    in-out property <string> addon_config_url;
+    in-out property <string> addon_config_label;
+    in-out property <bool> addon_config_streams: true;
+    in-out property <bool> addon_config_metadata: true;
+    callback addon_capabilities_changed(string, bool, bool);
     callback addon_configure(string);
     callback addon_refresh(int);
     // Copy an addon's install URL (Settings → Addons → "Copy link"); the row
@@ -547,6 +594,8 @@ export component AppWindow inherits Window {
     callback search_submitted(string);
     callback search_back_picked();
     callback search_history_cleared();
+    callback search_history_selected(int);
+    callback search_history_item_removed_at(int);
     callback search_history_item_removed(string);
     callback item_selected(string, int);
     callback stream_picked(int);
@@ -810,7 +859,7 @@ export component AppWindow inherits Window {
         }
 
         // ---- Discover page --------------------------------------------
-    if !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_home && !root.show_about && !root.more_open: DiscoverPage {
+    if !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads: DiscoverPage {
         nav-viewport-width: root.width;
         catalog <=> root.catalog;
         addon_names <=> root.addon_names;
@@ -827,6 +876,7 @@ export component AppWindow inherits Window {
         search_text <=> root.search_text;
         search_results <=> root.search_results;
         search_history: root.discover_search_history;
+        search_history_contexts: root.discover_search_history_contexts;
         search_results_open <=> root.discover_search_open;
         search_focused <=> root.discover_search_focused;
         search_filters_open: root.discover_search_filters_open;
@@ -874,6 +924,8 @@ export component AppWindow inherits Window {
         search_submitted(v) => { root.search_submitted(v); }
         search_back_picked => { root.search_back_picked(); }
         search_history_cleared => { root.search_history_cleared(); }
+        search_history_selected(index) => { root.search_history_selected(index); }
+        search_history_item_removed_at(index) => { root.search_history_item_removed_at(index); }
         search_history_item_removed(query) => { root.search_history_item_removed(query); }
         item_selected(id, i) => { root.item_selected(id, i); }
         discover_picked => { root.discover_picked(); }
@@ -888,7 +940,7 @@ export component AppWindow inherits Window {
     }
 
     // ---- Home page (landing page, Continue Watching) --------------------
-    if root.show_home && !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_about && !root.more_open: HomePage {
+    if root.show_home && !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads: HomePage {
         nav-viewport-width: root.width;
         continue_rows <=> root.home_continue;
         new_episode_rows <=> root.home_new_episodes;
@@ -1123,7 +1175,7 @@ export component AppWindow inherits Window {
     }
 
     // ---- Library page ---------------------------------------------------
-    if root.show_library && !root.player_open && !root.modal_visible && !root.show_settings && !root.show_home && !root.show_about && !root.more_open: LibraryPage {
+    if root.show_library && !root.player_open && !root.modal_visible && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads: LibraryPage {
         nav-viewport-width: root.width;
         library <=> root.library;
         category_rows <=> root.category_rows;
@@ -1303,6 +1355,12 @@ export component AppWindow inherits Window {
         addon_remove(i) => { root.addon_remove(i); }
         addon_move_up(i) => { root.addon_move_up(i); }
         addon_move_down(i) => { root.addon_move_down(i); }
+        addon_config_open <=> root.addon_config_open;
+        addon_config_url <=> root.addon_config_url;
+        addon_config_label <=> root.addon_config_label;
+        addon_config_streams <=> root.addon_config_streams;
+        addon_config_metadata <=> root.addon_config_metadata;
+        addon_capabilities_changed(u,s,m) => { root.addon_capabilities_changed(u,s,m); }
         addon_configure(u) => { root.addon_configure(u); }
         addon_refresh(i) => { root.addon_refresh(i); }
         addon_copy_link(u) => { root.addon_copy_link(u); }
@@ -1381,8 +1439,43 @@ export component AppWindow inherits Window {
         home_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.home_picked(); }
         discover_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.discover_picked(); }
         library_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.library_picked(); }
+        calendar_picked => { root.pick_more(2); }
+        downloads_picked => { root.pick_more(3); }
         settings_picked => { root.pick_more(0); }
         about_picked => { root.pick_more(1); }
+    }
+
+    if root.show_calendar && !root.player_open && !root.modal_visible && !root.more_open: CalendarPage {
+        cells: root.calendar_cells; week_cells: root.calendar_week; rows: root.calendar_rows; later: root.calendar_later;
+        title: root.calendar_title; day_title: root.calendar_day_title; count: root.calendar_count;
+        search <=> root.calendar_search; view <=> root.calendar_view; all <=> root.calendar_all;
+        refreshed => { root.calendar_changed(); } step(d) => { root.calendar_step(d); } today => { root.calendar_today(); }
+        day_picked(d) => { root.calendar_pick(d); } release_picked(k) => { root.calendar_release_picked(k); }
+        safe-top: root.safe-area-insets.top; safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right; safe-bottom: root.safe-area-insets.bottom;
+        system_back_request: root.system_back_request; kb_active <=> root.kb_active;
+        back => { root.more_subpage_back(); }
+        home_picked => { root.more_parent = false; root.home_picked(); }
+        discover_picked => { root.more_parent = false; root.discover_picked(); }
+        library_picked => { root.more_parent = false; root.library_picked(); }
+        settings_picked => { root.more_parent = false; root.settings_picked(); }
+        about_picked => { root.more_parent = false; root.about_picked(); }
+        more_picked => { root.open_more(); }
+    }
+    if root.show_downloads && !root.player_open && !root.modal_visible && !root.more_open: DownloadsPage {
+        groups: root.downloads_page_groups; transfers: root.downloads_page_transfers; summary: root.downloads_page_summary; counts: root.downloads_page_counts;
+        query <=> root.downloads_page_query; filter <=> root.downloads_page_filter; sort_recent <=> root.downloads_page_sort_recent;
+        query_changed(q) => { root.downloads_page_query_changed(q); } filter_changed(f) => { root.downloads_page_filter_changed(f); }
+        sort_changed(r) => { root.downloads_page_sort_changed(r); } group_toggled(k) => { root.downloads_page_group_toggled(k); }
+        action(k,a) => { root.downloads_page_action(k,a); }
+        safe-top: root.safe-area-insets.top; safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right; safe-bottom: root.safe-area-insets.bottom;
+        system_back_request: root.system_back_request; kb_active <=> root.kb_active;
+        back => { root.more_subpage_back(); }
+        home_picked => { root.more_parent = false; root.home_picked(); }
+        discover_picked => { root.more_parent = false; root.discover_picked(); }
+        library_picked => { root.more_parent = false; root.library_picked(); }
+        settings_picked => { root.more_parent = false; root.settings_picked(); }
+        about_picked => { root.more_parent = false; root.about_picked(); }
+        more_picked => { root.open_more(); }
     }
 
     // ---- Player overlay --------------------------------------------------

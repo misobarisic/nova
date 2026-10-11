@@ -132,7 +132,15 @@ impl TrackingState {
         {
             return Ok(None);
         }
-        let Some(index) = self.outbox.edits.iter().position(|e| e.target == *target) else {
+        // A rejected field remains available for correction, but cannot hold
+        // unrelated, explicitly requested edits behind it forever. Retryable
+        // edits retain their order and authentication/cooldown guards below.
+        let Some(index) = self
+            .outbox
+            .edits
+            .iter()
+            .position(|e| e.target == *target && e.state != DeliveryState::Rejected)
+        else {
             return Ok(None);
         };
         let edit = &mut self.outbox.edits[index];

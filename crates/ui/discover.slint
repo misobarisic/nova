@@ -1,8 +1,9 @@
 import { Spinner } from "std-widgets.slint";
+import { PillButton } from "settings-controls.slint";
 import { ScrollView } from "scrollview.slint";
 import { MediaCard } from "types.slint";
 import { KbMark } from "kbnav.slint";
-import { SideNav, NavMetrics } from "sidenav.slint";
+import { SideNav, NavMetrics, NavState } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
 import { Dropdown } from "dropdown.slint";
 import { SearchField } from "searchfield.slint";
@@ -145,6 +146,7 @@ component DiscoverHeader {
     in property <[string]> catalog_labels;
     in property <[string]> genre_names;
     in property <[string]> search_history;
+    in property <[string]> search_history_contexts;
     in-out property <bool> search_focused: false;
     in property <bool> search_filters_open: false;
     in property <[string]> search_addon_names: [];
@@ -196,6 +198,8 @@ component DiscoverHeader {
     callback back_picked();
     callback search_done();
     callback search_history_cleared();
+    callback search_history_selected(int);
+    callback search_history_item_removed_at(int);
     callback search_history_item_removed(string);
     callback filters_panned();
     callback filters_pan_released();
@@ -417,7 +421,7 @@ component DiscoverHeader {
                     VerticalLayout {
                         width: 100%;
                         spacing: 0px;
-                        for query in root.search_history: Rectangle {
+                        for query[index] in root.search_history: Rectangle {
                             height: 44px;
                             border-radius: 8px;
                             background: history_touch.has-hover ? Theme.current.selection_wash : transparent;
@@ -435,15 +439,23 @@ component DiscoverHeader {
                                         fill: Theme.current.text_hint;
                                     }
                                 }
-                                Text {
-                                    text: query;
-                                    height: 100%;
-                                    color: Theme.current.text_primary;
-                                    font-size: 14px;
+                                VerticalLayout {
                                     min-width: 0px;
                                     horizontal-stretch: 1;
-                                    overflow: elide;
-                                    vertical-alignment: center;
+                                    padding-top: 4px;
+                                    padding-bottom: 4px;
+                                    Text {
+                                        text: query;
+                                        color: Theme.current.text_primary;
+                                        font-size: 14px;
+                                        overflow: elide;
+                                    }
+                                    if index < root.search_history_contexts.length: Text {
+                                        text: root.search_history_contexts[index];
+                                        color: Theme.current.text_hint;
+                                        font-size: 11px;
+                                        overflow: elide;
+                                    }
                                 }
                                 Rectangle {
                                     width: 44px;
@@ -461,7 +473,7 @@ component DiscoverHeader {
                                     }
                                     remove_touch := TouchArea {
                                         mouse-cursor: pointer;
-                                        clicked => { root.search_history_item_removed(query); }
+                                        clicked => { root.search_history_item_removed_at(index); }
                                     }
                                 }
                                 Rectangle {
@@ -485,7 +497,7 @@ component DiscoverHeader {
                                 accessible-label: query;
                                 clicked => {
                                     root.search_text = query;
-                                    root.search_submitted(query);
+                                    root.search_history_selected(index);
                                 }
                             }
                         }
@@ -538,6 +550,8 @@ component DiscoverGrid {
     in-out property <int> kb_zone;
     in-out property <int> kb_idx;
     in property <bool> loading_more;
+    in property <bool> can_retry: false;
+    callback retry();
     in property <bool> loading: false;
     in property <string> empty_hint;
     in property <bool> stagger: false;
@@ -727,6 +741,14 @@ component DiscoverGrid {
                     horizontal-alignment: center;
                     wrap: word-wrap; min-width: 0px;
                 }
+                if root.can_retry && !root.loading_more: HorizontalLayout {
+                    alignment: center;
+                    PillButton {
+                        label: @tr("Retry");
+                        primary: true;
+                        clicked => { root.retry(); }
+                    }
+                }
             }
         }
     }
@@ -741,6 +763,7 @@ export component DiscoverPage {
     in-out property <[MediaCard]> catalog: [];
     in-out property <[MediaCard]> search_results: [];
     in property <[string]> search_history: [];
+    in property <[string]> search_history_contexts: [];
     in-out property <[string]> addon_names: [];
     in-out property <[string]> type_names: [];
     in-out property <[string]> catalog_names: [];
@@ -801,6 +824,8 @@ export component DiscoverPage {
     callback search_submitted(string);
     callback search_back_picked();
     callback search_history_cleared();
+    callback search_history_selected(int);
+    callback search_history_item_removed_at(int);
     callback search_history_item_removed(string);
     callback item_selected(string, int);
     callback home_picked();
@@ -810,7 +835,7 @@ export component DiscoverPage {
     callback about_picked();
     callback more_picked();
     in property <bool> more_open: false;
-    private property <int> nav_count: root.narrow ? 4 : 5;
+    private property <int> nav_count: root.narrow ? 4 : 7;
     changed narrow => { root.kb_nav = Math.min(root.kb_nav, root.nav_count - 1); }
     callback load_more();
     // Preload fetch window (visible ±2 rows) for poster loading/unloading
@@ -1095,9 +1120,10 @@ export component DiscoverPage {
                 root.library_picked();
             } else if (root.kb_nav == 3) {
                 if (root.narrow) { root.more_picked(); } else { root.settings_picked(); }
-            } else {
+            } else if root.kb_nav == 4 {
                 root.about_picked();
-            }
+            } else if root.kb_nav == 5 { NavState.calendar_picked(); }
+            else { NavState.downloads_picked(); }
         } else if (root.kb_zone == 1) {
             root.kb_cycle_addon(1);
         } else if (root.kb_zone == 2) {
@@ -1390,6 +1416,8 @@ export component DiscoverPage {
                     kb_zone <=> root.kb_zone;
                     kb_idx <=> root.kb_idx;
                     loading_more: root.display_loading_more;
+                    can_retry: root.display_can_load_more;
+                    retry => { root.load_more(); }
                     loading: root.display_loading;
                     empty_hint: root.display_empty_hint;
                     stagger: root.search_results_open && root.animate_search_results && Anim.enabled && Anim.transitions;
@@ -1419,6 +1447,7 @@ export component DiscoverPage {
                     catalog_labels: root.catalog_labels;
                     genre_names: root.genre_names;
                     search_history: root.search_history;
+                    search_history_contexts: root.search_history_contexts;
                     type_names: root.type_names;
                     addon_names: root.addon_names;
                     searchable: root.searchable;
@@ -1464,6 +1493,8 @@ export component DiscoverPage {
                     }
                     back_picked => { root.leave_search(); }
                     search_history_cleared => { root.search_history_cleared(); }
+                    search_history_selected(index) => { root.search_history_selected(index); }
+                    search_history_item_removed_at(index) => { root.search_history_item_removed_at(index); }
                     search_history_item_removed(query) => { root.search_history_item_removed(query); }
                     search_done => { nav_scope.focus(); }
                     filters_panned => { root.filters_panned(); }
@@ -1623,6 +1654,8 @@ export component DiscoverPage {
                 kb_zone <=> root.kb_zone;
                 kb_idx <=> root.kb_idx;
                 loading_more: root.display_loading_more;
+                    can_retry: root.display_can_load_more;
+                    retry => { root.load_more(); }
                 loading: root.display_loading;
                 empty_hint: root.display_empty_hint;
                 stagger: root.search_results_open && root.animate_search_results && Anim.enabled && Anim.transitions;
@@ -1651,6 +1684,7 @@ export component DiscoverPage {
                 catalog_labels: root.catalog_labels;
                 genre_names: root.genre_names;
                 search_history: root.search_history;
+                    search_history_contexts: root.search_history_contexts;
                 type_names: root.type_names;
                 addon_names: root.addon_names;
                 searchable: root.searchable;
@@ -1696,6 +1730,8 @@ export component DiscoverPage {
                 }
                 back_picked => { root.leave_search(); }
                 search_history_cleared => { root.search_history_cleared(); }
+                    search_history_selected(index) => { root.search_history_selected(index); }
+                    search_history_item_removed_at(index) => { root.search_history_item_removed_at(index); }
                 search_history_item_removed(query) => { root.search_history_item_removed(query); }
                 search_done => { nav_scope.focus(); }
                 filters_panned => { root.filters_panned(); }

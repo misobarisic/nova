@@ -67,11 +67,20 @@ fn projection_store() -> Option<ProjectionStore> {
 /// shows the same name (empty from older peers, then derived locally).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct SyncedAddon {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capabilities: Option<nova_providers::ProviderCapabilities>,
     #[serde(default)]
     label: String,
     enabled: bool,
     #[serde(default)]
     configure_ok: Option<bool>,
+}
+
+fn merged_addon_capabilities(
+    incoming: Option<nova_providers::ProviderCapabilities>,
+    local: Option<nova_providers::ProviderCapabilities>,
+) -> nova_providers::ProviderCapabilities {
+    incoming.or(local).unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +172,7 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
                     Ok((
                         a.url.clone(),
                         serde_json::to_string(&SyncedAddon {
+                            capabilities: a.capabilities,
                             label: a.label.clone(),
                             enabled: a.enabled,
                             configure_ok: None,
@@ -240,8 +250,9 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
     let owner = nova_sync::local_store()?;
     let dev = nova_sync::local_device()?;
     let mut store = owner.lock().unwrap();
+    let mut changed = false;
     if let Some(activity) = activity_update {
-        nova_sync::prepare_snapshot(
+        changed |= nova_sync::prepare_snapshot(
             &mut store,
             dev,
             DOMAIN_VIEWING_ACTIVITY,
@@ -260,7 +271,7 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
         // with an existing settings object conservatively retain all choices.
         let untouched =
             seed && domain == DOMAIN_SETTINGS && storage::try_get_str("settings")?.is_none();
-        nova_sync::prepare_snapshot(
+        changed |= nova_sync::prepare_snapshot(
             &mut store,
             dev,
             domain,
@@ -287,7 +298,12 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
         raw
     };
     store.queue_extra(key, Some(raw));
-    store.save()
+    store.save()?;
+    drop(store);
+    if changed && !applying() && !seed {
+        nova_sync::request_local_sync();
+    }
+    Ok(())
 }
 
 pub(crate) fn notify_library(entries: &[LibraryEntry]) {
@@ -379,6 +395,7 @@ pub(crate) fn notify_addons(addons: &[AddonStore]) {
         .iter()
         .filter_map(|addon| {
             let entry = SyncedAddon {
+                capabilities: addon.capabilities,
                 label: addon.label.clone(),
                 enabled: addon.enabled,
                 configure_ok: None,
@@ -732,6 +749,7 @@ impl Bridge {
                             .installed
                             .iter()
                             .map(|a| AddonStore {
+                                capabilities: nova_providers::provider_capabilities(&a.url),
                                 url: a.url.clone(),
                                 enabled: a.enabled,
                                 configure_ok: a.configure_ok,
@@ -991,6 +1009,7 @@ impl Bridge {
                 serde_json::from_str::<SyncedAddon>(value)
                     .ok()
                     .map(|a| AddonStore {
+                        capabilities: a.capabilities,
                         url: url.clone(),
                         enabled: a.enabled,
                         configure_ok: a.configure_ok,
@@ -1016,6 +1035,13 @@ impl Bridge {
         // Install missing ones (uses the cached manifest, else fetches) with
         // the synced label.
         for addon in &desired {
+            // Older peers don't know this field. An unrelated label/enable
+            // edit must not silently re-enable a locally disabled contribution.
+            let capabilities = merged_addon_capabilities(
+                addon.capabilities,
+                nova_providers::provider_capabilities(&addon.url),
+            );
+            self.apply_provider_capabilities(&addon.url, capabilities, false);
             let present = self
                 .shared
                 .lock()
@@ -1122,6 +1148,7 @@ impl Bridge {
                     .installed
                     .iter()
                     .map(|a| AddonStore {
+                        capabilities: nova_providers::provider_capabilities(&a.url),
                         url: a.url.clone(),
                         enabled: a.enabled,
                         configure_ok: a.configure_ok,
@@ -1188,10 +1215,7 @@ impl Bridge {
             let generation = self.sync_start_generation.fetch_add(1, Ordering::AcqRel) + 1;
             let b = self.clone();
             thread::spawn(move || {
-                let result = {
-                    let _phase = crate::startup_bench::span("sync_engine_start");
-                    nova_sync::SyncEngine::setup()
-                };
+                let result = nova_sync::SyncEngine::setup();
                 let _ = slint::invoke_from_event_loop(move || {
                     if b.sync_start_generation.load(Ordering::Acquire) != generation {
                         // Runtime teardown can wait for worker shutdown too.
@@ -1727,6 +1751,7 @@ mod tests {
     fn stores(urls: &[&str]) -> Vec<AddonStore> {
         urls.iter()
             .map(|u| AddonStore {
+                capabilities: None,
                 url: u.to_string(),
                 enabled: true,
                 configure_ok: None,
@@ -2184,5 +2209,36 @@ mod tests {
         let merged = merge_settings_fields(&base, &records);
         assert_eq!(merged.quality, 42);
         assert!(merged.animations);
+    }
+}
+
+#[cfg(test)]
+mod addon_capability_sync_tests {
+    use super::{SyncedAddon, merged_addon_capabilities};
+    use nova_providers::ProviderCapabilities;
+    #[test]
+    fn older_peer_omission_preserves_local_choices_but_explicit_defaults_reset() {
+        let old: SyncedAddon =
+            serde_json::from_str(r#"{"enabled":true,"label":"AniKoto"}"#).unwrap();
+        let streams_only = ProviderCapabilities {
+            streams: true,
+            metadata: false,
+        };
+        assert_eq!(
+            merged_addon_capabilities(old.capabilities, Some(streams_only)),
+            streams_only
+        );
+        assert_eq!(
+            merged_addon_capabilities(old.capabilities, None),
+            ProviderCapabilities::default()
+        );
+        let explicit: SyncedAddon = serde_json::from_str(
+            r#"{"enabled":true,"capabilities":{"streams":true,"metadata":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            merged_addon_capabilities(explicit.capabilities, Some(streams_only)),
+            ProviderCapabilities::default()
+        );
     }
 }

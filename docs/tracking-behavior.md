@@ -222,6 +222,8 @@ before retry. The Tracking tab shows pending, sending, retry, authentication,
 rejected, inactive-account, and alignment states. **Refresh / retry** cannot bypass
 a server cooldown. A score-preference change requires correcting an older queued
 score rather than silently converting it.
+Rejected manual fields remain available for correction, but do not block newer
+explicit edits to independent fields on the same target.
 
 If refreshed source metadata removes an assigned episode ID, tracking pauses for
 alignment review. **Edit alignment** requires another preview and discards unsent

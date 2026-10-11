@@ -775,7 +775,8 @@ export component PlayerOverlay {
         if (root.kb_idx == 2 && !root.is_android) {
             root.set_volume(Math.max(0, Math.min(100, root.volume + d * 5)));
         } else if (root.kb_idx == 3 || root.kb_idx == 4) {
-            root.seek(Math.max(0, Math.min(root.duration, root.position + d * 10)));
+            root.position = Math.max(0, Math.min(root.duration, root.position + d * 10));
+            root.seek(root.position);
         }
     }
 
@@ -980,13 +981,15 @@ export component PlayerOverlay {
     }
 
     function backdrop_single_tap(was_visible: bool) {
-        if (was_visible) {
+        // Hover can reveal the controls before a click. Playback intent must
+        // not depend on whether that hover happened to wake the OSD first.
+        if (!root.is_android) {
+            root.toggle_pause();
+            root.osd_mouse_moved();
+        } else if (was_visible) {
             root.osd_visible = false;
         } else {
             root.osd_mouse_moved();
-            if (!root.is_android) {
-                root.toggle_pause();
-            }
         }
     }
 
@@ -1168,6 +1171,10 @@ export component PlayerOverlay {
                     } else {
                         reject
                     }
+                } else if ((e.text == " " || e.text == "k" || e.text == "K")
+                    && !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta) {
+                    if (!e.repeat) { root.toggle_pause(); }
+                    accept
                 } else if (e.text == Key.UpArrow) {
                     root.kb_adjust(1);
                     accept
@@ -1223,8 +1230,8 @@ export component PlayerOverlay {
             }
         }
 
-        // Video gesture surface. Single taps toggle the OSD (and, off Android,
-        // toggle play/pause on wake). Seekable side taps wait 280 ms:
+        // Video gesture surface. Android singles toggle the OSD; desktop
+        // singles toggle playback and show controls. Side taps wait 280 ms:
         // - double-tap the outer thirds to seek ∓10 s (any platform):
         //   seek feedback only, preserving the OSD and pause state;
         // - press-and-hold 500 ms to preview 2× until release (any platform);
@@ -1248,6 +1255,8 @@ export component PlayerOverlay {
             width: 100%;
             height: 100%;
             pointer-event(ev) => {
+                if ((ev.kind == PointerEventKind.down || ev.kind == PointerEventKind.up)
+                    && ev.button != PointerEventButton.left) { return; }
                 if (ev.kind == PointerEventKind.down) {
                     player_backdrop.osd_visible_at_press = root.osd_visible;
                     player_backdrop.dragged = false;

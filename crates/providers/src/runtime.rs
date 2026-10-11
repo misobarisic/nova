@@ -47,6 +47,8 @@ pub struct PluginPermissions {
 pub struct PluginCapabilities {
     #[serde(default)]
     pub contextual_streams: bool,
+    #[serde(default)]
+    pub configurable_capabilities: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

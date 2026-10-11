@@ -1,6 +1,6 @@
 //! Player backdrop gestures (headless).
 //!
-//! The video backdrop owns taps (OSD toggle), double-taps on the outer
+//! The video backdrop owns taps (desktop pause, Android OSD toggle), double-taps on the outer
 //! thirds (∓10 s seek), a 500 ms press-and-hold (transient 2× preview until
 //! release) and, on Android, vertical swipes (left = brightness, right =
 //! system volume). Covers that double-taps seek without waking controls or
@@ -152,7 +152,7 @@ fn backdrop_double_tap_hold_and_swipe() {
             ),
         );
 
-        // ---- Lone side tap hides the OSD after the pairing window ----
+        // ---- Desktop side single pauses and shows controls after pairing ----
         tap(&app, 500.0, 300.0);
         let app2 = app.as_weak();
         let failures2 = failures1.clone();
@@ -160,8 +160,8 @@ fn backdrop_double_tap_hold_and_swipe() {
             let app = app2.upgrade().unwrap();
             fail(
                 &failures2,
-                !app.get_osd_visible(),
-                "lone tap must hide the OSD after the window",
+                app.get_osd_visible() && toggles1.borrow().eq(&1),
+                "desktop single must show the OSD and toggle pause after the window",
             );
             fail(
                 &failures2,
@@ -169,7 +169,7 @@ fn backdrop_double_tap_hold_and_swipe() {
                 "lone tap must not seek",
             );
 
-            // ---- Middle tap wakes immediately (and toggles pause off Android) ----
+            // ---- Middle click toggles pause immediately with visible controls ----
             tap(&app, 300.0, 300.0);
             fail(
                 &failures2,
@@ -178,8 +178,8 @@ fn backdrop_double_tap_hold_and_swipe() {
             );
             fail(
                 &failures2,
-                toggles1.borrow().eq(&1),
-                "desktop wake tap must toggle pause",
+                toggles1.borrow().eq(&2),
+                "desktop center click must toggle pause with visible controls",
             );
             let app3 = app.as_weak();
             let failures3 = failures2.clone();
@@ -187,7 +187,7 @@ fn backdrop_double_tap_hold_and_swipe() {
                 let app = app3.upgrade().unwrap();
                 fail(
                     &failures3,
-                    toggles1.borrow().eq(&1),
+                    toggles1.borrow().eq(&2),
                     "no trailing single may fire after an immediate tap",
                 );
 

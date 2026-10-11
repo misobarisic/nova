@@ -138,6 +138,7 @@ pub fn set_foreground(foreground: bool) {
     FOREGROUND.store(foreground, std::sync::atomic::Ordering::Relaxed);
     if let Some(engine) = engine() {
         engine.cadence_notify.notify_one();
+        engine.change_notify.notify_one();
     }
 }
 
@@ -156,6 +157,7 @@ pub fn write_settings(settings: &SyncSettings) {
     }
     if let Some(engine) = engine() {
         engine.cadence_notify.notify_one();
+        engine.change_notify.notify_one();
     }
 }
 
@@ -228,6 +230,8 @@ pub struct SyncEngine {
     conns: Arc<Mutex<HashMap<String, Connection>>>,
     /// Wakes the sync worker; coalesces overlapping triggers.
     sync_notify: Arc<tokio::sync::Notify>,
+    changes: Arc<Mutex<ChangeSchedule>>,
+    change_notify: Arc<tokio::sync::Notify>,
     /// Recompute the periodic deadline without requesting a pass.
     cadence_notify: Arc<tokio::sync::Notify>,
     /// One explicit recovery pass may bypass old failure health.
@@ -236,6 +240,126 @@ pub struct SyncEngine {
     network_refreshing: Arc<AtomicBool>,
     device: u64,
     stop: Arc<AtomicBool>,
+}
+
+/// Ephemeral deadlines only: records are persisted before requesting a wake.
+/// Taking a deadline before the pass ensures a later edit cannot be cleared by
+/// completion of a pass that did not observe it.
+#[derive(Default)]
+struct ChangeSchedule {
+    first_edit: Option<tokio::time::Instant>,
+    edit_due: Option<tokio::time::Instant>,
+    playback_due: Option<tokio::time::Instant>,
+}
+impl ChangeSchedule {
+    fn changed(&mut self, now: tokio::time::Instant, playback: bool) {
+        if playback {
+            self.playback_due
+                .get_or_insert(now + Duration::from_secs(120));
+        } else {
+            let first = *self.first_edit.get_or_insert(now);
+            self.edit_due =
+                Some((now + Duration::from_secs(2)).min(first + Duration::from_secs(10)));
+        }
+    }
+    fn deadline(&self) -> Option<tokio::time::Instant> {
+        self.edit_due.into_iter().chain(self.playback_due).min()
+    }
+    fn take_pending(&mut self, allowed: bool) -> bool {
+        if allowed && self.deadline().is_some() {
+            *self = Self::default();
+            true
+        } else {
+            false
+        }
+    }
+    fn take_due(&mut self, now: tokio::time::Instant, allowed: bool) -> bool {
+        if allowed && self.deadline().is_some_and(|due| due <= now) {
+            *self = Self::default();
+            true
+        } else {
+            false
+        }
+    }
+}
+thread_local! {
+    static PLAYBACK_CHECKPOINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// Classify a periodic playback save without making manual progress edits wait.
+pub fn playback_checkpoint<T>(save: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PLAYBACK_CHECKPOINT.set(self.0);
+        }
+    }
+    let _reset = Reset(PLAYBACK_CHECKPOINT.replace(true));
+    save()
+}
+/// Call only after a successful transaction containing actual local mutations.
+pub fn request_local_sync() {
+    if let Some(engine) = engine() {
+        engine.schedule_local_change();
+    }
+}
+/// Hand off already-persisted playback changes immediately after pause,
+/// stop or completion. A terminal lifecycle save may run while backgrounded,
+/// but only the live app engine (never a headless job lease) may request it.
+/// Repeated paused ticks with no new mutation neither notify nor request work.
+pub fn flush_local_sync() {
+    if let Some(engine) = engine() {
+        let allowed = read_settings().enabled && !engine.stop.load(Ordering::Relaxed);
+        #[cfg(target_os = "android")]
+        let allowed = allowed && FOREGROUND_OWNER.load(Ordering::Acquire);
+        if engine
+            .changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take_pending(allowed)
+        {
+            // Like scheduled automatic pushes, preserve peer failure backoff.
+            engine.sync_notify.notify_one();
+        }
+    }
+}
+
+async fn change_loop(
+    changes: Arc<Mutex<ChangeSchedule>>,
+    notify: Arc<tokio::sync::Notify>,
+    sync_notify: Arc<tokio::sync::Notify>,
+    stop: Arc<AtomicBool>,
+) {
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let due = changes.lock().unwrap_or_else(|e| e.into_inner()).deadline();
+        let Some(due) = due else {
+            notify.notified().await;
+            continue;
+        };
+        tokio::select! {
+            _ = notify.notified() => continue,
+            _ = tokio::time::sleep_until(due) => {}
+        }
+        // Background cadence and Android headless ownership remain authoritative.
+        let allowed = read_settings().enabled && FOREGROUND.load(Ordering::Relaxed);
+        #[cfg(target_os = "android")]
+        let allowed = allowed && FOREGROUND_OWNER.load(Ordering::Acquire);
+        if !allowed {
+            notify.notified().await;
+            continue;
+        }
+        if changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take_due(tokio::time::Instant::now(), allowed)
+        {
+            // Deliberately retain peer health/backoff; only explicit Sync now
+            // and network recovery may force a retry of unavailable devices.
+            sync_notify.notify_one();
+        }
+    }
 }
 
 /// Per-peer failure state driving the backoff between passes.
@@ -453,6 +577,14 @@ impl SyncEngine {
 
         let stop = Arc::new(AtomicBool::new(false));
         let cadence_notify = Arc::new(tokio::sync::Notify::new());
+        let changes = Arc::new(Mutex::new(ChangeSchedule::default()));
+        let change_notify = Arc::new(tokio::sync::Notify::new());
+        rt.spawn(change_loop(
+            changes.clone(),
+            change_notify.clone(),
+            sync_notify.clone(),
+            stop.clone(),
+        ));
         let force_attempt = Arc::new(AtomicBool::new(false));
         let health: Arc<Mutex<HashMap<String, PeerHealth>>> = Arc::new(Mutex::new(HashMap::new()));
         let conns: Arc<Mutex<HashMap<String, Connection>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -500,6 +632,8 @@ impl SyncEngine {
             sync_notify,
             cadence_notify,
             force_attempt,
+            changes,
+            change_notify,
             network_refreshing: Arc::new(AtomicBool::new(false)),
             device,
             stop,
@@ -723,17 +857,30 @@ impl SyncEngine {
         });
     }
 
+    fn schedule_local_change(&self) {
+        self.changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .changed(tokio::time::Instant::now(), PLAYBACK_CHECKPOINT.get());
+        self.change_notify.notify_one();
+    }
+
     /// Record a local change. `ts` is the observation time (0 = stamp now).
     /// A value of `None` is a tombstone (deletion). No-op when unchanged.
     pub fn notify(&self, domain: &str, key: &str, value: Option<&str>, ts: u64) {
         let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
-        if store.set(domain, key, value.map(str::to_string), ts, self.device)
-            && let Err(e) = store.save()
-        {
-            nova_storage::report(nova_storage::Error::new(
-                nova_storage::ErrorKind::Transaction,
-                e,
-            ));
+        let changed = store.set(domain, key, value.map(str::to_string), ts, self.device);
+        if changed {
+            match store.save() {
+                Ok(()) => {
+                    drop(store);
+                    self.schedule_local_change();
+                }
+                Err(e) => nova_storage::report(nova_storage::Error::new(
+                    nova_storage::ErrorKind::Transaction,
+                    e,
+                )),
+            }
         }
     }
 
@@ -748,11 +895,17 @@ impl SyncEngine {
         for (key, value, ts) in changes {
             changed |= store.set(domain, key, value.clone(), *ts, self.device);
         }
-        if changed && let Err(e) = store.save() {
-            nova_storage::report(nova_storage::Error::new(
-                nova_storage::ErrorKind::Transaction,
-                e,
-            ));
+        if changed {
+            match store.save() {
+                Ok(()) => {
+                    drop(store);
+                    self.schedule_local_change();
+                }
+                Err(e) => nova_storage::report(nova_storage::Error::new(
+                    nova_storage::ErrorKind::Transaction,
+                    e,
+                )),
+            }
         }
     }
 
@@ -785,6 +938,7 @@ impl SyncEngine {
         self.stop.store(true, Ordering::Relaxed);
         self.sync_notify.notify_one();
         self.cadence_notify.notify_one();
+        self.change_notify.notify_one();
         self.conns.lock().unwrap_or_else(|e| e.into_inner()).clear();
         let router = self.router.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(router) = router {
@@ -1768,6 +1922,97 @@ pub(crate) fn hex_decode(s: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_edits_debounce_and_continuous_edits_have_a_ceiling() {
+        let now = tokio::time::Instant::now();
+        let mut schedule = ChangeSchedule::default();
+        schedule.changed(now, false);
+        schedule.changed(now + Duration::from_secs(1), false);
+        assert_eq!(schedule.deadline(), Some(now + Duration::from_secs(3)));
+        assert!(!schedule.take_due(now + Duration::from_secs(2), true));
+        for second in 2..=9 {
+            schedule.changed(now + Duration::from_secs(second), false);
+        }
+        assert_eq!(schedule.deadline(), Some(now + Duration::from_secs(10)));
+        assert!(schedule.take_due(now + Duration::from_secs(10), true));
+        assert_eq!(schedule.deadline(), None);
+    }
+
+    #[test]
+    fn playback_heartbeat_is_not_postponed_by_checkpoints() {
+        let now = tokio::time::Instant::now();
+        let mut schedule = ChangeSchedule::default();
+        for second in [0, 30, 60, 90] {
+            schedule.changed(now + Duration::from_secs(second), true);
+        }
+        assert_eq!(schedule.deadline(), Some(now + Duration::from_secs(120)));
+        assert!(schedule.take_due(now + Duration::from_secs(120), true));
+        schedule.changed(now + Duration::from_secs(150), true);
+        assert_eq!(schedule.deadline(), Some(now + Duration::from_secs(270)));
+    }
+
+    #[test]
+    fn pause_dispatches_pending_progress_once_and_empty_flush_is_idle() {
+        let now = tokio::time::Instant::now();
+        let mut schedule = ChangeSchedule::default();
+        assert!(!schedule.take_pending(true));
+        schedule.changed(now, true);
+        assert!(schedule.take_pending(true));
+        assert_eq!(schedule.deadline(), None);
+        assert!(!schedule.take_pending(true));
+    }
+
+    #[test]
+    fn edits_during_active_pass_keep_their_own_deadline() {
+        let now = tokio::time::Instant::now();
+        let mut schedule = ChangeSchedule::default();
+        schedule.changed(now, false);
+        assert!(schedule.take_due(now + Duration::from_secs(2), true));
+        // Dispatch has taken the old generation; finishing its network pass
+        // never clears changes accumulated since dispatch.
+        schedule.changed(now + Duration::from_secs(3), false);
+        assert_eq!(schedule.deadline(), Some(now + Duration::from_secs(5)));
+        assert!(schedule.take_due(now + Duration::from_secs(5), true));
+    }
+
+    #[test]
+    fn disabled_or_background_work_retains_pending_changes_for_resume() {
+        let now = tokio::time::Instant::now();
+        let mut schedule = ChangeSchedule::default();
+        schedule.changed(now, false);
+        assert!(!schedule.take_due(now + Duration::from_secs(30), false));
+        assert_eq!(schedule.deadline(), Some(now + Duration::from_secs(2)));
+        assert!(schedule.take_due(now + Duration::from_secs(31), true));
+        assert_eq!(schedule.deadline(), None);
+    }
+
+    #[test]
+    fn lifecycle_handoff_retains_disabled_or_headless_work() {
+        let now = tokio::time::Instant::now();
+        let mut schedule = ChangeSchedule::default();
+        schedule.changed(now, true);
+        assert!(!schedule.take_pending(false));
+        assert_eq!(schedule.deadline(), Some(now + Duration::from_secs(120)));
+        assert!(schedule.take_pending(true));
+        assert!(!schedule.take_pending(true));
+        // A change during that handoff pass queues its own follow-up.
+        schedule.changed(now + Duration::from_secs(1), false);
+        assert!(schedule.take_pending(true));
+    }
+
+    #[test]
+    fn checkpoint_classification_restores_nested_and_panicking_scopes() {
+        assert!(!PLAYBACK_CHECKPOINT.get());
+        playback_checkpoint(|| {
+            assert!(PLAYBACK_CHECKPOINT.get());
+            playback_checkpoint(|| assert!(PLAYBACK_CHECKPOINT.get()));
+            assert!(PLAYBACK_CHECKPOINT.get());
+        });
+        assert!(!PLAYBACK_CHECKPOINT.get());
+        let _ = std::panic::catch_unwind(|| playback_checkpoint(|| panic!("save failed")));
+        assert!(!PLAYBACK_CHECKPOINT.get());
+    }
 
     #[test]
     fn settings_new_fields_default_to_current_behavior() {

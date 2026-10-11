@@ -7,11 +7,84 @@ use crate::{
 use addons::Manifest;
 use percent_encoding::percent_decode_str;
 use serde_json::{Value, json};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, OnceLock},
+    time::Duration,
+};
 use url::Url;
 
 pub const ANIKOTO_PROVIDER_URL: &str = "nova-provider://anikoto";
 const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
+
+/// User-selected contributions; metadata includes catalog browsing and search.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ProviderCapabilities {
+    pub streams: bool,
+    pub metadata: bool,
+}
+impl Default for ProviderCapabilities {
+    fn default() -> Self {
+        Self {
+            streams: true,
+            metadata: true,
+        }
+    }
+}
+fn capability_configs() -> &'static Mutex<HashMap<String, ProviderCapabilities>> {
+    static CONFIGS: OnceLock<Mutex<HashMap<String, ProviderCapabilities>>> = OnceLock::new();
+    CONFIGS.get_or_init(Default::default)
+}
+pub fn supports_capability_config(url: &str) -> bool {
+    bundled_providers().iter().any(|p| {
+        p.url == url.trim_end_matches('/')
+            && serde_json::from_str::<PluginManifest>(p.plugin_manifest)
+                .is_ok_and(|m| m.capabilities.configurable_capabilities)
+    })
+}
+pub fn provider_capabilities(url: &str) -> Option<ProviderCapabilities> {
+    supports_capability_config(url).then(|| {
+        capability_configs()
+            .lock()
+            .unwrap()
+            .get(url.trim_end_matches('/'))
+            .copied()
+            .unwrap_or_default()
+    })
+}
+pub fn configure_provider_capabilities(url: &str, config: ProviderCapabilities) {
+    if supports_capability_config(url) {
+        capability_configs()
+            .lock()
+            .unwrap()
+            .insert(url.trim_end_matches('/').into(), config);
+    }
+}
+/// Always start from the source manifest, so re-enabling a contribution cannot
+/// be limited by an earlier filtered manifest cached on disk.
+pub fn configured_provider_manifest(url: &str) -> Option<Manifest> {
+    let config = provider_capabilities(url)?;
+    let source = bundled_providers()
+        .iter()
+        .find(|p| p.url == url.trim_end_matches('/'))?;
+    manifest_with_capabilities(source, config)
+}
+fn manifest_with_capabilities(
+    source: &BundledProvider,
+    config: ProviderCapabilities,
+) -> Option<Manifest> {
+    let manifest: PluginManifest = serde_json::from_str(source.plugin_manifest).ok()?;
+    let addon: Value = serde_json::from_str(source.addon_manifest).ok()?;
+    let runtime = PluginRuntime::new(manifest, source.source);
+    let result = runtime
+        .invoke(
+            crate::MemoryProviderHost::new(),
+            &json!({"op":"manifest", "manifest":addon, "config":config}),
+        )
+        .ok()?;
+    serde_json::from_value(result).ok()
+}
 
 pub struct BundledProvider {
     pub url: &'static str,
@@ -47,6 +120,9 @@ pub fn private_provider_id(id: &str) -> bool {
 }
 
 pub fn supports_contextual_streams(provider_url: &str) -> bool {
+    if provider_capabilities(provider_url).is_some_and(|config| !config.streams) {
+        return false;
+    }
     bundled_providers()
         .iter()
         .find(|p| p.url == provider_url.trim_end_matches('/'))
@@ -118,7 +194,14 @@ pub fn fetch_builtin_addon_with_timeout(
     };
     let path = decoded_path_segments(&url);
     if path.last().is_some_and(|s| s == "manifest.json") {
-        return Some(Ok(definition.addon_manifest.as_bytes().to_vec()));
+        return Some(
+            serde_json::to_vec(
+                &configured_provider_manifest(definition.url).unwrap_or_else(|| {
+                    serde_json::from_str(definition.addon_manifest).expect("bundled manifest")
+                }),
+            )
+            .map_err(|e| ProviderHostError(e.to_string())),
+        );
     }
     let execute = || {
         let mut manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest)
@@ -130,6 +213,19 @@ pub fn fetch_builtin_addon_with_timeout(
         let addon: Manifest = serde_json::from_str(definition.addon_manifest)
             .map_err(|e| ProviderHostError(e.to_string()))?;
         let request = parse_protocol_request(&path, &manifest.id)?;
+        let config = provider_capabilities(definition.url).unwrap_or_default();
+        match &request {
+            ProtocolRequest::Catalog { .. } if !config.metadata => {
+                return Ok(br#"{"metas":[]}"#.to_vec());
+            }
+            ProtocolRequest::Meta { .. } if !config.metadata => {
+                return Ok(br#"{"meta":null}"#.to_vec());
+            }
+            ProtocolRequest::Streams { .. } | ProtocolRequest::Lookup { .. } if !config.streams => {
+                return Ok(br#"{"streams":[]}"#.to_vec());
+            }
+            _ => {}
+        }
         let state = crate::host::session_state();
         let host = Arc::new(ScopedHttpHost::new(
             state,
@@ -139,7 +235,8 @@ pub fn fetch_builtin_addon_with_timeout(
             manifest.limits.redirects,
             manifest.limits.requests_per_operation,
         ));
-        let provider = JsProvider::new(manifest, addon, definition.source);
+        let mut provider = JsProvider::new(manifest, addon, definition.source);
+        provider.config = config;
         let value = provider
             .protocol_response(host, request)
             .map_err(|e| ProviderHostError(e.to_string()))?;
@@ -151,6 +248,7 @@ pub fn fetch_builtin_addon_with_timeout(
 struct JsProvider {
     descriptor: ProviderDescriptor,
     runtime: PluginRuntime,
+    config: ProviderCapabilities,
 }
 
 impl JsProvider {
@@ -175,9 +273,15 @@ impl JsProvider {
                     .collect(),
             },
             runtime: PluginRuntime::new(manifest, source),
+            config: ProviderCapabilities::default(),
         }
     }
-    fn call(&self, host: Arc<dyn ProviderHost>, request: Value) -> Result<Value, ProviderError> {
+    fn call(
+        &self,
+        host: Arc<dyn ProviderHost>,
+        mut request: Value,
+    ) -> Result<Value, ProviderError> {
+        request["config"] = serde_json::to_value(self.config).expect("capabilities serialize");
         self.runtime.invoke(host, &request)
     }
     fn protocol_response(

@@ -930,6 +930,43 @@ fn snapshot(state: &TrackingState) -> TargetSnapshot {
     }
 }
 #[test]
+fn rejected_field_does_not_block_a_new_independent_edit() {
+    let mut state = delivery_state();
+    state.snapshots.push(snapshot(&state));
+    let key = state.targets[0].key.clone();
+    state
+        .enqueue_edit(
+            &key,
+            EntryPatch {
+                score_tenths: Some(85),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let score = state.begin_edit(&key, 0).unwrap().unwrap();
+    state
+        .finish_edit(&score, Err(DeliveryFailure::Rejected), 0)
+        .unwrap();
+    state
+        .enqueue_edit(
+            &key,
+            EntryPatch {
+                status: Some(ListStatus::OnHold),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let status = state
+        .begin_edit(&key, 1)
+        .unwrap()
+        .expect("new status must be deliverable");
+    assert_eq!(status.edit().patch.status, Some(ListStatus::OnHold));
+    assert_eq!(status.edit().patch.score_tenths, None);
+    assert_eq!(state.outbox.edits()[0].state, DeliveryState::Rejected);
+    state.validate().unwrap();
+}
+
+#[test]
 fn field_edits_preserve_independent_fields_and_serialize_with_progress() {
     let mut state = delivery_state();
     state.snapshots.push(snapshot(&state));

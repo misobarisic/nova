@@ -5,24 +5,51 @@ use super::*;
 pub(crate) fn progress_map_key(series_id: &str, episode_id: &str) -> String {
     format!("{series_id}\u{1}{episode_id}")
 }
-/// Days since the Unix epoch for an "YYYY-MM-DD" (prefix) date.
-/// Same calendar math as the relative branch of
-/// [`Bridge::format_human_date`]; `None` when unparseable.
+/// Validate the date prefix without slicing at untrusted UTF-8 boundaries.
+/// Addon timestamps retain their date-prefix behavior.
+pub(crate) fn iso_date(iso: &str) -> Option<(i64, i64, i64)> {
+    let prefix = iso.trim().as_bytes().get(..10)?;
+    if prefix[4] != b'-'
+        || prefix[7] != b'-'
+        || prefix
+            .iter()
+            .enumerate()
+            .any(|(i, b)| i != 4 && i != 7 && !b.is_ascii_digit())
+    {
+        return None;
+    }
+    let number = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .fold(0_i64, |n, b| n * 10 + i64::from(b - b'0'))
+    };
+    let year = number(&prefix[..4]);
+    let month = number(&prefix[5..7]);
+    let day = number(&prefix[8..10]);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let max_day = match month {
+        2 => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        4 | 6 | 9 | 11 => 30,
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        _ => return None,
+    };
+    (year > 0 && (1..=max_day).contains(&day)).then_some((year, month, day))
+}
+
+/// Days since the Unix epoch for a validated Gregorian date prefix.
 pub(crate) fn iso_days(iso: &str) -> Option<i64> {
-    let s = iso.trim();
-    if s.len() < 10 {
-        return None;
-    }
-    let year: i64 = s[0..4].parse().ok()?;
-    let month: i64 = s[5..7].parse().ok()?;
-    let day: i64 = s[8..10].parse().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-    let mut days =
-        (year - 1970) * 365 + (year - 1969) / 4 - (year - 1901) / 100 + (year - 1601) / 400;
-    let mdays: &[i64] = &[0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-    days += mdays[(month - 1) as usize] + (day - 1);
+    let (year, month, day) = iso_date(iso)?;
+    let previous = year - 1;
+    let mut days = (year - 1970) * 365 + previous / 4 - previous / 100 + previous / 400
+        - (1969 / 4 - 1969 / 100 + 1969 / 400);
+    let mdays = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    days += mdays[(month - 1) as usize] + day - 1;
     if month > 2 && (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) {
         days += 1;
     }
@@ -507,5 +534,34 @@ pub(crate) fn apply_stream_episode_context(app: &AppWindow, video: Option<&Video
         app.set_episode_context(SharedString::default());
         app.set_stream_episode_number(SharedString::default());
         app.set_stream_episode_title(SharedString::default());
+    }
+}
+
+#[cfg(test)]
+mod date_tests {
+    use super::*;
+    #[test]
+    fn date_prefixes_are_safe_and_gregorian() {
+        for bad in [
+            "2026-💥-01",
+            "💥26-01-01",
+            "2026/01/01",
+            "2026-02-29",
+            "1900-02-29",
+            "2026-04-31",
+            "0000-01-01",
+        ] {
+            assert_eq!(iso_days(bad), None, "{bad}");
+            assert_eq!(Bridge::format_human_date(bad, false), None);
+            assert_eq!(Bridge::format_human_date(bad, true), None);
+        }
+        assert_eq!(iso_days("1970-01-01"), Some(0));
+        assert_eq!(iso_days("1969-12-31"), Some(-1));
+        assert_eq!(iso_days(" 2000-02-29T12:00:00Z "), iso_days("2000-02-29"));
+        assert_eq!(
+            iso_days("2000-03-01").unwrap() - iso_days("2000-02-29").unwrap(),
+            1
+        );
+        assert!(Bridge::format_human_date("2000-02-29T12:00:00Z", false).is_some());
     }
 }

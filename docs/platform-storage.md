@@ -11,6 +11,8 @@ Nova keeps its durable state and rebuildable cache in separate directories. Thes
 | Windows | `%APPDATA%\nova` (normally `%USERPROFILE%\AppData\Roaming\nova`) | `%LOCALAPPDATA%\nova` (normally `%USERPROFILE%\AppData\Local\nova`) |
 | Android | App-private files directory returned by Android (`Context.getFilesDir()`) | App-private cache directory returned by Android (`Context.getCacheDir()`) |
 
+On Linux and macOS, empty or relative XDG roots are ignored and use the home-directory fallback.
+
 On desktop, if the platform environment variables and home-directory fallback are unavailable, Nova falls back to a `nova` directory under the system temporary directory. On Android, `NOVA_DATA_DIR` is a fallback if the app-private files directory has not been initialized. `NOVA_CACHE_DIR` overrides the cache path; otherwise Nova uses Android's cache directory.
 
 On Android, the application ID is `dev.misob.nova`. Android controls the actual private path; it is commonly under `/data/user/0/dev.misob.nova/`, but the app should use the platform-provided directories rather than hard-code that location.
@@ -20,7 +22,7 @@ On Android, the application ID is `dev.misob.nova`. Android controls the actual 
 | Location | Contents |
 | --- | --- |
 | `<data>/nova.redb` | Persistent database for settings, app state and local metadata. Metadata cache records use adaptive zstd level 3 compression; user state stays JSON. |
-| `<data>/downloads/` | Downloaded episodes managed by Nova's download coordinator. |
+| `<data>/downloads/` | Downloaded episodes managed by Nova's download coordinator. HTTP partial files have a `.part.resume.json` sidecar recording their URL and response validators; it is removed after completion. |
 | `<cache>/posters/` | Poster image files fetched from the network. |
 | `<cache>/torrents/` | Default torrent workspace and DHT state. If a custom torrent directory is configured, torrent data uses that directory instead. |
 | Android `<files>/fonts/` | Subtitle font extracted for mpv. |

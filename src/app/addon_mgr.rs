@@ -188,6 +188,7 @@ impl Bridge {
         _configure: Option<bool>,
         _label_override: Option<String>,
     ) {
+        let manifest = nova_providers::configured_provider_manifest(&url).unwrap_or(manifest);
         let label = {
             let state = self.shared.lock().unwrap();
             let Some(desired) = state.installed.iter().find(|a| a.url == url) else {
@@ -326,6 +327,59 @@ impl Bridge {
         }
     }
 
+    /// Applies only source-declared local configuration; remote addons keep
+    /// their configuration encoded in their install URL.
+    pub(super) fn apply_provider_capabilities(
+        &self,
+        url: &str,
+        config: nova_providers::ProviderCapabilities,
+        persist: bool,
+    ) {
+        if !nova_providers::supports_capability_config(url)
+            || (persist
+                && !self
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .installed
+                    .iter()
+                    .any(|a| a.url == url))
+        {
+            return;
+        }
+        let previous = nova_providers::provider_capabilities(url).unwrap_or_default();
+        if previous == config {
+            return;
+        }
+        nova_providers::configure_provider_capabilities(url, config);
+        let Some(manifest) = nova_providers::configured_provider_manifest(url) else {
+            nova_providers::configure_provider_capabilities(url, previous);
+            return;
+        };
+        {
+            let mut state = self.shared.lock().unwrap();
+            if let Some(entry) = state.installed.iter_mut().find(|a| a.url == url) {
+                entry.manifest = manifest;
+            }
+        }
+        // Reject in-flight results from the old inventory even when the new
+        // configuration leaves no catalog to trigger another request.
+        self.catalog_gen.fetch_add(1, Ordering::Relaxed);
+        if previous.streams != config.streams {
+            self.clear_streams();
+        }
+        if persist {
+            self.persist_installed();
+        }
+        self.refresh_all(true);
+        if let Some(app) = self.app()
+            && app.get_addon_config_url().as_str() == url
+        {
+            app.set_addon_config_streams(config.streams);
+            app.set_addon_config_metadata(config.metadata);
+        }
+    }
+
     /// Main thread: install an addon that is already persisted, preferring
     /// its cached manifest. Only when the cache misses is the manifest
     /// re-fetched from the addon server.
@@ -366,6 +420,7 @@ impl Bridge {
                 .installed
                 .iter()
                 .map(|a| AddonStore {
+                    capabilities: nova_providers::provider_capabilities(&a.url),
                     url: a.url.clone(),
                     enabled: a.enabled,
                     configure_ok: a.configure_ok,
@@ -450,6 +505,7 @@ impl Bridge {
     /// Main thread: apply a re-fetched manifest to the installed addon at
     /// `base`, refreshing everything stored from it.
     pub(super) fn refresh_ok(&self, base: String, manifest: Manifest) {
+        let manifest = nova_providers::configured_provider_manifest(&base).unwrap_or(manifest);
         {
             let mut state = self.shared.lock().unwrap();
             state.refreshing.remove(&base);
@@ -511,6 +567,12 @@ impl Bridge {
             }
             removed.url
         };
+        nova_providers::configure_provider_capabilities(&removed_url, Default::default());
+        if let Some(app) = self.app()
+            && app.get_addon_config_url().as_str() == removed_url
+        {
+            app.set_addon_config_open(false);
+        }
         delete_cached_manifest_for(&removed_url);
         self.persist_installed();
         // A removed duplicate may free the plain name for a remaining addon.
@@ -730,6 +792,9 @@ impl Bridge {
     /// without a configure page get no Configure button instead of a dead
     /// browser tab. Empty otherwise.
     pub(super) fn addon_config_url(installed: &Installed) -> String {
+        if nova_providers::supports_capability_config(&installed.url) {
+            return installed.url.clone();
+        }
         if installed.configure_ok == Some(true) {
             let base = installed.url.trim_end_matches('/');
             if base.starts_with("http://") || base.starts_with("https://") {
@@ -831,10 +896,14 @@ impl Bridge {
                 enabled: a.enabled,
                 config_url: SharedString::from(Self::addon_config_url(a)),
                 capabilities: SharedString::from(
-                    if nova_providers::supports_contextual_streams(&a.url) {
-                        text::tr("Streams for other sources")
-                    } else {
-                        ""
+                    match nova_providers::provider_capabilities(&a.url) {
+                        Some(config) if config.metadata && config.streams => {
+                            text::tr("Metadata and streams")
+                        }
+                        Some(config) if config.metadata => text::tr("Metadata"),
+                        Some(config) if config.streams => text::tr("Streams for other sources"),
+                        Some(_) => text::tr("No capabilities enabled"),
+                        None => "",
                     },
                 ),
             })
@@ -1139,5 +1208,33 @@ mod addon_filter_tests {
         assert_eq!(installed_index_for_url(&installed, &filtered[0]), Some(0));
         installed.remove(0);
         assert_eq!(installed_index_for_url(&installed, &filtered[0]), None);
+    }
+}
+
+#[cfg(test)]
+mod capability_store_tests {
+    use super::AddonStore;
+    #[test]
+    fn old_installs_and_all_capability_combinations_round_trip() {
+        let old: AddonStore =
+            serde_json::from_str(r#"{"url":"nova-provider://anikoto","enabled":true}"#).unwrap();
+        assert_eq!(
+            old.capabilities.unwrap_or_default(),
+            nova_providers::ProviderCapabilities::default()
+        );
+        for streams in [false, true] {
+            for metadata in [false, true] {
+                let config = nova_providers::ProviderCapabilities { streams, metadata };
+                let stored = AddonStore {
+                    capabilities: Some(config),
+                    ..old.clone()
+                };
+                let restored: AddonStore =
+                    serde_json::from_str(&serde_json::to_string(&stored).unwrap()).unwrap();
+                assert_eq!(restored.capabilities, Some(config));
+                assert_eq!(restored.url, old.url);
+                assert!(restored.enabled);
+            }
+        }
     }
 }

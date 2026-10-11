@@ -1,7 +1,7 @@
 import { Theme } from "theme.slint";
 import { ScrollView } from "scrollview.slint";
 import { LicenseSource } from "types.slint";
-import { SideNav, NavMetrics } from "sidenav.slint";
+import { SideNav, NavMetrics, NavState } from "sidenav.slint";
 import { PillButton, SectionHeader, SettingsCard, SettingsHeader, SettingsStyle } from "settings-controls.slint";
 
 // About has independent navigation and scroll state; opening it does not
@@ -107,7 +107,7 @@ export component AboutPage inherits Rectangle {
             } else if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
                 root.kb_active = true;
                 if (root.kb_zone == 0 && !root.narrow) {
-                    root.kb_nav = Math.mod(root.kb_nav + (e.text == Key.LeftArrow ? 4 : 1), 5);
+                    root.kb_nav = Math.mod(root.kb_nav + (e.text == Key.LeftArrow ? 6 : 1), 7);
                 }
                 accept
             } else if (e.text == Key.UpArrow) {
@@ -133,7 +133,9 @@ export component AboutPage inherits Rectangle {
                     else if (root.kb_nav == 1) { root.discover_picked(); }
                     else if (root.kb_nav == 2) { root.library_picked(); }
                     else if (root.kb_nav == 3) { root.settings_picked(); }
-                    else { root.about_picked(); }
+                    else if root.kb_nav == 4 { root.about_picked(); }
+                    else if root.kb_nav == 5 { NavState.calendar_picked(); }
+                    else { NavState.downloads_picked(); }
                 } else if (!root.licenses_open) { root.open_licenses(); }
                 else if (root.source_index < root.license_sources.length) {
                     root.license_source_requested(root.license_sources[root.source_index].url);
@@ -158,7 +160,7 @@ export component AboutPage inherits Rectangle {
         about_scroll := ScrollView {
             height: 100%;
             mouse-drag-pan-enabled: true;
-            viewport-width: self.visible-width;
+            content-width: self.visible-width;
             changed content-y => {
                 if (!root.restore_pending) {
                     if (root.licenses_open) { root.licenses_scroll_y = self.content-y; }

@@ -71,7 +71,7 @@ impl Coordinator {
         };
         let _guard = crate::app::sync::ApplyingGuard::new();
         let state = apply_peer_records(self.store.state(), &records, sequence, |episode| {
-            history.get(&episode.episode_id).is_some_and(|p| p.watched)
+            seed_watched(&history, &episode.source.source_id, &episode.episode_id)
         })
         .map_err(|_| {
             text::tr("Shared tracking data needs alignment or a newer Nova version.").to_string()
@@ -149,5 +149,39 @@ impl Coordinator {
         store.save().map_err(|_| storage_message())?;
         self.notice = text::tr("Tracking links and sign-in received from a paired device.").into();
         Ok(())
+    }
+}
+
+fn seed_watched(
+    history: &HashMap<String, EpisodeProgress>,
+    series_id: &str,
+    episode_id: &str,
+) -> bool {
+    history
+        .get(&progress_map_key(series_id, episode_id))
+        .is_some_and(|p| p.watched)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn watched_seed_uses_series_scoped_progress_keys() {
+        let history = HashMap::from([
+            (
+                progress_map_key("series-a", "episode-1"),
+                EpisodeProgress {
+                    watched: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                progress_map_key("series-b", "episode-1"),
+                EpisodeProgress::default(),
+            ),
+        ]);
+        assert!(seed_watched(&history, "series-a", "episode-1"));
+        assert!(!seed_watched(&history, "series-b", "episode-1"));
+        assert!(!seed_watched(&history, "missing", "episode-1"));
     }
 }

@@ -2,7 +2,9 @@ use addons::{Addon, Manifest, MetaItem, MetaPreview, Video};
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, Model, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 use std::collections::{HashMap, HashSet, VecDeque};
+#[cfg(any(feature = "desktop", test))]
 use std::fs;
+#[cfg(feature = "desktop")]
 use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -199,6 +201,7 @@ pub(crate) enum StreamSource {
 /// Resolved playback target held while the user chooses whether to resume.
 #[derive(Clone)]
 pub(crate) struct PendingStream {
+    pub(crate) request: crate::torrent::PlaybackRequest,
     pub(crate) url: String,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) subtitles: Vec<String>,
@@ -298,6 +301,10 @@ struct Shared {
     /// Current image-cache settings (mirrored from the KV store).
     cache_settings: CacheSettings,
     download_settings: DownloadSettings,
+    downloads_page_query: String,
+    downloads_page_filter: i32,
+    downloads_page_sort_recent: bool,
+    downloads_page_collapsed: HashSet<String>,
     /// Modal target, if open.
     modal_item: Option<ModalItem>,
     /// Streams currently displayed (already narrowed by `stream_filter`).
@@ -368,6 +375,7 @@ struct Shared {
     /// torrent resolves and opens the player; cleared when the player closes.
     /// Drives the "Connecting… ↓ rate · peers · %" status line.
     active_torrent: Option<String>,
+    playback_intent: Option<playback::PlaybackIntent>,
     /// In-flight per-addon metadata refreshes (base URLs). Guards the
     /// Refresh button against double-clicks racing two manifest fetches.
     refreshing: HashSet<String>,
@@ -764,9 +772,11 @@ struct Bridge {
 mod about;
 mod addon_mgr;
 mod bridge;
+mod calendar;
 mod catalog;
 mod detail;
 mod downloads;
+mod downloads_page;
 mod home;
 mod library;
 mod next_episode;
@@ -833,6 +843,9 @@ mod tests;
 /// Wire format for addon entries in the KV store (and the synced record).
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct AddonStore {
+    /// Bundled-source capabilities; external URL configuration remains opaque.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<nova_providers::ProviderCapabilities>,
     pub url: String,
     pub enabled: bool,
     /// Persisted configure-page verdict (`None` = never checked; missing in

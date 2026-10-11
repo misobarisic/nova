@@ -29,8 +29,10 @@ pub use models::{
     ProviderSubtitle, SearchRequest, StreamLookupRequest, StreamRequest,
 };
 pub use registry::{
-    ANIKOTO_PROVIDER_URL, bundled_providers, fetch_builtin_addon, fetch_builtin_addon_with_timeout,
-    private_provider_id, provider_owns_id, stream_lookup_url, supports_contextual_streams,
+    ANIKOTO_PROVIDER_URL, ProviderCapabilities, bundled_providers, configure_provider_capabilities,
+    configured_provider_manifest, fetch_builtin_addon, fetch_builtin_addon_with_timeout,
+    private_provider_id, provider_capabilities, provider_owns_id, stream_lookup_url,
+    supports_capability_config, supports_contextual_streams,
 };
 pub use runtime::{
     PluginCapabilities, PluginLimits, PluginManifest, PluginPermissions, PluginRuntime,

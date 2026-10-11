@@ -8,6 +8,15 @@ same paths as other sources. The addon can be disabled or removed; it is
 registered once per installation (`providers:bundled:v1`). Paste the transport
 URL into Addons to reinstall it.
 
+The normal Configure gear opens a sheet with independent Streams and Metadata
+switches. Metadata includes catalog browsing and search; disabling it preserves
+internal source lookups needed to resolve streams against another addon’s IDs.
+Both switches default on for older installs. With both off the addon remains
+installed but advertises no capabilities or catalogs. Choices live in the
+existing addon JSON record and sync with that addon; source refreshes preserve
+them and the transport URL remains unchanged. External Stremio configuration
+continues to use the addon’s own website and install URL.
+
 The Yuzono Android extensions contain Kotlin code for Aniyomi's APIs. Adding a
 source here means porting its requests and parsing to Nova's JavaScript API.
 This version loads trusted source files bundled at compile time.
@@ -46,6 +55,11 @@ show path and native episode number; expiring server tokens are fetched only
 at playback time. Descriptors/catalogs come from the addon manifest.
 `capabilities.contextualStreams` enables the contextual `resolve/series/...`
 transport, rather than app code checking a particular provider name.
+`capabilities.configurableCapabilities` opts a bundled source into the local
+configuration sheet. It must implement `manifest` with the unfiltered source
+manifest and `config: { streams, metadata }`, and gate exposed actions using
+that config. The bridge also gates protocol requests before HTTP and injects
+config into every JS action; internal matching calls remain available.
 
 ### Rust metadata services called from JS
 

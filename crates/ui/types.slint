@@ -276,3 +276,6 @@ export struct TrackingSetupRow { title:string, season:string, coverage:string, s
 
 export struct SettingSyncInfo {
     can_override: bool, key: string, status: int, local_value: string, shared_value: string, has_shared: bool, shared_supported: bool }
+
+export struct CalendarDay { cell: CalCell, preview: string, weekday: string }
+export struct CalendarRelease { key: string, title: string, subtitle: string, date: string, group: string, poster: image, is_loaded: bool }

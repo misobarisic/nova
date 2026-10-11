@@ -754,11 +754,62 @@ pub fn app_data_dir() -> PathBuf {
 /// to `$HOME/<home_fallback>/nova`, then to the temp dir.
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
 fn xdg_app_dir(env: &str, home_fallback: &str, name: &str) -> PathBuf {
-    let base = std::env::var_os(env)
+    xdg_app_dir_from(
+        std::env::var_os(env),
+        std::env::var_os("HOME"),
+        home_fallback,
+        name,
+    )
+}
+
+#[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
+fn xdg_app_dir_from(
+    root: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+    home_fallback: &str,
+    name: &str,
+) -> PathBuf {
+    let base = root
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(home_fallback)))
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            home.map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .map(|path| path.join(home_fallback))
+        })
         .unwrap_or_else(std::env::temp_dir);
     base.join(name)
+}
+
+#[test]
+#[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
+fn xdg_roots_must_be_absolute() {
+    for fallback in [".local/share", ".cache"] {
+        for root in [None, Some(""), Some("relative/path")] {
+            assert_eq!(
+                xdg_app_dir_from(
+                    root.map(Into::into),
+                    Some("/home/test".into()),
+                    fallback,
+                    "nova"
+                ),
+                PathBuf::from("/home/test").join(fallback).join("nova")
+            );
+        }
+        assert_eq!(
+            xdg_app_dir_from(
+                Some("/custom".into()),
+                Some("/home/test".into()),
+                fallback,
+                "nova"
+            ),
+            PathBuf::from("/custom/nova")
+        );
+        assert_eq!(
+            xdg_app_dir_from(None, Some("".into()), fallback, "nova"),
+            std::env::temp_dir().join("nova")
+        );
+    }
 }
 
 /// Windows data and cache roots use APPDATA and LOCALAPPDATA respectively,

@@ -12,6 +12,52 @@ mod image_cache_tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "android"))]
+    fn derivative_writers_release_encoding_slots_before_waiting_for_source() {
+        let dir = std::env::temp_dir().join(format!("nova-derivative-lock-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let url = "https://example.test/lock-order";
+        let source = poster_cache_path_in(&dir, url);
+        fs::write(&source, b"source").unwrap();
+        let lock = entry_lock(&source);
+        let guard = lock.lock().unwrap();
+        let writers: Vec<_> = (0..2)
+            .map(|_| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    write_display_poster_in(&dir, url, 16, &solid_rgba(16, 16), b"source")
+                })
+            })
+            .collect();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while Arc::strong_count(&lock) < 3 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        let waiting = Arc::strong_count(&lock) == 3;
+        let (send, recv) = std::sync::mpsc::channel();
+        let encoder = std::thread::spawn(move || {
+            let _permit = EncodingPermit::acquire();
+            send.send(()).unwrap();
+        });
+        let can_encode = recv.recv_timeout(std::time::Duration::from_secs(5)).is_ok();
+        // Always release and join before asserting, even with the old lock order.
+        drop(guard);
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        encoder.join().unwrap();
+        fs::remove_dir_all(dir).unwrap();
+        assert!(
+            waiting,
+            "both derivative writers must reach the source lock"
+        );
+        assert!(
+            can_encode,
+            "a converter holding the source must be able to encode"
+        );
+    }
+
+    #[test]
     fn downscale_dims_math() {
         assert_eq!(downscale_dims(1200, 600), Some((1024, 512)));
         assert_eq!(downscale_dims(500, 300), None);

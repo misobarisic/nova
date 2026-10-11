@@ -2265,7 +2265,7 @@ fn continue_remaining(record: Option<&EpisodeProgress>) -> String {
 /// single [`UpcomingEntry`]. `index` is the entry's position in the full
 /// Upcoming list, so picks from filtered views (the calendar's selected day)
 /// resolve through [`Bridge::upcoming_picked`].
-fn upcoming_row(
+pub(super) fn upcoming_row(
     entries: &[LibraryEntry],
     u: &UpcomingEntry,
     index: usize,
@@ -2300,7 +2300,7 @@ fn upcoming_row(
 /// Gregorian (year, month 1–12, day) from days since the Unix epoch (Howard
 /// Hinnant's `civil_from_days`). Inputs here are real air dates (≥ 1970), so
 /// the era division stays non-negative.
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
+pub(super) fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
     let era = z / 146097;
     let doe = z - era * 146097; // [0, 146096]
@@ -2315,7 +2315,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 
 /// Days since the Unix epoch from a Gregorian date (Hinnant's
 /// `days_from_civil`). Inverse of [`civil_from_days`].
-fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+pub(super) fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     let y = if month <= 2 { year - 1 } else { year };
     let era = y / 400;
     let yoe = y - era * 400; // [0, 399]
@@ -2326,14 +2326,14 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
 }
 
 /// Epoch days of the 1st of `days`' month.
-fn month_first(days: i64) -> i64 {
+pub(super) fn month_first(days: i64) -> i64 {
     let (year, month, _) = civil_from_days(days);
     days_from_civil(year, month, 1)
 }
 
 /// Weekday of an epoch day, Monday = 0 … Sunday = 6. 1970-01-01 was a
 /// Thursday, hence the +3.
-fn weekday_monday0(days: i64) -> u32 {
+pub(super) fn weekday_monday0(days: i64) -> u32 {
     (days + 3).rem_euclid(7) as u32
 }
 
@@ -2371,7 +2371,7 @@ fn heal_upcoming_cal(state: &mut Shared) {
 /// its 1st): full weeks starting Monday, filler days from the edge months
 /// included so the grid never shifts shape. `counts` maps epoch days to
 /// episode counts.
-fn cal_cells(
+pub(super) fn cal_cells(
     first: i64,
     counts: &HashMap<i64, usize>,
     selected: Option<i64>,
@@ -2397,7 +2397,7 @@ fn cal_cells(
 
 // Upcoming represents a series once, using its nearest announced episode.
 // Catalog episode order is not guaranteed to match the release dates.
-fn next_upcoming_episode(
+pub(super) fn next_upcoming_episode(
     episodes: &[Video],
     watched: impl Fn(&Video) -> bool,
     today: i64,

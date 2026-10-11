@@ -294,6 +294,11 @@ pub fn note_android_pause() {
             && app.get_player_open()
         {
             app.set_is_paused(true);
+            // The activity listener checkpoints immediately after this call;
+            // its last timer mirror can lag the position observed above.
+            if let Some(position) = observation.0 {
+                app.set_position(position as f32);
+            }
         }
         converge_screen_on(false);
         let mut recovery = state.recovery.lock().unwrap();
@@ -727,6 +732,8 @@ struct State {
     pending_subtitles: Mutex<Vec<String>>,
     /// Playback of the current session actually produced frames.
     started: AtomicBool,
+    /// A successful external handoff closes the overlay but keeps the source alive.
+    external_handoff: AtomicBool,
     /// The OSD thumb (or a programmatic seek) moved ahead of mpv and a seek is
     /// in flight. The `tick` scrub guard only engages while this is set, so an
     /// initial resume (opened at the saved position via the load-time `start`
@@ -951,6 +958,7 @@ impl Player {
             pending_headers: Mutex::new(Vec::new()),
             pending_subtitles: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),
+            external_handoff: AtomicBool::new(false),
             seek_pending: AtomicBool::new(false),
             reported: AtomicBool::new(false),
             opened_at: Mutex::new(Instant::now()),
@@ -1374,6 +1382,7 @@ impl Player {
         headers: &[(String, String)],
         subtitles: &[String],
     ) -> Result<(), String> {
+        self.state.external_handoff.store(false, Ordering::SeqCst);
         if let Some(err) = self.state.mpv_error.lock().unwrap().as_ref() {
             return Err(err.clone());
         }
@@ -1755,8 +1764,15 @@ impl Player {
         app.set_audio_track_label(audio_label);
     }
 
+    /// Consume the distinction between finishing playback and handing its
+    /// still-live source to an external player (Android decoder fallback).
+    pub fn take_external_handoff(&self) -> bool {
+        self.state.external_handoff.swap(false, Ordering::SeqCst)
+    }
+
     /// Stop playback and return to the catalog.
     pub fn close(&self) {
+        self.state.external_handoff.store(false, Ordering::SeqCst);
         if let Ok(mpv) = self.state.mpv.lock()
             && let Some(mpv) = mpv.as_ref()
         {
@@ -2116,6 +2132,7 @@ impl Player {
             Ok(()) => {
                 alog("no in-app playback: handed the stream to an external player");
                 self.close();
+                self.state.external_handoff.store(true, Ordering::SeqCst);
                 true
             }
             Err(e) => {

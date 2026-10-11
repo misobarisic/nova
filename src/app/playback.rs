@@ -1,7 +1,143 @@
 //! In-app playback flow and episode progress tracking.
 use super::*;
 
+#[derive(Clone, Default)]
+struct PlaybackContext {
+    title: String,
+    episode_label: String,
+    use_modal_poster: bool,
+    media_id: String,
+    request_id: String,
+    is_episode: bool,
+    is_movie: bool,
+}
+
+/// A UI intent outlives metadata discovery and the resume prompt, but cannot
+/// cross a different modal/episode selection. Active playback survives browsing.
+#[derive(Clone)]
+pub(super) struct PlaybackIntent {
+    token: crate::torrent::PlaybackRequest,
+    modal_token: Option<Arc<()>>,
+    request_id: String,
+    pending: bool,
+    in_app: bool,
+    context: PlaybackContext,
+}
+
+impl PlaybackIntent {
+    fn accepts(&self, token: &crate::torrent::PlaybackRequest, modal: Option<&ModalItem>) -> bool {
+        self.token.same_request(token)
+            && token.is_current()
+            && (!self.pending
+                || match (&self.modal_token, modal) {
+                    (Some(original), Some(modal)) => {
+                        Arc::ptr_eq(original, &modal.open_token)
+                            && self.request_id == modal.request_id
+                    }
+                    (None, None) => true,
+                    _ => false,
+                })
+    }
+}
+
+/// Called directly by the Android listener on the Slint event-loop thread,
+/// before the UI timer may stop. Clone under the bridge registry lock so the
+/// persistence/UI work runs after that lock is released.
+#[cfg(target_os = "android")]
+pub(crate) fn note_android_pause_checkpoint() {
+    let bridge = super::bridge::with_global_bridge(Clone::clone);
+    if let Some(bridge) = bridge {
+        bridge.note_player_progress_from_ui();
+        bridge.persist_outgoing_playback();
+    }
+}
+
 impl Bridge {
+    pub(super) fn begin_playback_request(&self) -> crate::torrent::PlaybackRequest {
+        self.persist_outgoing_playback();
+        self.finish_playback_request();
+        let episode_label = self
+            .app()
+            .map(|app| app.get_episode_context().to_string())
+            .unwrap_or_default();
+        let token = crate::torrent::PlaybackRequest::default();
+        let mut state = self.shared.lock().unwrap();
+        state.playback_intent = Some(PlaybackIntent {
+            token: token.clone(),
+            modal_token: state
+                .modal_item
+                .as_ref()
+                .map(|modal| modal.open_token.clone()),
+            request_id: state
+                .modal_item
+                .as_ref()
+                .map(|modal| modal.request_id.clone())
+                .unwrap_or_default(),
+            pending: true,
+            in_app: false,
+            context: state
+                .modal_item
+                .as_ref()
+                .map(|modal| PlaybackContext {
+                    title: modal.name.clone(),
+                    episode_label,
+                    use_modal_poster: true,
+                    media_id: modal.id.clone(),
+                    request_id: modal.request_id.clone(),
+                    is_episode: !modal.seasons.is_empty(),
+                    is_movie: modal.type_ == "movie",
+                })
+                .unwrap_or_default(),
+        });
+        token
+    }
+
+    fn playback_request_is_current(&self, token: &crate::torrent::PlaybackRequest) -> bool {
+        let state = self.shared.lock().unwrap();
+        state
+            .playback_intent
+            .as_ref()
+            .is_some_and(|intent| intent.accepts(token, state.modal_item.as_ref()))
+    }
+
+    pub(super) fn finish_playback_request(&self) {
+        {
+            let mut state = self.shared.lock().unwrap();
+            if let Some(intent) = state.playback_intent.take() {
+                intent.token.cancel();
+            }
+            state.pending_resume_stream = None;
+            state.resume_prompt_choice = None;
+            state.active_torrent = None;
+        }
+        if let Some(app) = self.app() {
+            app.set_resume_prompt_visible(false);
+        }
+        if let Some(engine) = crate::torrent::engine() {
+            engine.on_playback_stopped(&active_torrent_settings());
+        }
+    }
+
+    pub(super) fn cancel_pending_playback(&self) {
+        let pending = self
+            .shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_ref()
+            .is_some_and(|intent| intent.pending);
+        if pending {
+            self.finish_playback_request();
+        }
+    }
+
+    fn mark_playback_opened(&self, in_app: bool) {
+        if let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut() {
+            intent.pending = false;
+            intent.in_app = in_app;
+        }
+    }
+
     // ---- Playback rate (Settings → Player + the player's settings panel) ---
     //
     // One per-device value (`CacheSettings::playback_speed`) edits the same
@@ -120,7 +256,7 @@ impl Bridge {
         // A new torrent replaces any still-playing one: stop it first so a
         // no-cache torrent's data is deleted and caching mode stops seeding
         // the previous one.
-        engine.on_playback_stopped(&settings);
+        let request = self.begin_playback_request();
         // The whole row text carries the release name (Torrentio puts it on a
         // later line, not the first), which helps pick the right file inside
         // the torrent.
@@ -129,6 +265,7 @@ impl Bridge {
         let bridge = self.clone();
         let active_hash = info_hash.clone();
         engine.resolve(
+            request.clone(),
             info_hash,
             file_idx,
             requested_name,
@@ -136,34 +273,57 @@ impl Bridge {
             move |result| {
                 let bridge = bridge.clone();
                 let active_hash = active_hash.clone();
-                let _ = slint::invoke_from_event_loop(move || match result {
-                    Ok(ready) => {
-                        bridge.set_stream_hint(Some(StreamHint::Playing(ready.display_name)));
-                        if nova_config::active_cache_settings().player_external {
-                            // User choice (Settings → Player): external player,
-                            // always. Not tracked: there is no close event.
-                            let _ = crate::player::open_external(&ready.url);
-                        } else if bridge.open_player(ready.url.clone()) {
-                            // Remember which torrent the player is presenting
-                            // so the 250 ms tick can report download stats
-                            // while mpv buffers, and the close path can
-                            // pause/delete it. The external fallback below has
-                            // no close event, so it is not tracked here.
-                            {
-                                bridge.shared.lock().unwrap().active_torrent = Some(active_hash);
-                            }
-                        } else {
-                            // Built-in failed: external app as a fallback.
-                            // Not tracked: there is no close event.
-                            let _ = crate::player::open_external(&ready.url);
-                        }
-                    }
-                    Err(e) => {
-                        bridge.set_stream_hint(Some(StreamHint::P2pUnavailable(e.to_string())))
-                    }
+                let _ = slint::invoke_from_event_loop(move || {
+                    bridge.complete_torrent_resolution(request, active_hash, result);
                 });
             },
         );
+    }
+
+    fn complete_torrent_resolution(
+        &self,
+        request: crate::torrent::PlaybackRequest,
+        active_hash: String,
+        result: Result<crate::torrent::StreamReady, String>,
+    ) {
+        if !self.playback_request_is_current(&request) {
+            request.cancel();
+            if let Some(engine) = crate::torrent::engine() {
+                engine.on_playback_stopped(&active_torrent_settings());
+            }
+            return;
+        }
+        match result {
+            Ok(ready) => {
+                self.set_stream_hint(Some(StreamHint::Playing(ready.display_name)));
+                if nova_config::active_cache_settings().player_external {
+                    // User choice (Settings → Player): external player,
+                    // always. Not tracked: there is no close event.
+                    self.mark_playback_opened(false);
+                    let _ = crate::player::open_external(&ready.url);
+                } else if self.open_player_for_request(
+                    request.clone(),
+                    ready.url.clone(),
+                    Vec::new(),
+                    Vec::new(),
+                ) {
+                    // Remember which torrent the player is presenting
+                    // so the 250 ms tick can report download stats
+                    // while mpv buffers, and the close path can
+                    // pause/delete it. The external fallback below has
+                    // no close event, so it is not tracked here.
+                    {
+                        self.shared.lock().unwrap().active_torrent = Some(active_hash);
+                    }
+                } else {
+                    // Built-in failed: external app as a fallback.
+                    // Not tracked: there is no close event.
+                    self.mark_playback_opened(false);
+                    let _ = crate::player::open_external(&ready.url);
+                }
+            }
+            Err(e) => self.set_stream_hint(Some(StreamHint::P2pUnavailable(e.to_string()))),
+        }
     }
 
     /// Open the in-app mpv player for `url` (replacing any previous player
@@ -181,20 +341,159 @@ impl Bridge {
         headers: Vec<(String, String)>,
         subtitles: Vec<String>,
     ) -> bool {
+        let request = self.begin_playback_request();
+        self.open_requested_stream(request, url, headers, subtitles)
+    }
+
+    pub(super) fn play_download(&self, id: &str) {
+        let Some(job) = self
+            .downloads
+            .job(id)
+            .filter(|job| job.phase == crate::download::DownloadPhase::Completed)
+        else {
+            return;
+        };
+        let Some(path) = job.artifact_path.as_ref().filter(|path| path.is_file()) else {
+            return;
+        };
+        let request = self.begin_playback_request();
+        if let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut() {
+            intent.context = PlaybackContext {
+                title: job.title.clone(),
+                episode_label: read_episodes_cache_for(&job.media_type, &job.media_id)
+                    .and_then(|videos| videos.into_iter().find(|v| v.id == job.request_id))
+                    .map(|video| stream_episode_context_label(&video))
+                    .unwrap_or_default(),
+                use_modal_poster: false,
+                media_id: job.media_id.clone(),
+                request_id: job.request_id.clone(),
+                is_episode: job.media_type == "series",
+                is_movie: job.media_type == "movie",
+            };
+        }
+        self.open_requested_stream(
+            request,
+            path.to_string_lossy().into_owned(),
+            Vec::new(),
+            Vec::new(),
+        );
+    }
+
+    fn open_requested_stream(
+        &self,
+        request: crate::torrent::PlaybackRequest,
+        url: String,
+        headers: Vec<(String, String)>,
+        subtitles: Vec<String>,
+    ) -> bool {
+        let path = std::path::Path::new(&url);
+        if path.is_file()
+            && let Some(engine) = crate::torrent::engine()
+        {
+            // Acquire the bundle on a worker before opening it. A resolving
+            // network torrent can hold the operation lock for seconds.
+            let bridge = self.clone();
+            let callback_request = request.clone();
+            let cleanup_engine = engine.clone();
+            engine.pin_local_playback(request, path.to_path_buf(), move || {
+                let abandoned = callback_request.clone();
+                let abandoned_engine = cleanup_engine.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if bridge.playback_request_is_current(&callback_request) {
+                        if !bridge.open_player_for_request(
+                            callback_request,
+                            url.clone(),
+                            headers,
+                            subtitles,
+                        ) {
+                            bridge.mark_playback_opened(false);
+                            let _ = crate::player::open_external(&url);
+                        }
+                    } else {
+                        callback_request.cancel();
+                        cleanup_engine.on_playback_stopped(&active_torrent_settings());
+                    }
+                })
+                .map_err(|_| {
+                    abandoned.cancel();
+                    abandoned_engine.on_playback_stopped(&active_torrent_settings());
+                });
+            });
+            true
+        } else {
+            self.open_player_for_request(request, url, headers, subtitles)
+        }
+    }
+
+    /// Save the last observation before another episode replaces its target.
+    pub(super) fn persist_outgoing_playback(&self) {
+        let map = {
+            let mut state = self.shared.lock().unwrap();
+            let Some(target) = state.playback.clone() else {
+                return;
+            };
+            if target.last_pos <= 0.0 && target.last_dur <= 0.0 {
+                return;
+            }
+            let key = progress_map_key(&target.series_id, &target.episode_id);
+            let entry = state
+                .progress
+                .entry(key)
+                .or_insert_with(|| EpisodeProgress {
+                    series_id: target.series_id.clone(),
+                    episode_id: target.episode_id.clone(),
+                    ..Default::default()
+                });
+            if entry.position_secs != target.last_pos || entry.duration_secs != target.last_dur {
+                entry.position_secs = target.last_pos;
+                entry.duration_secs = target.last_dur;
+                entry.updated_at_secs = now_secs();
+                if target.last_pos > 0.0 {
+                    entry.unwatched_at_secs = 0;
+                }
+                if is_watched_position(target.last_pos, target.last_dur) {
+                    entry.watched = true;
+                }
+                Some(state.progress.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(map) = map {
+            write_progress_map(&map);
+        }
+        nova_sync::flush_local_sync();
+    }
+
+    fn open_player_for_request(
+        &self,
+        request: crate::torrent::PlaybackRequest,
+        url: String,
+        headers: Vec<(String, String)>,
+        subtitles: Vec<String>,
+    ) -> bool {
+        if !self.playback_request_is_current(&request) {
+            return false;
+        }
         self.clear_next_episode_prompt();
         let resume_choice = self.shared.lock().unwrap().resume_prompt_choice.take();
-        // Set the player title from the modal item before opening.
-        let (title, series_id, request_id, is_episode, is_movie) = {
-            let state = self.shared.lock().unwrap();
-            let m = state.modal_item.as_ref();
-            (
-                m.map(|m| m.name.clone()).unwrap_or_default(),
-                m.map(|m| m.id.clone()).unwrap_or_default(),
-                m.map(|m| m.request_id.clone()).unwrap_or_default(),
-                m.map(|m| !m.seasons.is_empty()).unwrap_or(false),
-                m.map(|m| m.type_ == "movie").unwrap_or(false),
-            )
-        };
+        // The selected source owns its context through async resolution and
+        // the resume prompt; a Downloads page can launch without a detail modal.
+        let context = self
+            .shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_ref()
+            .map(|intent| intent.context.clone())
+            .unwrap_or_default();
+        let (title, series_id, request_id, is_episode, is_movie) = (
+            context.title,
+            context.media_id,
+            context.request_id,
+            context.is_episode,
+            context.is_movie,
+        );
         // Series flow: make sure a playback target exists (episode_picked
         // arms it, but library re-entry can reach here directly) and count
         // this opening. Movies arm a target too, keyed to the movie's own id,
@@ -248,6 +547,7 @@ impl Bridge {
             });
             if ask && history_pos.is_some() && resume_choice.is_none() {
                 state.pending_resume_stream = Some(PendingStream {
+                    request,
                     url,
                     headers,
                     subtitles,
@@ -329,14 +629,7 @@ impl Bridge {
                 .and_then(|t| t.resume_pos)
                 .unwrap_or(0.0)
         };
-        let ep = self.app().and_then(|a| {
-            let ctx = a.get_episode_context();
-            if ctx.is_empty() {
-                None
-            } else {
-                Some(ctx.to_string())
-            }
-        });
+        let ep = (!context.episode_label.is_empty()).then_some(context.episode_label);
         let display_title = match ep {
             Some(ep) => format!("{title} · {ep}"),
             None => title,
@@ -347,7 +640,9 @@ impl Bridge {
             // when the episode was picked); fall back to the show poster
             // from the details modal. Movies (no episode pick) always land
             // here.
-            if app.get_player_poster().size().width == 0 {
+            if !context.use_modal_poster {
+                app.set_player_poster(Image::default());
+            } else if app.get_player_poster().size().width == 0 {
                 app.set_player_poster(app.get_selected_poster());
             }
         }
@@ -356,7 +651,10 @@ impl Bridge {
             .player
             .play_with_options(&url, start_at, &headers, &subtitles)
         {
-            Ok(()) => true,
+            Ok(()) => {
+                self.mark_playback_opened(true);
+                true
+            }
             Err(e) => {
                 eprintln!("nova: player unavailable: {e}");
                 false
@@ -372,13 +670,21 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_resume_prompt_visible(false);
         }
-        if let Some(stream) = pending_stream {
+        if let Some(stream) = pending_stream
+            && self.playback_request_is_current(&stream.request)
+        {
             self.shared.lock().unwrap().resume_prompt_choice = Some(resume);
-            let _ = self.open_player_with_options(stream.url, stream.headers, stream.subtitles);
+            let _ = self.open_player_for_request(
+                stream.request,
+                stream.url,
+                stream.headers,
+                stream.subtitles,
+            );
         }
     }
 
     pub(super) fn cancel_resume_prompt(&self) {
+        self.cancel_pending_playback();
         self.shared.lock().unwrap().pending_resume_stream = None;
         if let Some(app) = self.app() {
             app.set_resume_prompt_visible(false);
@@ -428,7 +734,21 @@ impl Bridge {
             return;
         };
         self.refresh_next_episode_prompt();
+        if self.player.take_external_handoff() {
+            self.mark_playback_opened(false);
+        }
         let player_open = app.get_player_open();
+        let closed = !player_open
+            && self
+                .shared
+                .lock()
+                .unwrap()
+                .playback_intent
+                .as_ref()
+                .is_some_and(|intent| intent.in_app);
+        if closed {
+            self.finish_playback_request();
+        }
         let pos = app.get_position() as f64;
         let dur = app.get_duration() as f64;
 
@@ -496,7 +816,11 @@ impl Bridge {
                 !paused && now.saturating_sub(target.last_saved_at) >= PROGRESS_SAVE_INTERVAL_SECS;
             let due_by_delta = (pos - target.last_saved_pos).abs() >= PROGRESS_MIN_DELTA_SECS;
             let newly_watched = watched_now && !already_watched;
-            if !(due_by_time || due_by_delta || newly_watched) {
+            let pause_save = paused && (pos - target.last_saved_pos).abs() > 0.001;
+            if !(due_by_time || due_by_delta || newly_watched || pause_save) {
+                if paused {
+                    nova_sync::flush_local_sync();
+                }
                 // Still remember the latest observation for finalize.
                 let mut state = self.shared.lock().unwrap();
                 if let Some(t) = state.playback.as_mut()
@@ -544,7 +868,12 @@ impl Bridge {
                 }
                 let map = state.progress.clone();
                 drop(state);
-                write_progress_map(&map);
+                if paused || newly_watched {
+                    write_progress_map(&map);
+                    nova_sync::flush_local_sync();
+                } else {
+                    nova_sync::playback_checkpoint(|| write_progress_map(&map));
+                }
             }
             if newly_watched {
                 self.auto_delete_watched_downloads(&target.series_id, &[target.episode_id.clone()]);
@@ -595,6 +924,7 @@ impl Bridge {
                     write_progress_map(&map);
                 }
             }
+            nova_sync::flush_local_sync();
             if saw_frames && watched_now {
                 self.auto_delete_watched_downloads(&target.series_id, &[target.episode_id.clone()]);
             }
@@ -763,10 +1093,7 @@ impl Bridge {
         let dir = torrent_cache_dir();
         let b = self.clone();
         thread::spawn(move || {
-            let engine = {
-                let _phase = crate::startup_bench::span("torrent_engine_start");
-                crate::torrent::TorrentEngine::setup(dir.clone(), &settings)
-            };
+            let engine = crate::torrent::TorrentEngine::setup(dir.clone(), &settings);
             let _ = slint::invoke_from_event_loop(move || {
                 let current = active_torrent_settings();
                 if b.app().is_some()
@@ -777,7 +1104,9 @@ impl Bridge {
                     // Setup already used the startup settings. Live edits
                     // start/update their own engine, which the guard above keeps.
                     // Reapplying here could purge a no-cache session on the UI thread.
+                    engine.restore_downloads(b.downloads.torrent_owners());
                     crate::torrent::install(engine);
+                    b.downloads.start();
                     b.refresh_torrent_disk_usage();
                 } else {
                     thread::spawn(move || drop(engine));
@@ -808,10 +1137,11 @@ pub(crate) fn sync_torrent_engine(settings: &TorrentSettings) {
     }
     match crate::torrent::engine() {
         Some(engine) => engine.apply_settings(settings),
-        None => crate::torrent::install(crate::torrent::TorrentEngine::setup(
-            torrent_cache_dir(),
-            settings,
-        )),
+        None => {
+            let engine = crate::torrent::TorrentEngine::setup(torrent_cache_dir(), settings);
+            engine.restore_downloads(downloads::persisted_torrent_owners());
+            crate::torrent::install(engine);
+        }
     }
 }
 
@@ -857,6 +1187,53 @@ mod home_return_tests {
             player,
             DownloadCoordinator::new(root.join("downloads")),
         );
+        // A resolver callback is injected here so no network or media backend
+        // is needed to prove stale success/error leave the UI and target alone.
+        let old = bridge.begin_playback_request();
+        let current = bridge.begin_playback_request();
+        assert!(!old.is_current());
+        bridge.complete_torrent_resolution(
+            old.clone(),
+            "old".into(),
+            Ok(crate::torrent::StreamReady {
+                url: "http://127.0.0.1/stale".into(),
+                display_name: "stale".into(),
+            }),
+        );
+        bridge.complete_torrent_resolution(old, "old".into(), Err("stale failure".into()));
+        assert!(!app.get_player_open());
+        assert!(bridge.shared.lock().unwrap().active_torrent.is_none());
+        assert!(bridge.playback_request_is_current(&current));
+        // A pending resolver must not be mistaken for a closed player.
+        bridge.note_player_progress_from_ui();
+        assert!(current.is_current());
+        bridge.stream_selector_back();
+        assert!(!current.is_current(), "movie Back cancels pending work");
+        let pending = bridge.begin_playback_request();
+        bridge.cancel_resume_prompt();
+        assert!(!pending.is_current());
+        let pending = bridge.begin_playback_request();
+        bridge.modal_closed();
+        assert!(!pending.is_current());
+        let playing = bridge.begin_playback_request();
+        bridge.mark_playback_opened(true);
+        bridge.clear_streams();
+        assert!(playing.is_current(), "browsing keeps active playback");
+        bridge.note_player_progress_from_ui();
+        assert!(
+            !playing.is_current(),
+            "natural close works without a progress target"
+        );
+
+        let external = bridge.begin_playback_request();
+        bridge.mark_playback_opened(false);
+        bridge.note_player_progress_from_ui();
+        assert!(
+            external.is_current(),
+            "external handoff keeps source ownership"
+        );
+        bridge.finish_playback_request();
+
         let videos = (1..=2)
             .map(|number| Video {
                 id: format!("episode-{number}"),
@@ -1044,6 +1421,53 @@ mod home_return_tests {
             serde_json::to_value(before).unwrap(),
             "manual viewing intent must not modify watched history"
         );
+
+        // Pausing between checkpoints saves the latest position once. Timer
+        // ticks at the stationary pause point leave both snapshot and HLC alone.
+        app.set_player_open(true);
+        app.set_playback_started(true);
+        app.set_is_paused(true);
+        app.set_position(123.0);
+        app.set_duration(1000.0);
+        bridge.shared.lock().unwrap().playback = Some(PlaybackTarget {
+            series_id: "series".into(),
+            episode_id: "episode-3".into(),
+            last_saved_pos: 100.0,
+            last_saved_at: now_secs(),
+            ..Default::default()
+        });
+        bridge.note_player_progress_from_ui();
+        assert_eq!(
+            read_progress_map()[&progress_map_key("series", "episode-3")].position_secs,
+            123.0
+        );
+        let paused_snapshot = storage::get_str(EPISODE_PROGRESS_KEY).unwrap();
+        let paused_digest = owner.lock().unwrap().digest();
+        bridge.note_player_progress_from_ui();
+        assert_eq!(
+            storage::get_str(EPISODE_PROGRESS_KEY).unwrap(),
+            paused_snapshot
+        );
+        assert_eq!(owner.lock().unwrap().digest(), paused_digest);
+
+        // Replacement saves the observation made since the last checkpoint.
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .playback
+            .as_mut()
+            .unwrap()
+            .last_pos = 145.0;
+        bridge.persist_outgoing_playback();
+        assert_eq!(
+            read_progress_map()[&progress_map_key("series", "episode-3")].position_secs,
+            145.0
+        );
+        let outgoing_digest = owner.lock().unwrap().digest();
+        bridge.persist_outgoing_playback();
+        assert_eq!(owner.lock().unwrap().digest(), outgoing_digest);
+        app.set_player_open(false);
 
         let snapshot = storage::get_str(VIEWING_ACTIVITY_KEY).unwrap();
         {

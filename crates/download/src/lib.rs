@@ -131,6 +131,9 @@ pub struct DownloadJob {
     #[serde(skip)]
     pub resource_progress: Option<(u64, u64)>,
     pub artifact_path: Option<PathBuf>,
+    /// Actual shared torrent bundle and resolved file, saved before completion.
+    pub torrent_directory: Option<PathBuf>,
+    pub torrent_file_idx: Option<usize>,
     pub file_name: Option<String>,
     pub error: Option<String>,
     pub etag: Option<String>,
@@ -157,6 +160,8 @@ impl Default for DownloadJob {
             bytes_per_second: 0,
             resource_progress: None,
             artifact_path: None,
+            torrent_directory: None,
+            torrent_file_idx: None,
             file_name: None,
             error: None,
             etag: None,

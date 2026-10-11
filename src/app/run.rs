@@ -2,9 +2,13 @@
 use super::*;
 
 /// Nav index of the page currently shown: 0 Home, 1 Discover, 2 Library,
-/// 3 Settings, 4 About (Discover is the fallback page).
+/// 3 Settings, 4 About, 5 Calendar, 6 Downloads (Discover is the fallback).
 fn current_nav(app: &AppWindow) -> i32 {
-    if app.get_show_home() {
+    if app.get_show_calendar() {
+        5
+    } else if app.get_show_downloads() {
+        6
+    } else if app.get_show_home() {
         0
     } else if app.get_show_library() {
         2
@@ -28,16 +32,15 @@ fn note_nav_switch(bridge: &Bridge, next: i32) {
         return;
     };
     let from = current_nav(&app);
+    bridge.cancel_pending_playback();
+    app.set_show_calendar(false);
+    app.set_show_downloads(false);
     if from != next {
         app.global::<crate::NavState>().set_from(from);
     }
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(feature = "desktop")]
-    let startup = crate::startup_bench::span("startup");
-    #[cfg(feature = "desktop")]
-    let window_setup = crate::startup_bench::span("window_setup");
     crate::diagnostics::init();
     net::init_metadata_transport();
     // Native desktop: in-app playback renders through mpv's OpenGL underlay
@@ -56,10 +59,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = AppWindow::new()?;
     nova_ui::initialize_fonts(app.window());
-    #[cfg(feature = "desktop")]
-    drop(window_setup);
-    #[cfg(feature = "desktop")]
-    let licenses = crate::startup_bench::span("license_models");
     app.set_license_catalog(OPEN_SOURCE_LICENSE_CATALOG.into());
     app.set_license_sources(
         Rc::new(VecModel::<LicenseSource>::from(
@@ -67,13 +66,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .into(),
     );
-    #[cfg(feature = "desktop")]
-    drop(licenses);
-    {
-        #[cfg(feature = "desktop")]
-        let _storage = crate::startup_bench::span("storage_open");
-        storage::init_at(&app_data_dir());
-    }
+    storage::init_at(&app_data_dir());
     nova_providers::set_metadata_cache(Arc::new(io::ProviderMetadataCache));
     crate::web_log("nova: window created");
 
@@ -111,8 +104,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Shared stale-response guard for catalog fetches (both targets).
     let catalog_gen = Arc::new(AtomicU64::new(0));
 
-    #[cfg(feature = "desktop")]
-    let poster_workers = crate::startup_bench::span("poster_workers");
     #[cfg(feature = "desktop")]
     // Poster download pipeline (off-thread decode + per-generation cache).
     // Dual intake: `hi` carries near-viewport (pre)loads from `visible_range`,
@@ -255,15 +246,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // In-app player (same window, like the reference prototype): mpv underlay
     // on desktop, HTML5 video element on web. Same public API either way.
     #[cfg(feature = "desktop")]
-    drop(poster_workers);
-    #[cfg(feature = "desktop")]
-    let player_setup = crate::startup_bench::span("player_setup");
-    #[cfg(feature = "desktop")]
     let after_first_frame = Rc::new(std::cell::RefCell::new(None::<Box<dyn FnOnce()>>));
     #[cfg(feature = "desktop")]
     let first_frame_job = after_first_frame.clone();
     #[cfg(feature = "desktop")]
-    let player = crate::startup_bench::player(&app, move |state| {
+    let player = crate::player::Player::setup_with_render_observer(&app, move |state| {
         if matches!(state, slint::RenderingState::AfterRendering)
             && let Some(job) = first_frame_job.borrow_mut().take()
         {
@@ -274,13 +261,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     #[cfg(not(feature = "desktop"))]
     let player = crate::player::Player::setup(&app);
-    #[cfg(feature = "desktop")]
-    drop(player_setup);
-    let downloads = {
-        #[cfg(feature = "desktop")]
-        let _downloads = crate::startup_bench::span("download_reconciliation");
-        DownloadCoordinator::new(app_data_dir().join("downloads"))
-    };
+    let downloads = DownloadCoordinator::new(app_data_dir().join("downloads"));
 
     #[cfg(feature = "desktop")]
     let bridge = Bridge::new(
@@ -301,19 +282,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     bridge.shared.lock().unwrap().restoring_models = true;
 
-    {
-        #[cfg(feature = "desktop")]
-        let _tracking = crate::startup_bench::span("tracking_worker_start");
-        bridge.initialize_tracking();
-    }
+    bridge.initialize_tracking();
 
     // Publish the bridge for the Android camera scanner's JNI entry point
     // (android_qr.rs), which runs off the UI thread.
     crate::app::bridge::install_global_bridge(&bridge);
 
     // Handler wiring.
-    #[cfg(feature = "desktop")]
-    let callback_wiring = crate::startup_bench::span("callback_wiring");
     let b = bridge.clone();
     app.on_addon_added(move |url| b.add_addon(&url));
 
@@ -365,7 +340,35 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // desktop's default browser (`xdg-open`) or, on Android, an `ACTION_VIEW`
     // link intent without a MIME type (an explicit video MIME — what the
     // stream fallback uses — would exclude the browser).
+    let b = bridge.clone();
+    app.on_addon_capabilities_changed(move |url, streams, metadata| {
+        b.apply_provider_capabilities(
+            &url,
+            nova_providers::ProviderCapabilities { streams, metadata },
+            true,
+        );
+    });
+    let b = bridge.clone();
     app.on_addon_configure(move |url| {
+        if let Some(config) = nova_providers::provider_capabilities(&url) {
+            if let Some(app) = b.app() {
+                let label = b
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .installed
+                    .iter()
+                    .find(|a| a.url == url.as_str())
+                    .map(|a| a.label.clone())
+                    .unwrap_or_default();
+                app.set_addon_config_label(label.into());
+                app.set_addon_config_url(url);
+                app.set_addon_config_streams(config.streams);
+                app.set_addon_config_metadata(config.metadata);
+                app.set_addon_config_open(true);
+            }
+            return;
+        }
         if let Err(e) = crate::player::open_browser(&url) {
             eprintln!("nova: could not open the addon configuration page {url}: {e}");
         }
@@ -410,6 +413,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.load_search_history();
     let b = bridge.clone();
     app.on_search_history_cleared(move || b.clear_search_history());
+    let b = bridge.clone();
+    app.on_search_history_selected(move |index| b.replay_search_history(index));
+    let b = bridge.clone();
+    app.on_search_history_item_removed_at(move |index| b.remove_search_history_item_at(index));
     let b = bridge.clone();
     app.on_search_history_item_removed(move |query| b.remove_search_history_item(&query));
 
@@ -627,6 +634,48 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         b.show_about_page();
     });
 
+    let b = bridge.clone();
+    app.on_calendar_picked(move || {
+        note_nav_switch(&b, 5);
+        b.show_calendar_page();
+    });
+    let b = bridge.clone();
+    app.global::<crate::NavState>().on_calendar_picked(move || {
+        note_nav_switch(&b, 5);
+        b.show_calendar_page();
+    });
+    let b = bridge.clone();
+    app.on_downloads_picked(move || {
+        note_nav_switch(&b, 6);
+        b.show_downloads_page();
+    });
+    let b = bridge.clone();
+    app.global::<crate::NavState>()
+        .on_downloads_picked(move || {
+            note_nav_switch(&b, 6);
+            b.show_downloads_page();
+        });
+    let b = bridge.clone();
+    app.on_calendar_changed(move || b.apply_calendar_to_ui());
+    let b = bridge.clone();
+    app.on_calendar_step(move |d| b.calendar_step(d));
+    let b = bridge.clone();
+    app.on_calendar_today(move || b.calendar_today());
+    let b = bridge.clone();
+    app.on_calendar_pick(move |d| b.calendar_pick(d));
+    let b = bridge.clone();
+    app.on_calendar_release_picked(move |k| b.calendar_release_picked(k));
+    let b = bridge.clone();
+    app.on_downloads_page_query_changed(move |q| b.downloads_page_query_changed(&q));
+    let b = bridge.clone();
+    app.on_downloads_page_filter_changed(move |f| b.downloads_page_filter_changed(f));
+    let b = bridge.clone();
+    app.on_downloads_page_sort_changed(move |r| b.downloads_page_sort_changed(r));
+    let b = bridge.clone();
+    app.on_downloads_page_group_toggled(move |k| b.downloads_page_group_toggled(&k));
+    let b = bridge.clone();
+    app.on_downloads_page_action(move |k, a| b.downloads_page_action(&k, a));
+
     // System back on the root screen (HomePage `exit_to_background`). Only
     // Android synthesizes `Key.Back`; elsewhere this callback is unreachable
     // and stays a no-op. Backgrounding (not finishing) keeps the process —
@@ -782,11 +831,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_library_view_changed(move || b.library_view_changed());
 
-    #[cfg(feature = "desktop")]
-    drop(callback_wiring);
-    #[cfg(feature = "desktop")]
-    let addon_restore = crate::startup_bench::span("addon_restore");
-
     // Startup addon set: the persisted KV list first, plus any
     // extra URLs from NOVA_ADDONS / --addon. Both are installed from their
     // cached manifest when available (no server ping); the cache is only
@@ -814,6 +858,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     bridge.shared.lock().unwrap().loading_addons = true;
     for addon in &persisted {
+        nova_providers::configure_provider_capabilities(
+            &addon.url,
+            addon.capabilities.unwrap_or_default(),
+        );
         bridge.install_persisted(
             &addon.url,
             addon.enabled,
@@ -837,11 +885,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.shared.lock().unwrap().loading_addons = false;
     bridge.persist_installed();
 
-    #[cfg(feature = "desktop")]
-    drop(addon_restore);
-    #[cfg(feature = "desktop")]
-    let settings_restore = crate::startup_bench::span("settings_restore");
-
     // Restore preferences before deriving Home models: applying Home with
     // temporary defaults would prune the saved poster-rail catalog cache.
     // These settings also control the first artwork decode/encode requests.
@@ -852,10 +895,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         set_active_cache_settings(state.cache_settings.clone());
     }
     bridge.settings_to_ui();
-    #[cfg(feature = "desktop")]
-    drop(settings_restore);
-    #[cfg(feature = "desktop")]
-    let library_restore = crate::startup_bench::span("library_restore");
 
     // Library: restore saved items and render them in the Library page.
     {
@@ -874,25 +913,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     bridge.migrate_viewing_activity();
-    #[cfg(feature = "desktop")]
-    drop(library_restore);
-    {
-        #[cfg(feature = "desktop")]
-        let _local_sync = crate::startup_bench::span("local_sync_projection");
-        // Only unapplied records need replay; snapshots already materialized
-        // by previous launches/local writes are authoritative and cheap to load.
-        bridge.sync_seed();
-        bridge.restore_sync_projection();
-        bridge.settings_to_ui();
-    }
-    #[cfg(feature = "desktop")]
-    let library_models = crate::startup_bench::span("library_models");
+    // Only unapplied records need replay; snapshots already materialized
+    // by previous launches/local writes are authoritative and cheap to load.
+    bridge.sync_seed();
+    bridge.restore_sync_projection();
+    bridge.settings_to_ui();
     bridge.shared.lock().unwrap().restoring_models = false;
     bridge.apply_library_to_ui();
-    #[cfg(feature = "desktop")]
-    drop(library_models);
-    #[cfg(feature = "desktop")]
-    let home_models = crate::startup_bench::span("home_models");
     // Home landing page: derive Continue Watching, New episodes and Upcoming
     // from viewing activity, playback history and cached episode air dates.
     bridge.rebuild_continue_list();
@@ -901,19 +928,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.dispatch_continue_posters();
     bridge.dispatch_upcoming_posters();
     bridge.dispatch_home_catalog_posters();
-    #[cfg(feature = "desktop")]
-    drop(home_models);
-    #[cfg(feature = "desktop")]
-    let home_catalogs = crate::startup_bench::span("home_catalog_restore_and_refresh");
     // Restore selected featured catalogs from local storage before the first
     // frame, then refresh in the background. Pending manifests do not block
     // cached titles; their completion retries the corresponding live fetch.
     bridge.refresh_home_showcase();
     bridge.refresh_home_catalog_rows();
-    #[cfg(feature = "desktop")]
-    drop(home_catalogs);
-    #[cfg(feature = "desktop")]
-    let torrent_setup = crate::startup_bench::span("torrent_settings_and_engine");
 
     // Torrent settings: restore + mirror into the runtime cache read by the
     // engine and the player-close cleanup path.
@@ -923,8 +942,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     bridge.torrent_settings_to_ui();
 
-    #[cfg(feature = "desktop")]
-    drop(torrent_setup);
     #[cfg(not(feature = "desktop"))]
     let sync_settings = nova_sync::read_settings();
     #[cfg(target_os = "android")]
@@ -951,11 +968,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
 
-    #[cfg(feature = "desktop")]
-    crate::startup_bench::models_ready(&app);
-    #[cfg(feature = "desktop")]
-    let player_callbacks = crate::startup_bench::span("player_callback_wiring");
-
     // In-app player overlay callbacks (same window).
     let p = player.clone();
     app.on_toggle_pause(move || p.toggle());
@@ -970,10 +982,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         // A swipe-dimmed window must not leak into the catalog.
         #[cfg(target_os = "android")]
         crate::app::android_player::player_brightness_reset();
-        if let Some(engine) = crate::torrent::engine() {
-            engine.on_playback_stopped(&active_torrent_settings());
-        }
-        b.shared.lock().unwrap().active_torrent = None;
+        b.finish_playback_request();
         b.refresh_torrent_disk_usage();
         b.clear_next_episode_prompt();
         // Finalize before a next-episode selection installs a new target.
@@ -1072,11 +1081,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let p = player.clone();
     app.on_tracks_popup_opened(move |_kind| p.refresh_tracks());
 
-    #[cfg(feature = "desktop")]
-    drop(player_callbacks);
-    #[cfg(feature = "desktop")]
-    let timers = crate::startup_bench::span("timer_setup");
-
     // OSD auto-hide: show on activity, hide after inactivity — 3 s while
     // playing, 5 s while paused so the controls linger for resume.
     // Android keeps paused controls visible so Home/screen-off restoration
@@ -1132,6 +1136,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             tick_bridge.note_player_progress_from_ui();
             tick_bridge.note_torrent_progress_from_ui();
             tick_bridge.refresh_download_rows();
+            if tick_bridge
+                .app()
+                .is_some_and(|app| app.get_show_downloads())
+            {
+                tick_bridge.refresh_downloads_page();
+            }
         },
     );
 
@@ -1180,12 +1190,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     crate::web_log("nova: startup complete, entering event loop");
-    #[cfg(feature = "desktop")]
-    drop(timers);
-    #[cfg(feature = "desktop")]
-    drop(startup);
-    #[cfg(feature = "desktop")]
-    let _benchmark_timer = crate::startup_bench::observe(&app);
     let result = app.run();
     bridge.shutdown_tracking();
     result?;

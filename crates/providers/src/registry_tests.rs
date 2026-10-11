@@ -1631,3 +1631,86 @@ fn synthetic_transport_keeps_http_addons_and_rejects_unknown_providers() {
         "AniKoto"
     );
 }
+
+#[test]
+fn source_manifest_and_operations_honor_independent_capabilities() {
+    let source = &bundled_providers()[0];
+    let runtime = PluginRuntime::new(
+        serde_json::from_str(source.plugin_manifest).unwrap(),
+        source.source,
+    );
+    for metadata in [false, true] {
+        for streams in [false, true] {
+            let config = ProviderCapabilities { streams, metadata };
+            let manifest = manifest_with_capabilities(source, config).unwrap();
+            assert_eq!(manifest.has_meta(), metadata);
+            assert_eq!(manifest.has_catalogs(), metadata);
+            assert_eq!(manifest.has_streams(), streams);
+            assert_eq!(!manifest.catalogs.is_empty(), metadata);
+            assert_eq!(
+                manifest.search_catalogs("series").next().is_some(),
+                metadata
+            );
+            for op in ["catalog", "details", "streams", "lookupStreams"] {
+                if (matches!(op, "catalog" | "details") && metadata)
+                    || (matches!(op, "streams" | "lookupStreams") && streams)
+                {
+                    continue;
+                }
+                // An empty host proves disabled actions don't perform HTTP.
+                let result = runtime
+                    .invoke(
+                        crate::MemoryProviderHost::new(),
+                        &json!({"op":op,"config":config}),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    result,
+                    if op == "details" {
+                        Value::Null
+                    } else {
+                        json!([])
+                    }
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn streams_only_still_resolves_foreign_metadata_ids() {
+    let host = FixtureHost::new();
+    host.foreign.store(1, Ordering::Relaxed);
+    let mut provider = provider();
+    provider.config = ProviderCapabilities {
+        streams: true,
+        metadata: false,
+    };
+    let lookup = foreign_lookup(2);
+    let result = provider
+        .protocol_response(host, ProtocolRequest::Lookup { request: lookup })
+        .unwrap();
+    assert_eq!(result["streams"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn provider_capabilities_default_and_round_trip() {
+    assert_eq!(
+        serde_json::from_str::<ProviderCapabilities>("{}").unwrap(),
+        Default::default()
+    );
+    for streams in [false, true] {
+        for metadata in [false, true] {
+            let config = ProviderCapabilities { streams, metadata };
+            assert_eq!(
+                serde_json::from_str::<ProviderCapabilities>(
+                    &serde_json::to_string(&config).unwrap()
+                )
+                .unwrap(),
+                config
+            );
+        }
+    }
+    assert!(supports_capability_config(ANIKOTO_PROVIDER_URL));
+    assert!(!supports_capability_config("https://torrentio.strem.fun"));
+}

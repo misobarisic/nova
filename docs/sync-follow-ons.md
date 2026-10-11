@@ -27,8 +27,8 @@ Legend: **effort** (S/M/L), **risk**, **value**.
 - **Device name editing polish (S / low / low).** Auto-detected names
   (Android `Build.MODEL`, desktop hostname) with an override field already ship.
   Could add a rename UI per peer and show names everywhere ids appear.
-- **Invite management (S / low / medium).** Countdown until expiry, revoke a
-  specific outstanding invite, and "share via…" intents on Android.
+- **Invite management (S / low / medium).** Countdown until expiry and
+  "share via…" intents on Android.
 - **Pairing history / re-pair (S / low / low).** Show when a device was paired
   and offer a guided re-pair if the identity changed (storage reset).
 
@@ -36,12 +36,6 @@ Legend: **effort** (S/M/L), **risk**, **value**.
 
 - **Concurrency tuning (S / medium / low).** Measure platform-specific pass
   concurrency and timeouts before changing the current bounded fan-out.
-- **Debounced push-on-change (S–M / low / high).** After a local write, sync a
-  few seconds after edits stop instead of waiting for the interval. **Important
-  constraint raised during design:** while *playback* is active, progress writes
-  fire roughly every 30 s, so the debounce must be playback-aware — use a
-  multi-minute window (or suppress push entirely) during playback and a short
-  window otherwise. Not implemented yet on purpose.
 - **Always-on hub device (M / medium / low).** Designate a desktop as the
   rendezvous point so two phones don't need to be online simultaneously.
 - **Selective sync per peer (M / low / low).** Choose which domains (library,
@@ -76,7 +70,7 @@ Legend: **effort** (S/M/L), **risk**, **value**.
 
 - **Pairing brute-force hardening (S / low / low).** The invite secret is
   128-bit and single-use, so brute force is infeasible; still add attempt
-  counting and a concurrent-prompt cap for the confirmation path.
+  counting for the confirmation path.
 - **Identity rotation (M / medium / low).** Re-key the endpoint and re-pair if
   the identity or store is suspected compromised.
 - **Encrypted sync state at rest (M / medium / low).** The record store and

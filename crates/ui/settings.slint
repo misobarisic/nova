@@ -9,7 +9,7 @@ import { SearchField } from "searchfield.slint";
 import { TrackingAccountRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow } from "types.slint";
 import { IcExtension, IcTag, IcImage, IcDisplay, IcPlay, IcChevronLeft, IcChevronRight, IcSettingsGear, IcSync, IcDelete } from "icons.slint";
 import { KbMark } from "kbnav.slint";
-import { SideNav, NavMetrics } from "sidenav.slint";
+import { SideNav, NavMetrics, NavState } from "sidenav.slint";
 import { Anim } from "anim.slint";
 import { SpeedControl } from "speedcontrol.slint";
 import { SliderGesture } from "slider-touch.slint";
@@ -173,6 +173,12 @@ export component SettingsPage {
     callback addon_remove(int);
     callback addon_move_up(int);
     callback addon_move_down(int);
+    in-out property <bool> addon_config_open: false;
+    in-out property <string> addon_config_url;
+    in-out property <string> addon_config_label;
+    in-out property <bool> addon_config_streams: true;
+    in-out property <bool> addon_config_metadata: true;
+    callback addon_capabilities_changed(string, bool, bool);
     callback addon_configure(string);
     callback addon_refresh(int);
     // Copy the install URL of the addon at this row (the row shows only its
@@ -599,7 +605,15 @@ export component SettingsPage {
         land_scroll.content-x = 0px;
     }
 
+    function close_addon_config() {
+        root.addon_config_open = false;
+        nav_scope.focus();
+    }
+    function save_addon_config() {
+        root.addon_capabilities_changed(root.addon_config_url, root.addon_config_streams, root.addon_config_metadata);
+    }
     function system_back() {
+        if root.addon_config_open { root.close_addon_config(); return; }
         if SettingsSync.open { SettingsSync.open = false; nav_scope.focus(); return; }
         if (root.home_catalog_add_open) {
             root.home_catalog_add_open = false;
@@ -1144,7 +1158,7 @@ export component SettingsPage {
 
     function kb_left() {
         if (root.kb_zone == 0) {
-            if (!root.phone_layout) { root.kb_nav = Math.mod(root.kb_nav + 4, 5); }
+            if (!root.phone_layout) { root.kb_nav = Math.mod(root.kb_nav + 6, 7); }
         } else if (root.kb_zone == 1) {
             if (root.kb_actl > 0) {
                 root.kb_actl -= 1;
@@ -1204,7 +1218,7 @@ export component SettingsPage {
 
     function kb_right() {
         if (root.kb_zone == 0) {
-            if (!root.phone_layout) { root.kb_nav = Math.mod(root.kb_nav + 1, 5); }
+            if (!root.phone_layout) { root.kb_nav = Math.mod(root.kb_nav + 1, 7); }
         } else if (root.kb_zone == 1) {
             if (root.kb_actl < 1) {
                 root.kb_actl += 1;
@@ -1276,9 +1290,10 @@ export component SettingsPage {
                 root.library_picked();
             } else if (root.kb_nav == 3) {
                 root.settings_picked();
-            } else {
+            } else if root.kb_nav == 4 {
                 root.about_picked();
-            }
+            } else if root.kb_nav == 5 { NavState.calendar_picked(); }
+            else { NavState.downloads_picked(); }
         } else if (root.kb_zone == 1) {
             if (root.kb_actl == 0) {
                 root.kb_edit = 1;
@@ -4300,6 +4315,78 @@ export component SettingsPage {
                                 );
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+    if root.addon_config_open: Rectangle {
+        background: Theme.current.scrim_settings;
+        TouchArea { clicked => { root.close_addon_config(); } }
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: root.phone_layout ? parent.height - self.height - root.safe-bottom : (parent.height - self.height) / 2;
+            width: Math.min(480px, parent.width - root.safe-left - root.safe-right - 24px);
+            height: Math.min(370px, parent.height - root.safe-top - root.safe-bottom - 24px);
+            background: Theme.current.card;
+            border-width: 1px;
+            border-color: Theme.current.dialog_border;
+            border-radius: 16px;
+            TouchArea { }
+            config_focus := FocusScope {
+                property <int> selected: 0;
+                init => { self.focus(); }
+                key-pressed(e) => {
+                    if e.repeat && e.text != Key.UpArrow && e.text != Key.DownArrow { accept }
+                    else if e.text == Key.Back || e.text == Key.Escape || e.text == Key.Backspace {
+                        root.close_addon_config(); accept
+                    } else if e.text == Key.UpArrow {
+                        self.selected = Math.max(0, self.selected - 1); accept
+                    } else if e.text == Key.DownArrow || e.text == Key.Tab {
+                        self.selected = Math.mod(self.selected + 1, 3); accept
+                    } else if e.text == Key.Return || e.text == " " || e.text == Key.LeftArrow || e.text == Key.RightArrow {
+                        if self.selected == 0 { root.addon_config_streams = !root.addon_config_streams; root.save_addon_config(); }
+                        else if self.selected == 1 { root.addon_config_metadata = !root.addon_config_metadata; root.save_addon_config(); }
+                        else { root.close_addon_config(); }
+                        accept
+                    } else { reject }
+                }
+                ScrollView {
+                    width: 100%; height: 100%;
+                    content-width: self.visible-width;
+                    mouse-drag-pan-enabled: true;
+                    VerticalLayout {
+                        padding: 20px; spacing: 12px;
+                        Text { text: @tr("Addon configuration"); color: Theme.current.text_bright; font-size: 19px; font-weight: 700; }
+                        Text { text: root.addon_config_label; color: Theme.current.text_settings; font-size: 14px; }
+                        SettingsCard {
+                            VerticalLayout {
+                                spacing: 0px;
+                                SettingsRow {
+                                    row-title: @tr("Streams");
+                                    row-desc: @tr("Provide playable streams, including for other metadata sources.");
+                                    ToggleSwitch {
+                                        name: @tr("Streams"); checked <=> root.addon_config_streams;
+                                        focused: SettingsStyle.keyboard-mode && config_focus.selected == 0;
+                                        toggled => { config_focus.focus(); config_focus.selected = 0; root.save_addon_config(); }
+                                    }
+                                }
+                                SettingsRow {
+                                    row-title: @tr("Metadata");
+                                    row-desc: @tr("Provide metadata, catalogs and search results.");
+                                    ToggleSwitch {
+                                        name: @tr("Metadata"); checked <=> root.addon_config_metadata;
+                                        focused: SettingsStyle.keyboard-mode && config_focus.selected == 1;
+                                        toggled => { config_focus.focus(); config_focus.selected = 1; root.save_addon_config(); }
+                                    }
+                                }
+                            }
+                        }
+                        if !root.addon_config_streams && !root.addon_config_metadata: Text {
+                            text: @tr("This addon provides no content while both options are off.");
+                            color: Theme.current.text_settings; font-size: 13px; wrap: word-wrap;
+                        }
+                        PillButton { label: @tr("Close"); roomy: true; focused: SettingsStyle.keyboard-mode && config_focus.selected == 2; clicked => { root.close_addon_config(); } }
                     }
                 }
             }

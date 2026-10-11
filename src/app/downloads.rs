@@ -64,6 +64,7 @@ struct DownloadState {
 #[derive(Clone)]
 struct ActiveDownload {
     id: String,
+    torrent_engine: Option<Arc<crate::torrent::TorrentEngine>>,
     cancel: CancellationToken,
     torrent_cancel: Arc<AtomicBool>,
     remove: Arc<AtomicBool>,
@@ -104,6 +105,14 @@ impl DownloadCoordinator {
         };
         coordinator.persist();
         coordinator
+    }
+
+    pub(crate) fn jobs(&self) -> Vec<DownloadJob> {
+        self.inner.state().manifest.jobs.clone()
+    }
+
+    pub(crate) fn torrent_owners(&self) -> Vec<crate::torrent::RetainedDownload> {
+        torrent_owners(&self.inner.state().manifest, &self.inner.root)
     }
 
     pub(crate) fn start(&self) {
@@ -226,10 +235,15 @@ impl DownloadCoordinator {
                 self.schedule_next();
                 return id;
             }
-            let id = format!(
-                "download-{:016x}",
-                self.inner.next_id.fetch_add(1, Ordering::Relaxed)
-            );
+            let id = loop {
+                let candidate = format!(
+                    "download-{:016x}",
+                    self.inner.next_id.fetch_add(1, Ordering::Relaxed)
+                );
+                if !state.manifest.jobs.iter().any(|job| job.id == candidate) {
+                    break candidate;
+                }
+            };
             let mut job = DownloadJob::new(id.clone(), source);
             job.media_type = media_type;
             job.media_id = media_id;
@@ -292,7 +306,7 @@ impl DownloadCoordinator {
     }
 
     pub(crate) fn remove(&self, id: &str) {
-        let removed = {
+        let (removed, transfer_engine) = {
             let mut state = self.inner.state();
             let Some(index) = state.manifest.jobs.iter().position(|job| job.id == id) else {
                 return;
@@ -305,12 +319,39 @@ impl DownloadCoordinator {
             }
             persist_manifest(&state.manifest);
             self.bump_revision();
-            job
+            let engine = state
+                .active
+                .as_ref()
+                .filter(|active| active.id == job.id)
+                .and_then(|active| active.torrent_engine.clone());
+            (job, engine)
         };
-        if let JobSource::Torrent { info_hash, .. } = &removed.source
-            && let Some(engine) = crate::torrent::engine()
-        {
-            let _ = engine.remove_retained(info_hash);
+        if matches!(removed.source, JobSource::Torrent { .. }) {
+            let remaining = self.torrent_owners();
+            let result = if let Some(engine) = transfer_engine.or_else(crate::torrent::engine) {
+                for owner in &remaining {
+                    engine.retain_download(owner.clone());
+                }
+                engine.remove_retained(&removed.id).map(|_| ())
+            } else if let Some(owner) = torrent_owner(&removed, &self.inner.root) {
+                crate::torrent::remove_download_files(&owner, &remaining)
+            } else {
+                Ok(())
+            };
+            if let Err(error) = result {
+                let mut state = self.inner.state();
+                let mut restored = removed;
+                restored.error = Some(error);
+                if !matches!(restored.phase, DownloadPhase::Completed) {
+                    restored.phase = DownloadPhase::Failed;
+                }
+                state.manifest.jobs.push(restored);
+                persist_manifest(&state.manifest);
+                self.bump_revision();
+                return;
+            }
+            self.schedule_next();
+            return;
         }
         if !self
             .inner
@@ -383,8 +424,15 @@ impl DownloadCoordinator {
             else {
                 return;
             };
+            if matches!(job.source, JobSource::Torrent { .. })
+                && crate::torrent::engine().is_none()
+                && active_torrent_settings().enabled
+            {
+                return;
+            }
             let active = ActiveDownload {
                 id: job.id.clone(),
+                torrent_engine: crate::torrent::engine(),
                 cancel: CancellationToken::new(),
                 torrent_cancel: Arc::new(AtomicBool::new(false)),
                 remove: Arc::new(AtomicBool::new(false)),
@@ -466,7 +514,7 @@ impl DownloadCoordinator {
         file_idx: Option<u32>,
         active: ActiveDownload,
     ) {
-        let Some(engine) = crate::torrent::engine() else {
+        let Some(engine) = active.torrent_engine.clone() else {
             self.finish(job.id, Err("torrent engine unavailable".into()));
             return;
         };
@@ -483,11 +531,24 @@ impl DownloadCoordinator {
         let progress_best = best_progress.clone();
         engine.start_download(
             crate::torrent::TorrentDownloadRequest {
+                owner_id: job.id.clone(),
                 info_hash,
                 file_idx,
                 requested_name: job.display.clone(),
                 output_directory: self.inner.root.join("torrents"),
                 cancel: active.torrent_cancel.clone(),
+            },
+            {
+                let coordinator = self.clone();
+                let id = job.id.clone();
+                move |location| {
+                    let mut state = coordinator.inner.state();
+                    if let Some(job) = state.manifest.jobs.iter_mut().find(|job| job.id == id) {
+                        job.torrent_directory = Some(location.directory);
+                        job.torrent_file_idx = Some(location.file_idx);
+                        persist_manifest(&state.manifest);
+                    }
+                }
             },
             move |stats| {
                 let bits = (stats.progress as f64).max(0.0).to_bits();
@@ -539,7 +600,11 @@ impl DownloadCoordinator {
 
     fn update_progress(&self, id: &str, progress: DownloadProgress) {
         let mut state = self.inner.state();
-        if !state.active.as_ref().is_some_and(|active| active.id == id) {
+        if !state
+            .active
+            .as_ref()
+            .is_some_and(|active| active.id == id && !active.cancel.is_cancelled())
+        {
             return;
         }
         let Some(job) = state.manifest.jobs.iter_mut().find(|job| job.id == id) else {
@@ -555,7 +620,11 @@ impl DownloadCoordinator {
 
     fn update_torrent_progress(&self, id: &str, stats: TorrentStats) {
         let mut state = self.inner.state();
-        if !state.active.as_ref().is_some_and(|active| active.id == id) {
+        if !state
+            .active
+            .as_ref()
+            .is_some_and(|active| active.id == id && !active.cancel.is_cancelled())
+        {
             return;
         }
         let Some(job) = state.manifest.jobs.iter_mut().find(|job| job.id == id) else {
@@ -596,7 +665,11 @@ impl DownloadCoordinator {
                         }
                         Err(error) => {
                             if active.cancel.is_cancelled() {
-                                job.phase = DownloadPhase::Paused;
+                                // Resume can queue the job while the cancelled
+                                // worker is still unwinding. Preserve that intent.
+                                if job.phase != DownloadPhase::Queued {
+                                    job.phase = DownloadPhase::Paused;
+                                }
                                 job.error = None;
                             } else {
                                 job.phase = DownloadPhase::Failed;
@@ -710,6 +783,9 @@ impl DownloadCoordinator {
     }
 
     fn remove_artifacts(&self, job: &DownloadJob) {
+        if matches!(job.source, JobSource::Torrent { .. }) {
+            return;
+        }
         let path = job
             .artifact_path
             .clone()
@@ -779,6 +855,43 @@ fn job_file_name(job: &DownloadJob) -> String {
     } else {
         candidate
     }
+}
+
+fn torrent_owner(job: &DownloadJob, root: &Path) -> Option<crate::torrent::RetainedDownload> {
+    let JobSource::Torrent {
+        info_hash,
+        file_idx,
+    } = &job.source
+    else {
+        return None;
+    };
+    Some(crate::torrent::RetainedDownload {
+        owner_id: job.id.clone(),
+        info_hash: info_hash.clone(),
+        requested_file_idx: *file_idx,
+        directory: crate::torrent::download_directory(
+            info_hash,
+            &root.join("torrents"),
+            job.torrent_directory.as_deref(),
+        ),
+        file_idx: job.torrent_file_idx,
+        complete: job.phase == DownloadPhase::Completed,
+    })
+}
+
+fn torrent_owners(
+    manifest: &DownloadManifest,
+    root: &Path,
+) -> Vec<crate::torrent::RetainedDownload> {
+    manifest
+        .jobs
+        .iter()
+        .filter_map(|job| torrent_owner(job, root))
+        .collect()
+}
+
+pub(super) fn persisted_torrent_owners() -> Vec<crate::torrent::RetainedDownload> {
+    torrent_owners(&load_manifest_raw(), &app_data_dir().join("downloads"))
 }
 
 fn load_manifest(root: &Path) -> DownloadManifest {
@@ -866,6 +979,9 @@ fn artifact_is_valid(job: &DownloadJob, root: &Path) -> bool {
     if !path.is_file() {
         return false;
     }
+    if let Some(owner) = torrent_owner(job, root) {
+        return crate::torrent::path_is_within(path, &owner.directory);
+    }
     let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     canonical_path.starts_with(&canonical_root)
@@ -920,8 +1036,8 @@ fn adopt_orphaned_artifacts(root: &Path, manifest: &mut DownloadManifest) {
     }
 }
 
-/// Largest non-`.part` regular file directly inside `dir`, if any. `.part`
-/// files are incomplete transfers and are not adopted as completed.
+/// Largest completed artifact directly inside `dir`, if any. Partial bodies
+/// and their resume metadata are never adopted as completed media.
 fn directory_artifact(dir: &Path) -> Option<(PathBuf, u64)> {
     let mut best: Option<(PathBuf, u64)> = None;
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
@@ -935,6 +1051,9 @@ fn directory_artifact(dir: &Path) -> Option<(PathBuf, u64)> {
         if path
             .extension()
             .is_some_and(|extension| extension == "part")
+            || path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(".part.resume.json"))
         {
             continue;
         }
@@ -1207,9 +1326,7 @@ impl Bridge {
             match action {
                 0 => match job.phase {
                     DownloadPhase::Completed => {
-                        if let Some(path) = job.artifact_path {
-                            let _ = self.open_player(path.to_string_lossy().into_owned());
-                        }
+                        self.play_download(&job.id);
                     }
                     DownloadPhase::Paused | DownloadPhase::Failed => self.downloads.resume(&job.id),
                     _ => self.downloads.pause(&job.id),
@@ -1656,6 +1773,51 @@ mod tests {
     }
 
     #[test]
+    fn removing_torrent_job_preserves_sibling_bundle_after_manifest_reload() {
+        for reverse in [false, true] {
+            let root = temp_root("torrent-siblings");
+            let coordinator = DownloadCoordinator::new(root.clone());
+            let hash = "abcdef0123456789abcdef0123456789abcdef01";
+            let directory = root.join("torrents").join(hash);
+            std::fs::create_dir_all(directory.join("season")).unwrap();
+            let mut jobs = Vec::new();
+            for (index, id) in ["a", "b"].into_iter().enumerate() {
+                let path = directory.join("season").join(format!("{id}.mkv"));
+                std::fs::write(&path, id).unwrap();
+                let mut job = DownloadJob::new(
+                    id,
+                    JobSource::Torrent {
+                        info_hash: hash.into(),
+                        file_idx: Some(index as u32),
+                    },
+                );
+                job.phase = DownloadPhase::Completed;
+                job.artifact_path = Some(path);
+                job.torrent_directory = Some(directory.clone());
+                job.torrent_file_idx = Some(index);
+                jobs.push(job);
+            }
+            let json = DownloadManifest::new(jobs).to_json().unwrap();
+            let mut manifest = DownloadManifest::from_json(&json).unwrap();
+            normalize_manifest(&mut manifest, &root);
+            assert!(
+                manifest
+                    .jobs
+                    .iter()
+                    .all(|job| job.phase == DownloadPhase::Completed)
+            );
+            coordinator.inner.state().manifest = manifest;
+            let (first, second) = if reverse { ("b", "a") } else { ("a", "b") };
+            coordinator.remove(first);
+            assert!(directory.join("season/a.mkv").exists());
+            assert!(directory.join("season/b.mkv").exists());
+            coordinator.remove(second);
+            assert!(!directory.exists());
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
     fn missing_artifact_marks_completed_job_failed() {
         let root = temp_root("missing");
         let mut job = DownloadJob::new("download-missing", JobSource::http("http://x/movie.mp4"));
@@ -1676,6 +1838,11 @@ mod tests {
         std::fs::write(&file, b"hello").unwrap();
         // An incomplete `.part` sibling must not be adopted as completed.
         std::fs::write(file.with_extension("mp4.part"), b"partial").unwrap();
+        std::fs::write(
+            file.with_extension("mp4.part.resume.json"),
+            b"metadata larger than the media",
+        )
+        .unwrap();
 
         let mut manifest = DownloadManifest::default();
         adopt_orphaned_artifacts(&root, &mut manifest);
@@ -1719,11 +1886,48 @@ mod tests {
         state.manifest.jobs.push(job);
         state.active = Some(ActiveDownload {
             id: id.to_string(),
+            torrent_engine: None,
             cancel: CancellationToken::new(),
             torrent_cancel: Arc::new(AtomicBool::new(false)),
             remove: Arc::new(AtomicBool::new(false)),
             finished: Arc::new(AtomicBool::new(finished)),
         });
+    }
+
+    #[test]
+    fn late_progress_preserves_pause_and_resume_intent() {
+        let coordinator = DownloadCoordinator::new(temp_root("pause-progress"));
+        install_active(
+            &coordinator,
+            "download-race",
+            DownloadPhase::Downloading,
+            false,
+        );
+        coordinator.pause("download-race");
+        coordinator.update_progress("download-race", DownloadProgress::new(3, Some(6), 1));
+        assert_eq!(
+            coordinator.job("download-race").unwrap().phase,
+            DownloadPhase::Paused
+        );
+        coordinator.resume("download-race");
+        coordinator.update_torrent_progress("download-race", TorrentStats::default());
+        assert_eq!(
+            coordinator.job("download-race").unwrap().phase,
+            DownloadPhase::Queued
+        );
+        // Finalization schedules the retry; a refused loopback connection may
+        // already have failed by the time we inspect it, but it must not pause.
+        coordinator.finish("download-race".into(), Err("cancelled".into()));
+        assert_ne!(
+            coordinator.job("download-race").unwrap().phase,
+            DownloadPhase::Paused
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while coordinator.inner.state().active.is_some() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(coordinator.inner.state().active.is_none());
+        let _ = std::fs::remove_dir_all(&coordinator.inner.root);
     }
 
     #[test]

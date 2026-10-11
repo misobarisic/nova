@@ -27,10 +27,6 @@ impl Bridge {
                 },
             )
         };
-        // The (generation, index) poster fast path is native-only; Android
-        // relies on the decoded LRU via load_detail_poster instead.
-        #[cfg(not(feature = "desktop"))]
-        let _ = generation;
         let preview = match preview {
             Some(p) => p,
             None => return,
@@ -50,6 +46,10 @@ impl Bridge {
         discover_index: Option<usize>,
         watch_now: bool,
     ) {
+        // The indexed poster fast path is desktop-only; Android relies on
+        // the decoded LRU via load_detail_poster instead.
+        #[cfg(not(feature = "desktop"))]
+        let _ = (generation, searching);
         let app = match self.app() {
             Some(a) => a,
             None => return,
@@ -298,6 +298,16 @@ impl Bridge {
     /// `<item>:<season>:<episode>` id of a picked episode) from every
     /// installed addon that provides streams for the modal item's type.
     pub(super) fn start_stream_search(&self, request_id: String) {
+        let changed = self
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .is_some_and(|modal| modal.request_id != request_id);
+        if changed {
+            self.cancel_pending_playback();
+        }
         let modal_type = {
             let state = self.shared.lock().unwrap();
             state
@@ -1174,17 +1184,7 @@ impl Bridge {
     /// When `relative` is true, returns relative strings ("3 days ago");
     /// when false, always returns an absolute date ("Mar 15, 2024").
     pub(super) fn format_human_date(iso: &str, relative: bool) -> Option<String> {
-        let s = iso.trim();
-        // Expect at least "YYYY-MM-DD".
-        if s.len() < 10 {
-            return None;
-        }
-        let year: i64 = s[0..4].parse().ok()?;
-        let month: i64 = s[5..7].parse().ok()?;
-        let day: i64 = s[8..10].parse().ok()?;
-        if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-            return None;
-        }
+        let (year, month, day) = iso_date(iso)?;
 
         let abs = || text::absolute_date(day as u32, month as u32, year);
 
@@ -1192,17 +1192,7 @@ impl Bridge {
             return Some(abs());
         }
 
-        // Days since Unix epoch for the parsed date.
-        let y = year;
-        let m = month;
-        let d = day;
-        let mut days = (y - 1970) * 365 + (y - 1969) / 4 - (y - 1901) / 100 + (y - 1601) / 400;
-        let mdays: &[i64] = &[0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-        days += mdays[(m - 1) as usize] + (d - 1);
-        // Leap-year adjustment for dates after Feb.
-        if m > 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) {
-            days += 1;
-        }
+        let days = iso_days(iso)?;
 
         // Current date as days since epoch.
         // the web build reads the browser clock via js_sys instead.)
@@ -1987,6 +1977,7 @@ impl Bridge {
         video: Video,
         index: usize,
     ) {
+        self.persist_outgoing_playback();
         // Arm playback tracking for this episode, resolving a resume point
         // from history (fresh when watched / no saved position).
         {
@@ -2241,6 +2232,7 @@ impl Bridge {
     /// Back preserves the origin of selection: manual episodes return to
     /// their list, movies to Overview, and Home shortcuts to the root page.
     pub(super) fn stream_selector_back(&self) {
+        self.cancel_pending_playback();
         let Some(app) = self.app() else {
             return;
         };
@@ -2607,6 +2599,7 @@ impl Bridge {
 
     /// Clear the stream list and its addon-filter state (state + UI).
     pub(super) fn clear_streams(&self) {
+        self.cancel_pending_playback();
         {
             let mut state = self.shared.lock().unwrap();
             state.stream_generation = state.stream_generation.wrapping_add(1);
@@ -2646,21 +2639,13 @@ impl Bridge {
 
         match stream.source.clone() {
             StreamSource::Url(url) => {
-                // A direct stream supersedes any torrent the tick may still be
-                // reporting stats for. Stop it first so a no-cache torrent's
-                // data is actually deleted instead of being left behind.
-                {
-                    if let Some(engine) = crate::torrent::engine() {
-                        engine.on_playback_stopped(&active_torrent_settings());
-                    }
-                    self.shared.lock().unwrap().active_torrent = None;
-                }
                 // Player backend (Settings → Player): external hands the URL to
                 // another video app unconditionally; otherwise in-app playback
                 // first (mpv on desktop and Android, HTML5 video on web), with
                 // the external app only as a fallback when the player cannot
                 // take the stream at all.
                 if nova_config::active_cache_settings().player_external {
+                    self.begin_playback_request();
                     let _ = crate::player::open_external(&url);
                 } else if !self.open_player(url.clone()) {
                     // Detached launch; the external app manages its own process.
@@ -2672,10 +2657,6 @@ impl Bridge {
                 headers,
                 subtitles,
             } => {
-                if let Some(engine) = crate::torrent::engine() {
-                    engine.on_playback_stopped(&active_torrent_settings());
-                }
-                self.shared.lock().unwrap().active_torrent = None;
                 // Keep source headers and subtitle tracks together in mpv.
                 if !self.open_player_with_options(url, headers, subtitles) {
                     self.set_stream_hint(Some(StreamHint::Fixed(
@@ -2699,7 +2680,7 @@ impl Bridge {
                 if job.is_some_and(|job| job.phase == crate::download::DownloadPhase::Completed)
                     && path.is_file()
                 {
-                    let _ = self.open_player(path.to_string_lossy().into_owned());
+                    self.play_download(&job_id);
                 } else {
                     self.set_stream_hint(Some(StreamHint::Fixed(
                         "This download is not complete yet.",

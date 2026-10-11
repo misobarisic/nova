@@ -64,12 +64,18 @@ fn history_focus_replay_back_and_clear() {
         ]))
         .into(),
     );
+    app.set_discover_search_history_contexts(names(&["AniKoto · series · Action", "All addons"]));
     let weak = app.as_weak();
     let submissions = Rc::new(RefCell::new(Vec::<String>::new()));
     let recorded = submissions.clone();
-    app.on_search_submitted(move |query| {
+    app.on_search_history_selected(move |index| {
+        let app = weak.upgrade().unwrap();
+        let query = app
+            .get_discover_search_history()
+            .row_data(index as usize)
+            .unwrap();
         recorded.borrow_mut().push(query.to_string());
-        weak.upgrade().unwrap().set_discover_search_open(true);
+        app.set_discover_search_open(true);
     });
     let weak = app.as_weak();
     app.on_search_back_picked(move || {
@@ -85,10 +91,10 @@ fn history_focus_replay_back_and_clear() {
             .set_discover_search_history(Rc::new(VecModel::<SharedString>::default()).into());
     });
     let weak = app.as_weak();
-    app.on_search_history_item_removed(move |query| {
+    app.on_search_history_item_removed_at(move |index| {
         let app = weak.upgrade().unwrap();
         let mut history: Vec<_> = app.get_discover_search_history().iter().collect();
-        history.retain(|saved| saved != &query);
+        history.remove(index as usize);
         app.set_discover_search_history(Rc::new(VecModel::from(history)).into());
     });
     app.show().unwrap();

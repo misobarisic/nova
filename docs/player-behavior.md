@@ -4,6 +4,21 @@ Closing the in-app player finalizes its observed progress and immediately rebuil
 Home’s Continue Watching and Upcoming cards, including the next released episode
 and updated resume progress, without requiring a navigation change.
 
+Local edits request device sync after 2 seconds without another edit, with a
+10-second ceiling during continuous editing. Ordinary playback checkpoints use
+a fixed 2-minute automatic push deadline that later checkpoints do not postpone;
+the configured periodic sync remains a reliability fallback and may run sooner.
+Pause, stop, episode replacement and completion save the latest observed resume
+point and immediately request one pass for pending changes. Automatic requests
+retain unavailable peers’ backoff; the manual Sync now action still forces a retry.
+Repeated stationary paused ticks do not rewrite progress or request empty passes.
+
+On Android, the activity Pause listener checkpoints on the UI thread before its
+timer can stop, using the position observed while pausing mpv. This terminal
+handoff can request a pass from the live app engine while backgrounded when sync
+is enabled. It does not authorize continuous automatic background pushes or a
+headless job lease; those retain their existing periodic scheduling constraints.
+
 ## Fullscreen stream selection
 
 Movies show Start/Continue beside the library button and have no Episodes tab.
@@ -71,8 +86,11 @@ controls stay hidden throughout both taps, and visible controls stay visible.
 On desktop it does not trigger the single-tap play/pause action first.
 
 A single tap on a seekable outer third waits for the 280 ms pairing window
-before toggling the OSD. Center taps act immediately. On Android, single taps
-only toggle controls; on desktop, waking hidden controls also toggles playback.
+before applying the single-tap action. Center taps act immediately. On Android,
+single taps only toggle controls. On desktop, a primary single click always
+pauses/resumes and shows controls, even if hover had already made them visible;
+non-primary backdrop clicks do not trigger playback gestures. Space or K also
+toggles playback, once per press, when a popup is not handling the keyboard.
 Press-and-hold and swipe gestures cancel pending taps when recognized. Small
 finger movement within the tap threshold does not reveal controls early.
 
@@ -133,3 +151,19 @@ the AppWindow `next_episode_*` properties/callbacks.
 
 Regression coverage lives beside the policy in `src/app/next_episode.rs` and
 in `tests/next_episode_banner.rs` for headless layout, navigation and input.
+
+## Torrent request and file ownership
+
+Each stream selection carries a playback request identity through resolution
+and the resume prompt. Replacing it, backing out while it is pending, or closing
+the player cancels that identity. Late success and error callbacks cannot open
+a stale stream or update the current hint. Engine activation and cleanup share
+an operation lock; cancellation is checked after discovery and initialization,
+before committing ownership or evicting other cached torrents.
+
+Offline torrent downloads have stable job owners independent of worker retries.
+Their actual bundle directory and resolved file index are saved in the local
+manifest and restored before cache sweeping. Multiple episode jobs can share a
+single torrent handle and its selected files. Removing one owner preserves the
+bundle for sibling downloads or active playback; torrent cleanup never deletes
+an episode's parent directory through the generic HTTP artifact path.

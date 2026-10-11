@@ -37,6 +37,7 @@ impl Bridge {
         }
         if let Some(app) = self.app() {
             app.set_loading_more(false);
+            app.set_can_load_more(false);
         }
         self.fetch_catalog_page(false);
     }
@@ -155,7 +156,7 @@ impl Bridge {
                 state.catalog_exhausted,
             )
         };
-        if !supports_skip || exhausted || skip == 0 {
+        if exhausted || (!supports_skip && skip > 0) {
             return;
         }
         // loading_more is set synchronously below; the async fetch clears it
@@ -170,7 +171,7 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_loading_more(true);
         }
-        self.fetch_catalog_page(true);
+        self.fetch_catalog_page(skip > 0);
     }
 
     /// Core fetch: builds URLs (with `skip` extra when appending), fetches
@@ -179,10 +180,14 @@ impl Bridge {
         let (urls, type_, catalog_id, genre, skip, generation) = {
             let state = self.shared.lock().unwrap();
             if state.chosen_type >= state.type_defs.len() {
+                drop(state);
+                self.cancel_catalog_page();
                 return;
             }
             let ty = &state.type_defs[state.chosen_type];
             if state.chosen_catalog >= ty.catalogs.len() {
+                drop(state);
+                self.cancel_catalog_page();
                 return;
             }
             let cat = &ty.catalogs[state.chosen_catalog];
@@ -199,6 +204,8 @@ impl Bridge {
             } else if state.chosen_addon < state.installed.len() {
                 vec![state.installed[state.chosen_addon].url.clone()]
             } else {
+                drop(state);
+                self.cancel_catalog_page();
                 return;
             };
 
@@ -219,6 +226,12 @@ impl Bridge {
                 generation,
             )
         };
+
+        self.shared.lock().unwrap().loading_more = true;
+        if let Some(app) = self.app() {
+            app.set_loading_more(true);
+            app.set_can_load_more(false);
+        }
 
         // Build the endpoint URLs on the main thread (pure URL math), then
         // fetch from all matching addons in parallel and merge.
@@ -256,25 +269,55 @@ impl Bridge {
 
         let results = Arc::new(Mutex::new(Vec::<MetaPreview>::new()));
         let remaining = Arc::new(AtomicUsize::new(fetch_urls.len()));
+        let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         for url in fetch_urls {
             let bridge = bridge.clone();
             let results = results.clone();
             let remaining = remaining.clone();
+            let failed = failed.clone();
             net::fetch_bytes(url, move |result| {
                 if let Ok(bytes) = result
                     && let Ok(metas) = Addon::parse_catalog(&bytes)
                 {
                     results.lock().unwrap().extend(metas);
+                } else {
+                    failed.store(true, Ordering::SeqCst);
                 }
                 // Last continuation home merges onto the UI thread.
                 if remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
                     let all = std::mem::take(&mut *results.lock().unwrap());
                     let bridge2 = bridge.clone();
                     let _ = slint::invoke_from_event_loop(move || {
-                        bridge2.apply_catalog(generation, all, append);
+                        if failed.load(Ordering::SeqCst) {
+                            bridge2.catalog_page_failed(generation);
+                        } else {
+                            bridge2.apply_catalog(generation, all, append);
+                        }
                     });
                 }
             });
+        }
+    }
+
+    fn cancel_catalog_page(&self) {
+        // Invalid selections also invalidate any response from the old source.
+        self.catalog_gen.fetch_add(1, Ordering::Relaxed);
+        self.shared.lock().unwrap().loading_more = false;
+        if let Some(app) = self.app() {
+            app.set_loading_more(false);
+            app.set_can_load_more(false);
+        }
+    }
+
+    /// Failed batches leave the cursor intact so scrolling can retry the page.
+    fn catalog_page_failed(&self, generation: u64) {
+        if generation != self.catalog_gen.load(Ordering::Relaxed) {
+            return;
+        }
+        self.shared.lock().unwrap().loading_more = false;
+        if let Some(app) = self.app() {
+            app.set_loading_more(false);
+            app.set_can_load_more(true);
         }
     }
 
@@ -316,6 +359,7 @@ impl Bridge {
                     drop(state);
                     if let Some(app) = self.app() {
                         app.set_loading_more(false);
+                        app.set_can_load_more(false);
                     }
                     return;
                 }
@@ -450,12 +494,14 @@ impl Bridge {
                     })
                     .collect();
 
+                state.loading_more = false;
                 state.next_skip = new_metas.len();
                 state.catalog_exhausted = new_metas.is_empty();
                 state.previews = new_metas.clone();
                 state.catalog_gen = generation;
                 drop(state);
 
+                app.set_loading_more(false);
                 app.set_catalog(Rc::new(VecModel::from(cards)).into());
                 app.set_empty_hint(SharedString::from(text::tr(
                     "No results for this selection.",
@@ -848,6 +894,9 @@ impl Bridge {
                 .unwrap_or(0);
             (idx != state.chosen_type, idx)
         };
+        if !changed {
+            return;
+        }
         {
             let mut state = self.shared.lock().unwrap();
             state.chosen_type = idx;
@@ -863,7 +912,7 @@ impl Bridge {
     pub(super) fn pick_catalog(&self, label: &str) {
         let (changed, idx) = {
             let state = self.shared.lock().unwrap();
-            let current_type = state
+            let catalog_count = state
                 .type_defs
                 .get(state.chosen_type)
                 .map(|t| t.catalogs.len())
@@ -873,8 +922,11 @@ impl Bridge {
                 .get(state.chosen_type)
                 .and_then(|t| t.catalogs.iter().position(|c| c.label == label))
                 .unwrap_or(0);
-            (idx != state.chosen_catalog || current_type == 0, idx)
+            (idx != state.chosen_catalog || catalog_count == 0, idx)
         };
+        if !changed {
+            return;
+        }
         {
             let mut state = self.shared.lock().unwrap();
             state.chosen_catalog = idx;
@@ -1219,17 +1271,18 @@ impl Bridge {
         for (target_index, url, type_) in work {
             let bridge = self.clone();
             net::fetch_bytes(url, move |result| {
-                let mut metas = result
+                let mut page = result
                     .ok()
-                    .and_then(|bytes| Addon::parse_catalog(&bytes).ok())
-                    .unwrap_or_default();
-                for meta in &mut metas {
-                    if meta.type_.is_empty() {
-                        meta.type_ = type_.clone();
+                    .and_then(|bytes| Addon::parse_catalog(&bytes).ok());
+                if let Some(metas) = &mut page {
+                    for meta in metas {
+                        if meta.type_.is_empty() {
+                            meta.type_ = type_.clone();
+                        }
                     }
                 }
                 let _ = slint::invoke_from_event_loop(move || {
-                    bridge.apply_search_results(generation, vec![(target_index, metas)], append);
+                    bridge.apply_search_results(generation, vec![(target_index, page)], append);
                 });
             });
         }
@@ -1240,7 +1293,7 @@ impl Bridge {
     fn apply_search_results(
         &self,
         generation: u64,
-        pages: Vec<(usize, Vec<MetaPreview>)>,
+        pages: Vec<(usize, Option<Vec<MetaPreview>>)>,
         append: bool,
     ) {
         let Some(app) = self.app() else { return };
@@ -1252,7 +1305,7 @@ impl Bridge {
             let old_previews = state.search_previews.clone();
 
             for (index, metas) in pages {
-                record_search_source_page(&mut state.search_targets, index, metas);
+                record_search_page_outcome(&mut state.search_targets, index, metas);
             }
 
             let query = state.search.clone();
@@ -1272,11 +1325,8 @@ impl Bridge {
             if pending == 0 {
                 state.search_loading_more = false;
             }
-            let can_load_more = pending == 0
-                && state
-                    .search_targets
-                    .iter()
-                    .any(|target| target.supports_skip && !target.exhausted);
+            let can_load_more =
+                pending == 0 && state.search_targets.iter().any(|target| !target.exhausted);
             (
                 old_previews,
                 ranked_metas,
@@ -1351,9 +1401,7 @@ impl Bridge {
                 .search_targets
                 .iter()
                 .enumerate()
-                .filter_map(|(index, target)| {
-                    (target.supports_skip && !target.exhausted).then_some(index)
-                })
+                .filter_map(|(index, target)| (!target.exhausted).then_some(index))
                 .collect();
             if targets.is_empty() {
                 return;
@@ -1392,17 +1440,25 @@ impl Bridge {
 
     // Search history is deliberately local: it never enters the sync domains.
     pub(super) fn load_search_history(&self) {
-        let stored = read_json::<Vec<String>>("discover:search_history").unwrap_or_default();
-        let mut history = Vec::new();
-        for query in stored.iter().rev() {
-            remember_search_query(&mut history, query);
-        }
+        self.apply_search_history(&read_search_history());
+    }
+
+    fn apply_search_history(&self, history: &[SearchHistoryEntry]) {
         if let Some(app) = self.app() {
             app.set_discover_search_history(
                 Rc::new(VecModel::from(
                     history
-                        .into_iter()
-                        .map(SharedString::from)
+                        .iter()
+                        .map(|entry| SharedString::from(entry.query.as_str()))
+                        .collect::<Vec<_>>(),
+                ))
+                .into(),
+            );
+            app.set_discover_search_history_contexts(
+                Rc::new(VecModel::from(
+                    history
+                        .iter()
+                        .map(|entry| SharedString::from(entry.caption.as_str()))
                         .collect::<Vec<_>>(),
                 ))
                 .into(),
@@ -1411,55 +1467,60 @@ impl Bridge {
     }
 
     fn remember_search(&self, query: &str) {
-        let Some(app) = self.app() else {
+        let entry = {
+            let state = self.shared.lock().unwrap();
+            SearchHistoryEntry::new(query, &state.search_filters, &state.installed)
+        };
+        let mut history = read_search_history();
+        remember_search_entry(&mut history, entry);
+        write_json("discover:search_history:v2", &history);
+        self.apply_search_history(&history);
+    }
+
+    pub(super) fn replay_search_history(&self, index: i32) {
+        let Ok(index) = usize::try_from(index) else {
             return;
         };
-        let model = app.get_discover_search_history();
-        let mut history: Vec<String> = model.iter().map(|value| value.to_string()).collect();
-        remember_search_query(&mut history, query);
-        write_json("discover:search_history", &history);
-        app.set_discover_search_history(
-            Rc::new(VecModel::from(
-                history
-                    .into_iter()
-                    .map(SharedString::from)
-                    .collect::<Vec<_>>(),
-            ))
-            .into(),
-        );
+        let Some(entry) = read_search_history().get(index).cloned() else {
+            return;
+        };
+        {
+            let mut state = self.shared.lock().unwrap();
+            state.search_filters = restore_search_context(&entry.context, &state.installed);
+        }
+        self.apply_search_filters_to_ui();
+        if let Some(app) = self.app() {
+            app.set_search_text(entry.query.clone().into());
+        }
+        self.submit_search(&entry.query);
     }
 
     pub(super) fn clear_search_history(&self) {
+        let history = Vec::<SearchHistoryEntry>::new();
+        // An explicit empty v2 list prevents legacy entries reappearing.
+        write_json("discover:search_history:v2", &history);
         write_json("discover:search_history", &Vec::<String>::new());
-        if let Some(app) = self.app() {
-            app.set_discover_search_history(Rc::new(VecModel::<SharedString>::default()).into());
+        self.apply_search_history(&history);
+    }
+
+    pub(super) fn remove_search_history_item_at(&self, index: i32) {
+        let Ok(index) = usize::try_from(index) else {
+            return;
+        };
+        let mut history = read_search_history();
+        if index >= history.len() {
+            return;
         }
+        history.remove(index);
+        write_json("discover:search_history:v2", &history);
+        self.apply_search_history(&history);
     }
 
     pub(super) fn remove_search_history_item(&self, query: &str) {
-        let Some(app) = self.app() else {
-            return;
-        };
-        let mut history: Vec<String> = app
-            .get_discover_search_history()
-            .iter()
-            .map(|value| value.to_string())
-            .collect();
-        let previous_len = history.len();
-        history.retain(|saved| saved != query);
-        if history.len() == previous_len {
-            return;
-        }
-        write_json("discover:search_history", &history);
-        app.set_discover_search_history(
-            Rc::new(VecModel::from(
-                history
-                    .into_iter()
-                    .map(SharedString::from)
-                    .collect::<Vec<_>>(),
-            ))
-            .into(),
-        );
+        let mut history = read_search_history();
+        history.retain(|entry| entry.query != query);
+        write_json("discover:search_history:v2", &history);
+        self.apply_search_history(&history);
     }
 
     /// Refresh just the catalog combo (after type/catalog index changes).
@@ -1865,14 +1926,155 @@ fn catalog_display_label(cat: &CatDef, hide_prefix: bool) -> &str {
     }
 }
 
-fn remember_search_query(history: &mut Vec<String>, query: &str) {
-    let query = query.trim();
-    if !(2..=256).contains(&query.chars().count()) {
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+struct SearchHistoryContext {
+    addon_url: String,
+    type_: String,
+    catalog: Option<(String, String, String)>,
+    genre: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SearchHistoryEntry {
+    query: String,
+    #[serde(default)]
+    context: SearchHistoryContext,
+    #[serde(default)]
+    caption: String,
+}
+
+impl SearchHistoryEntry {
+    fn new(query: &str, filters: &SearchFilters, installed: &[Installed]) -> Self {
+        let context = SearchHistoryContext {
+            addon_url: filters.addon_url.clone(),
+            type_: filters.type_.clone(),
+            catalog: filters.catalog.as_ref().map(|source| {
+                (
+                    source.addon_url.clone(),
+                    source.type_.clone(),
+                    source.catalog_id.clone(),
+                )
+            }),
+            genre: filters.genre.clone(),
+        };
+        let owner = filters
+            .catalog
+            .as_ref()
+            .map_or(filters.addon_url.as_str(), |source| {
+                source.addon_url.as_str()
+            });
+        let mut labels = vec![
+            installed
+                .iter()
+                .find(|addon| addon.url == owner)
+                .map_or_else(
+                    || text::tr("All addons").to_string(),
+                    |addon| addon.label.clone(),
+                ),
+        ];
+        if !filters.type_.is_empty() {
+            labels.push(filters.type_.clone());
+        }
+        if let Some(source) = &filters.catalog {
+            let name = installed
+                .iter()
+                .find(|addon| addon.url == source.addon_url)
+                .and_then(|addon| {
+                    addon.manifest.catalogs.iter().find(|catalog| {
+                        catalog.type_ == source.type_ && catalog.id == source.catalog_id
+                    })
+                })
+                .map(|catalog| {
+                    if catalog.name.is_empty() {
+                        &catalog.id
+                    } else {
+                        &catalog.name
+                    }
+                });
+            labels.push(name.unwrap_or(&source.catalog_id).clone());
+        }
+        if !filters.genre.is_empty() {
+            labels.push(filters.genre.clone());
+        }
+        Self {
+            query: query.trim().to_string(),
+            context,
+            caption: labels.join(" · "),
+        }
+    }
+}
+
+fn restore_search_context(
+    context: &SearchHistoryContext,
+    installed: &[Installed],
+) -> SearchFilters {
+    let mut filters = SearchFilters {
+        addon_url: context.addon_url.clone(),
+        type_: context.type_.clone(),
+        genre: context.genre.clone(),
+        catalog: context
+            .catalog
+            .as_ref()
+            .map(|(addon_url, type_, catalog_id)| SearchCatalogSource {
+                addon_url: addon_url.clone(),
+                type_: type_.clone(),
+                catalog_id: catalog_id.clone(),
+            }),
+    };
+    if let Some(source) = &filters.catalog {
+        let targets = build_search_targets(installed);
+        if !targets.iter().any(|target| target.source() == *source) {
+            // A catalog selected under All addons still owns a precise addon.
+            // Keep that owner when its catalog disappears instead of widening
+            // immediately to unrelated providers.
+            filters.addon_url = source.addon_url.clone();
+            if filters.type_.is_empty() {
+                filters.type_ = source.type_.clone();
+            }
+            filters.catalog = None;
+        }
+    }
+    search_filter_options(installed, &mut filters, false);
+    filters
+}
+
+fn read_search_history() -> Vec<SearchHistoryEntry> {
+    normalize_search_history(
+        read_json::<Vec<SearchHistoryEntry>>("discover:search_history:v2"),
+        || read_json::<Vec<String>>("discover:search_history").unwrap_or_default(),
+    )
+}
+
+fn normalize_search_history(
+    current: Option<Vec<SearchHistoryEntry>>,
+    legacy: impl FnOnce() -> Vec<String>,
+) -> Vec<SearchHistoryEntry> {
+    let stored = current.unwrap_or_else(|| {
+        legacy()
+            .into_iter()
+            .map(|query| SearchHistoryEntry {
+                query,
+                context: SearchHistoryContext::default(),
+                caption: text::tr("All addons").to_string(),
+            })
+            .collect()
+    });
+    let mut history = Vec::new();
+    for entry in stored.into_iter().rev() {
+        remember_search_entry(&mut history, entry);
+    }
+    history
+}
+
+fn remember_search_entry(history: &mut Vec<SearchHistoryEntry>, mut entry: SearchHistoryEntry) {
+    entry.query = entry.query.trim().to_string();
+    if !(2..=256).contains(&entry.query.chars().count()) {
         return;
     }
-    let key = query.to_lowercase();
-    history.retain(|old| old.to_lowercase() != key);
-    history.insert(0, query.to_string());
+    let key = entry.query.to_lowercase();
+    history.retain(|old| old.query.to_lowercase() != key || old.context != entry.context);
+    history.insert(0, entry);
     history.truncate(20);
 }
 
@@ -1932,6 +2134,16 @@ fn update_search_result_model(
     while current_keys.len() > new_previews.len() {
         model.remove(current_keys.len() - 1);
         current_keys.pop();
+    }
+}
+
+fn record_search_page_outcome(
+    targets: &mut [SearchTarget],
+    index: usize,
+    page: Option<Vec<MetaPreview>>,
+) {
+    if let Some(metas) = page {
+        record_search_source_page(targets, index, metas);
     }
 }
 
@@ -2346,6 +2558,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn failed_search_pages_preserve_retry_cursor() {
+        let mut target = search_target("retry");
+        target.next_skip = 40;
+        let mut targets = vec![target];
+        record_search_page_outcome(&mut targets, 0, None);
+        assert_eq!(targets[0].next_skip, 40);
+        assert!(!targets[0].exhausted);
+        record_search_page_outcome(
+            &mut targets,
+            0,
+            Some(vec![search_meta("retried", "Retried")]),
+        );
+        assert_eq!(targets[0].next_skip, 41);
+        assert_eq!(targets[0].results.len(), 1);
+        assert!(!targets[0].exhausted);
+        record_search_page_outcome(&mut targets, 0, Some(Vec::new()));
+        assert_eq!(targets[0].next_skip, 41);
+        assert!(targets[0].exhausted);
+        targets[0].supports_skip = false;
+        targets[0].exhausted = false;
+        record_search_page_outcome(&mut targets, 0, None);
+        assert!(
+            !targets[0].exhausted,
+            "non-paginated first-page failures can retry"
+        );
+        record_search_page_outcome(&mut targets, 0, Some(vec![search_meta("single", "Single")]));
+        assert!(targets[0].exhausted);
+        assert_eq!(targets[0].results.len(), 2);
+    }
+
+    #[test]
     fn debounced_search_preserves_a_space_until_the_next_word() {
         const CHILD: &str = "NOVA_TEST_SEARCH_SPACE_CHILD";
         let Ok(root) = std::env::var(CHILD) else {
@@ -2396,6 +2639,63 @@ mod tests {
             player,
             downloads,
         );
+        // Native picker callbacks can reselect the current row. Such events
+        // must preserve the active filter and the page already loaded.
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.chosen_type = 0;
+            state.chosen_catalog = 1;
+            state.chosen_genre = "Drama".into();
+            state.next_skip = 40;
+            state.type_defs = vec![TypeDef {
+                type_: "movie".into(),
+                label: "Movies".into(),
+                catalogs: vec![
+                    CatDef {
+                        id: "first".into(),
+                        label: "First".into(),
+                        addon_label: String::new(),
+                        genre_options: vec![],
+                        supports_skip: true,
+                    },
+                    CatDef {
+                        id: "second".into(),
+                        label: "Second".into(),
+                        addon_label: String::new(),
+                        genre_options: vec!["Drama".into()],
+                        supports_skip: true,
+                    },
+                ],
+            }];
+        }
+        bridge.pick_type("Movies");
+        bridge.pick_catalog("Second");
+        {
+            let state = bridge.shared.lock().unwrap();
+            assert_eq!(state.chosen_catalog, 1);
+            assert_eq!(state.chosen_genre, "Drama");
+            assert_eq!(state.next_skip, 40);
+        }
+        bridge.shared.lock().unwrap().next_skip = 0;
+        bridge.shared.lock().unwrap().loading_more = true;
+        bridge.catalog_gen.store(5, Ordering::Relaxed);
+        bridge.load_more();
+        assert_eq!(
+            bridge.catalog_gen.load(Ordering::Relaxed),
+            5,
+            "page-zero retry must not duplicate an in-flight request"
+        );
+        bridge.shared.lock().unwrap().next_skip = 40;
+
+        bridge.catalog_page_failed(4);
+        assert!(bridge.shared.lock().unwrap().loading_more);
+        bridge.catalog_page_failed(5);
+        {
+            let state = bridge.shared.lock().unwrap();
+            assert!(!state.loading_more);
+            assert!(!state.catalog_exhausted);
+            assert_eq!(state.next_skip, 40);
+        }
         for input in ["black ", "black clover"] {
             app.set_search_text(input.into());
             bridge.search_edited(input);
@@ -2690,7 +2990,133 @@ mod tests {
     }
 
     #[test]
+    fn search_history_restores_context_and_cascades_without_unrelated_sources() {
+        let source = installed(
+            true,
+            vec![
+                catalog(
+                    "movie",
+                    "saved",
+                    vec![extra("search", &[]), extra("genre", &["Drama"])],
+                ),
+                catalog("series", "other", vec![extra("search", &[])]),
+            ],
+        );
+        let context = SearchHistoryContext {
+            catalog: Some((source.url.clone(), "movie".into(), "saved".into())),
+            genre: "Drama".into(),
+            ..Default::default()
+        };
+        let exact = restore_search_context(&context, std::slice::from_ref(&source));
+        assert!(exact.catalog.is_some());
+        assert_eq!(exact.genre, "Drama");
+        let mut changed = source.clone();
+        changed.manifest.catalogs[0].id = "replacement".into();
+        let fallback = restore_search_context(&context, std::slice::from_ref(&changed));
+        assert_eq!(fallback.addon_url, source.url);
+        assert_eq!(fallback.type_, "movie");
+        assert!(fallback.catalog.is_none());
+        assert_eq!(fallback.genre, "Drama");
+        changed.manifest.catalogs.remove(0);
+        let stale_type = restore_search_context(&context, std::slice::from_ref(&changed));
+        assert_eq!(stale_type.addon_url, source.url);
+        assert!(stale_type.type_.is_empty());
+        let stale_genre = SearchHistoryContext {
+            genre: "Unknown genre".into(),
+            ..context.clone()
+        };
+        assert!(
+            restore_search_context(&stale_genre, std::slice::from_ref(&source))
+                .genre
+                .is_empty()
+        );
+        for available in [false, true] {
+            changed.available = available;
+            changed.enabled = !available;
+            assert!(
+                restore_search_context(&context, std::slice::from_ref(&changed))
+                    == SearchFilters::default()
+            );
+        }
+        let mut unrelated = source.clone();
+        unrelated.url = "https://unrelated.example".into();
+        assert!(restore_search_context(&context, &[unrelated]) == SearchFilters::default());
+        assert!(restore_search_context(&context, &[]) == SearchFilters::default());
+    }
+
+    #[test]
+    fn search_history_loads_legacy_on_missing_or_malformed_v2_but_respects_clear() {
+        let legacy =
+            || serde_json::from_str::<Vec<String>>(r#"["Dune","Star Wars","dune","a"]"#).unwrap();
+        for current in [
+            None,
+            serde_json::from_str::<Vec<SearchHistoryEntry>>(r#"[{"query":4}]"#).ok(),
+        ] {
+            let loaded = normalize_search_history(current, legacy);
+            assert_eq!(
+                loaded
+                    .iter()
+                    .map(|entry| entry.query.as_str())
+                    .collect::<Vec<_>>(),
+                ["Dune", "Star Wars"]
+            );
+            assert!(
+                loaded
+                    .iter()
+                    .all(|entry| entry.context == SearchHistoryContext::default())
+            );
+        }
+        assert!(normalize_search_history(Some(Vec::new()), legacy).is_empty());
+    }
+
+    #[test]
+    fn search_history_context_dedup_and_legacy_json_are_safe() {
+        let global = SearchFilters::default();
+        let scoped = SearchFilters {
+            addon_url: "https://catalog.example".into(),
+            genre: "Drama".into(),
+            ..Default::default()
+        };
+        let mut history = Vec::new();
+        remember_search_entry(&mut history, SearchHistoryEntry::new("Dune", &global, &[]));
+        remember_search_entry(&mut history, SearchHistoryEntry::new("Dune", &scoped, &[]));
+        assert_eq!(history.len(), 2);
+        remember_search_entry(
+            &mut history,
+            SearchHistoryEntry::new(" dune ", &scoped, &[]),
+        );
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].query, "dune");
+        let encoded = serde_json::to_string(&history).unwrap();
+        let decoded: Vec<SearchHistoryEntry> = serde_json::from_str(&encoded).unwrap();
+        assert!(decoded[0].context == history[0].context);
+        let legacy: Vec<String> = serde_json::from_str(r#"["Dune","Star Wars"]"#).unwrap();
+        let migrated: Vec<_> = legacy
+            .iter()
+            .map(|query| SearchHistoryEntry::new(query, &global, &[]))
+            .collect();
+        assert!(
+            migrated
+                .iter()
+                .all(|entry| entry.context == SearchHistoryContext::default())
+        );
+        let old_object: SearchHistoryEntry = serde_json::from_str(r#"{"query":"Dune"}"#).unwrap();
+        assert!(old_object.context == SearchHistoryContext::default());
+    }
+
+    #[test]
     fn search_history_is_recent_first_unique_and_bounded() {
+        fn remember_search_query(history: &mut Vec<String>, query: &str) {
+            let mut entries: Vec<_> = history
+                .iter()
+                .map(|query| SearchHistoryEntry::new(query, &SearchFilters::default(), &[]))
+                .collect();
+            remember_search_entry(
+                &mut entries,
+                SearchHistoryEntry::new(query, &SearchFilters::default(), &[]),
+            );
+            *history = entries.into_iter().map(|entry| entry.query).collect();
+        }
         let mut history = Vec::new();
         remember_search_query(&mut history, "Star Wars");
         remember_search_query(&mut history, "Dune");

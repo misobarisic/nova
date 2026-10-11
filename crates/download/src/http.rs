@@ -196,9 +196,22 @@ where
     let part = part_path(&destination);
     let mut offset = part_size(&part).await?;
     let mut resume = request.resume.unwrap_or_default();
+    // The job manifest may predate the last received body chunk (or the
+    // process may have died). Keep the representation identity with the
+    // partial file, and publish it durably before any bytes of that response.
+    match fs::read(resume_path(&part)).await {
+        Ok(bytes) => match serde_json::from_slice::<PartialIdentity>(&bytes) {
+            Ok(identity) if identity.url == url.as_str() => {
+                resume = DownloadResume::new(0, identity.etag, identity.last_modified);
+            }
+            _ => resume = DownloadResume::default(),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
     if offset == 0 {
         resume = DownloadResume::default();
-    } else if resume.bytes_downloaded > offset {
+    } else if resume.bytes_downloaded > offset || resume_validator(&resume).is_none() {
         reset_part(&part).await?;
         offset = 0;
         resume = DownloadResume::default();
@@ -375,6 +388,18 @@ where
     fs::create_dir_all(parent).await?;
     let file_name = output_file_name(&destination, response.headers(), Some(response.url()));
     let mut file = open_part(&part, offset).await?;
+    file.sync_all().await?;
+    let identity = PartialIdentity {
+        url: url.to_string(),
+        etag: etag.clone(),
+        last_modified: last_modified.clone(),
+    };
+    let bytes = serde_json::to_vec(&identity)
+        .map_err(|error| DownloadError::InvalidResponse(error.to_string()))?;
+    let mut checkpoint = File::create(resume_path(&part)).await?;
+    checkpoint.write_all(&bytes).await?;
+    checkpoint.sync_all().await?;
+    drop(checkpoint);
     let started = Instant::now();
     let mut downloaded = offset;
     let mut bytes_this_run = 0u64;
@@ -549,17 +574,7 @@ pub(super) async fn send_request(
     }
     if offset > 0 {
         request = request.header(RANGE, format!("bytes={offset}-"));
-        if let Some(validator) = resume
-            .etag
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .or_else(|| {
-                resume
-                    .last_modified
-                    .as_deref()
-                    .filter(|value| !value.is_empty())
-            })
-        {
+        if let Some(validator) = resume_validator(resume) {
             request = request.header(IF_RANGE, validator);
         }
     }
@@ -582,6 +597,32 @@ async fn part_size(path: &Path) -> Result<u64, DownloadError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
         Err(error) => Err(error.into()),
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PartialIdentity {
+    url: String,
+    etag: Option<String>,
+    last_modified: Option<String>,
+}
+
+fn resume_path(part: &Path) -> PathBuf {
+    let mut name = part.as_os_str().to_os_string();
+    name.push(".resume.json");
+    PathBuf::from(name)
+}
+
+fn resume_validator(resume: &DownloadResume) -> Option<&str> {
+    resume
+        .etag
+        .as_deref()
+        .filter(|value| !value.is_empty() && !value.starts_with("W/"))
+        .or_else(|| {
+            resume
+                .last_modified
+                .as_deref()
+                .filter(|value| !value.is_empty())
+        })
 }
 
 async fn reset_part(path: &Path) -> Result<(), DownloadError> {
@@ -617,14 +658,15 @@ async fn sync_after_error(file: &mut File) {
 
 async fn atomic_rename(part: &Path, destination: &Path) -> Result<(), DownloadError> {
     match fs::rename(part, destination).await {
-        Ok(()) => Ok(()),
+        Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             fs::remove_file(destination).await?;
             fs::rename(part, destination).await?;
-            Ok(())
         }
-        Err(error) => Err(error.into()),
+        Err(error) => return Err(error.into()),
     }
+    let _ = fs::remove_file(resume_path(part)).await;
+    Ok(())
 }
 
 async fn finish_existing_part(
@@ -992,6 +1034,78 @@ mod tests {
         task.await.unwrap();
         assert!(matches!(error, DownloadError::UnsupportedContentType(_)));
         assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn interrupted_job_retains_validator_across_restart() {
+        let path = test_path("interrupted-validator");
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/file.mp4", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_request(&mut socket).await;
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nETag: \"old\"\r\nConnection: close\r\n\r\nold").await.unwrap();
+            drop(socket);
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await.to_ascii_lowercase();
+            let validated = request.contains("if-range: \"old\"");
+            // Simulate a server honoring If-Range, or serving an unchecked range.
+            let response: &[u8] = if validated {
+                b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nETag: \"new\"\r\nConnection: close\r\n\r\nnewnew"
+            } else {
+                b"HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 3-5/6\r\nETag: \"new\"\r\nConnection: close\r\n\r\nnew"
+            };
+            socket.write_all(response).await.unwrap();
+            validated
+        });
+        let client = new_http_client().unwrap();
+        let job = DownloadJob::new("interrupted", super::super::DownloadSource::http(url));
+        assert!(
+            download_http_for_job(&client, &job, &path, CancellationToken::new(), |_| {})
+                .await
+                .is_err()
+        );
+        assert_eq!(fs::read(part_path(&path)).await.unwrap(), b"old");
+        let job: DownloadJob = serde_json::from_str(&serde_json::to_string(&job).unwrap()).unwrap();
+        download_http_for_job(&client, &job, &path, CancellationToken::new(), |_| {})
+            .await
+            .unwrap();
+        assert_eq!(fs::read(&path).await.unwrap(), b"newnew");
+        assert!(
+            server.await.unwrap(),
+            "resume must validate the persisted prefix"
+        );
+        fs::remove_file(path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unvalidated_partial_file_restarts_without_a_range() {
+        let path = test_path("unvalidated-partial");
+        fs::write(part_path(&path), b"old").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/file.mp4", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await.to_ascii_lowercase();
+            assert!(!request.contains("range:"));
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nnewnew")
+                .await
+                .unwrap();
+        });
+        download_http(
+            &new_http_client().unwrap(),
+            url,
+            &path,
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        server.await.unwrap();
+        assert_eq!(fs::read(&path).await.unwrap(), b"newnew");
+        assert!(!resume_path(&part_path(&path)).exists());
+        fs::remove_file(path).await.unwrap();
     }
 
     #[tokio::test]

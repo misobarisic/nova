@@ -639,6 +639,23 @@
 
   globalThis.novaProvider = {
     handle(request) {
+      // Only exposed contributions are gated. Stream matching may still use
+      // internal source metadata when public metadata/catalogs are disabled.
+      const config = { streams: true, metadata: true, ...request.config };
+      if (request.op === "manifest") {
+        const manifest = JSON.parse(JSON.stringify(request.manifest));
+        manifest.resources = manifest.resources.filter(resource => {
+          const name = typeof resource === "string" ? resource : resource.name;
+          return name === "stream" ? config.streams :
+            name === "meta" || name === "catalog" ? config.metadata : true;
+        });
+        if (!config.metadata) manifest.catalogs = [];
+        if (!config.metadata && !config.streams) manifest.types = [];
+        return manifest;
+      }
+      if (!config.metadata && request.op === "catalog") return [];
+      if (!config.metadata && request.op === "details") return null;
+      if (!config.streams && (request.op === "streams" || request.op === "lookupStreams")) return [];
       switch (request.op) {
         case "catalog": return catalog(request);
         case "details": return details(request);

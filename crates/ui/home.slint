@@ -3,7 +3,7 @@ import { TitleArtwork } from "title-artwork.slint";
 import { ScrollView } from "scrollview.slint";
 import { ContinueRow, UpcomingRow, HomeCatalogSection, HomeCatalogCard, CalCell, SheetItem } from "types.slint";
 import { MenuSheet } from "menusheet.slint";
-import { SideNav, NavMetrics } from "sidenav.slint";
+import { SideNav, NavMetrics, NavState } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
 import { Anim } from "anim.slint";
 import { IcChevronLeft, IcChevronRight, IcPlay, IcStarBorder, IcSchedule, IcDisplay } from "icons.slint";
@@ -1404,7 +1404,7 @@ export component HomePage {
     callback about_picked();
     callback more_picked();
     in property <bool> more_open: false;
-    private property <int> nav_count: root.narrow ? 4 : 5;
+    private property <int> nav_count: root.narrow ? 4 : 7;
     changed narrow => { root.kb_nav = Math.min(root.kb_nav, root.nav_count - 1); }
     callback continue_picked(int);
     callback new_episode_picked(int);
@@ -1692,9 +1692,10 @@ export component HomePage {
                 root.library_picked();
             } else if (root.kb_nav == 3) {
                 if (root.narrow) { root.more_picked(); } else { root.settings_picked(); }
-            } else {
+            } else if root.kb_nav == 4 {
                 root.about_picked();
-            }
+            } else if root.kb_nav == 5 { NavState.calendar_picked(); }
+            else { NavState.downloads_picked(); }
         } else if (root.kb_zone == 1) {
             if (root.kb_idx >= 0 && root.kb_idx < root.continue_rows.length) {
                 root.continue_picked(root.kb_idx);

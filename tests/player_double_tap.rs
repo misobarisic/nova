@@ -157,4 +157,69 @@ fn double_tap_seeks_without_revealing_controls_even_between_taps() {
     advance(281);
     assert!(!app.get_osd_visible(), "second independent single");
     assert!(seeks.borrow().is_empty());
+
+    // Hover/OSD visibility never changes what a desktop single click means.
+    app.set_is_android(false);
+    for paused in [false, true] {
+        app.set_is_paused(paused);
+        for visible in [false, true] {
+            for x in [100.0, 300.0, 500.0] {
+                app.set_osd_visible(visible);
+                toggles.set(0);
+                seeks.borrow_mut().clear();
+                tap(&app, x, 300.0);
+                advance(281);
+                assert_eq!(toggles.get(), 1);
+                assert!(app.get_osd_visible());
+                assert!(seeks.borrow().is_empty());
+            }
+        }
+    }
+    toggles.set(0);
+    let p = LogicalPosition::new(300.0, 300.0);
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+            position: p,
+            button: slint::platform::PointerEventButton::Right,
+        });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+            position: p,
+            button: slint::platform::PointerEventButton::Right,
+        });
+    advance(600);
+    assert_eq!(toggles.get(), 0, "right click never pauses");
+
+    // Keyboard adjustments on the seek control must publish their target
+    // before mpv's seek-pending guard compares it with the live position.
+    app.set_is_android(true);
+    app.set_is_paused(true);
+    app.set_position(100.0);
+    app.set_player_open(false);
+    advance(1);
+    app.set_player_open(true);
+    advance(500);
+    let key = |key: slint::platform::Key| {
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.into() });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key.into() });
+    };
+    key(slint::platform::Key::RightArrow);
+    seeks.borrow_mut().clear();
+    key(slint::platform::Key::UpArrow);
+    assert_eq!(seeks.borrow().as_slice(), [110.0]);
+    assert_eq!(app.get_position(), 110.0);
+    key(slint::platform::Key::DownArrow);
+    assert_eq!(app.get_position(), 100.0);
+    toggles.set(0);
+    for text in [" ", "k", "K"] {
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.into() });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressRepeated { text: text.into() });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: text.into() });
+    }
+    assert_eq!(toggles.get(), 3, "held playback shortcuts toggle only once");
 }

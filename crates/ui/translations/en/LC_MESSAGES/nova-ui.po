@@ -30,3 +30,89 @@ msgstr "Wait for new episodes"
 
 msgid "Resume watching"
 msgstr "Resume watching"
+
+msgid "Search series"
+msgstr "Search series"
+
+msgid "Month"
+msgstr "Month"
+
+msgid "Week"
+msgstr "Week"
+
+msgid "Agenda"
+msgstr "Agenda"
+
+msgid "All scheduled"
+msgstr "All scheduled"
+
+msgid "Today"
+msgstr "Today"
+
+msgid "No releases on this day"
+msgstr "No releases on this day"
+
+msgid "No scheduled releases"
+msgstr "No scheduled releases"
+
+msgid "Next up"
+msgstr "Next up"
+
+msgid "Upcoming episodes from your library"
+msgstr "Upcoming episodes from your library"
+
+msgid "Watch your saved episodes"
+msgstr "Watch your saved episodes"
+
+msgid "On this device"
+msgstr "On this device"
+
+msgid "Search downloaded episodes"
+msgstr "Search downloaded episodes"
+
+msgid "Remove download"
+msgstr "Remove download"
+
+msgid "Expand series"
+msgstr "Expand series"
+
+msgid "Collapse series"
+msgstr "Collapse series"
+
+msgid "Newest first"
+msgstr "Newest first"
+
+msgid "Series & episode"
+msgstr "Series & episode"
+
+msgid "Your completed downloads will appear here."
+msgstr "Your completed downloads will appear here."
+
+msgid "No downloads match your search or filter."
+msgstr "No downloads match your search or filter."
+
+msgid "Transfers"
+msgstr "Transfers"
+
+msgid "{n} scheduled episode"
+msgid_plural "{n} scheduled episodes"
+msgstr[0] "{n} scheduled episode"
+msgstr[1] "{n} scheduled episodes"
+
+msgid "Addon configuration"
+msgstr "Addon configuration"
+
+msgid "Metadata"
+msgstr "Metadata"
+
+msgid "Provide playable streams, including for other metadata sources."
+msgstr "Provide playable streams, including for other metadata sources."
+
+msgid "Provide metadata, catalogs and search results."
+msgstr "Provide metadata, catalogs and search results."
+
+msgid "This addon provides no content while both options are off."
+msgstr "This addon provides no content while both options are off."
+
+msgid "Retry"
+msgstr "Retry"

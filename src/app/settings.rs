@@ -275,12 +275,6 @@ impl Bridge {
             loop {
                 let (generation, path) = request;
                 let (bytes, files) = {
-                    #[cfg(feature = "desktop")]
-                    let _phase = crate::startup_bench::span(if torrent {
-                        "torrent_cache_scan"
-                    } else {
-                        "image_cache_scan"
-                    });
                     if torrent {
                         (crate::torrent::cache_bytes(&path), 0)
                     } else {
@@ -918,6 +912,7 @@ impl Bridge {
     }
 
     pub(super) fn modal_closed(&self) {
+        self.cancel_pending_playback();
         if self.app().is_some_and(|app| app.get_tracking_open()) {
             self.tracking_close();
         }

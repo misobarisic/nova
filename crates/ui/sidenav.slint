@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { ScrollView } from "scrollview.slint";
 import { IcHome, IcExplore, IcVideoLibrary, IcSettingsGear, IcInfo } from "icons.slint";
 import { Anim } from "anim.slint";
 
@@ -27,8 +28,10 @@ export global NavMetrics {
 // which is why the section being left is published here by the backend
 // (`app::run`), right before it flips the page flags.
 export global NavState {
+    callback calendar_picked();
+    callback downloads_picked();
     // Section the current switch is coming from (0 Home, 1 Discover,
-    // 2 Library, 3 Settings, 4 About). Consumed by the new bar so a rebuild
+    // 2 Library, 3 Settings, 4 About, 5 Calendar, 6 Downloads). Consumed by the new bar so a rebuild
     // (returning from detail or resizing) does not replay the selected icon's pop.
     in-out property <int> from: 0;
 }
@@ -67,7 +70,7 @@ export component NavFeedback inherits Rectangle {
 }
 
 component SideItem inherits Rectangle {
-    // 0 Home, 1 Discover, 2 Library, 3 Settings, 4 About.
+    // 0 Home, 1 Discover, 2 Library, 3 Settings, 4 About, 5 Calendar, 6 Downloads.
     in property <int> kind: 0;
     in property <bool> active: false;
     // Keyboard cursor (arrow-key nav, zone 0). Drawn as a ring on the icon
@@ -79,7 +82,7 @@ component SideItem inherits Rectangle {
     callback picked();
 
     accessible-role: button;
-    accessible-label: root.kind == 0 ? @tr("Home") : root.kind == 1 ? @tr("Discover") : root.kind == 2 ? @tr("Library") : root.kind == 3 ? @tr("Settings") : @tr("About");
+    accessible-label: root.kind == 0 ? @tr("Home") : root.kind == 1 ? @tr("Discover") : root.kind == 2 ? @tr("Library") : root.kind == 3 ? @tr("Settings") : root.kind == 4 ? @tr("About") : root.kind == 5 ? @tr("Calendar") : @tr("Downloads");
 
     height: 56px;
 
@@ -90,9 +93,9 @@ component SideItem inherits Rectangle {
         height: 48px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        background: (root.active || root.kb_focused) ? transparent : (item_touch.has-hover ? Theme.current.control_hover : transparent);
+        background: (root.active || root.kb_focused || item_focus.has-focus) ? transparent : (item_touch.has-hover ? Theme.current.control_hover : transparent);
         border-radius: 24px;
-        border-width: root.kb_focused ? 2px : 0px;
+        border-width: root.kb_focused || item_focus.has-focus ? 2px : 0px;
         border-color: Theme.current.text_bright;
 
         if root.kind == 0: icon_home := IcHome {
@@ -123,6 +126,7 @@ component SideItem inherits Rectangle {
             height: self.width;
             fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
+        if root.kind >= 5: Text { text: root.kind == 5 ? "▦" : "↓"; font-size: 26px; color: root.active ? Theme.current.on_accent : Theme.current.text_muted; horizontal-alignment: center; vertical-alignment: center; }
         if root.kind == 4: icon_about := IcInfo {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
@@ -132,6 +136,8 @@ component SideItem inherits Rectangle {
         }
     }
 
+    item_focus := FocusScope { width: 100%; height: 100%; key-pressed(e) => { if e.text == Key.Return || e.text == " " { if !e.repeat { root.picked(); } accept } else { reject } } }
+
     item_touch := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.picked(); }
@@ -139,7 +145,7 @@ component SideItem inherits Rectangle {
 }
 
 export component SideNav inherits Rectangle {
-    // Active section: 0 Home, 1 Discover, 2 Library, 3 Settings, 4 About.
+    // Active section: 0 Home, 1 Discover, 2 Library, 3 Settings, 4 About, 5 Calendar, 6 Downloads.
     in property <int> active: 0;
     in property <brush> panel-background: Theme.current.nav_rail;
     // Use the hosting page's width, not this component's own footprint.
@@ -185,13 +191,18 @@ export component SideNav inherits Rectangle {
 
     // Panel: a plain full-bleed column — no outer margin, no rounded corners
     // — spanning from the window's left edge to its bottom edge, with the
-    // five items listed top to bottom just under the top. Flush against the
+    // seven items listed top to bottom just under the top. Flush against the
     // window edges a rounded corner would only read as a bug.
+    rail_scroll := ScrollView {
+        x: 0px; y: 0px; width: 100%; height: 100%;
+        content-width: self.visible-width;
+        content-height: Math.max(self.visible-height, 408px + root.safe-top + root.safe-bottom);
+        mouse-drag-pan-enabled: true;
     panel := Rectangle {
         x: root.safe-left;
         y: root.safe-top;
         width: root.width - root.safe-left - 8px;
-        height: root.height - root.safe-top - root.safe-bottom;
+        height: Math.max(root.height - root.safe-top - root.safe-bottom, 408px);
         background: root.panel-background;
         border-width: 0px;
 
@@ -255,6 +266,9 @@ export component SideNav inherits Rectangle {
                 kb_focused: root.kb_zone == 0 && root.kb_nav == 4 && root.kb_active;
                 picked => { root.kb_active = false; root.about_picked(); }
             }
+            SideItem { kind: 5; active: root.active == 5; kb_focused: root.kb_zone == 0 && root.kb_nav == 5 && root.kb_active; picked => { root.kb_active = false; NavState.calendar_picked(); } }
+            SideItem { kind: 6; active: root.active == 6; kb_focused: root.kb_zone == 0 && root.kb_nav == 6 && root.kb_active; picked => { root.kb_active = false; NavState.downloads_picked(); } }
         }
+    }
     }
 }

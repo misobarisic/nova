@@ -1,0 +1,159 @@
+import { Theme } from "theme.slint";
+import { ScrollView } from "scrollview.slint";
+import { SearchField } from "searchfield.slint";
+import { SideNav, NavMetrics } from "sidenav.slint";
+import { BottomNav } from "bottomnav.slint";
+
+export struct DownloadEpisode {
+    id: string, title: string, badge: string, details: string,
+    state: int, progress: float, action_label: string, action_kind: int,
+}
+export struct DownloadGroup {
+    id: string, title: string, subtitle: string, artwork: image,
+    episodes: [DownloadEpisode], collapsed: bool,
+}
+component DownloadButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    callback picked();
+    width: Math.max(44px, label-text.preferred-width + 20px); height: 44px;
+    border-radius: 8px;
+    background: root.selected ? Theme.current.accent : (touch.has-hover ? Theme.current.control_hover : Theme.current.control);
+    accessible-role: button; accessible-label: root.label;
+    label-text := Text { text: root.label; color: root.selected ? Theme.current.on_accent : Theme.current.accent; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+    border-width: key-focus.has-focus ? 2px : 0px; border-color: Theme.current.focus_ring;
+    key-focus := FocusScope { key-pressed(e) => { if (e.text == Key.Return || e.text == " ") { if (!e.repeat) { root.picked(); } accept } else { reject } } }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { key-focus.focus(); root.picked(); } }
+}
+component DownloadEpisodeRow inherits Rectangle {
+    in property <DownloadEpisode> episode;
+    in property <bool> narrow;
+    callback action(string, int);
+    height: 82px; background: Theme.current.artwork_canvas;
+    HorizontalLayout {
+        padding: 8px; spacing: 8px;
+        Rectangle { width: root.narrow ? 49px : 62px; height: 30px; border-radius: 5px; background: Theme.current.control;
+            Text { text: root.episode.badge; color: Theme.current.text_secondary; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        VerticalLayout {
+            spacing: 3px;
+            Text { text: root.episode.title; color: Theme.current.text_primary; font-size: 13px; font-weight: 600; overflow: elide; }
+            Text { text: root.episode.details; color: Theme.current.text_muted; font-size: 11px; overflow: elide; }
+            if root.episode.state == 1: Rectangle { height: 4px; background: Theme.current.slider_track; border-radius: 2px;
+                Rectangle { x: 0px; width: parent.width * root.episode.progress; height: 100%; background: Theme.current.accent; border-radius: 2px; }
+            }
+            if root.episode.action_kind == 4 && root.episode.state != 1: Text {
+                text: root.episode.state == 2 ? @tr("Watched") : @tr("Unwatched"); color: root.episode.state == 2 ? Theme.current.accent : Theme.current.text_muted; font-size: 11px;
+            }
+        }
+        DownloadButton { width: root.narrow ? 58px : 80px; label: root.episode.action_label; picked => { root.action(root.episode.id, 0); } }
+        DownloadButton { width: 44px; label: "×"; accessible-label: @tr("Remove download"); picked => { root.action(root.episode.id, 1); } }
+    }
+}
+component DownloadSeriesCard inherits Rectangle {
+    in property <DownloadGroup> group;
+    in property <bool> narrow;
+    callback toggled(string);
+    callback action(string,int);
+    border-radius: 10px; border-width: 1px; border-color: Theme.current.border_strong;
+    background: Theme.current.artwork_canvas; clip: true;
+    height: 86px + (root.group.collapsed ? 0px : root.group.episodes.length * 82px);
+    VerticalLayout { spacing: 0px;
+        Rectangle { height: 86px; background: Theme.current.control;
+            Image { source: root.group.artwork; width: 100%; height: 100%; image-fit: cover; }
+            Rectangle { width: 100%; height: 100%; background: #00000090; }
+            HorizontalLayout { padding: 14px; spacing: 10px;
+                VerticalLayout { spacing: 5px;
+                    Text { vertical-stretch: 0; text: root.group.title; color: Theme.current.text_bright; font-size: 17px; font-weight: 700; overflow: elide; }
+                    Text { vertical-stretch: 0; text: root.group.subtitle; color: Theme.current.text_secondary; font-size: 12px; overflow: elide; }
+                }
+                DownloadButton { width: 44px; label: root.group.collapsed ? "⌄" : "⌃"; accessible-label: root.group.collapsed ? @tr("Expand series") : @tr("Collapse series"); picked => { root.toggled(root.group.id); } }
+            }
+        }
+        if !root.group.collapsed: VerticalLayout { spacing: 0px;
+            for episode in root.group.episodes: DownloadEpisodeRow { episode: episode; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } }
+        }
+    }
+}
+export component DownloadsPage inherits Rectangle {
+    background: Theme.current.artwork_canvas;
+    in property <[DownloadGroup]> groups;
+    in property <[DownloadEpisode]> transfers;
+    in property <string> summary;
+    in property <[int]> counts;
+    in-out property <string> query;
+    in-out property <int> filter;
+    in-out property <bool> sort_recent;
+    in property <length> safe-top; in property <length> safe-left; in property <length> safe-right; in property <length> safe-bottom;
+    in property <int> system_back_request;
+    in-out property <bool> kb_active;
+    in property <length> nav-viewport-width: root.width;
+    private property <bool> narrow: root.nav-viewport-width < 700px;
+    // Derive layout widths directly from the hosting viewport. Using a
+    // repeated row's parent.width here would feed its intrinsic width back
+    // into ScrollView's minimum width calculation.
+    private property <length> available-width: root.nav-viewport-width
+        - root.safe-left - (root.narrow ? 0px : NavMetrics.width-for(root.nav-viewport-width))
+        - (root.narrow ? 24px : 48px) - root.safe-right;
+    private property <bool> two-columns: root.available-width > 850px;
+    private property <int> columns: root.two-columns ? 2 : 1;
+    private property <int> last-back;
+    private property <[string]> filter-labels: [@tr("All"), @tr("Unwatched"), @tr("In progress"), @tr("Watched")];
+    callback query_changed(string); callback filter_changed(int); callback sort_changed(bool);
+    callback group_toggled(string); callback action(string,int); callback back();
+    callback home_picked(); callback discover_picked(); callback library_picked(); callback settings_picked(); callback about_picked(); callback more_picked();
+    changed system_back_request => { if (root.last-back != root.system_back_request) { root.last-back = root.system_back_request; root.back(); } }
+    FocusScope { width: 100%; height: 100%; init => { root.last-back = root.system_back_request; self.focus(); }
+        capture-key-pressed(e) => { if (e.text == Key.Back || e.text == Key.Escape) { if (!e.repeat) { root.back(); } accept } else { reject } }
+    if !root.narrow: SideNav {
+        viewport-width: root.nav-viewport-width; active: 6; safe-top: root.safe-top; safe-left: root.safe-left; safe-bottom: root.safe-bottom; kb_active <=> root.kb_active;
+        home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } settings_picked => { root.settings_picked(); } about_picked => { root.about_picked(); }
+    }
+    content := VerticalLayout {
+        x: root.narrow ? 0px : NavMetrics.width-for(root.nav-viewport-width) + root.safe-left;
+        width: root.width - self.x; height: 100%;
+        padding-top: root.safe-top; spacing: 0px;
+        ScrollView { vertical-stretch: 1; content-width: self.visible-width; mouse-drag-pan-enabled: true;
+            VerticalLayout { alignment: start; padding: root.narrow ? 12px : 24px; padding-left: (root.narrow ? 12px + root.safe-left : 24px); padding-right: (root.narrow ? 12px : 24px) + root.safe-right; spacing: 14px;
+                Text { vertical-stretch: 0; text: @tr("Downloads"); color: Theme.current.text_bright; font-size: 28px; font-weight: 700; }
+                Text { vertical-stretch: 0; text: root.summary; color: Theme.current.text_secondary; font-size: 12px; wrap: word-wrap; }
+                Text { vertical-stretch: 0; text: @tr("On this device"); color: Theme.current.text_muted; font-size: 12px; }
+                SearchField { text <=> root.query; placeholder-text: @tr("Search downloaded episodes"); search-icon: true; roomy: true; edited(value) => { root.query_changed(value); } }
+                // Keep every filter visible on phones instead of placing a
+                // partially clipped chip at the edge of a horizontal viewport.
+                if root.narrow: VerticalLayout { alignment: start; vertical-stretch: 0; spacing: 5px;
+                    for row in 2: HorizontalLayout { spacing: 5px; height: 44px;
+                        for column in 2: DownloadButton {
+                            width: (root.available-width - 5px) / 2;
+                            label: root.filter-labels[row * 2 + column] + " " + root.counts[row * 2 + column];
+                            selected: root.filter == row * 2 + column;
+                            picked => { root.filter_changed(row * 2 + column); }
+                        }
+                    }
+                }
+                if !root.narrow: HorizontalLayout { spacing: 5px; alignment: start; height: 44px;
+                    for label[index] in root.filter-labels: DownloadButton {
+                        label: label + " " + root.counts[index]; selected: root.filter == index;
+                        picked => { root.filter_changed(index); }
+                    }
+                }
+                DownloadButton { label: root.sort_recent ? @tr("Newest first") : @tr("Series & episode"); picked => { root.sort_changed(!root.sort_recent); } }
+                if root.groups.length == 0: Text { vertical-stretch: 0;
+                    text: root.counts[0] == 0 ? @tr("Your completed downloads will appear here.") : @tr("No downloads match your search or filter.");
+                    color: Theme.current.text_muted; wrap: word-wrap; font-size: 15px;
+                }
+                for row in Math.ceil(root.groups.length / root.columns): HorizontalLayout { spacing: 12px; vertical-stretch: 0;
+                    DownloadSeriesCard { width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * root.columns]; narrow: root.narrow; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } }
+                    if root.two-columns && row * 2 + 1 < root.groups.length: DownloadSeriesCard { width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * 2 + 1]; narrow: false; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } }
+                    if root.two-columns && row * 2 + 1 >= root.groups.length: Rectangle { width: (root.available-width - 12px) / 2; }
+                }
+                if root.transfers.length > 0: Text { vertical-stretch: 0; text: @tr("Transfers"); color: Theme.current.text_bright; font-size: 20px; font-weight: 600; }
+                for transfer in root.transfers: DownloadEpisodeRow { episode: transfer; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } }
+            }
+        }
+        if root.narrow: BottomNav { active: 3; safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right; kb_active <=> root.kb_active;
+            home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } more_picked => { root.more_picked(); }
+        }
+    }
+    }
+}

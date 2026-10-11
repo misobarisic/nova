@@ -35,10 +35,6 @@ pub use nova_torrent as torrent;
 pub mod app;
 mod diagnostics;
 
-/// Opt-in desktop startup measurements and fixture preparation.
-#[cfg(feature = "desktop")]
-pub mod startup_bench;
-
 // Android entry point: cargo-apk / xbuild launch `android_main`, not
 // `main`. Initializes the Slint Android backend, then runs the same catalog
 // app as desktop (src/main.rs calls `app::run()` the same way).
@@ -72,7 +68,8 @@ fn android_main(app: slint::android::AndroidApp) {
             match main {
                 MainEvent::Pause => {
                     nova_sync::set_foreground(false);
-                    crate::player::note_android_pause()
+                    crate::player::note_android_pause();
+                    crate::app::note_android_pause_checkpoint();
                 }
                 MainEvent::Resume { .. } => {
                     nova_sync::set_foreground(true);

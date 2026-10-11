@@ -21,6 +21,8 @@ export component MorePage inherits Rectangle {
     callback library_picked();
     callback settings_picked();
     callback about_picked();
+    callback calendar_picked();
+    callback downloads_picked();
     changed system_back_request => {
         if (root.last_back != root.system_back_request) {
             root.last_back = root.system_back_request;
@@ -38,11 +40,11 @@ export component MorePage inherits Rectangle {
                 if (!e.repeat) { root.home_picked(); }
                 accept
             } else if (e.text == Key.UpArrow) {
-                if (root.kb_zone == 0) { root.kb_zone = 1; root.choice = 1; }
-                else { root.choice = 0; }
+                if (root.kb_zone == 0) { root.kb_zone = 1; root.choice = 3; }
+                else { root.choice = Math.max(0, root.choice - 1); }
                 accept
             } else if (e.text == Key.DownArrow || e.text == Key.Tab) {
-                if (root.kb_zone == 1 && root.choice == 0) { root.choice = 1; }
+                if (root.kb_zone == 1 && root.choice < 3) { root.choice += 1; }
                 else { root.kb_zone = 0; }
                 accept
             } else if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
@@ -51,7 +53,7 @@ export component MorePage inherits Rectangle {
             } else if (e.text == Key.Return || e.text == " ") {
                 if (!e.repeat) {
                     if (root.kb_zone == 1) {
-                        if (root.choice == 0) { root.settings_picked(); } else { root.about_picked(); }
+                        if (root.choice == 0) { root.settings_picked(); } else if root.choice == 1 { root.about_picked(); } else if root.choice == 2 { root.calendar_picked(); } else { root.downloads_picked(); }
                     } else if (root.kb_nav == 0) { root.home_picked(); }
                     else if (root.kb_nav == 1) { root.discover_picked(); }
                     else if (root.kb_nav == 2) { root.library_picked(); }
@@ -86,6 +88,8 @@ export component MorePage inherits Rectangle {
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 1;
                     picked => { root.about_picked(); }
                 } }
+                SettingsCard { SettingsLink { destination-id: "more:calendar"; title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 2; picked => { root.calendar_picked(); } } }
+                SettingsCard { SettingsLink { destination-id: "more:downloads"; title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 3; picked => { root.downloads_picked(); } } }
                 Rectangle { vertical-stretch: 1; }
             }
         }

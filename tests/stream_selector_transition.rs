@@ -250,7 +250,7 @@ fn new_streams_stagger_upward_while_progress_and_retained_rows_stay_visible() {
     app.set_stream_total(4);
     assert!(row_element(&app, 0).computed_opacity() < 0.01);
     let mut faded = false;
-    let mut moved = false;
+    let mut row_positions = Vec::new();
     let mut staggered = false;
     for frame in 0..60 {
         row_frames(&app, &model, 10);
@@ -259,11 +259,7 @@ fn new_streams_stagger_upward_while_progress_and_retained_rows_stay_visible() {
         let opacity = first.computed_opacity();
         faded |= opacity > 0.01 && opacity < 0.99;
         staggered |= opacity > last.computed_opacity() + 0.05;
-        let slot = ElementHandle::find_by_element_id(&app, "StreamList::stream_row")
-            .next()
-            .unwrap();
-        let offset = first.absolute_position().y - slot.absolute_position().y;
-        moved |= offset > 0.1 && offset < 11.9;
+        row_positions.push(first.absolute_position().y);
         if frame % 4 == 0 {
             // The backend sends the same in-place progress notifications.
             let mut download = model.row_data(0).unwrap();
@@ -271,9 +267,16 @@ fn new_streams_stagger_upward_while_progress_and_retained_rows_stay_visible() {
             model.set_row_data(0, download);
         }
     }
+    // Compare against the settled visual position, rather than an ancestor
+    // that Slint can fold into the animated item's debug geometry.
+    let settled_y = row_element(&app, 0).absolute_position().y;
+    let moved = row_positions.iter().any(|y| {
+        let offset = y - settled_y;
+        offset > 0.1 && offset < 11.9
+    });
     assert!(
         faded && moved && staggered,
-        "new rows fade, rise and stagger"
+        "new rows fade, rise and stagger: faded={faded}, moved={moved}, staggered={staggered}, positions={row_positions:?}, settled={settled_y}"
     );
     for index in 0..4 {
         assert!(row_element(&app, index).computed_opacity() > 0.99);

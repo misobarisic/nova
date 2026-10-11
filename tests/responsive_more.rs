@@ -188,7 +188,7 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
         assert_no_bar(&app);
         assert_eq!(
             ElementHandle::find_by_element_type_name(&app, "SideItem").count(),
-            if width >= 700 { 5 } else { 0 }
+            if width >= 700 { 7 } else { 0 }
         );
     }
     key(&app, slint::platform::Key::Back);
@@ -206,7 +206,7 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     assert!(!app.get_more_open());
     assert_eq!(
         ElementHandle::find_by_element_type_name(&app, "SideItem").count(),
-        5
+        7
     );
     assert_no_bar(&app);
     click(
@@ -225,7 +225,7 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     assert!(app.get_show_settings());
     assert_eq!(
         ElementHandle::find_by_element_type_name(&app, "SideItem").count(),
-        5,
+        7,
         "wide Android Settings retains its rail"
     );
 }
