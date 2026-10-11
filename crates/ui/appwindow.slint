@@ -27,6 +27,8 @@ import { Anim } from "anim.slint";
 // section a page switch is leaving, for the incoming nav icon's feedback.
 import { NavMetrics } from "sidenav.slint";
 export { NavState } from "sidenav.slint";
+import { SettingsStyle } from "settings-controls.slint";
+export { SettingsStyle } from "settings-controls.slint";
 
 // Shared structs used by the property declarations below; they are exported
 // from types.slint, so the generated Rust module (`slint::include_modules!`)
@@ -207,7 +209,7 @@ export component AppWindow inherits Window {
     in-out property <int> calendar_first;
     in-out property <int> calendar_selected;
     in-out property <int> calendar_view;
-    in-out property <bool> calendar_all;
+    in-out property <bool> calendar_all: true;
     callback calendar_picked();
     callback calendar_changed();
     callback calendar_step(int);
@@ -830,6 +832,13 @@ export component AppWindow inherits Window {
                 reject
             } else {
                 root.system_back_held = true;
+                // Android Back is navigation, not keyboard navigation. Clear
+                // both shared visual-mode sources before the returned page is
+                // built; arrow keys can enable them again on real key input.
+                if (root.touch_menus) {
+                    root.kb_active = false;
+                    SettingsStyle.keyboard-mode = false;
+                }
                 if (root.resume_prompt_visible) {
                     root.resume_cancel();
                     accept
@@ -1446,6 +1455,11 @@ export component AppWindow inherits Window {
     }
 
     if root.show_calendar && !root.player_open && !root.modal_visible && !root.more_open: CalendarPage {
+        width: root.width; height: root.height;
+        x: root.more_subpage_motion && !root.more_subpage_entered ? root.width * 0.28 : 0px;
+        opacity: root.more_subpage_motion && !root.more_subpage_entered ? 0.0 : 1.0;
+        animate x { duration: Anim.transition_slide; easing: ease-out; }
+        animate opacity { duration: Anim.transition_fade; }
         cells: root.calendar_cells; week_cells: root.calendar_week; rows: root.calendar_rows; later: root.calendar_later;
         title: root.calendar_title; day_title: root.calendar_day_title; count: root.calendar_count;
         search <=> root.calendar_search; view <=> root.calendar_view; all <=> root.calendar_all;
@@ -1462,6 +1476,11 @@ export component AppWindow inherits Window {
         more_picked => { root.open_more(); }
     }
     if root.show_downloads && !root.player_open && !root.modal_visible && !root.more_open: DownloadsPage {
+        width: root.width; height: root.height;
+        x: root.more_subpage_motion && !root.more_subpage_entered ? root.width * 0.28 : 0px;
+        opacity: root.more_subpage_motion && !root.more_subpage_entered ? 0.0 : 1.0;
+        animate x { duration: Anim.transition_slide; easing: ease-out; }
+        animate opacity { duration: Anim.transition_fade; }
         groups: root.downloads_page_groups; transfers: root.downloads_page_transfers; summary: root.downloads_page_summary; counts: root.downloads_page_counts;
         query <=> root.downloads_page_query; filter <=> root.downloads_page_filter; sort_recent <=> root.downloads_page_sort_recent;
         query_changed(q) => { root.downloads_page_query_changed(q); } filter_changed(f) => { root.downloads_page_filter_changed(f); }

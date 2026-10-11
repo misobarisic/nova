@@ -58,6 +58,10 @@ wrapped-row and addon-gesture tests.
 
 ## Android system gestures
 
+System Back dismisses the nearest open layer without enabling keyboard focus
+markers on the player or the page it returns to. Held repeats still pop only
+one layer; desktop keyboard navigation keeps its focus markers.
+
 Leaving the app with Home, switching apps, or turning the screen off pauses
 playback immediately, including a stream still loading. Returning restores the
 video and position and shows the OSD. Settings → Player → When returning to

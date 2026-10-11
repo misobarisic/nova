@@ -106,6 +106,11 @@ fn completed_episode_actions_keep_job_identity_across_layouts() {
         for label in ["All 1", "Unwatched 0", "In progress 1", "Watched 0"] {
             click(&app, label);
         }
+        if width < 700 {
+            let before_back = *backs.borrow();
+            click(&app, "Back");
+            assert_eq!(*backs.borrow(), before_back + 1, "header Back routes Home");
+        }
         assert_eq!(
             filters.borrow().last(),
             Some(&3),
@@ -177,5 +182,5 @@ fn completed_episode_actions_keep_job_identity_across_layouts() {
             SharedString::from("series-season-2")
         ]
     );
-    assert_eq!(*backs.borrow(), 6);
+    assert_eq!(*backs.borrow(), 8);
 }

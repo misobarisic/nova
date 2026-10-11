@@ -42,6 +42,10 @@ impl Bridge {
             let day = selected + i64::from(delta) * 7;
             app.set_calendar_selected(day as i32);
             app.set_calendar_first(month_first(day) as i32);
+        } else if app.get_calendar_view() == 2 {
+            let day = shift_month(selected, delta);
+            app.set_calendar_selected(day as i32);
+            app.set_calendar_first(month_first(day) as i32);
         } else {
             let (year, month, _) = civil_from_days(i64::from(app.get_calendar_first()));
             let shifted = i64::from(month) - 1 + i64::from(delta);
@@ -115,30 +119,16 @@ impl Bridge {
                 continue;
             }
             let videos = read_episodes_cache_for(&e.type_, &e.id).unwrap_or_default();
-            let selected = if app.get_calendar_all() {
-                videos
-                    .iter()
-                    .filter_map(|v| {
-                        v.released
-                            .as_deref()
-                            .and_then(iso_days)
-                            .filter(|day| *day >= today)
-                            .map(|day| (v.id.clone(), day))
-                    })
-                    .collect::<Vec<_>>()
-            } else {
-                next_upcoming_episode(
-                    &videos,
-                    |v| {
-                        progress
-                            .get(&progress_map_key(&e.id, &v.id))
-                            .is_some_and(|p| p.watched)
-                    },
-                    today,
-                )
-                .map(|(i, day)| vec![(videos[i].id.clone(), day)])
-                .unwrap_or_default()
-            };
+            let selected = calendar_releases(
+                &videos,
+                app.get_calendar_all(),
+                |v| {
+                    progress
+                        .get(&progress_map_key(&e.id, &v.id))
+                        .is_some_and(|p| p.watched)
+                },
+                today,
+            );
             schedule.extend(
                 selected
                     .into_iter()
@@ -195,6 +185,7 @@ impl Bridge {
             })
             .collect::<Vec<_>>();
         let week_start = day - weekday_monday0(day) as i64;
+        let period = calendar_period(first, day, app.get_calendar_view());
         let week = (0..7)
             .map(|offset| {
                 let epoch = week_start + offset;
@@ -245,10 +236,12 @@ impl Bridge {
         };
         let visible = schedule
             .iter()
-            .filter(|item| match app.get_calendar_view() {
-                0 => item.air_days == day,
-                1 => item.air_days >= week_start && item.air_days < week_start + 7,
-                _ => true,
+            .filter(|item| {
+                if app.get_calendar_view() == 0 {
+                    item.air_days == day
+                } else {
+                    in_period(item.air_days, period)
+                }
             })
             .collect();
         app.set_calendar_rows(Rc::new(VecModel::from(rows(visible))).into());
@@ -271,13 +264,20 @@ impl Bridge {
                     civil_from_days(week_start),
                     civil_from_days(week_start + 6),
                 )
+            } else if app.get_calendar_view() == 2 {
+                text::calendar_week_title(civil_from_days(period.0), civil_from_days(period.1 - 1))
             } else {
                 text::cal_month_title(month, year)
             }
             .into(),
         );
         app.set_calendar_day_title(calendar_date(day).into());
-        app.set_calendar_count(schedule.len() as i32);
+        app.set_calendar_count(
+            schedule
+                .iter()
+                .filter(|item| in_period(item.air_days, period))
+                .count() as i32,
+        );
         // Fetch only the displayed cards. Completion targets stable identities,
         // so changing the search or selected date cannot paint the wrong row.
         let mut requested = HashSet::new();
@@ -333,4 +333,115 @@ impl Bridge {
 fn calendar_date(day: i64) -> String {
     let (year, month, date) = civil_from_days(day);
     text::calendar_date(date, month, year)
+}
+
+/// Shift a local date by whole months, clamping dates such as January 31
+/// to the last valid day of the destination month.
+fn shift_month(day: i64, delta: i32) -> i64 {
+    let (year, month, date) = civil_from_days(day);
+    let shifted = i64::from(month) - 1 + i64::from(delta);
+    let year = year + shifted.div_euclid(12);
+    let month = (shifted.rem_euclid(12) + 1) as u32;
+    let first = days_from_civil(year, month, 1);
+    let next = if month == 12 {
+        days_from_civil(year + 1, 1, 1)
+    } else {
+        days_from_civil(year, month + 1, 1)
+    };
+    first + i64::from(date).min(next - first) - 1
+}
+
+/// Half-open boundaries keep adjacent calendar periods free of duplicates.
+fn calendar_period(first: i64, selected: i64, view: i32) -> (i64, i64) {
+    match view {
+        0 => (first, shift_month(first, 1)),
+        1 => {
+            let monday = selected - i64::from(weekday_monday0(selected));
+            (monday, monday + 7)
+        }
+        _ => (selected, shift_month(selected, 1)),
+    }
+}
+fn in_period(day: i64, period: (i64, i64)) -> bool {
+    day >= period.0 && day < period.1
+}
+fn calendar_releases(
+    videos: &[Video],
+    all: bool,
+    watched: impl Fn(&Video) -> bool,
+    today: i64,
+) -> Vec<(String, i64)> {
+    if all {
+        videos
+            .iter()
+            .filter_map(|v| {
+                v.released
+                    .as_deref()
+                    .and_then(iso_days)
+                    .map(|day| (v.id.clone(), day))
+            })
+            .collect()
+    } else {
+        next_upcoming_episode(videos, watched, today)
+            .map(|(index, day)| vec![(videos[index].id.clone(), day)])
+            .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn date(year: i64, month: u32, day: u32) -> i64 {
+        days_from_civil(year, month, day)
+    }
+    #[test]
+    fn all_releases_include_past_dates_and_ignore_invalid_dates() {
+        let videos: Vec<Video> = serde_json::from_value(serde_json::json!([
+            {"id":"past", "released":"2026-09-12"},
+            {"id":"future", "released":"2026-11-12T12:00:00Z"},
+            {"id":"bad", "released":"2026-02-30"},
+            {"id":"unknown"}
+        ]))
+        .unwrap();
+        let today = date(2026, 10, 11);
+        assert_eq!(
+            calendar_releases(&videos, true, |_| false, today),
+            vec![
+                ("past".into(), date(2026, 9, 12)),
+                ("future".into(), date(2026, 11, 12))
+            ]
+        );
+        assert_eq!(
+            calendar_releases(&videos, false, |_| true, today),
+            vec![("future".into(), date(2026, 11, 12))]
+        );
+        assert!(calendar_releases(&videos, false, |_| false, today).is_empty());
+    }
+    #[test]
+    fn month_steps_clamp_dates_across_leap_years_and_year_boundaries() {
+        assert_eq!(shift_month(date(2026, 1, 31), 1), date(2026, 2, 28));
+        assert_eq!(shift_month(date(2024, 1, 31), 1), date(2024, 2, 29));
+        assert_eq!(shift_month(date(2026, 3, 31), -1), date(2026, 2, 28));
+        assert_eq!(shift_month(date(2026, 1, 15), -1), date(2025, 12, 15));
+        assert_eq!(shift_month(date(2026, 12, 15), 1), date(2027, 1, 15));
+    }
+    #[test]
+    fn periods_have_inclusive_start_and_exclusive_end() {
+        let selected = date(2026, 10, 11);
+        let month = calendar_period(date(2026, 10, 1), selected, 0);
+        assert_eq!(month, (date(2026, 10, 1), date(2026, 11, 1)));
+        let week = calendar_period(date(2026, 10, 1), selected, 1);
+        assert_eq!(week, (date(2026, 10, 5), date(2026, 10, 12)));
+        let agenda = calendar_period(date(2026, 10, 1), selected, 2);
+        assert_eq!(agenda, (selected, date(2026, 11, 11)));
+        for period in [month, week, agenda] {
+            assert!(!in_period(period.0 - 1, period));
+            assert!(in_period(period.0, period));
+            assert!(in_period(period.1 - 1, period));
+            assert!(!in_period(period.1, period));
+        }
+        let previous = calendar_period(date(2026, 9, 1), shift_month(selected, -1), 2);
+        assert!(in_period(date(2026, 9, 12), previous));
+        assert!(!in_period(selected, previous));
+    }
 }

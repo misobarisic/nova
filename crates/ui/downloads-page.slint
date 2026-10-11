@@ -20,7 +20,7 @@ component DownloadButton inherits Rectangle {
     border-radius: 8px;
     background: root.selected ? Theme.current.accent : (touch.has-hover ? Theme.current.control_hover : Theme.current.control);
     accessible-role: button; accessible-label: root.label;
-    label-text := Text { text: root.label; color: root.selected ? Theme.current.on_accent : Theme.current.accent; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+    label-text := Text { text: root.label; color: root.selected ? Theme.current.on_accent : Theme.current.text_bright; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
     border-width: key-focus.has-focus ? 2px : 0px; border-color: Theme.current.focus_ring;
     key-focus := FocusScope { key-pressed(e) => { if (e.text == Key.Return || e.text == " ") { if (!e.repeat) { root.picked(); } accept } else { reject } } }
     touch := TouchArea { mouse-cursor: pointer; clicked => { key-focus.focus(); root.picked(); } }
@@ -113,9 +113,16 @@ export component DownloadsPage inherits Rectangle {
         x: root.narrow ? 0px : NavMetrics.width-for(root.nav-viewport-width) + root.safe-left;
         width: root.width - self.x; height: 100%;
         padding-top: root.safe-top; spacing: 0px;
+        // Keep the phone's Back route reachable while the downloads scroll.
+        if root.narrow: HorizontalLayout {
+            height: 56px; vertical-stretch: 0; spacing: 12px;
+            padding-top: 12px; padding-left: 12px + root.safe-left; padding-right: 12px + root.safe-right;
+            DownloadButton { width: 44px; label: "‹"; accessible-label: @tr("Back"); picked => { root.back(); } }
+            Text { min-width: 0; text: @tr("Downloads"); color: Theme.current.text_bright; font-size: 28px; font-weight: 700; vertical-alignment: center; overflow: elide; }
+        }
         ScrollView { vertical-stretch: 1; content-width: self.visible-width; mouse-drag-pan-enabled: true;
             VerticalLayout { alignment: start; padding: root.narrow ? 12px : 24px; padding-left: (root.narrow ? 12px + root.safe-left : 24px); padding-right: (root.narrow ? 12px : 24px) + root.safe-right; spacing: 14px;
-                Text { vertical-stretch: 0; text: @tr("Downloads"); color: Theme.current.text_bright; font-size: 28px; font-weight: 700; }
+                if !root.narrow: Text { vertical-stretch: 0; text: @tr("Downloads"); color: Theme.current.text_bright; font-size: 28px; font-weight: 700; }
                 Text { vertical-stretch: 0; text: root.summary; color: Theme.current.text_secondary; font-size: 12px; wrap: word-wrap; }
                 Text { vertical-stretch: 0; text: @tr("On this device"); color: Theme.current.text_muted; font-size: 12px; }
                 SearchField { text <=> root.query; placeholder-text: @tr("Search downloaded episodes"); search-icon: true; roomy: true; edited(value) => { root.query_changed(value); } }

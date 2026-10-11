@@ -600,9 +600,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_home_catalog_card_picked(move |i| b.home_catalog_card_picked(i as usize));
 
-    // Home → Upcoming calendar (month view in the "see all" subpage).
+    // Home's Upcoming shortcut enters the same full planner as the navbar.
     let b = bridge.clone();
-    app.on_upcoming_cal_open(move || b.upcoming_cal_open());
+    app.on_upcoming_cal_open(move || {
+        note_nav_switch(&b, 5);
+        b.show_calendar_page();
+    });
 
     let b = bridge.clone();
     app.on_upcoming_cal_close(move || b.upcoming_cal_close());

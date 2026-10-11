@@ -35,7 +35,12 @@ fn tap(app: &nova::AppWindow, item: ElementHandle) {
 fn more_subpages_slide_fade_and_accept_back_during_entry() {
     i_slint_backend_testing::init_integration_test_with_mock_time();
     for (enabled, transitions) in [(true, true), (false, true), (true, false)] {
-        for (label, component) in [("Settings", "SettingsPage"), ("About", "AboutPage")] {
+        for (label, component) in [
+            ("Settings", "SettingsPage"),
+            ("About", "AboutPage"),
+            ("Calendar", "CalendarPage"),
+            ("Downloads", "DownloadsPage"),
+        ] {
             let app = nova::AppWindow::new().unwrap();
             app.set_is_android(true);
             app.set_touch_menus(true);
@@ -57,6 +62,18 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
                 a.set_show_settings(false);
                 a.set_show_about(true);
             });
+            let weak = app.as_weak();
+            app.on_calendar_picked(move || {
+                let a = weak.upgrade().unwrap();
+                a.set_show_home(false);
+                a.set_show_calendar(true);
+            });
+            let weak = app.as_weak();
+            app.on_downloads_picked(move || {
+                let a = weak.upgrade().unwrap();
+                a.set_show_home(false);
+                a.set_show_downloads(true);
+            });
             app.show().unwrap();
             app.set_more_open(true);
             let _ = page(&app, "MorePage").size();
@@ -67,7 +84,7 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
             let opacity = start.computed_opacity();
             assert_eq!(
                 ElementHandle::find_by_element_type_name(&app, "BottomNav").count(),
-                0
+                usize::from(label == "Calendar" || label == "Downloads")
             );
             if enabled && transitions {
                 assert!(x > 0.0 && opacity < 0.01);
@@ -113,7 +130,12 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
                 ));
             }
             assert!(app.get_more_open());
-            assert!(!app.get_show_settings() && !app.get_show_about());
+            assert!(
+                !app.get_show_settings()
+                    && !app.get_show_about()
+                    && !app.get_show_calendar()
+                    && !app.get_show_downloads()
+            );
         }
     }
 }

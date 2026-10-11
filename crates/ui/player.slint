@@ -725,7 +725,7 @@ export component PlayerOverlay {
 
     function system_back() {
         root.osd_mouse_moved();
-        root.kb_active = true;
+        if (!root.is_android) { root.kb_active = true; }
         if (root.open_popup == 4) {
             root.settings_back();
         } else if (root.open_popup != 0) {

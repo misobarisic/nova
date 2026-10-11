@@ -959,7 +959,7 @@ export component DiscoverPage {
     }
 
     function system_back() {
-        root.kb_active = true;
+        if (!root.touch_menus) { root.kb_active = true; }
         if (root.search_mode) {
             root.leave_search();
         } else {

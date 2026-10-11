@@ -2057,14 +2057,6 @@ impl Bridge {
         app.set_home_cal_open(open);
     }
 
-    /// Main thread: open the Upcoming calendar (the subpage's Calendar
-    /// button). Healing picks today / the earliest air date, so opening
-    /// always lands on a live month.
-    pub(super) fn upcoming_cal_open(&self) {
-        self.shared.lock().unwrap().upcoming_cal.open = true;
-        self.apply_upcoming_cal_to_ui();
-    }
-
     /// Main thread: back to the episode grid (button, system back).
     pub(super) fn upcoming_cal_close(&self) {
         self.shared.lock().unwrap().upcoming_cal.open = false;

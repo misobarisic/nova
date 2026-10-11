@@ -59,6 +59,30 @@ fn route(app: &nova::AppWindow, downloads: bool) {
     app.set_show_downloads(downloads);
 }
 
+fn agenda_navigation(app: &nova::AppWindow) {
+    assert_eq!(app.get_calendar_view(), 2);
+    let before = app.get_calendar_first();
+    tap(app, visible(app, "Previous period"));
+    assert_eq!(
+        app.get_calendar_first(),
+        before - 1,
+        "Agenda previous must dispatch -1"
+    );
+    tap(app, visible(app, "Next period"));
+    assert_eq!(
+        app.get_calendar_first(),
+        before,
+        "Agenda next must dispatch +1"
+    );
+    let today_calls = app.get_calendar_selected();
+    tap(app, visible(app, "Today"));
+    assert_eq!(
+        app.get_calendar_selected(),
+        today_calls + 1,
+        "Agenda Today must dispatch"
+    );
+}
+
 fn stage(app: slint::Weak<nova::AppWindow>, step: usize, failures: Rc<RefCell<Vec<String>>>) {
     slint::Timer::single_shot(Duration::from_millis(80), move || {
         let app = app.upgrade().unwrap();
@@ -114,6 +138,9 @@ fn stage(app: slint::Weak<nova::AppWindow>, step: usize, failures: Rc<RefCell<Ve
                 route(&app, false);
                 app.set_calendar_search("".into());
             } else {
+                if step == 10 || step == 11 {
+                    agenda_navigation(&app);
+                }
                 let width = app.window().size().width as f32;
                 for element in ElementQuery::from_root(&app)
                     .match_predicate(|e: &ElementHandle| {
@@ -198,6 +225,14 @@ fn stage(app: slint::Weak<nova::AppWindow>, step: usize, failures: Rc<RefCell<Ve
             }
             9 => {
                 visible(&app, "Downloads");
+                app.set_calendar_view(2);
+                app.set_calendar_title("Oct 11–Nov 10, 2026".into());
+                app.window().set_size(slint::PhysicalSize::new(320, 800));
+            }
+            10 => {
+                app.window().set_size(slint::PhysicalSize::new(1200, 800));
+            }
+            11 => {
                 slint::quit_event_loop().unwrap();
                 return;
             }
@@ -214,6 +249,22 @@ fn calendar_and_downloads_destinations_fit_desktop_and_phone() {
     }
     let app = nova::AppWindow::new().unwrap();
     app.set_show_home(true);
+    assert!(
+        app.get_calendar_all(),
+        "Calendar defaults to historical and future releases"
+    );
+    // These callbacks record dispatch through independent properties; backend
+    // month arithmetic is covered by calendar.rs pure behavior tests.
+    let weak = app.as_weak();
+    app.on_calendar_step(move |delta| {
+        let app = weak.upgrade().unwrap();
+        app.set_calendar_first(app.get_calendar_first() + delta);
+    });
+    let weak = app.as_weak();
+    app.on_calendar_today(move || {
+        let app = weak.upgrade().unwrap();
+        app.set_calendar_selected(app.get_calendar_selected() + 1);
+    });
     app.set_animations(false);
     app.set_anim_transitions(false);
     let weak = app.as_weak();

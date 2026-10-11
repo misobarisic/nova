@@ -80,17 +80,18 @@ component PlannerScope inherits Rectangle {
     height: 44px;
     HorizontalLayout { spacing: 6px;
         PlannerButton { label: @tr("Next episode"); selected: !root.all; picked => { root.picked(false); } }
-        PlannerButton { label: @tr("All scheduled"); selected: root.all; picked => { root.picked(true); } }
+        PlannerButton { label: @tr("All releases"); selected: root.all; picked => { root.picked(true); } }
     }
 }
 component PlannerPeriod inherits Rectangle {
     in property <string> title;
+    in property <bool> compact: false;
     callback step(int);
     callback today();
     height: 44px;
     HorizontalLayout { spacing: 8px;
         PlannerButton { width: 44px; label: "‹"; accessible-label: @tr("Previous period"); picked => { root.step(-1); } }
-        Text { vertical-stretch: 0; min-width: 0; text: root.title; color: Theme.current.text_bright; vertical-alignment: center; horizontal-alignment: center; font-size: 15px; overflow: elide; }
+        Text { vertical-stretch: 0; min-width: 0; text: root.title; color: Theme.current.text_bright; vertical-alignment: center; horizontal-alignment: center; font-size: root.compact ? 12px : 15px; wrap: root.compact ? word-wrap : no-wrap; overflow: elide; }
         PlannerButton { width: 44px; label: "›"; accessible-label: @tr("Next period"); picked => { root.step(1); } }
         PlannerButton { width: 65px; label: @tr("Today"); picked => { root.today(); } }
     }
@@ -138,7 +139,7 @@ export component CalendarPage inherits Rectangle {
             PlannerButton { width: 44px; label: "‹"; accessible-label: @tr("Back"); picked => { root.back(); } }
             VerticalLayout { spacing: 2px;
                 Text { vertical-stretch: 0; min-width: 0; text: @tr("Calendar"); color: Theme.current.text_bright; font-size: 25px; font-weight: 700; }
-                Text { vertical-stretch: 0; min-width: 0; text: @tr("{n} scheduled episode" | "{n} scheduled episodes" % root.count); color: Theme.current.text_muted; font-size: 12px; }
+                Text { vertical-stretch: 0; min-width: 0; text: @tr("{n} episode release" | "{n} episode releases" % root.count); color: Theme.current.text_muted; font-size: 12px; }
             }
             if !root.narrow: SearchField {
                 width: root.wide_header ? 240px : 220px;
@@ -162,15 +163,14 @@ export component CalendarPage inherits Rectangle {
         if root.narrow: PlannerScope { all: root.all; picked(v) => { root.all = v; root.refreshed(); } }
         if root.wide_header: HorizontalLayout {
             height: 44px; spacing: 12px;
-            if root.view != 2: PlannerPeriod { title: root.title; step(d) => { root.step(d); } today => { root.today(); } }
-            if root.view == 2: Rectangle { horizontal-stretch: 1; }
+            PlannerPeriod { title: root.title; step(d) => { root.step(d); } today => { root.today(); } }
             PlannerScope { width: 280px; all: root.all; picked(v) => { root.all = v; root.refreshed(); } }
         }
-        if !root.wide_header && root.view != 2: PlannerPeriod { title: root.title; step(d) => { root.step(d); } today => { root.today(); } }
+        if !root.wide_header: PlannerPeriod { compact: root.narrow; title: root.title; step(d) => { root.step(d); } today => { root.today(); } }
         ScrollView {
             vertical-stretch: 1; content-width: self.visible-width; mouse-drag-pan-enabled: true;
             VerticalLayout {
-                spacing: 12px;
+                alignment: start; spacing: 12px;
                 if root.view == 0: HorizontalLayout {
                     height: root.narrow ? 300px : 550px;
                     spacing: 16px;
@@ -182,7 +182,7 @@ export component CalendarPage inherits Rectangle {
                     if !root.narrow: ScrollView { width: 310px; height: 550px; content-width: self.visible-width; mouse-drag-pan-enabled: true; VerticalLayout { alignment: start; spacing: 10px; Text { vertical-stretch: 0; min-width: 0; text: root.day_title; color: Theme.current.text_bright; font-size: 16px; font-weight: 600; } if root.rows.length == 0: Text { vertical-stretch: 0; min-width: 0; text: @tr("No releases on this day"); color: Theme.current.text_muted; wrap: word-wrap; } for row in root.rows: ReleaseCard { release: row; picked(key) => { root.release_picked(key); } } Text { vertical-stretch: 0; min-width: 0; text: @tr("Next up"); color: Theme.current.text_bright; font-size: 16px; } for row in root.later: ReleaseCard { release: row; picked(key) => { root.release_picked(key); } } } }
                 }
                 if root.view == 1: HorizontalLayout { spacing: 3px; height: 82px; for item in root.week_cells: PlannerDay { item: item; compact: root.narrow; week: true; picked(day) => { root.day_picked(day); } } }
-                if root.view != 0 || root.narrow: VerticalLayout { spacing: 10px; if root.view == 0: Text { vertical-stretch: 0; min-width: 0; text: root.day_title; color: Theme.current.text_bright; font-size: 16px; } if root.rows.length == 0: Text { vertical-stretch: 0; min-width: 0; text: @tr("No scheduled releases"); color: Theme.current.text_muted; wrap: word-wrap; } for row in root.rows: VerticalLayout { spacing: 8px; if root.view != 0 && row.group != "": Text { vertical-stretch: 0; min-width: 0; text: row.group; color: Theme.current.text_bright; font-size: 16px; font-weight: 600; } ReleaseCard { release: row; picked(key) => { root.release_picked(key); } } } }
+                if root.view != 0 || root.narrow: VerticalLayout { alignment: start; vertical-stretch: 0; spacing: 10px; if root.view == 0: Text { vertical-stretch: 0; min-width: 0; text: root.day_title; color: Theme.current.text_bright; font-size: 16px; } if root.rows.length == 0: Text { vertical-stretch: 0; min-width: 0; text: root.view == 0 ? @tr("No releases on this day") : @tr("No releases in this period"); color: Theme.current.text_muted; wrap: word-wrap; } for row in root.rows: VerticalLayout { alignment: start; vertical-stretch: 0; spacing: 8px; if root.view != 0 && row.group != "": Text { vertical-stretch: 0; min-width: 0; text: row.group; color: Theme.current.text_bright; font-size: 16px; font-weight: 600; } ReleaseCard { release: row; picked(key) => { root.release_picked(key); } } } }
             }
         }
         if root.narrow: BottomNav { active: 3; safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right; page-inset-left: 14px + root.safe-left; page-inset-right: 14px + root.safe-right; kb_active <=> root.kb_active; home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } more_picked => { root.more_picked(); } }

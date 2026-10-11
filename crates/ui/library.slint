@@ -359,34 +359,10 @@ export component LibraryPage {
         let min_y = Math.min(0px, lib_scroll.visible-height - lib_scroll.content-height);
         lib_scroll.content-y = Math.max(min_y, Math.min(0px, lib_scroll.content-y));
     }
-    // Reveal the focused card only when its row is *entirely* outside the
-    // viewport. Used when the page is restored (and when the model is
-    // re-applied): nudging a partially visible row into view is what used to
-    // shift the listing slightly on the way back from an entry. Real keyboard
-    // navigation still uses `kb_follow`, which keeps the whole row visible.
-    function kb_reveal_if_hidden() {
-        if (root.kb_zone != 2 || root.library.length == 0) {
-            return;
-        }
-        if (!root.grid_ready) {
-            return;
-        }
-        let top = root.grid-top + Math.floor(root.kb_idx / root.cols) * root.row_stride;
-        let bot = top + root.row_stride;
-        let vy = lib_scroll.content-y;
-        let vh = lib_scroll.visible-height;
-        let min_y = Math.min(0px, vh - lib_scroll.content-height);
-        if (bot <= root.header_cover - vy) {
-            lib_scroll.content-y = Math.max(min_y, root.header_cover - top);
-        } else if (top >= vh - vy) {
-            lib_scroll.content-y = Math.max(min_y, vh - bot);
-        }
-    }
-
-    changed library => {
-        root.kb_clamp_idx();
-        root.kb_reveal_if_hidden();
-    }
+    // Model refreshes preserve the user's viewport. The saved keyboard card
+    // can be far from a later pointer scroll; only explicit keyboard movement
+    // should reveal it via kb_follow.
+    changed library => { root.kb_clamp_idx(); }
     changed category_index => { root.kb_f = root.category_index; }
     property <length> selected_filter_left: 0px;
     property <length> selected_filter_width: 0px;
@@ -470,11 +446,9 @@ export component LibraryPage {
                 vertical-stretch: 1;
                 clip: true;
 
-                // One-shot restore: the page is recreated on return (bound
-                // kb props arrive pre-set, so no `changed` fires) — clamp +
-                // scroll to the focused card once layout is ready. The bound
-                // scroll offset restores the absolute position; the clamp
-                // guards shrunk content and follow is a no-op when visible.
+                // Page recreation restores the latest bound offset, whether
+                // returning from Detail or another root tab. Clamp only: the
+                // last keyboard card can be stale after the user scrolls.
                 restore_t := Timer {
                     interval: 120ms;
                     running: true;
@@ -489,11 +463,7 @@ export component LibraryPage {
                         }
                         self.running = false;
                         root.kb_clamp_idx();
-                        // Restore the exact offset: clamp for shrunk content,
-                        // then reveal only if the focused row is fully hidden
-                        // (a no-op in the common case).
                         root.kb_clamp_view();
-                        root.kb_reveal_if_hidden();
                     }
                 }
 

@@ -438,7 +438,7 @@ export component DetailPage {
     }
 
     function system_back() {
-        root.kb_active = true;
+        if (!root.touch_menus) { root.kb_active = true; }
         // Tracking shares Detail's toolbar, so its library menu still owns
         // the nearest Back layer before alignment or tab navigation.
         if (root.stream_action_open) {
