@@ -167,6 +167,9 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     assert!(app.get_show_home());
 
     open_more(&app);
+    // A fresh keyboard choice starts at Calendar; child returns retain it.
+    app.set_more_choice(0);
+    app.set_more_focus_zone(1);
     // Keyboard selection belongs to the More page.
     for _ in 0..3 {
         key(&app, slint::platform::Key::DownArrow);
@@ -216,18 +219,25 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
         6
     );
     assert_no_bar(&app);
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(&app, "SettingsLink").count(),
+        2,
+        "wide More contains only Settings and About; shortcuts live in the rail"
+    );
     let calendar_y = button(&app, "Calendar").absolute_position().y;
     let downloads_y = button(&app, "Downloads").absolute_position().y;
+    let more_y = button(&app, "More").absolute_position().y;
     let settings_y = button(&app, "Settings").absolute_position().y;
     let about_y = button(&app, "About").absolute_position().y;
-    assert!(calendar_y < downloads_y && downloads_y < settings_y && settings_y < about_y);
+    assert!(calendar_y < downloads_y && downloads_y < more_y);
+    assert!(settings_y < about_y);
     click(&app, button(&app, "Settings"));
     assert!(app.get_show_settings());
     assert!(!app.get_more_open());
     click(
         &app,
         ElementHandle::find_by_element_type_name(&app, "SideItem")
-            .nth(3)
+            .nth(5)
             .unwrap(),
     );
     assert!(

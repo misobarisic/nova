@@ -1,0 +1,21 @@
+// One import per external library avoids duplicate SharedGlobals fields in
+// Slint 1.18.0. Re-export the globals already in scope without another import.
+import { ProbeSettingsPage, AddonRow, Theme, ThemePalette, SettingsSync, Anim, SettingsStyle, ControlInput } from "@NovaSettingsProbe";
+export { Theme, ThemePalette, SettingsSync, Anim, SettingsStyle, ControlInput }
+
+export component SettingsProbe inherits Window {
+    in-out property <[AddonRow]> addons;
+    in-out property <bool> active: true;
+    background: Theme.current.canvas;
+    width: 1100px;
+    height: 750px;
+    ProbeSettingsPage {
+        viewport_width: root.width;
+        viewport_height: root.height;
+        width: 100%;
+        height: 100%;
+        addon_rows <=> root.addons;
+        active: root.active;
+        external_navigation: true;
+    }
+}

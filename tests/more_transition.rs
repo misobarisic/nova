@@ -1,4 +1,4 @@
-//! More destinations animate into and back out of the page on narrow layouts.
+//! More destinations share content push transitions and stationary navigation chrome.
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::{ComponentHandle, platform::WindowEvent};
 use std::time::Duration;
@@ -145,7 +145,7 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
             let opacity = start.computed_opacity();
             assert_eq!(
                 ElementHandle::find_by_element_type_name(&app, "BottomNav").count(),
-                usize::from(label == "Calendar" || label == "Downloads")
+                0
             );
             if enabled && transitions {
                 assert!(x > 0.0 && opacity < 0.01);
@@ -220,7 +220,8 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
                 assert!((reversing.absolute_position().x - entry_x).abs() < 0.5);
                 assert!(
                     (reversing.computed_opacity() - entry_alpha).abs() < 0.01,
-                    "Back during entry must not flash a fully opaque subpage"
+                    "{component}: Back during entry must preserve opacity ({entry_alpha} before, {} after)",
+                    reversing.computed_opacity()
                 );
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(110));
                 let outgoing = page(&app, component);
@@ -298,12 +299,16 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
     }
     more_return_cancels_for_destination_navigation();
     more_return_animates_wide_and_motion_toggle_finishes_pending_return();
+    canonical_direct_routes_and_modal_interruptions();
+    more_state_survives_children_and_breakpoints();
+    settings_navigation_has_six_desktop_targets();
+    pending_return_blocks_scroll_and_editor_input();
 }
 
 fn more_return_cancels_for_destination_navigation() {
     let app = nova::AppWindow::new().unwrap();
-    app.set_is_android(true);
-    app.window().set_size(slint::PhysicalSize::new(320, 800));
+    app.set_is_android(false);
+    app.window().set_size(slint::PhysicalSize::new(900, 800));
     let weak = app.as_weak();
     app.on_calendar_picked(move || {
         let app = weak.upgrade().unwrap();
@@ -329,9 +334,9 @@ fn more_return_cancels_for_destination_navigation() {
     tap(&app, button(&app, "Back"));
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(80));
     assert!(!app.get_more_open());
-    let library = ElementHandle::find_by_element_id(&app, "BottomNav::tab_library")
-        .last()
-        .expect("the outgoing page's Library tab");
+    let library = ElementHandle::find_by_element_type_name(&app, "SideItem")
+        .nth(2)
+        .expect("the stationary Library tab");
     tap(&app, library);
     assert!(app.get_show_library());
     assert!(!app.get_show_calendar() && !app.get_more_open());
@@ -360,8 +365,12 @@ fn more_return_animates_wide_and_motion_toggle_finishes_pending_return() {
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
     tap(&app, button(&app, "Calendar"));
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
-    assert!(page(&app, "CalendarPage").absolute_position().x.abs() < 0.1);
-    tap(&app, button(&app, "Back"));
+    assert!(page(&app, "CalendarPage").absolute_position().x > 64.0);
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(&app, "SideNav").count(),
+        1
+    );
+    app.set_system_back_request(app.get_system_back_request() + 1);
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(80));
     let outgoing = page(&app, "CalendarPage");
     assert!(outgoing.absolute_position().x > 0.1);
@@ -382,4 +391,301 @@ fn more_return_animates_wide_and_motion_toggle_finishes_pending_return() {
         ElementHandle::find_by_element_type_name(&app, "CalendarPage").count(),
         0
     );
+}
+
+fn canonical_direct_routes_and_modal_interruptions() {
+    for width in [699, 700, 1100] {
+        let app = nova::AppWindow::new().unwrap();
+        app.window().set_size(slint::PhysicalSize::new(width, 800));
+        let weak = app.as_weak();
+        app.global::<nova::NavState>()
+            .on_calendar_picked(move || weak.upgrade().unwrap().invoke_navigate_section(4));
+        let weak = app.as_weak();
+        app.global::<nova::NavState>()
+            .on_downloads_picked(move || weak.upgrade().unwrap().invoke_navigate_section(5));
+        app.show().unwrap();
+        app.set_more_open(true);
+        let _ = page(&app, "MorePage").size();
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+        tap(&app, button(&app, "Calendar"));
+        let initial = page(&app, "CalendarPage");
+        let initial_size = initial.size();
+        let rail_position = if width >= 700 {
+            Some(page(&app, "SideNav").absolute_position())
+        } else {
+            None
+        };
+        assert_eq!(
+            ElementHandle::find_by_element_type_name(&app, "BottomNav").count(),
+            0
+        );
+        for _ in 0..20 {
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+            assert_eq!(page(&app, "CalendarPage").size(), initial_size);
+            if let Some(position) = rail_position {
+                assert_eq!(page(&app, "SideNav").absolute_position(), position);
+                assert_eq!(
+                    ElementHandle::find_by_element_type_name(&app, "SideNav").count(),
+                    1
+                );
+            }
+        }
+        tap(&app, button(&app, "Back"));
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(64));
+        // Exercise exactly the global callback production mouse and keyboard use.
+        app.global::<nova::NavState>().invoke_downloads_picked();
+        assert!(app.get_show_downloads());
+        assert!(!app.get_more_open() && !app.get_show_calendar());
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(350));
+        assert!(
+            !app.get_more_open(),
+            "stale return must not replace Downloads"
+        );
+        assert_eq!(
+            ElementHandle::find_by_element_type_name(&app, "MorePage").count(),
+            0
+        );
+        assert_eq!(
+            ElementHandle::find_by_element_type_name(&app, "BottomNav").count(),
+            0
+        );
+        app.set_system_back_request(app.get_system_back_request() + 1);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+        assert!(
+            app.get_show_home(),
+            "direct Calendar/Downloads Back returns Home"
+        );
+        app.invoke_navigate_section(3);
+        let _ = page(&app, "MorePage").size();
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+        tap(&app, button(&app, "Calendar"));
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+        app.set_system_back_request(app.get_system_back_request() + 1);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(30));
+        app.set_modal_visible(true);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(350));
+        assert!(
+            !app.get_more_open(),
+            "modal invalidates pending More return"
+        );
+        app.set_modal_visible(false);
+        assert!(app.get_show_calendar());
+        app.set_system_back_request(app.get_system_back_request() + 1);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+        assert!(
+            app.get_more_open(),
+            "Detail close retains the More Back origin"
+        );
+        app.invoke_navigate_section(3);
+        let _ = page(&app, "MorePage").size();
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+        tap(&app, button(&app, "Calendar"));
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+        app.set_system_back_request(app.get_system_back_request() + 1);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(30));
+        app.set_player_open(true);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(350));
+        assert!(
+            !app.get_more_open(),
+            "player invalidates pending More return"
+        );
+        app.set_player_open(false);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+        app.set_system_back_request(app.get_system_back_request() + 1);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+        assert!(
+            app.get_more_open(),
+            "player close retains the More Back origin"
+        );
+    }
+}
+
+fn more_state_survives_children_and_breakpoints() {
+    let app = nova::AppWindow::new().unwrap();
+    app.set_is_android(true);
+    app.global::<nova::Anim>().set_enabled(false);
+    app.window().set_size(slint::PhysicalSize::new(360, 360));
+    app.set_more_choice(3);
+    app.set_more_scroll_y(-120.0);
+    app.set_more_open(true);
+    app.show().unwrap();
+    let _ = page(&app, "MorePage").size();
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+    let scroll = app.get_more_scroll_y();
+    assert!(scroll < 0.0, "short More viewport must restore scroll");
+    app.window().dispatch_event(WindowEvent::KeyPressed {
+        text: slint::platform::Key::Return.into(),
+    });
+    app.window().dispatch_event(WindowEvent::KeyReleased {
+        text: slint::platform::Key::Return.into(),
+    });
+    assert!(app.get_show_about());
+    assert!(app.get_kb_active());
+    app.set_system_back_request(app.get_system_back_request() + 1);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    assert!(app.get_more_open());
+    assert_eq!(app.get_more_choice(), 3);
+    assert!((app.get_more_scroll_y() - scroll).abs() < 0.5);
+    assert!(
+        app.get_kb_active(),
+        "keyboard return retains its choice highlight"
+    );
+    app.set_kb_active(false);
+    for width in [700, 699, 700] {
+        app.window().set_size(slint::PhysicalSize::new(width, 360));
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+        assert_eq!(
+            ElementHandle::find_by_element_type_name(&app, "SideNav").count(),
+            usize::from(width >= 700)
+        );
+        assert_eq!(
+            ElementHandle::find_by_element_type_name(&app, "BottomNav").count(),
+            usize::from(width < 700)
+        );
+    }
+    app.window().set_size(slint::PhysicalSize::new(360, 800));
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    tap(&app, button(&app, "About"));
+    app.set_system_back_request(app.get_system_back_request() + 1);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    assert!(app.get_more_open());
+    assert!(
+        !app.get_kb_active(),
+        "Android Back must not invent a keyboard highlight"
+    );
+}
+
+fn settings_navigation_has_six_desktop_targets() {
+    let app = nova::AppWindow::new().unwrap();
+    app.window().set_size(slint::PhysicalSize::new(900, 800));
+    app.global::<nova::Anim>().set_enabled(false);
+    app.on_settings_search_matches(|_, _| true);
+    app.show().unwrap();
+    app.invoke_navigate_section(6);
+    let _ = page(&app, "SettingsPage").size();
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    for _ in 0..6 {
+        app.window().dispatch_event(WindowEvent::KeyPressed {
+            text: slint::platform::Key::RightArrow.into(),
+        });
+        app.window().dispatch_event(WindowEvent::KeyReleased {
+            text: slint::platform::Key::RightArrow.into(),
+        });
+    }
+    app.window().dispatch_event(WindowEvent::KeyPressed {
+        text: slint::platform::Key::Return.into(),
+    });
+    app.window().dispatch_event(WindowEvent::KeyReleased {
+        text: slint::platform::Key::Return.into(),
+    });
+    assert!(
+        app.get_more_open(),
+        "six arrow presses return the desktop cursor to More"
+    );
+}
+
+// Use real native input and Flickable dispatch: disabled page shortcut scopes
+// alone do not disable sibling editors, and an empty click shield lets wheel
+// events fall through to the outgoing page.
+fn pending_return_blocks_scroll_and_editor_input() {
+    let app = nova::AppWindow::new().unwrap();
+    app.set_is_android(true);
+    app.window().set_size(slint::PhysicalSize::new(360, 520));
+    app.global::<nova::Anim>().set_enabled(true);
+    app.global::<nova::Anim>().set_transitions(true);
+    app.on_settings_search_matches(|_, _| true);
+    app.set_more_open(true);
+    app.show().unwrap();
+    let _ = page(&app, "MorePage").size();
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    tap(&app, button(&app, "Settings"));
+    for _ in 0..35 {
+        let _ = page(&app, "SettingsPage").absolute_position();
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(10));
+    }
+
+    let scroll_position = slint::LogicalPosition::new(200.0, 300.0);
+    app.window().dispatch_event(WindowEvent::PointerScrolled {
+        position: scroll_position,
+        delta_x: 0.0,
+        delta_y: -200.0,
+    });
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+    let _ = page(&app, "SettingsPage").absolute_position();
+    assert!(
+        app.get_settings_navigation_scroll() < 0.0,
+        "the active Settings landing must be scrollable for this regression"
+    );
+    app.window().dispatch_event(WindowEvent::PointerScrolled {
+        position: scroll_position,
+        delta_x: 0.0,
+        delta_y: 10_000.0,
+    });
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+    let _ = page(&app, "SettingsPage").absolute_position();
+    let search = ElementHandle::find_by_element_id(&app, "SettingsPage::settings_search")
+        .next()
+        .unwrap();
+    tap(&app, search);
+    for event in [
+        WindowEvent::KeyPressed { text: "q".into() },
+        WindowEvent::KeyReleased { text: "q".into() },
+    ] {
+        app.window().dispatch_event(event);
+    }
+    assert_eq!(app.get_settings_search_query().as_str(), "q");
+    app.set_settings_search_query("".into());
+
+    // The canonical More route begins return even while the search owns focus.
+    app.invoke_navigate_section(3);
+    assert!(!app.get_more_open() && app.get_show_settings());
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(&app, "BottomNav").count(),
+        1,
+        "stationary chrome must be available throughout return"
+    );
+    let settings_scroll = app.get_settings_navigation_scroll();
+    let more_scroll = app.get_more_scroll_y();
+    let selected = app.get_settings_selected_id();
+    let choice = app.get_more_choice();
+    for (delta_x, delta_y) in [(0.0, -200.0), (70.0, -40.0), (0.0, 200.0)] {
+        app.window().dispatch_event(WindowEvent::PointerScrolled {
+            position: scroll_position,
+            delta_x,
+            delta_y,
+        });
+    }
+    // Wheel dispatch uses smooth scrolling, so advance a frame before checking.
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    let _ = page(&app, "SettingsPage").absolute_position();
+    assert_eq!(app.get_settings_navigation_scroll(), settings_scroll);
+    assert_eq!(app.get_more_scroll_y(), more_scroll);
+    // Tab can reach a native editor despite the outgoing page's disabled
+    // shortcut scope. The ancestor capture must consume subsequent edits and
+    // activation before either the editor or an inactive More link handles them.
+    for _ in 0..20 {
+        for text in [
+            slint::SharedString::from(slint::platform::Key::Tab),
+            "x".into(),
+            slint::platform::Key::Return.into(),
+        ] {
+            app.window()
+                .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+            app.window()
+                .dispatch_event(WindowEvent::KeyReleased { text });
+        }
+    }
+    assert_eq!(app.get_settings_search_query().as_str(), "");
+    assert_eq!(app.get_settings_selected_id(), selected);
+    assert!(!app.get_settings_detail_open());
+    assert_eq!(app.get_more_choice(), choice);
+    assert!(app.get_show_settings() && !app.get_more_open());
+
+    let library = ElementHandle::find_by_element_id(&app, "BottomNav::tab_library")
+        .next()
+        .expect("stationary Library tab");
+    tap(&app, library);
+    assert!(app.get_show_library() && !app.get_show_settings());
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+    assert!(app.get_show_library() && !app.get_more_open());
 }

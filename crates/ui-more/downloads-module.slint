@@ -1,0 +1,42 @@
+import { DownloadsPage } from "../ui/downloads-page.slint";
+import { DownloadsBridge } from "@NovaUiShared";
+
+export component DownloadsModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: DownloadsBridge.viewport_width; height: DownloadsBridge.viewport_height;
+    DownloadsPage {
+        width: 100%; height: 100%;
+        query <=> DownloadsBridge.query;
+        filter <=> DownloadsBridge.filter;
+        sort_recent <=> DownloadsBridge.sort_recent;
+        kb_active <=> DownloadsBridge.kb_active;
+        artwork-active <=> DownloadsBridge.artwork-active;
+        nav-viewport-width <=> DownloadsBridge.nav-viewport-width;
+        external_navigation <=> DownloadsBridge.external_navigation;
+        active <=> DownloadsBridge.active;
+        groups <=> DownloadsBridge.groups;
+        transfers <=> DownloadsBridge.transfers;
+        summary <=> DownloadsBridge.summary;
+        counts <=> DownloadsBridge.counts;
+        safe-top <=> DownloadsBridge.safe-top;
+        safe-left <=> DownloadsBridge.safe-left;
+        safe-right <=> DownloadsBridge.safe-right;
+        safe-bottom <=> DownloadsBridge.safe-bottom;
+        system_back_request <=> DownloadsBridge.system_back_request;
+        artwork-visible(arg0, arg1) => { DownloadsBridge.artwork-visible(arg0, arg1); }
+        artwork-active-changed(arg0) => { DownloadsBridge.artwork-active-changed(arg0); }
+        query_changed(arg0) => { DownloadsBridge.query_changed(arg0); }
+        filter_changed(arg0) => { DownloadsBridge.filter_changed(arg0); }
+        sort_changed(arg0) => { DownloadsBridge.sort_changed(arg0); }
+        group_toggled(arg0) => { DownloadsBridge.group_toggled(arg0); }
+        action(arg0, arg1) => { DownloadsBridge.action(arg0, arg1); }
+        back() => { DownloadsBridge.back(); }
+        home_picked() => { DownloadsBridge.home_picked(); }
+        discover_picked() => { DownloadsBridge.discover_picked(); }
+        library_picked() => { DownloadsBridge.library_picked(); }
+        settings_picked() => { DownloadsBridge.settings_picked(); }
+        about_picked() => { DownloadsBridge.about_picked(); }
+        more_picked() => { DownloadsBridge.more_picked(); }
+    }
+}

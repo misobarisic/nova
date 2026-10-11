@@ -1,0 +1,38 @@
+import { DownloadEpisode, DownloadGroup } from "../ui/types.slint";
+// Persistent bindings connect backend state once; embedded roots share this object.
+export global DownloadsBridge {
+    in-out property <component-factory> factory;
+    in-out property <length> viewport_width;
+    in-out property <length> viewport_height;
+    in-out property <string> query;
+    in-out property <int> filter;
+    in-out property <bool> sort_recent;
+    in-out property <bool> kb_active;
+    in-out property <bool> artwork-active;
+    in-out property <length> nav-viewport-width;
+    in-out property <bool> external_navigation;
+    in-out property <bool> active;
+    in-out property <[DownloadGroup]> groups;
+    in-out property <[DownloadEpisode]> transfers;
+    in-out property <string> summary;
+    in-out property <[int]> counts;
+    in-out property <length> safe-top;
+    in-out property <length> safe-left;
+    in-out property <length> safe-right;
+    in-out property <length> safe-bottom;
+    in-out property <int> system_back_request;
+    callback artwork-visible(string, bool);
+    callback artwork-active-changed(bool);
+    callback query_changed(string);
+    callback filter_changed(int);
+    callback sort_changed(bool);
+    callback group_toggled(string);
+    callback action(string, int);
+    callback back();
+    callback home_picked();
+    callback discover_picked();
+    callback library_picked();
+    callback settings_picked();
+    callback about_picked();
+    callback more_picked();
+}

@@ -1,0 +1,19 @@
+[package]
+name = "nova-ui-detail"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+links = "novauidetail"
+
+[dependencies]
+slint = { workspace = true }
+i-slint-core = { workspace = true, features = ["image-decoders", "svg"] }
+nova-ui-shared = { path = "../ui-shared" }
+
+nova-ui-detail-tracking = { path = "../ui-detail-tracking" }
+nova-ui-detail-tracking-entry = { path = "../ui-detail-tracking-entry" }
+nova-ui-detail-streams = { path = "../ui-detail-streams" }
+nova-ui-detail-episodes = { path = "../ui-detail-episodes" }
+
+[build-dependencies]
+slint-build = { workspace = true, features = ["experimental-module-builds"] }

@@ -1,0 +1,88 @@
+import { SettingsBridge, SettingsContent, Theme, Anim, SettingsStyle } from "@NovaUiShared";
+
+import { PillButton, SettingsRow } from "../ui/settings-controls.slint";
+
+// The shell owns scrolling and transitions. Report intrinsic layout sizes
+// only while this section is selected, so outgoing instances cannot resize it.
+export component SettingsDownloadedEpisodesModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: SettingsContent.slot_width; height: SettingsContent.slot_height;
+    private property <length> measured_min: body_layout.min-height;
+    private property <length> measured_preferred: body_layout.preferred-height;
+    changed measured_min => { root.publish_size(); }
+    changed measured_preferred => { root.publish_size(); }
+    init => { root.publish_size(); }
+    function publish_size() {
+        if SettingsBridge.sel == 9 {
+            SettingsContent.content_min_height = root.measured_min;
+            SettingsContent.content_preferred_height = root.measured_preferred;
+        }
+    }
+    body_layout := VerticalLayout {
+        width: 100%; height: 100%; spacing: 0px;
+        Rectangle {
+
+            vertical-stretch: 0;
+            height: dl_inner.preferred-height;
+
+            // Entrance slide/fade for the nested list. The
+            // subpage layer is already open when this swaps in,
+            // so this is the only open transition it gets.
+            dl_inner := VerticalLayout {
+                width: 100%;
+                spacing: 18px;
+                x: SettingsContent.dl_revealed ? 0px : 0.28 * SettingsContent.shell_width;
+                opacity: SettingsContent.dl_revealed ? 1.0 : 0.0;
+                animate x { duration: Anim.transition_slide; easing: ease-out; }
+                animate opacity { duration: Anim.transition_fade; }
+
+                if SettingsBridge.downloads_rows.length == 0: Rectangle {
+                    background: Theme.current.card;
+                    border-radius: 16px;
+                    min-height: 56px;
+
+                    Text {
+                        x: 16px;
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width - 32px;
+                        text: @tr("No downloaded episodes. Download an episode from its stream list to see it here.");
+                        font-size: 14px;
+                        color: Theme.current.text_settings;
+                        wrap: word-wrap;
+                    }
+                }
+
+                Rectangle {
+                    visible: SettingsBridge.downloads_rows.length > 0;
+                    background: Theme.current.card;
+                    border-radius: 16px;
+                    border-width: 1px;
+                    border-color: Theme.current.border_soft;
+                    clip: true;
+
+                    VerticalLayout {
+                        spacing: 0px;
+
+                        for dl[i] in SettingsBridge.downloads_rows: SettingsRow {
+                            tinted: Math.mod(i, 2) == 0;
+                            row-title: dl.title;
+                            row-desc: dl.subtitle + (dl.details == "" ? "" : "\n" + dl.details);
+
+                            PillButton {
+                                label: @tr("Delete"); destructive: true;
+                                focused: SettingsBridge.kb_zone == 13 && SettingsContent.kb_dlr == i && SettingsBridge.kb_active;
+                                clicked => {
+                                    SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                    SettingsBridge.kb_zone = 13;
+                                    SettingsContent.kb_dlr = i;
+                                    SettingsBridge.download_list_remove(dl.id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

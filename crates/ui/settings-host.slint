@@ -1,0 +1,35 @@
+import { SettingsBridge, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease } from "@NovaUiShared";
+// Only mount-specific inputs live here; persistent state is connected once
+// by page-bindings.slint, outside the conditional ComponentContainer.
+
+export component SettingsHost inherits Rectangle {
+    in-out property <bool> external_navigation <=> SettingsBridge.external_navigation;
+    in-out property <bool> active <=> SettingsBridge.active;
+    in-out property <bool> two_pane <=> SettingsBridge.two_pane;
+    in-out property <bool> cache_busy <=> SettingsBridge.cache_busy;
+    in-out property <bool> cache_rewriting <=> SettingsBridge.cache_rewriting;
+    in-out property <int> cache_processed <=> SettingsBridge.cache_processed;
+    in-out property <int> cache_total <=> SettingsBridge.cache_total;
+    in-out property <string> cache_status <=> SettingsBridge.cache_status;
+    in-out property <length> nav-viewport-width <=> SettingsBridge.nav-viewport-width;
+    in-out property <[TrackingAccountRow]> tracking_accounts <=> SettingsBridge.tracking_accounts;
+    in-out property <string> tracking_notice <=> SettingsBridge.tracking_notice;
+    in-out property <bool> persistence_failed <=> SettingsBridge.persistence_failed;
+    in-out property <bool> cinemeta_installed <=> SettingsBridge.cinemeta_installed;
+    in-out property <int> system_back_request <=> SettingsBridge.system_back_request;
+    in-out property <string> audio_language_label <=> SettingsBridge.audio_language_label;
+    in-out property <string> subtitle_language_label <=> SettingsBridge.subtitle_language_label;
+    in-out property <[string]> audio_language_codes <=> SettingsBridge.audio_language_codes;
+    in-out property <[string]> audio_language_names <=> SettingsBridge.audio_language_names;
+    in-out property <[string]> subtitle_language_codes <=> SettingsBridge.subtitle_language_codes;
+    in-out property <[string]> subtitle_language_names <=> SettingsBridge.subtitle_language_names;
+    in-out property <bool> is_android <=> SettingsBridge.is_android;
+    in-out property <bool> phone_layout <=> SettingsBridge.phone_layout;
+    in-out property <length> safe-top <=> SettingsBridge.safe-top;
+    in-out property <length> safe-left <=> SettingsBridge.safe-left;
+    in-out property <length> safe-right <=> SettingsBridge.safe-right;
+    in-out property <length> safe-bottom <=> SettingsBridge.safe-bottom;
+    in-out property <length> viewport_width <=> SettingsBridge.viewport_width;
+    in-out property <length> viewport_height <=> SettingsBridge.viewport_height;
+    ComponentContainer { width: 100%; height: 100%; component-factory: SettingsBridge.factory; }
+}

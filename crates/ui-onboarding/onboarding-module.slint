@@ -1,0 +1,38 @@
+import { Onboarding } from "../ui/onboarding.slint";
+import { OnboardingBridge } from "@NovaUiShared";
+
+export component OnboardingModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: OnboardingBridge.viewport_width; height: OnboardingBridge.viewport_height;
+    Onboarding {
+        width: 100%; height: 100%;
+        step <=> OnboardingBridge.step;
+        language_index <=> OnboardingBridge.language_index;
+        true_black <=> OnboardingBridge.true_black;
+        addon_url <=> OnboardingBridge.addon_url;
+        busy <=> OnboardingBridge.busy;
+        addon_ready <=> OnboardingBridge.addon_ready;
+        error <=> OnboardingBridge.error;
+        audio_label <=> OnboardingBridge.audio_label;
+        subtitle_label <=> OnboardingBridge.subtitle_label;
+        audio_codes <=> OnboardingBridge.audio_codes;
+        audio_names <=> OnboardingBridge.audio_names;
+        subtitle_codes <=> OnboardingBridge.subtitle_codes;
+        subtitle_names <=> OnboardingBridge.subtitle_names;
+        audio_index <=> OnboardingBridge.audio_index;
+        subtitle_index <=> OnboardingBridge.subtitle_index;
+        safe_top <=> OnboardingBridge.safe_top;
+        safe_bottom <=> OnboardingBridge.safe_bottom;
+        safe_left <=> OnboardingBridge.safe_left;
+        safe_right <=> OnboardingBridge.safe_right;
+        system_back_request <=> OnboardingBridge.system_back_request;
+        add_addon(url) => { OnboardingBridge.add_addon(url); }
+        cinemeta() => { OnboardingBridge.cinemeta(); }
+        setting_edited(field) => { OnboardingBridge.setting_edited(field); }
+        language_search(query, subtitle) => { OnboardingBridge.language_search(query, subtitle); }
+        language_picked(code, subtitle) => { OnboardingBridge.language_picked(code, subtitle); }
+        finished() => { OnboardingBridge.finished(); }
+        background_requested() => { OnboardingBridge.background_requested(); }
+    }
+}

@@ -204,7 +204,24 @@ impl Bridge {
                 }
             })
             .collect::<Vec<_>>();
-        let rows = |items: Vec<&UpcomingEntry>| {
+        let retained = self
+            .shared
+            .lock()
+            .unwrap()
+            .page_artwork
+            .retained_keys(super::page_artwork::Page::Calendar);
+        let old_rows: HashMap<String, CalendarRelease> = app
+            .get_calendar_rows()
+            .iter()
+            .map(|row| (format!("r{}", row.key), row))
+            .chain(
+                app.get_calendar_later()
+                    .iter()
+                    .map(|row| (format!("l{}", row.key), row)),
+            )
+            .collect();
+        let mut artwork_identities = Vec::new();
+        let mut rows = |items: Vec<&UpcomingEntry>, list: &str| {
             let mut previous = None;
             items
                 .into_iter()
@@ -216,20 +233,39 @@ impl Bridge {
                         calendar_date(item.air_days)
                     };
                     previous = Some(item.air_days);
+                    let key =
+                        serde_json::to_string(&(&item.type_, &item.series_id, &item.episode_id))
+                            .unwrap_or_default();
+                    let artwork_key = format!("{list}{key}");
+                    let identity = super::page_artwork::Identity::new(
+                        row.art_url.to_string(),
+                        ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+                    );
+                    let (poster, is_loaded) = if retained.contains(&artwork_key) {
+                        if let Some(pixels) = decoded_cache_get(&identity.cache_key) {
+                            (Image::from_rgba8(pixels), true)
+                        } else if let Some(old) = old_rows
+                            .get(&artwork_key)
+                            .filter(|old| old.artwork_identity == identity.cache_key)
+                        {
+                            (old.poster.clone(), old.is_loaded)
+                        } else {
+                            (Image::default(), false)
+                        }
+                    } else {
+                        (Image::default(), false)
+                    };
+                    let artwork_identity = identity.cache_key.clone().into();
+                    artwork_identities.push((artwork_key, identity));
                     Some(CalendarRelease {
-                        key: serde_json::to_string(&(
-                            &item.type_,
-                            &item.series_id,
-                            &item.episode_id,
-                        ))
-                        .unwrap_or_default()
-                        .into(),
+                        key: key.into(),
+                        artwork_identity,
                         title: row.title,
                         subtitle: row.subtitle,
                         date: row.date,
                         group: group.into(),
-                        poster: row.poster,
-                        is_loaded: row.is_loaded,
+                        poster,
+                        is_loaded,
                     })
                 })
                 .collect::<Vec<_>>()
@@ -244,17 +280,27 @@ impl Bridge {
                 }
             })
             .collect();
-        app.set_calendar_rows(Rc::new(VecModel::from(rows(visible))).into());
-        app.set_calendar_later(
-            Rc::new(VecModel::from(rows(
-                schedule
-                    .iter()
-                    .filter(|item| item.air_days > day)
-                    .take(8)
-                    .collect(),
-            )))
-            .into(),
+        let visible_rows = rows(visible, "r");
+        let later_rows = rows(
+            schedule
+                .iter()
+                .filter(|item| item.air_days > day)
+                .take(8)
+                .collect(),
+            "l",
         );
+        self.shared.lock().unwrap().page_artwork.reconcile(
+            super::page_artwork::Page::Calendar,
+            format!(
+                "{first}:{day}:{}:{}:{query}",
+                app.get_calendar_view(),
+                app.get_calendar_all()
+            ),
+            artwork_identities,
+            app.get_page_artwork_allowed(),
+        );
+        app.set_calendar_rows(Rc::new(VecModel::from(visible_rows)).into());
+        app.set_calendar_later(Rc::new(VecModel::from(later_rows)).into());
         app.set_calendar_cells(Rc::new(VecModel::from(cells)).into());
         app.set_calendar_week(Rc::new(VecModel::from(week)).into());
         let (year, month, _) = civil_from_days(first);
@@ -278,59 +324,7 @@ impl Bridge {
                 .filter(|item| in_period(item.air_days, period))
                 .count() as i32,
         );
-        // Fetch only the displayed cards. Completion targets stable identities,
-        // so changing the search or selected date cannot paint the wrong row.
-        let mut requested = HashSet::new();
-        for model in [app.get_calendar_rows(), app.get_calendar_later()] {
-            for row in model.iter().take(80).filter(|row| !row.is_loaded) {
-                if !requested.insert(row.key.clone()) {
-                    continue;
-                }
-                let Ok((type_, series, episode)) =
-                    serde_json::from_str::<(String, String, String)>(&row.key)
-                else {
-                    continue;
-                };
-                let Some(entry) = entries.iter().find(|e| e.type_ == type_ && e.id == series)
-                else {
-                    continue;
-                };
-                let videos = read_episodes_cache_for(&type_, &series).unwrap_or_default();
-                let url = videos
-                    .iter()
-                    .find(|v| v.id == episode)
-                    .and_then(|v| v.thumbnail.as_deref())
-                    .filter(|url| !url.trim().is_empty())
-                    .unwrap_or(&entry.poster_url)
-                    .to_owned();
-                if url.is_empty() {
-                    continue;
-                }
-                let bridge = self.clone();
-                let key = row.key;
-                let revision = image_settings_revision();
-                net::fetch_image(url, Some(DISPLAY_POSTER_SIDE), move |pixels| {
-                    let Some(pixels) = pixels else { return };
-                    let _ = slint::invoke_from_event_loop(move || {
-                        let Some(app) = bridge.app() else { return };
-                        if image_settings_revision() != revision {
-                            return;
-                        }
-                        for model in [app.get_calendar_rows(), app.get_calendar_later()] {
-                            for index in 0..model.row_count() {
-                                if let Some(mut row) = model.row_data(index)
-                                    && row.key == key
-                                {
-                                    row.poster = Image::from_rgba8(pixels.clone());
-                                    row.is_loaded = true;
-                                    model.set_row_data(index, row);
-                                }
-                            }
-                        }
-                    });
-                });
-            }
-        }
+        self.schedule_page_artwork(super::page_artwork::Page::Calendar);
     }
 }
 

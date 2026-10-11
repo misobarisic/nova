@@ -1,0 +1,20 @@
+export { MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadEpisode, DownloadGroup, SettingsDestination } from "../ui/types.slint";
+export { Theme, ThemePalette } from "../ui/theme.slint";
+export { Anim } from "../ui/anim.slint";
+export { NavMetrics, NavState, SettingsStyle, SettingsDestinations, SettingsSync, ControlInput, SliderGesture, PlaybackSpeed } from "globals.slint";
+export { SettingsContent } from "settings-content.slint";
+export { SettingsBridge } from "settings-bridge.slint";
+export { HomeBridge } from "home-bridge.slint";
+export { DiscoverBridge } from "discover-bridge.slint";
+export { CalendarBridge } from "calendar-bridge.slint";
+export { DetailBridge } from "detail-bridge.slint";
+export { LibraryBridge } from "library-bridge.slint";
+export { MoreBridge } from "more-bridge.slint";
+export { AboutBridge } from "about-bridge.slint";
+export { DownloadsBridge } from "downloads-bridge.slint";
+export { PlayerOsdBridge } from "player-osd-bridge.slint";
+export { OnboardingBridge } from "onboarding-bridge.slint";
+export { DetailContent } from "detail-content.slint";
+
+// This root is not mounted; the library owns only shared contracts and globals.
+export component SharedRoot inherits Window { background: transparent; width: 1px; height: 1px; }

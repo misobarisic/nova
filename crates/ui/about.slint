@@ -1,12 +1,15 @@
-import { Theme } from "theme.slint";
+import { Theme, LicenseSource, NavMetrics, NavState, SettingsStyle } from "@NovaUiShared";
+
 import { ScrollView } from "scrollview.slint";
-import { LicenseSource } from "types.slint";
-import { SideNav, NavMetrics, NavState } from "sidenav.slint";
-import { PillButton, SectionHeader, SettingsCard, SettingsHeader, SettingsStyle } from "settings-controls.slint";
+
+import { SideNav } from "sidenav.slint";
+import { PillButton, SectionHeader, SettingsCard, SettingsHeader } from "settings-controls.slint";
 
 // About has independent navigation and scroll state; opening it does not
 // mount Settings or trigger its storage and service refreshes.
 export component AboutPage inherits Rectangle {
+    in property <bool> external_navigation: false;
+    in property <bool> active: true;
     preferred-width: 100%;
     preferred-height: 100%;
     background: Theme.current.artwork_canvas;
@@ -24,11 +27,11 @@ export component AboutPage inherits Rectangle {
     in-out property <length> licenses_scroll_y: 0px;
     in-out property <bool> kb_active: false;
     private property <int> last_system_back_request: 0;
-    private property <int> kb_zone: 1;
-    private property <int> kb_nav: 3;
+    in-out property <int> kb_zone: 1;
+    in-out property <int> kb_nav: 3;
     private property <int> source_index: 0;
     private property <bool> restore_pending: true;
-    private property <length> rail_w: root.narrow ? 0px : NavMetrics.width-for(root.nav-viewport-width);
+    private property <length> rail_w: root.narrow || root.external_navigation ? 0px : NavMetrics.width-for(root.nav-viewport-width);
     private property <int> focus_request: SettingsStyle.focus-request;
     private property <bool> native_keyboard_mode: SettingsStyle.keyboard-mode;
     callback home_picked();
@@ -72,7 +75,7 @@ export component AboutPage inherits Rectangle {
         } else { root.back_picked(); }
     }
     changed system_back_request => {
-        if (root.last_system_back_request != root.system_back_request) {
+        if (root.active && root.last_system_back_request != root.system_back_request) {
             root.last_system_back_request = root.system_back_request;
             root.back();
         }
@@ -100,6 +103,7 @@ export component AboutPage inherits Rectangle {
     }
 
     nav_scope := FocusScope {
+        enabled: root.active;
         width: 100%; height: 100%;
         init => { root.last_system_back_request = root.system_back_request; self.focus(); entry_focus_t.start(); restore_scroll_t.start(); }
         key-pressed(e) => {
@@ -109,7 +113,7 @@ export component AboutPage inherits Rectangle {
             } else if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
                 root.kb_active = true;
                 if (root.kb_zone == 0 && !root.narrow) {
-                    root.kb_nav = Math.mod(root.kb_nav + (e.text == Key.LeftArrow ? 5 : 1), 6);
+                    root.kb_nav = NavState.step(root.kb_nav, e.text == Key.LeftArrow ? -1 : 1, false);
                 }
                 accept
             } else if (e.text == Key.UpArrow) {
@@ -305,7 +309,7 @@ export component AboutPage inherits Rectangle {
             }
         }
     }
-    if !root.narrow: rail := SideNav {
+    if !root.narrow && !root.external_navigation: rail := SideNav {
         viewport-width: root.nav-viewport-width;
         panel-background: transparent;
         active: 3;
@@ -319,5 +323,10 @@ export component AboutPage inherits Rectangle {
         discover_picked => { root.discover_picked(); }
         library_picked => { root.library_picked(); }
         more_picked => { root.more_picked(); }
+    }
+    if !root.active: TouchArea {
+        width: 100%; height: 100%;
+        clicked => { }
+        scroll-event(event) => { accept }
     }
 }

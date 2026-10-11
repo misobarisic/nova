@@ -1,0 +1,25 @@
+import { ProbeSettingsPage } from "../settings-page.slint";
+import { AddonRow } from "../../../types.slint";
+import { Theme } from "../../../theme.slint";
+export { Theme, ThemePalette } from "../../../theme.slint";
+export { SettingsSync } from "../../../settings-sync.slint";
+export { Anim } from "../../../anim.slint";
+export { SettingsStyle } from "../../../settings-controls.slint";
+export { ControlInput } from "../../../control-input.slint";
+
+export component SettingsProbe inherits Window {
+    in-out property <[AddonRow]> addons;
+    in-out property <bool> active: true;
+    background: Theme.current.canvas;
+    width: 1100px;
+    height: 750px;
+    ProbeSettingsPage {
+        viewport_width: root.width;
+        viewport_height: root.height;
+        width: 100%;
+        height: 100%;
+        addon_rows <=> root.addons;
+        active: root.active;
+        external_navigation: true;
+    }
+}

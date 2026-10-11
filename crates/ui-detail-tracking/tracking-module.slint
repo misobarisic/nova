@@ -1,0 +1,85 @@
+import { Theme, DetailBridge, DetailContent } from "@NovaUiShared";
+import { TrackingPanel } from "../ui/tracking-panel.slint";
+import { SettingsBackButton } from "../ui/settings-controls.slint";
+export component DetailTrackingModule inherits Window {
+    default-font-family: "Roboto"; background: Theme.current.artwork_canvas;
+    width: DetailBridge.viewport_width; height: DetailBridge.viewport_height;
+    public function recover_entry_focus() { panel.recover_entry_focus(); }
+    public function validate_entry() { panel.validate_entry(); }
+    public function focus_tracking() { panel.focus_panel(); }
+    public function nested_back() { panel.nested_back(); }
+    root_focus := FocusScope {
+        width: 100%; height: 100%;
+        key-pressed(e) => {
+            if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
+                if !e.repeat { DetailContent.dispatch_back(); }
+                accept
+            } else { reject }
+        }
+    VerticalLayout {
+        width: 100%; height: 100%; spacing: 0px;
+        padding-top: DetailBridge.safe-top;
+        HorizontalLayout {
+            padding-left: DetailBridge.safe-left + 16px;
+            padding-right: DetailBridge.safe-right + 16px;
+            spacing: 12px;
+            SettingsBackButton { clicked => { DetailContent.dispatch_back(); } }
+            VerticalLayout {
+                alignment: center; spacing: 4px;
+                Text { text: @tr("Tracking"); color: Theme.current.text_tracking_primary; font-size: 20px; font-weight: 700; }
+                Text { text: DetailBridge.selected_title; color: Theme.current.text_detail_metadata; wrap: word-wrap; min-width: 0px; }
+            }
+        }
+        Flickable {
+            min-height: 0px; vertical-stretch: 1;
+            content-width: self.width;
+            VerticalLayout {
+                width: 100%; height: self.preferred-height; alignment: start;
+                padding-top: 16px;
+                padding-left: DetailBridge.safe-left + (DetailBridge.narrow ? 20px : 64px);
+                padding-right: DetailBridge.safe-right + (DetailBridge.narrow ? 20px : 64px);
+                HorizontalLayout {
+                alignment: center;
+                panel := TrackingPanel {
+                    max-width: 1040px; horizontal-stretch: 1;
+                    height: self.preferred-height;
+                    compact: false;
+                    focus_request: DetailContent.tracking_focus_request;
+                    back_request: DetailContent.tracking_back_request;
+                    back_to_details() => { DetailBridge.tracking_close(); }
+                    open: DetailBridge.tracking_open;
+                    links: DetailBridge.tracking_links;
+                    candidates: DetailBridge.tracking_candidates;
+                    selected_service <=> DetailBridge.tracking_service;
+                    setup: DetailBridge.tracking_setup;
+                    setup_revision: DetailBridge.tracking_setup_revision;
+                    setup_summary: DetailBridge.tracking_setup_summary;
+                    setup_unmapped: DetailBridge.tracking_setup_unmapped;
+                    setup_active: DetailBridge.tracking_setup_active;
+                    range_first: DetailBridge.tracking_range_first;
+                    range_last: DetailBridge.tracking_range_last;
+                    range_start: DetailBridge.tracking_range_start;
+                    preview_rows: DetailBridge.tracking_preview_rows;
+                    mapping_rows: DetailBridge.tracking_mapping_rows;
+                    notice: DetailBridge.tracking_notice;
+                    candidate_title: DetailBridge.tracking_candidate_title;
+                    busy: DetailBridge.tracking_busy;
+                    can_confirm: DetailBridge.tracking_can_confirm;
+                    safe-bottom: DetailBridge.safe-bottom;
+                    search(a0,a1) => { DetailBridge.tracking_search(a0,a1); }
+                    pick(a0) => { DetailBridge.tracking_pick(a0); }
+                    preview(a0,a1,a2) => { DetailBridge.tracking_preview(a0,a1,a2); }
+                    confirm() => { DetailBridge.tracking_confirm(); }
+                    accept_setup(revision,history) => { DetailBridge.tracking_accept_setup(revision,history); }
+                    adjust_setup(index) => { DetailBridge.tracking_adjust_setup(index); }
+                    cancel_adjust() => { DetailBridge.tracking_cancel_adjust(); }
+                    assign(row,value) => { DetailBridge.tracking_assign(row,value); }
+                    edit(a0,a1,a2,a3,a4,a5,a6,a7) => { DetailBridge.tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7); }
+                    action(a0,a1) => { DetailBridge.tracking_action(a0,a1); }
+                }
+                }
+            }
+        }
+    }
+    }
+}

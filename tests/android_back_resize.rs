@@ -111,7 +111,7 @@ async fn open_settings(
             let opened = if title == "Tracking" {
                 ElementHandle::find_by_element_type_name(app, "TrackingSettings").count() == 1
             } else {
-                ElementHandle::find_by_element_id(app, "SettingsPage::addon_url_narrow")
+                ElementHandle::find_by_element_id(app, "SettingsAddonsModule::addon_url_narrow")
                     .next()
                     .is_some()
             };
@@ -297,7 +297,7 @@ fn focused_editors_keep_back_navigation_after_rotation() {
             slint::quit_event_loop().unwrap();
             return;
         }
-        let field = ElementHandle::find_by_element_id(&app, "SettingsPage::addon_url_narrow").next().unwrap();
+        let field = ElementHandle::find_by_element_id(&app, "SettingsAddonsModule::addon_url_narrow").next().unwrap();
         field.single_click(slint::platform::PointerEventButton::Left).await;
         settle().await;
         let focused = type_text(&app, "xy").await && app.get_addon_url() == "xy";

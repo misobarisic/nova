@@ -152,13 +152,15 @@ impl Bridge {
             + 1;
         if let Some(app) = self.app() {
             app.set_tracking_return_tab(app.get_detail_tab());
+            // Full-screen Detail subpages have one interactive owner.
+            app.set_stream_action_open(false);
+            app.set_stream_selector_open(false);
             app.set_tracking_open(true);
-            app.set_detail_tab(4);
             app.set_tracking_candidate_title("".into());
             app.set_tracking_candidates(
                 Rc::new(VecModel::<crate::TrackingCandidateRow>::default()).into(),
             );
-            // The tab is visible immediately; never flash another title's
+            // The full-screen page is visible immediately; never flash another title's
             // previous links or proposal while its worker request is loading.
             app.set_tracking_links(Rc::new(VecModel::<crate::TrackingLinkRow>::default()).into());
             app.set_tracking_setup(Rc::new(VecModel::<crate::TrackingSetupRow>::default()).into());

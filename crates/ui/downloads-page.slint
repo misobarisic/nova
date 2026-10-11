@@ -1,18 +1,12 @@
-import { Theme } from "theme.slint";
+import { Theme, NavMetrics, DownloadEpisode, DownloadGroup } from "@NovaUiShared";
+
 import { ScrollView } from "scrollview.slint";
 import { SearchField } from "searchfield.slint";
-import { SideNav, NavMetrics } from "sidenav.slint";
-import { BottomNav } from "bottomnav.slint";
+import { SideNav } from "sidenav.slint";
 import { SettingsBackButton } from "settings-controls.slint";
 
-export struct DownloadEpisode {
-    id: string, title: string, badge: string, details: string,
-    state: int, progress: float, action_label: string, action_kind: int,
-}
-export struct DownloadGroup {
-    id: string, title: string, subtitle: string, artwork: image,
-    episodes: [DownloadEpisode], collapsed: bool,
-}
+
+
 component DownloadButton inherits Rectangle {
     in property <string> label;
     in property <bool> selected: false;
@@ -54,6 +48,17 @@ component DownloadEpisodeRow inherits Rectangle {
 component DownloadSeriesCard inherits Rectangle {
     in property <DownloadGroup> group;
     in property <bool> narrow;
+    in property <bool> artwork-active;
+    in property <length> viewport-top;
+    in property <length> viewport-height;
+    callback artwork-visible(string, bool);
+    private property <bool> artwork-retained: root.artwork-active && root.viewport-height > 0px
+        && self.absolute-position.y + 86px >= root.viewport-top - root.viewport-height
+        && self.absolute-position.y <= root.viewport-top + 2 * root.viewport-height;
+    private property <string> artwork-report: root.group.id + root.group.artwork_identity + (root.artwork-retained ? "1" : "0");
+    Timer { interval: 1500ms; running: root.artwork-retained; triggered => { root.artwork-visible(root.group.id, true); } }
+    changed artwork-report => { root.artwork-visible(root.group.id, root.artwork-retained); }
+    init => { root.artwork-visible(root.group.id, root.artwork-retained); }
     callback toggled(string);
     callback action(string,int);
     border-radius: 10px; border-width: 1px; border-color: Theme.current.border_strong;
@@ -77,6 +82,8 @@ component DownloadSeriesCard inherits Rectangle {
     }
 }
 export component DownloadsPage inherits Rectangle {
+    in property <bool> external_navigation: false;
+    in property <bool> active: true;
     background: Theme.current.artwork_canvas;
     in property <[DownloadGroup]> groups;
     in property <[DownloadEpisode]> transfers;
@@ -93,25 +100,29 @@ export component DownloadsPage inherits Rectangle {
     // Derive layout widths directly from the hosting viewport. Using a
     // repeated row's parent.width here would feed its intrinsic width back
     // into ScrollView's minimum width calculation.
-    private property <length> available-width: root.nav-viewport-width
-        - root.safe-left - (root.narrow ? 0px : NavMetrics.width-for(root.nav-viewport-width))
+    private property <length> available-width: (root.external_navigation ? root.width : root.nav-viewport-width)
+        - root.safe-left - (root.narrow || root.external_navigation ? 0px : NavMetrics.width-for(root.nav-viewport-width))
         - (root.narrow ? 24px : 48px) - root.safe-right;
     private property <bool> two-columns: root.available-width > 850px;
     private property <int> columns: root.two-columns ? 2 : 1;
     private property <int> last-back;
     private property <[string]> filter-labels: [@tr("All"), @tr("Unwatched"), @tr("In progress"), @tr("Watched")];
+    in property <bool> artwork-active: true;
+    callback artwork-visible(string, bool);
+    callback artwork-active-changed(bool);
+    changed artwork-active => { root.artwork-active-changed(root.artwork-active); }
     callback query_changed(string); callback filter_changed(int); callback sort_changed(bool);
     callback group_toggled(string); callback action(string,int); callback back();
     callback home_picked(); callback discover_picked(); callback library_picked(); callback settings_picked(); callback about_picked(); callback more_picked();
-    changed system_back_request => { if (root.last-back != root.system_back_request) { root.last-back = root.system_back_request; root.back(); } }
-    FocusScope { width: 100%; height: 100%; init => { root.last-back = root.system_back_request; self.focus(); }
+    changed system_back_request => { if (root.active && root.last-back != root.system_back_request) { root.last-back = root.system_back_request; root.back(); } }
+    FocusScope { enabled: root.active; width: 100%; height: 100%; init => { root.last-back = root.system_back_request; self.focus(); }
         capture-key-pressed(e) => { if (e.text == Key.Back || e.text == Key.Escape) { if (!e.repeat) { root.back(); } accept } else { reject } }
-    if !root.narrow: SideNav {
+    if !root.narrow && !root.external_navigation: SideNav {
         viewport-width: root.nav-viewport-width; active: 5; safe-top: root.safe-top; safe-left: root.safe-left; safe-bottom: root.safe-bottom; kb_active <=> root.kb_active;
         home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } more_picked => { root.more_picked(); }
     }
     content := VerticalLayout {
-        x: root.narrow ? 0px : NavMetrics.width-for(root.nav-viewport-width) + root.safe-left;
+        x: root.narrow || root.external_navigation ? 0px : NavMetrics.width-for(root.nav-viewport-width) + root.safe-left;
         width: root.width - self.x; height: 100%;
         padding-top: root.safe-top; spacing: 0px;
         // Keep the phone's Back route reachable while the downloads scroll.
@@ -121,7 +132,7 @@ export component DownloadsPage inherits Rectangle {
             SettingsBackButton { clicked => { root.back(); } }
             Text { min-width: 0; text: @tr("Downloads"); color: Theme.current.text_bright; font-size: 28px; font-weight: 700; vertical-alignment: center; overflow: elide; }
         }
-        ScrollView { vertical-stretch: 1; content-width: self.visible-width; mouse-drag-pan-enabled: true;
+        groups-scroll := ScrollView { vertical-stretch: 1; content-width: self.visible-width; mouse-drag-pan-enabled: true;
             VerticalLayout { alignment: start; padding: root.narrow ? 12px : 24px; padding-left: (root.narrow ? 12px + root.safe-left : 24px); padding-right: (root.narrow ? 12px : 24px) + root.safe-right; spacing: 14px;
                 if !root.narrow: Text { vertical-stretch: 0; text: @tr("Downloads"); color: Theme.current.text_bright; font-size: 28px; font-weight: 700; }
                 Text { vertical-stretch: 0; text: root.summary; color: Theme.current.text_secondary; font-size: 12px; wrap: word-wrap; }
@@ -151,17 +162,20 @@ export component DownloadsPage inherits Rectangle {
                     color: Theme.current.text_muted; wrap: word-wrap; font-size: 15px;
                 }
                 for row in Math.ceil(root.groups.length / root.columns): HorizontalLayout { spacing: 12px; vertical-stretch: 0;
-                    DownloadSeriesCard { width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * root.columns]; narrow: root.narrow; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } }
-                    if root.two-columns && row * 2 + 1 < root.groups.length: DownloadSeriesCard { width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * 2 + 1]; narrow: false; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } }
+                    DownloadSeriesCard { artwork-active: root.artwork-active; viewport-top: groups-scroll.absolute-position.y; viewport-height: groups-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * root.columns]; narrow: root.narrow; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } }
+                    if root.two-columns && row * 2 + 1 < root.groups.length: DownloadSeriesCard { artwork-active: root.artwork-active; viewport-top: groups-scroll.absolute-position.y; viewport-height: groups-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * 2 + 1]; narrow: false; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } }
                     if root.two-columns && row * 2 + 1 >= root.groups.length: Rectangle { width: (root.available-width - 12px) / 2; }
                 }
                 if root.transfers.length > 0: Text { vertical-stretch: 0; text: @tr("Transfers"); color: Theme.current.text_bright; font-size: 20px; font-weight: 600; }
                 for transfer in root.transfers: DownloadEpisodeRow { episode: transfer; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } }
             }
         }
-        if root.narrow: BottomNav { active: 3; safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right; kb_active <=> root.kb_active;
-            home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } more_picked => { root.more_picked(); }
-        }
+
     }
+    }
+    if !root.active: TouchArea {
+        width: 100%; height: 100%;
+        clicked => { }
+        scroll-event(event) => { accept }
     }
 }

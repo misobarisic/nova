@@ -1,0 +1,13 @@
+[package]
+name = "nova-settings-module-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+links = "novasettingsprobe"
+
+[dependencies]
+slint = { workspace = true }
+i-slint-core = { workspace = true }
+
+[build-dependencies]
+slint-build = { workspace = true }

@@ -273,10 +273,10 @@ fn calendar_and_downloads_destinations_fit_desktop_and_phone() {
     app.global::<nova::Anim>().set_transitions(false);
     let weak = app.as_weak();
     app.global::<nova::NavState>()
-        .on_calendar_picked(move || route(&weak.upgrade().unwrap(), false));
+        .on_calendar_picked(move || weak.upgrade().unwrap().invoke_navigate_section(4));
     let weak = app.as_weak();
     app.global::<nova::NavState>()
-        .on_downloads_picked(move || route(&weak.upgrade().unwrap(), true));
+        .on_downloads_picked(move || weak.upgrade().unwrap().invoke_navigate_section(5));
     let weak = app.as_weak();
     app.on_calendar_picked(move || route(&weak.upgrade().unwrap(), false));
     let weak = app.as_weak();

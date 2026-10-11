@@ -1,0 +1,96 @@
+import { SettingsBridge } from "settings-bridge.slint";
+
+// Submenu factories and shell-local state share the window globals bundle.
+// Backend values remain in SettingsBridge; this state resets on shell creation.
+export global SettingsContent {
+    in-out property <component-factory> tracking_factory;
+    in-out property <component-factory> addons_factory;
+    in-out property <component-factory> categories_factory;
+    in-out property <component-factory> image_cache_factory;
+    in-out property <component-factory> display_factory;
+    in-out property <component-factory> p2p_factory;
+    in-out property <component-factory> player_factory;
+    in-out property <component-factory> theme_factory;
+    in-out property <component-factory> look_feel_factory;
+    in-out property <component-factory> sync_factory;
+    in-out property <component-factory> home_factory;
+    in-out property <component-factory> downloads_factory;
+    in-out property <component-factory> downloaded_episodes_factory;
+    in-out property <length> slot_width;
+    in-out property <length> slot_height;
+    in-out property <length> shell_width;
+    in-out property <length> detail_width;
+    in-out property <length> content_min_height;
+    in-out property <length> content_preferred_height;
+    in-out property <bool> dl_revealed: true;
+    in-out property <bool> input_focused: false;
+    in-out property <int> kb_ac: 0;
+    in-out property <int> kb_actl: 0;
+    in-out property <int> kb_anr: 0;
+    in-out property <int> kb_ar: 0;
+    in-out property <int> kb_ccol: 0;
+    in-out property <int> kb_cctl: 0;
+    in-out property <int> kb_cr: 0;
+    in-out property <int> kb_dl: 0;
+    in-out property <int> kb_dlr: 0;
+    in-out property <int> kb_dr: 5;
+    in-out property <int> kb_edit: 0;
+    in-out property <int> kb_home: 0;
+    in-out property <int> kb_hr: 0;
+    in-out property <int> kb_pr: 0;
+    in-out property <int> kb_theme: 0;
+    in-out property <int> kb_tr: 0;
+    in-out property <bool> player_language_input_focused: false;
+    in-out property <string> sync_remove_prompt_id: "";
+    in-out property <string> sync_remove_prompt_name: "";
+    in-out property <bool> sync_remove_prompt_visible: false;
+    in-out property <bool> tracking_blur: false;
+    in-out property <bool> tracking_input_focused: false;
+    in-out property <bool> tracking_reset_confirm: false;
+    out property <int> button_radius_preset_index: SettingsBridge.button_corner_radius == 0 ? 0 : SettingsBridge.button_corner_radius == 4 ? 1 : SettingsBridge.button_corner_radius == 8 ? 2 : SettingsBridge.button_corner_radius == 12 ? 3 : SettingsBridge.button_corner_radius == 24 ? 4 : -1;
+    out property <bool> narrow: SettingsContent.detail_width < 680px;
+    out property <int> radius_preset_index: SettingsBridge.card_corner_radius == 0 ? 0 : SettingsBridge.card_corner_radius == 4 ? 1 : SettingsBridge.card_corner_radius == 10 ? 2 : SettingsBridge.card_corner_radius == 16 ? 3 : SettingsBridge.card_corner_radius == 24 ? 4 : -1;
+    out property <int> spacing_preset_index: SettingsBridge.card_spacing == 0 ? 0 : SettingsBridge.card_spacing == 4 ? 1 : SettingsBridge.card_spacing == 8 ? 2 : SettingsBridge.card_spacing == 16 ? 3 : SettingsBridge.card_spacing == 32 ? 4 : -1;
+    out property <string> torrent_rate_label: SettingsBridge.torrent_down_limit <= 0 ? @tr("Unlimited") : Math.round(SettingsBridge.torrent_down_limit) + " KB/s";
+    out property <string> torrent_size_label: Math.round(SettingsBridge.torrent_max_mb) + " MB";
+    pure callback kb_player_audio_language_row() -> int;
+    pure callback kb_player_speed_row() -> int;
+    pure callback kb_player_subtitle_language_row() -> int;
+    callback open_page(int);
+    callback pick_button_radius(int);
+    callback pick_card_radius(int);
+    callback pick_card_spacing(int);
+    callback restore_theme_defaults();
+    callback reveal_detail_control(length,length);
+    callback schedule_save();
+    callback schedule_setting(string);
+    callback focus_shell();
+
+    public function reset_state() {
+        SettingsContent.dl_revealed = true;
+        SettingsContent.input_focused = false;
+        SettingsContent.kb_ac = 0;
+        SettingsContent.kb_actl = 0;
+        SettingsContent.kb_anr = 0;
+        SettingsContent.kb_ar = 0;
+        SettingsContent.kb_ccol = 0;
+        SettingsContent.kb_cctl = 0;
+        SettingsContent.kb_cr = 0;
+        SettingsContent.kb_dl = 0;
+        SettingsContent.kb_dlr = 0;
+        SettingsContent.kb_dr = 5;
+        SettingsContent.kb_edit = 0;
+        SettingsContent.kb_home = 0;
+        SettingsContent.kb_hr = 0;
+        SettingsContent.kb_pr = 0;
+        SettingsContent.kb_theme = 0;
+        SettingsContent.kb_tr = 0;
+        SettingsContent.player_language_input_focused = false;
+        SettingsContent.sync_remove_prompt_id = "";
+        SettingsContent.sync_remove_prompt_name = "";
+        SettingsContent.sync_remove_prompt_visible = false;
+        SettingsContent.tracking_blur = false;
+        SettingsContent.tracking_input_focused = false;
+        SettingsContent.tracking_reset_confirm = false;
+    }
+}

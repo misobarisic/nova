@@ -1,0 +1,42 @@
+import { MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadEpisode, DownloadGroup, SettingsDestination } from "../ui/types.slint";
+
+// The host keeps backend-owned state; the page shares this exact object.
+export global CalendarBridge {
+    in-out property <component-factory> factory;
+    in-out property <length> viewport_width;
+    in-out property <length> viewport_height;
+    in-out property <bool> artwork-active;
+    in-out property <length> nav-viewport-width;
+    in-out property <bool> external_navigation;
+    in-out property <bool> active;
+    in-out property <[CalendarDay]> cells;
+    in-out property <[CalendarDay]> week_cells;
+    in-out property <[CalendarRelease]> rows;
+    in-out property <[CalendarRelease]> later;
+    in-out property <string> title;
+    in-out property <string> day_title;
+    in-out property <int> count;
+    in-out property <string> search;
+    in-out property <int> view;
+    in-out property <bool> all;
+    in-out property <length> safe-top;
+    in-out property <length> safe-left;
+    in-out property <length> safe-right;
+    in-out property <length> safe-bottom;
+    in-out property <int> system_back_request;
+    in-out property <bool> kb_active;
+    callback artwork-visible(string, bool);
+    callback artwork-active-changed(bool);
+    callback refreshed();
+    callback step(int);
+    callback today();
+    callback day_picked(int);
+    callback release_picked(string);
+    callback back();
+    callback home_picked();
+    callback discover_picked();
+    callback library_picked();
+    callback settings_picked();
+    callback about_picked();
+    callback more_picked();
+}

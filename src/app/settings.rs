@@ -173,6 +173,7 @@ impl Bridge {
     /// Mirror the stored cache settings onto the Settings page controls.
     pub(super) fn settings_to_ui(&self) {
         let settings = self.shared.lock().unwrap().cache_settings.clone();
+        self.invalidate_home_pending_logo();
         if let Some(app) = self.app() {
             app.set_persistence_failed(storage::last_error().is_some());
             app.set_cache_images(settings.cache_images);
@@ -457,6 +458,7 @@ impl Bridge {
             state.cache_settings = settings.clone();
         }
         set_active_cache_settings(settings.clone());
+        self.invalidate_home_pending_logo();
         if !applying() {
             self.player.update_playback_defaults(&settings);
             self.refresh_effective_speed();

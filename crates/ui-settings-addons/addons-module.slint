@@ -1,0 +1,356 @@
+import { SettingsBridge, SettingsContent, Theme, SettingsStyle } from "@NovaUiShared";
+
+import { SearchField } from "../ui/searchfield.slint";
+
+import { KbMark } from "../ui/kbnav.slint";
+
+import { PillButton, AddonRowCard, Segmented, SectionHeader, SettingsCard } from "../ui/settings-controls.slint";
+
+// The shell owns scrolling and transitions. Report intrinsic layout sizes
+// only while this section is selected, so outgoing instances cannot resize it.
+export component SettingsAddonsModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: SettingsContent.slot_width; height: SettingsContent.slot_height;
+    private property <length> measured_min: body_layout.min-height;
+    private property <length> measured_preferred: body_layout.preferred-height;
+    changed measured_min => { root.publish_size(); }
+    changed measured_preferred => { root.publish_size(); }
+    init => { root.publish_size(); }
+    function publish_size() {
+        if SettingsBridge.sel == 0 {
+            SettingsContent.content_min_height = root.measured_min;
+            SettingsContent.content_preferred_height = root.measured_preferred;
+        }
+    }
+    body_layout := VerticalLayout {
+        width: 100%; height: 100%; spacing: 0px;
+        Rectangle {
+
+                // Conditional layouts report vertical size at their
+                // preferred width. Use the actual viewport so narrow
+                // wrapped copy contributes its full height to scrolling.
+                width: SettingsContent.slot_width;
+                vertical-stretch: 0;
+                height: addons_body.preferred-height;
+                addons_body := VerticalLayout {
+                width: 100%;
+                spacing: 18px;
+
+                SectionHeader { label: @tr("Installation"); }
+
+                // ---- Addons ------------------------------------
+
+                SettingsCard { install_box := Rectangle {
+                        background: Theme.current.card;
+                        // Dynamic narrow height (same wrapped-text
+                        // measuring quirk as SettingsRow above):
+                        // the stacked description wraps to 2+
+                        // lines but Slint sizes wrapped text at
+                        // one line, so without the hidden copy
+                        // below the box clips the input row.
+                        min-height: SettingsContent.narrow ? Math.max(88px, 105px + install_desc_measure.height) : 88px;
+
+                        if !SettingsContent.narrow: HorizontalLayout {
+                            width: 100%;
+                            padding-top: 14px;
+                            padding-bottom: 14px;
+                            padding-left: 16px;
+                            padding-right: 16px;
+                            spacing: 16px;
+
+                            VerticalLayout {
+                                width: 360px;
+                                alignment: center;
+                                spacing: 3px;
+
+                                Text {
+                                    text: @tr("Install addon");
+                                    font-size: 14px;
+                                    font-weight: 600;
+                                    color: Theme.current.text_bright;
+                                }
+
+                                Text {
+                                    text: @tr("Paste an addon install URL and add it to the catalog sources.");
+                                    font-size: 14px;
+                                    color: Theme.current.text_settings;
+                                    wrap: word-wrap;
+                                    width: 360px;
+                                    height: 44px;
+                                }
+                            }
+
+                            // Centered so the input keeps its
+                            // natural height in the tall row.
+                            // Stretched so the input fills the
+                            // space left by the fixed text
+                            // column (same as Discover filters).
+                            VerticalLayout {
+                                height: 100%;
+                                horizontal-stretch: 1;
+                                alignment: center;
+
+                                HorizontalLayout {
+                                    width: 100%;
+                                    // Pinned like Discover wide
+                                    // filter rows: 32px tall so
+                                    // the input stretches to the
+                                    // full button height instead
+                                    // of collapsing to its
+                                    // preferred height.
+                                    height: 44px;
+                                    spacing: 16px;
+
+                                    KbMark { on: SettingsBridge.kb_zone == 1 && SettingsContent.kb_actl == 0; active: SettingsBridge.kb_active; }
+                                    addon_url_wide := SearchField {
+                                        show-pointer-focus: false; keyboard-mode: SettingsBridge.kb_active;
+                                        roomy: true;
+                                        text <=> SettingsBridge.addon_url;
+                                        placeholder-text: @tr("Addon install URL — e.g. https://v3-cinemeta.strem.io");
+                                        focus_changed(focused) => { SettingsContent.input_focused = focused; if (focused && SettingsBridge.kb_active) { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                                        // Redundant with the two-way binding on
+                                        // desktop, but keeps the model in sync on
+                                        // Android IME commit paths.
+                                        edited(t) => { SettingsBridge.addon_url = t; }
+                                        accepted(t) => {
+                                            SettingsBridge.addon_url = t;
+                                            SettingsContent.kb_edit = 0;
+                                            SettingsContent.focus_shell();
+                                            SettingsBridge.addon_added(t);
+                                        }
+                                        horizontal-stretch: 1;
+                                        min-width: 0px;
+                                        max-width: 560px;
+                                    }
+
+                                    // Focuses the field on demand: page scope
+                                    // cannot see ids inside `if`, but this
+                                    // timer (inside the branch) can.
+                                    edit_t1 := Timer {
+                                        interval: 80ms;
+                                        running: SettingsContent.kb_edit == 1 && !SettingsContent.narrow;
+                                        triggered => { addon_url_wide.focus(); }
+                                    }
+
+                                    PillButton {
+                                        label: @tr("Add");
+                                        primary: true;
+                                        roomy: true;
+                                        btn_min_width: 92px;
+                                        focused: SettingsBridge.kb_zone == 1 && SettingsContent.kb_actl == 1 && SettingsBridge.kb_active;
+                                        clicked => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 1; SettingsContent.kb_actl = 1; SettingsBridge.addon_added(addon_url_wide.full-text); }
+                                    }
+                                }
+                            }
+                        }
+
+                        if SettingsContent.narrow: VerticalLayout {
+                            width: 100%;
+                            padding-top: 14px;
+                            padding-bottom: 14px;
+                            padding-left: 16px;
+                            padding-right: 16px;
+                            spacing: 10px;
+
+                            VerticalLayout {
+                                spacing: 3px;
+
+                                Text {
+                                    text: @tr("Install addon");
+                                    font-size: 14px;
+                                    font-weight: 600;
+                                    color: Theme.current.text_bright;
+                                }
+
+                                Text {
+                                    text: @tr("Paste an addon install URL and add it to the catalog sources.");
+                                    font-size: 14px;
+                                    color: Theme.current.text_settings;
+                                    wrap: word-wrap;
+                                }
+                            }
+
+                            // Constrained to the card width: without
+                            // width: 100% the LineEdit sizes to
+                            // its preferred width and pushes the
+                            // Add button off-screen on portrait
+                            // phones (the card clips it).
+                            HorizontalLayout {
+                                width: 100%;
+                                // Pinned like Discover narrow
+                                // search row: 44px touch targets.
+                                height: 44px;
+                                spacing: 12px;
+
+                                KbMark { on: SettingsBridge.kb_zone == 1 && SettingsContent.kb_actl == 0; active: SettingsBridge.kb_active; }
+                                addon_url_narrow := SearchField {
+                                    show-pointer-focus: false; keyboard-mode: SettingsBridge.kb_active;
+                                    roomy: true;
+                                    text <=> SettingsBridge.addon_url;
+                                    placeholder-text: @tr("Addon install URL — e.g. https://v3-cinemeta.strem.io");
+                                    focus_changed(focused) => { SettingsContent.input_focused = focused; if (focused && SettingsBridge.kb_active) { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                                    edited(t) => { SettingsBridge.addon_url = t; }
+                                    accepted(t) => {
+                                        SettingsBridge.addon_url = t;
+                                        SettingsContent.kb_edit = 0;
+                                        SettingsContent.focus_shell();
+                                        SettingsBridge.addon_added(t);
+                                    }
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+                                }
+
+                                edit_t1n := Timer {
+                                    interval: 80ms;
+                                    running: SettingsContent.kb_edit == 1 && SettingsContent.narrow;
+                                    triggered => { addon_url_narrow.focus(); }
+                                }
+
+                                PillButton {
+                                    label: @tr("Add");
+                                    primary: true;
+                                    roomy: true;
+                                    btn_min_width: 92px;
+                                    focused: SettingsBridge.kb_zone == 1 && SettingsContent.kb_actl == 1 && SettingsBridge.kb_active;
+                                    clicked => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 1; SettingsContent.kb_actl = 1; SettingsBridge.addon_added(addon_url_narrow.full-text); }
+                                }
+                            }
+                        }
+
+                        // Hidden measurement copy of the narrow
+                        // description (see SettingsRow): its real
+                        // wrapped height drives the box minimum
+                        // above so the input row is never clipped.
+                        Rectangle {
+                            height: 0;
+                            clip: true;
+
+                            install_desc_measure := Text {
+                                width: install_box.width - 32px;
+                                text: @tr("Paste an addon install URL and add it to the catalog sources.");
+                                font-size: 14px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    } }
+                if !SettingsBridge.cinemeta_installed: cinemeta_suggestion := Rectangle {
+                    min-width: 0px;
+                    vertical-stretch: 0;
+                    // As with install_box, wrapped text needs a measured
+                    // height so Flickable includes every line in its extent.
+                    min-height: 52px + cinemeta_description_measure.height;
+                    Text {
+                        width: 100%; height: cinemeta_description_measure.height;
+                        text: @tr("Cinemeta supplies movie and series catalogs and metadata. It does not provide streams.");
+                        font-size: 14px; wrap: word-wrap; color: Theme.current.text_secondary;
+                    }
+                    PillButton {
+                        y: cinemeta_description_measure.height + 8px;
+                        label: @tr("Add Cinemeta");
+                        clicked => { SettingsContent.focus_shell(); SettingsBridge.addon_added("https://v3-cinemeta.strem.io"); }
+                    }
+                    Rectangle {
+                        height: 0px; clip: true;
+                        cinemeta_description_measure := Text {
+                            width: cinemeta_suggestion.width;
+                            text: @tr("Cinemeta supplies movie and series catalogs and metadata. It does not provide streams.");
+                            font-size: 14px; wrap: word-wrap;
+                        }
+                    }
+                }
+                SectionHeader { label: @tr("Installed sources"); }
+                SearchField {
+                    placeholder-text: @tr("Search installed addons…");
+                    text <=> SettingsBridge.addon_search_text;
+                    search-icon: true;
+                    focus_changed(focused) => { SettingsContent.input_focused = focused; }
+                    edited(t) => { SettingsBridge.addon_search_text = t; SettingsBridge.addon_filter_changed(); }
+                }
+                if !SettingsContent.narrow: Segmented {
+                    labels: [@tr("All"), @tr("Searchable catalogs"), @tr("Metadata"), @tr("Streams")];
+                    current_index: SettingsBridge.addon_capability_filter;
+                    picked(index) => { SettingsContent.focus_shell(); SettingsBridge.addon_capability_filter = index; SettingsBridge.addon_filter_changed(); }
+                }
+                if SettingsContent.narrow: VerticalLayout {
+                    spacing: 8px;
+                    Segmented {
+                        labels: [@tr("All"), @tr("Searchable catalogs")];
+                        current_index: SettingsBridge.addon_capability_filter < 2 ? SettingsBridge.addon_capability_filter : -1;
+                        picked(index) => { SettingsContent.focus_shell(); SettingsBridge.addon_capability_filter = index; SettingsBridge.addon_filter_changed(); }
+                    }
+                    Segmented {
+                        labels: [@tr("Metadata"), @tr("Streams")];
+                        current_index: SettingsBridge.addon_capability_filter >= 2 ? SettingsBridge.addon_capability_filter - 2 : -1;
+                        picked(index) => { SettingsContent.focus_shell(); SettingsBridge.addon_capability_filter = index + 2; SettingsBridge.addon_filter_changed(); }
+                    }
+                }
+                Rectangle {
+                    background: Theme.current.card;
+                    border-radius: 16px;
+                    border-width: 1px;
+                    border-color: Theme.current.border_soft;
+                    clip: true;
+
+                    VerticalLayout {
+                        spacing: 0px;
+
+                        // Install row. The 360px text column wraps
+                        // the description to 2 lines; the input is
+                        // capped so it doesn't span the whole card.
+                        // Narrow windows stack the input below the text.
+
+                        if SettingsBridge.addon_rows.length == 0: Rectangle {
+                            background: Theme.current.card;
+                            min-height: 96px;
+
+                            Text {
+                                x: 16px;
+                                width: parent.width - 32px;
+                                y: (parent.height - self.height) / 2;
+                                text: SettingsBridge.addon_search_text != "" || SettingsBridge.addon_capability_filter != 0 ? @tr("No installed addons match these filters.") : @tr("No addons installed yet. Paste an addon install URL above and click Add.");
+                                color: Theme.current.text_settings;
+                                font-size: 14px;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 12px;
+                            for row[i] in SettingsBridge.addon_rows: AddonRowCard {
+                                tinted: Math.mod(i, 2) == 1;
+                                title: row.label;
+                                caption: row.capabilities;
+                                logo: row.logo;
+                                initial: row.initial;
+                                on: row.enabled;
+                                has_config: row.config_url != "";
+                                kb_focused_row: SettingsBridge.kb_zone == 2 && SettingsContent.kb_ar == i;
+                                kb_active: SettingsBridge.kb_active;
+                                kb_col: SettingsContent.kb_ac;
+                                toggled(on) => {
+                                    // Row rebuilds must not destroy the only Back route.
+                                    SettingsContent.focus_shell();
+                                    SettingsBridge.addon_rows[i].enabled = on;
+                                    SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                    SettingsBridge.kb_zone = 2;
+                                    SettingsContent.kb_ar = i;
+                                    SettingsContent.kb_ac = 0;
+                                    SettingsBridge.addon_toggled(i);
+                                }
+                                configure => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 2; SettingsContent.kb_ar = i; SettingsContent.kb_ac = 1; SettingsBridge.addon_configure(row.config_url); }
+                                copy_link => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 2; SettingsContent.kb_ar = i; SettingsContent.kb_ac = 2; SettingsBridge.addon_copy_link(row.url); }
+                                refresh => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 2; SettingsContent.kb_ar = i; SettingsContent.kb_ac = 3; SettingsBridge.addon_refresh(i); }
+                                remove => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 2; SettingsContent.kb_ar = i; SettingsContent.kb_ac = 4; SettingsBridge.addon_remove(i); }
+                                move_up => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 2; SettingsContent.kb_ac = 5; SettingsBridge.addon_move_up(i); SettingsContent.kb_ar = Math.max(0, i - 1); }
+                                move_down => { SettingsContent.focus_shell(); SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 2; SettingsContent.kb_ac = 6; SettingsBridge.addon_move_down(i); SettingsContent.kb_ar = Math.min(SettingsBridge.addon_rows.length - 1, i + 1); }
+                            }
+                        }
+                    }
+                }
+
+            }
+
+        }
+    }
+}

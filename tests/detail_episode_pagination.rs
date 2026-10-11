@@ -29,6 +29,7 @@ fn episode(n: usize) -> nova::EpisodeRow {
         ep_no: s(format!("EP {n}").as_str()),
         date: SharedString::default(),
         runtime: Default::default(),
+        ..Default::default()
     }
 }
 

@@ -1,4 +1,4 @@
-//! Dedicated Tracking navigation, responsive confirmation, and service changes.
+//! Full-screen Tracking navigation, responsive confirmation, and service changes.
 //! Set NOVA_TRACKING_PREVIEW_DIR to render the same fixture with a desktop backend.
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::{ComponentHandle, VecModel};
@@ -30,10 +30,35 @@ async fn settle() {
     .await;
 }
 
-async fn scroll_to_end(app: &nova::AppWindow) {
-    let scroll = ElementHandle::find_by_element_id(app, "DetailPage::det_scroll")
+fn tracking_scroll(app: &nova::AppWindow) -> ElementHandle {
+    ElementHandle::find_by_element_id(app, "DetailTrackingModule::root")
         .next()
-        .unwrap();
+        .expect("mounted Tracking leaf")
+        .query_descendants()
+        .match_inherits("Flickable")
+        .find_first()
+        .expect("Tracking owns its scroll viewport")
+}
+
+async fn navbar_back(app: &nova::AppWindow) {
+    for event in [
+        slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        },
+        slint::platform::WindowEvent::KeyReleased {
+            text: slint::platform::Key::Back.into(),
+        },
+    ] {
+        assert!(matches!(
+            app.window().dispatch_event_with_result(event).unwrap(),
+            slint::platform::WindowEventDispatchResult::Accepted
+        ));
+    }
+    settle().await;
+}
+
+async fn scroll_to_end(app: &nova::AppWindow) {
+    let scroll = tracking_scroll(app);
     let p = scroll.absolute_position();
     let size = scroll.size();
     app.window()
@@ -76,7 +101,7 @@ async fn click_tab(app: &nova::AppWindow, label: &str) {
 }
 
 #[test]
-fn tracking_is_a_detail_tab_with_reachable_confirmation() {
+fn tracking_preserves_detail_tab_with_reachable_confirmation() {
     let preview_dir = std::env::var_os("NOVA_TRACKING_PREVIEW_DIR").map(std::path::PathBuf::from);
     if preview_dir.is_none() {
         i_slint_backend_testing::init_integration_test_with_system_time();
@@ -102,7 +127,6 @@ fn tracking_is_a_detail_tab_with_reachable_confirmation() {
         let app = weak.upgrade().unwrap();
         app.set_tracking_return_tab(app.get_detail_tab());
         app.set_tracking_open(true);
-        app.set_detail_tab(4);
     });
     let weak = app.as_weak();
     app.on_detail_tab_picked(move |tab| {
@@ -118,7 +142,6 @@ fn tracking_is_a_detail_tab_with_reachable_confirmation() {
     app.on_tracking_close(move || {
         let app = weak.upgrade().unwrap();
         app.set_tracking_open(false);
-        app.set_detail_tab(app.get_tracking_return_tab());
     });
     let searches = Rc::new(RefCell::new(Vec::new()));
     let recorded_searches = searches.clone();
@@ -140,19 +163,13 @@ fn tracking_is_a_detail_tab_with_reachable_confirmation() {
     slint::spawn_local(async move {
         let app = weak.upgrade().unwrap();
         settle().await;
-        let tabs_y = ElementHandle::find_by_element_type_name(&app, "DetailTabs")
-            .next()
-            .unwrap()
-            .absolute_position()
-            .y;
         click_tab(&app, "Tracking").await;
-        let tracking_tabs_y = ElementHandle::find_by_element_type_name(&app, "DetailTabs")
-            .next()
-            .unwrap()
-            .absolute_position()
-            .y;
-        assert!((tracking_tabs_y - tabs_y).abs() < 1.0, "Tracking preserves the shared hero height");
-        assert_eq!(app.get_detail_tab(), 4);
+        assert_eq!(app.get_detail_tab(), 3, "Tracking preserves the underlying Episodes tab");
+        assert_eq!(
+            ElementHandle::find_by_element_id(&app, "DetailEpisodesModule::root").count(),
+            1,
+            "the episode tree remains mounted beneath Tracking"
+        );
         assert!(app.get_tracking_open());
         assert_eq!(app.get_tracking_return_tab(), 3);
         assert_eq!(shows.get(), 1);
@@ -209,9 +226,7 @@ fn tracking_is_a_detail_tab_with_reachable_confirmation() {
                 p.y >= 0.0 && p.y + size.height <= height as f32 + 1.0,
                 "action height at {width}x{height}: {p:?} {size:?}"
             );
-            let scroll = ElementHandle::find_by_element_id(&app, "DetailPage::det_scroll")
-                .next()
-                .unwrap();
+            let scroll = tracking_scroll(&app);
             let body = ElementHandle::find_by_element_id(&app, "TrackingPanel::tracking_body")
                 .next()
                 .unwrap();
@@ -262,9 +277,7 @@ fn tracking_is_a_detail_tab_with_reachable_confirmation() {
         let service = ElementHandle::find_by_accessible_label(&app, "AniList")
             .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
             .unwrap();
-        let scroll = ElementHandle::find_by_element_id(&app, "DetailPage::det_scroll")
-            .next()
-            .unwrap();
+        let scroll = tracking_scroll(&app);
         let p = scroll.absolute_position();
         let size = scroll.size();
         app.window()
@@ -303,9 +316,7 @@ fn tracking_is_a_detail_tab_with_reachable_confirmation() {
             app.window()
                 .set_size(slint::PhysicalSize::new(width, height));
             settle().await;
-            let scroll = ElementHandle::find_by_element_id(&app, "DetailPage::det_scroll")
-                .next()
-                .unwrap();
+            let scroll = tracking_scroll(&app);
             assert!(scroll.size().height >= 80.0);
             scroll_to_end(&app).await;
             for label in ["Choose another release", "Add missing releases"] {
@@ -344,6 +355,9 @@ fn tracking_is_a_detail_tab_with_reachable_confirmation() {
                 .unwrap();
             }
         }
+        navbar_back(&app).await;
+        assert_eq!(app.get_detail_tab(), 3, "Back reveals the preserved Episodes tab");
+        assert!(!app.get_tracking_open());
         click_tab(&app, "Overview").await;
         assert_eq!(app.get_detail_tab(), 0);
         assert!(!app.get_tracking_open());

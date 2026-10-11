@@ -1,0 +1,46 @@
+import { LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, MediaCard, CategoryRow, LicenseSource, DownloadEpisode, DownloadGroup } from "@NovaUiShared";
+
+// These aliases exist once for the lifetime of AppWindow, avoiding remount cycles.
+export component LibraryBindings {
+    in-out property <[MediaCard]> library <=> LibraryBridge.library;
+    in-out property <[CategoryRow]> category_rows <=> LibraryBridge.category_rows;
+    in-out property <[string]> category_names <=> LibraryBridge.category_names;
+    in-out property <[string]> category_labels <=> LibraryBridge.category_labels;
+    in-out property <int> category_index <=> LibraryBridge.category_index;
+    in-out property <string> library_filter_category <=> LibraryBridge.library_filter_category;
+    in-out property <string> query <=> LibraryBridge.query;
+    in-out property <int> sort_index <=> LibraryBridge.sort_index;
+    in-out property <bool> list_view <=> LibraryBridge.list_view;
+    in-out property <bool> search_open <=> LibraryBridge.search_open;
+    in-out property <string> library_empty_hint <=> LibraryBridge.library_empty_hint;
+    in-out property <int> kb_zone <=> LibraryBridge.kb_zone;
+    in-out property <int> kb_nav <=> LibraryBridge.kb_nav;
+    in-out property <int> kb_f <=> LibraryBridge.kb_f;
+    in-out property <int> kb_idx <=> LibraryBridge.kb_idx;
+    in-out property <bool> kb_active <=> LibraryBridge.kb_active;
+    in-out property <length> scroll_y <=> LibraryBridge.scroll_y;
+}
+
+export component MoreBindings {
+    in-out property <length> scroll_y <=> MoreBridge.scroll_y;
+    in-out property <int> choice <=> MoreBridge.choice;
+    in-out property <int> kb_zone <=> MoreBridge.kb_zone;
+    in-out property <int> kb_nav <=> MoreBridge.kb_nav;
+    in-out property <bool> kb_active <=> MoreBridge.kb_active;
+}
+
+export component AboutBindings {
+    in-out property <int> kb_zone <=> AboutBridge.kb_zone;
+    in-out property <int> kb_nav <=> AboutBridge.kb_nav;
+    in-out property <bool> kb_active <=> AboutBridge.kb_active;
+    in-out property <bool> licenses_open <=> AboutBridge.licenses_open;
+    in-out property <length> scroll_y <=> AboutBridge.scroll_y;
+    in-out property <length> licenses_scroll_y <=> AboutBridge.licenses_scroll_y;
+}
+
+export component DownloadsBindings {
+    in-out property <string> query <=> DownloadsBridge.query;
+    in-out property <int> filter <=> DownloadsBridge.filter;
+    in-out property <bool> sort_recent <=> DownloadsBridge.sort_recent;
+    in-out property <bool> kb_active <=> DownloadsBridge.kb_active;
+}

@@ -112,7 +112,7 @@ fn short_settings_subpage_is_top_aligned_not_stretched() {
                 let app = app2.upgrade().unwrap();
                 let window_h = app.window().size().height as f32;
                 if let Some(card) =
-                    ElementHandle::find_by_element_id(&app, "SettingsPage::cat_box").next()
+                    ElementHandle::find_by_element_id(&app, "SettingsCategoriesModule::cat_box").next()
                 {
                     let pos = card.absolute_position();
                     let size = card.size();

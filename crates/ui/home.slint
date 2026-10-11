@@ -1,11 +1,12 @@
-import { Theme } from "theme.slint";
+import { Theme, ContinueRow, UpcomingRow, HomeCatalogSection, HomeCatalogCard, CalCell, SheetItem, NavMetrics, NavState, Anim } from "@NovaUiShared";
+
 import { TitleArtwork } from "title-artwork.slint";
 import { ScrollView } from "scrollview.slint";
-import { ContinueRow, UpcomingRow, HomeCatalogSection, HomeCatalogCard, CalCell, SheetItem } from "types.slint";
+
 import { MenuSheet } from "menusheet.slint";
-import { SideNav, NavMetrics, NavState } from "sidenav.slint";
+import { SideNav } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
-import { Anim } from "anim.slint";
+
 import { IcChevronLeft, IcChevronRight, IcPlay, IcStarBorder, IcSchedule, IcDisplay } from "icons.slint";
 
 // Small "Next up" pill pinned to a Continue card's poster top-right. Shown
@@ -1624,7 +1625,7 @@ export component HomePage {
                 root.kb_idx -= 1;
             }
         } else if (root.kb_zone == 0) {
-            root.kb_nav = Math.mod(root.kb_nav + root.nav_count - 1, root.nav_count);
+            root.kb_nav = NavState.step(root.kb_nav, -1, root.narrow);
         } else if (root.kb_zone == 1 || root.kb_zone == 4) {
             if (root.kb_idx > 0) {
                 root.kb_idx -= 1;
@@ -1650,7 +1651,7 @@ export component HomePage {
                 root.kb_idx += 1;
             }
         } else if (root.kb_zone == 0) {
-            root.kb_nav = Math.mod(root.kb_nav + 1, root.nav_count);
+            root.kb_nav = NavState.step(root.kb_nav, 1, root.narrow);
         } else if (root.kb_zone == 1 || root.kb_zone == 4) {
             if (root.kb_idx + 1 < root.active_len()) {
                 root.kb_idx += 1;

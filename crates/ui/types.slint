@@ -55,6 +55,9 @@ export struct DownloadRow {
 }
 
 export struct EpisodeRow {
+    id: string,
+    artwork_identity: string,
+    displayed_artwork_identity: string,
     text: string,
     /// Release date / description (may be empty).
     details: string,
@@ -156,6 +159,9 @@ export struct SyncInvite {
 /// One season card in the detail-page season picker grid (art-backed like
 /// the reference season wall; season 0 renders as "Specials").
 export struct SeasonCard {
+    id: string,
+    artwork_identity: string,
+    displayed_artwork_identity: string,
     name: string,
     thumb: image,
     has_thumb: bool,
@@ -278,4 +284,16 @@ export struct SettingSyncInfo {
     can_override: bool, key: string, status: int, local_value: string, shared_value: string, has_shared: bool, shared_supported: bool }
 
 export struct CalendarDay { cell: CalCell, preview: string, weekday: string }
-export struct CalendarRelease { key: string, title: string, subtitle: string, date: string, group: string, poster: image, is_loaded: bool }
+export struct CalendarRelease { key: string, artwork_identity: string, title: string, subtitle: string, date: string, group: string, poster: image, is_loaded: bool }
+
+export struct DownloadEpisode {
+    id: string, title: string, badge: string, details: string,
+    state: int, progress: float, action_label: string, action_kind: int,
+}
+
+export struct DownloadGroup {
+    id: string, title: string, subtitle: string, artwork: image, artwork_identity: string,
+    episodes: [DownloadEpisode], collapsed: bool,
+}
+
+export struct SettingsDestination { id: int, stable-id: string, group: int, title: string, description: string, terms: string, aliases: string, parent: int }

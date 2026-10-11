@@ -20,11 +20,6 @@ fn cached_episode_numbers(request: &str, videos: &[Video]) -> Option<(u32, u32)>
         .or_else(|| episode_numbers(request))
 }
 
-// Failed URLs get a short cooldown, and concurrent refreshes share one worker.
-// Pixels themselves remain owned by nova-media's memory/disk cache.
-static ARTWORK_ATTEMPTS: LazyLock<Mutex<HashMap<String, std::time::Instant>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
 fn viewing_state(progress: Option<&EpisodeProgress>) -> (i32, f32) {
     match progress {
         Some(p) if p.watched => (2, 1.0),
@@ -72,7 +67,8 @@ fn update_episode_model(
 
 fn update_group_model(
     model: &slint::ModelRc<DownloadGroup>,
-    rows: Vec<DownloadGroup>,
+    mut rows: Vec<DownloadGroup>,
+    retained: &HashSet<String>,
 ) -> slint::ModelRc<DownloadGroup> {
     if model.row_count() != rows.len()
         || rows
@@ -80,6 +76,23 @@ fn update_group_model(
             .enumerate()
             .any(|(i, row)| model.row_data(i).is_none_or(|old| old.id != row.id))
     {
+        // A completed download can add or reorder groups while their direct
+        // completion pixels no longer reside in the LRU. Match by identity
+        // across structural rebuilds too, otherwise the scheduler remembers
+        // a successful delivery while the replacement model stays blank.
+        let live: HashMap<_, _> = model
+            .iter()
+            .filter(|row| retained.contains(row.id.as_str()))
+            .map(|row| (row.id.clone(), row))
+            .collect();
+        for row in &mut rows {
+            if let Some(old) = live.get(&row.id)
+                && old.artwork_identity == row.artwork_identity
+                && row.artwork.size().width == 0
+            {
+                row.artwork = old.artwork.clone();
+            }
+        }
         return Rc::new(VecModel::from(rows)).into();
     }
     for (i, mut row) in rows.into_iter().enumerate() {
@@ -92,16 +105,21 @@ fn update_group_model(
                 .zip(row.episodes.iter())
                 .any(|(a, b)| a.id != b.id);
         row.episodes = episodes;
-        // Artwork completion paints this model directly using stable IDs.
-        let artwork_arrived = old.artwork.size().width == 0 && row.artwork.size().width > 0;
-        if !artwork_arrived {
-            row.artwork = old.artwork;
+        // Preserve directly delivered pixels after decoded-cache eviction only
+        // for the same URL/recipe and a card still inside its retention window.
+        if retained.contains(row.id.as_str())
+            && old.artwork_identity == row.artwork_identity
+            && row.artwork.size().width == 0
+        {
+            row.artwork = old.artwork.clone();
         }
+        let artwork_changed =
+            old.artwork != row.artwork || old.artwork_identity != row.artwork_identity;
         if old.title != row.title
             || old.subtitle != row.subtitle
             || old.collapsed != row.collapsed
             || structure_changed
-            || artwork_arrived
+            || artwork_changed
         {
             model.set_row_data(i, row);
         }
@@ -171,7 +189,13 @@ impl Bridge {
                     read_episodes_cache_for(&job.media_type, &job.media_id).unwrap_or_default()
                 });
         }
-        let mut artwork_requests = Vec::new();
+        let mut artwork_identities = Vec::new();
+        let retained: HashSet<String> = self
+            .shared
+            .lock()
+            .unwrap()
+            .page_artwork
+            .retained_keys(super::page_artwork::Page::Downloads);
         let mut counts = vec![0i32; 4];
         let mut bytes = 0u64;
         let mut series = HashSet::new();
@@ -329,19 +353,19 @@ impl Bridge {
                         }
                     })
                     .unwrap_or_default();
-                let cached = decoded_cache_get(&image_cache_key(
-                    &artwork_url,
+                let identity = super::page_artwork::Identity::new(
+                    artwork_url,
                     ImageUse::Fixed(Some(DETAIL_BACKDROP_SIDE)),
-                ));
-                if cached.is_none() && !artwork_url.is_empty() {
-                    artwork_requests.push((
-                        id.clone(),
-                        first.media_type.clone(),
-                        first.media_id.clone(),
-                        artwork_url,
-                    ));
-                }
-                let artwork = cached.map(Image::from_rgba8).unwrap_or_default();
+                );
+                let artwork = if retained.contains(&id) {
+                    decoded_cache_get(&identity.cache_key)
+                        .map(Image::from_rgba8)
+                        .unwrap_or_default()
+                } else {
+                    Image::default()
+                };
+                let artwork_identity = identity.cache_key.clone().into();
+                artwork_identities.push((id.clone(), identity));
                 let title = if first.title.is_empty() {
                     text::tr("Recovered files").into()
                 } else {
@@ -394,16 +418,27 @@ impl Bridge {
                     title: title.into(),
                     subtitle: subtitle.into(),
                     artwork,
+                    artwork_identity,
                     collapsed: collapsed.contains(&id),
                     episodes: Rc::new(VecModel::from(episodes)).into(),
                 }
             })
             .collect();
+        self.shared.lock().unwrap().page_artwork.reconcile(
+            super::page_artwork::Page::Downloads,
+            format!("{query}:{filter}:{recent}"),
+            artwork_identities,
+            app.get_page_artwork_allowed(),
+        );
         app.set_downloads_page_summary(
             text::downloads_summary(counts[0] as usize, series.len(), &format_bytes(bytes)).into(),
         );
         app.set_downloads_page_counts(Rc::new(VecModel::from(counts)).into());
-        app.set_downloads_page_groups(update_group_model(&app.get_downloads_page_groups(), rows));
+        app.set_downloads_page_groups(update_group_model(
+            &app.get_downloads_page_groups(),
+            rows,
+            &retained,
+        ));
         app.set_downloads_page_transfers(update_episode_model(
             &app.get_downloads_page_transfers(),
             transfers,
@@ -411,60 +446,7 @@ impl Bridge {
         app.set_downloads_page_query(query.into());
         app.set_downloads_page_filter(filter);
         app.set_downloads_page_sort_recent(recent);
-        for (id, media_type, media_id, url) in artwork_requests.into_iter().take(80) {
-            let cache_key = image_cache_key(&url, ImageUse::Fixed(Some(DETAIL_BACKDROP_SIDE)));
-            let now = std::time::Instant::now();
-            let mut attempts = ARTWORK_ATTEMPTS.lock().unwrap();
-            if attempts
-                .get(&cache_key)
-                .is_some_and(|last| now.duration_since(*last) < Duration::from_secs(30))
-            {
-                continue;
-            }
-            attempts.insert(cache_key, now);
-            drop(attempts);
-            let bridge = self.clone();
-            let revision = image_settings_revision();
-            net::fetch_image(
-                url.clone(),
-                ImageUse::Fixed(Some(DETAIL_BACKDROP_SIDE)),
-                move |pixels| {
-                    let Some(pixels) = pixels else { return };
-                    let _ = slint::invoke_from_event_loop(move || {
-                        let Some(app) = bridge.app() else { return };
-                        if !app.get_show_downloads() || image_settings_revision() != revision {
-                            return;
-                        }
-                        let same_url = bridge
-                            .shared
-                            .lock()
-                            .unwrap()
-                            .entries
-                            .iter()
-                            .find(|entry| entry.id == media_id && entry.type_ == media_type)
-                            .is_some_and(|entry| {
-                                if entry.background_url.is_empty() {
-                                    entry.poster_url == url
-                                } else {
-                                    entry.background_url == url
-                                }
-                            });
-                        if !same_url {
-                            return;
-                        }
-                        let model = app.get_downloads_page_groups();
-                        for index in 0..model.row_count() {
-                            if let Some(mut row) = model.row_data(index)
-                                && row.id.as_str() == id.as_str()
-                            {
-                                row.artwork = Image::from_rgba8(pixels.clone());
-                                model.set_row_data(index, row);
-                            }
-                        }
-                    });
-                },
-            );
-        }
+        self.schedule_page_artwork(super::page_artwork::Page::Downloads);
     }
 }
 
@@ -498,6 +480,89 @@ mod tests {
         );
         assert_eq!(model.row_data(0).unwrap().id.as_str(), "stable");
         assert_eq!(replacement.row_data(0).unwrap().id.as_str(), "replacement");
+    }
+
+    #[test]
+    fn cached_replacement_artwork_replaces_nonempty_old_image_by_identity() {
+        let old_image = Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::new(1, 1));
+        let new_image = Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::new(2, 2));
+        let first = DownloadGroup {
+            id: "stable-group".into(),
+            artwork: old_image,
+            artwork_identity: "old-url-and-recipe".into(),
+            ..Default::default()
+        };
+        let model: slint::ModelRc<DownloadGroup> =
+            Rc::new(VecModel::from(vec![first.clone()])).into();
+        let retained = HashSet::from(["stable-group".to_owned()]);
+        update_group_model(
+            &model,
+            vec![DownloadGroup {
+                artwork: new_image,
+                artwork_identity: "new-url-and-recipe".into(),
+                ..first.clone()
+            }],
+            &retained,
+        );
+        assert_eq!(model.row_data(0).unwrap().artwork.size().width, 2);
+        assert_eq!(
+            model.row_data(0).unwrap().artwork_identity,
+            "new-url-and-recipe"
+        );
+        // Directly delivered pixels survive decoded cache eviction for a retained
+        // card, then are released when it leaves the retention window.
+        let current = model.row_data(0).unwrap();
+        update_group_model(
+            &model,
+            vec![DownloadGroup {
+                artwork: Image::default(),
+                ..current.clone()
+            }],
+            &retained,
+        );
+        assert_eq!(model.row_data(0).unwrap().artwork.size().width, 2);
+        update_group_model(
+            &model,
+            vec![DownloadGroup {
+                artwork: Image::default(),
+                ..current
+            }],
+            &HashSet::new(),
+        );
+        assert_eq!(model.row_data(0).unwrap().artwork.size().width, 0);
+    }
+
+    #[test]
+    fn group_reordering_keeps_visible_direct_artwork_after_cache_eviction() {
+        let first = DownloadGroup {
+            id: "first".into(),
+            artwork_identity: "first-recipe".into(),
+            artwork: Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::new(7, 3)),
+            ..Default::default()
+        };
+        let model: slint::ModelRc<DownloadGroup> =
+            Rc::new(VecModel::from(vec![first.clone()])).into();
+        let updated = update_group_model(
+            &model,
+            vec![
+                DownloadGroup {
+                    id: "new".into(),
+                    ..Default::default()
+                },
+                DownloadGroup {
+                    artwork: Image::default(),
+                    ..first.clone()
+                },
+            ],
+            &HashSet::from(["first".to_owned()]),
+        );
+        assert_eq!(updated.row_data(1).unwrap().artwork.size().width, 7);
+        let mut rows: Vec<_> = updated.iter().collect();
+        rows.swap(0, 1);
+        rows[0].artwork = Image::default();
+        rows[0].artwork_identity = "replacement-recipe".into();
+        let replaced = update_group_model(&updated, rows, &HashSet::from(["first".to_owned()]));
+        assert_eq!(replaced.row_data(0).unwrap().artwork.size().width, 0);
     }
 
     #[test]

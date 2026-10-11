@@ -1,0 +1,27 @@
+// Persistent bindings connect backend state once; embedded roots share this object.
+export global MoreBridge {
+    in-out property <component-factory> factory;
+    in-out property <length> viewport_width;
+    in-out property <length> viewport_height;
+    in-out property <length> scroll_y;
+    in-out property <int> choice;
+    in-out property <int> kb_zone;
+    in-out property <int> kb_nav;
+    in-out property <bool> kb_active;
+    in-out property <bool> external_navigation;
+    in-out property <bool> active;
+    in-out property <bool> narrow;
+    in-out property <length> nav-viewport-width;
+    in-out property <length> safe-top;
+    in-out property <length> safe-bottom;
+    in-out property <length> safe-left;
+    in-out property <length> safe-right;
+    in-out property <int> system_back_request;
+    callback home_picked();
+    callback discover_picked();
+    callback library_picked();
+    callback calendar_picked();
+    callback downloads_picked();
+    callback settings_picked();
+    callback about_picked();
+}

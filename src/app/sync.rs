@@ -933,6 +933,7 @@ impl Bridge {
             )
         });
         let _guard = ApplyingGuard::new();
+        let image_revision = image_settings_revision();
         let peers_changed = domains.iter().any(|d| d == nova_sync::DOMAIN_PEERS);
         for domain in domains {
             let failures = write_failures();
@@ -985,6 +986,9 @@ impl Bridge {
             self.apply_episode_rows();
             self.refresh_library_progress_ui();
         }
+        if publish_models {
+            self.refresh_remote_artwork_if_revision_changed(image_revision);
+        }
         if peers_changed {
             // The mesh grew or shrank: refresh the list and immediately run a
             // pass so newly learned devices are dialed now. `Notify` coalesces
@@ -1002,6 +1006,42 @@ impl Bridge {
                     self.set_sync_notice(SyncNotice::RemovedFromSync(name));
                 }
                 engine.sync_now();
+            }
+        }
+    }
+
+    /// Remote recipe edits can arrive while any page is open. Rebuild its
+    /// request identities once after the batch, before old workers deliver;
+    /// progress-only batches retain their lightweight projection path.
+    pub(super) fn refresh_remote_artwork_if_revision_changed(&self, previous_revision: u64) {
+        if previous_revision == image_settings_revision() {
+            return;
+        }
+        let Some(app) = self.app() else { return };
+        if app.get_show_calendar() {
+            self.apply_calendar_to_ui();
+        }
+        if app.get_show_downloads() {
+            self.refresh_downloads_page();
+        }
+        if app.get_modal_visible() {
+            self.apply_season_cards();
+            self.refresh_episode_rows();
+            let urls = self.shared.lock().unwrap().modal_item.as_ref().map(|item| {
+                (
+                    item.id.clone(),
+                    item.poster_url.clone(),
+                    item.background_url.clone(),
+                )
+            });
+            self.load_current_detail_logo();
+            if let Some((id, poster, backdrop)) = urls {
+                if !poster.is_empty() {
+                    self.load_detail_poster(poster, id.clone());
+                }
+                if !backdrop.is_empty() {
+                    self.load_detail_backdrop(backdrop, id);
+                }
             }
         }
     }

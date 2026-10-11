@@ -1,0 +1,21 @@
+import { PlayerOsdBridge, TrackRow } from "@NovaUiShared";
+// Only original one-way mount inputs belong in this conditional host.
+export component PlayerOsdHost inherits Rectangle {
+    preferred-width: 100%; preferred-height: 100%;
+    in-out property <bool> next_episode_visible <=> PlayerOsdBridge.next_episode_visible;
+    in-out property <string> next_episode_token <=> PlayerOsdBridge.next_episode_token;
+    in-out property <string> next_episode_title <=> PlayerOsdBridge.next_episode_title;
+    in-out property <string> next_episode_context <=> PlayerOsdBridge.next_episode_context;
+    in-out property <bool> audio_preference_saved <=> PlayerOsdBridge.audio_preference_saved;
+    in-out property <bool> subtitle_preference_saved <=> PlayerOsdBridge.subtitle_preference_saved;
+    in-out property <bool> speed_preference_saved <=> PlayerOsdBridge.speed_preference_saved;
+    in-out property <int> system_back_request <=> PlayerOsdBridge.system_back_request;
+    in-out property <bool> is_android <=> PlayerOsdBridge.is_android;
+    in-out property <bool> narrow <=> PlayerOsdBridge.narrow;
+    in-out property <length> safe-top <=> PlayerOsdBridge.safe-top;
+    in-out property <length> safe-left <=> PlayerOsdBridge.safe-left;
+    in-out property <length> safe-right <=> PlayerOsdBridge.safe-right;
+    in-out property <length> viewport_width <=> PlayerOsdBridge.viewport_width;
+    in-out property <length> viewport_height <=> PlayerOsdBridge.viewport_height;
+    ComponentContainer { width: 100%; height: 100%; component-factory: PlayerOsdBridge.factory; }
+}

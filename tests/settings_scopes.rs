@@ -49,7 +49,7 @@ fn reveal_speed(app: &nova::AppWindow) {
     // so reveal the caption before comparing its bounds with the scope badge.
     for _ in 0..24 {
         if let Some(title) =
-            ElementHandle::find_by_element_id(app, "SettingsPage::speed_title").next()
+            ElementHandle::find_by_element_id(app, "SettingsPlayerModule::speed_title").next()
         {
             let y = title.absolute_position().y;
             app.set_settings_scroll_y(app.get_settings_scroll_y() + 250.0 - y);
@@ -282,9 +282,10 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
                 rows.set_row_data(1, speed);
                 settle(&app);
                 reveal_speed(&app);
-                let title = ElementHandle::find_by_element_id(&app, "SettingsPage::speed_title")
-                    .next()
-                    .expect("narrow playback speed title");
+                let title =
+                    ElementHandle::find_by_element_id(&app, "SettingsPlayerModule::speed_title")
+                        .next()
+                        .expect("narrow playback speed title");
                 let scope = badge(&app, "playback_speed");
                 let tp = title.absolute_position();
                 let ts = title.size();

@@ -5,11 +5,9 @@ edition = "2024"
 license.workspace = true
 
 [features]
-# Opt-in interpreter-backed UI for Linux development: on a Linux debug build
-# this loads `appwindow.slint` from disk and hot-reloads it instead of using the
-# ahead-of-time compiled components (see build.rs). It pulls in the Slint
-# interpreter (`slint-interpreter`), so it is never enabled by default, on
-# other targets, or in release builds.
+# Retained feature name for development tooling. The compiled page bridges
+# currently requires AOT handles; build.rs warns and stays compiled even when
+# this feature is requested. A dynamic-global bridge is needed for hot reload.
 live-preview = ["slint/live-preview"]
 
 [dependencies]
@@ -18,6 +16,16 @@ slint = { workspace = true }
 # Slint's font registration exposes a family but does not add it to fallback.
 i-slint-core = { workspace = true }
 nova-config = { path = "../config" }
+nova-ui-settings = { path = "../ui-settings" }
+nova-ui-shared = { path = "../ui-shared" }
+nova-ui-home = { path = "../ui-home" }
+nova-ui-discover = { path = "../ui-discover" }
+nova-ui-calendar = { path = "../ui-calendar" }
+nova-ui-detail = { path = "../ui-detail" }
+nova-ui-library = { path = "../ui-library" }
+nova-ui-more = { path = "../ui-more" }
+nova-ui-player-osd = { path = "../ui-player-osd" }
+nova-ui-onboarding = { path = "../ui-onboarding" }
 
 [build-dependencies]
-slint-build = { workspace = true }
+slint-build = { workspace = true, features = ["experimental-module-builds"] }

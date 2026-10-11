@@ -148,7 +148,7 @@ fn nav_marker_is_centred_and_lands_on_the_picked_item() {
             "rail settings",
             &rail_icons(&app),
             &rail_dots(&app),
-            3,
+            5,
             true,
             &f,
         );

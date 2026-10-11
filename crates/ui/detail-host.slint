@@ -1,0 +1,44 @@
+import { DetailBridge, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadEpisode, DownloadGroup, SettingsDestination } from "@NovaUiShared";
+// Only mount-specific inputs live here; persistent state is connected once
+// by page-bindings.slint, outside the conditional ComponentContainer.
+
+export component DetailHost inherits Rectangle {
+    preferred-width: 100%; preferred-height: 100%;
+    in-out property <[TrackingLinkRow]> tracking_links <=> DetailBridge.tracking_links;
+    in-out property <[TrackingCandidateRow]> tracking_candidates <=> DetailBridge.tracking_candidates;
+    in-out property <[TrackingSetupRow]> tracking_setup <=> DetailBridge.tracking_setup;
+    in-out property <string> tracking_setup_revision <=> DetailBridge.tracking_setup_revision;
+    in-out property <string> tracking_setup_summary <=> DetailBridge.tracking_setup_summary;
+    in-out property <string> tracking_setup_unmapped <=> DetailBridge.tracking_setup_unmapped;
+    in-out property <bool> tracking_setup_active <=> DetailBridge.tracking_setup_active;
+    in-out property <string> tracking_range_first <=> DetailBridge.tracking_range_first;
+    in-out property <string> tracking_range_last <=> DetailBridge.tracking_range_last;
+    in-out property <string> tracking_range_start <=> DetailBridge.tracking_range_start;
+    in-out property <[string]> tracking_source_rows <=> DetailBridge.tracking_source_rows;
+    in-out property <[string]> tracking_preview_rows <=> DetailBridge.tracking_preview_rows;
+    in-out property <[TrackingMappingRow]> tracking_mapping_rows <=> DetailBridge.tracking_mapping_rows;
+    in-out property <string> tracking_notice <=> DetailBridge.tracking_notice;
+    in-out property <string> tracking_candidate_title <=> DetailBridge.tracking_candidate_title;
+    in-out property <bool> tracking_busy <=> DetailBridge.tracking_busy;
+    in-out property <bool> tracking_can_confirm <=> DetailBridge.tracking_can_confirm;
+    in-out property <image> selected_logo <=> DetailBridge.selected_logo;
+    in-out property <bool> is_movie <=> DetailBridge.is_movie;
+    in-out property <int> episode_reveal_request <=> DetailBridge.episode_reveal_request;
+    in-out property <string> stream_episode_number <=> DetailBridge.stream_episode_number;
+    in-out property <string> stream_episode_title <=> DetailBridge.stream_episode_title;
+    in-out property <string> watch_label <=> DetailBridge.watch_label;
+    in-out property <bool> deep_stream <=> DetailBridge.deep_stream;
+    in-out property <int> system_back_request <=> DetailBridge.system_back_request;
+    in-out property <bool> popup_open <=> DetailBridge.popup_open;
+    in-out property <bool> narrow <=> DetailBridge.narrow;
+    in-out property <length> safe-top <=> DetailBridge.safe-top;
+    in-out property <length> safe-left <=> DetailBridge.safe-left;
+    in-out property <length> safe-right <=> DetailBridge.safe-right;
+    in-out property <length> safe-bottom <=> DetailBridge.safe-bottom;
+    in-out property <bool> touch_menus <=> DetailBridge.touch_menus;
+    in-out property <bool> library_watched <=> DetailBridge.library_watched;
+    in-out property <int> library_activity_action <=> DetailBridge.library_activity_action;
+    in-out property <length> viewport_width <=> DetailBridge.viewport_width;
+    in-out property <length> viewport_height <=> DetailBridge.viewport_height;
+    ComponentContainer { width: 100%; height: 100%; component-factory: DetailBridge.factory; }
+}

@@ -1,10 +1,8 @@
+import { SliderGesture } from "@NovaUiShared";
 import { ControlTouchArea } from "control-input.slint";
 // Shared by the numeric settings sliders and playback-speed control. The
 // Settings page yields its vertical pan for the entire slider gesture.
-export global SliderGesture {
-    in-out property <bool> active: false;
-    in-out property <bool> hovered: false;
-}
+
 
 export component SliderTouchArea inherits ControlTouchArea {
     private property <bool> owns-gesture: false;

@@ -1,0 +1,256 @@
+import { SettingsBridge, SettingsContent, Theme, SettingsStyle } from "@NovaUiShared";
+
+import { SearchField } from "../ui/searchfield.slint";
+
+import { KbMark } from "../ui/kbnav.slint";
+
+import { PillButton, SectionHeader, SettingsRow, SettingsCard } from "../ui/settings-controls.slint";
+
+// The shell owns scrolling and transitions. Report intrinsic layout sizes
+// only while this section is selected, so outgoing instances cannot resize it.
+export component SettingsCategoriesModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: SettingsContent.slot_width; height: SettingsContent.slot_height;
+    private property <length> measured_min: body_layout.min-height;
+    private property <length> measured_preferred: body_layout.preferred-height;
+    changed measured_min => { root.publish_size(); }
+    changed measured_preferred => { root.publish_size(); }
+    init => { root.publish_size(); }
+    function publish_size() {
+        if SettingsBridge.sel == 1 {
+            SettingsContent.content_min_height = root.measured_min;
+            SettingsContent.content_preferred_height = root.measured_preferred;
+        }
+    }
+    body_layout := VerticalLayout {
+        width: 100%; height: 100%; spacing: 0px;
+        VerticalLayout {
+
+            vertical-stretch: 0;
+            spacing: 18px;
+
+            SectionHeader { label: @tr("Creation"); }
+
+            // ---- Categories -------------------------------
+
+            SettingsCard { cat_box := Rectangle {
+                    background: Theme.current.card;
+                    // Same wrapped-text measuring fix as the
+                    // install row above: grow with the real
+                    // stacked-description height on narrow.
+                    min-height: SettingsContent.narrow ? Math.max(88px, 105px + cat_desc_measure.height) : 88px;
+
+                    if !SettingsContent.narrow: HorizontalLayout {
+                        width: 100%;
+                        padding-top: 14px;
+                        padding-bottom: 14px;
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        spacing: 16px;
+
+                        VerticalLayout {
+                            width: 360px;
+                            alignment: center;
+                            spacing: 3px;
+
+                            Text {
+                                text: @tr("Add category");
+                                font-size: 14px;
+                                font-weight: 600;
+                                color: Theme.current.text_bright;
+                            }
+
+                            Text {
+                                text: @tr("Create a tag you can assign to items from the detail page and filter the library with.");
+                                font-size: 14px;
+                                color: Theme.current.text_settings;
+                                wrap: word-wrap;
+                                width: 360px;
+                                height: 44px;
+                            }
+                        }
+
+                        VerticalLayout {
+                            height: 100%;
+                            horizontal-stretch: 1;
+                            alignment: center;
+
+                            HorizontalLayout {
+                                width: 100%;
+                                // Same 32px pin as the addon
+                                // install row above.
+                                height: 44px;
+                                spacing: 16px;
+
+                                KbMark { on: SettingsBridge.kb_zone == 3 && SettingsContent.kb_cctl == 0; active: SettingsBridge.kb_active; }
+                                cat_input_wide := SearchField {
+                                    show-pointer-focus: false; keyboard-mode: SettingsBridge.kb_active;
+                                    roomy: true;
+                                    text <=> SettingsBridge.category_input;
+                                    placeholder-text: @tr("New category name");
+                                    focus_changed(focused) => { SettingsContent.input_focused = focused; if (focused && SettingsBridge.kb_active) { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                                    edited(t) => { SettingsBridge.category_input = t; }
+                                    accepted(t) => {
+                                        SettingsBridge.category_input = t;
+                                        SettingsContent.kb_edit = 0;
+                                        SettingsContent.focus_shell();
+                                        SettingsBridge.category_added(t);
+                                    }
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    max-width: 560px;
+                                }
+
+                                edit_t2 := Timer {
+                                    interval: 80ms;
+                                    running: SettingsContent.kb_edit == 2 && !SettingsContent.narrow;
+                                    triggered => { cat_input_wide.focus(); }
+                                }
+
+                                PillButton {
+                                    label: @tr("Add");
+                                    primary: true;
+                                    roomy: true;
+                                    btn_min_width: 92px;
+                                    focused: SettingsBridge.kb_zone == 3 && SettingsContent.kb_cctl == 1 && SettingsBridge.kb_active;
+                                    clicked => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 3; SettingsContent.kb_cctl = 1; SettingsBridge.category_added(cat_input_wide.full-text); SettingsBridge.category_input = ""; }
+                                }
+                            }
+                        }
+                    }
+
+                    if SettingsContent.narrow: VerticalLayout {
+                        width: 100%;
+                        padding-top: 14px;
+                        padding-bottom: 14px;
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        spacing: 10px;
+
+                        VerticalLayout {
+                            spacing: 3px;
+
+                            Text {
+                                text: @tr("Add category");
+                                font-size: 14px;
+                                font-weight: 600;
+                                color: Theme.current.text_bright;
+                            }
+
+                            Text {
+                                text: @tr("Create a tag you can assign to items from the detail page and filter the library with.");
+                                font-size: 14px;
+                                color: Theme.current.text_settings;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            width: 100%;
+                            height: 44px;
+                            spacing: 12px;
+
+                            KbMark { on: SettingsBridge.kb_zone == 3 && SettingsContent.kb_cctl == 0; active: SettingsBridge.kb_active; }
+                            cat_input_narrow := SearchField {
+                                show-pointer-focus: false; keyboard-mode: SettingsBridge.kb_active;
+                                roomy: true;
+                                text <=> SettingsBridge.category_input;
+                                placeholder-text: @tr("New category name");
+                                focus_changed(focused) => { SettingsContent.input_focused = focused; if (focused && SettingsBridge.kb_active) { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); } }
+                                edited(t) => { SettingsBridge.category_input = t; }
+                                accepted(t) => {
+                                    SettingsBridge.category_input = t;
+                                    SettingsContent.kb_edit = 0;
+                                    SettingsContent.focus_shell();
+                                    SettingsBridge.category_added(t);
+                                }
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                            }
+
+                            edit_t2n := Timer {
+                                interval: 80ms;
+                                running: SettingsContent.kb_edit == 2 && SettingsContent.narrow;
+                                triggered => { cat_input_narrow.focus(); }
+                            }
+
+                            PillButton {
+                                label: @tr("Add");
+                                primary: true;
+                                roomy: true;
+                                btn_min_width: 92px;
+                                focused: SettingsBridge.kb_zone == 3 && SettingsContent.kb_cctl == 1 && SettingsBridge.kb_active;
+                                clicked => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 3; SettingsContent.kb_cctl = 1; SettingsBridge.category_added(cat_input_narrow.full-text); SettingsBridge.category_input = ""; }
+                            }
+                        }
+                    }
+
+                    // Hidden measurement copy of the narrow
+                    // description (see SettingsRow): its real
+                    // wrapped height drives the box minimum
+                    // above so the input row is never clipped.
+                    Rectangle {
+                        height: 0;
+                        clip: true;
+
+                        cat_desc_measure := Text {
+                            width: cat_box.width - 32px;
+                            text: @tr("Create a tag you can assign to items from the detail page and filter the library with.");
+                            font-size: 14px;
+                            wrap: word-wrap;
+                        }
+                    }
+                } }
+            SectionHeader { label: @tr("Existing categories"); }
+            cat_card := Rectangle {
+                background: Theme.current.card;
+                border-radius: 16px;
+                border-width: 1px;
+                border-color: Theme.current.border_soft;
+                clip: true;
+
+                VerticalLayout {
+                    spacing: 0px;
+
+                    // Same proportions as the addons install row.
+                    // Narrow windows stack the input below the text.
+
+                    if SettingsBridge.category_rows.length == 0: Rectangle {
+                        background: Theme.current.card;
+                        min-height: 96px;
+
+                        Text {
+                            x: 16px;
+                            width: parent.width - 32px;
+                            y: (parent.height - self.height) / 2;
+                            text: @tr("No categories yet. Add one above, then assign items to categories from the detail page.");
+                            color: Theme.current.text_settings;
+                            font-size: 14px;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    for row[i] in SettingsBridge.category_rows: SettingsRow {
+                        tinted: Math.mod(i, 2) == 1;
+                        row-title: row.name;
+
+                        HorizontalLayout {
+                            spacing: 12px;
+
+                            KbMark { on: SettingsBridge.kb_zone == 4 && SettingsContent.kb_cr == i; active: SettingsBridge.kb_active; }
+                            PillButton {
+                                label: @tr("Remove");
+                                destructive: true;
+                                btn_min_width: 92px;
+                                roomy: true;
+                                focused: SettingsBridge.kb_zone == 4 && SettingsContent.kb_cr == i && SettingsContent.kb_ccol == 0 && SettingsBridge.kb_active;
+                                clicked => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 4; SettingsContent.kb_cr = i; SettingsContent.kb_ccol = 0; SettingsBridge.category_removed(i); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

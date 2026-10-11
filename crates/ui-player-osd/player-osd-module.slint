@@ -1,0 +1,69 @@
+import { PlayerOverlay } from "../ui/player.slint";
+import { PlayerOsdBridge } from "@NovaUiShared";
+
+export component PlayerOsdModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: PlayerOsdBridge.viewport_width; height: PlayerOsdBridge.viewport_height;
+    PlayerOverlay {
+        width: 100%; height: 100%;
+        next_episode_visible <=> PlayerOsdBridge.next_episode_visible;
+        next_episode_token <=> PlayerOsdBridge.next_episode_token;
+        next_episode_title <=> PlayerOsdBridge.next_episode_title;
+        next_episode_context <=> PlayerOsdBridge.next_episode_context;
+        playback_started <=> PlayerOsdBridge.playback_started;
+        is_paused <=> PlayerOsdBridge.is_paused;
+        position <=> PlayerOsdBridge.position;
+        duration <=> PlayerOsdBridge.duration;
+        time_text <=> PlayerOsdBridge.time_text;
+        player_status <=> PlayerOsdBridge.player_status;
+        player_title <=> PlayerOsdBridge.player_title;
+        decode_label <=> PlayerOsdBridge.decode_label;
+        decoder_selected <=> PlayerOsdBridge.decoder_selected;
+        sub_label <=> PlayerOsdBridge.sub_label;
+        audio_label <=> PlayerOsdBridge.audio_label;
+        volume <=> PlayerOsdBridge.volume;
+        muted <=> PlayerOsdBridge.muted;
+        playback_speed <=> PlayerOsdBridge.playback_speed;
+        audio_preference_saved <=> PlayerOsdBridge.audio_preference_saved;
+        subtitle_preference_saved <=> PlayerOsdBridge.subtitle_preference_saved;
+        speed_preference_saved <=> PlayerOsdBridge.speed_preference_saved;
+        player_brightness <=> PlayerOsdBridge.player_brightness;
+        is_fullscreen <=> PlayerOsdBridge.is_fullscreen;
+        audio_tracks <=> PlayerOsdBridge.audio_tracks;
+        sub_tracks <=> PlayerOsdBridge.sub_tracks;
+        osd_visible <=> PlayerOsdBridge.osd_visible;
+        scrim_image <=> PlayerOsdBridge.scrim_image;
+        player_poster <=> PlayerOsdBridge.player_poster;
+        kb_active <=> PlayerOsdBridge.kb_active;
+        system_back_request <=> PlayerOsdBridge.system_back_request;
+        is_android <=> PlayerOsdBridge.is_android;
+        narrow <=> PlayerOsdBridge.narrow;
+        safe-top <=> PlayerOsdBridge.safe-top;
+        safe-left <=> PlayerOsdBridge.safe-left;
+        safe-right <=> PlayerOsdBridge.safe-right;
+        next_episode_streams(t) => { PlayerOsdBridge.next_episode_streams(t); }
+        next_episode_dismiss(t) => { PlayerOsdBridge.next_episode_dismiss(t); }
+        restore_playback_default(control) => { PlayerOsdBridge.restore_playback_default(control); }
+        osd_opacity_changed(v) => { PlayerOsdBridge.osd_opacity_changed(v); }
+        toggle_pause() => { PlayerOsdBridge.toggle_pause(); }
+        seek(v) => { PlayerOsdBridge.seek(v); }
+        close_player() => { PlayerOsdBridge.close_player(); }
+        set_volume(v) => { PlayerOsdBridge.set_volume(v); }
+        toggle_mute() => { PlayerOsdBridge.toggle_mute(); }
+        pick_audio_track(i) => { PlayerOsdBridge.pick_audio_track(i); }
+        pick_sub_track(i) => { PlayerOsdBridge.pick_sub_track(i); }
+        pick_decoder(i) => { PlayerOsdBridge.pick_decoder(i); }
+        playback_speed_changed(v) => { PlayerOsdBridge.playback_speed_changed(v); }
+        playback_speed_stepped(d) => { PlayerOsdBridge.playback_speed_stepped(d); }
+        playback_speed_preview(v) => { PlayerOsdBridge.playback_speed_preview(v); }
+        android_brightness_step(d) => { PlayerOsdBridge.android_brightness_step(d); }
+        android_volume_step(d) => { PlayerOsdBridge.android_volume_step(d); }
+        settings_opened() => { PlayerOsdBridge.settings_opened(); }
+        toggle_fullscreen() => { PlayerOsdBridge.toggle_fullscreen(); }
+        osd_mouse_moved() => { PlayerOsdBridge.osd_mouse_moved(); }
+        tracks_popup_opened(i) => { PlayerOsdBridge.tracks_popup_opened(i); }
+        format_time(t) => { PlayerOsdBridge.format_time(t); }
+        format_volume(v) => { PlayerOsdBridge.format_volume(v); }
+    }
+}

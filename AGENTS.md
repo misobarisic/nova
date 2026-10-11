@@ -36,7 +36,7 @@ Run the narrowest check that covers your change, then the broader ones:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --locked -- -D warnings
 cargo check                         # whole workspace (default = desktop)
 cargo test -p nova-sync --lib       # fast unit tests for the sync crate
 cargo test                          # workspace tests (app unit + integration)

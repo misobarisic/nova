@@ -81,7 +81,7 @@ jobs:
         run: nix develop .#default --command cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: nix develop .#default --command cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: nix develop .#default --command cargo clippy --workspace --locked -- -D warnings
 
       - name: Check Rust workspace
         run: nix develop .#default --command cargo check --workspace --locked

@@ -1,0 +1,13 @@
+import { SettingsContent } from "@NovaUiShared";
+
+// ComponentContainer does not export its child window's intrinsic height.
+// The mounted submenu reports its measured layout, at this slot's real width.
+export component SettingsSectionHost inherits Rectangle {
+    in property <component-factory> factory;
+    in-out property <length> slot_width <=> SettingsContent.slot_width;
+    in-out property <length> slot_height <=> SettingsContent.slot_height;
+    min-height: SettingsContent.content_min_height;
+    preferred-height: SettingsContent.content_preferred_height;
+    vertical-stretch: 0;
+    ComponentContainer { width: 100%; height: 100%; component-factory: root.factory; }
+}

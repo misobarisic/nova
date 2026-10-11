@@ -1,0 +1,44 @@
+import { DetailBridge, DetailContent } from "@NovaUiShared";
+import { StreamSelector } from "../ui/stream-selector.slint";
+export component DetailStreamsModule inherits Window {
+    default-font-family: "Roboto"; background: transparent;
+    width: DetailBridge.viewport_width; height: DetailBridge.viewport_height;
+        StreamSelector {
+            title: DetailBridge.selected_title;
+            is_movie: DetailBridge.is_movie;
+            year: DetailBridge.selected_year;
+            episode_context: DetailBridge.episode_context;
+            episode_number: DetailBridge.stream_episode_number;
+            episode_title: DetailBridge.stream_episode_title;
+            poster: DetailBridge.selected_poster;
+            backdrop: DetailBridge.selected_backdrop;
+            rows: DetailBridge.streams;
+            hint: DetailBridge.streams_hint;
+            addons: DetailBridge.stream_addons;
+            loading: DetailBridge.stream_loading;
+            searching: DetailBridge.streams_searching;
+            addon_filter: DetailBridge.stream_filter;
+            page: DetailBridge.stream_page;
+            page_count: DetailBridge.stream_page_count;
+            page_start: DetailBridge.stream_page_start;
+            total: DetailBridge.stream_total;
+            touch_menus: DetailBridge.touch_menus;
+            safe-top: DetailBridge.safe-top;
+            safe-left: DetailBridge.safe-left;
+            safe-right: DetailBridge.safe-right;
+            safe-bottom: DetailBridge.safe-bottom;
+            kb_index <=> DetailBridge.kb_s;
+            kb_active <=> DetailBridge.kb_active;
+            action_open <=> DetailBridge.stream_action_open;
+            action_title: DetailBridge.stream_action_title;
+            action_id: DetailBridge.stream_action_id;
+            action_items: DetailBridge.stream_action_items;
+            back => { DetailContent.dispatch_back(); }
+            picked(i) => { DetailBridge.stream_picked(i); }
+            page_picked(p) => { DetailBridge.stream_page_picked(p); }
+            filter_picked(i) => { DetailBridge.stream_filter_picked(i); }
+            action_requested(id) => { DetailContent.request_stream_action(id); }
+            action_selected(id, a) => { DetailBridge.stream_action_selected(id, a); }
+        }
+
+}

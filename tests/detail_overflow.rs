@@ -80,6 +80,7 @@ fn episode_row(i: usize) -> nova::EpisodeRow {
         ep_no: s(&format!("S1 E{i}")),
         date: s("January 1st, 2024, Extra Long Date Label"),
         runtime: Default::default(),
+        ..Default::default()
     }
 }
 
@@ -127,6 +128,7 @@ fn show_detail(app: &nova::AppWindow) {
                     has_thumb: false,
                     watched: false,
                     progress: 0.0,
+                    ..Default::default()
                 })
                 .collect::<Vec<_>>(),
         ))

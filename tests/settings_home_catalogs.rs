@@ -109,14 +109,14 @@ fn home_catalogs_are_added_with_a_genre_and_removed_individually() {
         after(350, move || {
             let app = app_weak.upgrade().unwrap();
             assert_eq!(
-                ElementHandle::find_by_element_id(&app, "SettingsPage::home_catalog_remove")
+                ElementHandle::find_by_element_id(&app, "SettingsHomeModule::home_catalog_remove")
                     .count(),
                 1,
                 "only the configured catalog/genre entry should be listed"
             );
 
             let add_button =
-                ElementHandle::find_by_element_id(&app, "SettingsPage::home_catalog_add")
+                ElementHandle::find_by_element_id(&app, "SettingsHomeModule::home_catalog_add")
                     .next()
                     .expect("Add catalog button");
             tap(&app, center(&add_button));
@@ -134,7 +134,7 @@ fn home_catalogs_are_added_with_a_genre_and_removed_individually() {
             assert!(!app.get_home_catalog_add_open());
 
             let remove_button =
-                ElementHandle::find_by_element_id(&app, "SettingsPage::home_catalog_remove")
+                ElementHandle::find_by_element_id(&app, "SettingsHomeModule::home_catalog_remove")
                     .next()
                     .expect("configured row Remove button");
             tap(&app, center(&remove_button));

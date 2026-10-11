@@ -1,26 +1,23 @@
+include!("build-support.rs");
+
 fn main() {
+    enable_experimental_components();
+    println!("cargo:rerun-if-changed=build-support.rs");
     // Debug info feeds the `ElementHandle` queries used by the headless
     // drag-scroll regression test (`tests/scroll_drag.rs`, driven via
     // i-slint-backend-testing). It only bloats debug builds; release
     // builds stay lean unless SLINT_EMIT_DEBUG_INFO is set explicitly.
-    let debug_info = std::env::var("SLINT_EMIT_DEBUG_INFO")
-        .map(|v| v != "0" && v.to_lowercase() != "false")
-        .unwrap_or_else(|_| std::env::var("PROFILE").as_deref() == Ok("debug"));
+    let debug_info = inspection_metadata();
 
-    // In Linux debug builds with the opt-in `live-preview` feature, Slint emits
-    // an interpreter-backed component that loads `appwindow.slint` from disk and
-    // hot-reloads it, instead of ahead-of-time compiling it. Every other case
-    // (other targets, release, feature off) stays AOT. Setting SLINT_LIVE_PREVIEW
-    // explicitly overrides the profile-based default.
-    if std::env::var_os("SLINT_LIVE_PREVIEW").is_none() {
-        let linux = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux");
-        let debug = std::env::var("PROFILE").as_deref() == Ok("debug");
-        let live_preview = std::env::var_os("CARGO_FEATURE_LIVE_PREVIEW").is_some();
-        if linux && debug && live_preview {
-            // SAFETY: build scripts run single-threaded, before slint-build
-            // (which reads this in-process) is invoked.
-            unsafe { std::env::set_var("SLINT_LIVE_PREVIEW", "1") };
-        }
+    // The page factory bridges shares native compiled-library globals.
+    // Interpreter globals/weak handles have a different representation, so
+    // keep all compilation units AOT until there is a separate preview bridge.
+    // SAFETY: this build script has not started any threads.
+    unsafe { std::env::remove_var("SLINT_LIVE_PREVIEW") };
+    if std::env::var_os("CARGO_FEATURE_LIVE_PREVIEW").is_some() {
+        println!(
+            "cargo:warning=live-preview currently uses compiled UI with compiled page modules"
+        );
     }
 
     // UI translations: the `@tr("…")` strings in the `.slint` files are looked

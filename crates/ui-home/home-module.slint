@@ -1,0 +1,83 @@
+import { HomePage } from "../ui/home.slint";
+import { HomeBridge } from "@NovaUiShared";
+
+export component HomeModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: HomeBridge.viewport_width; height: HomeBridge.viewport_height;
+    HomePage {
+        width: 100%; height: 100%;
+        nav-viewport-width <=> HomeBridge.nav-viewport-width;
+        continue_rows <=> HomeBridge.continue_rows;
+        new_episode_rows <=> HomeBridge.new_episode_rows;
+        upcoming_rows <=> HomeBridge.upcoming_rows;
+        catalog_sections <=> HomeBridge.catalog_sections;
+        catalog_order <=> HomeBridge.catalog_order;
+        catalog_positions <=> HomeBridge.catalog_positions;
+        catalog_cards <=> HomeBridge.catalog_cards;
+        cal_cells <=> HomeBridge.cal_cells;
+        cal_title <=> HomeBridge.cal_title;
+        cal_day_rows <=> HomeBridge.cal_day_rows;
+        cal_epoch <=> HomeBridge.cal_epoch;
+        cal_open <=> HomeBridge.cal_open;
+        home_empty_hint <=> HomeBridge.home_empty_hint;
+        featured_title <=> HomeBridge.featured_title;
+        featured_watch_label <=> HomeBridge.featured_watch_label;
+        featured_logo <=> HomeBridge.featured_logo;
+        featured_type <=> HomeBridge.featured_type;
+        featured_rating <=> HomeBridge.featured_rating;
+        featured_runtime <=> HomeBridge.featured_runtime;
+        featured_release_info <=> HomeBridge.featured_release_info;
+        featured_tagline <=> HomeBridge.featured_tagline;
+        featured_description <=> HomeBridge.featured_description;
+        featured_backdrop <=> HomeBridge.featured_backdrop;
+        featured_index <=> HomeBridge.featured_index;
+        featured_count <=> HomeBridge.featured_count;
+        featured_revision <=> HomeBridge.featured_revision;
+        featured_refresh_pending <=> HomeBridge.featured_refresh_pending;
+        min_cols <=> HomeBridge.min_cols;
+        kb_zone <=> HomeBridge.kb_zone;
+        kb_nav <=> HomeBridge.kb_nav;
+        kb_idx <=> HomeBridge.kb_idx;
+        kb_up_idx <=> HomeBridge.kb_up_idx;
+        kb_active <=> HomeBridge.kb_active;
+        scroll_y <=> HomeBridge.scroll_y;
+        view <=> HomeBridge.view;
+        system_back_request <=> HomeBridge.system_back_request;
+        all_scroll_y <=> HomeBridge.all_scroll_y;
+        continue_x <=> HomeBridge.continue_x;
+        new_episodes_x <=> HomeBridge.new_episodes_x;
+        upcoming_x <=> HomeBridge.upcoming_x;
+        narrow <=> HomeBridge.narrow;
+        touch_menus <=> HomeBridge.touch_menus;
+        continue_enabled <=> HomeBridge.continue_enabled;
+        safe-top <=> HomeBridge.safe-top;
+        safe-left <=> HomeBridge.safe-left;
+        safe-right <=> HomeBridge.safe-right;
+        safe-bottom <=> HomeBridge.safe-bottom;
+        more_open <=> HomeBridge.more_open;
+        home_picked() => { HomeBridge.home_picked(); }
+        discover_picked() => { HomeBridge.discover_picked(); }
+        library_picked() => { HomeBridge.library_picked(); }
+        settings_picked() => { HomeBridge.settings_picked(); }
+        more_picked() => { HomeBridge.more_picked(); }
+        about_picked() => { HomeBridge.about_picked(); }
+        continue_picked(arg0) => { HomeBridge.continue_picked(arg0); }
+        new_episode_picked(arg0) => { HomeBridge.new_episode_picked(arg0); }
+        new_episode_enter(arg0) => { HomeBridge.new_episode_enter(arg0); }
+        new_episode_remove(arg0) => { HomeBridge.new_episode_remove(arg0); }
+        continue_remove(arg0) => { HomeBridge.continue_remove(arg0); }
+        continue_enter(arg0) => { HomeBridge.continue_enter(arg0); }
+        upcoming_picked(arg0) => { HomeBridge.upcoming_picked(arg0); }
+        catalog_card_picked(arg0) => { HomeBridge.catalog_card_picked(arg0); }
+        upcoming_cal_open() => { HomeBridge.upcoming_cal_open(); }
+        upcoming_cal_close() => { HomeBridge.upcoming_cal_close(); }
+        upcoming_cal_month(arg0) => { HomeBridge.upcoming_cal_month(arg0); }
+        upcoming_cal_pick(arg0) => { HomeBridge.upcoming_cal_pick(arg0); }
+        upcoming_cal_activate() => { HomeBridge.upcoming_cal_activate(); }
+        featured_picked() => { HomeBridge.featured_picked(); }
+        featured_watch_now() => { HomeBridge.featured_watch_now(); }
+        featured_step(arg0) => { HomeBridge.featured_step(arg0); }
+        exit_to_background() => { HomeBridge.exit_to_background(); }
+    }
+}

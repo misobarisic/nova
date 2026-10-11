@@ -1,0 +1,30 @@
+import { DiscoverBridge, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadEpisode, DownloadGroup, SettingsDestination } from "@NovaUiShared";
+// Only mount-specific inputs live here; persistent state is connected once
+// by page-bindings.slint, outside the conditional ComponentContainer.
+
+export component DiscoverHost inherits Rectangle {
+    preferred-width: 100%; preferred-height: 100%;
+    in-out property <length> nav-viewport-width <=> DiscoverBridge.nav-viewport-width;
+    in-out property <[string]> catalog_labels <=> DiscoverBridge.catalog_labels;
+    in-out property <[string]> search_history <=> DiscoverBridge.search_history;
+    in-out property <[string]> search_history_contexts <=> DiscoverBridge.search_history_contexts;
+    in-out property <bool> search_filters_open <=> DiscoverBridge.search_filters_open;
+    in-out property <[string]> search_addon_names <=> DiscoverBridge.search_addon_names;
+    in-out property <[string]> search_type_names <=> DiscoverBridge.search_type_names;
+    in-out property <[string]> search_catalog_names <=> DiscoverBridge.search_catalog_names;
+    in-out property <[string]> search_catalog_labels <=> DiscoverBridge.search_catalog_labels;
+    in-out property <[string]> search_genre_names <=> DiscoverBridge.search_genre_names;
+    in-out property <int> system_back_request <=> DiscoverBridge.system_back_request;
+    in-out property <bool> animate_search_results <=> DiscoverBridge.animate_search_results;
+    in-out property <int> min_cols <=> DiscoverBridge.min_cols;
+    in-out property <bool> narrow <=> DiscoverBridge.narrow;
+    in-out property <bool> touch_menus <=> DiscoverBridge.touch_menus;
+    in-out property <length> safe-top <=> DiscoverBridge.safe-top;
+    in-out property <length> safe-left <=> DiscoverBridge.safe-left;
+    in-out property <length> safe-right <=> DiscoverBridge.safe-right;
+    in-out property <length> safe-bottom <=> DiscoverBridge.safe-bottom;
+    in-out property <bool> more_open <=> DiscoverBridge.more_open;
+    in-out property <length> viewport_width <=> DiscoverBridge.viewport_width;
+    in-out property <length> viewport_height <=> DiscoverBridge.viewport_height;
+    ComponentContainer { width: 100%; height: 100%; component-factory: DiscoverBridge.factory; }
+}

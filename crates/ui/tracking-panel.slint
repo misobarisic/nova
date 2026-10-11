@@ -1,0 +1,413 @@
+import { Theme, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, DetailContent } from "@NovaUiShared";
+import { CheckBox, Spinner } from "std-widgets.slint";
+import { SettingsInput } from "settings-controls.slint";
+import { TrackingButton, MappingChip, HistoryToggle } from "tracking-controls.slint";
+
+// Matches, linked entries and their action cards share one scroll viewport.
+// Keep the last card clear of the bottom edge, without taking space from entries.
+export component TrackingPanel inherits Rectangle {
+    in property <bool> open;
+    in property <[TrackingLinkRow]> links;
+    in property <[TrackingCandidateRow]> candidates;
+    in-out property <int> selected_service;
+    in property <[TrackingSetupRow]> setup;
+    in property <string> setup_revision;
+    in property <string> setup_summary;
+    in property <string> setup_unmapped;
+    in property <bool> setup_active;
+    in property <string> range_first;
+    in property <string> range_last;
+    in property <string> range_start;
+    in property <[string]> preview_rows;
+    in property <[TrackingMappingRow]> mapping_rows;
+    in property <string> notice;
+    in property <string> candidate_title;
+    in property <bool> busy;
+    in property <bool> can_confirm;
+    in property <length> safe-bottom;
+    property <string> edit_first;
+    property <string> edit_last;
+    property <string> edit_start;
+    property <bool> individual_mode: false;
+    property <bool> manual_search: false;
+    property <string> query_text: "";
+    property <bool> include_history: false;
+    in-out property <string> active_entry_id <=> DetailContent.active_entry_id;
+    in-out property <bool> entry_more <=> DetailContent.entry_more;
+    in-out property <bool> entry_editing <=> DetailContent.entry_editing;
+    in-out property <bool> entry_history_confirm <=> DetailContent.entry_history_confirm;
+    in-out property <bool> entry_unlink_confirm <=> DetailContent.entry_unlink_confirm;
+    function close_entry() {
+        root.active_entry_id = "";
+        DetailContent.entry_generation += 1;
+        DetailContent.entry_height = 0px;
+        root.entry_more = false;
+        root.entry_editing = false;
+        root.entry_history_confirm = false;
+        root.entry_unlink_confirm = false;
+    }
+    public function recover_entry_focus() {
+        // Explicit cancellation or removal of the stable ID removes the
+        // active body; focus stays on the panel before that teardown.
+        if root.open && (root.active_entry_id != "" || panel_focus.has-focus) {
+            panel_focus.focus();
+            root.close_entry();
+        }
+    }
+    changed links => { root.validate_entry(); }
+    property <int> link_count: root.links.length;
+    changed link_count => { root.validate_entry(); }
+    public function validate_entry() {
+        if root.active_entry_id != "" {
+            let index = DetailContent.entry_index(root.active_entry_id);
+            if index < 0 { root.recover_entry_focus(); }
+            else { DetailContent.active_entry_index = index; }
+        }
+    }
+    public function focus_panel() { panel_focus.focus(); }
+
+    in property <int> back_request;
+    property <int> last_back_request: -1;
+    changed back_request => {
+        if root.last_back_request >= 0 && root.back_request != root.last_back_request {
+            root.last_back_request = root.back_request;
+            root.nested_back();
+        }
+    }
+    public function nested_back() {
+        if root.active_entry_id != "" && root.entry_unlink_confirm { root.entry_unlink_confirm = false; }
+        else if root.active_entry_id != "" && root.entry_history_confirm { root.entry_history_confirm = false; }
+        // Same Cancel behavior as the entry editor: discard unsaved inputs.
+        else if root.active_entry_id != "" && root.entry_editing { root.entry_editing = false; }
+        else if root.active_entry_id != "" && root.entry_more { root.close_entry(); }
+        else if root.manual_search { root.manual_search = false; }
+        else if root.candidate_title != "" { root.cancel_adjust(); }
+        else { root.back_to_details(); }
+    }
+    property <bool> wide: root.width >= 840px;
+    // Derive density from the window, rather than this layout's own height.
+    in property <bool> compact: false;
+    property <bool> has_setup: root.setup_active && root.setup.length > 0;
+    property <bool> setup_review: root.has_setup && root.candidate_title == "" && !root.manual_search;
+    changed has_setup => { if root.has_setup { root.recover_entry_focus(); } }
+    changed candidate_title => {
+        root.edit_first = root.range_first;
+        root.edit_last = root.range_last;
+        root.edit_start = root.range_start;
+        root.individual_mode = false;
+        root.close_entry();
+        if root.candidate_title != "" { root.manual_search = false; }
+        // Adjust/search can remove the focused input. Keep a persistent
+        // control focused so Android Back stays in the window capture chain.
+        if root.open { panel_focus.focus(); }
+    }
+    changed setup_revision => {
+        root.close_entry();
+        root.include_history = false;
+        root.manual_search = false;
+        if root.open { panel_focus.focus(); }
+    }
+    changed manual_search => {
+        if root.open { panel_focus.focus(); }
+    }
+    init => { panel_focus.focus(); root.last_back_request = root.back_request; }
+    in property <int> focus_request;
+    changed focus_request => { panel_focus.focus(); }
+    callback back_to_details();
+    callback accept_setup(string, bool);
+    callback adjust_setup(int);
+    callback cancel_adjust();
+    callback search(int, string);
+    callback pick(int);
+    callback preview(string, string, string);
+    callback confirm();
+    callback assign(int, string);
+    callback edit(string, string, int, string, bool, string, bool, string);
+    callback action(string, int);
+    horizontal-stretch: 0;
+    preferred-width: 0px;
+    preferred-height: panel_layout.preferred-height;
+    max-width: 100000px;
+    min-width: 0px;
+    min-height: 0px;
+    vertical-stretch: 0;
+    background: transparent;
+
+    panel_focus := FocusScope {
+        width: 100%;
+        height: 100%;
+        key-pressed(e) => {
+            if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
+                if !e.repeat { DetailContent.dispatch_back(); }
+                accept
+            } else { reject }
+        }
+        panel_layout := VerticalLayout {
+            spacing: root.compact ? 8px : root.wide ? 20px : 12px;
+            padding-bottom: root.safe-bottom + (root.compact ? 8px : 12px);
+            if !root.compact: HorizontalLayout {
+                spacing: 12px;
+                vertical-stretch: 0;
+                VerticalLayout {
+                    spacing: 4px;
+                    Text {
+                        text: root.candidate_title != "" ? @tr("Episode alignment") : root.links.length > 0 && !root.has_setup ? @tr("Your tracking") : @tr("Track your progress");
+                        color: Theme.current.text_tracking_primary;
+                        font-size: root.wide ? 26px : 22px;
+                        font-weight: 700;
+                        wrap: word-wrap;
+                        min-width: 0px;
+                    }
+                    Text {
+                        text: root.candidate_title != "" ? @tr("Review which episodes update this release.") : @tr("Link this title to your anime list.");
+                        color: Theme.current.text_detail_metadata;
+                        font-size: 14px;
+                        wrap: word-wrap;
+                        min-width: 0px;
+                    }
+                }
+                if root.candidate_title != "": TrackingButton {
+                    width: 120px;
+                    text: @tr("Back to review");
+                    quiet: true;
+                    clicked => { root.cancel_adjust(); }
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                service_mal := TrackingButton {
+                    width: 144px;
+                    text: "MyAnimeList";
+                    icon: 4;
+                    selected: root.selected_service == 0;
+                    enabled: !root.busy;
+                    clicked => {
+                        if root.selected_service != 0 {
+                            root.selected_service = 0;
+                            root.query_text = "";
+                            root.search(0, "");
+                        }
+                    }
+                }
+                TrackingButton {
+                    width: 104px;
+                    text: "AniList";
+                    icon: 5;
+                    selected: root.selected_service == 1;
+                    enabled: !root.busy;
+                    clicked => {
+                        if root.selected_service != 1 {
+                            root.selected_service = 1;
+                            root.query_text = "";
+                            root.search(1, "");
+                        }
+                    }
+                }
+            }
+            scroll := Rectangle {
+                min-width: 0px;
+                max-width: 100000px;
+                preferred-width: 0px;
+                horizontal-stretch: 1;
+                vertical-stretch: 0;
+                // Grow with the body; the full-screen Tracking leaf owns scrolling.
+                height: Math.max(tracking_body.preferred-height, content_end.y + content_end.height) + 24px;
+                tracking_body := VerticalLayout {
+                    x: 0px;
+                    y: 0px;
+                    width: 100%;
+                    max-width: 100000px;
+                    preferred-width: 0px;
+                    height: self.preferred-height;
+                    spacing: 12px;
+                    alignment: start;
+                    // The final action card can scroll clear of the edge.
+                    padding-bottom: 12px;
+                    if root.busy: HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        vertical-stretch: 0;
+                        Spinner { width: 20px; height: 20px; }
+                        Text { text: @tr("Loading tracker…"); color: Theme.current.text_secondary; vertical-alignment: center; }
+                    }
+                    if root.notice != "": Text {
+                        text: root.notice;
+                        color: Theme.current.text_episode_metadata;
+                        font-size: 14px;
+                        wrap: word-wrap;
+                        min-width: 0px;
+                        vertical-stretch: 0;
+                    }
+                    if !root.has_setup && root.candidate_title == "": VerticalLayout {
+                        spacing: 12px;
+                        vertical-stretch: 0;
+                        for row[index] in root.links: Rectangle {
+                            min-width: 0px; vertical-stretch: 0;
+                            background: Theme.current.episode_toolbar; border-radius: 16px;
+                            border-width: 1px; border-color: Theme.current.border_medium;
+                            VerticalLayout {
+                                padding: 12px; spacing: 8px;
+                                Text { text: row.title; color: Theme.current.text_tracking_primary; wrap: word-wrap; min-width: 0px; font-weight: 700; }
+                                Text { text: row.coverage; color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                                Text { text: row.state; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0px; }
+                                Text { text: @tr("Progress") + ": " + row.progress; color: Theme.current.text_secondary; }
+                                TrackingButton {
+                                    text: root.active_entry_id == row.id ? @tr("Back to review") : @tr("More"); quiet: true;
+                                    clicked => {
+                                        if root.active_entry_id == row.id { root.close_entry(); }
+                                        else { root.close_entry(); DetailContent.activate_entry(row.id, index); }
+                                    }
+                                }
+
+                            }
+                        }
+                    }
+                    if root.active_entry_id != "": Rectangle {
+                        width: 100%; height: DetailContent.entry_height;
+                        vertical-stretch: 0;
+                        ComponentContainer { width: 100%; height: 100%; component-factory: DetailContent.entry_factory; }
+                        changed width => { DetailContent.entry_slot_width = self.width; }
+                        init => { DetailContent.entry_slot_width = self.width; }
+                    }
+                    if root.setup_unmapped != "" && root.setup_review: Text { text: root.setup_unmapped; color: Theme.current.text_tracking_warning; font-size: 13px; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
+                    if root.setup_review: VerticalLayout {
+                        spacing: 12px;
+                        vertical-stretch: 0;
+                        Text { text: @tr("Suggested matches"); color: Theme.current.text_tracking_primary; font-size: 18px; font-weight: 600; }
+                        // Each release is independently adjustable; ranges are
+                        // actual backend coverage, including split seasons.
+                        for release[index] in root.setup: Rectangle {
+                            background: Theme.current.episode_toolbar;
+                            border-radius: 16px;
+                            border-width: 1px;
+                            border-color: Theme.current.border_medium;
+                            vertical-stretch: 0;
+                            min-width: 0px;
+                            VerticalLayout {
+                                padding: 16px;
+                                spacing: 8px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    VerticalLayout {
+                                        spacing: 4px;
+                                        Text { text: release.season; color: Theme.current.accent_vivid; font-size: 13px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+                                        Text { text: release.title; color: Theme.current.text_tracking_primary; font-size: 16px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+                                    }
+                                    TrackingButton { width: 76px; text: @tr("Adjust"); quiet: true; enabled: !root.busy; clicked => { root.adjust_setup(index); } }
+                                }
+                                if release.source_range != "" && release.target_range != "": HorizontalLayout {
+                                    spacing: 8px;
+                                    MappingChip { numbers: release.source_range; caption: @tr("Nova episodes"); }
+                                    Text { text: "→"; color: Theme.current.text_detail_tab; font-size: 22px; vertical-alignment: center; horizontal-stretch: 0; }
+                                    MappingChip { numbers: release.target_range; caption: @tr("Tracker episodes"); }
+                                }
+                                // Unnumbered sources still retain truthful coverage.
+                                if release.source_range == "" || release.target_range == "": Text { text: release.coverage; color: Theme.current.text_episode_metadata; font-size: 13px; wrap: word-wrap; min-width: 0px; }
+                                if release.reason != "": Text { text: release.reason; color: Theme.current.text_detail_metadata; font-size: 12px; wrap: word-wrap; min-width: 0px; }
+                                if root.include_history: Text { text: release.history; color: Theme.current.text_episode_metadata; font-size: 12px; wrap: word-wrap; min-width: 0px; }
+                            }
+                        }
+                    }
+                    if root.candidate_title == "": TrackingButton {
+                        text: @tr("Choose another release");
+                        icon: 3;
+                        enabled: !root.busy;
+                        clicked => { root.manual_search = !root.manual_search; }
+                    }
+                    if root.manual_search: SettingsInput {
+                        text <=> root.query_text;
+                        placeholder-text: @tr("Title, ID, or official anime URL");
+                        accessible-label: @tr("Tracker search");
+                        vertical-stretch: 0;
+                    }
+                    if !root.setup_review && root.candidate_title == "": TrackingButton {
+                        text: root.links.length > 0 ? @tr("Add missing releases") : @tr("Reload suggestions");
+                        quiet: true;
+                        icon: 2;
+                        enabled: !root.busy;
+                        clicked => { root.query_text = ""; root.search(root.selected_service, ""); }
+                    }
+                    if root.manual_search: TrackingButton {
+                        text: @tr("Search tracker");
+                        enabled: !root.busy;
+                        clicked => { root.search(root.selected_service, root.query_text); }
+                    }
+                    if root.manual_search || (!root.has_setup && root.candidate_title == ""): VerticalLayout {
+                        spacing: 12px;
+                        vertical-stretch: 0;
+                        for candidate[index] in root.candidates: Rectangle {
+                            background: Theme.current.episode_toolbar;
+                            border-radius: 16px;
+                            border-width: 1px;
+                            border-color: Theme.current.border_medium;
+                            vertical-stretch: 0;
+                            min-width: 0px;
+                            VerticalLayout {
+                                padding: 16px;
+                                spacing: 8px;
+                                Text { text: candidate.title; color: Theme.current.text_tracking_primary; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+                                Text { text: candidate.detail; color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                                Text { text: candidate.reason; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0px; }
+                                TrackingButton { text: @tr("Select release"); accessible-label: candidate.title; enabled: !root.busy; clicked => { root.pick(index); } }
+                            }
+                        }
+                    }
+                    if root.candidate_title != "": Rectangle {
+                        background: Theme.current.episode_toolbar;
+                        border-radius: 16px;
+                        border-width: 1px;
+                        border-color: Theme.current.border_medium;
+                        vertical-stretch: 0;
+                        min-width: 0px;
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 8px;
+                            Text { text: root.candidate_title; color: Theme.current.text_tracking_primary; wrap: word-wrap; min-width: 0px; font-weight: 700; }
+                            Text { text: @tr("Check the episode range. Use individual assignments only when the numbering differs."); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                            Text { text: @tr("First source row"); color: Theme.current.text_secondary; }
+                            first := SettingsInput { text <=> root.edit_first; accessible-label: @tr("First source row"); }
+                            Text { text: @tr("Last source row"); color: Theme.current.text_secondary; }
+                            last := SettingsInput { text <=> root.edit_last; accessible-label: @tr("Last source row"); }
+                            Text { text: @tr("First tracker episode"); color: Theme.current.text_secondary; }
+                            offset := SettingsInput { text <=> root.edit_start; accessible-label: @tr("First tracker episode"); }
+                            TrackingButton { text: @tr("Preview alignment"); enabled: !root.busy; clicked => { root.preview(first.text, last.text, offset.text); } }
+                            CheckBox { text: @tr("Edit individual episodes"); checked <=> root.individual_mode; }
+                            if root.individual_mode: VerticalLayout {
+                                spacing: 8px;
+                                Text { text: @tr("Adjust individual assignments below. Leave empty to exclude a source episode."); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                                for mapping in root.mapping_rows: VerticalLayout {
+                                    spacing: 4px;
+                                    vertical-stretch: 0;
+                                    Text { text: mapping.label; color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                                    SettingsInput { text: mapping.target_episode; placeholder-text: @tr("Tracker episode or empty"); accessible-label: mapping.label; edited(value) => { root.assign(mapping.source_row, value); } }
+                                }
+                                for label in root.preview_rows: Text { text: label; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
+                            }
+                            TrackingButton { text: root.has_setup ? @tr("Save adjustment") : @tr("Confirm alignment"); primary: true; enabled: root.can_confirm && !root.busy; clicked => { root.confirm(); } }
+                        }
+                    }
+                    if root.setup_review: Rectangle {
+                        width: 100%;
+                        vertical-stretch: 0;
+                        background: Theme.current.episode_toolbar;
+                        border-radius: 16px;
+                        border-width: 1px;
+                        border-color: Theme.current.border_medium;
+                        VerticalLayout {
+                            padding: root.compact ? 12px : 16px;
+                            spacing: root.compact ? 8px : 10px;
+                            alignment: start;
+                            if root.wide && !root.compact: Text { text: @tr("Ready to track"); color: Theme.current.text_tracking_primary; font-size: 20px; font-weight: 600; }
+                            Text { text: root.setup_summary; color: Theme.current.text_episode_metadata; font-size: 13px; wrap: word-wrap; min-width: 0px; }
+                            if root.wide && !root.compact: Text { text: @tr("Only linked episodes will update your tracker."); color: Theme.current.text_detail_metadata; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+                            HistoryToggle { checked <=> root.include_history; enabled: !root.busy; compact: root.compact; }
+                            TrackingButton { text: @tr("Start tracking"); primary: true; compact: root.compact; enabled: !root.busy; clicked => { root.accept_setup(root.setup_revision, root.include_history); } }
+                        }
+                    }
+                    content_end := Rectangle { height: 12px; vertical-stretch: 0; }
+                }
+            }
+        }
+    }
+}

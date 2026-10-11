@@ -1,0 +1,35 @@
+import { TrackRow } from "../ui/types.slint";
+
+// Shared canonical data handles; this global owns no visual tree.
+export global OnboardingBridge {
+    in-out property <component-factory> factory;
+    in-out property <length> viewport_width;
+    in-out property <length> viewport_height;
+    in-out property <int> step;
+    in-out property <int> language_index;
+    in-out property <bool> true_black;
+    in-out property <string> addon_url;
+    in-out property <bool> busy;
+    in-out property <bool> addon_ready;
+    in-out property <string> error;
+    in-out property <string> audio_label;
+    in-out property <string> subtitle_label;
+    in-out property <[string]> audio_codes;
+    in-out property <[string]> audio_names;
+    in-out property <[string]> subtitle_codes;
+    in-out property <[string]> subtitle_names;
+    in-out property <int> audio_index;
+    in-out property <int> subtitle_index;
+    in-out property <length> safe_top;
+    in-out property <length> safe_bottom;
+    in-out property <length> safe_left;
+    in-out property <length> safe_right;
+    in-out property <int> system_back_request;
+    callback add_addon(string);
+    callback cinemeta();
+    callback setting_edited(string);
+    callback language_search(string, bool);
+    callback language_picked(string, bool);
+    callback finished();
+    callback background_requested();
+}

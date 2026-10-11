@@ -1,0 +1,22 @@
+import { OnboardingBridge, TrackRow } from "@NovaUiShared";
+// Only original one-way mount inputs belong in this conditional host.
+export component OnboardingHost inherits Rectangle {
+    preferred-width: 100%; preferred-height: 100%;
+    in-out property <bool> busy <=> OnboardingBridge.busy;
+    in-out property <bool> addon_ready <=> OnboardingBridge.addon_ready;
+    in-out property <string> error <=> OnboardingBridge.error;
+    in-out property <string> audio_label <=> OnboardingBridge.audio_label;
+    in-out property <string> subtitle_label <=> OnboardingBridge.subtitle_label;
+    in-out property <[string]> audio_codes <=> OnboardingBridge.audio_codes;
+    in-out property <[string]> audio_names <=> OnboardingBridge.audio_names;
+    in-out property <[string]> subtitle_codes <=> OnboardingBridge.subtitle_codes;
+    in-out property <[string]> subtitle_names <=> OnboardingBridge.subtitle_names;
+    in-out property <length> safe_top <=> OnboardingBridge.safe_top;
+    in-out property <length> safe_bottom <=> OnboardingBridge.safe_bottom;
+    in-out property <length> safe_left <=> OnboardingBridge.safe_left;
+    in-out property <length> safe_right <=> OnboardingBridge.safe_right;
+    in-out property <int> system_back_request <=> OnboardingBridge.system_back_request;
+    in-out property <length> viewport_width <=> OnboardingBridge.viewport_width;
+    in-out property <length> viewport_height <=> OnboardingBridge.viewport_height;
+    ComponentContainer { width: 100%; height: 100%; component-factory: OnboardingBridge.factory; }
+}

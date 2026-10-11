@@ -44,10 +44,9 @@ enum Catalogs {
     /// `select_bundled_translation` failed: this build has no catalogs at all,
     /// so stop trying — and stop logging — on this thread.
     ///
-    /// That is the interpreter-backed `live-preview` UI (`cargo dev`): it
-    /// compiles the `.slint` files at runtime and never registers a bundle
-    /// (`set_bundled_languages` is only emitted by the ahead-of-time
-    /// generator), so the strings stay English there.
+    /// Current UI builds, including the retained `live-preview` feature, use
+    /// compiled components and bundle catalogs. Keep the fallback for builds
+    /// without bundled translations rather than repeatedly reporting failure.
     Unavailable,
 }
 
@@ -107,9 +106,8 @@ impl Bridge {
         if let Some(err) = failure {
             eprintln!(
                 "nova: UI translations are not bundled in this build ({err}) — \
-                 the interface stays in English. The interpreter-backed UI \
-                 (`cargo dev` / `live-preview`) has no catalogs; a regular \
-                 `cargo build` / `cargo run` bundles them."
+                 the interface stays in English. Regular compiled UI builds \
+                 bundle the translation catalogs."
             );
         }
         self.refresh_language_dependent_ui();

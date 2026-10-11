@@ -436,216 +436,266 @@ impl Bridge {
         }
     }
 
-    /// Queue one thumbnail download per still-missing episode of the current
-    /// season; fetching is throttled by `pump_episode_thumbs`.
     pub(super) fn queue_episode_thumbnails(&self) {
-        self.queue_episode_thumbs_inner(false);
+        self.queue_detail_thumbnails(false, true, false);
     }
 
-    /// Queue a refresh check per already-cached thumbnail of the current
-    /// season (see `EpisodeThumbJob::verify`): fresh bytes download in the
-    /// background and rows repaint only when art actually changed. Missing
-    /// thumbnails are NOT queued here — the normal pass above handles those.
     pub(super) fn queue_episode_thumbnail_verify(&self) {
-        self.queue_episode_thumbs_inner(true);
+        self.queue_detail_thumbnails(true, true, false);
     }
 
-    /// Shared episode-thumbnail queue builder. The normal pass (`verify ==
-    /// false`) fetches the still-missing episodes; the verify pass re-checks
-    /// the already-cached ones. Both respect the episode filter and the
-    /// `show_unwatched_thumbs` setting identically, and both sets stay
-    /// disjoint through the shared `EPISODE_INFLIGHT` guard.
-    pub(super) fn queue_episode_thumbs_inner(&self, verify: bool) {
-        let jobs: Vec<EpisodeThumbJob> = {
+    /// Queue just the current episode page, or the season picker. The UI can
+    /// already own a successful image which never fitted the decoded cache.
+    fn queue_detail_thumbnails(&self, verify: bool, episodes: bool, seasons: bool) {
+        let Some(app) = self.app() else { return };
+        let painted: HashSet<String> = app
+            .get_episode_rows()
+            .iter()
+            .filter(|row| row.has_thumb)
+            .map(|row| row.displayed_artwork_identity.to_string())
+            .chain(
+                app.get_season_cards()
+                    .iter()
+                    .filter(|row| row.has_thumb)
+                    .map(|row| row.displayed_artwork_identity.to_string()),
+            )
+            .collect();
+        let filter = app.get_episode_filter().to_string();
+        let revision = image_settings_revision();
+        let jobs = {
             let state = self.shared.lock().unwrap();
             let Some(m) = state.modal_item.as_ref() else {
                 return;
             };
-            if m.seasons.is_empty() {
-                return;
-            }
-            let season = m.seasons[m.season_index.min(m.seasons.len() - 1)];
-            let show_unwatched = state.cache_settings.show_unwatched_thumbs;
-            let mut inflight = EPISODE_INFLIGHT.lock().unwrap();
-            let mut jobs = Vec::new();
-            // Only the filtered (visible) episodes need thumbnails.
-            let filter = self
-                .app()
-                .map(|a| a.get_episode_filter().to_string())
-                .unwrap_or_default();
-            for v in season_episodes(&m.videos, season) {
-                if !episode_matches_filter(v, &filter) {
-                    continue;
-                }
-                // Hidden by the `show_unwatched_thumbs` setting: don't
-                // download what the rows won't display.
-                if !show_unwatched {
+            let mut candidates = Vec::new();
+            if episodes && let Some(&season) = m.seasons.get(m.season_index) {
+                for v in season_episodes(&m.videos, season)
+                    .into_iter()
+                    .filter(|v| episode_matches_filter(v, &filter))
+                    .skip(m.episode_page * EPISODE_PAGE_SIZE)
+                    .take(EPISODE_PAGE_SIZE)
+                {
                     let (watched, progress, _) =
                         Self::episode_watch_state(&state.progress, &m.id, &v.id);
-                    if !Self::episode_thumb_visible(show_unwatched, watched, progress) {
-                        continue;
-                    }
-                }
-                if let Some(url) = &v.thumbnail
-                    && {
-                        let cached = decoded_cache_contains(&image_cache_key(
-                            url,
-                            ImageUse::EpisodeThumbnail,
+                    if Self::episode_thumb_visible(
+                        state.cache_settings.show_unwatched_thumbs,
+                        watched,
+                        progress,
+                    ) && let Some(url) =
+                        v.thumbnail.as_deref().filter(|url| !url.trim().is_empty())
+                    {
+                        candidates.push((
+                            url.to_owned(),
+                            super::detail::detail_artwork_identity(m, "episode", &v.id, Some(url)),
                         ));
-                        // Normal pass takes the missing ones, verify pass
-                        // the cached ones — disjoint by construction.
-                        cached == verify
                     }
-                    && inflight.insert(image_cache_key(url, ImageUse::EpisodeThumbnail))
-                {
-                    jobs.push(EpisodeThumbJob {
-                        url: url.clone(),
-                        cache_key: image_cache_key(url, ImageUse::EpisodeThumbnail),
-                        settings_revision: image_settings_revision(),
-                        verify,
-                    });
                 }
+            }
+            if seasons {
+                for &season in &m.seasons {
+                    if let Some(url) = season_thumb_url(&m.videos, &m.season_backdrops, season) {
+                        let identity = super::detail::detail_artwork_identity(
+                            m,
+                            "season",
+                            &season.to_string(),
+                            Some(&url),
+                        );
+                        candidates.push((url, identity));
+                    }
+                }
+            }
+            let mut inflight = EPISODE_INFLIGHT.lock().unwrap();
+            let mut jobs = Vec::new();
+            for (url, identity) in candidates {
+                let cache_key = image_cache_key(&url, ImageUse::EpisodeThumbnail);
+                let loaded = painted.contains(&identity) || decoded_cache_contains(&cache_key);
+                if loaded != verify {
+                    continue;
+                }
+                let request_key =
+                    format!("{:p}:{revision}:{cache_key}", Arc::as_ptr(&m.open_token));
+                if inflight.contains_key(&request_key) {
+                    continue;
+                }
+                let job_id = EPISODE_JOB_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+                inflight.insert(request_key.clone(), job_id);
+                jobs.push(EpisodeThumbJob {
+                    job_id,
+                    request_key,
+                    url,
+                    cache_key,
+                    settings_revision: revision,
+                    open_token: m.open_token.clone(),
+                    item_id: m.id.clone(),
+                    media_type: m.type_.clone(),
+                    verify,
+                });
             }
             jobs
         };
-        if jobs.is_empty() {
-            return;
-        }
-        {
-            let mut queue = EPISODE_QUEUE.lock().unwrap();
-            for job in jobs {
-                queue.push_back(job);
-            }
-        }
+        EPISODE_QUEUE.lock().unwrap().extend(jobs);
         Self::pump_episode_thumbs(self.clone());
     }
 
-    /// Worker pump: keep at most a few thumbnail downloads running at once.
-    /// Completed downloads are picked up by a debounced re-render of the list
-    /// (never a rebuild per image), so seasons with hundreds of episodes stay
-    /// responsive while switching.
+    pub(super) fn release_episode_thumb_job(job: &EpisodeThumbJob) {
+        let mut inflight = EPISODE_INFLIGHT.lock().unwrap();
+        if inflight.get(&job.request_key) == Some(&job.job_id) {
+            inflight.remove(&job.request_key);
+        }
+    }
+
+    /// Reserve a slot atomically: completions on separate transport threads
+    /// may pump simultaneously, but episode and season work together stays <=4.
     pub(super) fn pump_episode_thumbs(bridge: Bridge) {
-        const MAX_ACTIVE: usize = 4;
         loop {
-            if EPISODE_ACTIVE.load(Ordering::SeqCst) >= MAX_ACTIVE {
+            if EPISODE_ACTIVE
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+                    (active < 4).then_some(active + 1)
+                })
+                .is_err()
+            {
                 break;
             }
-            let job = EPISODE_QUEUE.lock().unwrap().pop_front();
-            let Some(job) = job else {
+            let Some(job) = EPISODE_QUEUE.lock().unwrap().pop_front() else {
+                EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
                 break;
             };
-            if image_settings_revision() != job.settings_revision {
-                EPISODE_INFLIGHT.lock().unwrap().remove(&job.cache_key);
-                continue;
-            }
-            EPISODE_ACTIVE.fetch_add(1, Ordering::SeqCst);
-            if job.verify {
-                // Refresh check: the cached art stays painted while fresh
-                // bytes download; rows repaint only on a real pixel change.
-                let worker = bridge.clone();
-                refresh_image_if_changed(
-                    job.url.clone(),
-                    ImageUse::EpisodeThumbnail,
-                    move |fresh| {
-                        EPISODE_INFLIGHT.lock().unwrap().remove(&job.cache_key);
-                        EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
-                        // Kick off the next queued download.
-                        Bridge::pump_episode_thumbs(worker.clone());
-                        if fresh.is_none() || image_settings_revision() != job.settings_revision {
-                            return; // unchanged or failed: cached art is shown
-                        }
-                        Bridge::schedule_episode_thumb_render(worker);
-                    },
-                );
+            let current_opening = bridge
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .is_some_and(|item| {
+                    Arc::ptr_eq(&item.open_token, &job.open_token)
+                        && item.id == job.item_id
+                        && item.type_ == job.media_type
+                });
+            if !current_opening || image_settings_revision() != job.settings_revision {
+                Self::release_episode_thumb_job(&job);
+                EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
                 continue;
             }
             let worker = bridge.clone();
-            net::fetch_image(job.url.clone(), ImageUse::EpisodeThumbnail, move |pixels| {
-                let loaded = pixels.is_some();
-                EPISODE_INFLIGHT.lock().unwrap().remove(&job.cache_key);
-                EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
-                // Kick off the next queued download.
-                Bridge::pump_episode_thumbs(worker.clone());
-                if !loaded || image_settings_revision() != job.settings_revision {
-                    return; // keep the placeholder
+            let url = job.url.clone();
+            let verify = job.verify;
+            let finish = move |pixels: Option<SharedPixelBuffer<Rgba8Pixel>>| {
+                // Hold the slot until publication, bounding transient completion
+                // buffers even if the UI thread is busy rebuilding metadata.
+                let fallback_job = (job.request_key.clone(), job.job_id);
+                let fallback_worker = worker.clone();
+                if slint::invoke_from_event_loop(move || {
+                    if let Some(pixels) = pixels {
+                        worker.publish_detail_thumbnail(&job, pixels);
+                    }
+                    Self::release_episode_thumb_job(&job);
+                    EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
+                    Self::pump_episode_thumbs(worker);
+                })
+                .is_err()
+                {
+                    let mut inflight = EPISODE_INFLIGHT.lock().unwrap();
+                    if inflight.get(&fallback_job.0) == Some(&fallback_job.1) {
+                        inflight.remove(&fallback_job.0);
+                    }
+                    drop(inflight);
+                    EPISODE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
+                    Self::pump_episode_thumbs(fallback_worker);
                 }
-                Bridge::schedule_episode_thumb_render(worker);
-            });
+            };
+            // Copy these before moving the job into the completion callback.
+            // The selected recipe is identical for the episode and season uses.
+            if verify {
+                refresh_image_if_changed(url, ImageUse::EpisodeThumbnail, finish);
+            } else {
+                net::fetch_image(url, ImageUse::EpisodeThumbnail, finish);
+            }
         }
     }
 
-    /// Debounced episode-list re-render after thumbnail downloads: at most
-    /// one render is scheduled; it picks up every thumbnail finished so far.
-    /// Render the current list: an older item's pending timer must not swallow
-    /// completions from a newly opened item/season. Rows read pixels by their
-    /// current URLs, so an old download cannot apply another show's artwork.
-    pub(super) fn schedule_episode_thumb_render(bridge: Bridge) {
-        if !EPISODE_RENDER_PENDING.swap(true, Ordering::SeqCst) {
-            let _ = slint::invoke_from_event_loop(move || {
-                let timer = slint::Timer::default();
-                timer.start(
-                    slint::TimerMode::SingleShot,
-                    Duration::from_millis(120),
-                    move || {
-                        EPISODE_RENDER_PENDING.store(false, Ordering::SeqCst);
-                        if bridge
-                            .app()
-                            .is_some_and(|app| app.get_modal_visible() && app.get_modal_episodes())
-                        {
-                            bridge.apply_episode_rows();
-                        }
-                    },
-                );
-                std::mem::forget(timer);
-            });
+    pub(super) fn publish_detail_thumbnail(
+        &self,
+        job: &EpisodeThumbJob,
+        pixels: SharedPixelBuffer<Rgba8Pixel>,
+    ) {
+        if image_settings_revision() != job.settings_revision
+            || image_cache_key(&job.url, ImageUse::EpisodeThumbnail) != job.cache_key
+        {
+            return;
         }
-    }
-
-    /// Fetch still-missing season card artwork, then repaint the cards.
-    /// Seasons are few (unlike episodes), so each missing thumb downloads
-    /// directly instead of joining the capped episode pool; completion is
-    /// guarded on the same item + season list.
-    pub(super) fn dispatch_season_thumbs(&self) {
-        let (item_id, seasons, urls): (String, Vec<u32>, Vec<String>) = {
+        let Some(app) = self.app().filter(|app| app.get_modal_visible()) else {
+            return;
+        };
+        let identities = {
             let state = self.shared.lock().unwrap();
-            let Some(m) = state.modal_item.as_ref() else {
+            let Some(m) = state.modal_item.as_ref().filter(|m| {
+                Arc::ptr_eq(&m.open_token, &job.open_token)
+                    && m.id == job.item_id
+                    && m.type_ == job.media_type
+            }) else {
                 return;
             };
-            let mut urls = Vec::new();
-            for &s in &m.seasons {
-                if let Some(url) = season_thumb_url(&m.videos, &m.season_backdrops, s)
-                    && !decoded_cache_contains(&image_cache_key(&url, ImageUse::EpisodeThumbnail))
-                    && !urls.contains(&url)
-                {
-                    urls.push(url);
+            let mut identities = HashSet::new();
+            for v in &m.videos {
+                if v.thumbnail.as_deref() != Some(&job.url) {
+                    continue;
+                }
+                let (watched, progress, _) =
+                    Self::episode_watch_state(&state.progress, &m.id, &v.id);
+                if Self::episode_thumb_visible(
+                    state.cache_settings.show_unwatched_thumbs,
+                    watched,
+                    progress,
+                ) {
+                    identities.insert(super::detail::detail_artwork_identity(
+                        m,
+                        "episode",
+                        &v.id,
+                        Some(&job.url),
+                    ));
                 }
             }
-            (m.id.clone(), m.seasons.clone(), urls)
-        };
-        for url in urls {
-            let revision = image_settings_revision();
-            let bridge = self.clone();
-            let item_id = item_id.clone();
-            let seasons = seasons.clone();
-            net::fetch_image(url, ImageUse::EpisodeThumbnail, move |pixels| {
-                if pixels.is_none() {
-                    return; // keep the placeholder
+            for &season in &m.seasons {
+                if season_thumb_url(&m.videos, &m.season_backdrops, season).as_deref()
+                    == Some(&job.url)
+                {
+                    identities.insert(super::detail::detail_artwork_identity(
+                        m,
+                        "season",
+                        &season.to_string(),
+                        Some(&job.url),
+                    ));
                 }
-                let _ = slint::invoke_from_event_loop(move || {
-                    let same = bridge
-                        .shared
-                        .lock()
-                        .unwrap()
-                        .modal_item
-                        .as_ref()
-                        .map(|m| m.id == item_id && m.seasons == seasons)
-                        .unwrap_or(false);
-                    if same && image_settings_revision() == revision {
-                        bridge.apply_season_cards();
-                    }
-                });
-            });
+            }
+            identities
+        };
+        let image = Image::from_rgba8(pixels);
+        let episodes = app.get_episode_rows();
+        for index in 0..episodes.row_count() {
+            if let Some(mut row) = episodes.row_data(index)
+                && identities.contains(row.artwork_identity.as_str())
+            {
+                row.thumb = image.clone();
+                row.has_thumb = true;
+                row.displayed_artwork_identity = row.artwork_identity.clone();
+                episodes.set_row_data(index, row);
+            }
         }
+        let seasons = app.get_season_cards();
+        for index in 0..seasons.row_count() {
+            if let Some(mut row) = seasons.row_data(index)
+                && identities.contains(row.artwork_identity.as_str())
+            {
+                row.thumb = image.clone();
+                row.has_thumb = true;
+                row.displayed_artwork_identity = row.artwork_identity.clone();
+                seasons.set_row_data(index, row);
+            }
+        }
+    }
+
+    pub(super) fn dispatch_season_thumbs(&self) {
+        self.queue_detail_thumbnails(false, false, true);
     }
 
     /// Load posters for the library grid off the UI thread: cached entries

@@ -1,0 +1,20 @@
+import { AboutBridge, LicenseSource } from "@NovaUiShared";
+
+// Backend aliases live in CollectionBindings, outside this conditional host.
+export component AboutHost inherits Rectangle {
+    preferred-width: 100%; preferred-height: 100%;
+    in-out property <bool> external_navigation <=> AboutBridge.external_navigation;
+    in-out property <bool> active <=> AboutBridge.active;
+    in-out property <length> nav-viewport-width <=> AboutBridge.nav-viewport-width;
+    in-out property <bool> narrow <=> AboutBridge.narrow;
+    in-out property <length> safe-top <=> AboutBridge.safe-top;
+    in-out property <length> safe-left <=> AboutBridge.safe-left;
+    in-out property <length> safe-right <=> AboutBridge.safe-right;
+    in-out property <length> safe-bottom <=> AboutBridge.safe-bottom;
+    in-out property <int> system_back_request <=> AboutBridge.system_back_request;
+    in-out property <string> license_catalog <=> AboutBridge.license_catalog;
+    in-out property <[LicenseSource]> license_sources <=> AboutBridge.license_sources;
+    in-out property <length> viewport_width <=> AboutBridge.viewport_width;
+    in-out property <length> viewport_height <=> AboutBridge.viewport_height;
+    ComponentContainer { width: 100%; height: 100%; component-factory: AboutBridge.factory; }
+}

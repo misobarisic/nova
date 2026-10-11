@@ -12,7 +12,8 @@
 # linker = "/home/you/Android/Sdk/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang"
 # ar = "/home/you/Android/Sdk/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
 
-# Run the app with the interpreter-backed (hot-reloading) UI. Linux debug only;
-# see the `live-preview` feature in Cargo.toml / crates/ui/build.rs.
+# Retained development alias. The compiled page factories currently require
+# AOT UI; `live-preview` warns until a dynamic bridge is available.
+# See Cargo.toml / crates/ui/build.rs.
 [alias]
 dev = "run --features live-preview"

@@ -1,0 +1,30 @@
+[package]
+name = "nova-ui-settings"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+links = "novasettings"
+
+[dependencies]
+slint = { workspace = true }
+# The page embeds SVG assets, including when checked without an app renderer.
+i-slint-core = { workspace = true, features = ["image-decoders", "svg"] }
+
+nova-ui-shared = { path = "../ui-shared" }
+
+nova-ui-settings-tracking = { path = "../ui-settings-tracking" }
+nova-ui-settings-addons = { path = "../ui-settings-addons" }
+nova-ui-settings-categories = { path = "../ui-settings-categories" }
+nova-ui-settings-image-cache = { path = "../ui-settings-image-cache" }
+nova-ui-settings-display = { path = "../ui-settings-display" }
+nova-ui-settings-p2p = { path = "../ui-settings-p2p" }
+nova-ui-settings-player = { path = "../ui-settings-player" }
+nova-ui-settings-theme = { path = "../ui-settings-theme" }
+nova-ui-settings-look-feel = { path = "../ui-settings-look-feel" }
+nova-ui-settings-sync = { path = "../ui-settings-sync" }
+nova-ui-settings-home = { path = "../ui-settings-home" }
+nova-ui-settings-downloads = { path = "../ui-settings-downloads" }
+nova-ui-settings-downloaded-episodes = { path = "../ui-settings-downloaded-episodes" }
+
+[build-dependencies]
+slint-build = { workspace = true, features = ["experimental-module-builds"] }

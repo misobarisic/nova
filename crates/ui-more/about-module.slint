@@ -1,0 +1,36 @@
+import { AboutPage } from "../ui/about.slint";
+import { AboutBridge } from "@NovaUiShared";
+
+export component AboutModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: AboutBridge.viewport_width; height: AboutBridge.viewport_height;
+    AboutPage {
+        width: 100%; height: 100%;
+        kb_zone <=> AboutBridge.kb_zone;
+        kb_nav <=> AboutBridge.kb_nav;
+        kb_active <=> AboutBridge.kb_active;
+        licenses_open <=> AboutBridge.licenses_open;
+        scroll_y <=> AboutBridge.scroll_y;
+        licenses_scroll_y <=> AboutBridge.licenses_scroll_y;
+        external_navigation <=> AboutBridge.external_navigation;
+        active <=> AboutBridge.active;
+        nav-viewport-width <=> AboutBridge.nav-viewport-width;
+        narrow <=> AboutBridge.narrow;
+        safe-top <=> AboutBridge.safe-top;
+        safe-left <=> AboutBridge.safe-left;
+        safe-right <=> AboutBridge.safe-right;
+        safe-bottom <=> AboutBridge.safe-bottom;
+        system_back_request <=> AboutBridge.system_back_request;
+        license_catalog <=> AboutBridge.license_catalog;
+        license_sources <=> AboutBridge.license_sources;
+        home_picked() => { AboutBridge.home_picked(); }
+        back_picked() => { AboutBridge.back_picked(); }
+        discover_picked() => { AboutBridge.discover_picked(); }
+        library_picked() => { AboutBridge.library_picked(); }
+        settings_picked() => { AboutBridge.settings_picked(); }
+        about_picked() => { AboutBridge.about_picked(); }
+        more_picked() => { AboutBridge.more_picked(); }
+        license_source_requested(arg0) => { AboutBridge.license_source_requested(arg0); }
+    }
+}

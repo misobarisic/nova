@@ -1,0 +1,66 @@
+import { SettingsBridge, SettingsContent, SettingsStyle } from "@NovaUiShared";
+
+import { PillButton, ToggleSwitch, SectionHeader, SettingsRow, SettingsCard } from "../ui/settings-controls.slint";
+
+// The shell owns scrolling and transitions. Report intrinsic layout sizes
+// only while this section is selected, so outgoing instances cannot resize it.
+export component SettingsDownloadsModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: SettingsContent.slot_width; height: SettingsContent.slot_height;
+    private property <length> measured_min: body_layout.min-height;
+    private property <length> measured_preferred: body_layout.preferred-height;
+    changed measured_min => { root.publish_size(); }
+    changed measured_preferred => { root.publish_size(); }
+    init => { root.publish_size(); }
+    function publish_size() {
+        if SettingsBridge.sel == 8 {
+            SettingsContent.content_min_height = root.measured_min;
+            SettingsContent.content_preferred_height = root.measured_preferred;
+        }
+    }
+    body_layout := VerticalLayout {
+        width: 100%; height: 100%; spacing: 0px;
+        VerticalLayout {
+
+            vertical-stretch: 0;
+            spacing: 18px;
+            SectionHeader { label: @tr("Cleanup policy"); }
+
+            SettingsCard { SettingsRow {
+                    setting-key: "download_auto_delete_watched";
+                    row-title: @tr("Auto-delete watched episodes");
+                    row-desc: @tr("Delete a downloaded episode once you mark it watched. Movie downloads are never removed by this setting.");
+
+                    ToggleSwitch {
+                        name: @tr("Auto-delete watched episodes");
+                        checked <=> SettingsBridge.download_auto_delete_watched;
+                        focused: SettingsBridge.kb_zone == 12 && SettingsContent.kb_dl == 0 && SettingsBridge.kb_active;
+                        toggled => {
+                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                            SettingsBridge.kb_zone = 12;
+                            SettingsContent.kb_dl = 0;
+                            SettingsBridge.download_auto_delete_watched_changed(SettingsBridge.download_auto_delete_watched);
+                        }
+                    }
+                } }
+            SectionHeader { label: @tr("Downloaded episodes"); }
+            SettingsCard { SettingsRow {
+                    tinted: true;
+                    row-title: @tr("Downloaded episodes");
+                    row-desc: @tr("Stored on this device: {n} episode" | "Stored on this device: {n} episodes" % SettingsBridge.downloads_rows.length);
+
+                    PillButton {
+                        label: @tr("View");
+                        focused: SettingsBridge.kb_zone == 12 && SettingsContent.kb_dl == 1 && SettingsBridge.kb_active;
+                        clicked => {
+                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                            SettingsBridge.kb_zone = 12;
+                            SettingsContent.kb_dl = 1;
+                            SettingsContent.open_page(9);
+                        }
+                    }
+                } }
+        }
+    }
+}

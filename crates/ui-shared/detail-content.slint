@@ -1,0 +1,44 @@
+import { TrackingLinkRow } from "../ui/types.slint";
+
+// Detail shell ownership shared by compiled bodies on the existing window adapter.
+// Backend values and models stay in DetailBridge; factories have stable identity.
+export global DetailContent {
+    in-out property <component-factory> tracking_factory;
+    in-out property <component-factory> streams_factory;
+    in-out property <component-factory> episodes_factory;
+    in-out property <component-factory> entry_factory;
+    in-out property <length> shell_width;
+    in-out property <length> episodes_slot_width;
+    in-out property <length> episodes_slot_height;
+    in-out property <length> episodes_height;
+    in-out property <int> episodes_generation;
+    in-out property <length> entry_slot_width;
+    in-out property <length> entry_height;
+    in-out property <int> entry_generation;
+    in-out property <int> active_entry_index;
+    in-out property <string> active_entry_id;
+    in-out property <bool> entry_more;
+    in-out property <bool> entry_editing;
+    in-out property <bool> entry_history_confirm;
+    in-out property <bool> entry_unlink_confirm;
+    in-out property <bool> episode_search_open;
+    in-out property <int> episode_focus_request;
+    in-out property <bool> filter_focused;
+    in-out property <bool> kb_edit;
+    in-out property <int> tracking_back_request;
+    in-out property <int> tracking_focus_request;
+    pure callback entry_index(string) -> int;
+    callback validate_entry();
+    callback activate_entry(string, int);
+    callback focus_tracking();
+    callback restore_episode_focus();
+    callback dispatch_back();
+    callback focus_shell();
+    callback filters_panned();
+    callback filters_pan_released();
+    callback open_ep_menu(int, bool, float);
+    callback open_season_menu(int, bool);
+    callback scroll_list_to_top(length);
+    callback request_stream_action(string);
+    callback recover_entry_focus();
+}

@@ -1,0 +1,296 @@
+import { SettingsBridge, SettingsContent, SettingsSync, Theme, SettingsStyle } from "@NovaUiShared";
+import { SettingSyncBadge } from "../ui/settings-sync.slint";
+
+import { KbMark } from "../ui/kbnav.slint";
+
+import { SpeedControl } from "../ui/speedcontrol.slint";
+
+import { Segmented, SectionHeader, SettingsRow, SettingsCard } from "../ui/settings-controls.slint";
+
+import { PlaybackLanguagePicker } from "../ui/playback-language-picker.slint";
+
+// The shell owns scrolling and transitions. Report intrinsic layout sizes
+// only while this section is selected, so outgoing instances cannot resize it.
+export component SettingsPlayerModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: SettingsContent.slot_width; height: SettingsContent.slot_height;
+    private property <length> measured_min: body_layout.min-height;
+    private property <length> measured_preferred: body_layout.preferred-height;
+    changed measured_min => { root.publish_size(); }
+    changed measured_preferred => { root.publish_size(); }
+    init => { root.publish_size(); }
+    function publish_size() {
+        if SettingsBridge.sel == 5 {
+            SettingsContent.content_min_height = root.measured_min;
+            SettingsContent.content_preferred_height = root.measured_preferred;
+        }
+    }
+    body_layout := VerticalLayout {
+        width: 100%; height: 100%; spacing: 0px;
+        VerticalLayout {
+
+            vertical-stretch: 0; spacing: 16px;
+            SectionHeader { label: @tr("Player choice"); }
+            SettingsCard {
+
+                SettingsRow {
+                    setting-key: "player_external";
+                    row-title: @tr("Player");
+                    row-desc: @tr("Built-in plays streams inside the app. External hands them to another video app.");
+
+                    Segmented {
+                        labels: [@tr("Built-in"), @tr("External")];
+                        current_index: SettingsBridge.player_backend_index;
+                        focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 0 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 0; SettingsBridge.player_backend_index = i; SettingsContent.schedule_save(); }
+                    }
+                }
+            }
+            SectionHeader { label: @tr("Episode playback"); }
+            SettingsCard {
+
+                SettingsRow {
+                    tinted: true;
+                    setting-key: "episode_start_behavior";
+                    row-title: @tr("Episode playback");
+                    row-desc: @tr("Choose how episodes with saved playback history start.");
+
+                    Segmented {
+                        labels: [@tr("Start over"), @tr("Resume"), @tr("Ask")];
+                        current_index: SettingsBridge.episode_start_index;
+                        focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 1 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 1; SettingsBridge.episode_start_index = i; SettingsContent.schedule_save(); }
+                    }
+                }
+            }
+            SectionHeader { label: @tr("Playback controls"); }
+            SettingsCard {
+
+                if !SettingsBridge.is_android && SettingsBridge.player_backend_index == 1: SettingsRow {
+                    tinted: true;
+                    setting-key: "desktop_external_app";
+                    row-title: @tr("External app");
+                    row-desc: @tr("Which app opens the stream. System default uses whatever handles video URLs.");
+
+                    Segmented {
+                        labels: [@tr("System default"), "VLC", "mpv"];
+                        current_index: SettingsBridge.desktop_external_app_index;
+                        focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 2 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 2; SettingsBridge.desktop_external_app_index = i; SettingsContent.schedule_save(); }
+                    }
+                }
+
+                if SettingsBridge.is_android && SettingsBridge.player_backend_index == 0: SettingsRow {
+                    tinted: true;
+                    setting-key: "android_hwdec";
+                    row-title: @tr("Video decoder");
+                    row-desc: @tr("HW+ keeps decoded frames on the GPU and is fastest; it falls back to HW, then SW. HW falls back to SW.");
+
+                    Segmented {
+                        labels: ["HW+", "HW", "SW"];
+                        current_index: SettingsBridge.android_hwdec_index;
+                        focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 2 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 2; SettingsBridge.android_hwdec_index = i; SettingsContent.schedule_save(); }
+                    }
+                }
+
+                if SettingsBridge.is_android && SettingsBridge.player_backend_index == 0: SettingsRow {
+                    row-title: @tr("When returning to playback");
+                    row-desc: @tr("Always pause in the background. Automatically continue only if the video was playing before you left.");
+                    Segmented {
+                        labels: [@tr("Stay paused"), @tr("Auto continue")];
+                        current_index: SettingsBridge.android_auto_continue ? 1 : 0;
+                        focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == 3 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 9; SettingsContent.kb_pr = 3; SettingsBridge.android_auto_continue = i == 1; SettingsContent.schedule_save(); }
+                    }
+                }
+
+                if SettingsBridge.player_backend_index == 0: SettingsRow {
+                    setting-key: "default_audio_language";
+                    row-title: @tr("Default audio language");
+                    row-desc: @tr("Search for the language the built-in player should use by default.");
+
+                    HorizontalLayout {
+                        width: 100%;
+                        height: 44px;
+                        spacing: 8px;
+                        KbMark { on: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_audio_language_row(); active: SettingsBridge.kb_active; }
+                        PlaybackLanguagePicker {
+                            horizontal-stretch: 1;
+                            min-width: 0px;
+                            subtitle: false;
+                            edit-requested: SettingsContent.kb_edit == 4;
+                            keyboard-mode: SettingsBridge.kb_active;
+                            current-label: SettingsBridge.audio_language_label;
+                            codes: SettingsBridge.audio_language_codes;
+                            names: SettingsBridge.audio_language_names;
+                            current-index <=> SettingsBridge.audio_language_choice_index;
+                            search(query, is_subtitle) => { SettingsBridge.playback_language_search(query, is_subtitle); }
+                            picked(code, is_subtitle) => {
+                                SettingsBridge.playback_language_picked(code, is_subtitle);
+                                SettingsBridge.default_audio_language = code;
+                                SettingsContent.schedule_setting("default_audio_language");
+                            }
+                            focus_changed(focused) => {
+                                SettingsContent.player_language_input_focused = focused;
+                                if (focused && SettingsBridge.kb_active) { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); }
+                            }
+                            accepted => { SettingsContent.kb_edit = 0; SettingsContent.player_language_input_focused = false; SettingsContent.focus_shell(); }
+                        }
+                    }
+                }
+
+                if SettingsBridge.player_backend_index == 0: SettingsRow {
+                    tinted: true;
+                    setting-key: "default_subtitle_language";
+                    row-title: @tr("Default subtitle language");
+                    row-desc: @tr("Search for the subtitle language the built-in player should use by default.");
+
+                    HorizontalLayout {
+                        width: 100%;
+                        height: 44px;
+                        spacing: 8px;
+                        KbMark { on: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_subtitle_language_row(); active: SettingsBridge.kb_active; }
+                        PlaybackLanguagePicker {
+                            horizontal-stretch: 1;
+                            min-width: 0px;
+                            subtitle: true;
+                            edit-requested: SettingsContent.kb_edit == 5;
+                            keyboard-mode: SettingsBridge.kb_active;
+                            current-label: SettingsBridge.subtitle_language_label;
+                            codes: SettingsBridge.subtitle_language_codes;
+                            names: SettingsBridge.subtitle_language_names;
+                            current-index <=> SettingsBridge.subtitle_language_choice_index;
+                            search(query, is_subtitle) => { SettingsBridge.playback_language_search(query, is_subtitle); }
+                            picked(code, is_subtitle) => {
+                                SettingsBridge.playback_language_picked(code, is_subtitle);
+                                SettingsBridge.default_subtitle_language = code;
+                                SettingsContent.schedule_setting("default_subtitle_language");
+                            }
+                            focus_changed(focused) => {
+                                SettingsContent.player_language_input_focused = focused;
+                                if (focused && SettingsBridge.kb_active) { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); }
+                            }
+                            accepted => { SettingsContent.kb_edit = 0; SettingsContent.player_language_input_focused = false; SettingsContent.focus_shell(); }
+                        }
+                    }
+                }
+
+                // Global default rate for the built-in player;
+                // its OSD title override is a separate setting.
+                // ± steps by 0.05, quantized by the backend.
+                if !SettingsContent.narrow && SettingsBridge.player_backend_index == 0: SettingsRow {
+                    // Alternate with the row above: the
+                    // Android decoder row (built-in) is
+                    // already tinted.
+                    tinted: !SettingsBridge.is_android;
+                    setting-key: "playback_speed";
+                    row-title: @tr("Default playback speed");
+                    row-desc: @tr("Rate the built-in player starts at. The slider covers 0.5×–2.0×; ± moves in 0.05× steps.");
+
+                    VerticalLayout {
+                        width: 240px;
+                        // Slider row + preset row.
+                        height: 96px;
+                        alignment: center;
+
+                        speed_control := SpeedControl {
+                            roomy: true; keyboard-mode <=> SettingsBridge.kb_active;
+                            speed <=> SettingsBridge.playback_speed;
+                            focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() && SettingsBridge.kb_active;
+                            changed(v) => {
+                                SettingsBridge.playback_speed = v;
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = SettingsContent.kb_player_speed_row();
+                                SettingsContent.schedule_save();
+                            }
+                            stepped(d) => {
+                                SettingsBridge.playback_speed_stepped(d);
+                                SettingsContent.schedule_save();
+                            }
+                        }
+                    }
+                }
+
+                // Narrow: the slider column would push the page
+                // sideways, so the control stacks under the
+                // text (same split as the cache sliders).
+                if SettingsContent.narrow && SettingsBridge.player_backend_index == 0: Rectangle {
+                    background: Theme.current.card;
+
+                    VerticalLayout {
+                        width: 100%;
+                        padding-top: 14px;
+                        padding-bottom: 14px;
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        spacing: 10px;
+
+                        VerticalLayout {
+                            spacing: 3px;
+
+                            speed_title_line := Rectangle {
+                                // Match ordinary settings rows without forcing
+                                // translated titles and badges onto one line.
+                                property <bool> inline-badge: SettingsSync.enabled && speed_title_natural.preferred-width + speed_scope_badge.preferred-width + 8px <= self.width;
+                                height: self.inline-badge ? Math.max(speed_title.preferred-height, 26px) : speed_title.preferred-height + (SettingsSync.enabled ? 29px : 0px);
+
+                                Rectangle {
+                                    width: 0px; height: 0px; clip: true;
+                                    speed_title_natural := Text { width: 0px; height: 0px; text: @tr("Default playback speed"); font-size: 14px; font-weight: 600; }
+                                }
+                                speed_title := Text {
+                                    // Plain Rectangle children center by default.
+                                    // Anchor the title before the inline scope badge.
+                                    x: 0px;
+                                    text: @tr("Default playback speed");
+                                    font-size: 14px;
+                                    font-weight: 600;
+                                    color: Theme.current.text_bright;
+                                    wrap: word-wrap;
+                                    min-width: 0px;
+                                    width: speed_title_line.inline-badge ? speed_title_natural.preferred-width : parent.width;
+                                    height: self.preferred-height;
+                                    y: speed_title_line.inline-badge ? (parent.height - self.height) / 2 : 0px;
+                                }
+                                speed_scope_badge := SettingSyncBadge {
+                                    setting_key: "playback_speed";
+                                    setting_title: @tr("Default playback speed");
+                                    width: Math.min(self.preferred-width, parent.width);
+                                    x: speed_title_line.inline-badge ? speed_title_natural.preferred-width + 8px : 0px;
+                                    y: speed_title_line.inline-badge ? (parent.height - self.height) / 2 : speed_title.preferred-height + 3px;
+                                }
+                            }
+
+                            Text {
+                                text: @tr("Rate the built-in player starts at. The slider covers 0.5×–2.0×; ± moves in 0.05× steps.");
+                                font-size: 14px;
+                                color: Theme.current.text_settings;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        speed_control_n := SpeedControl {
+                            roomy: true; keyboard-mode <=> SettingsBridge.kb_active;
+                            speed <=> SettingsBridge.playback_speed;
+                            focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() && SettingsBridge.kb_active;
+                            changed(v) => {
+                                SettingsBridge.playback_speed = v;
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = SettingsContent.kb_player_speed_row();
+                                SettingsContent.schedule_save();
+                            }
+                            stepped(d) => {
+                                SettingsBridge.playback_speed_stepped(d);
+                                SettingsContent.schedule_save();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

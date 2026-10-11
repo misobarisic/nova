@@ -1273,8 +1273,10 @@ impl Bridge {
         show_unwatched || watched || progress > 0.0
     }
 
-    pub(super) fn current_episode_rows(&self) -> Vec<EpisodeRow> {
+    pub(super) fn current_episode_page(&self) -> (usize, usize, Vec<EpisodeRow>) {
         struct RowSeed {
+            id: SharedString,
+            artwork_identity: SharedString,
             text: SharedString,
             details: String,
             thumb_url: Option<String>,
@@ -1285,13 +1287,13 @@ impl Bridge {
             date: SharedString,
             runtime: SharedString,
         }
-        let seeds: Vec<RowSeed> = {
+        let (total, page, seeds) = {
             let state = self.shared.lock().unwrap();
             let Some(m) = state.modal_item.as_ref() else {
-                return Vec::new();
+                return (0, 0, Vec::new());
             };
             if m.seasons.is_empty() {
-                return Vec::new();
+                return (0, 0, Vec::new());
             }
             let date_relative = state.cache_settings.date_relative;
             let show_unwatched = state.cache_settings.show_unwatched_thumbs;
@@ -1302,9 +1304,17 @@ impl Bridge {
                 .app()
                 .map(|a| a.get_episode_filter().to_string())
                 .unwrap_or_default();
-            season_episodes(&m.videos, season)
-                .iter()
+            let episodes: Vec<_> = season_episodes(&m.videos, season)
+                .into_iter()
                 .filter(|v| episode_matches_filter(v, &filter))
+                .collect();
+            let total = episodes.len();
+            let page = m.episode_page.min(page_count(total).saturating_sub(1));
+            // Do not construct images or display strings for other pages.
+            let seeds: Vec<RowSeed> = episodes
+                .into_iter()
+                .skip(page * EPISODE_PAGE_SIZE)
+                .take(EPISODE_PAGE_SIZE)
                 .map(|v| {
                     let (watched, progress, resume_suffix) =
                         Self::episode_watch_state(&state.progress, &m.id, &v.id);
@@ -1324,11 +1334,20 @@ impl Bridge {
                                 .or_else(|| Some(d.trim().to_string()))
                         })
                         .unwrap_or_default();
+                    let show_thumb = Self::episode_thumb_visible(show_unwatched, watched, progress);
                     RowSeed {
+                        id: v.id.as_str().into(),
+                        artwork_identity: detail_artwork_identity(
+                            m,
+                            "episode",
+                            &v.id,
+                            show_thumb.then_some(v.thumbnail.as_deref()).flatten(),
+                        )
+                        .into(),
                         text,
                         details,
                         thumb_url: v.thumbnail.clone(),
-                        show_thumb: Self::episode_thumb_visible(show_unwatched, watched, progress),
+                        show_thumb,
                         watched,
                         progress,
                         ep_no: SharedString::from(episode_badge(v)),
@@ -1344,10 +1363,11 @@ impl Bridge {
                         ),
                     }
                 })
-                .collect()
+                .collect();
+            (total, page, seeds)
         };
 
-        seeds
+        let rows = seeds
             .into_iter()
             .map(|seed| {
                 let reserved_lines = Self::estimate_stream_lines(&seed.text)
@@ -1378,6 +1398,13 @@ impl Bridge {
                     }
                 };
                 EpisodeRow {
+                    id: seed.id,
+                    displayed_artwork_identity: if has_thumb {
+                        seed.artwork_identity.clone()
+                    } else {
+                        SharedString::default()
+                    },
+                    artwork_identity: seed.artwork_identity,
                     text: seed.text,
                     details: SharedString::from(&seed.details),
                     lines,
@@ -1390,39 +1417,29 @@ impl Bridge {
                     runtime: seed.runtime,
                 }
             })
-            .collect()
+            .collect();
+        (total, page, rows)
     }
 
-    /// (Re)build + push the episode rows for the current season and start
-    /// downloading any thumbnails that are not cached yet.
-    /// Render the episode list from the current season state (thumbnails
-    /// already present in the decode cache are filled in).
+    /// Render the current filtered page, preserving correctly identified live
+    /// images even when their pixels have been evicted from the shared cache.
     pub(super) fn apply_episode_rows(&self) {
         let Some(app) = self.app() else {
             return;
         };
         self.refresh_watch_action();
         self.refresh_home_watch_action();
-        let all = self.current_episode_rows();
-        let total = all.len();
-        // Clamp the stored page: the filter/season may have shrunk the list
-        // while it was showing a later page.
-        let page = {
-            let mut state = self.shared.lock().unwrap();
-            match state.modal_item.as_mut() {
-                Some(m) => {
-                    m.episode_page = m.episode_page.min(page_count(total).saturating_sub(1));
-                    m.episode_page
-                }
-                None => 0,
+        let (total, page, mut rows) = self.current_episode_page();
+        if let Some(m) = self.shared.lock().unwrap().modal_item.as_mut() {
+            m.episode_page = page;
+        }
+        let old = app.get_episode_rows();
+        for row in &mut rows {
+            if let Some(previous) = old.iter().find(|previous| previous.id == row.id) {
+                retain_episode_row_artwork(row, &previous);
             }
-        };
+        }
         let start = page * EPISODE_PAGE_SIZE;
-        let rows: Vec<EpisodeRow> = all
-            .into_iter()
-            .skip(start)
-            .take(EPISODE_PAGE_SIZE)
-            .collect();
         app.set_episode_rows(Rc::new(VecModel::from(rows)).into());
         app.set_episode_page(page as i32);
         app.set_episode_page_count(page_count(total) as i32);
@@ -1439,7 +1456,21 @@ impl Bridge {
     /// here). Rebuilds the page's rows and queues its thumbnails.
     pub(super) fn episode_page_picked(&self, page: i32) {
         self.cancel_watch_now();
-        let total = self.current_episode_rows().len();
+        let total = {
+            let state = self.shared.lock().unwrap();
+            state.modal_item.as_ref().map_or(0, |m| {
+                let filter = self
+                    .app()
+                    .map(|a| a.get_episode_filter().to_string())
+                    .unwrap_or_default();
+                m.seasons.get(m.season_index).map_or(0, |&season| {
+                    season_episodes(&m.videos, season)
+                        .into_iter()
+                        .filter(|v| episode_matches_filter(v, &filter))
+                        .count()
+                })
+            })
+        };
         let pages = page_count(total) as i32;
         let page = page.clamp(0, pages.saturating_sub(1));
         let moved = {
@@ -1479,7 +1510,7 @@ impl Bridge {
             }
         };
         if moved {
-            self.apply_episode_rows();
+            self.refresh_episode_rows();
         }
         index % EPISODE_PAGE_SIZE
     }
@@ -1492,14 +1523,19 @@ impl Bridge {
     }
 
     /// (Re)build + push the episode rows for the current season and queue
-    /// thumbnail downloads. Big seasons are kept responsive by the capped
-    /// download pool + debounced re-renders below.
+    /// thumbnail downloads. Big seasons construct only this page's rows, and
+    /// episode/season requests share the capped download pool.
     pub(super) fn refresh_episode_rows(&self) {
         // Cancel queued downloads that belonged to a previous list.
-        EPISODE_QUEUE.lock().unwrap().clear();
-        EPISODE_INFLIGHT.lock().unwrap().clear();
+        let cancelled: Vec<_> = EPISODE_QUEUE.lock().unwrap().drain(..).collect();
+        for job in cancelled {
+            Self::release_episode_thumb_job(&job);
+        }
         self.apply_episode_rows();
         self.queue_episode_thumbnails();
+        // Rebuilding an episode page also cancels queued season-card jobs.
+        // Requeue missing picker images after the visible episode work.
+        self.dispatch_season_thumbs();
     }
 
     /// Season picker cards for the open modal, in `seasons` order. Artwork
@@ -1515,11 +1551,12 @@ impl Bridge {
         m.seasons
             .iter()
             .map(|&s| {
-                let (thumb, has_thumb) = match season_thumb_url(&m.videos, &m.season_backdrops, s)
-                    .as_deref()
-                    .and_then(|url| {
-                        decoded_cache_get(&image_cache_key(url, ImageUse::EpisodeThumbnail))
-                    }) {
+                let url = season_thumb_url(&m.videos, &m.season_backdrops, s);
+                let artwork_identity =
+                    detail_artwork_identity(m, "season", &s.to_string(), url.as_deref());
+                let (thumb, has_thumb) = match url.as_deref().and_then(|url| {
+                    decoded_cache_get(&image_cache_key(url, ImageUse::EpisodeThumbnail))
+                }) {
                     Some(buf) => (Image::from_rgba8(buf), true),
                     None => (Image::default(), false),
                 };
@@ -1539,6 +1576,13 @@ impl Bridge {
                     })
                     .count();
                 SeasonCard {
+                    id: s.to_string().into(),
+                    displayed_artwork_identity: if has_thumb {
+                        artwork_identity.as_str().into()
+                    } else {
+                        SharedString::default()
+                    },
+                    artwork_identity: artwork_identity.into(),
                     name: SharedString::from(season_label(s)),
                     thumb,
                     has_thumb,
@@ -1556,7 +1600,14 @@ impl Bridge {
     /// Push the current season cards to the UI (empty without an open modal).
     pub(super) fn apply_season_cards(&self) {
         if let Some(app) = self.app() {
-            app.set_season_cards(Rc::new(VecModel::from(self.current_season_cards())).into());
+            let mut rows = self.current_season_cards();
+            let old = app.get_season_cards();
+            for row in &mut rows {
+                if let Some(previous) = old.iter().find(|previous| previous.id == row.id) {
+                    retain_season_artwork(row, &previous);
+                }
+            }
+            app.set_season_cards(Rc::new(VecModel::from(rows)).into());
         }
     }
 
@@ -1661,7 +1712,7 @@ impl Bridge {
 
     /// Resolve a displayed (filter-narrowed) episode row index to
     /// `(series_id, episode_id, ordered episode ids of the season)`.
-    /// Uses the same season + filter as `current_episode_rows`, so menu
+    /// Uses the same season + filter as `current_episode_page`, so menu
     /// actions and the quick-toggle always hit the card the user touched.
     pub(super) fn resolve_filtered_episode(
         &self,
@@ -1892,7 +1943,7 @@ impl Bridge {
                 _ => return,
             };
             let season = m.seasons[m.season_index];
-            // Same filter current_episode_rows applies, so a filtered card
+            // Same filter current_episode_page applies, so a filtered card
             // opens its own episode (row order matches the list).
             let filter = self
                 .app()
@@ -2728,12 +2779,12 @@ impl Bridge {
             return;
         }
 
-        let (seasons, episode_page) = {
+        let seasons = {
             let state = self.shared.lock().unwrap();
             let Some(modal) = state.modal_item.as_ref() else {
                 return;
             };
-            (modal.seasons.clone(), modal.episode_page)
+            modal.seasons.clone()
         };
         app.set_season_names(
             Rc::new(VecModel::from(
@@ -2760,12 +2811,7 @@ impl Bridge {
             app.set_season_cards(Rc::new(VecModel::from(season_cards)).into());
         }
 
-        let page_rows: Vec<EpisodeRow> = self
-            .current_episode_rows()
-            .into_iter()
-            .skip(episode_page * EPISODE_PAGE_SIZE)
-            .take(EPISODE_PAGE_SIZE)
-            .collect();
+        let (_, _, page_rows) = self.current_episode_page();
         let episode_model = app.get_episode_rows();
         if episode_model.row_count() == page_rows.len() {
             for (index, fresh) in page_rows.into_iter().enumerate() {
@@ -4243,5 +4289,52 @@ mod player_art_resolution_tests {
                 preview.width() as usize * preview.height() as usize * 4
             );
         }
+    }
+}
+
+// Include the opening token: reopening the same ID must not accept a delayed
+// reply from the previous modal, even when its artwork URL is unchanged.
+pub(super) fn detail_artwork_identity(
+    modal: &ModalItem,
+    kind: &str,
+    id: &str,
+    url: Option<&str>,
+) -> String {
+    let Some(url) = url.filter(|url| !url.trim().is_empty()) else {
+        return String::new();
+    };
+    serde_json::to_string(&(
+        Arc::as_ptr(&modal.open_token) as usize,
+        &modal.type_,
+        &modal.id,
+        kind,
+        id,
+        image_cache_key(url, ImageUse::EpisodeThumbnail),
+    ))
+    .expect("artwork identity")
+}
+
+fn retain_episode_row_artwork(row: &mut EpisodeRow, old: &EpisodeRow) {
+    if !row.has_thumb
+        && !row.artwork_identity.is_empty()
+        && row.id == old.id
+        && row.artwork_identity == old.displayed_artwork_identity
+        && old.has_thumb
+    {
+        row.thumb = old.thumb.clone();
+        row.has_thumb = true;
+        row.displayed_artwork_identity = old.displayed_artwork_identity.clone();
+    }
+}
+fn retain_season_artwork(row: &mut SeasonCard, old: &SeasonCard) {
+    if !row.has_thumb
+        && !row.artwork_identity.is_empty()
+        && row.id == old.id
+        && row.artwork_identity == old.displayed_artwork_identity
+        && old.has_thumb
+    {
+        row.thumb = old.thumb.clone();
+        row.has_thumb = true;
+        row.displayed_artwork_identity = old.displayed_artwork_identity.clone();
     }
 }

@@ -1,0 +1,34 @@
+export { AboutModule } from "about-module.slint";
+export { DownloadsModule } from "downloads-module.slint";
+import { MorePage } from "../ui/more.slint";
+import { MoreBridge } from "@NovaUiShared";
+
+export component MoreModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: MoreBridge.viewport_width; height: MoreBridge.viewport_height;
+    MorePage {
+        width: 100%; height: 100%;
+        scroll_y <=> MoreBridge.scroll_y;
+        choice <=> MoreBridge.choice;
+        kb_zone <=> MoreBridge.kb_zone;
+        kb_nav <=> MoreBridge.kb_nav;
+        kb_active <=> MoreBridge.kb_active;
+        external_navigation <=> MoreBridge.external_navigation;
+        active <=> MoreBridge.active;
+        narrow <=> MoreBridge.narrow;
+        nav-viewport-width <=> MoreBridge.nav-viewport-width;
+        safe-top <=> MoreBridge.safe-top;
+        safe-bottom <=> MoreBridge.safe-bottom;
+        safe-left <=> MoreBridge.safe-left;
+        safe-right <=> MoreBridge.safe-right;
+        system_back_request <=> MoreBridge.system_back_request;
+        home_picked() => { MoreBridge.home_picked(); }
+        discover_picked() => { MoreBridge.discover_picked(); }
+        library_picked() => { MoreBridge.library_picked(); }
+        calendar_picked() => { MoreBridge.calendar_picked(); }
+        downloads_picked() => { MoreBridge.downloads_picked(); }
+        settings_picked() => { MoreBridge.settings_picked(); }
+        about_picked() => { MoreBridge.about_picked(); }
+    }
+}

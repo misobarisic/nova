@@ -8,7 +8,39 @@ pub mod backend_text;
 mod fonts;
 pub use fonts::initialize_fonts;
 
-slint::include_modules!();
+mod generated {
+    slint::include_modules!();
+}
+// Model types and globals preserve their existing public paths. AppWindow's
+// wrapper installs the factory for production and headless callers alike.
+pub use generated::*;
+// Imported library models are not re-exported by Slint 1.18's generator.
+// Preserve Nova's public model paths while sharing the leaf's exact types.
+pub use nova_ui_shared::{
+    AddonRow, CalCell, CalendarDay, CalendarRelease, CategoryRow, ContinueRow, DownloadEpisode,
+    DownloadGroup, DownloadRow, EpisodeRow, HomeCatalogCard, HomeCatalogRow, HomeCatalogSection,
+    LicenseSource, MediaCard, SeasonCard, SettingSyncInfo, SheetItem, StreamRow, SyncInvite,
+    SyncPeer, ThemePalette, TrackRow, TrackingAccountRow, TrackingCandidateRow, TrackingLinkRow,
+    TrackingMappingRow, TrackingSetupRow, UpcomingRow,
+};
+// Native page callbacks route through AppWindow without keeping it alive.
+macro_rules! forward_app_callbacks {
+    ($app:expr, $bridge:expr; $($callback:ident => $invoke:ident($($arg:ident),*)),* $(,)?) => {{
+        let bridge = $bridge;
+        $(let weak = $app.as_weak();
+        bridge.$callback(move |$($arg),*| {
+            weak.upgrade().map(|app| app.$invoke($($arg),*)).unwrap_or_default()
+        });)*
+    }};
+}
+pub(crate) use forward_app_callbacks;
+
+mod collection_factories;
+mod page_factories;
+mod playback_factories;
+mod settings_factory;
+mod window;
+pub use window::AppWindow;
 
 /// Local AND search over Unicode lowercase, whitespace-separated terms.
 /// The caller supplies localized labels and the registry's English aliases.

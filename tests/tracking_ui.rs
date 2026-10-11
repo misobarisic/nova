@@ -1,5 +1,5 @@
 //! Tracking uses the real Slint pages; verify narrow layouts, explicit history
-//! confirmation, suggestion selection and tab-first Back without network access.
+//! confirmation, suggestion selection and overlay-first Back without network access.
 #[path = "support/destinations.rs"]
 mod destinations;
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
@@ -49,6 +49,17 @@ async fn navbar_back(app: &nova::AppWindow) {
     }
     settle().await;
 }
+fn detail_scroll(app: &nova::AppWindow) -> Option<ElementHandle> {
+    if app.get_tracking_open() {
+        ElementHandle::find_by_element_id(app, "DetailTrackingModule::root")
+            .next()?
+            .query_descendants()
+            .match_inherits("Flickable")
+            .find_first()
+    } else {
+        ElementHandle::find_by_element_id(app, "DetailPage::det_scroll").next()
+    }
+}
 async fn click(app: &nova::AppWindow, label: &str) {
     let mut target = None;
     for attempt in 0..12 {
@@ -67,8 +78,7 @@ async fn click(app: &nova::AppWindow, label: &str) {
         }
         // Slint's queries omit controls fully clipped by the viewport.
         // Reveal the next actions in a long expanded tracking card first.
-        let Some(scroll) = ElementHandle::find_by_element_id(app, "DetailPage::det_scroll").next()
-        else {
+        let Some(scroll) = detail_scroll(app) else {
             break;
         };
         let p = scroll.absolute_position();
@@ -90,8 +100,7 @@ async fn click(app: &nova::AppWindow, label: &str) {
     }
     let mut target = target.unwrap_or_else(|| panic!("missing action {label}"));
     for _ in 0..12 {
-        let Some(scroll) = ElementHandle::find_by_element_id(app, "DetailPage::det_scroll").next()
-        else {
+        let Some(scroll) = detail_scroll(app) else {
             break;
         };
         let p = scroll.absolute_position();
@@ -170,7 +179,7 @@ fn check_width(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) {
     }
 }
 #[test]
-fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
+fn tracking_settings_and_overlay_fit_phone_and_require_history_confirmation() {
     i_slint_backend_testing::init_integration_test_with_system_time();
     let app = nova::AppWindow::new().unwrap();
     app.on_settings_search_matches(|q, h| nova_ui::settings_search_matches(&q, &h));
@@ -200,8 +209,13 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
     let failures = Rc::new(RefCell::new(Vec::new()));
     let actions = Rc::new(Cell::new(0));
     let actions2 = actions.clone();
-    app.on_tracking_action(move |_, action| {
+    app.on_tracking_action(move |id, action| {
         if action == 2 {
+            assert_eq!(
+                id.as_str(),
+                "binding",
+                "history targets the active stable ID"
+            );
             actions2.set(actions2.get() + 1);
         }
     });
@@ -210,13 +224,12 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
         let app = weak.upgrade().unwrap();
         app.set_tracking_return_tab(app.get_detail_tab());
         app.set_tracking_open(true);
-        app.set_detail_tab(4);
     });
     let weak = app.as_weak();
     app.on_detail_tab_picked(move |tab| {
         let app = weak.upgrade().unwrap();
         if tab == 4 {
-            app.set_tracking_open(true);
+            app.invoke_tracking_show();
         } else {
             app.set_tracking_open(false);
             app.set_detail_tab(tab);
@@ -226,7 +239,6 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
     app.on_tracking_close(move || {
         let app = weak.upgrade().unwrap();
         app.set_tracking_open(false);
-        app.set_detail_tab(app.get_tracking_return_tab());
     });
     let searches = Rc::new(RefCell::new(Vec::new()));
     let recorded_searches = searches.clone();
@@ -309,12 +321,22 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
         assert!(app.get_tracking_open());
         check_width(&app, &f);
         click(&app, "More").await;
+        assert_eq!(
+            ElementHandle::find_by_element_id(&app, "DetailTrackingEntryModule::root").count(),
+            1,
+            "only the active stable ID mounts an entry leaf"
+        );
         click(&app, "Apply Nova history").await;
         assert_eq!(a.get(), 0, "preview must not send history");
         click(&app, "Confirm history update").await;
         assert_eq!(a.get(), 1);
         navbar_back(&app).await;
         assert!(app.get_tracking_open(), "Back closes More before Tracking");
+        assert_eq!(
+            ElementHandle::find_by_element_id(&app, "DetailTrackingEntryModule::root").count(),
+            0,
+            "Back releases the active entry leaf"
+        );
         assert!(
             ElementHandle::find_by_accessible_label(&app, "Apply Nova history")
                 .next()
@@ -384,7 +406,7 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
         click(&app, "Tracking").await;
         assert!(
             picks.borrow().is_empty(),
-            "opening the tab must not invoke a selection callback"
+            "opening Tracking must not invoke a selection callback"
         );
         assert_eq!(confirms.get(), 0, "suggestions must not create links");
         assert_eq!(app.get_tracking_service(), 1);
@@ -458,9 +480,7 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
             app.window().set_size(slint::PhysicalSize::new(width, 800));
             settle().await;
             check_width(&app, &f);
-            let scroll = ElementHandle::find_by_element_id(&app, "DetailPage::det_scroll")
-                .next()
-                .unwrap();
+            let scroll = detail_scroll(&app).unwrap();
             let p = scroll.absolute_position();
             let size = scroll.size();
             app.window()
@@ -514,9 +534,7 @@ fn tracking_settings_and_tab_fit_phone_and_require_history_confirmation() {
             &("proposal-2".to_string(), true)
         );
         // Reveal the first release again after checking the final action card.
-        let scroll = ElementHandle::find_by_element_id(&app, "DetailPage::det_scroll")
-            .next()
-            .unwrap();
+        let scroll = detail_scroll(&app).unwrap();
         let p = scroll.absolute_position();
         let size = scroll.size();
         app.window()

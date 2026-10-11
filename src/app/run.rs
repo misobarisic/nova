@@ -19,12 +19,9 @@ fn current_nav(app: &AppWindow) -> i32 {
     }
 }
 
-/// Publish the section a page switch is leaving, before the page flags flip.
-///
-/// `NavState.from` is what the switch destroys: the nav bar lives inside the
-/// page, so the new bar cannot see the old selection by itself. It uses this
-/// to pop only an incoming icon, never on a rebuild of the same page (Settings
-/// → Look and feel → Navigation feedback). The highlight snaps immediately.
+/// Publish selection feedback before Rust changes page flags. AppWindow owns
+/// More origins and transition cancellation; persistent family chrome also
+/// observes selection changes directly, while rebuilt bars consume `from`.
 fn note_nav_switch(bridge: &Bridge, next: i32) {
     let Some(app) = bridge.app() else {
         return;
@@ -36,6 +33,68 @@ fn note_nav_switch(bridge: &Bridge, next: i32) {
     if from != next {
         app.global::<crate::NavState>().set_from(from);
     }
+}
+
+/// Connect every root destination to its production Bridge behavior. Global
+/// rail callbacks enter AppWindow's canonical route before refreshing models,
+/// so mouse and keyboard destinations both clear pending More returns.
+pub(super) fn wire_page_navigation(app: &AppWindow, bridge: &Bridge) {
+    let b = bridge.clone();
+    app.on_library_picked(move || {
+        note_nav_switch(&b, 2);
+        b.show_library_page();
+    });
+
+    let b = bridge.clone();
+    app.on_discover_picked(move || {
+        note_nav_switch(&b, 1);
+        b.show_discover_page();
+    });
+
+    let b = bridge.clone();
+    app.on_home_picked(move || {
+        note_nav_switch(&b, 0);
+        b.show_home_page();
+    });
+
+    let b = bridge.clone();
+    app.on_settings_picked(move || {
+        note_nav_switch(&b, 3);
+        b.show_settings_page();
+    });
+
+    let b = bridge.clone();
+    app.on_about_picked(move || {
+        note_nav_switch(&b, 3);
+        b.show_about_page();
+    });
+
+    let b = bridge.clone();
+    app.on_calendar_picked(move || {
+        note_nav_switch(&b, 4);
+        b.show_calendar_page();
+    });
+
+    let b = bridge.clone();
+    app.on_downloads_picked(move || {
+        note_nav_switch(&b, 5);
+        b.show_downloads_page();
+    });
+
+    let weak = app.as_weak();
+    app.global::<crate::NavState>().on_calendar_picked(move || {
+        if let Some(app) = weak.upgrade() {
+            app.invoke_navigate_section(4);
+        }
+    });
+
+    let weak = app.as_weak();
+    app.global::<crate::NavState>()
+        .on_downloads_picked(move || {
+            if let Some(app) = weak.upgrade() {
+                app.invoke_navigate_section(5);
+            }
+        });
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -546,29 +605,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_library_item_picked(move |i| b.open_library_item(i as usize));
 
-    // ---- Page navigation (nav bar / rail) --------------------------------
-    // These four callbacks are the only way a page switch happens, so the
-    // switch bookkeeping lives here, *before* the page flags flip: each page
-    // hosts its own nav bar, which is rebuilt by the switch and therefore
-    // reads the section we are leaving from `NavState` to distinguish a real
-    // navigation click from a same-page rebuild before popping the new icon.
-    let b = bridge.clone();
-    app.on_library_picked(move || {
-        note_nav_switch(&b, 2);
-        b.show_library_page();
-    });
-
-    let b = bridge.clone();
-    app.on_discover_picked(move || {
-        note_nav_switch(&b, 1);
-        b.show_discover_page();
-    });
-
-    let b = bridge.clone();
-    app.on_home_picked(move || {
-        note_nav_switch(&b, 0);
-        b.show_home_page();
-    });
+    // Route callbacks share the same production wiring used by headless tests.
+    wire_page_navigation(&app, &bridge);
 
     let b = bridge.clone();
     app.on_home_featured_picked(move || b.home_showcase_picked());
@@ -597,7 +635,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Home's Upcoming shortcut enters the same full planner as the navbar.
     let b = bridge.clone();
     app.on_upcoming_cal_open(move || {
-        note_nav_switch(&b, 5);
+        note_nav_switch(&b, 4);
         b.show_calendar_page();
     });
 
@@ -620,40 +658,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_library_status_action(move |i, s| b.library_status_action(i as usize, s));
 
     let b = bridge.clone();
-    app.on_settings_picked(move || {
-        note_nav_switch(&b, 3);
-        b.show_settings_page();
-    });
-
-    let b = bridge.clone();
-    app.on_about_picked(move || {
-        note_nav_switch(&b, 4);
-        b.show_about_page();
-    });
-
-    let b = bridge.clone();
-    app.on_calendar_picked(move || {
-        note_nav_switch(&b, 5);
-        b.show_calendar_page();
-    });
-    let b = bridge.clone();
-    app.global::<crate::NavState>().on_calendar_picked(move || {
-        note_nav_switch(&b, 5);
-        b.show_calendar_page();
-    });
-    let b = bridge.clone();
-    app.on_downloads_picked(move || {
-        note_nav_switch(&b, 6);
-        b.show_downloads_page();
-    });
-    let b = bridge.clone();
-    app.global::<crate::NavState>()
-        .on_downloads_picked(move || {
-            note_nav_switch(&b, 6);
-            b.show_downloads_page();
-        });
-    let b = bridge.clone();
     app.on_calendar_changed(move || b.apply_calendar_to_ui());
+    let b = bridge.clone();
+    app.on_calendar_artwork_visible(move |key, retained| {
+        b.calendar_artwork_visible(key.as_str(), retained)
+    });
+    let b = bridge.clone();
+    app.on_calendar_artwork_active_changed(move |active| b.calendar_artwork_active(active));
+    let b = bridge.clone();
+    app.on_downloads_page_artwork_visible(move |key, retained| {
+        b.downloads_artwork_visible(key.as_str(), retained)
+    });
+    let b = bridge.clone();
+    app.on_downloads_page_artwork_active_changed(move |active| b.downloads_artwork_active(active));
+
     let b = bridge.clone();
     app.on_calendar_step(move |d| b.calendar_step(d));
     let b = bridge.clone();
@@ -1205,4 +1223,175 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.shutdown_tracking();
     result?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    use slint::platform::{PointerEventButton, WindowEvent};
+
+    fn tap(app: &AppWindow, element: ElementHandle) {
+        let position = element.absolute_position();
+        let size = element.size();
+        let position = slint::LogicalPosition::new(
+            position.x + size.width / 2.0,
+            position.y + size.height / 2.0,
+        );
+        for event in [
+            WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            },
+            WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            },
+        ] {
+            app.window().dispatch_event(event);
+        }
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+    }
+
+    fn more_link(app: &AppWindow, label: &str) -> ElementHandle {
+        ElementHandle::find_by_accessible_label(app, label)
+            .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
+            .unwrap_or_else(|| panic!("missing More link {label}"))
+    }
+
+    fn assert_one_rail(app: &AppWindow) {
+        assert_eq!(
+            ElementHandle::find_by_element_type_name(app, "SideNav").count(),
+            1,
+            "production routing keeps one stationary desktop rail"
+        );
+        assert_eq!(
+            ElementHandle::find_by_element_type_name(app, "BottomNav").count(),
+            0
+        );
+    }
+
+    #[test]
+    fn production_navigation_preserves_origin_and_stationary_chrome() {
+        // Slint and storage are process globals. Run the real callback wiring
+        // in an isolated process with an empty local library and no addons,
+        // rather than replacing the Bridge's model refreshes with mock flags.
+        const TEST_DIR: &str = "NOVA_PRODUCTION_NAV_TEST_DIR";
+        let Some(root) = std::env::var_os(TEST_DIR) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-production-nav-test-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(TEST_DIR, &root)
+                .args([
+                    "--exact",
+                    "app::run::tests::production_navigation_preserves_origin_and_stationary_chrome",
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        app.global::<crate::Anim>().set_enabled(false);
+        let player = crate::player::Player::setup(&app);
+        let downloads = DownloadCoordinator::new(root.join("downloads"));
+        #[cfg(feature = "desktop")]
+        let bridge = {
+            // No poster workers consume requests in this empty fixture.
+            let (hi, _) = mpsc::channel();
+            let (lo, _) = mpsc::channel();
+            Bridge::new(
+                app.as_weak(),
+                PosterTx { hi, lo },
+                Arc::new(AtomicU64::new(0)),
+                player,
+                downloads,
+            )
+        };
+        #[cfg(not(feature = "desktop"))]
+        let bridge = Bridge::new(
+            app.as_weak(),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            downloads,
+        );
+        assert!(bridge.shared.lock().unwrap().installed.is_empty());
+        wire_page_navigation(&app, &bridge);
+        app.show().unwrap();
+
+        for width in [700, 1100] {
+            app.window().set_size(slint::PhysicalSize::new(width, 800));
+            for (index, label, component) in [
+                (4, "Calendar", "CalendarPage"),
+                (5, "Downloads", "DownloadsPage"),
+            ] {
+                app.invoke_navigate_section(3);
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+                assert!(app.get_more_open());
+                // Mouse rail selection reaches the exact production global
+                // NavState callback and must establish a direct Back origin.
+                let direct = ElementHandle::find_by_element_type_name(&app, "SideItem")
+                    .nth(index as usize)
+                    .unwrap();
+                tap(&app, direct);
+                assert!(!app.get_more_open(), "{label} must close desktop More");
+                assert_eq!(current_nav(&app), index);
+                assert_eq!(
+                    ElementHandle::find_by_element_type_name(&app, component).count(),
+                    1
+                );
+                assert_one_rail(&app);
+                app.set_system_back_request(app.get_system_back_request() + 1);
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+                assert!(app.get_show_home(), "direct {label} Back returns Home");
+                assert!(!app.get_more_open());
+
+                app.invoke_navigate_section(3);
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+                tap(&app, more_link(&app, label));
+                assert_eq!(current_nav(&app), index);
+                assert_one_rail(&app);
+                let rail = ElementHandle::find_by_element_type_name(&app, "SideNav")
+                    .next()
+                    .unwrap()
+                    .absolute_position();
+                app.set_system_back_request(app.get_system_back_request() + 1);
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+                assert!(app.get_more_open(), "More-link {label} Back returns More");
+                assert!(!app.get_show_home());
+                assert_one_rail(&app);
+                assert_eq!(
+                    ElementHandle::find_by_element_type_name(&app, "SideNav")
+                        .next()
+                        .unwrap()
+                        .absolute_position(),
+                    rail
+                );
+                assert_eq!(
+                    ElementHandle::find_by_element_type_name(&app, component).count(),
+                    0
+                );
+                app.set_system_back_request(app.get_system_back_request() + 1);
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+                assert!(app.get_show_home());
+                assert!(!app.get_more_open());
+            }
+        }
+        // No startup addon/tracking/download workers were started.
+        assert!(bridge.shared.lock().unwrap().installed.is_empty());
+        assert!(bridge.downloads.jobs().is_empty());
+    }
 }

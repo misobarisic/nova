@@ -1,0 +1,47 @@
+import { MediaCard, CategoryRow } from "../ui/types.slint";
+// Persistent bindings connect backend state once; embedded roots share this object.
+export global LibraryBridge {
+    in-out property <component-factory> factory;
+    in-out property <length> viewport_width;
+    in-out property <length> viewport_height;
+    in-out property <[MediaCard]> library;
+    in-out property <[CategoryRow]> category_rows;
+    in-out property <[string]> category_names;
+    in-out property <[string]> category_labels;
+    in-out property <int> category_index;
+    in-out property <string> library_filter_category;
+    in-out property <string> query;
+    in-out property <int> sort_index;
+    in-out property <bool> list_view;
+    in-out property <bool> search_open;
+    in-out property <string> library_empty_hint;
+    in-out property <int> kb_zone;
+    in-out property <int> kb_nav;
+    in-out property <int> kb_f;
+    in-out property <int> kb_idx;
+    in-out property <bool> kb_active;
+    in-out property <length> scroll_y;
+    in-out property <length> nav-viewport-width;
+    in-out property <int> min_cols;
+    in-out property <int> system_back_request;
+    in-out property <bool> more_open;
+    in-out property <bool> narrow;
+    in-out property <length> safe-top;
+    in-out property <length> safe-left;
+    in-out property <length> safe-right;
+    in-out property <length> safe-bottom;
+    in-out property <bool> touch_menus;
+    callback view_changed();
+    callback discover_picked();
+    callback home_picked();
+    callback library_picked();
+    callback settings_picked();
+    callback more_picked();
+    callback about_picked();
+    callback library_filter_picked(string);
+    callback library_item_picked(int);
+    callback remove_library_item(int);
+    callback library_watch_action(int, int);
+    callback library_status_action(int, int);
+    callback library_visible_range(int, int);
+}

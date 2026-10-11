@@ -3069,8 +3069,6 @@ dependencies = [
 [[package]]
 name = "i-slint-compiler"
 version = "1.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2412bc535ec506ca7917fdda20a2fb0a32cb03c5f9b215566d098b949d31b720"
 dependencies = [
  "annotate-snippets",
  "by_address",
@@ -5413,7 +5411,303 @@ version = "0.1.0"
 dependencies = [
  "i-slint-core",
  "nova-config",
+ "nova-ui-calendar",
+ "nova-ui-detail",
+ "nova-ui-discover",
+ "nova-ui-home",
+ "nova-ui-library",
+ "nova-ui-more",
+ "nova-ui-onboarding",
+ "nova-ui-player-osd",
+ "nova-ui-settings",
+ "nova-ui-shared",
  "serde_json",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-calendar"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-detail"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-detail-episodes",
+ "nova-ui-detail-streams",
+ "nova-ui-detail-tracking",
+ "nova-ui-detail-tracking-entry",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-detail-episodes"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-detail-streams"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-detail-tracking"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-detail-tracking-entry"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-discover"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-home"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-library"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-more"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-onboarding"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-player-osd"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-settings"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-settings-addons",
+ "nova-ui-settings-categories",
+ "nova-ui-settings-display",
+ "nova-ui-settings-downloaded-episodes",
+ "nova-ui-settings-downloads",
+ "nova-ui-settings-home",
+ "nova-ui-settings-image-cache",
+ "nova-ui-settings-look-feel",
+ "nova-ui-settings-p2p",
+ "nova-ui-settings-player",
+ "nova-ui-settings-sync",
+ "nova-ui-settings-theme",
+ "nova-ui-settings-tracking",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-settings-addons"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-settings-categories"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-settings-display"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-settings-downloaded-episodes"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-settings-downloads"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-settings-home"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-settings-image-cache"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-settings-look-feel"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-settings-p2p"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-settings-player"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-settings-sync"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-settings-theme"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-settings-tracking"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
+ "nova-ui-shared",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
+name = "nova-ui-shared"
+version = "0.1.0"
+dependencies = [
+ "i-slint-core",
  "slint",
  "slint-build",
 ]

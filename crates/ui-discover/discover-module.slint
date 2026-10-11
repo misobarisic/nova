@@ -1,0 +1,87 @@
+import { DiscoverPage } from "../ui/discover.slint";
+import { DiscoverBridge } from "@NovaUiShared";
+
+export component DiscoverModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: DiscoverBridge.viewport_width; height: DiscoverBridge.viewport_height;
+    DiscoverPage {
+        width: 100%; height: 100%;
+        nav-viewport-width <=> DiscoverBridge.nav-viewport-width;
+        catalog <=> DiscoverBridge.catalog;
+        addon_names <=> DiscoverBridge.addon_names;
+        type_names <=> DiscoverBridge.type_names;
+        catalog_names <=> DiscoverBridge.catalog_names;
+        catalog_labels <=> DiscoverBridge.catalog_labels;
+        genre_names <=> DiscoverBridge.genre_names;
+        empty_hint <=> DiscoverBridge.empty_hint;
+        searchable_hint <=> DiscoverBridge.searchable_hint;
+        addon_combo_idx <=> DiscoverBridge.addon_combo_idx;
+        type_combo_idx <=> DiscoverBridge.type_combo_idx;
+        catalog_combo_idx <=> DiscoverBridge.catalog_combo_idx;
+        genre_combo_idx <=> DiscoverBridge.genre_combo_idx;
+        search_text <=> DiscoverBridge.search_text;
+        search_results <=> DiscoverBridge.search_results;
+        search_history <=> DiscoverBridge.search_history;
+        search_history_contexts <=> DiscoverBridge.search_history_contexts;
+        search_results_open <=> DiscoverBridge.search_results_open;
+        search_focused <=> DiscoverBridge.search_focused;
+        search_filters_open <=> DiscoverBridge.search_filters_open;
+        search_addon_names <=> DiscoverBridge.search_addon_names;
+        search_type_names <=> DiscoverBridge.search_type_names;
+        search_catalog_names <=> DiscoverBridge.search_catalog_names;
+        search_catalog_labels <=> DiscoverBridge.search_catalog_labels;
+        search_genre_names <=> DiscoverBridge.search_genre_names;
+        search_addon_combo_idx <=> DiscoverBridge.search_addon_combo_idx;
+        search_type_combo_idx <=> DiscoverBridge.search_type_combo_idx;
+        search_catalog_combo_idx <=> DiscoverBridge.search_catalog_combo_idx;
+        search_genre_combo_idx <=> DiscoverBridge.search_genre_combo_idx;
+        system_back_request <=> DiscoverBridge.system_back_request;
+        animate_search_results <=> DiscoverBridge.animate_search_results;
+        search_loading <=> DiscoverBridge.search_loading;
+        search_loading_more <=> DiscoverBridge.search_loading_more;
+        search_can_load_more <=> DiscoverBridge.search_can_load_more;
+        search_empty_hint <=> DiscoverBridge.search_empty_hint;
+        searchable <=> DiscoverBridge.searchable;
+        min_cols <=> DiscoverBridge.min_cols;
+        can_load_more <=> DiscoverBridge.can_load_more;
+        loading_more <=> DiscoverBridge.loading_more;
+        kb_zone <=> DiscoverBridge.kb_zone;
+        kb_nav <=> DiscoverBridge.kb_nav;
+        kb_ctl <=> DiscoverBridge.kb_ctl;
+        kb_idx <=> DiscoverBridge.kb_idx;
+        kb_active <=> DiscoverBridge.kb_active;
+        scroll_y <=> DiscoverBridge.scroll_y;
+        search_scroll_y <=> DiscoverBridge.search_scroll_y;
+        scroll_page <=> DiscoverBridge.scroll_page;
+        narrow <=> DiscoverBridge.narrow;
+        touch_menus <=> DiscoverBridge.touch_menus;
+        safe-top <=> DiscoverBridge.safe-top;
+        safe-left <=> DiscoverBridge.safe-left;
+        safe-right <=> DiscoverBridge.safe-right;
+        safe-bottom <=> DiscoverBridge.safe-bottom;
+        more_open <=> DiscoverBridge.more_open;
+        addon_picked(arg0) => { DiscoverBridge.addon_picked(arg0); }
+        type_picked(arg0) => { DiscoverBridge.type_picked(arg0); }
+        catalog_picked(arg0) => { DiscoverBridge.catalog_picked(arg0); }
+        genre_picked(arg0) => { DiscoverBridge.genre_picked(arg0); }
+        search_activated() => { DiscoverBridge.search_activated(); }
+        search_filter_picked(arg0, arg1) => { DiscoverBridge.search_filter_picked(arg0, arg1); }
+        search_edited(arg0) => { DiscoverBridge.search_edited(arg0); }
+        search_submitted(arg0) => { DiscoverBridge.search_submitted(arg0); }
+        search_back_picked() => { DiscoverBridge.search_back_picked(); }
+        search_history_cleared() => { DiscoverBridge.search_history_cleared(); }
+        search_history_selected(arg0) => { DiscoverBridge.search_history_selected(arg0); }
+        search_history_item_removed_at(arg0) => { DiscoverBridge.search_history_item_removed_at(arg0); }
+        search_history_item_removed(arg0) => { DiscoverBridge.search_history_item_removed(arg0); }
+        item_selected(arg0, arg1) => { DiscoverBridge.item_selected(arg0, arg1); }
+        discover_picked() => { DiscoverBridge.discover_picked(); }
+        home_picked() => { DiscoverBridge.home_picked(); }
+        library_picked() => { DiscoverBridge.library_picked(); }
+        settings_picked() => { DiscoverBridge.settings_picked(); }
+        more_picked() => { DiscoverBridge.more_picked(); }
+        about_picked() => { DiscoverBridge.about_picked(); }
+        load_more() => { DiscoverBridge.load_more(); }
+        visible_range(arg0, arg1) => { DiscoverBridge.visible_range(arg0, arg1); }
+    }
+}

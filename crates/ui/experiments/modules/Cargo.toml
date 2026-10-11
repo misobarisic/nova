@@ -1,0 +1,16 @@
+[workspace]
+members = ["settings-library", "monolithic", "imported", "container"]
+resolver = "3"
+
+# This is an isolated compile experiment, not a dependency of Nova.
+[workspace.dependencies]
+slint = { version = "=1.18.0", default-features = false, features = ["std", "accessibility", "compat-1-2", "backend-winit", "renderer-femtovg"] }
+slint-build = { version = "=1.18.0", features = ["experimental-module-builds"] }
+i-slint-core = { version = "=1.18.0", default-features = false, features = ["std", "shared-parley"] }
+
+[profile.dev]
+opt-level = 0
+debug = false
+
+[profile.dev.package."*"]
+opt-level = 2

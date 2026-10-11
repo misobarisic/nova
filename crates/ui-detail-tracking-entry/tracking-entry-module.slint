@@ -1,0 +1,32 @@
+import { DetailBridge, DetailContent } from "@NovaUiShared";
+import { EntryEditor } from "../ui/tracking-entry.slint";
+export component DetailTrackingEntryModule inherits Window {
+    default-font-family: "Roboto"; background: transparent;
+    width: DetailContent.entry_slot_width; height: DetailContent.entry_height;
+    private property <string> entry_id;
+    private property <int> generation;
+    private property <length> measured_height: body.preferred-height;
+    init => { root.entry_id = DetailContent.active_entry_id; root.generation = DetailContent.entry_generation; root.publish_size(); }
+    changed measured_height => { root.publish_size(); }
+    changed width => { root.publish_size(); }
+    function publish_size() {
+        if root.entry_id != "" && root.entry_id == DetailContent.active_entry_id && root.generation == DetailContent.entry_generation { DetailContent.entry_height = root.measured_height; }
+    }
+    body := VerticalLayout {
+        width: 100%; height: self.preferred-height; spacing: 0px;
+        EntryEditor {
+            entry: DetailBridge.tracking_links[DetailContent.active_entry_index];
+            active_entry_id <=> DetailContent.active_entry_id;
+            entry_more <=> DetailContent.entry_more;
+            entry_editing <=> DetailContent.entry_editing;
+            entry_history_confirm <=> DetailContent.entry_history_confirm;
+            entry_unlink_confirm <=> DetailContent.entry_unlink_confirm;
+            release_focus => { DetailContent.recover_entry_focus(); }
+            edit(id, progress, status, score, set_started, started, set_completed, completed) => { DetailBridge.tracking_edit(id, progress, status, score, set_started, started, set_completed, completed); }
+            action(id, action) => {
+                if action == 3 { DetailContent.recover_entry_focus(); }
+                DetailBridge.tracking_action(id, action);
+            }
+        }
+    }
+}

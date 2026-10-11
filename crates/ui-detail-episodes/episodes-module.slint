@@ -1,0 +1,778 @@
+import { Theme, Anim, DetailBridge, DetailContent } from "@NovaUiShared";
+import { EpisodePager } from "../ui/episode-pager.slint";
+import { SearchField } from "../ui/searchfield.slint";
+import { IcCheck, IcSchedule, IcSearch, IcClose } from "../ui/icons.slint";
+
+export component DetailEpisodesModule inherits Window {
+    background: transparent; default-font-family: "Roboto";
+    width: DetailContent.episodes_slot_width; height: DetailContent.episodes_slot_height;
+    public function restore_episode_focus() {
+        if DetailContent.episode_search_open && !DetailBridge.tracking_open && !DetailBridge.stream_selector_open { DetailContent.episode_focus_request += 1; }
+        else { DetailContent.focus_shell(); }
+    }
+    private property <int> generation;
+    init => { root.generation = DetailContent.episodes_generation; root.publish_size(); }
+    private property <length> measured_height: body.preferred-height;
+    changed measured_height => { root.publish_size(); }
+    changed width => { root.publish_size(); }
+    function publish_size() {
+        if root.generation == DetailContent.episodes_generation && DetailBridge.detail_tab == 3 { DetailContent.episodes_height = root.measured_height; }
+    }
+    property <int> ep_cols: DetailBridge.narrow ? 1 : Math.min(4, Math.max(2, Math.floor((root.episode_content_w + root.card-gap) / (320px + root.card-gap))));
+    // Equal-width episode cards: grid columns start at each cell's
+    // preferred width (full unwrapped text even when wrapped — see Text
+    // docs), so without an explicit cell width columns track content
+    // length. Derive one shared width top-down from the page width
+    // (content = page − 64px scroll padding each side on wide layouts).
+    // The shell supplies the actual body-slot width one-way; intrinsic
+    // height measurements never drive this width back through the scroller.
+    property <length> episode_content_w: root.width;
+    property <length> card-gap: Theme.card_spacing;
+    property <length> ep_card_w: (root.episode_content_w - (root.ep_cols - 1) * root.card-gap) / root.ep_cols;
+    // Phones keep seasons in one horizontal rail with the next card
+    // peeking in. On wide windows the grid grows from a 180px minimum card;
+    // cards are capped (same centered-cap scheme as the Discover grid), so the
+    // wall never turns into a few giant banners on desktop.
+    property <length> min-season: 180px;
+    property <length> max-season: 240px;
+    property <int> season_cols: DetailBridge.narrow ? 2 : Math.min(5, Math.max(3, Math.floor((root.episode_content_w + root.card-gap) / (root.min-season + root.card-gap))));
+    property <length> season_card_w: DetailBridge.narrow ? Math.min(180px, Math.max(120px, (DetailContent.shell_width - 40px - DetailBridge.safe-left - DetailBridge.safe-right) / 2.2)) : Math.min(root.max-season, (root.episode_content_w - (root.season_cols - 1) * root.card-gap) / root.season_cols);
+    // Columns actually used (partial last row still packs left).
+    property <int> season_grid_cols: Math.min(root.season_cols, DetailBridge.season_cards.length);
+
+    body := VerticalLayout { height: self.preferred-height;
+
+        // Percent-sized controls alone have no intrinsic width.
+        // Keep this column anchored when filtering removes the
+        // fixed-width episode cards (including all results).
+        width: root.episode_content_w;
+        spacing: 10px;
+        alignment: start;
+
+        // `if` keeps big episode grids uninstantiated when
+        // hidden; keyboard edit-mode focuses the
+        // filter via edit_watcher below (page scope
+        // cannot see ids inside `if`).
+        if DetailBridge.modal_episodes: VerticalLayout {
+            width: 100%;
+            spacing: 8px;
+            alignment: start;
+
+            // Enters filter edit mode on demand: the
+            // page sets kb_edit, this focuses the
+            // field (accepting the keystrokes); the
+            // field's accepted handler exits edit.
+            edit_watcher := Timer {
+                interval: 80ms;
+                running: DetailContent.kb_edit && !DetailBridge.tracking_open && !DetailBridge.stream_selector_open;
+                triggered => { DetailContent.episode_search_open = true; filter_line.focus(); }
+            }
+
+            // ---- Season picker ----------------------
+            // Art-backed season wall (tap a card to
+            // switch seasons). The keyboard zone is
+            // unchanged (kb_ci == 0, Left/Right
+            // cycles, Enter steps); the ring on the
+            // selected card shows focus (same as the
+            // episode grid, which also has no mark).
+            // No label row above the wall: its emoji
+            // measured narrower than it painted on
+            // Android and let the page wiggle sideways.
+            season_picker := Rectangle {
+                width: 100%;
+                height: DetailBridge.season_cards.length == 0 ? 0px : (DetailBridge.narrow ? root.season_card_w * 9 / 16 : Math.ceil(DetailBridge.season_cards.length / root.season_cols) * (root.season_card_w * 9 / 16 + root.card-gap) - root.card-gap);
+                property <int> selected_index: DetailBridge.season_combo_idx;
+                changed selected_index => { season_flick.reveal_selected(); }
+
+                season_flick := Flickable {
+                    x: DetailBridge.narrow ? 0px : (parent.width - self.width) / 2;
+                    width: DetailBridge.narrow ? parent.width : season_grid.width;
+                    height: parent.height;
+                    interactive: DetailBridge.narrow;
+                    content-width: Math.max(self.width, season_grid.width);
+                    content-height: self.height;
+                    // Match Home's Continue row: card hints choose the
+                    // axis early, and row movement maintains the page hold.
+                    // Automatic selected-card reveal must not arm it.
+                    property <length> revealed_x: 0px;
+                    changed content-x => {
+                        if (DetailBridge.narrow && !DetailBridge.kb_active && self.content-x != self.revealed_x) {
+                            DetailContent.filters_panned();
+                        }
+                    }
+                    changed width => { self.reveal_selected(); }
+                    init => { self.reveal_selected(); }
+                    function reveal_selected() {
+                        if (!DetailBridge.narrow) {
+                            self.revealed_x = 0px;
+                            self.content-x = 0px;
+                            return;
+                        }
+                        let left = Math.max(0, DetailBridge.season_combo_idx) * (root.season_card_w + root.card-gap);
+                        let right = left + root.season_card_w;
+                        let target = left + self.content-x < 0px ? -left :
+                            right + self.content-x > self.width ? self.width - right : self.content-x;
+                        // Publish the automatic offset before moving the row,
+                        // so its content-x callback cannot hold the page.
+                        self.revealed_x = Math.max(self.width - self.content-width, Math.min(0px, target));
+                        self.content-x = self.revealed_x;
+                        DetailContent.filters_pan_released();
+                    }
+
+                    season_grid := GridLayout {
+                        // The narrow row has its own scrollable width;
+                        // desktop keeps the centered capped grid.
+                        width: Math.max(0px, (DetailBridge.narrow ? DetailBridge.season_cards.length : root.season_grid_cols) * (root.season_card_w + root.card-gap) - root.card-gap);
+                        height: season_picker.height;
+                        spacing: root.card-gap;
+
+                        for s[i] in DetailBridge.season_cards: Rectangle {
+                            row: DetailBridge.narrow ? 0 : Math.floor(i / root.season_cols);
+                            col: DetailBridge.narrow ? i : Math.mod(i, root.season_cols);
+                            // Fixed shared width (see
+                            // season_card_w): keeps every
+                            // column equal.
+                            width: root.season_card_w;
+                            // Cinematic 16:9 cards.
+                            height: root.season_card_w * 9 / 16;
+                            border-radius: Theme.card_corner_radius;
+                            clip: true;
+                            background: Theme.current.episode_placeholder;
+                            border-width: DetailBridge.season_combo_idx == i ? 2px : 0px;
+                            border-color: DetailBridge.kb_active && DetailBridge.kb_zone == 3 && DetailBridge.kb_ci == 0 && DetailBridge.season_combo_idx == i ? Theme.current.text_bright : Theme.current.accent;
+
+                            if s.has_thumb: Image {
+                                source: s.thumb;
+                                image-fit: cover;
+                                width: 100%;
+                                height: 100%;
+                            }
+
+                            if !s.has_thumb: Text {
+                                text: "🎬";
+                                font-size: 22px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            // Dim the art so the label
+                            // stays legible.
+                            Rectangle {
+                                width: 100%;
+                                height: 100%;
+                                background: Theme.current.scrim_episode;
+                            }
+
+                            Text {
+                                text: s.name;
+                                color: Theme.current.text_bright;
+                                font-size: 17px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            // Watched check (top-right) for fully-seen seasons:
+                            // same small white disc + black check as the
+                            // episode cards.
+                            if s.watched: Rectangle {
+                                x: parent.width - 28px;
+                                y: 4px;
+                                width: 22px;
+                                height: 22px;
+                                border-radius: 11px;
+                                background: Theme.current.watched_badge;
+
+                                IcCheck {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    width: 13px;
+                                    height: 13px;
+                                    fill: Theme.current.on_watched_badge;
+                                }
+                            }
+
+                            // Card menu: desktop right-click opens the
+                            // native popup at the cursor; touch hold
+                            // opens the bottom sheet (see below).
+                            season_ctx := ContextMenuArea {
+                                width: 100%;
+                                height: 100%;
+
+                                Menu {
+                                    MenuItem {
+                                        title: s.watched ? @tr("Mark season as unwatched") : @tr("Mark season as watched");
+                                        activated => { DetailBridge.season_watch_action(i, 0); }
+                                    }
+                                    MenuSeparator {}
+                                    MenuItem {
+                                        title: @tr("Select season");
+                                        activated => {
+                                            DetailBridge.kb_active = false;
+                                            DetailBridge.kb_zone = 3;
+                                            DetailBridge.kb_ci = 0;
+                                            DetailBridge.season_picked(i);
+                                        }
+                                    }
+                                }
+
+                            touch_season := TouchArea {
+                                property <bool> lp_suppress: false;
+                                property <bool> dragged: false;
+                                property <length> hint_x: 0px;
+                                property <length> hint_y: 0px;
+                                property <bool> hint_live: false;
+                                property <bool> hint_held: false;
+                                function hint_stop() {
+                                    self.hint_live = false;
+                                    if (self.hint_held) {
+                                        self.hint_held = false;
+                                        DetailContent.filters_pan_released();
+                                    }
+                                }
+                                changed pressed => { if (!self.pressed) { self.hint_stop(); } }
+                                accessible-role: button;
+                                accessible-label: s.name;
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    if (touch_season.lp_suppress || touch_season.dragged) {
+                                        touch_season.lp_suppress = false;
+                                        touch_season.dragged = false;
+                                    } else {
+                                        DetailBridge.kb_active = false;
+                                        DetailBridge.kb_zone = 3;
+                                        DetailBridge.kb_ci = 0;
+                                        DetailBridge.season_picked(i);
+                                    }
+                                }
+                                pointer-event(ev) => {
+                                    if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
+                                        season_lp_timer.stop();
+                                        if (DetailBridge.touch_menus) {
+                                            DetailContent.open_season_menu(i, s.watched);
+                                        } else {
+                                            season_ctx.show({ x: touch_season.mouse-x, y: touch_season.mouse-y });
+                                        }
+                                    } else if (ev.kind == PointerEventKind.down) {
+                                        DetailBridge.kb_active = false;
+                                        touch_season.lp_suppress = false;
+                                        touch_season.dragged = false;
+                                        self.hint_x = self.mouse-x;
+                                        self.hint_y = self.mouse-y;
+                                        self.hint_live = true;
+                                        if (DetailBridge.touch_menus) {
+                                            season_lp_timer.stop();
+                                            season_lp_timer.start();
+                                        }
+                                    } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                                        season_lp_timer.stop();
+                                        self.hint_stop();
+                                    } else if (ev.kind == PointerEventKind.move && DetailBridge.narrow) {
+                                        // Decide the axis before the page captures a
+                                        // slightly diagonal horizontal season swipe.
+                                        if (!(self.pressed || ev.touch-finger-id != 0)) {
+                                            self.hint_stop();
+                                            return;
+                                        }
+                                        DetailBridge.kb_active = false;
+                                        if (!self.hint_live) {
+                                            self.hint_x = self.mouse-x;
+                                            self.hint_y = self.mouse-y;
+                                            self.hint_live = true;
+                                        }
+                                        let dx = self.mouse-x - self.hint_x;
+                                        let dy = self.mouse-y - self.hint_y;
+                                        if (Math.abs(dy) > 8px && Math.abs(dy) > Math.abs(dx)) {
+                                            self.hint_stop();
+                                        } else {
+                                            self.hint_held = true;
+                                            DetailContent.filters_panned();
+                                        }
+                                    }
+                                }
+                                moved => {
+                                    if (Math.abs(touch_season.mouse-x - touch_season.pressed-x) + Math.abs(touch_season.mouse-y - touch_season.pressed-y) > 12px) {
+                                        touch_season.dragged = true;
+                                        season_lp_timer.stop();
+                                    }
+                                }
+                            }
+                            }
+
+                            // Hold-to-open timer (pinned off until a
+                            // press arms it; see ep_lp_timer).
+                            season_lp_timer := Timer {
+                                interval: 600ms;
+                                running: false;
+                                triggered => {
+                                    self.stop();
+                                    touch_season.lp_suppress = true;
+                                    DetailContent.open_season_menu(i, s.watched);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            episode_search_focus := Timer {
+                interval: 80ms;
+                running: false;
+                triggered => {
+                    self.stop();
+                    if (DetailContent.episode_search_open && !DetailBridge.tracking_open && !DetailBridge.stream_selector_open) { filter_line.focus(); }
+                }
+            }
+
+            property <int> restore_request: DetailContent.episode_focus_request;
+            changed restore_request => { if !DetailBridge.tracking_open && !DetailBridge.stream_selector_open && DetailContent.episode_search_open { filter_line.focus(); } }
+            episode_toolbar := Rectangle {
+                width: 100%;
+                height: DetailContent.episode_search_open ? 120px : 64px;
+                animate height { duration: Anim.transition_slide; easing: ease-out; }
+                border-radius: 16px;
+                background: Theme.current.episode_toolbar;
+                border-width: 1px;
+                border-color: DetailContent.filter_focused ? Theme.current.focus_soft : Theme.current.border_medium;
+                // The field stays instantiated for keyboard focus requests.
+                // Explicit row positions keep the header stable as it expands.
+                clip: true;
+
+                HorizontalLayout {
+                    x: 10px; y: 10px;
+                    width: parent.width - 20px;
+                    height: 44px;
+                    spacing: 8px;
+                    Rectangle {
+                        width: 44px; height: 44px;
+                        horizontal-stretch: 0;
+                        border-radius: 12px;
+                        background: DetailContent.episode_search_open ? Theme.current.search_active_wash : (episode_search_toggle.has-hover ? Theme.current.episode_search_hover : Theme.current.episode_search);
+                        border-width: 1px;
+                        border-color: DetailBridge.kb_active && DetailBridge.kb_zone == 3 && DetailBridge.kb_ci == 1 ? Theme.current.accent_vivid : (DetailContent.episode_search_open || DetailBridge.episode_filter != "" ? Theme.current.focus_soft : Theme.current.border_medium);
+                        if !DetailContent.episode_search_open: IcSearch {
+                            x: 12px; y: 12px;
+                            width: 20px; height: 20px;
+                            fill: DetailBridge.episode_filter != "" ? Theme.current.text_search_match : Theme.current.icon_episode_search;
+                        }
+                        if DetailContent.episode_search_open: IcClose {
+                            x: 12px; y: 12px;
+                            width: 20px; height: 20px;
+                            fill: Theme.current.text_search_match;
+                        }
+                        episode_search_toggle := TouchArea {
+                            accessible-role: button;
+                            accessible-label: DetailContent.episode_search_open ? @tr("Hide episode search") : @tr("Search episodes");
+                            mouse-cursor: pointer;
+                            clicked => {
+                                DetailBridge.kb_active = false;
+                                DetailContent.episode_search_open = !DetailContent.episode_search_open;
+                                if (DetailContent.episode_search_open) {
+                                    episode_search_focus.start();
+                                } else {
+                                    episode_search_focus.stop();
+                                    DetailContent.kb_edit = false;
+                                    DetailContent.focus_shell();
+                                }
+                            }
+                        }
+                    }
+                    episode_result_count := Text {
+                        text: DetailBridge.episode_filter != "" ? @tr("Found: {}", DetailBridge.episode_total) : @tr("{} in this season", DetailBridge.episode_total);
+                        color: Theme.current.text_episode_counter;
+                        font-size: 12px;
+                        min-width: 0px;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                    if DetailBridge.episode_page_count > 1: episode_top_pager := EpisodePager {
+                        episode-style: true;
+                        page: DetailBridge.episode_page;
+                        count: DetailBridge.episode_page_count;
+                        picked(p) => { DetailBridge.episode_page_picked(p); }
+                    }
+                }
+                filter_line := SearchField {
+                    x: 10px; y: 62px;
+                    width: parent.width - 20px;
+                    height: 48px;
+                    visible: DetailContent.episode_search_open;
+                    enabled: DetailContent.episode_search_open;
+                    prominent: true;
+                    search-icon: true;
+                    min-width: 0px;
+                    text <=> DetailBridge.episode_filter;
+                    placeholder-text: @tr("Search episodes…");
+                    background: Theme.current.episode_empty_panel;
+                    focus_changed(focused) => { if !DetailBridge.tracking_open { DetailContent.filter_focused = focused; } }
+                    edited(t) => { DetailBridge.episode_filter_changed(t); }
+                    accepted(t) => {
+                        DetailBridge.episode_filter_changed(t);
+                        DetailContent.kb_edit = false;
+                        DetailContent.focus_shell();
+                    }
+                }
+            }
+
+            if DetailBridge.episode_rows.length == 0 && DetailBridge.episode_filter != "": episode_empty := Rectangle {
+                width: 100%;
+                height: Math.max(96px, empty_copy.preferred-height);
+                border-radius: 16px;
+                background: Theme.current.episode_card;
+                empty_copy := VerticalLayout {
+                    padding: 16px;
+                    spacing: 6px;
+                    alignment: center;
+                    episode_empty_title := Text {
+                        text: @tr("No matching episodes");
+                        color: Theme.current.text_primary;
+                        font-size: 15px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                    episode_empty_hint := Text {
+                        text: @tr("Try a different title or episode number.");
+                        color: Theme.current.text_episode_hint;
+                        font-size: 13px;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            GridLayout {
+                spacing: root.card-gap;
+
+                for e[i] in DetailBridge.episode_rows: ep_card := Rectangle {
+                    // Reveal after the season/page model and the
+                    // outer scroll geometry have settled.
+                    property <int> reveal_request: DetailBridge.episode_reveal_request;
+                    changed reveal_request => {
+                        if (self.reveal_request > 0 && i == DetailBridge.kb_ep) {
+                            episode_reveal_t.stop();
+                            episode_reveal_t.start();
+                        }
+                    }
+                    init => {
+                        if (self.reveal_request > 0 && i == DetailBridge.kb_ep) { episode_reveal_t.start(); }
+                    }
+                    episode_reveal_t := Timer {
+                        interval: 60ms;
+                        running: false;
+                        triggered => {
+                            self.stop();
+                            if (!DetailBridge.tracking_open && !DetailBridge.stream_selector_open && DetailBridge.modal_episodes && DetailBridge.detail_tab == 3 && i == DetailBridge.kb_ep) {
+                                DetailContent.scroll_list_to_top(ep_card.absolute-position.y - 12px);
+                            }
+                        }
+                    }
+                    row: Math.floor(i / root.ep_cols);
+                    col: Math.mod(i, root.ep_cols);
+                    // Fixed shared width (see ep_card_w):
+                    // keeps every column equal.
+                    width: root.ep_card_w;
+                    // Keep the full canvas even when artwork and
+                    // synopsis metadata are unavailable.
+                    height: Math.max(240px, self.width * 0.43);
+                    // Hard containment: on some renderer
+                    // paths overflowing text is painted
+                    // past its element instead of being
+                    // elided, so the card itself must
+                    // clip (nothing may reach the next
+                    // row's thumbnails).
+                    clip: true;
+                    background: Theme.current.episode_card;
+                    border-radius: Theme.card_corner_radius;
+                    border-width: DetailBridge.kb_active && DetailBridge.kb_zone == 3 && DetailBridge.kb_ci == 2 && DetailBridge.kb_ep == i ? 2px : 1px;
+                    border-color: DetailBridge.kb_active && DetailBridge.kb_zone == 3 && DetailBridge.kb_ci == 2 && DetailBridge.kb_ep == i ? Theme.current.focus_ring : Theme.current.border_card;
+
+                    // Card menu: desktop right-click opens the
+                    // native popup at the cursor; touch hold
+                    // opens the bottom sheet (see below).
+                    // The TouchArea owns all presses (see
+                    // upstream slint#12354), both paths open
+                    // explicitly from its handlers.
+                    ep_ctx := ContextMenuArea {
+                        width: 100%;
+                        height: 100%;
+
+                        Menu {
+                            MenuItem {
+                                title: e.watched ? @tr("Mark episode as unwatched") : @tr("Mark episode as watched");
+                                activated => { DetailBridge.episode_watch_action(DetailBridge.episode_page_start + i, e.watched ? 2 : 1); }
+                            }
+                            MenuItem {
+                                title: @tr("Mark episode and previous as watched");
+                                enabled: !e.watched;
+                                activated => { DetailBridge.episode_watch_action(DetailBridge.episode_page_start + i, 3); }
+                            }
+                            MenuItem {
+                                title: @tr("Clear resume position");
+                                enabled: !e.watched && e.progress > 0;
+                                activated => { DetailBridge.episode_watch_action(DetailBridge.episode_page_start + i, 4); }
+                            }
+                            MenuSeparator {}
+                            MenuItem {
+                                title: @tr("Open episode");
+                                activated => {
+                                    DetailBridge.kb_active = false;
+                                    DetailBridge.episode_picked(DetailBridge.episode_page_start + i);
+                                }
+                            }
+                        }
+
+                    touch_ep := TouchArea {
+                        property <bool> lp_suppress: false;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if (touch_ep.lp_suppress) {
+                                // Release after a hold: the sheet
+                                // is already up, don't open.
+                                touch_ep.lp_suppress = false;
+                            } else {
+                                DetailBridge.kb_active = false;
+                                DetailBridge.episode_picked(DetailBridge.episode_page_start + i);
+                            }
+                        }
+                        pointer-event(ev) => {
+                            if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
+                                ep_lp_timer.stop();
+                                if (DetailBridge.touch_menus) {
+                                    DetailContent.open_ep_menu(DetailBridge.episode_page_start + i, e.watched, e.progress);
+                                } else {
+                                    ep_ctx.show({ x: touch_ep.mouse-x, y: touch_ep.mouse-y });
+                                }
+                            } else if (ev.kind == PointerEventKind.down) {
+                                touch_ep.lp_suppress = false;
+                                // Hold-to-sheet is a touch flow;
+                                // desktop keeps click-only behavior.
+                                if (DetailBridge.touch_menus) {
+                                    ep_lp_timer.stop();
+                                    ep_lp_timer.start();
+                                }
+                            } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                                ep_lp_timer.stop();
+                            }
+                        }
+                        // Finger jitter must not cancel the hold;
+                        // only a real drag (scroll) does.
+                        moved => {
+                            if (Math.abs(touch_ep.mouse-x - touch_ep.pressed-x) + Math.abs(touch_ep.mouse-y - touch_ep.pressed-y) > 24px) {
+                                ep_lp_timer.stop();
+                            }
+                        }
+                    }
+                    }
+
+                    // Hold-to-open timer. NOTE: Slint Timers
+                    // run from creation by default
+                    // (`running` defaults true), so it is
+                    // pinned off here and only armed by a
+                    // press. A 600ms stationary hold opens
+                    // the sheet; taps/drags stop it first.
+                    ep_lp_timer := Timer {
+                        interval: 600ms;
+                        running: false;
+                        triggered => {
+                            self.stop();
+                            touch_ep.lp_suppress = true;
+                            DetailContent.open_ep_menu(DetailBridge.episode_page_start + i, e.watched, e.progress);
+                        }
+                    }
+
+                    // Full-bleed artwork: badges stay at the top while
+                    // text sits over a dark, continuous bottom scrim.
+                    if e.has_thumb: episode_artwork := Image {
+                        x: 0px; y: 0px;
+                        width: 100%; height: 100%;
+                        source: e.thumb;
+                        image-fit: cover;
+                    }
+                    Image {
+                        x: 0px; y: 0px;
+                        width: 100%; height: 100%;
+                        source: @image-url("../../assets/episode-card-scrim.svg");
+                        colorize: Theme.current.scrim_episode_card;
+                        image-fit: fill;
+                    }
+
+                    if e.ep_no != "": Rectangle {
+                        x: 14px; y: 14px;
+                        width: episode_badge.preferred-width + 24px;
+                        height: 30px;
+                        border-radius: 15px;
+                        background: Theme.current.episode_number_badge;
+                        border-width: 1.5px;
+                        border-color: Theme.current.episode_number_border;
+                        episode_badge := Text {
+                            x: 12px; y: 0px;
+                            height: 100%;
+                            text: e.ep_no;
+                            color: Theme.current.text_bright;
+                            font-size: 14px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    if e.watched: episode_watched := Rectangle {
+                        x: parent.width - self.width - 14px;
+                        y: 14px;
+                        width: 30px; height: 30px;
+                        border-radius: 15px;
+                        background: Theme.current.watched_badge;
+                        IcCheck {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 18px; height: 18px;
+                            fill: Theme.current.episode_card;
+                        }
+                    }
+
+                    // Measure with the same font as the visible title:
+                    // a guessed line height can elide its second line.
+                    episode_title_measure := Text {
+                        width: episode_title.width;
+                        text: e.text;
+                        font-size: episode_title.font-size;
+                        font-weight: 700;
+                        wrap: word-wrap;
+                        visible: false;
+                    }
+                    episode_title_two_lines := Text {
+                        text: "Ag\nAg";
+                        font-size: episode_title.font-size;
+                        font-weight: 700;
+                        visible: false;
+                    }
+
+                    episode_content := VerticalLayout {
+                        x: 16px;
+                        y: ep_card.height - self.height - 16px;
+                        width: ep_card.width - 32px;
+                        height: self.preferred-height;
+                        spacing: 7px;
+                        alignment: start;
+
+                        episode_title := Text {
+                            width: parent.width * (ep_card.width > 520px ? 0.75 : 1.0);
+                            text: e.text;
+                            color: Theme.current.text_bright;
+                            font-size: Math.max(18px, Math.min(24px, ep_card.width * 0.045));
+                            font-weight: 700;
+                            height: Math.min(episode_title_measure.preferred-height, episode_title_two_lines.preferred-height) + 1px;
+                            vertical-alignment: top;
+                            wrap: word-wrap;
+                            overflow: elide;
+                        }
+
+                        if e.date != "" || e.runtime != "": HorizontalLayout {
+                            height: 18px;
+                            spacing: e.date != "" && e.runtime != "" ? 12px : 0px;
+                            if e.date != "": HorizontalLayout {
+                                width: Math.min(e.runtime != "" ? (parent.width - 24px) * 0.6 : parent.width, episode_date.preferred-width + 23px);
+                                horizontal-stretch: 0;
+                                spacing: 7px;
+                                Path {
+                                    width: 16px; height: 16px;
+                                    viewbox-width: 24; viewbox-height: 24;
+                                    commands: "M4 5H20V21H4Z M4 10H20 M8 2V7 M16 2V7 M8 13H9 M12 13H13 M16 13H17 M8 17H9 M12 17H13 M16 17H17";
+                                    fill: transparent;
+                                    stroke: Theme.current.text_settings;
+                                    stroke-width: 1.5px;
+                                }
+                                episode_date := Text {
+                                    text: e.date;
+                                    color: Theme.current.text_settings;
+                                    font-size: 13px;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+                            }
+                            if e.runtime != "": HorizontalLayout {
+                                width: Math.min(e.date != "" ? (parent.width - 24px) * 0.4 : parent.width, episode_runtime.preferred-width + 23px);
+                                horizontal-stretch: 0;
+                                spacing: 7px;
+                                IcSchedule {
+                                    width: 16px; height: 16px;
+                                    fill: Theme.current.text_settings;
+                                }
+                                episode_runtime := Text {
+                                    text: e.runtime;
+                                    color: Theme.current.text_settings;
+                                    font-size: 13px;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+
+                        if e.details != "": episode_synopsis := Text {
+                            text: e.details;
+                            color: Theme.current.text_settings;
+                            font-size: 14px;
+                            height: 2 * self.font-size * 1.4;
+                            vertical-alignment: top;
+                            wrap: word-wrap;
+                            overflow: elide;
+                        }
+
+                        // Completed episodes keep the watched disc; only
+                        // unfinished playback needs a resume rail.
+                        if !e.watched && e.progress > 0: episode_progress := HorizontalLayout {
+                            height: 20px;
+                            spacing: 10px;
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                episode_progress_track := Rectangle {
+                                    x: 0px;
+                                    y: (parent.height - self.height) / 2;
+                                    width: 100%; height: 7px;
+                                    border-radius: 3.5px;
+                                    background: Theme.current.progress_track_overlay;
+                                    Rectangle {
+                                        x: 0px;
+                                        width: parent.width * Math.max(0, Math.min(1, e.progress));
+                                        height: 100%;
+                                        border-radius: 3.5px;
+                                        background: Theme.current.progress_fill;
+                                    }
+                                }
+                            }
+                            episode_percentage := Text {
+                                text: @tr("{}%", Math.round(Math.max(0, Math.min(1, e.progress)) * 100));
+                                color: Theme.current.text_bright;
+                                font-size: 14px;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Turning the page at the bottom returns to the search
+            // bar and first new card, even for a shorter last page.
+            if DetailBridge.episode_page_count > 1: HorizontalLayout {
+                width: 100%;
+                height: 44px;
+                alignment: end;
+                EpisodePager {
+                    episode-style: true;
+                    page: DetailBridge.episode_page;
+                    count: DetailBridge.episode_page_count;
+                    picked(p) => {
+                        DetailBridge.episode_page_picked(p);
+                        DetailContent.scroll_list_to_top(episode_toolbar.absolute-position.y);
+                    }
+                }
+            }
+        }
+
+
+    }
+}

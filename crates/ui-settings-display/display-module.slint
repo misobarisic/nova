@@ -1,0 +1,129 @@
+import { SettingsBridge, SettingsContent, SettingsStyle } from "@NovaUiShared";
+
+import { ToggleSwitch, Segmented, SectionHeader, SettingsRow, SettingsCard } from "../ui/settings-controls.slint";
+
+// The shell owns scrolling and transitions. Report intrinsic layout sizes
+// only while this section is selected, so outgoing instances cannot resize it.
+export component SettingsDisplayModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: SettingsContent.slot_width; height: SettingsContent.slot_height;
+    private property <length> measured_min: body_layout.min-height;
+    private property <length> measured_preferred: body_layout.preferred-height;
+    changed measured_min => { root.publish_size(); }
+    changed measured_preferred => { root.publish_size(); }
+    init => { root.publish_size(); }
+    function publish_size() {
+        if SettingsBridge.sel == 3 {
+            SettingsContent.content_min_height = root.measured_min;
+            SettingsContent.content_preferred_height = root.measured_preferred;
+        }
+    }
+    body_layout := VerticalLayout {
+        width: 100%; height: 100%; spacing: 0px;
+        VerticalLayout {
+
+            vertical-stretch: 0; spacing: 16px;
+            SectionHeader { label: @tr("Language"); }
+            SettingsCard {
+                SettingsRow {
+                    tinted: true;
+                    setting-key: "language";
+                    row-title: @tr("Language");
+                    row-desc: @tr("Language of the interface.");
+
+                    Segmented {
+                        labels: SettingsBridge.language_names;
+                        current-index: SettingsBridge.language_index;
+                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 5 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 5; SettingsBridge.language_index = i; SettingsContent.schedule_save(); }
+                    }
+                }
+            }
+            SectionHeader { label: @tr("Artwork and metadata"); }
+            SettingsCard {
+                SettingsRow {
+                    setting-key: "date_relative";
+                    row-title: @tr("Relative episode dates");
+                    row-desc: @tr("Show release dates as \"3 days ago\" instead of \"Mar 15, 2024\".");
+
+                    ToggleSwitch {
+                        name: @tr("Relative episode dates");
+                        checked <=> SettingsBridge.cache_date_relative;
+                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 0 && SettingsBridge.kb_active;
+                        toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 0; SettingsContent.schedule_setting("date_relative"); }
+                    }
+                }
+                SettingsRow {
+                    tinted: true;
+                    setting-key: "prefetch_metadata";
+                    row-title: @tr("Prefetch episode metadata");
+                    row-desc: @tr("Download season/episode info in the background for items in Discover. My Library is always prefetched.");
+
+                    ToggleSwitch {
+                        name: @tr("Prefetch episode metadata");
+                        checked <=> SettingsBridge.cache_prefetch_metadata;
+                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 1 && SettingsBridge.kb_active;
+                        toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 1; SettingsContent.schedule_setting("prefetch_metadata"); }
+                    }
+                }
+                SettingsRow {
+                    tinted: false;
+                    setting-key: "show_unwatched_thumbs";
+                    row-title: @tr("Show unwatched thumbnails");
+                    row-desc: @tr("Show artwork for episodes you haven't started. When off, unwatched episodes show a placeholder instead.");
+
+                    ToggleSwitch {
+                        name: @tr("Show unwatched thumbnails");
+                        checked <=> SettingsBridge.cache_show_unwatched_thumbs;
+                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 2 && SettingsBridge.kb_active;
+                        toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 2; SettingsContent.schedule_setting("show_unwatched_thumbs"); }
+                    }
+                }
+            }
+            SectionHeader { label: @tr("Discover layout"); }
+            SettingsCard {
+                SettingsRow {
+                    tinted: true;
+                    setting-key: "discover_min_cols";
+                    row-title: @tr("Discover grid columns");
+                    row-desc: @tr("Minimum columns in the Discover grid. More columns show smaller cards — e.g. 3 across on a phone.");
+
+                    Segmented {
+                        labels: ["2", "3", "4", "5", "6"];
+                        current-index: Math.max(0, Math.min(4, SettingsBridge.discover_min_cols - 2));
+                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 3 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 3; SettingsBridge.discover_min_cols = i + 2; SettingsContent.schedule_setting("discover_min_cols"); }
+                    }
+                }
+                SettingsRow {
+                    setting-key: "discover_catalog_addon_names";
+                    row-title: @tr("Show addon names in catalogs");
+                    row-desc: @tr("Prefix catalog names with their addon in Discover's All addons view.");
+                    ToggleSwitch {
+                        name: @tr("Show addon names in catalogs");
+                        checked <=> SettingsBridge.discover_catalog_addon_names;
+                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 6 && SettingsBridge.kb_active;
+                        toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 6; SettingsContent.schedule_setting("discover_catalog_addon_names"); }
+                    }
+                }
+            }
+            SectionHeader { label: @tr("Library layout"); }
+            SettingsCard {
+                SettingsRow {
+                    tinted: false;
+                    setting-key: "library_min_cols";
+                    row-title: @tr("Library grid columns");
+                    row-desc: @tr("Minimum columns in My Library. Applies automatically.");
+
+                    Segmented {
+                        labels: ["2", "3", "4", "5", "6"];
+                        current-index: Math.max(0, Math.min(4, SettingsBridge.library_min_cols - 2));
+                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 4 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 4; SettingsBridge.library_min_cols = i + 2; SettingsContent.schedule_setting("library_min_cols"); }
+                    }
+                }
+            }
+        }
+    }
+}

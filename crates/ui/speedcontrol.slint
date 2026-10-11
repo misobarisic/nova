@@ -1,5 +1,6 @@
+import { Theme, PlaybackSpeed } from "@NovaUiShared";
 import { ControlTouchArea } from "control-input.slint";
-import { Theme } from "theme.slint";
+
 import { SliderTouchArea } from "slider-touch.slint";
 // Shared playback-rate control.
 //
@@ -13,19 +14,7 @@ import { SliderTouchArea } from "slider-touch.slint";
 // 1.5×, 2×) jumps straight to the common rates. The readout always shows two
 // decimals.
 
-export global PlaybackSpeed {
-    out property <float> minimum: 0.5;
-    out property <float> maximum: 2.0;
-    out property <float> span: maximum - minimum;
 
-    /// "1.25×" — Slint has no printf-style formatting, so the hundredths are
-    /// padded by hand (the value is already clamped by the backend).
-    public pure function label(speed: float) -> string {
-        let hundredths = Math.round(speed * 100);
-        let fraction = Math.mod(hundredths, 100);
-        return Math.floor(hundredths / 100) + "." + (fraction < 10 ? "0" : "") + fraction + "×";
-    }
-}
 
 // Square, text-free step button (same material as the small in-row buttons).
 component SpeedStepButton inherits Rectangle {

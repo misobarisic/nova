@@ -1,0 +1,32 @@
+import { LicenseSource } from "../ui/types.slint";
+// Persistent bindings connect backend state once; embedded roots share this object.
+export global AboutBridge {
+    in-out property <component-factory> factory;
+    in-out property <length> viewport_width;
+    in-out property <length> viewport_height;
+    in-out property <int> kb_zone;
+    in-out property <int> kb_nav;
+    in-out property <bool> kb_active;
+    in-out property <bool> licenses_open;
+    in-out property <length> scroll_y;
+    in-out property <length> licenses_scroll_y;
+    in-out property <bool> external_navigation;
+    in-out property <bool> active;
+    in-out property <length> nav-viewport-width;
+    in-out property <bool> narrow;
+    in-out property <length> safe-top;
+    in-out property <length> safe-left;
+    in-out property <length> safe-right;
+    in-out property <length> safe-bottom;
+    in-out property <int> system_back_request;
+    in-out property <string> license_catalog;
+    in-out property <[LicenseSource]> license_sources;
+    callback home_picked();
+    callback back_picked();
+    callback discover_picked();
+    callback library_picked();
+    callback settings_picked();
+    callback about_picked();
+    callback more_picked();
+    callback license_source_requested(string);
+}

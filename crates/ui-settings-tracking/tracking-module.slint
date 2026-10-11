@@ -1,0 +1,40 @@
+import { SettingsBridge, SettingsContent } from "@NovaUiShared";
+
+import { TrackingSettings } from "../ui/tracking.slint";
+
+// The shell owns scrolling and transitions. Report intrinsic layout sizes
+// only while this section is selected, so outgoing instances cannot resize it.
+export component SettingsTrackingModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: SettingsContent.slot_width; height: SettingsContent.slot_height;
+    private property <length> measured_min: body_layout.min-height;
+    private property <length> measured_preferred: body_layout.preferred-height;
+    changed measured_min => { root.publish_size(); }
+    changed measured_preferred => { root.publish_size(); }
+    init => { root.publish_size(); }
+    function publish_size() {
+        if SettingsBridge.sel == 12 {
+            SettingsContent.content_min_height = root.measured_min;
+            SettingsContent.content_preferred_height = root.measured_preferred;
+        }
+    }
+    body_layout := VerticalLayout {
+        width: 100%; height: 100%; spacing: 0px;
+        tracking_settings := TrackingSettings {
+
+            init => { SettingsContent.tracking_input_focused = self.input_focused; }
+            accounts: SettingsBridge.tracking_accounts;
+            reset_confirm <=> SettingsContent.tracking_reset_confirm;
+            changed input_focused => {SettingsContent.tracking_input_focused=self.input_focused;}
+            blur: SettingsContent.tracking_blur;
+            notice: SettingsBridge.tracking_notice;
+            connect(service,client,redirect) => {SettingsBridge.tracking_connect(service,client,redirect);}
+            complete(service,value) => {SettingsBridge.tracking_complete(service,value);}
+            disconnect(service) => {SettingsBridge.tracking_disconnect(service);}
+            cancel(service) => {SettingsBridge.tracking_cancel(service);}
+            reset => {SettingsBridge.tracking_reset();}
+            automatic(service,enabled) => {SettingsBridge.tracking_automatic(service,enabled);}
+        }
+    }
+}

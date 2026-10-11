@@ -1,49 +1,418 @@
-export { SettingSyncInfo } from "types.slint";
-import { SettingsSync } from "settings-sync.slint";
-export { SettingsSync } from "settings-sync.slint";
-import { Theme } from "theme.slint";
-export { Theme, ThemePalette } from "theme.slint";
+import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
+import { MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
+// Types and globals have one shared compiled definition. Page visual trees
+// live in independent factory products, never imported into AppWindow.
+
+export { Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge }
 // Bundle the same UI family on desktop and Android, including a real bold face.
 import "../../assets/fonts/Roboto-Regular.ttf";
 import "../../assets/fonts/Roboto-Bold.ttf";
-import { DiscoverPage } from "discover.slint";
-import { HomePage } from "home.slint";
-import { DetailPage } from "detail.slint";
+import { DiscoverBindings, HomeBindings, DetailBindings, SettingsBindings, CalendarBindings } from "page-bindings.slint";
+import { DiscoverHost } from "discover-host.slint";
+import { HomeHost } from "home-host.slint";
+import { DetailHost } from "detail-host.slint";
 import { CategoryPickerPopup } from "categories.slint";
 import { LibraryDuplicates } from "library-duplicates.slint";
-import { LibraryPage } from "library.slint";
-import { Onboarding } from "onboarding.slint";
-import { SettingsPage } from "settings.slint";
-import { AboutPage } from "about.slint";
-import { CalendarPage } from "calendar.slint";
-import { DownloadsPage, DownloadGroup, DownloadEpisode } from "downloads-page.slint";
-import { CalendarDay, CalendarRelease } from "types.slint";
-import { MorePage } from "more.slint";
-import { PlayerOverlay } from "player.slint";
-// Re-exported so the Rust backend can reach the animation switches (globals
-// are only accessible from Rust when exported by the root component's file).
-export { Anim } from "anim.slint";
-import { Anim } from "anim.slint";
-// Same re-export for the navigation bookkeeping the backend writes: which
-// section a page switch is leaving, for the incoming nav icon's feedback.
-import { NavMetrics } from "sidenav.slint";
-export { NavState } from "sidenav.slint";
-import { SettingsStyle } from "settings-controls.slint";
-import { ControlInput } from "control-input.slint";
-export { ControlInput } from "control-input.slint";
-export { SettingsStyle } from "settings-controls.slint";
-
-// Shared structs used by the property declarations below; they are exported
-// from types.slint, so the generated Rust module (`slint::include_modules!`)
-// exposes them to the backend.
-import { TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, MediaCard, StreamRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, SyncPeer, SyncInvite, TrackRow, SeasonCard, ContinueRow, UpcomingRow, CalCell, SheetItem, DownloadRow, LicenseSource } from "types.slint";
+import { LibraryHost } from "library-host.slint";
+import { OnboardingHost } from "onboarding-host.slint";
+import { SettingsHost } from "settings-host.slint";
+import { AboutHost } from "about-host.slint";
+import { CalendarHost } from "calendar-host.slint";
+import { DownloadsHost } from "downloads-host.slint";
+import { MoreHost } from "more-host.slint";
+import { PlayerOsdHost } from "player-osd-host.slint";
+import { PlayerOsdBindings, OnboardingBindings } from "playback-bindings.slint";
+import { SideNav } from "sidenav.slint";
+import { BottomNav } from "bottomnav.slint";
 
 // AppWindow owns every property / callback the backend drives (all the
-// `set_*`, `get_*`, `on_*` and `invoke_*` calls in desktop.rs / web.rs) and
+// `set_*`, `get_*`, `on_*` and `invoke_*` calls in src/app/) and
 // forwards them into the per-screen components below. The screen switching
 // guards live here so each page component stays self-contained.
 export component AppWindow inherits Window {
+    public function player_bridge_next_episode_streams(t: string) { root.next_episode_streams(t); }
+    public function player_bridge_next_episode_dismiss(t: string) { root.next_episode_dismiss(t); }
+    public function player_bridge_restore_playback_default(control: int) { root.restore_playback_default(control); }
+    public function player_bridge_osd_opacity_changed(v: float) { root.osd_opacity = v; }
+    public function player_bridge_toggle_pause() { root.toggle_pause(); }
+    public function player_bridge_seek(v: float) { root.seek(v); }
+    public function player_bridge_close_player() { root.close_player(); }
+    public function player_bridge_set_volume(v: float) { root.set_volume(v); }
+    public function player_bridge_toggle_mute() { root.toggle_mute(); }
+    public function player_bridge_pick_audio_track(i: int) { root.pick_audio_track(i); }
+    public function player_bridge_pick_sub_track(i: int) { root.pick_sub_track(i); }
+    public function player_bridge_pick_decoder(i: int) { root.pick_decoder(i); }
+    public function player_bridge_playback_speed_changed(v: float) { root.playback_speed_changed(v); }
+    public function player_bridge_playback_speed_stepped(d: int) { root.playback_speed_stepped(d); }
+    public function player_bridge_playback_speed_preview(v: float) { root.playback_speed_preview(v); }
+    public function player_bridge_android_brightness_step(d: int) { root.android_brightness_step(d); }
+    public function player_bridge_android_volume_step(d: int) { root.android_volume_step(d); }
+    public function player_bridge_settings_opened() { root.settings_opened(); }
+    public function player_bridge_toggle_fullscreen() { root.toggle_fullscreen(); }
+    public function player_bridge_osd_mouse_moved() { root.osd_mouse_moved(); }
+    public function player_bridge_tracks_popup_opened(i: int) { root.tracks_popup_opened(i); }
+    public pure function player_bridge_format_time(t: float) -> string { return root.format_time(t); }
+    public pure function player_bridge_format_volume(v: float) -> string { return root.format_volume(v); }
+    public function onboarding_bridge_add_addon(url: string) { root.onboarding_addon_added(url); }
+    public function onboarding_bridge_cinemeta() { root.onboarding_addon_added("https://v3-cinemeta.strem.io"); }
+    public function onboarding_bridge_setting_edited(field: string) { root.settings_edited(field); }
+    public function onboarding_bridge_language_search(query: string, subtitle: bool) { root.playback_language_search(query, subtitle); }
+    public function onboarding_bridge_language_picked(code: string, subtitle: bool) { root.playback_language_picked(code, subtitle); }
+    public function onboarding_bridge_finished() { root.onboarding_finished(); }
+    public function onboarding_bridge_background_requested() { root.exit_to_background(); }
+    PlayerOsdBindings {
+        playback_started <=> root.playback_started;
+        is_paused <=> root.is_paused;
+        position <=> root.position;
+        duration <=> root.duration;
+        time_text <=> root.time_text;
+        player_status <=> root.player_status;
+        player_title <=> root.player_title;
+        decode_label <=> root.decode_label;
+        decoder_selected <=> root.decoder_selected;
+        sub_label <=> root.sub_track_label;
+        audio_label <=> root.audio_track_label;
+        volume <=> root.volume;
+        muted <=> root.muted;
+        playback_speed <=> root.effective_playback_speed;
+        player_brightness <=> root.player_brightness;
+        is_fullscreen <=> root.is_fullscreen;
+        audio_tracks <=> root.audio_tracks;
+        sub_tracks <=> root.sub_tracks;
+        osd_visible <=> root.osd_visible;
+        scrim_image <=> root.scrim_image;
+        player_poster <=> root.player_poster;
+        kb_active <=> root.kb_active;
+    }
+    OnboardingBindings {
+        step <=> root.onboarding_step;
+        language_index <=> root.language_index;
+        true_black <=> root.true_black;
+        addon_url <=> root.addon_url;
+        audio_index <=> root.audio_language_choice_index;
+        subtitle_index <=> root.subtitle_language_choice_index;
+    }
+    LibraryBindings {
+        library <=> root.library;
+        category_rows <=> root.category_rows;
+        category_names <=> root.library_category_names;
+        category_labels <=> root.library_category_labels;
+        category_index <=> root.library_category_index;
+        library_filter_category <=> root.library_filter_category;
+        query <=> root.library_query;
+        sort_index <=> root.library_sort;
+        list_view <=> root.library_list_view;
+        search_open <=> root.library_search_open;
+        library_empty_hint <=> root.library_empty_hint;
+        kb_zone <=> root.library_kb_zone;
+        kb_nav <=> root.library_kb_nav;
+        kb_f <=> root.library_kb_f;
+        kb_idx <=> root.library_kb_idx;
+        kb_active <=> root.kb_active;
+        scroll_y <=> root.library_scroll_y;
+    }
+    MoreBindings {
+        scroll_y <=> root.more_scroll_y;
+        choice <=> root.more_choice;
+        kb_zone <=> root.more_focus_zone;
+        kb_nav <=> root.more_nav_index;
+        kb_active <=> root.kb_active;
+    }
+    AboutBindings {
+        kb_zone <=> root.family_nav_zone;
+        kb_nav <=> root.family_nav_index;
+        kb_active <=> root.kb_active;
+        licenses_open <=> root.about_licenses_open;
+        scroll_y <=> root.about_scroll_y;
+        licenses_scroll_y <=> root.about_licenses_scroll_y;
+    }
+    DownloadsBindings {
+        query <=> root.downloads_page_query;
+        filter <=> root.downloads_page_filter;
+        sort_recent <=> root.downloads_page_sort_recent;
+        kb_active <=> root.kb_active;
+    }
+
     default-font-family: "Roboto";
+
+    // Link backend-owned state to the shared bridges once, independently of
+    // page visibility. Remounting visual hosts must never merge these pools again.
+    DiscoverBindings {
+        catalog <=> root.catalog;
+        addon_names <=> root.addon_names;
+        type_names <=> root.type_names;
+        catalog_names <=> root.catalog_names;
+        genre_names <=> root.genre_names;
+        empty_hint <=> root.empty_hint;
+        searchable_hint <=> root.searchable_hint;
+        addon_combo_idx <=> root.addon_combo_idx;
+        type_combo_idx <=> root.type_combo_idx;
+        catalog_combo_idx <=> root.catalog_combo_idx;
+        genre_combo_idx <=> root.genre_combo_idx;
+        search_text <=> root.search_text;
+        search_results <=> root.search_results;
+        search_results_open <=> root.discover_search_open;
+        search_focused <=> root.discover_search_focused;
+        search_addon_combo_idx <=> root.search_addon_combo_idx;
+        search_type_combo_idx <=> root.search_type_combo_idx;
+        search_catalog_combo_idx <=> root.search_catalog_combo_idx;
+        search_genre_combo_idx <=> root.search_genre_combo_idx;
+        search_loading <=> root.search_loading;
+        search_loading_more <=> root.search_loading_more;
+        search_can_load_more <=> root.search_can_load_more;
+        search_empty_hint <=> root.search_empty_hint;
+        searchable <=> root.searchable;
+        can_load_more <=> root.can_load_more;
+        loading_more <=> root.loading_more;
+        kb_zone <=> root.discover_kb_zone;
+        kb_nav <=> root.discover_kb_nav;
+        kb_ctl <=> root.discover_kb_ctl;
+        kb_idx <=> root.discover_kb_idx;
+        kb_active <=> root.kb_active;
+        scroll_y <=> root.discover_scroll_y;
+        search_scroll_y <=> root.discover_search_scroll_y;
+        scroll_page <=> root.discover_scroll_page;
+    }
+    HomeBindings {
+        continue_rows <=> root.home_continue;
+        new_episode_rows <=> root.home_new_episodes;
+        upcoming_rows <=> root.home_upcoming;
+        cal_cells <=> root.home_cal_cells;
+        cal_title <=> root.home_cal_title;
+        cal_day_rows <=> root.home_cal_day;
+        cal_epoch <=> root.home_cal_epoch;
+        cal_open <=> root.home_cal_open;
+        home_empty_hint <=> root.home_empty_hint;
+        featured_title <=> root.home_featured_title;
+        featured_type <=> root.home_featured_type;
+        featured_rating <=> root.home_featured_rating;
+        featured_runtime <=> root.home_featured_runtime;
+        featured_release_info <=> root.home_featured_release_info;
+        featured_tagline <=> root.home_featured_tagline;
+        featured_description <=> root.home_featured_description;
+        featured_backdrop <=> root.home_featured_backdrop;
+        featured_index <=> root.home_featured_index;
+        featured_count <=> root.home_featured_count;
+        featured_revision <=> root.home_featured_revision;
+        kb_zone <=> root.home_kb_zone;
+        kb_nav <=> root.home_kb_nav;
+        kb_idx <=> root.home_kb_idx;
+        kb_up_idx <=> root.home_kb_up_idx;
+        kb_active <=> root.kb_active;
+        scroll_y <=> root.home_scroll_y;
+        view <=> root.home_view;
+        all_scroll_y <=> root.home_all_scroll_y;
+        continue_x <=> root.home_continue_x;
+        new_episodes_x <=> root.home_new_episodes_x;
+        upcoming_x <=> root.home_upcoming_x;
+    }
+    DetailBindings {
+        tracking_service <=> root.tracking_service;
+        tracking_open <=> root.tracking_open;
+        tracking_return_tab <=> root.tracking_return_tab;
+        selected_poster <=> root.selected_poster;
+        selected_backdrop <=> root.selected_backdrop;
+        selected_title <=> root.selected_title;
+        stream_selector_open <=> root.stream_selector_open;
+        selected_year <=> root.selected_year;
+        selected_description <=> root.selected_description;
+        selected_genre_list <=> root.selected_genre_list;
+        detail_tab <=> root.detail_tab;
+        episode_filter <=> root.episode_filter;
+        in_library <=> root.in_library;
+        category_rows <=> root.category_rows;
+        selected_category_count <=> root.selected_category_count;
+        streams <=> root.streams;
+        stream_page <=> root.stream_page;
+        stream_page_count <=> root.stream_page_count;
+        stream_page_start <=> root.stream_page_start;
+        stream_total <=> root.stream_total;
+        streams_hint <=> root.streams_hint;
+        stream_addons <=> root.stream_addons;
+        stream_loading <=> root.stream_loading;
+        streams_searching <=> root.streams_searching;
+        stream_filter <=> root.stream_filter;
+        stream_action_open <=> root.stream_action_open;
+        stream_action_id <=> root.stream_action_id;
+        stream_action_title <=> root.stream_action_title;
+        stream_action_items <=> root.stream_action_items;
+        modal_episodes <=> root.modal_episodes;
+        season_names <=> root.season_names;
+        season_combo_idx <=> root.season_combo_idx;
+        season_cards <=> root.season_cards;
+        episode_rows <=> root.episode_rows;
+        episode_page <=> root.episode_page;
+        episode_page_count <=> root.episode_page_count;
+        episode_page_start <=> root.episode_page_start;
+        episode_total <=> root.episode_total;
+        episode_context <=> root.episode_context;
+        kb_zone <=> root.detail_kb_zone;
+        kb_top <=> root.detail_kb_top;
+        kb_tab <=> root.detail_kb_tab;
+        kb_ci <=> root.detail_kb_ci;
+        kb_ep <=> root.detail_kb_ep;
+        kb_s <=> root.detail_kb_s;
+        kb_active <=> root.kb_active;
+    }
+    SettingsBindings {
+        kb_zone <=> root.family_nav_zone;
+        kb_nav <=> root.family_nav_index;
+        sel <=> root.settings_selected_id;
+        sub_open <=> root.settings_detail_open;
+        search_query <=> root.settings_search_query;
+        kb_land <=> root.settings_focused_id;
+        land_scroll_y <=> root.settings_navigation_scroll;
+        page_scrolls <=> root.settings_page_scrolls;
+        addon_rows <=> root.addon_rows;
+        addon_search_text <=> root.addon_search_text;
+        addon_capability_filter <=> root.addon_capability_filter;
+        addon_url <=> root.addon_url;
+        category_rows <=> root.category_rows;
+        category_input <=> root.category_input;
+        home_catalog_rows <=> root.home_catalog_rows;
+        home_row_catalog_rows <=> root.home_row_catalog_rows;
+        home_continue_enabled <=> root.home_continue_enabled;
+        home_upcoming_enabled <=> root.home_upcoming_enabled;
+        home_episode_artwork <=> root.home_episode_artwork;
+        home_catalog_candidate_names <=> root.home_catalog_candidate_names;
+        home_catalog_candidate_index <=> root.home_catalog_candidate_index;
+        home_catalog_genre_names <=> root.home_catalog_genre_names;
+        home_catalog_genre_index <=> root.home_catalog_genre_index;
+        home_catalog_add_open <=> root.home_catalog_add_open;
+        home_catalog_add_target <=> root.home_catalog_add_target;
+        home_catalog_add_error <=> root.home_catalog_add_error;
+        cache_images <=> root.cache_images;
+        cache_disk_usage <=> root.cache_disk_usage;
+        cache_enabled <=> root.cache_enabled;
+        cache_format_index <=> root.cache_format_index;
+        cache_quality <=> root.cache_quality;
+        detail_poster_resolution_index <=> root.detail_poster_resolution_index;
+        detail_backdrop_resolution_index <=> root.detail_backdrop_resolution_index;
+        episode_thumbnail_resolution_index <=> root.episode_thumbnail_resolution_index;
+        player_episode_backdrop_resolution_index <=> root.player_episode_backdrop_resolution_index;
+        cache_date_relative <=> root.cache_date_relative;
+        cache_show_unwatched_thumbs <=> root.cache_show_unwatched_thumbs;
+        cache_lru_mb <=> root.cache_lru_mb;
+        cache_prefetch_metadata <=> root.cache_prefetch_metadata;
+        discover_catalog_addon_names <=> root.discover_catalog_addon_names;
+        image_resolution_names <=> root.image_resolution_names;
+        discover_min_cols <=> root.discover_min_cols;
+        library_min_cols <=> root.library_min_cols;
+        cache_format_names <=> root.cache_format_names;
+        android_hwdec_index <=> root.android_hwdec_index;
+        player_backend_index <=> root.player_backend_index;
+        desktop_external_app_index <=> root.desktop_external_app_index;
+        default_audio_language <=> root.default_audio_language;
+        default_subtitle_language <=> root.default_subtitle_language;
+        audio_language_choice_index <=> root.audio_language_choice_index;
+        subtitle_language_choice_index <=> root.subtitle_language_choice_index;
+        playback_speed <=> root.playback_speed;
+        android_auto_continue <=> root.android_auto_continue;
+        episode_start_index <=> root.episode_start_index;
+        true_black <=> root.true_black;
+        card_corner_radius <=> root.card_corner_radius;
+        button_corner_radius <=> root.button_corner_radius;
+        card_spacing <=> root.card_spacing;
+        status_bar_gradient <=> root.status_bar_gradient;
+        home_backdrop_size <=> root.home_backdrop_size;
+        detail_backdrop_size <=> root.detail_backdrop_size;
+        hero_title_alignment <=> root.hero_title_alignment;
+        animations <=> root.animations;
+        anim_transitions <=> root.anim_transitions;
+        anim_hover <=> root.anim_hover;
+        anim_player <=> root.anim_player;
+        anim_nav_slide <=> root.anim_nav_slide;
+        language_index <=> root.language_index;
+        language_names <=> root.language_names;
+        show_image_cache <=> root.show_image_cache;
+        show_torrents <=> root.show_torrents;
+        torrent_enabled <=> root.torrent_enabled;
+        torrent_dir <=> root.torrent_dir;
+        torrent_max_mb <=> root.torrent_max_mb;
+        torrent_down_limit <=> root.torrent_down_limit;
+        torrent_no_cache <=> root.torrent_no_cache;
+        torrent_disk_usage <=> root.torrent_disk_usage;
+        download_auto_delete_watched <=> root.download_auto_delete_watched;
+        downloads_rows <=> root.downloads_rows;
+        sync_enabled <=> root.sync_enabled;
+        sync_identity <=> root.sync_identity;
+        sync_peers <=> root.sync_peers;
+        sync_peer_input <=> root.sync_peer_input;
+        sync_status <=> root.sync_status;
+        sync_device_name <=> root.sync_device_name;
+        sync_pair_confirm <=> root.sync_pair_confirm;
+        sync_local_discovery <=> root.sync_local_discovery;
+        sync_interval_index <=> root.sync_interval_index;
+        sync_background <=> root.sync_background;
+        sync_invite_ticket <=> root.sync_invite_ticket;
+        sync_invite_qr <=> root.sync_invite_qr;
+        sync_invites <=> root.sync_invites;
+        sync_join_input <=> root.sync_join_input;
+        sync_qr_scan_available <=> root.sync_qr_scan_available;
+        sync_link_notice <=> root.sync_link_notice;
+        sync_pair_prompt_visible <=> root.sync_pair_prompt_visible;
+        sync_pair_prompt_id <=> root.sync_pair_prompt_id;
+        sync_pair_prompt_name <=> root.sync_pair_prompt_name;
+        sync_pair_prompt_code <=> root.sync_pair_prompt_code;
+        kb_active <=> root.kb_active;
+        scroll_y <=> root.settings_scroll_y;
+        addon_config_open <=> root.addon_config_open;
+        addon_config_url <=> root.addon_config_url;
+        addon_config_label <=> root.addon_config_label;
+        addon_config_streams <=> root.addon_config_streams;
+        addon_config_metadata <=> root.addon_config_metadata;
+    }
+    CalendarBindings {
+        search <=> root.calendar_search;
+        view <=> root.calendar_view;
+        all <=> root.calendar_all;
+        kb_active <=> root.kb_active;
+    }
+
+    // Keep the mount guards in one place. Shared bridge payloads outlive their
+    // conditional hosts, so release their cached copies after page teardown.
+    callback release_page_payloads();
+    private property <bool> home_page_mounted: root.show_home && !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
+    changed home_page_mounted => { page_release_timer.start(); }
+    private property <bool> discover_page_mounted: !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
+    changed discover_page_mounted => { page_release_timer.start(); }
+    private property <bool> calendar_page_mounted: root.show_calendar && !root.player_open && !root.modal_visible && !root.more_open;
+    changed calendar_page_mounted => { page_release_timer.start(); }
+    private property <bool> detail_page_mounted: root.modal_visible && !root.player_open;
+    changed detail_page_mounted => { page_release_timer.start(); }
+    private property <bool> settings_page_mounted: root.show_settings && !root.more_open && !root.player_open && !root.modal_visible && !root.show_home && !root.show_about;
+    changed settings_page_mounted => { page_release_timer.start(); }
+    private property <bool> library_page_mounted: root.show_library && !root.player_open && !root.modal_visible && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
+    private property <bool> more_page_mounted: (root.more_open || root.more_parent) && !root.player_open && !root.modal_visible;
+    private property <bool> about_page_mounted: root.show_about && !root.more_open && !root.player_open && !root.modal_visible && !root.show_home && !root.show_library && !root.show_settings;
+    changed about_page_mounted => { page_release_timer.start(); }
+    private property <bool> downloads_page_mounted: root.show_downloads && !root.player_open && !root.modal_visible && !root.more_open;
+    changed downloads_page_mounted => { page_release_timer.start(); }
+    changed onboarding_visible => { page_release_timer.start(); }
+
+    // The Rust handler forces pending tree updates before releasing payloads
+    // and rechecks this guard in case navigation changed during child init.
+    public pure function page_bridge_is_mounted(page: int) -> bool {
+        return page == 0 ? root.home_page_mounted
+            : page == 1 ? root.discover_page_mounted
+            : page == 2 ? root.calendar_page_mounted
+            : page == 3 ? root.detail_page_mounted
+            : page == 4 ? root.settings_page_mounted
+            : page == 5 ? root.library_page_mounted
+            : page == 6 ? root.more_page_mounted
+            : page == 7 ? root.about_page_mounted
+            : page == 8 ? root.downloads_page_mounted
+            : page == 9 ? root.player_open
+            : page == 10 ? root.onboarding_visible : true;
+    }
+    page_release_timer := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => {
+            self.stop();
+            root.release_page_payloads();
+        }
+    }
     in-out property <bool> onboarding_visible: false;
     in-out property <int> onboarding_step: 0;
     in-out property <string> onboarding_pending_url: "";
@@ -169,12 +538,12 @@ export component AppWindow inherits Window {
         if (root.modal_visible && root.discover_search_open) {
             root.discover_search_animate_results = false;
         }
-        if (root.modal_visible) { root.discover_search_focused = false; root.more_open = false; }
+        if (root.modal_visible) { root.cancel_more_subpage_back(); root.more_subpage_entered = true; root.discover_search_focused = false; root.more_open = false; }
     }
-    changed show_home => { if (root.show_home) { root.discover_search_focused = false; root.more_open = false; } }
-    changed show_library => { if (root.show_library) { root.discover_search_focused = false; root.more_open = false; } }
+    changed show_home => { if (root.show_home) { root.cancel_more_subpage_back(); root.more_parent = false; root.more_subpage_entered = true; root.discover_search_focused = false; root.more_open = false; } }
+    changed show_library => { if (root.show_library) { root.cancel_more_subpage_back(); root.more_parent = false; root.more_subpage_entered = true; root.discover_search_focused = false; root.more_open = false; } }
     changed show_settings => { if (root.show_settings) { root.discover_search_focused = false; root.more_open = false; if (root.settings_two_pane) { root.settings_detail_open = true; } } }
-    changed player_open => { if (root.player_open) { root.discover_search_focused = false; root.more_open = false; } }
+    changed player_open => { if (root.player_open) { root.cancel_more_subpage_back(); root.more_subpage_entered = true; root.discover_search_focused = false; root.more_open = false; } }
     in-out property <bool> search_loading: false;
     in-out property <bool> search_loading_more: false;
     in-out property <bool> search_can_load_more: false;
@@ -229,6 +598,16 @@ export component AppWindow inherits Window {
     callback calendar_today();
     callback calendar_pick(int);
     callback calendar_release_picked(string);
+    // Page components can disappear beneath overlays while their route flags
+    // remain set. Invalidate their models/jobs at the window lifecycle boundary.
+    out property <bool> page_artwork_allowed: !root.modal_visible && !root.player_open && !root.more_open && !root.more_return_pending;
+    changed page_artwork_allowed => {
+        root.calendar_artwork_active_changed(root.page_artwork_allowed && root.show_calendar);
+        root.downloads_page_artwork_active_changed(root.page_artwork_allowed && root.show_downloads);
+    }
+    callback calendar_artwork_visible(string, bool);
+    callback calendar_artwork_active_changed(bool);
+    changed show_calendar => { root.calendar_artwork_active_changed(root.show_calendar && root.page_artwork_allowed); }
     in-out property <[DownloadGroup]> downloads_page_groups;
     in-out property <[DownloadEpisode]> downloads_page_transfers;
     in-out property <string> downloads_page_summary;
@@ -242,6 +621,9 @@ export component AppWindow inherits Window {
     callback downloads_page_sort_changed(bool);
     callback downloads_page_group_toggled(string);
     callback downloads_page_action(string, int);
+    callback downloads_page_artwork_visible(string, bool);
+    callback downloads_page_artwork_active_changed(bool);
+    changed show_downloads => { root.downloads_page_artwork_active_changed(root.show_downloads && root.page_artwork_allowed); }
     in-out property <[UpcomingRow]> home_upcoming: [];
     in-out property <[HomeCatalogSection]> home_catalog_sections: [];
     in-out property <[int]> home_catalog_order: [-1, -3, -2];
@@ -252,6 +634,11 @@ export component AppWindow inherits Window {
     in-out property <string> home_featured_title: "";
     in-out property <string> home_featured_watch_label: @tr("Start");
     in-out property <image> home_featured_logo;
+    // Only the displayed slide and its explicit pending target may own logos
+    // outside the decoded LRU; inactive prefetches keep request metadata only.
+    in-out property <string> home_featured_logo_identity;
+    in-out property <image> home_pending_logo;
+    in-out property <string> home_pending_logo_identity;
     in-out property <string> home_featured_type: "";
     in-out property <string> home_featured_rating: "";
     in-out property <string> home_featured_runtime: "";
@@ -287,72 +674,98 @@ export component AppWindow inherits Window {
     in-out property <bool> about_licenses_open: false;
     in-out property <length> about_scroll_y: 0px;
     in-out property <length> about_licenses_scroll_y: 0px;
-    // More is a root page; narrow children retain a Back route.
+    // More owns transient navigation state while its children share stationary chrome.
     in-out property <bool> more_open: false;
+    in-out property <length> more_scroll_y: 0px;
+    in-out property <int> more_choice: 0;
+    in-out property <int> more_focus_zone: 1;
+    private property <int> more_nav_index: 3;
+    private property <int> family_nav_zone: 1;
+    private property <int> family_nav_index: 3;
     private property <bool> more_parent: false;
+    private property <int> more_route_generation: 0;
+    private property <int> more_return_generation: 0;
     private property <bool> more_subpage_entered: true;
     private property <bool> more_subpage_exiting: false;
     private property <bool> more_return_pending: false;
+    private property <bool> more_family: root.more_open || root.more_parent || root.show_settings || root.show_about || root.show_calendar || root.show_downloads;
+    private property <length> more_rail_width: root.narrow_ui ? 0px : NavMetrics.rail-width + root.safe-area-insets.left;
     private property <float> more_entry_progress: root.more_subpage_entered ? 1.0 : 0.0;
-    animate more_entry_progress {
-        duration: root.more_subpage_entered ? Anim.transition_slide : 0ms;
-        easing: ease-out;
-    }
+    animate more_entry_progress { duration: root.more_subpage_entered ? Anim.transition_slide : 0ms; easing: ease-out; }
+    private property <float> more_entry_alpha: root.more_subpage_entered ? 1.0 : 0.0;
+    animate more_entry_alpha { duration: root.more_subpage_entered ? Anim.transition_fade : 0ms; }
     private property <float> more_return_start: 1.0;
-    // Reveal the destination under the outgoing page for the entire return.
-    // One progress value avoids a blank gap between unequal slide/fade times.
+    private property <float> more_return_alpha_start: 1.0;
     private property <float> more_return_progress: root.more_return_pending ? 1.0 : 0.0;
-    animate more_return_progress {
-        duration: root.more_return_pending ? Anim.transition_slide : 0ms;
-        easing: ease-out;
-    }
-    private property <bool> more_subpage_motion: root.more_parent && (root.narrow_ui || root.more_subpage_exiting) && Anim.enabled && Anim.transitions;
+    animate more_return_progress { duration: root.more_return_pending ? Anim.transition_slide : 0ms; easing: ease-out; }
+    private property <float> more_return_alpha: root.more_return_pending ? 1.0 : 0.0;
+    animate more_return_alpha { duration: root.more_return_pending ? Anim.transition_fade : 0ms; }
+    private property <bool> more_subpage_motion: root.more_parent && Anim.enabled && Anim.transitions;
     private property <float> more_subpage_offset: root.more_subpage_motion
-        ? (root.more_subpage_exiting ? 1.0 - root.more_return_start * (1.0 - root.more_return_progress) : 1.0 - root.more_entry_progress)
-        : 0.0;
-    more_entry_tick := Timer {
-        interval: 1ms; running: false;
-        triggered => { self.stop(); root.more_subpage_entered = true; }
-    }
-    more_return_tick := Timer {
-        interval: Anim.transition_slide; running: false;
-        triggered => { self.stop(); root.finish_more_subpage_back(); }
-    }
+        ? (root.more_subpage_exiting ? 1.0 - root.more_return_start * (1.0 - root.more_return_progress) : 1.0 - root.more_entry_progress) : 0.0;
+    private property <float> more_subpage_alpha: root.more_subpage_motion
+        ? (root.more_subpage_exiting ? root.more_return_alpha_start * (1.0 - root.more_return_alpha) : root.more_entry_alpha) : 1.0;
+    more_entry_tick := Timer { interval: 1ms; running: false; triggered => { self.stop(); if (root.more_parent) { root.more_subpage_entered = true; } } }
+    more_return_tick := Timer { interval: Anim.transition_slide; running: false; triggered => { self.stop(); root.finish_more_subpage_back(); } }
     changed more_subpage_motion => {
-        if (!root.more_subpage_motion && root.more_return_pending) {
-            more_return_tick.stop();
-            if (root.more_parent) { root.finish_more_subpage_back(); }
-            else { root.cancel_more_subpage_back(); }
-        }
+        if (!root.more_subpage_motion && root.more_return_pending) { root.finish_more_subpage_back(); }
     }
     changed show_about => { if (root.show_about) { root.discover_search_focused = false; root.more_open = false; } }
+    public function navigate_section(index: int) { root.route_section(index, false); }
+    function route_section(index: int, from_more: bool) {
+        if (index == 3) { root.open_more(); }
+        else { root.route_page(index, from_more); }
+    }
+    // Back's direct Home route uses this leaf helper. Keeping More dispatch
+    // outside it avoids a static recursion cycle in Slint's binding analysis.
+    function route_page(index: int, from_more: bool) {
+        let previous_nav = root.more_open || root.more_return_pending || root.show_settings || root.show_about ? 3 : root.show_calendar ? 4 : root.show_downloads ? 5 : root.show_home ? 0 : root.show_library ? 2 : 1;
+        root.preserve_back_focus();
+        root.cancel_more_subpage_back();
+        root.more_parent = from_more;
+        root.more_open = false;
+        root.more_subpage_entered = !from_more;
+        if (from_more) {
+            // Establish the entry baseline before the timer enables motion,
+            // even when its first painted frame arrives after that timer.
+            root.more_return_start = root.more_entry_progress;
+            root.more_return_alpha_start = root.more_entry_alpha;
+        }
+        root.discover_search_focused = false;
+        root.family_nav_zone = index == 6 ? (root.narrow_ui ? 8 : 0) : 1;
+        root.family_nav_index = index == 4 ? 4 : index == 5 ? 5 : 3;
+        root.show_home = index == 0;
+        root.show_library = index == 2;
+        root.show_settings = index == 6;
+        root.show_about = index == 7;
+        root.show_calendar = index == 4;
+        root.show_downloads = index == 5;
+        if (index == 0) { root.home_picked(); }
+        else if (index == 1) { root.discover_picked(); }
+        else if (index == 2) { root.library_picked(); }
+        else if (index == 4) { root.calendar_picked(); }
+        else if (index == 5) { root.downloads_picked(); }
+        else if (index == 6) { root.settings_picked(); }
+        else if (index == 7) { root.about_picked(); }
+        // Backend callbacks can publish their own previous flags; this route
+        // owns the actual visible origin for rebuilt navigation feedback.
+        NavState.from = previous_nav;
+        if (from_more) { more_entry_tick.start(); }
+    }
     function open_more() {
-        if (!root.player_open && !root.modal_visible && root.more_parent) {
-            root.more_subpage_back();
-        } else if (!root.player_open && !root.modal_visible) {
-            system_back_scope.focus();
-            root.discover_search_focused = false;
+        if (root.player_open || root.modal_visible) { return; }
+        if (root.more_parent) { root.more_subpage_back(); }
+        else {
+            root.preserve_back_focus();
             root.cancel_more_subpage_back();
             root.more_parent = false;
+            root.discover_search_focused = false;
             root.more_open = true;
         }
     }
-    function pick_more(index: int) {
-        root.preserve_back_focus();
-        more_return_tick.stop();
-        root.more_return_pending = false;
-        root.more_subpage_exiting = false;
-        root.more_subpage_entered = false;
-        root.more_parent = true;
-        root.more_open = false;
-        if (index == 0) { root.calendar_picked(); }
-        else if index == 1 { root.downloads_picked(); }
-        else if index == 2 { root.settings_picked(); }
-        else { root.about_picked(); }
-        more_entry_tick.start();
-    }
+    function pick_more(index: int) { root.more_choice = index; root.more_focus_zone = 1; root.route_section(index == 0 ? 4 : index == 1 ? 5 : index == 2 ? 6 : 7, true); }
     function finish_more_subpage_back() {
-        if (!root.more_return_pending) { return; }
+        if (!root.more_return_pending || root.more_return_generation != root.more_route_generation || !root.more_parent || root.player_open || root.modal_visible) { return; }
         root.more_return_pending = false;
         root.more_subpage_exiting = false;
         root.show_settings = false;
@@ -365,26 +778,27 @@ export component AppWindow inherits Window {
         root.more_open = true;
     }
     function cancel_more_subpage_back() {
-        more_return_tick.stop();
+        more_entry_tick.stop(); more_return_tick.stop();
+        root.more_route_generation += 1;
         root.more_return_pending = false;
         root.more_subpage_exiting = false;
     }
     function more_subpage_back() {
-        system_back_scope.focus();
-        if (root.more_parent) {
-            if (root.more_return_pending) { return; }
-            if (Anim.enabled && Anim.transitions) {
-                // Reverse from the current entry frame if Back arrives early.
-                root.more_return_start = root.more_subpage_motion ? root.more_entry_progress : 1.0;
-                more_entry_tick.stop();
-                root.more_return_pending = true;
-                root.more_subpage_exiting = true;
-                more_return_tick.start();
-            } else {
-                root.more_return_pending = true;
-                root.finish_more_subpage_back();
-            }
-        } else { root.home_picked(); }
+        root.preserve_back_focus();
+        if (!root.more_parent) { root.route_page(0, false); return; }
+        if (root.more_return_pending) { return; }
+        // Reverse the visible entry frame, including its independent fade.
+        // Return bindings are lazy and unused outside the exiting branch.
+        // Sample their zero-duration reset while pending is still false: an
+        // unobserved completed return must not carry its old 1.0 into this one.
+        root.more_return_start = root.more_subpage_motion ? root.more_entry_progress * (1.0 - root.more_return_progress) : 1.0;
+        root.more_return_alpha_start = root.more_subpage_motion ? root.more_entry_alpha * (1.0 - root.more_return_alpha) : 1.0;
+        more_entry_tick.stop();
+        root.more_return_generation = root.more_route_generation;
+        root.more_return_pending = true;
+        root.more_subpage_exiting = true;
+        if (Anim.enabled && Anim.transitions) { more_return_tick.start(); }
+        else { root.finish_more_subpage_back(); }
     }
     in-out property <string> license_catalog: "";
     in-out property <[LicenseSource]> license_sources: [];
@@ -907,6 +1321,212 @@ export component AppWindow inherits Window {
         root.library[idx].is_loaded = false;
     }
 
+    // Page callbacks stay in the root so navigation and cleanup keep their ownership.
+    public function library_bridge_view_changed() { root.library_view_changed(); }
+    public function library_bridge_discover_picked() { root.navigate_section(1); }
+    public function library_bridge_home_picked() { root.navigate_section(0); }
+    public function library_bridge_library_picked() { root.navigate_section(2); }
+    public function library_bridge_settings_picked() { root.navigate_section(6); }
+    public function library_bridge_more_picked() { root.open_more(); }
+    public function library_bridge_about_picked() { root.navigate_section(7); }
+    public function library_bridge_library_filter_picked(c: string) { root.library_filter_picked(c); }
+    public function library_bridge_library_item_picked(i: int) { root.library_item_picked(i); }
+    public function library_bridge_remove_library_item(i: int) { root.remove_library_item(i); }
+    public function library_bridge_library_watch_action(i: int, a: int) { root.library_watch_action(i, a); }
+    public function library_bridge_library_status_action(i: int, s: int) { root.library_status_action(i, s); }
+    public function library_bridge_library_visible_range(f: int, l: int) { root.library_visible_range(f, l); }
+    public function more_bridge_home_picked() { root.navigate_section(0); }
+    public function more_bridge_discover_picked() { root.navigate_section(1); }
+    public function more_bridge_library_picked() { root.navigate_section(2); }
+    public function more_bridge_calendar_picked() { root.pick_more(0); }
+    public function more_bridge_downloads_picked() { root.pick_more(1); }
+    public function more_bridge_settings_picked() { root.pick_more(2); }
+    public function more_bridge_about_picked() { root.pick_more(3); }
+    public function about_bridge_home_picked() { root.navigate_section(0); }
+    public function about_bridge_back_picked() { root.more_subpage_back(); }
+    public function about_bridge_discover_picked() { root.navigate_section(1); }
+    public function about_bridge_library_picked() { root.navigate_section(2); }
+    public function about_bridge_settings_picked() { root.navigate_section(6); }
+    public function about_bridge_about_picked() { root.navigate_section(7); }
+    public function about_bridge_more_picked() { root.open_more(); }
+    public function about_bridge_license_source_requested(url: string) { root.license_source_requested(url); }
+    public function downloads_bridge_artwork_visible(key: string, retained: bool) { root.downloads_page_artwork_visible(key, retained); }
+    public function downloads_bridge_artwork_active_changed(active: bool) { root.downloads_page_artwork_active_changed(active); }
+    public function downloads_bridge_query_changed(q: string) { root.downloads_page_query_changed(q); }
+    public function downloads_bridge_filter_changed(f: int) { root.downloads_page_filter_changed(f); }
+    public function downloads_bridge_sort_changed(r: bool) { root.downloads_page_sort_changed(r); }
+    public function downloads_bridge_group_toggled(k: string) { root.downloads_page_group_toggled(k); }
+    public function downloads_bridge_action(k: string, a: int) { root.downloads_page_action(k,a); }
+    public function downloads_bridge_back() { root.more_subpage_back(); }
+    public function downloads_bridge_home_picked() { root.navigate_section(0); }
+    public function downloads_bridge_discover_picked() { root.navigate_section(1); }
+    public function downloads_bridge_library_picked() { root.navigate_section(2); }
+    public function downloads_bridge_settings_picked() { root.navigate_section(6); }
+    public function downloads_bridge_about_picked() { root.navigate_section(7); }
+    public function downloads_bridge_more_picked() { root.open_more(); }
+
+    public function home_bridge_home_picked() { root.navigate_section(0); }
+    public function home_bridge_discover_picked() { root.navigate_section(1); }
+    public function home_bridge_library_picked() { root.navigate_section(2); }
+    public function home_bridge_settings_picked() { root.navigate_section(6); }
+    public function home_bridge_more_picked() { root.open_more(); }
+    public function home_bridge_about_picked() { root.navigate_section(7); }
+    public function home_bridge_continue_picked(i: int) { root.continue_picked(i); }
+    public function home_bridge_new_episode_picked(i: int) { root.new_episode_picked(i); }
+    public function home_bridge_new_episode_enter(i: int) { root.new_episode_enter(i); }
+    public function home_bridge_new_episode_remove(i: int) { root.new_episode_remove(i); }
+    public function home_bridge_continue_remove(i: int) { root.continue_remove(i); }
+    public function home_bridge_continue_enter(i: int) { root.continue_enter(i); }
+    public function home_bridge_upcoming_picked(i: int) { root.upcoming_picked(i); }
+    public function home_bridge_catalog_card_picked(i: int) { root.home_catalog_card_picked(i); }
+    public function home_bridge_upcoming_cal_open() { root.navigate_section(4); }
+    public function home_bridge_upcoming_cal_close() { root.upcoming_cal_close(); }
+    public function home_bridge_upcoming_cal_month(d: int) { root.upcoming_cal_month(d); }
+    public function home_bridge_upcoming_cal_pick(e: int) { root.upcoming_cal_pick(e); }
+    public function home_bridge_upcoming_cal_activate() { root.upcoming_cal_activate(); }
+    public function home_bridge_featured_picked() { root.home_featured_picked(); }
+    public function home_bridge_featured_watch_now() { root.home_featured_watch_now(); }
+    public function home_bridge_featured_step(d: int) { root.home_featured_step(d); }
+    public function home_bridge_exit_to_background() { root.exit_to_background(); }
+    public function discover_bridge_addon_picked(v: string) { root.addon_picked(v); }
+    public function discover_bridge_type_picked(v: string) { root.type_picked(v); }
+    public function discover_bridge_catalog_picked(v: string) { root.catalog_picked(v); }
+    public function discover_bridge_genre_picked(v: string) { root.genre_picked(v); }
+    public function discover_bridge_search_activated() { root.search_activated(); }
+    public function discover_bridge_search_filter_picked(kind: int, index: int) { root.search_filter_picked(kind, index); }
+    public function discover_bridge_search_edited(v: string) { root.search_edited(v); }
+    public function discover_bridge_search_submitted(v: string) { root.search_submitted(v); }
+    public function discover_bridge_search_back_picked() { root.search_back_picked(); }
+    public function discover_bridge_search_history_cleared() { root.search_history_cleared(); }
+    public function discover_bridge_search_history_selected(index: int) { root.search_history_selected(index); }
+    public function discover_bridge_search_history_item_removed_at(index: int) { root.search_history_item_removed_at(index); }
+    public function discover_bridge_search_history_item_removed(query: string) { root.search_history_item_removed(query); }
+    public function discover_bridge_item_selected(id: string, i: int) { root.item_selected(id, i); }
+    public function discover_bridge_discover_picked() { root.navigate_section(1); }
+    public function discover_bridge_home_picked() { root.navigate_section(0); }
+    public function discover_bridge_library_picked() { root.navigate_section(2); }
+    public function discover_bridge_settings_picked() { root.navigate_section(6); }
+    public function discover_bridge_more_picked() { root.open_more(); }
+    public function discover_bridge_about_picked() { root.navigate_section(7); }
+    public function discover_bridge_load_more() { root.load_more(); }
+    public function discover_bridge_visible_range(f: int, l: int) { root.visible_range(f, l); }
+    public function calendar_bridge_artwork_visible(key: string, retained: bool) { root.calendar_artwork_visible(key, retained); }
+    public function calendar_bridge_artwork_active_changed(active: bool) { root.calendar_artwork_active_changed(active); }
+    public function calendar_bridge_refreshed() { root.calendar_changed(); }
+    public function calendar_bridge_step(d: int) { root.calendar_step(d); }
+    public function calendar_bridge_today() { root.calendar_today(); }
+    public function calendar_bridge_day_picked(d: int) { root.calendar_pick(d); }
+    public function calendar_bridge_release_picked(k: string) { root.calendar_release_picked(k); }
+    public function calendar_bridge_back() { root.more_subpage_back(); }
+    public function calendar_bridge_home_picked() { root.navigate_section(0); }
+    public function calendar_bridge_discover_picked() { root.navigate_section(1); }
+    public function calendar_bridge_library_picked() { root.navigate_section(2); }
+    public function calendar_bridge_settings_picked() { root.navigate_section(6); }
+    public function calendar_bridge_about_picked() { root.navigate_section(7); }
+    public function calendar_bridge_more_picked() { root.open_more(); }
+    public function detail_bridge_tracking_show() {root.tracking_show();}
+    public function detail_bridge_tracking_close() {root.tracking_close();}
+    public function detail_bridge_tracking_search(a0: int, a1: string) {root.tracking_search(a0,a1);}
+    public function detail_bridge_tracking_pick(a0: int) {root.tracking_pick(a0);}
+    public function detail_bridge_tracking_preview(a0: string, a1: string, a2: string) {root.tracking_preview(a0,a1,a2);}
+    public function detail_bridge_tracking_confirm() {root.tracking_confirm();}
+    public function detail_bridge_tracking_accept_setup(revision: string, history: bool) {root.tracking_accept_setup(revision,history);}
+    public function detail_bridge_tracking_adjust_setup(index: int) {root.tracking_adjust_setup(index);}
+    public function detail_bridge_tracking_cancel_adjust() {root.tracking_cancel_adjust();}
+    public function detail_bridge_tracking_assign(row: int, value: string) {root.tracking_assign(row,value);}
+    public function detail_bridge_tracking_edit(a0: string, a1: string, a2: int, a3: string, a4: bool, a5: string, a6: bool, a7: string) {root.tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7);}
+    public function detail_bridge_tracking_action(a0: string, a1: int) {root.tracking_action(a0,a1);}
+    public function detail_bridge_back() {
+            root.library_duplicates_open = false;
+            root.categories_modal = false;
+            root.modal_visible = false;
+            root.modal_closed();
+        }
+    public function detail_bridge_episodes_back() { root.episodes_back(); }
+    public function detail_bridge_add_to_library() { root.add_to_library(); }
+    public function detail_bridge_library_action(a: int) { root.detail_library_action(a); }
+    public function detail_bridge_open_categories() { root.categories_modal = true; }
+    public function detail_bridge_season_picked(i: int) { root.season_picked(i); }
+    public function detail_bridge_episode_picked(i: int) { root.episode_picked(i); }
+    public function detail_bridge_episode_page_picked(p: int) { root.episode_page_picked(p); }
+    public function detail_bridge_episode_toggle_watched(i: int) { root.episode_toggle_watched(i); }
+    public function detail_bridge_episode_watch_action(i: int, a: int) { root.episode_watch_action(i, a); }
+    public function detail_bridge_season_watch_action(i: int, a: int) { root.season_watch_action(i, a); }
+    public function detail_bridge_stream_picked(i: int) { root.stream_picked(i); }
+    public function detail_bridge_stream_page_picked(p: int) { root.stream_page_picked(p); }
+    public function detail_bridge_stream_action_requested(id: string) { root.stream_action_requested(id); }
+    public function detail_bridge_stream_action_selected(id: string, a: int) { root.stream_action_selected(id, a); }
+    public function detail_bridge_stream_filter_picked(i: int) { root.stream_filter_picked(i); }
+    public function detail_bridge_stream_selector_back() { root.preserve_back_focus(); root.stream_selector_back(); }
+    public function detail_bridge_detail_tab_picked(t: int) { root.detail_tab_picked(t); }
+    public function detail_bridge_episode_filter_changed(t: string) { root.episode_filter_changed(t); }
+    public function detail_bridge_watch_now() { root.watch_now(); }
+
+    // Settings callbacks cross the compiled boundary through this root API.
+    // Keep navigation here so factory products cannot replace host routing.
+    public pure function settings_bridge_search_matches(query: string, haystack: string) -> bool { return root.settings_search_matches(query, haystack); }
+    public function settings_bridge_tracking_connect(a0: int, a1: string, a2: string) { root.tracking_connect(a0,a1,a2); }
+    public function settings_bridge_tracking_complete(a0: int, a1: string) { root.tracking_complete(a0,a1); }
+    public function settings_bridge_tracking_disconnect(a0: int) { root.tracking_disconnect(a0); }
+    public function settings_bridge_tracking_cancel(a0: int) { root.tracking_cancel(a0); }
+    public function settings_bridge_tracking_automatic(service: int, enabled: bool) { root.tracking_automatic(service,enabled); }
+    public function settings_bridge_playback_language_search(query: string, subtitles: bool) { root.playback_language_search(query, subtitles); }
+    public function settings_bridge_playback_language_picked(code: string, subtitles: bool) { root.playback_language_picked(code, subtitles); }
+    public function settings_bridge_addon_added(u: string) { root.addon_added(u); }
+    public function settings_bridge_addon_toggled(i: int) { root.addon_toggled(i); }
+    public function settings_bridge_addon_remove(i: int) { root.addon_remove(i); }
+    public function settings_bridge_addon_move_up(i: int) { root.addon_move_up(i); }
+    public function settings_bridge_addon_move_down(i: int) { root.addon_move_down(i); }
+    public function settings_bridge_addon_capabilities_changed(u: string, s: bool, m: bool) { root.addon_capabilities_changed(u,s,m); }
+    public function settings_bridge_addon_configure(u: string) { root.addon_configure(u); }
+    public function settings_bridge_addon_refresh(i: int) { root.addon_refresh(i); }
+    public function settings_bridge_addon_copy_link(u: string) { root.addon_copy_link(u); }
+    public function settings_bridge_playback_speed_stepped(d: int) { root.default_playback_speed_stepped(d); }
+    public function settings_bridge_category_added(n: string) { root.category_added(n); }
+    public function settings_bridge_category_removed(i: int) { root.category_removed(i); }
+    public function settings_bridge_home_catalog_candidate_picked(i: int) { root.home_catalog_candidate_picked(i); }
+    public function settings_bridge_home_catalog_added(c: int, g: int) { root.home_catalog_added(c, g); }
+    public function settings_bridge_home_catalog_removed(i: int) { root.home_catalog_removed(i); }
+    public function settings_bridge_home_row_catalog_removed(i: int) { root.home_row_catalog_removed(i); }
+    public function settings_bridge_home_row_catalog_action(i: int, action: int) { root.home_row_catalog_action(i, action); }
+    public function settings_bridge_settings_edited(field: string) { root.settings_edited(field); }
+    public function settings_bridge_torrent_dir_edited(d: string) { root.torrent_dir_edited(d); }
+    public function settings_bridge_download_auto_delete_watched_changed(v: bool) { root.download_auto_delete_watched_changed(v); }
+    public function settings_bridge_download_list_remove(id: string) { root.download_list_remove(id); }
+    public function settings_bridge_sync_add_peer(id: string) { root.sync_add_peer(id); }
+    public function settings_bridge_sync_remove_peer(id: string) { root.sync_remove_peer(id); }
+    public function settings_bridge_sync_device_name_edited(n: string) { root.sync_device_name_edited(n); }
+    public function settings_bridge_sync_pair_confirm_changed(v: bool) { root.sync_pair_confirm_changed(v); }
+    public function settings_bridge_sync_local_discovery_changed(v: bool) { root.sync_local_discovery_changed(v); }
+    public function settings_bridge_sync_interval_picked(i: int) { root.sync_interval_picked(i); }
+    public function settings_bridge_sync_background_changed(v: bool) { root.sync_background_changed(v); }
+    public function settings_bridge_sync_cancel_invite(id: string) { root.sync_cancel_invite(id); }
+    public function settings_bridge_sync_copy_ticket(t: string) { root.sync_copy_ticket(t); }
+    public function settings_bridge_sync_join_invite(t: string) { root.sync_join_invite(t); }
+    public function settings_bridge_sync_respond_pair(id: string, ok: bool) { root.sync_respond_pair(id, ok); }
+    public function settings_bridge_cancel_reencode() { root.cancel_reencode(); }
+    public function settings_bridge_tracking_reset() { root.tracking_reset(); }
+    public function settings_bridge_addon_filter_changed() { root.addon_filter_changed(); }
+    public function settings_bridge_discover_picked() { root.navigate_section(1); }
+    public function settings_bridge_home_picked() { root.navigate_section(0); }
+    public function settings_bridge_back_picked() { root.more_subpage_back(); }
+    public function settings_bridge_library_picked() { root.navigate_section(2); }
+    public function settings_bridge_settings_picked() { root.navigate_section(6); }
+    public function settings_bridge_about_picked() { root.navigate_section(7); }
+    public function settings_bridge_more_picked() { root.open_more(); }
+    public function settings_bridge_home_catalog_add_requested() { root.home_catalog_add_requested(); }
+    public function settings_bridge_home_row_catalog_add_requested() { root.home_row_catalog_add_requested(); }
+    public function settings_bridge_save_settings() { root.save_settings(); }
+    public function settings_bridge_clear_cache() { root.clear_cache(); }
+    public function settings_bridge_reencode_cache() { root.reencode_cache(); }
+    public function settings_bridge_torrents_changed() { root.torrents_changed(); }
+    public function settings_bridge_clear_torrent_cache() { root.clear_torrent_cache(); }
+    public function settings_bridge_sync_changed() { root.sync_changed(); }
+    public function settings_bridge_sync_now() { root.sync_now(); }
+    public function settings_bridge_sync_copy_identity() { root.sync_copy_identity(); }
+    public function settings_bridge_sync_create_invite() { root.sync_create_invite(); }
+    public function settings_bridge_sync_scan_qr() { root.sync_scan_qr(); }
+
     // Android delivers Back as a key event, but focused inputs and page-local
     // scopes can reject or consume it before the active screen handles it.
     // Capture it at the shared window layer; separate PopupWindows (such as
@@ -962,129 +1582,44 @@ export component AppWindow inherits Window {
         }
 
         // ---- Discover page --------------------------------------------
-    if !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads: DiscoverPage {
+    if root.discover_page_mounted: DiscoverHost {
+        viewport_width: self.width; viewport_height: self.height;
         nav-viewport-width: root.width;
-        catalog <=> root.catalog;
-        addon_names <=> root.addon_names;
-        type_names <=> root.type_names;
-        catalog_names <=> root.catalog_names;
         catalog_labels: root.catalog_labels;
-        genre_names <=> root.genre_names;
-        empty_hint <=> root.empty_hint;
-        searchable_hint <=> root.searchable_hint;
-        addon_combo_idx <=> root.addon_combo_idx;
-        type_combo_idx <=> root.type_combo_idx;
-        catalog_combo_idx <=> root.catalog_combo_idx;
-        genre_combo_idx <=> root.genre_combo_idx;
-        search_text <=> root.search_text;
-        search_results <=> root.search_results;
         search_history: root.discover_search_history;
         search_history_contexts: root.discover_search_history_contexts;
-        search_results_open <=> root.discover_search_open;
-        search_focused <=> root.discover_search_focused;
         search_filters_open: root.discover_search_filters_open;
         search_addon_names: root.search_addon_names;
         search_type_names: root.search_type_names;
         search_catalog_names: root.search_catalog_names;
         search_catalog_labels: root.search_catalog_labels;
         search_genre_names: root.search_genre_names;
-        search_addon_combo_idx <=> root.search_addon_combo_idx;
-        search_type_combo_idx <=> root.search_type_combo_idx;
-        search_catalog_combo_idx <=> root.search_catalog_combo_idx;
-        search_genre_combo_idx <=> root.search_genre_combo_idx;
         system_back_request: root.page_back_request;
         animate_search_results: root.discover_search_animate_results;
-        search_loading <=> root.search_loading;
-        search_loading_more <=> root.search_loading_more;
-        search_can_load_more <=> root.search_can_load_more;
-        search_empty_hint <=> root.search_empty_hint;
-        searchable <=> root.searchable;
         min_cols: root.discover_min_cols;
-        can_load_more <=> root.can_load_more;
-        loading_more <=> root.loading_more;
-        kb_zone <=> root.discover_kb_zone;
-        kb_nav <=> root.discover_kb_nav;
-        kb_ctl <=> root.discover_kb_ctl;
-        kb_idx <=> root.discover_kb_idx;
-        kb_active <=> root.kb_active;
-        scroll_y <=> root.discover_scroll_y;
-        search_scroll_y <=> root.discover_search_scroll_y;
-        scroll_page <=> root.discover_scroll_page;
         narrow: root.narrow_ui;
         touch_menus: root.touch_menus;
         safe-top: root.safe-area-insets.top;
         safe-left: root.safe-area-insets.left;
         safe-right: root.safe-area-insets.right;
         safe-bottom: root.safe-area-insets.bottom;
-
-        addon_picked(v) => { root.addon_picked(v); }
-        type_picked(v) => { root.type_picked(v); }
-        catalog_picked(v) => { root.catalog_picked(v); }
-        genre_picked(v) => { root.genre_picked(v); }
-        search_activated => { root.search_activated(); }
-        search_filter_picked(kind, index) => { root.search_filter_picked(kind, index); }
-        search_edited(v) => { root.search_edited(v); }
-        search_submitted(v) => { root.search_submitted(v); }
-        search_back_picked => { root.search_back_picked(); }
-        search_history_cleared => { root.search_history_cleared(); }
-        search_history_selected(index) => { root.search_history_selected(index); }
-        search_history_item_removed_at(index) => { root.search_history_item_removed_at(index); }
-        search_history_item_removed(query) => { root.search_history_item_removed(query); }
-        item_selected(id, i) => { root.item_selected(id, i); }
-        discover_picked => { root.discover_picked(); }
-        home_picked => { root.home_picked(); }
-        library_picked => { root.library_picked(); }
-        settings_picked => { root.more_parent = false; root.more_open = false; root.settings_picked(); }
         more_open: root.more_open;
-        more_picked => { root.open_more(); }
-        about_picked => { root.more_parent = false; root.more_open = false; root.about_picked(); }
-        load_more => { root.load_more(); }
-        visible_range(f, l) => { root.visible_range(f, l); }
+
     }
 
     // ---- Home page (landing page, Continue Watching) --------------------
-    if root.show_home && !root.player_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads: HomePage {
+    if root.home_page_mounted: HomeHost {
+        viewport_width: self.width; viewport_height: self.height;
         nav-viewport-width: root.width;
-        continue_rows <=> root.home_continue;
-        new_episode_rows <=> root.home_new_episodes;
-        upcoming_rows <=> root.home_upcoming;
         catalog_sections: root.home_catalog_sections;
         catalog_order: root.home_catalog_order;
         catalog_positions: root.home_catalog_positions;
         catalog_cards: root.home_catalog_cards;
-        cal_cells <=> root.home_cal_cells;
-        cal_title <=> root.home_cal_title;
-        cal_day_rows <=> root.home_cal_day;
-        cal_epoch <=> root.home_cal_epoch;
-        cal_open <=> root.home_cal_open;
-        home_empty_hint <=> root.home_empty_hint;
-        featured_title <=> root.home_featured_title;
         featured_watch_label: root.home_featured_watch_label;
         featured_logo: root.home_featured_logo;
-        featured_type <=> root.home_featured_type;
-        featured_rating <=> root.home_featured_rating;
-        featured_runtime <=> root.home_featured_runtime;
-        featured_release_info <=> root.home_featured_release_info;
-        featured_tagline <=> root.home_featured_tagline;
-        featured_description <=> root.home_featured_description;
-        featured_backdrop <=> root.home_featured_backdrop;
-        featured_index <=> root.home_featured_index;
-        featured_count <=> root.home_featured_count;
-        featured_revision <=> root.home_featured_revision;
         featured_refresh_pending: root.home_featured_refresh_pending;
         min_cols: root.library_min_cols;
-        kb_zone <=> root.home_kb_zone;
-        kb_nav <=> root.home_kb_nav;
-        kb_idx <=> root.home_kb_idx;
-        kb_up_idx <=> root.home_kb_up_idx;
-        kb_active <=> root.kb_active;
-        scroll_y <=> root.home_scroll_y;
-        view <=> root.home_view;
         system_back_request: root.page_back_request;
-        all_scroll_y <=> root.home_all_scroll_y;
-        continue_x <=> root.home_continue_x;
-        new_episodes_x <=> root.home_new_episodes_x;
-        upcoming_x <=> root.home_upcoming_x;
         narrow: root.narrow_ui;
         touch_menus: root.touch_menus;
         continue_enabled: root.home_continue_enabled;
@@ -1092,38 +1627,15 @@ export component AppWindow inherits Window {
         safe-left: root.safe-area-insets.left;
         safe-right: root.safe-area-insets.right;
         safe-bottom: root.safe-area-insets.bottom;
-
-        home_picked => { root.home_picked(); }
-        discover_picked => { root.discover_picked(); }
-        library_picked => { root.library_picked(); }
-        settings_picked => { root.more_parent = false; root.more_open = false; root.settings_picked(); }
         more_open: root.more_open;
-        more_picked => { root.open_more(); }
-        about_picked => { root.more_parent = false; root.more_open = false; root.about_picked(); }
-        continue_picked(i) => { root.continue_picked(i); }
-        new_episode_picked(i) => { root.new_episode_picked(i); }
-        new_episode_enter(i) => { root.new_episode_enter(i); }
-        new_episode_remove(i) => { root.new_episode_remove(i); }
-        continue_remove(i) => { root.continue_remove(i); }
-        continue_enter(i) => { root.continue_enter(i); }
-        upcoming_picked(i) => { root.upcoming_picked(i); }
-        catalog_card_picked(i) => { root.home_catalog_card_picked(i); }
-        upcoming_cal_open => { root.upcoming_cal_open(); }
-        upcoming_cal_close => { root.upcoming_cal_close(); }
-        upcoming_cal_month(d) => { root.upcoming_cal_month(d); }
-        upcoming_cal_pick(e) => { root.upcoming_cal_pick(e); }
-        upcoming_cal_activate => { root.upcoming_cal_activate(); }
-        featured_picked => { root.home_featured_picked(); }
-        featured_watch_now => { root.home_featured_watch_now(); }
-        featured_step(d) => { root.home_featured_step(d); }
-        exit_to_background => { root.exit_to_background(); }
+
     }
 
     // ---- Detail page ---------------------------------------------------
-    if root.modal_visible && !root.player_open: DetailPage {
+    if root.detail_page_mounted: DetailHost {
+        viewport_width: self.width; viewport_height: self.height;
         tracking_links: root.tracking_links;
         tracking_candidates: root.tracking_candidates;
-        tracking_service <=> root.tracking_service;
         tracking_setup:root.tracking_setup;
         tracking_setup_revision:root.tracking_setup_revision;
         tracking_setup_summary:root.tracking_setup_summary;
@@ -1132,7 +1644,6 @@ export component AppWindow inherits Window {
         tracking_range_first:root.tracking_range_first;
         tracking_range_last:root.tracking_range_last;
         tracking_range_start:root.tracking_range_start;
-
         tracking_source_rows: root.tracking_source_rows;
         tracking_preview_rows: root.tracking_preview_rows;
         tracking_mapping_rows: root.tracking_mapping_rows;
@@ -1140,107 +1651,24 @@ export component AppWindow inherits Window {
         tracking_candidate_title: root.tracking_candidate_title;
         tracking_busy: root.tracking_busy;
         tracking_can_confirm: root.tracking_can_confirm;
-        tracking_open <=> root.tracking_open;
-        tracking_return_tab <=> root.tracking_return_tab;
-        tracking_show() => {root.tracking_show();}
-        tracking_close() => {root.tracking_close();}
-        tracking_search(a0,a1) => {root.tracking_search(a0,a1);}
-        tracking_pick(a0) => {root.tracking_pick(a0);}
-        tracking_preview(a0,a1,a2) => {root.tracking_preview(a0,a1,a2);}
-        tracking_confirm() => {root.tracking_confirm();}
-        tracking_accept_setup(revision,history) => {root.tracking_accept_setup(revision,history);}
-        tracking_adjust_setup(index) => {root.tracking_adjust_setup(index);}
-        tracking_cancel_adjust() => {root.tracking_cancel_adjust();}
-        tracking_assign(row,value) => {root.tracking_assign(row,value);}
-        tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7) => {root.tracking_edit(a0,a1,a2,a3,a4,a5,a6,a7);}
-        tracking_action(a0,a1) => {root.tracking_action(a0,a1);}
-
-        selected_poster <=> root.selected_poster;
-        selected_backdrop <=> root.selected_backdrop;
         selected_logo: root.selected_logo;
-        selected_title <=> root.selected_title;
         is_movie: root.detail_is_movie;
-        stream_selector_open <=> root.stream_selector_open;
-        selected_year <=> root.selected_year;
-        selected_description <=> root.selected_description;
-        selected_genre_list <=> root.selected_genre_list;
-        detail_tab <=> root.detail_tab;
-        episode_filter <=> root.episode_filter;
-        in_library <=> root.in_library;
-        category_rows <=> root.category_rows;
-        selected_category_count <=> root.selected_category_count;
-        streams <=> root.streams;
-        stream_page <=> root.stream_page;
-        stream_page_count <=> root.stream_page_count;
-        stream_page_start <=> root.stream_page_start;
-        stream_total <=> root.stream_total;
-        streams_hint <=> root.streams_hint;
-        stream_addons <=> root.stream_addons;
-        stream_loading <=> root.stream_loading;
-        streams_searching <=> root.streams_searching;
-        stream_filter <=> root.stream_filter;
-        stream_action_open <=> root.stream_action_open;
-        stream_action_id <=> root.stream_action_id;
-        stream_action_title <=> root.stream_action_title;
-        stream_action_items <=> root.stream_action_items;
-        modal_episodes <=> root.modal_episodes;
-        season_names <=> root.season_names;
-        season_combo_idx <=> root.season_combo_idx;
-        season_cards <=> root.season_cards;
-        episode_rows <=> root.episode_rows;
-        episode_page <=> root.episode_page;
-        episode_page_count <=> root.episode_page_count;
-        episode_page_start <=> root.episode_page_start;
         episode_reveal_request: root.detail_episode_reveal_request;
-        episode_total <=> root.episode_total;
-        episode_context <=> root.episode_context;
         stream_episode_number: root.stream_episode_number;
         stream_episode_title: root.stream_episode_title;
         watch_label: root.detail_watch_label;
         deep_stream: root.detail_deep_stream;
         system_back_request: root.page_back_request;
         popup_open: root.categories_modal || root.library_duplicates_open;
-        kb_zone <=> root.detail_kb_zone;
-        kb_top <=> root.detail_kb_top;
-        kb_tab <=> root.detail_kb_tab;
-        kb_ci <=> root.detail_kb_ci;
-        kb_ep <=> root.detail_kb_ep;
-        kb_s <=> root.detail_kb_s;
-        kb_active <=> root.kb_active;
         narrow: root.narrow_ui;
         safe-top: root.safe-area-insets.top;
         safe-left: root.safe-area-insets.left;
         safe-right: root.safe-area-insets.right;
         safe-bottom: root.safe-area-insets.bottom;
         touch_menus: root.touch_menus;
-
-        back => {
-            root.library_duplicates_open = false;
-            root.categories_modal = false;
-            root.modal_visible = false;
-            root.modal_closed();
-        }
-        episodes_back => { root.episodes_back(); }
-        add_to_library => { root.add_to_library(); }
         library_watched: root.detail_library_watched;
         library_activity_action: root.detail_library_activity_action;
-        library_action(a) => { root.detail_library_action(a); }
-        open_categories => { root.categories_modal = true; }
-        season_picked(i) => { root.season_picked(i); }
-        episode_picked(i) => { root.episode_picked(i); }
-        episode_page_picked(p) => { root.episode_page_picked(p); }
-        episode_toggle_watched(i) => { root.episode_toggle_watched(i); }
-        episode_watch_action(i, a) => { root.episode_watch_action(i, a); }
-        season_watch_action(i, a) => { root.season_watch_action(i, a); }
-        stream_picked(i) => { root.stream_picked(i); }
-        stream_page_picked(p) => { root.stream_page_picked(p); }
-        stream_action_requested(id) => { root.stream_action_requested(id); }
-        stream_action_selected(id, a) => { root.stream_action_selected(id, a); }
-        stream_filter_picked(i) => { root.stream_filter_picked(i); }
-        stream_selector_back => { root.preserve_back_focus(); root.stream_selector_back(); }
-        detail_tab_picked(t) => { root.detail_tab_picked(t); }
-        episode_filter_changed(t) => { root.episode_filter_changed(t); }
-        watch_now => { root.watch_now(); }
+
     }
 
     // ---- Assign-categories popup ---------------------------------------
@@ -1278,42 +1706,12 @@ export component AppWindow inherits Window {
     }
 
     // ---- Library page ---------------------------------------------------
-    if root.show_library && !root.player_open && !root.modal_visible && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads: LibraryPage {
+    if root.show_library && !root.player_open && !root.modal_visible && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads: LibraryHost {
+        viewport_width: self.width; viewport_height: self.height;
         nav-viewport-width: root.width;
-        library <=> root.library;
-        category_rows <=> root.category_rows;
-        category_names <=> root.library_category_names;
-        category_labels <=> root.library_category_labels;
-        category_index <=> root.library_category_index;
-        library_filter_category <=> root.library_filter_category;
-        query <=> root.library_query;
-        sort_index <=> root.library_sort;
-        list_view <=> root.library_list_view;
-        search_open <=> root.library_search_open;
-        view_changed => { root.library_view_changed(); }
         min_cols: root.library_min_cols;
-        library_empty_hint <=> root.library_empty_hint;
         system_back_request: root.page_back_request;
-
-        discover_picked => { root.discover_picked(); }
-        home_picked => { root.home_picked(); }
-        library_picked => { root.library_picked(); }
-        settings_picked => { root.more_parent = false; root.more_open = false; root.settings_picked(); }
         more_open: root.more_open;
-        more_picked => { root.open_more(); }
-        about_picked => { root.more_parent = false; root.more_open = false; root.about_picked(); }
-        library_filter_picked(c) => { root.library_filter_picked(c); }
-        library_item_picked(i) => { root.library_item_picked(i); }
-        remove_library_item(i) => { root.remove_library_item(i); }
-        library_watch_action(i, a) => { root.library_watch_action(i, a); }
-        library_status_action(i, s) => { root.library_status_action(i, s); }
-        library_visible_range(f, l) => { root.library_visible_range(f, l); }
-        kb_zone <=> root.library_kb_zone;
-        kb_nav <=> root.library_kb_nav;
-        kb_f <=> root.library_kb_f;
-        kb_idx <=> root.library_kb_idx;
-        kb_active <=> root.kb_active;
-        scroll_y <=> root.library_scroll_y;
         narrow: root.narrow_ui;
         safe-top: root.safe-area-insets.top;
         safe-left: root.safe-area-insets.left;
@@ -1322,358 +1720,161 @@ export component AppWindow inherits Window {
         touch_menus: root.touch_menus;
     }
 
-    if (root.more_open || root.more_return_pending) && !root.player_open && !root.modal_visible: MorePage {
-        width: root.width; height: root.height;
+    more_content_host := Rectangle {
+        x: root.more_rail_width; y: 0px;
+        width: root.width - root.more_rail_width; height: root.height;
+        clip: true;
+        // An inactive page can still contain native editors or tab targets.
+        // Capture before descendants handle keys; persistent chrome is outside
+        // this scope and remains available to interrupt the return.
+        content_input_scope := FocusScope {
+            width: 100%; height: 100%;
+            // Forward Tab from the persistent window scope lands here before
+            // any outgoing editor; active pages gain no extra tab stop.
+            focus-on-tab-navigation: root.more_return_pending;
+            capture-key-pressed(e) => {
+                if (root.more_return_pending) { self.focus(); accept } else { reject }
+            }
+            capture-key-released(e) => {
+                if (root.more_return_pending) { accept } else { reject }
+            }
+    if (root.more_open || root.more_parent) && !root.player_open && !root.modal_visible: MoreHost {
+        viewport_width: self.width; viewport_height: self.height;
+        width: more_content_host.width; height: more_content_host.height;
         // Keep this layer behind every subpage, including Settings/About.
-        x: root.width * 0.08 * (root.more_return_progress - (root.more_return_pending ? 1.0 : 0.0));
-        opacity: root.more_return_progress + (root.more_open ? 1.0 : 0.0);
+        x: root.more_open ? 0px : -0.28 * more_content_host.width * (1.0 - root.more_subpage_offset);
+        opacity: root.more_open ? 1.0 : 1.0 - root.more_subpage_alpha;
+        external_navigation: true;
         active: root.more_open;
         narrow: root.narrow_ui;
         nav-viewport-width: root.width;
         safe-top: root.safe-area-insets.top;
         safe-bottom: root.safe-area-insets.bottom;
-        safe-left: root.safe-area-insets.left;
+        safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px;
         safe-right: root.safe-area-insets.right;
-        kb_active <=> root.kb_active;
         system_back_request: root.page_back_request;
-        home_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.home_picked(); }
-        discover_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.discover_picked(); }
-        library_picked => { system_back_scope.focus(); root.more_parent = false; root.more_open = false; root.library_picked(); }
-        calendar_picked => { root.pick_more(0); }
-        downloads_picked => { root.pick_more(1); }
-        settings_picked => { root.pick_more(2); }
-        about_picked => { root.pick_more(3); }
     }
 
     // ---- Settings page --------------------------------------------------
-    if root.show_settings && !root.player_open && !root.modal_visible && !root.show_home && !root.show_about: SettingsPage {
-        width: root.width; height: root.height;
-        x: root.width * 0.28 * root.more_subpage_offset;
-        opacity: 1.0 - root.more_subpage_offset;
-        sel <=> root.settings_selected_id;
-        sub_open <=> root.settings_detail_open;
+    if root.settings_page_mounted: SettingsHost {
+        viewport_width: self.width; viewport_height: self.height;
+        width: more_content_host.width; height: more_content_host.height;
+        x: more_content_host.width * root.more_subpage_offset;
+        opacity: root.more_subpage_alpha;
+        external_navigation: true;
+        active: !root.more_return_pending;
         two_pane: root.settings_two_pane;
-        search_query <=> root.settings_search_query;
-        kb_land <=> root.settings_focused_id;
-        land_scroll_y <=> root.settings_navigation_scroll;
-        page_scrolls <=> root.settings_page_scrolls;
-        search_matches(query, haystack) => { return root.settings_search_matches(query, haystack); }
         cache_busy: root.cache_busy;
         cache_rewriting: root.cache_rewriting;
         cache_processed: root.cache_processed;
         cache_total: root.cache_total;
         cache_status: root.cache_status;
-        cancel_reencode => { root.cancel_reencode(); }
         nav-viewport-width: root.width;
         tracking_accounts: root.tracking_accounts;
         tracking_notice: root.tracking_notice;
-        tracking_connect(a0,a1,a2) => {root.tracking_connect(a0,a1,a2);}
-        tracking_complete(a0,a1) => {root.tracking_complete(a0,a1);}
-        tracking_disconnect(a0) => {root.tracking_disconnect(a0);}
-        tracking_cancel(a0) => {root.tracking_cancel(a0);}
-        tracking_reset => {root.tracking_reset();}
-        tracking_automatic(service,enabled) => {root.tracking_automatic(service,enabled);}
-
         persistence_failed: root.persistence_failed;
-        addon_rows <=> root.addon_rows;
-        addon_search_text <=> root.addon_search_text;
-        addon_capability_filter <=> root.addon_capability_filter;
-        addon_filter_changed => { root.addon_filter_changed(); }
         cinemeta_installed: root.cinemeta_installed;
-        addon_url <=> root.addon_url;
-        category_rows <=> root.category_rows;
-        category_input <=> root.category_input;
-        home_catalog_rows <=> root.home_catalog_rows;
-        home_row_catalog_rows <=> root.home_row_catalog_rows;
-        home_continue_enabled <=> root.home_continue_enabled;
-        home_upcoming_enabled <=> root.home_upcoming_enabled;
-        home_episode_artwork <=> root.home_episode_artwork;
-        home_catalog_candidate_names <=> root.home_catalog_candidate_names;
-        home_catalog_candidate_index <=> root.home_catalog_candidate_index;
-        home_catalog_genre_names <=> root.home_catalog_genre_names;
-        home_catalog_genre_index <=> root.home_catalog_genre_index;
-        home_catalog_add_open <=> root.home_catalog_add_open;
-        home_catalog_add_target <=> root.home_catalog_add_target;
         system_back_request: root.page_back_request;
-        home_catalog_add_error <=> root.home_catalog_add_error;
-        cache_images <=> root.cache_images;
-        cache_disk_usage <=> root.cache_disk_usage;
-        cache_enabled <=> root.cache_enabled;
-        cache_format_index <=> root.cache_format_index;
-        cache_quality <=> root.cache_quality;
-        detail_poster_resolution_index <=> root.detail_poster_resolution_index;
-        detail_backdrop_resolution_index <=> root.detail_backdrop_resolution_index;
-        episode_thumbnail_resolution_index <=> root.episode_thumbnail_resolution_index;
-        player_episode_backdrop_resolution_index <=> root.player_episode_backdrop_resolution_index;
-        cache_date_relative <=> root.cache_date_relative;
-        cache_show_unwatched_thumbs <=> root.cache_show_unwatched_thumbs;
-        cache_lru_mb <=> root.cache_lru_mb;
-        cache_prefetch_metadata <=> root.cache_prefetch_metadata;
-        discover_catalog_addon_names <=> root.discover_catalog_addon_names;
-        image_resolution_names <=> root.image_resolution_names;
-        discover_min_cols <=> root.discover_min_cols;
-        library_min_cols <=> root.library_min_cols;
-        cache_format_names <=> root.cache_format_names;
-        android_hwdec_index <=> root.android_hwdec_index;
-        player_backend_index <=> root.player_backend_index;
-        desktop_external_app_index <=> root.desktop_external_app_index;
-        default_audio_language <=> root.default_audio_language;
-        default_subtitle_language <=> root.default_subtitle_language;
-        audio_language_choice_index <=> root.audio_language_choice_index;
-        subtitle_language_choice_index <=> root.subtitle_language_choice_index;
         audio_language_label: root.audio_language_label;
         subtitle_language_label: root.subtitle_language_label;
         audio_language_codes: root.audio_language_codes;
         audio_language_names: root.audio_language_names;
         subtitle_language_codes: root.subtitle_language_codes;
         subtitle_language_names: root.subtitle_language_names;
-        playback_language_search(query, subtitles) => { root.playback_language_search(query, subtitles); }
-        playback_language_picked(code, subtitles) => { root.playback_language_picked(code, subtitles); }
-        playback_speed <=> root.playback_speed;
-        android_auto_continue <=> root.android_auto_continue;
-        episode_start_index <=> root.episode_start_index;
         is_android: root.is_android;
-        true_black <=> root.true_black;
-        card_corner_radius <=> root.card_corner_radius;
-        button_corner_radius <=> root.button_corner_radius;
-        card_spacing <=> root.card_spacing;
-        status_bar_gradient <=> root.status_bar_gradient;
-        home_backdrop_size <=> root.home_backdrop_size;
-        detail_backdrop_size <=> root.detail_backdrop_size;
-        hero_title_alignment <=> root.hero_title_alignment;
-        animations <=> root.animations;
-        anim_transitions <=> root.anim_transitions;
-        anim_hover <=> root.anim_hover;
-        anim_player <=> root.anim_player;
-        anim_nav_slide <=> root.anim_nav_slide;
-        language_index <=> root.language_index;
-        language_names <=> root.language_names;
-        show_image_cache <=> root.show_image_cache;
-        show_torrents <=> root.show_torrents;
-        torrent_enabled <=> root.torrent_enabled;
-        torrent_dir <=> root.torrent_dir;
-        torrent_max_mb <=> root.torrent_max_mb;
-        torrent_down_limit <=> root.torrent_down_limit;
-        torrent_no_cache <=> root.torrent_no_cache;
-        torrent_disk_usage <=> root.torrent_disk_usage;
-        download_auto_delete_watched <=> root.download_auto_delete_watched;
-        downloads_rows <=> root.downloads_rows;
-        sync_enabled <=> root.sync_enabled;
-        sync_identity <=> root.sync_identity;
-        sync_peers <=> root.sync_peers;
-        sync_peer_input <=> root.sync_peer_input;
-        sync_status <=> root.sync_status;
-        sync_device_name <=> root.sync_device_name;
-        sync_pair_confirm <=> root.sync_pair_confirm;
-        sync_local_discovery <=> root.sync_local_discovery;
-        sync_interval_index <=> root.sync_interval_index;
-        sync_background <=> root.sync_background;
-        sync_invite_ticket <=> root.sync_invite_ticket;
-        sync_invite_qr <=> root.sync_invite_qr;
-        sync_invites <=> root.sync_invites;
-        sync_join_input <=> root.sync_join_input;
-        sync_qr_scan_available <=> root.sync_qr_scan_available;
-        sync_link_notice <=> root.sync_link_notice;
-        sync_pair_prompt_visible <=> root.sync_pair_prompt_visible;
-        sync_pair_prompt_id <=> root.sync_pair_prompt_id;
-        sync_pair_prompt_name <=> root.sync_pair_prompt_name;
-        sync_pair_prompt_code <=> root.sync_pair_prompt_code;
-        kb_active <=> root.kb_active;
         phone_layout: root.narrow_ui;
         safe-top: root.safe-area-insets.top;
-        safe-left: root.safe-area-insets.left;
+        safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px;
         safe-right: root.safe-area-insets.right;
         safe-bottom: root.safe-area-insets.bottom;
-        scroll_y <=> root.settings_scroll_y;
 
-        discover_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.discover_picked(); }
-        home_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.more_open = false; root.home_picked(); }
-        back_picked => { root.more_subpage_back(); }
-        library_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.library_picked(); }
-        settings_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.more_open = false; root.settings_picked(); }
-        about_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.more_open = false; root.about_picked(); }
-        more_picked => { root.open_more(); }
-        addon_added(u) => { root.addon_added(u); }
-        addon_toggled(i) => { root.addon_toggled(i); }
-        addon_remove(i) => { root.addon_remove(i); }
-        addon_move_up(i) => { root.addon_move_up(i); }
-        addon_move_down(i) => { root.addon_move_down(i); }
-        addon_config_open <=> root.addon_config_open;
-        addon_config_url <=> root.addon_config_url;
-        addon_config_label <=> root.addon_config_label;
-        addon_config_streams <=> root.addon_config_streams;
-        addon_config_metadata <=> root.addon_config_metadata;
-        addon_capabilities_changed(u,s,m) => { root.addon_capabilities_changed(u,s,m); }
-        addon_configure(u) => { root.addon_configure(u); }
-        addon_refresh(i) => { root.addon_refresh(i); }
-        addon_copy_link(u) => { root.addon_copy_link(u); }
-        playback_speed_stepped(d) => { root.default_playback_speed_stepped(d); }
-        category_added(n) => { root.category_added(n); }
-        category_removed(i) => { root.category_removed(i); }
-        home_catalog_add_requested => { root.home_catalog_add_requested(); }
-        home_row_catalog_add_requested => { root.home_row_catalog_add_requested(); }
-        home_catalog_candidate_picked(i) => { root.home_catalog_candidate_picked(i); }
-        home_catalog_added(c, g) => { root.home_catalog_added(c, g); }
-        home_catalog_removed(i) => { root.home_catalog_removed(i); }
-        home_row_catalog_removed(i) => { root.home_row_catalog_removed(i); }
-        home_row_catalog_action(i, action) => { root.home_row_catalog_action(i, action); }
-        save_settings => { root.save_settings(); }
-        settings_edited(field) => { root.settings_edited(field); }
-        clear_cache => { root.clear_cache(); }
-        reencode_cache => { root.reencode_cache(); }
-        torrents_changed => { root.torrents_changed(); }
-        torrent_dir_edited(d) => { root.torrent_dir_edited(d); }
-        clear_torrent_cache => { root.clear_torrent_cache(); }
-        download_auto_delete_watched_changed(v) => { root.download_auto_delete_watched_changed(v); }
-        download_list_remove(id) => { root.download_list_remove(id); }
-        sync_changed => { root.sync_changed(); }
-        sync_add_peer(id) => { root.sync_add_peer(id); }
-        sync_remove_peer(id) => { root.sync_remove_peer(id); }
-        sync_now => { root.sync_now(); }
-        sync_copy_identity => { root.sync_copy_identity(); }
-        sync_device_name_edited(n) => { root.sync_device_name_edited(n); }
-        sync_pair_confirm_changed(v) => { root.sync_pair_confirm_changed(v); }
-        sync_local_discovery_changed(v) => { root.sync_local_discovery_changed(v); }
-        sync_interval_picked(i) => { root.sync_interval_picked(i); }
-        sync_background_changed(v) => { root.sync_background_changed(v); }
-        sync_create_invite => { root.sync_create_invite(); }
-        sync_cancel_invite(id) => { root.sync_cancel_invite(id); }
-        sync_copy_ticket(t) => { root.sync_copy_ticket(t); }
-        sync_join_invite(t) => { root.sync_join_invite(t); }
-        sync_scan_qr => { root.sync_scan_qr(); }
-        sync_respond_pair(id, ok) => { root.sync_respond_pair(id, ok); }
     }
 
     // ---- About (with nested Licenses) -----------------------------------
-    if root.show_about && !root.player_open && !root.modal_visible && !root.show_home && !root.show_library && !root.show_settings: AboutPage {
-        width: root.width; height: root.height;
-        x: root.width * 0.28 * root.more_subpage_offset;
-        opacity: 1.0 - root.more_subpage_offset;
+    if root.show_about && !root.more_open && !root.player_open && !root.modal_visible && !root.show_home && !root.show_library && !root.show_settings: AboutHost {
+        viewport_width: self.width; viewport_height: self.height;
+        width: more_content_host.width; height: more_content_host.height;
+        x: more_content_host.width * root.more_subpage_offset;
+        opacity: root.more_subpage_alpha;
+        external_navigation: true;
+        active: !root.more_return_pending;
         nav-viewport-width: root.width;
         narrow: root.narrow_ui;
         safe-top: root.safe-area-insets.top;
-        safe-left: root.safe-area-insets.left;
+        safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px;
         safe-right: root.safe-area-insets.right;
         safe-bottom: root.safe-area-insets.bottom;
-        kb_active <=> root.kb_active;
         system_back_request: root.page_back_request;
-        licenses_open <=> root.about_licenses_open;
-        scroll_y <=> root.about_scroll_y;
-        licenses_scroll_y <=> root.about_licenses_scroll_y;
         license_catalog: root.license_catalog;
         license_sources: root.license_sources;
-        home_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.more_open = false; root.home_picked(); }
-        back_picked => { root.more_subpage_back(); }
-        discover_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.discover_picked(); }
-        library_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.library_picked(); }
-        settings_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.settings_picked(); }
-        about_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.about_picked(); }
-        more_picked => { root.open_more(); }
-        license_source_requested(url) => { root.license_source_requested(url); }
     }
 
 
-    if root.show_calendar && !root.player_open && !root.modal_visible && !root.more_open: CalendarPage {
-        width: root.width; height: root.height;
-        x: root.width * 0.28 * root.more_subpage_offset;
-        opacity: 1.0 - root.more_subpage_offset;
+    if root.calendar_page_mounted: CalendarHost {
+        viewport_width: self.width; viewport_height: self.height;
+        artwork-active: root.page_artwork_allowed;
+        nav-viewport-width: root.width;
+        width: more_content_host.width; height: more_content_host.height;
+        x: more_content_host.width * root.more_subpage_offset;
+        opacity: root.more_subpage_alpha;
+        external_navigation: true;
+        active: !root.more_return_pending;
         cells: root.calendar_cells; week_cells: root.calendar_week; rows: root.calendar_rows; later: root.calendar_later;
         title: root.calendar_title; day_title: root.calendar_day_title; count: root.calendar_count;
-        search <=> root.calendar_search; view <=> root.calendar_view; all <=> root.calendar_all;
-        refreshed => { root.calendar_changed(); } step(d) => { root.calendar_step(d); } today => { root.calendar_today(); }
-        day_picked(d) => { root.calendar_pick(d); } release_picked(k) => { root.calendar_release_picked(k); }
-        safe-top: root.safe-area-insets.top; safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right; safe-bottom: root.safe-area-insets.bottom;
-        system_back_request: root.page_back_request; kb_active <=> root.kb_active;
-        back => { root.more_subpage_back(); }
-        home_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.home_picked(); }
-        discover_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.discover_picked(); }
-        library_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.library_picked(); }
-        settings_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.settings_picked(); }
-        about_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.about_picked(); }
-        more_picked => { root.open_more(); }
+        safe-top: root.safe-area-insets.top; safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px; safe-right: root.safe-area-insets.right; safe-bottom: root.safe-area-insets.bottom;
+        system_back_request: root.page_back_request;
+
     }
-    if root.show_downloads && !root.player_open && !root.modal_visible && !root.more_open: DownloadsPage {
-        width: root.width; height: root.height;
-        x: root.width * 0.28 * root.more_subpage_offset;
-        opacity: 1.0 - root.more_subpage_offset;
+    if root.show_downloads && !root.player_open && !root.modal_visible && !root.more_open: DownloadsHost {
+        viewport_width: self.width; viewport_height: self.height;
+        artwork-active: root.page_artwork_allowed;
+        nav-viewport-width: root.width;
+        width: more_content_host.width; height: more_content_host.height;
+        x: more_content_host.width * root.more_subpage_offset;
+        opacity: root.more_subpage_alpha;
+        external_navigation: true;
+        active: !root.more_return_pending;
         groups: root.downloads_page_groups; transfers: root.downloads_page_transfers; summary: root.downloads_page_summary; counts: root.downloads_page_counts;
-        query <=> root.downloads_page_query; filter <=> root.downloads_page_filter; sort_recent <=> root.downloads_page_sort_recent;
-        query_changed(q) => { root.downloads_page_query_changed(q); } filter_changed(f) => { root.downloads_page_filter_changed(f); }
-        sort_changed(r) => { root.downloads_page_sort_changed(r); } group_toggled(k) => { root.downloads_page_group_toggled(k); }
-        action(k,a) => { root.downloads_page_action(k,a); }
-        safe-top: root.safe-area-insets.top; safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right; safe-bottom: root.safe-area-insets.bottom;
-        system_back_request: root.page_back_request; kb_active <=> root.kb_active;
-        back => { root.more_subpage_back(); }
-        home_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.home_picked(); }
-        discover_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.discover_picked(); }
-        library_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.library_picked(); }
-        settings_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.settings_picked(); }
-        about_picked => { root.cancel_more_subpage_back(); root.more_parent = false; root.about_picked(); }
-        more_picked => { root.open_more(); }
+        safe-top: root.safe-area-insets.top; safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px; safe-right: root.safe-area-insets.right; safe-bottom: root.safe-area-insets.bottom;
+        system_back_request: root.page_back_request;
+    }
+
+        }
+    }
+    if root.more_family && !root.narrow_ui && !root.player_open && !root.modal_visible: SideNav {
+        viewport-width: root.width;
+        active: root.more_open || root.more_return_pending || root.show_settings || root.show_about ? 3 : root.show_calendar ? 4 : 5;
+        safe-top: root.safe-area-insets.top; safe-left: root.safe-area-insets.left; safe-bottom: root.safe-area-insets.bottom;
+        kb_zone: root.more_open ? root.more_focus_zone : root.family_nav_zone;
+        kb_nav: root.more_open || root.more_return_pending ? root.more_nav_index : root.family_nav_index; kb_active <=> root.kb_active;
+        home_picked => { root.navigate_section(0); } discover_picked => { root.navigate_section(1); }
+        library_picked => { root.navigate_section(2); } more_picked => { root.navigate_section(3); }
+    }
+    if (root.more_open || root.more_return_pending) && root.narrow_ui && !root.player_open && !root.modal_visible: BottomNav {
+        y: root.height - self.height; width: root.width;
+        active: 3; kb_zone: root.more_focus_zone; kb_nav: root.more_open || root.more_return_pending ? root.more_nav_index : root.family_nav_index; kb_active <=> root.kb_active;
+        safe-bottom: root.safe-area-insets.bottom; safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px; safe-right: root.safe-area-insets.right;
+        page-inset-left: 0px; page-inset-right: 0px;
+        home_picked => { root.navigate_section(0); } discover_picked => { root.navigate_section(1); } library_picked => { root.navigate_section(2); }
     }
 
     // ---- Player overlay --------------------------------------------------
-    if root.player_open: PlayerOverlay {
+    if root.player_open: PlayerOsdHost {
+        width: 100%; height: 100%;
+        viewport_width: self.width; viewport_height: self.height;
         next_episode_visible: root.next_episode_visible;
         next_episode_token: root.next_episode_token;
         next_episode_title: root.next_episode_title;
         next_episode_context: root.next_episode_context;
-        next_episode_streams(t) => { root.next_episode_streams(t); }
-        next_episode_dismiss(t) => { root.next_episode_dismiss(t); }
-        playback_started <=> root.playback_started;
-        is_paused <=> root.is_paused;
-        position <=> root.position;
-        duration <=> root.duration;
-        time_text <=> root.time_text;
-        player_status <=> root.player_status;
-        player_title <=> root.player_title;
-        decode_label <=> root.decode_label;
-        decoder_selected <=> root.decoder_selected;
-        sub_label <=> root.sub_track_label;
-        audio_label <=> root.audio_track_label;
-        volume <=> root.volume;
-        muted <=> root.muted;
-        playback_speed <=> root.effective_playback_speed;
         audio_preference_saved: root.audio_preference_saved;
         subtitle_preference_saved: root.subtitle_preference_saved;
         speed_preference_saved: root.speed_preference_saved;
-        restore_playback_default(control) => { root.restore_playback_default(control); }
-        player_brightness <=> root.player_brightness;
-        is_fullscreen <=> root.is_fullscreen;
-        audio_tracks <=> root.audio_tracks;
-        sub_tracks <=> root.sub_tracks;
-        osd_visible <=> root.osd_visible;
-        // Mirror the animated OSD opacity up for the backend frame-rate logic.
-        osd_opacity_changed(v) => { root.osd_opacity = v; }
-        scrim_image <=> root.scrim_image;
-        player_poster <=> root.player_poster;
-        kb_active <=> root.kb_active;
         system_back_request: root.page_back_request;
         is_android: root.is_android;
         narrow: root.narrow_ui;
         safe-top: root.safe-area-insets.top;
         safe-left: root.safe-area-insets.left;
         safe-right: root.safe-area-insets.right;
-
-        toggle_pause => { root.toggle_pause(); }
-        seek(v) => { root.seek(v); }
-        close_player => { root.close_player(); }
-        set_volume(v) => { root.set_volume(v); }
-        toggle_mute => { root.toggle_mute(); }
-        pick_audio_track(i) => { root.pick_audio_track(i); }
-        pick_sub_track(i) => { root.pick_sub_track(i); }
-        pick_decoder(i) => { root.pick_decoder(i); }
-        playback_speed_changed(v) => { root.playback_speed_changed(v); }
-        playback_speed_stepped(d) => { root.playback_speed_stepped(d); }
-        playback_speed_preview(v) => { root.playback_speed_preview(v); }
-        android_brightness_step(d) => { root.android_brightness_step(d); }
-        android_volume_step(d) => { root.android_volume_step(d); }
-        settings_opened => { root.settings_opened(); }
-        toggle_fullscreen => { root.toggle_fullscreen(); }
-        osd_mouse_moved => { root.osd_mouse_moved(); }
-        tracks_popup_opened(i) => { root.tracks_popup_opened(i); }
-        format_time(t) => { root.format_time(t); }
-        format_volume(v) => { root.format_volume(v); }
     }
 
     if root.resume_prompt_visible: Rectangle {
@@ -1712,12 +1913,9 @@ export component AppWindow inherits Window {
         }
     }
     }
-    if root.onboarding_visible: onboarding := Onboarding {
+    if root.onboarding_visible: OnboardingHost {
         width: 100%; height: 100%;
-        step <=> root.onboarding_step;
-        language_index <=> root.language_index;
-        true_black <=> root.true_black;
-        addon_url <=> root.addon_url;
+        viewport_width: self.width; viewport_height: self.height;
         busy: root.onboarding_busy;
         addon_ready: root.onboarding_addon_ready;
         error: root.onboarding_error;
@@ -1727,20 +1925,11 @@ export component AppWindow inherits Window {
         audio_names: root.audio_language_names;
         subtitle_codes: root.subtitle_language_codes;
         subtitle_names: root.subtitle_language_names;
-        audio_index <=> root.audio_language_choice_index;
-        subtitle_index <=> root.subtitle_language_choice_index;
         safe_top: root.safe-area-insets.top;
         safe_bottom: root.safe-area-insets.bottom;
         safe_left: root.safe-area-insets.left;
         safe_right: root.safe-area-insets.right;
         system_back_request: root.system_back_request;
-        add_addon(url) => { root.onboarding_addon_added(url); }
-        cinemeta => { root.onboarding_addon_added("https://v3-cinemeta.strem.io"); }
-        setting_edited(field) => { root.settings_edited(field); }
-        language_search(query, subtitle) => { root.playback_language_search(query, subtitle); }
-        language_picked(code, subtitle) => { root.playback_language_picked(code, subtitle); }
-        finished => { root.onboarding_finished(); }
-        background_requested => { root.exit_to_background(); }
     }
 
 }

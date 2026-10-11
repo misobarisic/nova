@@ -1,14 +1,15 @@
+import { MediaCard, NavMetrics, NavState, Theme, Anim } from "@NovaUiShared";
 import { Spinner } from "std-widgets.slint";
 import { PillButton } from "settings-controls.slint";
 import { ScrollView } from "scrollview.slint";
-import { MediaCard } from "types.slint";
+
 import { KbMark } from "kbnav.slint";
-import { SideNav, NavMetrics, NavState } from "sidenav.slint";
+import { SideNav } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
 import { Dropdown } from "dropdown.slint";
 import { SearchField } from "searchfield.slint";
-import { Theme } from "theme.slint";
-import { Anim } from "anim.slint";
+
+
 import { IcChevronLeft, IcChevronRight, IcDelete, IcSearch, IcImage, IcExtension } from "icons.slint";
 
 // Browse and temporary search filters share the same dropdown rail. It keeps
@@ -1070,7 +1071,7 @@ export component DiscoverPage {
 
     function kb_left() {
         if (root.kb_zone == 0) {
-            root.kb_nav = Math.mod(root.kb_nav + root.nav_count - 1, root.nav_count);
+            root.kb_nav = NavState.step(root.kb_nav, -1, root.narrow);
         } else if (root.kb_zone == 1) {
             root.kb_cycle_addon(-1);
         } else if (root.kb_zone == 2) {
@@ -1092,7 +1093,7 @@ export component DiscoverPage {
 
     function kb_right() {
         if (root.kb_zone == 0) {
-            root.kb_nav = Math.mod(root.kb_nav + 1, root.nav_count);
+            root.kb_nav = NavState.step(root.kb_nav, 1, root.narrow);
         } else if (root.kb_zone == 1) {
             root.kb_cycle_addon(1);
         } else if (root.kb_zone == 2) {

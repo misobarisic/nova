@@ -1,0 +1,28 @@
+import { HomeBridge, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadEpisode, DownloadGroup, SettingsDestination } from "@NovaUiShared";
+// Only mount-specific inputs live here; persistent state is connected once
+// by page-bindings.slint, outside the conditional ComponentContainer.
+
+export component HomeHost inherits Rectangle {
+    preferred-width: 100%; preferred-height: 100%;
+    in-out property <length> nav-viewport-width <=> HomeBridge.nav-viewport-width;
+    in-out property <[HomeCatalogSection]> catalog_sections <=> HomeBridge.catalog_sections;
+    in-out property <[int]> catalog_order <=> HomeBridge.catalog_order;
+    in-out property <[int]> catalog_positions <=> HomeBridge.catalog_positions;
+    in-out property <[HomeCatalogCard]> catalog_cards <=> HomeBridge.catalog_cards;
+    in-out property <string> featured_watch_label <=> HomeBridge.featured_watch_label;
+    in-out property <image> featured_logo <=> HomeBridge.featured_logo;
+    in-out property <bool> featured_refresh_pending <=> HomeBridge.featured_refresh_pending;
+    in-out property <int> min_cols <=> HomeBridge.min_cols;
+    in-out property <int> system_back_request <=> HomeBridge.system_back_request;
+    in-out property <bool> narrow <=> HomeBridge.narrow;
+    in-out property <bool> touch_menus <=> HomeBridge.touch_menus;
+    in-out property <bool> continue_enabled <=> HomeBridge.continue_enabled;
+    in-out property <length> safe-top <=> HomeBridge.safe-top;
+    in-out property <length> safe-left <=> HomeBridge.safe-left;
+    in-out property <length> safe-right <=> HomeBridge.safe-right;
+    in-out property <length> safe-bottom <=> HomeBridge.safe-bottom;
+    in-out property <bool> more_open <=> HomeBridge.more_open;
+    in-out property <length> viewport_width <=> HomeBridge.viewport_width;
+    in-out property <length> viewport_height <=> HomeBridge.viewport_height;
+    ComponentContainer { width: 100%; height: 100%; component-factory: HomeBridge.factory; }
+}

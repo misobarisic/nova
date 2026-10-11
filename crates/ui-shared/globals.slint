@@ -1,0 +1,97 @@
+// Shared state and pure helpers, without page visual trees.
+import { SettingSyncInfo, SettingsDestination } from "../ui/types.slint";
+
+export global NavMetrics {
+    out property <length> rail-width: 64px;
+
+    public pure function width-for(viewport-width: length) -> length {
+        return root.rail-width;
+    }
+}
+
+export global NavState {
+    // Section IDs are shared with backend routing and the narrow bottom bar.
+    // Only the wide rail places Calendar and Downloads before More.
+    public pure function step(section: int, direction: int, narrow: bool) -> int {
+        if (narrow) { return Math.mod(Math.min(3, Math.max(0, section)) + direction + 4, 4); }
+        let slot = section == 3 ? 5 : section >= 4 ? section - 1 : section;
+        let next = Math.mod(slot + direction + 6, 6);
+        return next == 5 ? 3 : next >= 3 ? next + 1 : next;
+    }
+
+    callback calendar_picked();
+    callback downloads_picked();
+    // Section the current switch is coming from (0 Home, 1 Discover,
+    // 2 Library, 3 More, 4 Calendar, 5 Downloads). Consumed by the new bar so a rebuild
+    // (returning from detail or resizing) does not replay the selected icon's pop.
+    in-out property <int> from: 0;
+}
+
+export global SettingsStyle {
+    in-out property <bool> keyboard-mode: false;
+    in-out property <length> focus-y;
+    in-out property <length> focus-height;
+    in-out property <bool> navigation-focus: false;
+    in-out property <int> focus-request: 0;
+}
+
+export global SettingsDestinations {
+    out property <[SettingsDestination]> entries: [
+    { id: 13, stable-id: "settings:home", group: 0, title: @tr("Home"), description: @tr("Featured titles and catalog rows"), terms: @tr("HOME CATALOGS") + " " + @tr("Built-in") + " " + @tr("Move up") + " " + @tr("Move down") + " " + @tr("Continue watching Upcoming Home sections featured catalogs catalog rows poster rows Add catalog Remove") + " " + @tr("HOME ROWS") + " " + @tr("Continue Watching") + " " + @tr("Upcoming") + " " + @tr("Episode artwork on Home") + " " + @tr("Episode artwork") + " " + @tr("FEATURED SHOWCASE") + " " + @tr("CATALOG ROWS") + " " + @tr("Add catalog row") + " " + @tr("Remove") + " " + @tr("Add catalog"), aliases: "Home catalogs Built-in visibility reorder move up move down Home Featured titles and catalog rows Continue watching Upcoming episode artwork episode thumbnails show posters catalog rows poster rows below Upcoming Add catalog row Remove HOME ROWS Continue Watching Upcoming Episode artwork on Home Episode artwork FEATURED SHOWCASE CATALOG ROWS Add catalog row Add catalog", parent: -1 },
+    { id: 3, stable-id: "settings:display", group: 0, title: @tr("Display"), description: @tr("Dates, metadata, grid layout and language"), terms: @tr("Language artwork metadata relative dates Discover Library grid columns catalog addon names unwatched thumbnails prefetch") + " " + @tr("Language") + " " + @tr("Artwork and metadata") + " " + @tr("Relative episode dates") + " " + @tr("Prefetch episode metadata") + " " + @tr("Show unwatched thumbnails") + " " + @tr("Discover layout") + " " + @tr("Discover grid columns") + " " + @tr("Show addon names in catalogs") + " " + @tr("Library layout") + " " + @tr("Library grid columns") + " " + @tr("Language") + " " + @tr("Artwork and metadata") + " " + @tr("Relative episode dates") + " " + @tr("Prefetch episode metadata") + " " + @tr("Show unwatched thumbnails") + " " + @tr("Discover layout") + " " + @tr("Discover grid columns") + " " + @tr("Show addon names in catalogs") + " " + @tr("Library layout") + " " + @tr("Library grid columns") + " 2 3 4 5 6 English Hrvatski", aliases: "Display Dates, metadata, grid layout and language Language artwork metadata relative dates Discover Library grid columns catalog addon names unwatched thumbnails prefetch Language Artwork and metadata Relative episode dates Prefetch episode metadata Show unwatched thumbnails Discover layout Discover grid columns Show addon names in catalogs Library layout Library grid columns", parent: -1 },
+    { id: 14, stable-id: "settings:theme", group: 0, title: @tr("Theme"), description: @tr("Background colours and artwork fades"), terms: @tr("True black") + " " + @tr("Use pure black backgrounds and artwork fades.") + " " + @tr("Card corner radius") + " " + @tr("Choose how rounded cards look. Soft is the default.") + " " + @tr("Button corner radius") + " " + @tr("Choose how rounded buttons look. Soft is the default.") + " " + @tr("Square") + " " + @tr("Subtle") + " " + @tr("Soft") + " " + @tr("Rounded") + " " + @tr("Extra rounded") + " " + @tr("Card spacing") + " " + @tr("Choose how much space sits between cards. Compact is the default.") + " " + @tr("None") + " " + @tr("Tight") + " " + @tr("Compact") + " " + @tr("Comfortable") + " " + @tr("Spacious") + " " + @tr("Status bar gradient") + " " + @tr("Darken the top of Home and Detail on narrow screens. Set to 0 to turn off.") + " " + @tr("Home backdrop size") + " " + @tr("Detail backdrop size") + " " + @tr("Small") + " " + @tr("Medium") + " " + @tr("Large") + " " + @tr("Choose how tall the featured artwork is. Sizes adapt to screen width.") + " " + @tr("Choose how tall the Detail artwork is. Sizes adapt to screen width.") + " " + @tr("Title alignment") + " " + @tr("Align titles on narrow Home and Detail screens, plus Home featured metadata.") + " " + @tr("Left") + " " + @tr("Center") + " " + @tr("Right") + " " + @tr("Restore theme defaults"), aliases: "Theme True black AMOLED OLED backgrounds colours colors artwork fades card corner radius button corner radius button rounding rounded square none presets buttons spacing margins gap rows grids season episode status bar gradient top darken opacity strength fade home detail backdrop size height small medium large title logo fallback metadata alignment left center right reset restore defaults", parent: -1 },
+    { id: 6, stable-id: "settings:look-and-feel", group: 0, title: @tr("Look and feel"), description: @tr("Motion, transitions and hover effects"), terms: @tr("Enable animations Page transitions Hover effects Player OSD Navigation feedback") + " " + @tr("Animations") + " " + @tr("Enable animations") + " " + @tr("Motion options") + " " + @tr("Page transitions") + " " + @tr("Hover effects") + " " + @tr("Player OSD") + " " + @tr("Navigation feedback"), aliases: "Look and feel Motion, transitions and hover effects Enable animations Page transitions Hover effects Player OSD Navigation feedback", parent: -1 },
+    { id: 5, stable-id: "settings:player", group: 0, title: @tr("Player"), description: @tr("Built-in or external player"), terms: @tr("Player choice Episode playback decoder hardware mpv external app Playback speed presets") + " " + @tr("Player") + " " + @tr("Episode playback") + " " + @tr("External app") + " " + @tr("Video decoder") + " " + @tr("Playback speed") + " " + @tr("Player choice") + " " + @tr("Player") + " " + @tr("Episode playback") + " " + @tr("Playback controls") + " " + @tr("External app") + " " + @tr("Video decoder") + " " + @tr("Playback speed") + " " + @tr("Built-in") + " " + @tr("External") + " " + @tr("Start over") + " " + @tr("Resume") + " " + @tr("Ask") + " " + @tr("System default") + " " + @tr("Default audio language") + " " + @tr("Default subtitle language") + " " + @tr("Default playback speed") + " Built-in External Start over Resume Ask System default VLC mpv HW+ HW SW 1× 1.25× 1.5× 2× 1x 1.25x 1.5x 2x", aliases: "Player Built-in or external player Player choice Episode playback decoder hardware mpv external app Playback speed presets Player Episode playback External app Video decoder Playback speed Default audio language Default subtitle language Default playback speed", parent: -1 },
+    { id: 0, stable-id: "settings:addons", group: 1, title: @tr("Addons"), description: @tr("Installed addons and catalog sources"), terms: @tr("Install addon URL sources Enable Configure Copy link Refresh Remove Move up Move down") + " " + @tr("Add") + " " + @tr("Copy link") + " " + @tr("Installation") + " " + @tr("Addon install URL — e.g. https://v3-cinemeta.strem.io") + " " + @tr("Add") + " " + @tr("Installed sources") + " " + @tr("Copy link"), aliases: "Addons Installed addons and catalog sources Install addon URL sources Enable Configure Copy link Refresh Remove Move up Move down Add Copy link", parent: -1 },
+    { id: 1, stable-id: "settings:categories", group: 1, title: @tr("Categories"), description: @tr("Tags for organising My Library"), terms: @tr("Create Add category Remove tags") + " " + @tr("Add") + " " + @tr("Remove") + " " + @tr("Creation") + " " + @tr("New category name") + " " + @tr("Add") + " " + @tr("Existing categories") + " " + @tr("Remove"), aliases: "Categories Tags for organising My Library Create Add category Remove tags Add Remove", parent: -1 },
+    { id: 7, stable-id: "settings:sync", group: 1, title: @tr("Sync"), description: @tr("Sync library and watch history between devices"), terms: @tr("Enable This device Automatic sync Pairing Connected peers Invite ticket QR code confirmation remove") + " " + @tr("Accept") + " " + @tr("Deny") + " " + @tr("Cancel") + " " + @tr("Remove") + " " + @tr("Enablement") + " " + @tr("Enable cross-device sync") + " " + @tr("THIS DEVICE") + " " + @tr("Device name") + " " + @tr("Copy") + " " + @tr("Sync now") + " " + @tr("AUTO-SYNC") + " " + @tr("Auto-sync while the app is running") + " " + @tr("Background sync") + " " + @tr("Local network discovery") + " " + @tr("PAIRING") + " " + @tr("Ask before accepting devices") + " " + @tr("Create invite") + " " + @tr("Copy code") + " " + @tr("paste invite code") + " " + @tr("Join") + " " + @tr("Scan QR code") + " " + @tr("PEERS") + " " + @tr("peer endpoint id") + " " + @tr("Add") + " " + @tr("30s") + " " + @tr("1m") + " " + @tr("5m") + " " + @tr("15m") + " 30s 1m 5m 15m", aliases: "Sync Sync library and watch history between devices Enable This device Automatic sync Pairing Connected peers Invite ticket QR code confirmation remove", parent: -1 },
+    { id: 12, stable-id: "settings:tracking", group: 1, title: @tr("Tracking"), description: @tr("Anime progress on MyAnimeList and AniList"), terms: @tr("MyAnimeList AniList MAL Sign in account Connect Disconnect Automatic tracking recovery Reset history") + " " + @tr("Public client ID") + " " + @tr("Registered redirect URL") + " " + @tr("Finish sign-in") + " " + @tr("Cancel sign-in") + " " + @tr("Disconnect") + " " + @tr("Sign-in is saved and shared with paired devices. Disconnect removes shared sign-in.") + " " + @tr("Reset local tracking") + " " + @tr("Reset all local links and queued updates? A recovery backup is retained. Nova history and remote tracker lists stay unchanged.") + " " + @tr("Confirm tracking reset") + " " + @tr("Cancel") + " " + @tr("Automatic tracking for linked releases") + " " + @tr("Public client ID") + " " + @tr("Registered redirect URL") + " " + @tr("Reconnect") + " " + @tr("Connect") + " " + @tr("Approve Nova in AniList, then copy the displayed token and paste it below.") + " " + @tr("Finish sign-in in your browser. Paste the full return URL here if automatic return fails.") + " " + @tr("AniList token") + " " + @tr("Full return URL") + " " + @tr("Finish sign-in") + " " + @tr("Cancel sign-in") + " " + @tr("Disconnect") + " " + @tr("Sign-in is saved and shared with paired devices. Disconnect removes shared sign-in.") + " " + @tr("Reset local tracking") + " " + @tr("Reset all local links and queued updates? A recovery backup is retained. Nova history and remote tracker lists stay unchanged.") + " " + @tr("Confirm tracking reset") + " " + @tr("Cancel"), aliases: "Tracking Anime progress on MyAnimeList and AniList MyAnimeList AniList MAL Sign in account Connect Disconnect Automatic tracking recovery Reset history", parent: -1 },
+    { id: 2, stable-id: "settings:image-cache", group: 2, title: @tr("Image cache"), description: @tr("Poster and thumbnail caching"), terms: @tr("Storage disk caching Compression JPEG WebP Quality Detail posters Detail backdrops Episode thumbnails Player episode backdrops Memory decoded-image budget Clear cache Re-encode now") + " " + @tr("Storage") + " " + @tr("Disk caching") + " " + @tr("Compression") + " " + @tr("Compress images") + " " + @tr("Format") + " " + @tr("Quality") + " " + @tr("Detail posters") + " " + @tr("Detail backdrops") + " " + @tr("Episode thumbnails") + " " + @tr("Player episode backdrops") + " " + @tr("Memory") + " " + @tr("Decoded-image budget") + " " + @tr("Maintenance") + " " + @tr("Disk usage") + " " + @tr("Clear cache") + " " + @tr("Convert existing images"), aliases: "Image cache Poster and thumbnail caching Storage disk caching Compression JPEG WebP Quality Detail posters Detail backdrops Episode thumbnails Player episode backdrops Memory decoded-image budget Clear cache Re-encode now Storage Disk caching Compression Compress images Format Quality Detail posters Detail backdrops Episode thumbnails Player episode backdrops Memory Decoded-image budget Maintenance Disk usage Clear cache Convert existing images", parent: -1 },
+    { id: 8, stable-id: "settings:downloads", group: 2, title: @tr("Downloads"), description: @tr("Offline media and cleanup policy"), terms: @tr("Cleanup Auto-delete watched episodes Downloaded episodes") + " " + @tr("Auto-delete watched episodes") + " " + @tr("Downloaded episodes") + " " + @tr("View") + " " + @tr("Cleanup policy") + " " + @tr("Auto-delete watched episodes") + " " + @tr("Downloaded episodes") + " " + @tr("View"), aliases: "Downloads Offline media and cleanup policy Cleanup Auto-delete watched episodes Downloaded episodes Auto-delete watched episodes Downloaded episodes View", parent: -1 },
+    { id: 9, stable-id: "settings:downloaded-episodes", group: 2, title: @tr("Downloaded episodes"), description: @tr("Episode files stored on this device"), terms: @tr("Downloads offline media downloaded episodes delete Remove") + " " + @tr("DOWNLOADED EPISODES") + " " + @tr("Delete") + " " + @tr("Delete"), aliases: "Downloaded episodes Episode files stored on this device Downloads offline media downloaded episodes delete Remove DOWNLOADED EPISODES Delete", parent: 8 },
+    { id: 4, stable-id: "settings:p2p", group: 2, title: @tr("P2P"), description: @tr("Stream P2P with the built-in client"), terms: @tr("Streaming torrents Cache location folder limits size disk usage cleanup rate limit") + " " + @tr("Stream P2P") + " " + @tr("Cache size limit") + " " + @tr("Download rate limit") + " " + @tr("No caching") + " " + @tr("Disk usage") + " " + @tr("Clear") + " " + @tr("Streaming") + " " + @tr("Stream P2P") + " " + @tr("Cache location and limits") + " " + @tr("Default (app cache folder)") + " " + @tr("Cache size limit") + " " + @tr("Download rate limit") + " " + @tr("No caching") + " " + @tr("Disk usage and cleanup") + " " + @tr("Disk usage") + " " + @tr("Clear"), aliases: "P2P Stream P2P with the built-in client Streaming torrents Cache location folder limits size disk usage cleanup rate limit Stream P2P Cache size limit Download rate limit No caching Disk usage Clear", parent: -1 },
+    ];
+}
+
+export global SettingsSync {
+    in-out property <[SettingSyncInfo]> rows;
+    // Mirrors the device's actual cross-device sync setting. Scope badges are
+    // presentation only and disappear when syncing is disabled.
+    in-out property <bool> enabled: false;
+    in-out property <bool> open: false;
+    in-out property <string> selected_key;
+    in-out property <string> selected_title;
+    pure callback lookup(string) -> int;
+    callback requested();
+    callback override_changed(string, bool);
+    changed enabled => { if !self.enabled { self.open = false; } }
+    public function show(key: string, title: string) {
+        self.selected_key = key;
+        self.selected_title = title;
+        self.requested();
+        self.open = true;
+    }
+}
+
+export global ControlInput {
+    in-out property <bool> touch-feedback: false;
+}
+
+export global SliderGesture {
+    in-out property <bool> active: false;
+    in-out property <bool> hovered: false;
+}
+
+export global PlaybackSpeed {
+    out property <float> minimum: 0.5;
+    out property <float> maximum: 2.0;
+    out property <float> span: maximum - minimum;
+
+    /// "1.25×" — Slint has no printf-style formatting, so the hundredths are
+    /// padded by hand (the value is already clamped by the backend).
+    public pure function label(speed: float) -> string {
+        let hundredths = Math.round(speed * 100);
+        let fraction = Math.mod(hundredths, 100);
+        return Math.floor(hundredths / 100) + "." + (fraction < 10 ? "0" : "") + fraction + "×";
+    }
+}

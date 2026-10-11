@@ -1,0 +1,219 @@
+import { SettingsPage } from "../ui/settings.slint";
+import { SettingsBridge } from "@NovaUiShared";
+
+export component SettingsModule inherits Window {
+    public function content_prepare() { page.prepare_submenu(); }
+    public function content_focus_shell() { page.focus_shell(); }
+    public function content_kb_player_audio_language_row() -> int { return page.kb_player_audio_language_row(); }
+    public function content_kb_player_speed_row() -> int { return page.kb_player_speed_row(); }
+    public function content_kb_player_subtitle_language_row() -> int { return page.kb_player_subtitle_language_row(); }
+    public function content_open_page(id: int) { page.open_page(id); }
+    public function content_pick_button_radius(index: int) { page.pick_button_radius(index); }
+    public function content_pick_card_radius(index: int) { page.pick_card_radius(index); }
+    public function content_pick_card_spacing(index: int) { page.pick_card_spacing(index); }
+    public function content_restore_theme_defaults() { page.restore_theme_defaults(); }
+    public function content_reveal_detail_control(y: length, h: length) { page.reveal_detail_control(y,h); }
+    public function content_schedule_save() { page.schedule_save(); }
+    public function content_schedule_setting(field: string) { page.schedule_setting(field); }
+
+    default-font-family: "Roboto";
+    background: transparent;
+    width: SettingsBridge.viewport_width; height: SettingsBridge.viewport_height;
+    page := SettingsPage {
+        width: 100%; height: 100%;
+        kb_zone <=> SettingsBridge.kb_zone;
+        kb_nav <=> SettingsBridge.kb_nav;
+        external_navigation <=> SettingsBridge.external_navigation;
+        active <=> SettingsBridge.active;
+        sel <=> SettingsBridge.sel;
+        sub_open <=> SettingsBridge.sub_open;
+        two_pane <=> SettingsBridge.two_pane;
+        search_query <=> SettingsBridge.search_query;
+        kb_land <=> SettingsBridge.kb_land;
+        land_scroll_y <=> SettingsBridge.land_scroll_y;
+        page_scrolls <=> SettingsBridge.page_scrolls;
+        cache_busy <=> SettingsBridge.cache_busy;
+        cache_rewriting <=> SettingsBridge.cache_rewriting;
+        cache_processed <=> SettingsBridge.cache_processed;
+        cache_total <=> SettingsBridge.cache_total;
+        cache_status <=> SettingsBridge.cache_status;
+        nav-viewport-width <=> SettingsBridge.nav-viewport-width;
+        tracking_accounts <=> SettingsBridge.tracking_accounts;
+        tracking_notice <=> SettingsBridge.tracking_notice;
+        persistence_failed <=> SettingsBridge.persistence_failed;
+        addon_rows <=> SettingsBridge.addon_rows;
+        addon_search_text <=> SettingsBridge.addon_search_text;
+        addon_capability_filter <=> SettingsBridge.addon_capability_filter;
+        cinemeta_installed <=> SettingsBridge.cinemeta_installed;
+        addon_url <=> SettingsBridge.addon_url;
+        category_rows <=> SettingsBridge.category_rows;
+        category_input <=> SettingsBridge.category_input;
+        home_catalog_rows <=> SettingsBridge.home_catalog_rows;
+        home_row_catalog_rows <=> SettingsBridge.home_row_catalog_rows;
+        home_continue_enabled <=> SettingsBridge.home_continue_enabled;
+        home_upcoming_enabled <=> SettingsBridge.home_upcoming_enabled;
+        home_episode_artwork <=> SettingsBridge.home_episode_artwork;
+        home_catalog_candidate_names <=> SettingsBridge.home_catalog_candidate_names;
+        home_catalog_candidate_index <=> SettingsBridge.home_catalog_candidate_index;
+        home_catalog_genre_names <=> SettingsBridge.home_catalog_genre_names;
+        home_catalog_genre_index <=> SettingsBridge.home_catalog_genre_index;
+        home_catalog_add_open <=> SettingsBridge.home_catalog_add_open;
+        home_catalog_add_target <=> SettingsBridge.home_catalog_add_target;
+        system_back_request <=> SettingsBridge.system_back_request;
+        home_catalog_add_error <=> SettingsBridge.home_catalog_add_error;
+        cache_images <=> SettingsBridge.cache_images;
+        cache_disk_usage <=> SettingsBridge.cache_disk_usage;
+        cache_enabled <=> SettingsBridge.cache_enabled;
+        cache_format_index <=> SettingsBridge.cache_format_index;
+        cache_quality <=> SettingsBridge.cache_quality;
+        detail_poster_resolution_index <=> SettingsBridge.detail_poster_resolution_index;
+        detail_backdrop_resolution_index <=> SettingsBridge.detail_backdrop_resolution_index;
+        episode_thumbnail_resolution_index <=> SettingsBridge.episode_thumbnail_resolution_index;
+        player_episode_backdrop_resolution_index <=> SettingsBridge.player_episode_backdrop_resolution_index;
+        cache_date_relative <=> SettingsBridge.cache_date_relative;
+        cache_show_unwatched_thumbs <=> SettingsBridge.cache_show_unwatched_thumbs;
+        cache_lru_mb <=> SettingsBridge.cache_lru_mb;
+        cache_prefetch_metadata <=> SettingsBridge.cache_prefetch_metadata;
+        discover_catalog_addon_names <=> SettingsBridge.discover_catalog_addon_names;
+        image_resolution_names <=> SettingsBridge.image_resolution_names;
+        discover_min_cols <=> SettingsBridge.discover_min_cols;
+        library_min_cols <=> SettingsBridge.library_min_cols;
+        cache_format_names <=> SettingsBridge.cache_format_names;
+        android_hwdec_index <=> SettingsBridge.android_hwdec_index;
+        player_backend_index <=> SettingsBridge.player_backend_index;
+        desktop_external_app_index <=> SettingsBridge.desktop_external_app_index;
+        default_audio_language <=> SettingsBridge.default_audio_language;
+        default_subtitle_language <=> SettingsBridge.default_subtitle_language;
+        audio_language_choice_index <=> SettingsBridge.audio_language_choice_index;
+        subtitle_language_choice_index <=> SettingsBridge.subtitle_language_choice_index;
+        audio_language_label <=> SettingsBridge.audio_language_label;
+        subtitle_language_label <=> SettingsBridge.subtitle_language_label;
+        audio_language_codes <=> SettingsBridge.audio_language_codes;
+        audio_language_names <=> SettingsBridge.audio_language_names;
+        subtitle_language_codes <=> SettingsBridge.subtitle_language_codes;
+        subtitle_language_names <=> SettingsBridge.subtitle_language_names;
+        playback_speed <=> SettingsBridge.playback_speed;
+        android_auto_continue <=> SettingsBridge.android_auto_continue;
+        episode_start_index <=> SettingsBridge.episode_start_index;
+        is_android <=> SettingsBridge.is_android;
+        true_black <=> SettingsBridge.true_black;
+        card_corner_radius <=> SettingsBridge.card_corner_radius;
+        button_corner_radius <=> SettingsBridge.button_corner_radius;
+        card_spacing <=> SettingsBridge.card_spacing;
+        status_bar_gradient <=> SettingsBridge.status_bar_gradient;
+        home_backdrop_size <=> SettingsBridge.home_backdrop_size;
+        detail_backdrop_size <=> SettingsBridge.detail_backdrop_size;
+        hero_title_alignment <=> SettingsBridge.hero_title_alignment;
+        animations <=> SettingsBridge.animations;
+        anim_transitions <=> SettingsBridge.anim_transitions;
+        anim_hover <=> SettingsBridge.anim_hover;
+        anim_player <=> SettingsBridge.anim_player;
+        anim_nav_slide <=> SettingsBridge.anim_nav_slide;
+        language_index <=> SettingsBridge.language_index;
+        language_names <=> SettingsBridge.language_names;
+        show_image_cache <=> SettingsBridge.show_image_cache;
+        show_torrents <=> SettingsBridge.show_torrents;
+        torrent_enabled <=> SettingsBridge.torrent_enabled;
+        torrent_dir <=> SettingsBridge.torrent_dir;
+        torrent_max_mb <=> SettingsBridge.torrent_max_mb;
+        torrent_down_limit <=> SettingsBridge.torrent_down_limit;
+        torrent_no_cache <=> SettingsBridge.torrent_no_cache;
+        torrent_disk_usage <=> SettingsBridge.torrent_disk_usage;
+        download_auto_delete_watched <=> SettingsBridge.download_auto_delete_watched;
+        downloads_rows <=> SettingsBridge.downloads_rows;
+        sync_enabled <=> SettingsBridge.sync_enabled;
+        sync_identity <=> SettingsBridge.sync_identity;
+        sync_peers <=> SettingsBridge.sync_peers;
+        sync_peer_input <=> SettingsBridge.sync_peer_input;
+        sync_status <=> SettingsBridge.sync_status;
+        sync_device_name <=> SettingsBridge.sync_device_name;
+        sync_pair_confirm <=> SettingsBridge.sync_pair_confirm;
+        sync_local_discovery <=> SettingsBridge.sync_local_discovery;
+        sync_interval_index <=> SettingsBridge.sync_interval_index;
+        sync_background <=> SettingsBridge.sync_background;
+        sync_invite_ticket <=> SettingsBridge.sync_invite_ticket;
+        sync_invite_qr <=> SettingsBridge.sync_invite_qr;
+        sync_invites <=> SettingsBridge.sync_invites;
+        sync_join_input <=> SettingsBridge.sync_join_input;
+        sync_qr_scan_available <=> SettingsBridge.sync_qr_scan_available;
+        sync_link_notice <=> SettingsBridge.sync_link_notice;
+        sync_pair_prompt_visible <=> SettingsBridge.sync_pair_prompt_visible;
+        sync_pair_prompt_id <=> SettingsBridge.sync_pair_prompt_id;
+        sync_pair_prompt_name <=> SettingsBridge.sync_pair_prompt_name;
+        sync_pair_prompt_code <=> SettingsBridge.sync_pair_prompt_code;
+        kb_active <=> SettingsBridge.kb_active;
+        phone_layout <=> SettingsBridge.phone_layout;
+        safe-top <=> SettingsBridge.safe-top;
+        safe-left <=> SettingsBridge.safe-left;
+        safe-right <=> SettingsBridge.safe-right;
+        safe-bottom <=> SettingsBridge.safe-bottom;
+        scroll_y <=> SettingsBridge.scroll_y;
+        addon_config_open <=> SettingsBridge.addon_config_open;
+        addon_config_url <=> SettingsBridge.addon_config_url;
+        addon_config_label <=> SettingsBridge.addon_config_label;
+        addon_config_streams <=> SettingsBridge.addon_config_streams;
+        addon_config_metadata <=> SettingsBridge.addon_config_metadata;
+        search_matches(arg0, arg1) => { SettingsBridge.search_matches(arg0, arg1); }
+        tracking_connect(arg0, arg1, arg2) => { SettingsBridge.tracking_connect(arg0, arg1, arg2); }
+        tracking_complete(arg0, arg1) => { SettingsBridge.tracking_complete(arg0, arg1); }
+        tracking_disconnect(arg0) => { SettingsBridge.tracking_disconnect(arg0); }
+        tracking_cancel(arg0) => { SettingsBridge.tracking_cancel(arg0); }
+        tracking_automatic(arg0, arg1) => { SettingsBridge.tracking_automatic(arg0, arg1); }
+        playback_language_search(arg0, arg1) => { SettingsBridge.playback_language_search(arg0, arg1); }
+        playback_language_picked(arg0, arg1) => { SettingsBridge.playback_language_picked(arg0, arg1); }
+        addon_added(arg0) => { SettingsBridge.addon_added(arg0); }
+        addon_toggled(arg0) => { SettingsBridge.addon_toggled(arg0); }
+        addon_remove(arg0) => { SettingsBridge.addon_remove(arg0); }
+        addon_move_up(arg0) => { SettingsBridge.addon_move_up(arg0); }
+        addon_move_down(arg0) => { SettingsBridge.addon_move_down(arg0); }
+        addon_capabilities_changed(arg0, arg1, arg2) => { SettingsBridge.addon_capabilities_changed(arg0, arg1, arg2); }
+        addon_configure(arg0) => { SettingsBridge.addon_configure(arg0); }
+        addon_refresh(arg0) => { SettingsBridge.addon_refresh(arg0); }
+        addon_copy_link(arg0) => { SettingsBridge.addon_copy_link(arg0); }
+        playback_speed_stepped(arg0) => { SettingsBridge.playback_speed_stepped(arg0); }
+        category_added(arg0) => { SettingsBridge.category_added(arg0); }
+        category_removed(arg0) => { SettingsBridge.category_removed(arg0); }
+        home_catalog_candidate_picked(arg0) => { SettingsBridge.home_catalog_candidate_picked(arg0); }
+        home_catalog_added(arg0, arg1) => { SettingsBridge.home_catalog_added(arg0, arg1); }
+        home_catalog_removed(arg0) => { SettingsBridge.home_catalog_removed(arg0); }
+        home_row_catalog_removed(arg0) => { SettingsBridge.home_row_catalog_removed(arg0); }
+        home_row_catalog_action(arg0, arg1) => { SettingsBridge.home_row_catalog_action(arg0, arg1); }
+        settings_edited(arg0) => { SettingsBridge.settings_edited(arg0); }
+        torrent_dir_edited(arg0) => { SettingsBridge.torrent_dir_edited(arg0); }
+        download_auto_delete_watched_changed(arg0) => { SettingsBridge.download_auto_delete_watched_changed(arg0); }
+        download_list_remove(arg0) => { SettingsBridge.download_list_remove(arg0); }
+        sync_add_peer(arg0) => { SettingsBridge.sync_add_peer(arg0); }
+        sync_remove_peer(arg0) => { SettingsBridge.sync_remove_peer(arg0); }
+        sync_device_name_edited(arg0) => { SettingsBridge.sync_device_name_edited(arg0); }
+        sync_pair_confirm_changed(arg0) => { SettingsBridge.sync_pair_confirm_changed(arg0); }
+        sync_local_discovery_changed(arg0) => { SettingsBridge.sync_local_discovery_changed(arg0); }
+        sync_interval_picked(arg0) => { SettingsBridge.sync_interval_picked(arg0); }
+        sync_background_changed(arg0) => { SettingsBridge.sync_background_changed(arg0); }
+        sync_cancel_invite(arg0) => { SettingsBridge.sync_cancel_invite(arg0); }
+        sync_copy_ticket(arg0) => { SettingsBridge.sync_copy_ticket(arg0); }
+        sync_join_invite(arg0) => { SettingsBridge.sync_join_invite(arg0); }
+        sync_respond_pair(arg0, arg1) => { SettingsBridge.sync_respond_pair(arg0, arg1); }
+        cancel_reencode() => { SettingsBridge.cancel_reencode(); }
+        tracking_reset() => { SettingsBridge.tracking_reset(); }
+        addon_filter_changed() => { SettingsBridge.addon_filter_changed(); }
+        discover_picked() => { SettingsBridge.discover_picked(); }
+        home_picked() => { SettingsBridge.home_picked(); }
+        back_picked() => { SettingsBridge.back_picked(); }
+        library_picked() => { SettingsBridge.library_picked(); }
+        settings_picked() => { SettingsBridge.settings_picked(); }
+        about_picked() => { SettingsBridge.about_picked(); }
+        more_picked() => { SettingsBridge.more_picked(); }
+        home_catalog_add_requested() => { SettingsBridge.home_catalog_add_requested(); }
+        home_row_catalog_add_requested() => { SettingsBridge.home_row_catalog_add_requested(); }
+        save_settings() => { SettingsBridge.save_settings(); }
+        clear_cache() => { SettingsBridge.clear_cache(); }
+        reencode_cache() => { SettingsBridge.reencode_cache(); }
+        torrents_changed() => { SettingsBridge.torrents_changed(); }
+        clear_torrent_cache() => { SettingsBridge.clear_torrent_cache(); }
+        sync_changed() => { SettingsBridge.sync_changed(); }
+        sync_now() => { SettingsBridge.sync_now(); }
+        sync_copy_identity() => { SettingsBridge.sync_copy_identity(); }
+        sync_create_invite() => { SettingsBridge.sync_create_invite(); }
+        sync_scan_qr() => { SettingsBridge.sync_scan_qr(); }
+    }
+}

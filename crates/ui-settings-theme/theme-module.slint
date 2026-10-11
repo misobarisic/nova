@@ -1,0 +1,201 @@
+import { SettingsBridge, SettingsContent, SettingsStyle } from "@NovaUiShared";
+
+import { PillButton, ToggleSwitch, Segmented, SectionHeader, SettingsRow, NumericSetting, SettingsCard } from "../ui/settings-controls.slint";
+
+// The shell owns scrolling and transitions. Report intrinsic layout sizes
+// only while this section is selected, so outgoing instances cannot resize it.
+export component SettingsThemeModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: SettingsContent.slot_width; height: SettingsContent.slot_height;
+    private property <length> measured_min: body_layout.min-height;
+    private property <length> measured_preferred: body_layout.preferred-height;
+    changed measured_min => { root.publish_size(); }
+    changed measured_preferred => { root.publish_size(); }
+    init => { root.publish_size(); }
+    function publish_size() {
+        if SettingsBridge.sel == 14 {
+            SettingsContent.content_min_height = root.measured_min;
+            SettingsContent.content_preferred_height = root.measured_preferred;
+        }
+    }
+    body_layout := VerticalLayout {
+        width: 100%; height: 100%; spacing: 0px;
+        VerticalLayout {
+
+            vertical-stretch: 0; spacing: 16px;
+            SectionHeader { label: @tr("Theme"); }
+            SettingsCard { SettingsRow {
+                setting-key: "true_black";
+                row-title: @tr("True black");
+                row-desc: @tr("Use pure black backgrounds and artwork fades.");
+                ToggleSwitch {
+                    name: @tr("True black");
+                    checked <=> SettingsBridge.true_black;
+                    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 0 && SettingsBridge.kb_active;
+                    toggled => {
+                        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                        SettingsBridge.kb_zone = 17;
+                        SettingsContent.kb_theme = 0;
+                        SettingsContent.schedule_setting("true_black");
+                    }
+                }
+            } }
+            SettingsCard { SettingsRow {
+                setting-key: "card_corner_radius";
+                row-title: @tr("Card corner radius");
+                row-desc: @tr("Choose how rounded cards look. Soft is the default.");
+                if !SettingsContent.narrow: Segmented {
+                    labels: [@tr("Square"), @tr("Subtle"), @tr("Soft"), @tr("Rounded"), @tr("Extra rounded")];
+                    current_index: SettingsContent.radius_preset_index;
+                    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 1 && SettingsBridge.kb_active;
+                    picked(i) => { SettingsContent.pick_card_radius(i); }
+                }
+                if SettingsContent.narrow: VerticalLayout {
+                    spacing: 8px;
+                    Segmented {
+                        labels: [@tr("Square"), @tr("Subtle"), @tr("Soft")];
+                        current_index: SettingsContent.radius_preset_index < 3 ? SettingsContent.radius_preset_index : -1;
+                        focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 1 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsContent.pick_card_radius(i); }
+                    }
+                    Segmented {
+                        labels: [@tr("Rounded"), @tr("Extra rounded")];
+                        current_index: SettingsContent.radius_preset_index >= 3 ? SettingsContent.radius_preset_index - 3 : -1;
+                        focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 1 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsContent.pick_card_radius(i + 3); }
+                    }
+                }
+            } }
+            SettingsCard { SettingsRow {
+                setting-key: "button_corner_radius";
+                row-title: @tr("Button corner radius");
+                row-desc: @tr("Choose how rounded buttons look. Soft is the default.");
+                if !SettingsContent.narrow: Segmented {
+                    labels: [@tr("Square"), @tr("Subtle"), @tr("Soft"), @tr("Rounded"), @tr("Extra rounded")];
+                    current_index: SettingsContent.button_radius_preset_index;
+                    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 2 && SettingsBridge.kb_active;
+                    picked(i) => { SettingsContent.pick_button_radius(i); }
+                }
+                if SettingsContent.narrow: VerticalLayout {
+                    spacing: 8px;
+                    Segmented {
+                        labels: [@tr("Square"), @tr("Subtle"), @tr("Soft")];
+                        current_index: SettingsContent.button_radius_preset_index < 3 ? SettingsContent.button_radius_preset_index : -1;
+                        focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 2 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsContent.pick_button_radius(i); }
+                    }
+                    Segmented {
+                        labels: [@tr("Rounded"), @tr("Extra rounded")];
+                        current_index: SettingsContent.button_radius_preset_index >= 3 ? SettingsContent.button_radius_preset_index - 3 : -1;
+                        focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 2 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsContent.pick_button_radius(i + 3); }
+                    }
+                }
+            } }
+            SettingsCard { SettingsRow {
+                setting-key: "card_spacing";
+                row-title: @tr("Card spacing");
+                row-desc: @tr("Choose how much space sits between cards. Compact is the default.");
+                if !SettingsContent.narrow: Segmented {
+                    labels: [@tr("None"), @tr("Tight"), @tr("Compact"), @tr("Comfortable"), @tr("Spacious")];
+                    current_index: SettingsContent.spacing_preset_index;
+                    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 3 && SettingsBridge.kb_active;
+                    picked(i) => { SettingsContent.pick_card_spacing(i); }
+                }
+                if SettingsContent.narrow: VerticalLayout {
+                    spacing: 8px;
+                    Segmented {
+                        labels: [@tr("None"), @tr("Tight"), @tr("Compact")];
+                        current_index: SettingsContent.spacing_preset_index < 3 ? SettingsContent.spacing_preset_index : -1;
+                        focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 3 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsContent.pick_card_spacing(i); }
+                    }
+                    Segmented {
+                        labels: [@tr("Comfortable"), @tr("Spacious")];
+                        current_index: SettingsContent.spacing_preset_index >= 3 ? SettingsContent.spacing_preset_index - 3 : -1;
+                        focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 3 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsContent.pick_card_spacing(i + 3); }
+                    }
+                }
+            } }
+            SettingsCard { SettingsRow {
+                setting-key: "status_bar_gradient";
+                row-title: @tr("Status bar gradient");
+                row-desc: @tr("Darken the top of Home and Detail on narrow screens. Set to 0 to turn off.");
+                NumericSetting {
+                    value <=> SettingsBridge.status_bar_gradient;
+                    minimum: 0; maximum: 100; step: 1; suffix: "%";
+                    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 4 && SettingsBridge.kb_active;
+                    changed(v) => {
+                        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                        SettingsBridge.kb_zone = 17;
+                        SettingsContent.kb_theme = 4;
+                        SettingsContent.schedule_setting("status_bar_gradient");
+                    }
+                }
+            } }
+            SettingsCard { SettingsRow {
+                setting-key: "home_backdrop_size";
+                row-title: @tr("Home backdrop size");
+                row-desc: @tr("Choose how tall the featured artwork is. Sizes adapt to screen width.");
+                Segmented {
+                    labels: [@tr("Small"), @tr("Medium"), @tr("Large")];
+                    current_index: SettingsBridge.home_backdrop_size;
+                    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 5 && SettingsBridge.kb_active;
+                    picked(i) => {
+                        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                        SettingsBridge.kb_zone = 17; SettingsContent.kb_theme = 5;
+                        SettingsBridge.home_backdrop_size = i;
+                        SettingsContent.schedule_setting("home_backdrop_size");
+                    }
+                }
+            } }
+            SettingsCard { SettingsRow {
+                setting-key: "detail_backdrop_size";
+                row-title: @tr("Detail backdrop size");
+                row-desc: @tr("Choose how tall the Detail artwork is. Sizes adapt to screen width.");
+                Segmented {
+                    labels: [@tr("Small"), @tr("Medium"), @tr("Large")];
+                    current_index: SettingsBridge.detail_backdrop_size;
+                    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 6 && SettingsBridge.kb_active;
+                    picked(i) => {
+                        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                        SettingsBridge.kb_zone = 17; SettingsContent.kb_theme = 6;
+                        SettingsBridge.detail_backdrop_size = i;
+                        SettingsContent.schedule_setting("detail_backdrop_size");
+                    }
+                }
+            } }
+            SettingsCard { SettingsRow {
+                setting-key: "hero_title_alignment";
+                row-title: @tr("Title alignment");
+                row-desc: @tr("Align titles on narrow Home and Detail screens, plus Home featured metadata.");
+                Segmented {
+                    labels: [@tr("Left"), @tr("Center"), @tr("Right")];
+                    current_index: SettingsBridge.hero_title_alignment;
+                    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 7 && SettingsBridge.kb_active;
+                    picked(i) => {
+                        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                        SettingsBridge.kb_zone = 17; SettingsContent.kb_theme = 7;
+                        SettingsBridge.hero_title_alignment = i;
+                        SettingsContent.schedule_setting("hero_title_alignment");
+                    }
+                }
+            } }
+            HorizontalLayout {
+                alignment: start;
+                PillButton {
+                    label: @tr("Restore theme defaults");
+                    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 8 && SettingsBridge.kb_active;
+                    clicked => {
+                        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                        SettingsBridge.kb_zone = 17;
+                        SettingsContent.kb_theme = 8;
+                        SettingsContent.restore_theme_defaults();
+                    }
+                }
+            }
+        }
+    }
+}

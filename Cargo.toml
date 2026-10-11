@@ -1,5 +1,44 @@
 [workspace]
-members = ["crates/addons", "crates/providers", "crates/ui", "crates/storage", "crates/config", "crates/download", "crates/torrent", "crates/media", "crates/player", "crates/sync", "crates/tracking"]
+members = [
+    "crates/addons",
+    "crates/providers",
+    "crates/ui",
+    "crates/ui-settings",
+    "crates/ui-settings-tracking",
+    "crates/ui-settings-addons",
+    "crates/ui-settings-categories",
+    "crates/ui-settings-image-cache",
+    "crates/ui-settings-display",
+    "crates/ui-settings-p2p",
+    "crates/ui-settings-player",
+    "crates/ui-settings-theme",
+    "crates/ui-settings-look-feel",
+    "crates/ui-settings-sync",
+    "crates/ui-settings-home",
+    "crates/ui-settings-downloads",
+    "crates/ui-settings-downloaded-episodes",
+    "crates/ui-shared",
+    "crates/ui-home",
+    "crates/ui-discover",
+    "crates/ui-calendar",
+    "crates/ui-detail",
+    "crates/ui-detail-tracking",
+    "crates/ui-detail-tracking-entry",
+    "crates/ui-detail-streams",
+    "crates/ui-detail-episodes",
+    "crates/ui-library",
+    "crates/ui-more",
+    "crates/ui-player-osd",
+    "crates/ui-onboarding",
+    "crates/storage",
+    "crates/config",
+    "crates/download",
+    "crates/torrent",
+    "crates/media",
+    "crates/player",
+    "crates/sync",
+    "crates/tracking",
+]
 resolver = "3"
 
 [workspace.package]
@@ -9,6 +48,9 @@ license = "GPL-3.0-or-later"
 # Slint 1.18 must suspend while TerminateWindow still owns a valid native
 # window, so mpv releases its GL resources before InitWindow replaces it.
 i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }
+# Compiled Settings factories need parent/window attachment without replacing
+# AppWindow. This narrowly extends Slint 1.18's experimental Rust constructor.
+i-slint-compiler = { path = "vendor/i-slint-compiler" }
 # librqbit-utp 0.7.0 exits its dispatcher on Windows UDP datagram errors
 # (including WSAECONNRESET/10054), breaking every later uTP connection.
 # Pin the merged upstream fix until a release includes it; keep uTP enabled.
@@ -19,10 +61,11 @@ librqbit-utp = { git = "https://github.com/ikatson/librqbit-utp", rev = "f19f77e
 # Slint GUI toolkit: single source of truth for the version. Crates opt into
 # backend/renderer features through the root package; avoid Slint's default
 # software renderer and desktop-only extras.
-slint = { version = "1.18.0", default-features = false, features = ["std", "accessibility", "compat-1-2"] }
-slint-build = "1.18.0"
-i-slint-core = { version = "1.18.0", default-features = false, features = ["std", "shared-parley"] }
-i-slint-backend-testing = "1.18.0"
+# Native library field layouts and the local embedding patch must match exactly.
+slint = { version = "=1.18.0", default-features = false, features = ["std", "accessibility", "compat-1-2"] }
+slint-build = "=1.18.0"
+i-slint-core = { version = "=1.18.0", default-features = false, features = ["std", "shared-parley"] }
+i-slint-backend-testing = "=1.18.0"
 tracing = "0.1"
 
 [package]
@@ -45,12 +88,9 @@ desktop = [
 ]
 # Android's activity backend selects Slint's Skia renderer on Android.
 android = ["slint/backend-android-activity-06"]
-# Opt-in interpreter-backed UI for Linux development. Not part of any default
-# or release build: run it explicitly, e.g.
-#   cargo run --features live-preview        (or: cargo dev)
-# Only generates interpreted code on a Linux debug build (see crates/ui/build.rs);
-# other targets and release builds stay ahead-of-time compiled and never pull
-# the Slint interpreter into the dependency tree.
+# Retained opt-in development feature. The compiled page factory bridges
+# currently keeps AppWindow AOT as well; nova-ui's build script reports this.
+# Hot reload needs a separate bridge for the interpreter's dynamic globals.
 live-preview = ["nova-ui/live-preview"]
 
 [dependencies]

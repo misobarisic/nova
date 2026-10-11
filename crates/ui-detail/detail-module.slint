@@ -1,0 +1,133 @@
+import { DetailPage } from "../ui/detail.slint";
+import { DetailBridge, DetailContent } from "@NovaUiShared";
+
+export component DetailModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: DetailBridge.viewport_width; height: DetailBridge.viewport_height;
+    changed width => { DetailContent.shell_width = root.width; }
+    init => { DetailContent.shell_width = root.width; }
+    public function content_dispatch_back() { page.content_dispatch_back(); }
+    public function content_focus_shell() { page.content_focus_shell(); }
+    public function content_filters_panned() { page.content_filters_panned(); }
+    public function content_filters_pan_released() { page.content_filters_pan_released(); }
+    public function content_open_ep_menu(idx: int, watched: bool, progress: float) { page.content_open_ep_menu(idx, watched, progress); }
+    public function content_open_season_menu(idx: int, watched: bool) { page.content_open_season_menu(idx, watched); }
+    public function content_scroll_list_to_top(y: length) { page.content_scroll_list_to_top(y); }
+    public function content_request_stream_action(id: string) { page.content_request_stream_action(id); }
+    page := DetailPage {
+        width: 100%; height: 100%;
+        tracking_links <=> DetailBridge.tracking_links;
+        tracking_candidates <=> DetailBridge.tracking_candidates;
+        tracking_service <=> DetailBridge.tracking_service;
+        tracking_setup <=> DetailBridge.tracking_setup;
+        tracking_setup_revision <=> DetailBridge.tracking_setup_revision;
+        tracking_setup_summary <=> DetailBridge.tracking_setup_summary;
+        tracking_setup_unmapped <=> DetailBridge.tracking_setup_unmapped;
+        tracking_setup_active <=> DetailBridge.tracking_setup_active;
+        tracking_range_first <=> DetailBridge.tracking_range_first;
+        tracking_range_last <=> DetailBridge.tracking_range_last;
+        tracking_range_start <=> DetailBridge.tracking_range_start;
+        tracking_source_rows <=> DetailBridge.tracking_source_rows;
+        tracking_preview_rows <=> DetailBridge.tracking_preview_rows;
+        tracking_mapping_rows <=> DetailBridge.tracking_mapping_rows;
+        tracking_notice <=> DetailBridge.tracking_notice;
+        tracking_candidate_title <=> DetailBridge.tracking_candidate_title;
+        tracking_busy <=> DetailBridge.tracking_busy;
+        tracking_can_confirm <=> DetailBridge.tracking_can_confirm;
+        tracking_open <=> DetailBridge.tracking_open;
+        tracking_return_tab <=> DetailBridge.tracking_return_tab;
+        selected_poster <=> DetailBridge.selected_poster;
+        selected_backdrop <=> DetailBridge.selected_backdrop;
+        selected_logo <=> DetailBridge.selected_logo;
+        selected_title <=> DetailBridge.selected_title;
+        is_movie <=> DetailBridge.is_movie;
+        stream_selector_open <=> DetailBridge.stream_selector_open;
+        selected_year <=> DetailBridge.selected_year;
+        selected_description <=> DetailBridge.selected_description;
+        selected_genre_list <=> DetailBridge.selected_genre_list;
+        detail_tab <=> DetailBridge.detail_tab;
+        episode_filter <=> DetailBridge.episode_filter;
+        in_library <=> DetailBridge.in_library;
+        category_rows <=> DetailBridge.category_rows;
+        selected_category_count <=> DetailBridge.selected_category_count;
+        streams <=> DetailBridge.streams;
+        stream_page <=> DetailBridge.stream_page;
+        stream_page_count <=> DetailBridge.stream_page_count;
+        stream_page_start <=> DetailBridge.stream_page_start;
+        stream_total <=> DetailBridge.stream_total;
+        streams_hint <=> DetailBridge.streams_hint;
+        stream_addons <=> DetailBridge.stream_addons;
+        stream_loading <=> DetailBridge.stream_loading;
+        streams_searching <=> DetailBridge.streams_searching;
+        stream_filter <=> DetailBridge.stream_filter;
+        stream_action_open <=> DetailBridge.stream_action_open;
+        stream_action_id <=> DetailBridge.stream_action_id;
+        stream_action_title <=> DetailBridge.stream_action_title;
+        stream_action_items <=> DetailBridge.stream_action_items;
+        modal_episodes <=> DetailBridge.modal_episodes;
+        season_names <=> DetailBridge.season_names;
+        season_combo_idx <=> DetailBridge.season_combo_idx;
+        season_cards <=> DetailBridge.season_cards;
+        episode_rows <=> DetailBridge.episode_rows;
+        episode_page <=> DetailBridge.episode_page;
+        episode_page_count <=> DetailBridge.episode_page_count;
+        episode_page_start <=> DetailBridge.episode_page_start;
+        episode_reveal_request <=> DetailBridge.episode_reveal_request;
+        episode_total <=> DetailBridge.episode_total;
+        episode_context <=> DetailBridge.episode_context;
+        stream_episode_number <=> DetailBridge.stream_episode_number;
+        stream_episode_title <=> DetailBridge.stream_episode_title;
+        watch_label <=> DetailBridge.watch_label;
+        deep_stream <=> DetailBridge.deep_stream;
+        system_back_request <=> DetailBridge.system_back_request;
+        popup_open <=> DetailBridge.popup_open;
+        kb_zone <=> DetailBridge.kb_zone;
+        kb_top <=> DetailBridge.kb_top;
+        kb_tab <=> DetailBridge.kb_tab;
+        kb_ci <=> DetailBridge.kb_ci;
+        kb_ep <=> DetailBridge.kb_ep;
+        kb_s <=> DetailBridge.kb_s;
+        kb_active <=> DetailBridge.kb_active;
+        narrow <=> DetailBridge.narrow;
+        safe-top <=> DetailBridge.safe-top;
+        safe-left <=> DetailBridge.safe-left;
+        safe-right <=> DetailBridge.safe-right;
+        safe-bottom <=> DetailBridge.safe-bottom;
+        touch_menus <=> DetailBridge.touch_menus;
+        library_watched <=> DetailBridge.library_watched;
+        library_activity_action <=> DetailBridge.library_activity_action;
+        tracking_show() => { DetailBridge.tracking_show(); }
+        tracking_close() => { DetailBridge.tracking_close(); }
+        tracking_search(arg0, arg1) => { DetailBridge.tracking_search(arg0, arg1); }
+        tracking_pick(arg0) => { DetailBridge.tracking_pick(arg0); }
+        tracking_preview(arg0, arg1, arg2) => { DetailBridge.tracking_preview(arg0, arg1, arg2); }
+        tracking_confirm() => { DetailBridge.tracking_confirm(); }
+        tracking_accept_setup(arg0, arg1) => { DetailBridge.tracking_accept_setup(arg0, arg1); }
+        tracking_adjust_setup(arg0) => { DetailBridge.tracking_adjust_setup(arg0); }
+        tracking_cancel_adjust() => { DetailBridge.tracking_cancel_adjust(); }
+        tracking_assign(arg0, arg1) => { DetailBridge.tracking_assign(arg0, arg1); }
+        tracking_edit(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7) => { DetailBridge.tracking_edit(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7); }
+        tracking_action(arg0, arg1) => { DetailBridge.tracking_action(arg0, arg1); }
+        back() => { DetailBridge.back(); }
+        episodes_back() => { DetailBridge.episodes_back(); }
+        add_to_library() => { DetailBridge.add_to_library(); }
+        library_action(arg0) => { DetailBridge.library_action(arg0); }
+        open_categories() => { DetailBridge.open_categories(); }
+        season_picked(arg0) => { DetailBridge.season_picked(arg0); }
+        episode_picked(arg0) => { DetailBridge.episode_picked(arg0); }
+        episode_page_picked(arg0) => { DetailBridge.episode_page_picked(arg0); }
+        episode_toggle_watched(arg0) => { DetailBridge.episode_toggle_watched(arg0); }
+        episode_watch_action(arg0, arg1) => { DetailBridge.episode_watch_action(arg0, arg1); }
+        season_watch_action(arg0, arg1) => { DetailBridge.season_watch_action(arg0, arg1); }
+        stream_picked(arg0) => { DetailBridge.stream_picked(arg0); }
+        stream_page_picked(arg0) => { DetailBridge.stream_page_picked(arg0); }
+        stream_action_requested(arg0) => { DetailBridge.stream_action_requested(arg0); }
+        stream_action_selected(arg0, arg1) => { DetailBridge.stream_action_selected(arg0, arg1); }
+        stream_filter_picked(arg0) => { DetailBridge.stream_filter_picked(arg0); }
+        stream_selector_back() => { DetailBridge.stream_selector_back(); }
+        detail_tab_picked(arg0) => { DetailBridge.detail_tab_picked(arg0); }
+        episode_filter_changed(arg0) => { DetailBridge.episode_filter_changed(arg0); }
+        watch_now() => { DetailBridge.watch_now(); }
+    }
+}

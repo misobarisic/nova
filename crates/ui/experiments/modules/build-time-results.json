@@ -1,0 +1,417 @@
+{
+  "date": "2026-10-11",
+  "git_head": "a2be019864b0044ef277f5b16e76b81527d8422f",
+  "source_state": "includes uncommitted workspace changes; hashes describe the source before reconstructing the inline variant",
+  "environment": "default Nix development environment",
+  "comparison": "development UI build; same current source, inline Settings vs factory split; common patched compiler, same profiles, normal incremental",
+  "samples_per_case": 1,
+  "shared_target_dir": "/home/mb/programming/rust/nova/target",
+  "source_snapshot_dirs": [
+    "/tmp/nova-ui-build-time-pmajl3_o/monolithic",
+    "/tmp/nova-ui-build-time-pmajl3_o/split"
+  ],
+  "normal_incremental": true,
+  "explicit_job_count": null,
+  "target_copied_or_cleaned": false,
+  "scope": "development UI library builds with Rust code generation; full app, release, tests and runtime not measured",
+  "settings_edit": {
+    "from": "@tr(\"Make Nova yours\")",
+    "to": "@tr(\"Make Nova yours 1\")",
+    "occurrences_per_variant": 2
+  },
+  "initial_comparison_basis": "first UI Rust compiler start to last UI Rust compiler finish; counts both split libraries and their pipelining; excludes shared dependency warm-up and build-script stages",
+  "incremental_comparison_basis": "full cargo build elapsed time following the same Settings edit",
+  "initial_command_caveat": "the inline run built missing common dependency artifacts first; do not compare raw whole-command initial elapsed times",
+  "rss_caveat": "sampled process RSS; descendant sums can count shared pages more than once",
+  "measurements": [
+    {
+      "label": "monolithic-initial",
+      "command": [
+        "cargo",
+        "build",
+        "-p",
+        "nova-ui",
+        "--locked",
+        "--features",
+        "slint/backend-winit,slint/renderer-femtovg",
+        "--manifest-path",
+        "/tmp/nova-ui-build-time-pmajl3_o/monolithic/Cargo.toml",
+        "--target-dir",
+        "/home/mb/programming/rust/nova/target",
+        "--timings"
+      ],
+      "exit_code": 0,
+      "command_elapsed_seconds": 327.72,
+      "rust_ui_critical_span_seconds": 239.88,
+      "sampled_descendant_process_peak_rss_kib": 11745324,
+      "sampled_ui_rustc_peak_rss_kib": {
+        "nova_ui": 11721080
+      },
+      "cargo_ui_units": [
+        {
+          "name": "nova-ui",
+          "mode": "todo",
+          "target": " build-script",
+          "start": 78.7,
+          "duration": 1.69,
+          "sections": null
+        },
+        {
+          "name": "nova-ui",
+          "mode": "run-custom-build",
+          "target": " build-script (run)",
+          "start": 80.4,
+          "duration": 7.12,
+          "sections": null
+        },
+        {
+          "name": "nova-ui",
+          "mode": "todo",
+          "target": "",
+          "start": 87.52,
+          "duration": 239.88,
+          "sections": [
+            [
+              "frontend",
+              {
+                "start": 0.0,
+                "end": 197.09
+              }
+            ],
+            [
+              "codegen",
+              {
+                "start": 197.09,
+                "end": 239.88
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "label": "split-initial",
+      "command": [
+        "cargo",
+        "build",
+        "-p",
+        "nova-ui",
+        "--locked",
+        "--features",
+        "slint/backend-winit,slint/renderer-femtovg",
+        "--target-dir",
+        "/home/mb/programming/rust/nova/target",
+        "--timings",
+        "--manifest-path",
+        "/tmp/nova-ui-build-time-pmajl3_o/split/Cargo.toml"
+      ],
+      "exit_code": 0,
+      "command_elapsed_seconds": 215.36,
+      "rust_ui_critical_span_seconds": 210.19,
+      "sampled_descendant_process_peak_rss_kib": 8465320,
+      "sampled_ui_rustc_peak_rss_kib": {
+        "nova_ui_settings": 5389736,
+        "nova_ui": 8404476
+      },
+      "cargo_ui_units": [
+        {
+          "name": "nova-ui",
+          "mode": "todo",
+          "target": " build-script",
+          "start": 0.0,
+          "duration": 0.0,
+          "sections": null
+        },
+        {
+          "name": "nova-ui-settings",
+          "mode": "todo",
+          "target": " build-script",
+          "start": 0.83,
+          "duration": 1.24,
+          "sections": null
+        },
+        {
+          "name": "nova-ui-settings",
+          "mode": "run-custom-build",
+          "target": " build-script (run)",
+          "start": 2.06,
+          "duration": 2.85,
+          "sections": null
+        },
+        {
+          "name": "nova-ui-settings",
+          "mode": "todo",
+          "target": "",
+          "start": 4.92,
+          "duration": 81.79,
+          "sections": [
+            [
+              "frontend",
+              {
+                "start": 0.0,
+                "end": 68.56
+              }
+            ],
+            [
+              "codegen",
+              {
+                "start": 68.56,
+                "end": 81.79
+              }
+            ]
+          ]
+        },
+        {
+          "name": "nova-ui",
+          "mode": "run-custom-build",
+          "target": " build-script (run)",
+          "start": 4.92,
+          "duration": 4.06,
+          "sections": null
+        },
+        {
+          "name": "nova-ui",
+          "mode": "todo",
+          "target": "",
+          "start": 73.48,
+          "duration": 141.63,
+          "sections": [
+            [
+              "frontend",
+              {
+                "start": 0.0,
+                "end": 120.38
+              }
+            ],
+            [
+              "codegen",
+              {
+                "start": 120.38,
+                "end": 141.63
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "label": "monolithic-settings-edit",
+      "command": [
+        "cargo",
+        "build",
+        "-p",
+        "nova-ui",
+        "--locked",
+        "--features",
+        "slint/backend-winit,slint/renderer-femtovg",
+        "--target-dir",
+        "/home/mb/programming/rust/nova/target",
+        "--timings",
+        "--manifest-path",
+        "/tmp/nova-ui-build-time-pmajl3_o/monolithic/Cargo.toml"
+      ],
+      "exit_code": 0,
+      "command_elapsed_seconds": 113.97,
+      "rust_ui_critical_span_seconds": 106.43,
+      "sampled_descendant_process_peak_rss_kib": 11267428,
+      "sampled_ui_rustc_peak_rss_kib": {
+        "nova_ui": 11153544
+      },
+      "cargo_ui_units": [
+        {
+          "name": "nova-ui",
+          "mode": "todo",
+          "target": " build-script",
+          "start": 0.0,
+          "duration": 0.0,
+          "sections": null
+        },
+        {
+          "name": "nova-ui",
+          "mode": "run-custom-build",
+          "target": " build-script (run)",
+          "start": 0.61,
+          "duration": 6.6,
+          "sections": null
+        },
+        {
+          "name": "nova-ui",
+          "mode": "todo",
+          "target": "",
+          "start": 7.26,
+          "duration": 106.43,
+          "sections": [
+            [
+              "frontend",
+              {
+                "start": 0.0,
+                "end": 80.09
+              }
+            ],
+            [
+              "codegen",
+              {
+                "start": 80.09,
+                "end": 106.43
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "label": "split-settings-edit",
+      "command": [
+        "cargo",
+        "build",
+        "-p",
+        "nova-ui",
+        "--locked",
+        "--features",
+        "slint/backend-winit,slint/renderer-femtovg",
+        "--target-dir",
+        "/home/mb/programming/rust/nova/target",
+        "--timings",
+        "--manifest-path",
+        "/tmp/nova-ui-build-time-pmajl3_o/split/Cargo.toml"
+      ],
+      "exit_code": 0,
+      "command_elapsed_seconds": 74.03,
+      "rust_ui_critical_span_seconds": 70.26,
+      "sampled_descendant_process_peak_rss_kib": 6860156,
+      "sampled_ui_rustc_peak_rss_kib": {
+        "nova_ui_settings": 4584992,
+        "nova_ui": 5753408
+      },
+      "cargo_ui_units": [
+        {
+          "name": "nova-ui",
+          "mode": "todo",
+          "target": " build-script",
+          "start": 0.0,
+          "duration": 0.0,
+          "sections": null
+        },
+        {
+          "name": "nova-ui-settings",
+          "mode": "todo",
+          "target": " build-script",
+          "start": 0.0,
+          "duration": 0.0,
+          "sections": null
+        },
+        {
+          "name": "nova-ui-settings",
+          "mode": "run-custom-build",
+          "target": " build-script (run)",
+          "start": 0.74,
+          "duration": 2.87,
+          "sections": null
+        },
+        {
+          "name": "nova-ui-settings",
+          "mode": "todo",
+          "target": "",
+          "start": 3.61,
+          "duration": 38.38,
+          "sections": [
+            [
+              "frontend",
+              {
+                "start": 0.0,
+                "end": 26.75
+              }
+            ],
+            [
+              "codegen",
+              {
+                "start": 26.75,
+                "end": 38.38
+              }
+            ]
+          ]
+        },
+        {
+          "name": "nova-ui",
+          "mode": "run-custom-build",
+          "target": " build-script (run)",
+          "start": 3.61,
+          "duration": 4.7,
+          "sections": null
+        },
+        {
+          "name": "nova-ui",
+          "mode": "todo",
+          "target": "",
+          "start": 30.4,
+          "duration": 43.47,
+          "sections": [
+            [
+              "frontend",
+              {
+                "start": 0.0,
+                "end": 34.22
+              }
+            ],
+            [
+              "codegen",
+              {
+                "start": 34.22,
+                "end": 43.47
+              }
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "source_hashes": {
+    "crates/ui/Cargo.toml": "c780cc505a27a951df7c0fe0fcf3b5fbb50a0039c609892c039a47857b7ef4e5",
+    "crates/ui/about.slint": "088f158dbbc201db85d0fc1586856c29f01b693377be6420b4456b3d2c584471",
+    "crates/ui/anim.slint": "2faebac3c0e7f96d9bfbb74458633e7316a8e408e3bb42467dc48585d00129e9",
+    "crates/ui/appwindow.slint": "507729e468f3cd4f812b7b7a28d025262de6b3b4728380c5c2c56b14ce2cd0aa",
+    "crates/ui/bottomnav.slint": "2e0bd725096a205e620fd39d084ea32b6b83e021bbdf7030683a9e4ae05baa5c",
+    "crates/ui/build-support.rs": "8e0fef46ae00d2260dea6c0614fcf2e74471b5a93d9ac5d06d61f81116815d8b",
+    "crates/ui/build.rs": "a1443a11a9416cc0bfe80fef4494de83c6fec8d6bce99424e12005ccd4e19821",
+    "crates/ui/calendar.slint": "525d6b486cfd3c42f53240727229a6127ed5b94e1d47597b54460a36f921c0ba",
+    "crates/ui/categories.slint": "e36f69f890e738161f31cdf9442f9fe70bfbfb64af282af98f6f68b114b4c239",
+    "crates/ui/control-input.slint": "31d6caeb87bed754a23b33dd2fde5c11c47bd51177918f4531705ce05b11b41d",
+    "crates/ui/detail.slint": "26f4719b6a6d5d20259688c5a78e17dad5ded3f24f9bdcf3c6eaad7aa4735eab",
+    "crates/ui/discover.slint": "ae55c22526c5beab15dc27fbb7af4467b316fa4a4fe2b7897924d610e40bc2e7",
+    "crates/ui/downloads-page.slint": "8b06fe4b4ce79aa2afbdf8fe9467245c18ea2b6e6b1575d78be877c82844fa3c",
+    "crates/ui/dropdown.slint": "3394b56dc931d06804f1d7cf9d31976a928462c928ae0fed948baa69f7d99581",
+    "crates/ui/home.slint": "cce95ea520f503d3a6fe80e63530cfb4a8df6acaab53275350ee0af63b1affca",
+    "crates/ui/icons.slint": "1e3fe33573959acb59be2bd467c60d3241f7631109328e09d16685012ad0f389",
+    "crates/ui/kbnav.slint": "a32254cb4743003989b7cf290520894fd4779d7d04d3c561367278958dd423a9",
+    "crates/ui/library-duplicates.slint": "f5ac2f2da4282b07cba2153ffa16199c6b4706af4861c24c70f32c5fea96f042",
+    "crates/ui/library.slint": "a372b7326e7df3ef83ba99973f91410077dbe91e2db7010b2e8bf2197163332b",
+    "crates/ui/menusheet.slint": "bc778f58b44cc2a4782c59b1df0172847bac951ff28c424b43887784ce4488f8",
+    "crates/ui/more.slint": "4ecb5bc26cf6ea936d89823e9896ba10d246c7d7f9840f62ccafe63416b7af81",
+    "crates/ui/onboarding.slint": "f88488337b1b39ed38ed11ecb8ae3e3fbab40fcf1eba8f4b409daf67d05e7c51",
+    "crates/ui/playback-language-picker.slint": "dfe00c4b54ae0fa4185075aa1f4cfb1c098fdf7773d341df569c78a4acf1f4ed",
+    "crates/ui/player.slint": "e82b1ad272ff45d9d557f010d9b12d3da4a8c198a0629e4aaf01517b6816f18b",
+    "crates/ui/scrollview.slint": "f013faa3392d438e6891f50802c6167b663be2091b87a9a97866de00f91f72be",
+    "crates/ui/searchfield.slint": "1bd2214a21a01abe425f9cbb075cb185362e41d0038aa8b95f56092dee57c25b",
+    "crates/ui/settings-controls.slint": "c71636fdc989bebae110c92edda8dd2a4f60844dc0c5eafc280d4f2b3dee68df",
+    "crates/ui/settings-host.slint": "2baa72dd945a32635aa71ceb3934e322e6989094057018dbccd4a6620d7206eb",
+    "crates/ui/settings-sync-modal.slint": "cd5d49f034ae0e2a9eabb05703fb99f1a600c21ccf0ff04cd27f93d7599207b1",
+    "crates/ui/settings-sync.slint": "23b268a9fb638a5f3cc539c354c8190aabbb5de0ed59ae290ec3b018345953aa",
+    "crates/ui/settings.slint": "59bd81ec0ee7d9cec8f55e01afa581589a4dfeae75c155e2a42202decd35a087",
+    "crates/ui/sidenav.slint": "d335de0a26dccffc84be1e04323dd18d2ffeb72a5c561816e1886b8b23e510f0",
+    "crates/ui/slider-touch.slint": "0336f238cc95133eed5ab62c1608ae195a0b011755b6fd90a804a8e1a7c03e16",
+    "crates/ui/speedcontrol.slint": "fb9ab18b3c05e14643eb06e39c96823207f7fcd5280b1a3f904063e8ec207c65",
+    "crates/ui/src/backend_text.rs": "284a1b9974d14f4c5467c9c79f537e5aa283bf6a08f1fbca9ab684d6bb0d6f8a",
+    "crates/ui/src/fonts.rs": "a2ae21ef0b3e6cb7b034bc1836f4d361954312103032bd86803f2fa56a5f0d2f",
+    "crates/ui/src/lib.rs": "4f6f77a7c96a7c2ff48e8411ba4d4d0cad1407371f81c860e6ecfee7da35436d",
+    "crates/ui/src/settings_factory.rs": "20701e8a7c924efa0647dbfcdfc83fa2e98d7883c4b00c413b652e6e4a895955",
+    "crates/ui/src/window.rs": "79a65ea59e551da577334e2bea44fab7ba9b77c450d33f54ac39f1184f3e1e99",
+    "crates/ui/stream-selector.slint": "d3c4e3096917b11542612818aa31e349b62649546e699b8f9865f78c3bcbe309",
+    "crates/ui/theme.slint": "1ad6f392a727185850f45072174d8c0d22cdb0c6ef3043f3a2b8b02c9d074879",
+    "crates/ui/title-artwork.slint": "8a1a2054f76cc98fd58faa50644a3c668594b2225f3bb6935adc12da20f4781e",
+    "crates/ui/tracking.slint": "a919a30b8fd18a5458602e4ff34fbcdc671f2ee27b9ea9d10f5d48bfda7c5e06",
+    "crates/ui/translations/en/LC_MESSAGES/nova-ui.po": "57034e67f91ea008434fd0f57fb5c9a932d28b088afe6f9cddff38a2fef43efd",
+    "crates/ui/translations/hr/LC_MESSAGES/nova-ui.po": "9b16fcd7fdb52ef141bc1b0f9b34e5a5ececd6905f3877dd5300e25d4c39bb18",
+    "crates/ui/types.slint": "b81992ff1462002e962b20bdf5589a36d20bd92c7add1d50db74d6a4f90bc772"
+  },
+  "full_session_evidence_dir": "/tmp/nova-ui-build-time-pmajl3_o"
+}

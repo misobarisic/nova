@@ -55,9 +55,9 @@ fn icon(app: &nova::AppWindow, wide: bool, index: usize) -> ElementHandle {
             "icon_home",
             "icon_discover",
             "icon_library",
-            "icon_more",
             "icon_calendar",
             "icon_download",
+            "icon_more",
         ][index]
     } else {
         ["icon_home", "icon_discover", "icon_library", "icon_more"][index]
@@ -161,10 +161,15 @@ fn nav_icons_pop_while_highlights_snap() {
     app.on_about_picked(move || switch(&weak.upgrade().unwrap(), 5));
     let weak = app.as_weak();
     app.global::<nova::NavState>()
-        .on_calendar_picked(move || switch_calendar_or_download(&weak.upgrade().unwrap(), true));
+        .on_calendar_picked(move || weak.upgrade().unwrap().invoke_navigate_section(4));
     let weak = app.as_weak();
     app.global::<nova::NavState>()
-        .on_downloads_picked(move || switch_calendar_or_download(&weak.upgrade().unwrap(), false));
+        .on_downloads_picked(move || weak.upgrade().unwrap().invoke_navigate_section(5));
+
+    let weak = app.as_weak();
+    app.on_calendar_picked(move || switch_calendar_or_download(&weak.upgrade().unwrap(), true));
+    let weak = app.as_weak();
+    app.on_downloads_picked(move || switch_calendar_or_download(&weak.upgrade().unwrap(), false));
 
     for wide in [true, false] {
         let anim = app.global::<nova::Anim>();
@@ -176,7 +181,7 @@ fn nav_icons_pop_while_highlights_snap() {
         idle(&app, wide, 400);
         let axis = |p: LogicalPosition| if wide { p.y } else { p.x };
         let home = axis(center(&marker(&app, wide)));
-        let target = if wide { 3 } else { 2 };
+        let target = if wide { 5 } else { 2 };
         click(&app, wide, target);
         // The page switch is immediate, even while feedback is in flight.
         assert!(if wide {
@@ -276,18 +281,18 @@ fn nav_icons_pop_while_highlights_snap() {
     switch(&app, 0);
     app.window().set_size(slint::PhysicalSize::new(1100, 800));
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(400));
-    click(&app, true, 4);
+    click(&app, true, 3);
     assert!(app.get_show_calendar());
+    idle(&app, true, 90);
+    assert!(icon(&app, true, 3).size().width > 24.5);
+    idle(&app, true, 300);
+    assert_eq!(icon(&app, true, 3).size().width, 24.0);
+    click(&app, true, 4);
+    assert!(app.get_show_downloads());
     idle(&app, true, 90);
     assert!(icon(&app, true, 4).size().width > 24.5);
     idle(&app, true, 300);
     assert_eq!(icon(&app, true, 4).size().width, 24.0);
-    click(&app, true, 5);
-    assert!(app.get_show_downloads());
-    idle(&app, true, 90);
-    assert!(icon(&app, true, 5).size().width > 24.5);
-    idle(&app, true, 300);
-    assert_eq!(icon(&app, true, 5).size().width, 24.0);
 
     // Padded page hosts and Home's edge-to-edge host must produce the same
     // full-width bar. Cutouts protect the labels rather than inset the panel.
@@ -378,7 +383,7 @@ fn nav_icons_pop_while_highlights_snap() {
                 } else if page == 2 {
                     2
                 } else {
-                    3
+                    5
                 };
                 let item = ElementHandle::find_by_element_type_name(&app, "SideItem")
                     .nth(active_slot)
@@ -390,7 +395,7 @@ fn nav_icons_pop_while_highlights_snap() {
         if width >= 700 {
             switch(&app, 0);
             i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
-            click(&app, true, 3);
+            click(&app, true, 5);
             assert!(
                 app.get_more_open(),
                 "the compact rail opens the full More page"

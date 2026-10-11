@@ -1,8 +1,9 @@
-import { Theme } from "theme.slint";
+import { Theme, NavMetrics, NavState, SettingsStyle } from "@NovaUiShared";
+
 import { ScrollView } from "scrollview.slint";
 import { BottomNav } from "bottomnav.slint";
-import { SideNav, NavMetrics } from "sidenav.slint";
-import { SettingsHeader, SettingsLink, SettingsCard, SettingsStyle } from "settings-controls.slint";
+import { SideNav } from "sidenav.slint";
+import { SettingsHeader, SettingsLink, SettingsCard } from "settings-controls.slint";
 
 // A root page, like Settings landing, rather than a sheet over another page.
 export component MorePage inherits Rectangle {
@@ -13,15 +14,22 @@ export component MorePage inherits Rectangle {
     in property <length> safe-bottom;
     in property <length> nav-viewport-width;
     in property <bool> narrow: true;
+    in property <bool> external_navigation: false;
+    in-out property <length> scroll_y: 0px;
+    private property <bool> restore_pending: true;
     // The destination can paint during return without taking input or focus.
     in property <bool> active: true;
     in property <int> system_back_request;
     in-out property <bool> kb_active;
+    private property <bool> native_keyboard_mode: SettingsStyle.keyboard-mode;
+    changed native_keyboard_mode => { if (root.active) { root.kb_active = root.native_keyboard_mode; } }
+    changed kb_active => { if (root.active) { SettingsStyle.keyboard-mode = root.kb_active; } }
     private property <int> last_back: 0;
-    private property <int> kb_zone: 1;
-    private property <int> kb_nav: 3;
-    private property <int> choice: 0;
-    private property <int> nav_count: root.narrow ? 4 : 6;
+    in-out property <int> kb_zone: 1;
+    in-out property <int> kb_nav: 3;
+    in-out property <int> choice: 0;
+    // Choice IDs stay stable when desktop shortcuts move into the rail.
+    private property <int> first_choice: root.narrow ? 0 : 2;
     callback home_picked();
     callback discover_picked();
     callback library_picked();
@@ -35,6 +43,18 @@ export component MorePage inherits Rectangle {
             root.home_picked();
         }
     }
+    restore_scroll := Timer { interval: 1ms; running: false; triggered => { self.stop(); more_scroll.content-y = root.scroll_y; root.restore_pending = false; } }
+    changed narrow => {
+        root.kb_nav = Math.min(root.kb_nav, root.narrow ? 3 : 5);
+        root.choice = Math.max(root.first_choice, Math.min(3, root.choice));
+        // Removed shortcut cards can own native focus during a resize.
+        if (root.active) { entry_focus.start(); }
+    }
+    changed choice => {
+        if (root.choice < root.first_choice || root.choice > 3) {
+            root.choice = Math.max(root.first_choice, Math.min(3, root.choice));
+        }
+    }
     entry_focus := Timer { interval: 1ms; running: false; triggered => { self.stop(); if (root.active) { nav_scope.focus(); } } }
     changed active => {
         root.last_back = root.system_back_request;
@@ -43,52 +63,57 @@ export component MorePage inherits Rectangle {
     nav_scope := FocusScope {
         enabled: root.active;
         width: 100%; height: 100%;
-        init => { root.last_back = root.system_back_request; if (root.active) { self.focus(); entry_focus.start(); } }
+        init => { root.choice = Math.max(root.first_choice, Math.min(3, root.choice)); root.last_back = root.system_back_request; if (root.active) { self.focus(); entry_focus.start(); } }
         key-pressed(e) => {
-            root.kb_active = true;
-            SettingsStyle.keyboard-mode = true;
             if (e.text == Key.Back || e.text == Key.Backspace || e.text == Key.Escape) {
                 if (!e.repeat) { root.home_picked(); }
                 accept
             } else if (e.text == Key.UpArrow) {
+                root.kb_active = true; SettingsStyle.keyboard-mode = true;
                 if (root.kb_zone == 0) { root.kb_zone = 1; root.choice = 3; }
-                else { root.choice = Math.max(0, root.choice - 1); }
+                else { root.choice = Math.max(root.first_choice, root.choice - 1); }
                 accept
             } else if (e.text == Key.DownArrow || e.text == Key.Tab) {
+                root.kb_active = true; SettingsStyle.keyboard-mode = true;
                 if (root.kb_zone == 1 && root.choice < 3) { root.choice += 1; }
                 else { root.kb_zone = 0; }
                 accept
             } else if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
-                if (root.kb_zone == 0) { root.kb_nav = Math.mod(root.kb_nav + (e.text == Key.LeftArrow ? root.nav_count - 1 : 1), root.nav_count); }
+                root.kb_active = true; SettingsStyle.keyboard-mode = true;
+                if (root.kb_zone == 0) { root.kb_nav = NavState.step(root.kb_nav, e.text == Key.LeftArrow ? -1 : 1, root.narrow); }
                 accept
             } else if (e.text == Key.Return || e.text == " ") {
+                root.kb_active = true; SettingsStyle.keyboard-mode = true;
                 if (!e.repeat) {
                     if (root.kb_zone == 1) {
                         if (root.choice == 0) { root.calendar_picked(); } else if root.choice == 1 { root.downloads_picked(); } else if root.choice == 2 { root.settings_picked(); } else { root.about_picked(); }
                     } else if (root.kb_nav == 0) { root.home_picked(); }
                     else if (root.kb_nav == 1) { root.discover_picked(); }
                     else if (root.kb_nav == 2) { root.library_picked(); }
-                    else if (!root.narrow && root.kb_nav == 4) { root.calendar_picked(); }
-                    else if (!root.narrow && root.kb_nav == 5) { root.downloads_picked(); }
+                    else if (!root.narrow && root.kb_nav == 4) { NavState.calendar_picked(); }
+                    else if (!root.narrow && root.kb_nav == 5) { NavState.downloads_picked(); }
                 }
                 accept
             } else { reject }
         }
     }
     VerticalLayout {
-        padding-left: 18px + root.safe-left + (root.narrow ? 0px : NavMetrics.width-for(root.nav-viewport-width));
+        padding-left: 18px + root.safe-left + (root.narrow || root.external_navigation ? 0px : NavMetrics.width-for(root.nav-viewport-width));
         padding-right: 18px + root.safe-right;
         padding-top: 18px + root.safe-top;
+        padding-bottom: root.external_navigation && root.narrow ? 68px + root.safe-bottom : 0px;
         spacing: 0px;
-        ScrollView {
+        more_scroll := ScrollView {
+            init => { restore_scroll.start(); }
+            changed content-y => { if (!root.restore_pending) { root.scroll_y = self.content-y; } }
             vertical-stretch: 1;
             mouse-drag-pan-enabled: true;
             content-width: self.visible-width;
             VerticalLayout {
                 width: 100%; spacing: 12px;
                 SettingsHeader { title: @tr("More"); overview: true; show-back: true; back => { if (root.active) { root.home_picked(); } } }
-                SettingsCard { SettingsLink { interactive: root.active; destination-id: "more:calendar"; title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 0; picked => { root.calendar_picked(); } } }
-                SettingsCard { SettingsLink { interactive: root.active; destination-id: "more:downloads"; title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 1; picked => { root.downloads_picked(); } } }
+                if root.narrow: SettingsCard { SettingsLink { interactive: root.active; destination-id: "more:calendar"; icon-kind: 16; title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 0; picked => { root.calendar_picked(); } } }
+                if root.narrow: SettingsCard { SettingsLink { interactive: root.active; destination-id: "more:downloads"; icon-kind: 17; title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 1; picked => { root.downloads_picked(); } } }
                 SettingsCard { SettingsLink {
                     interactive: root.active; destination-id: "more:settings";
                     icon-kind: 14;
@@ -106,7 +131,7 @@ export component MorePage inherits Rectangle {
                 Rectangle { vertical-stretch: 1; }
             }
         }
-        if root.narrow: BottomNav {
+        if root.narrow && !root.external_navigation: BottomNav {
             active: 3;
             safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;
             page-inset-left: 18px + root.safe-left; page-inset-right: 18px + root.safe-right;
@@ -116,7 +141,7 @@ export component MorePage inherits Rectangle {
             library_picked => { if (root.active) { root.library_picked(); } }
         }
     }
-    if !root.narrow: SideNav {
+    if !root.narrow && !root.external_navigation: SideNav {
         viewport-width: root.nav-viewport-width;
         active: 3;
         safe-top: root.safe-top;
@@ -133,5 +158,6 @@ export component MorePage inherits Rectangle {
     if !root.active: TouchArea {
         width: 100%; height: 100%;
         clicked => { }
+        scroll-event(event) => { accept }
     }
 }

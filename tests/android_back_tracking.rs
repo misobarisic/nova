@@ -1,7 +1,7 @@
 //! Android Back must keep working after focused tracking controls disappear.
 //!
 //! Dispatch real key events: incrementing `system_back_request` directly skips
-//! the window capture path and cannot catch focus lost when a tab closes.
+//! the window capture path and cannot catch focus lost when the Tracking leaf closes.
 
 // Built-in interpreter widgets omit the element metadata used to prove
 // input focus here. Exercise the compiled UI shipped on Android instead.
@@ -49,9 +49,22 @@ async fn click(app: &nova::AppWindow, label: &str, failures: &RefCell<Vec<String
     } else {
         AccessibleRole::Button
     };
-    let Some(element) = ElementHandle::find_by_accessible_label(app, label)
-        .find(|element| element.accessible_role() == Some(role))
-    else {
+    let target = if label == "Back" && app.get_tracking_open() {
+        ElementHandle::find_by_element_id(app, "DetailTrackingModule::root")
+            .next()
+            .and_then(|root| {
+                root.query_descendants()
+                    .match_predicate(|element: &ElementHandle| {
+                        element.accessible_label().as_deref() == Some("Back")
+                            && element.accessible_role() == Some(AccessibleRole::Button)
+                    })
+                    .find_first()
+            })
+    } else {
+        ElementHandle::find_by_accessible_label(app, label)
+            .find(|element| element.accessible_role() == Some(role))
+    };
+    let Some(element) = target else {
         failures
             .borrow_mut()
             .push(format!("missing tracking control: {label}"));
@@ -174,7 +187,6 @@ fn back_keeps_popping_layers_after_tracking_focus_is_removed() {
         recorded_closes.set(recorded_closes.get() + 1);
         let app = weak.upgrade().unwrap();
         app.set_tracking_open(false);
-        app.set_detail_tab(app.get_tracking_return_tab());
     });
     let cancelled_adjustments = Rc::new(Cell::new(0usize));
     let recorded_cancellations = cancelled_adjustments.clone();
@@ -216,7 +228,6 @@ fn back_keeps_popping_layers_after_tracking_focus_is_removed() {
         settle().await;
         app.set_tracking_return_tab(app.get_detail_tab());
         app.set_tracking_open(true);
-        app.set_detail_tab(4);
         settle().await;
         back(&app, true, failures).await;
         check(
@@ -247,9 +258,8 @@ fn back_keeps_popping_layers_after_tracking_focus_is_removed() {
         settle().await;
         app.set_tracking_return_tab(app.get_detail_tab());
         app.set_tracking_open(true);
-        app.set_detail_tab(4);
         settle().await;
-        if !click(&app, "Back to details", failures).await {
+        if !click(&app, "Back", failures).await {
             slint::quit_event_loop().unwrap();
             return;
         }
@@ -272,12 +282,11 @@ fn back_keeps_popping_layers_after_tracking_focus_is_removed() {
         );
 
         // Alignment cancellation removes the focused custom input. Subsequent
-        // Back presses must still reach the review tab and then details.
+        // Back presses must still reach the review and then details.
         app.set_modal_visible(true);
         settle().await;
         app.set_tracking_return_tab(app.get_detail_tab());
         app.set_tracking_open(true);
-        app.set_detail_tab(4);
         app.set_tracking_candidate_title("A suggested release".into());
         settle().await;
         if !click(&app, "First source row", failures).await {
@@ -346,12 +355,11 @@ fn back_keeps_popping_layers_after_tracking_focus_is_removed() {
         );
 
         // A suggestions response replaces the manual-search input. Its
-        // removal must preserve the tab's own Back capture path too.
+        // removal must preserve the leaf's own Back capture path too.
         app.set_modal_visible(true);
         settle().await;
         app.set_tracking_return_tab(app.get_detail_tab());
         app.set_tracking_open(true);
-        app.set_detail_tab(4);
         settle().await;
         if !click(&app, "Choose another release", failures).await
             || !click(&app, "Tracker search", failures).await
@@ -382,7 +390,7 @@ fn back_keeps_popping_layers_after_tracking_focus_is_removed() {
         check(
             failures,
             !app.get_modal_visible() && detail_closes.get() == 4 && backgrounds.get() == 4,
-            "Back after the refreshed tab closes must dismiss details only",
+            "Back after the refreshed leaf closes must dismiss details only",
         );
         back(&app, false, failures).await;
         check(

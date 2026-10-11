@@ -306,6 +306,7 @@ struct Shared {
     downloads_page_filter: i32,
     downloads_page_sort_recent: bool,
     downloads_page_collapsed: HashSet<String>,
+    page_artwork: page_artwork::PageArtworkState,
     /// Modal target, if open.
     modal_item: Option<ModalItem>,
     /// Streams currently displayed (already narrowed by `stream_filter`).
@@ -650,33 +651,29 @@ impl PosterTx {
     }
 }
 
-/// Episode thumbnail URLs currently being fetched, so repeated row refreshes
-/// don't spawn duplicate downloads for the same image.
-static EPISODE_INFLIGHT: LazyLock<Mutex<HashSet<String>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
+/// One registration per opening/recipe, including queued and running work.
+/// Queued cancellation removes only its job ID; a running completion cannot
+/// unregister another opening's request.
+static EPISODE_INFLIGHT: LazyLock<Mutex<HashMap<String, u64>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static EPISODE_JOB_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-/// A queued episode-thumbnail fetch. Completed pixels are cached by recipe;
-/// the debounced render always reads the currently visible episode list.
 struct EpisodeThumbJob {
+    job_id: u64,
+    request_key: String,
     url: String,
     cache_key: String,
     settings_revision: u64,
-    /// Refresh check (not a plain fetch): the URL is already cached, so
-    /// fresh bytes download in the background and the pixels swap only
-    /// when they actually changed — unchanged art never flashes through
-    /// the placeholder.
+    open_token: Arc<()>,
+    item_id: String,
+    media_type: String,
+    // Verification keeps the painted image while a source refresh runs.
     verify: bool,
 }
 
-/// Thumbnails waiting for a free download slot. Concurrency is capped so a
-/// season with hundreds of episodes never spawns one thread per image.
 static EPISODE_QUEUE: LazyLock<Mutex<VecDeque<EpisodeThumbJob>>> =
     LazyLock::new(|| Mutex::new(VecDeque::new()));
-
 static EPISODE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
-
-/// True while a debounced episode-list render is already scheduled.
-static EPISODE_RENDER_PENDING: AtomicBool = AtomicBool::new(false);
 
 // ---------------------------------------------------------------------------
 // Bridge: all UI-mutating methods run on the main thread only.
@@ -723,6 +720,7 @@ mod home;
 mod library;
 mod next_episode;
 mod onboarding;
+mod page_artwork;
 mod playback;
 mod playback_preferences;
 mod posters;
@@ -777,6 +775,9 @@ pub(crate) use watch_state::*;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod artwork_tests;
 
 // ---------------------------------------------------------------------------
 // Persistence: the installed addon list + per-addon manifest cache live in

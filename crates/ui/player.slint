@@ -1,14 +1,11 @@
-import { Theme } from "theme.slint";
+import { Theme, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
+
 import { ScrollView } from "scrollview.slint";
-import { TrackRow } from "types.slint";
-import {
-    IcPlay, IcPause, IcVolumeUp, IcVolumeOff, IcReplay10, IcForward10,
-    IcCaptions, IcMusic, IcFullscreen, IcFullscreenExit, IcClose,
-    IcChevronRight, IcChevronLeft, IcCheck, IcSettingsGear,
-} from "icons.slint";
-import { Anim } from "anim.slint";
-import { SpeedControl, PlaybackSpeed } from "speedcontrol.slint";
-import { SliderGesture } from "slider-touch.slint";
+
+import { IcPlay, IcPause, IcVolumeUp, IcVolumeOff, IcReplay10, IcForward10, IcCaptions, IcMusic, IcFullscreen, IcFullscreenExit, IcClose, IcChevronRight, IcChevronLeft, IcCheck, IcSettingsGear } from "icons.slint";
+
+import { SpeedControl } from "speedcontrol.slint";
+
 
 // Rounded player control with the same purple selected surface as menus.
 component IconBtn inherits Rectangle {

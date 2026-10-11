@@ -1,0 +1,13 @@
+[package]
+name = "nova-ui-shared"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+links = "novauishared"
+
+[dependencies]
+slint = { workspace = true }
+i-slint-core = { workspace = true, features = ["image-decoders", "svg"] }
+
+[build-dependencies]
+slint-build = { workspace = true, features = ["experimental-module-builds"] }

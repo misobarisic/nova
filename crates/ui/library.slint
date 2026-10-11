@@ -1,13 +1,14 @@
+import { MediaCard, CategoryRow, NavMetrics, NavState, Anim, Theme } from "@NovaUiShared";
 import { ScrollView } from "scrollview.slint";
-import { MediaCard, CategoryRow } from "types.slint";
+
 import { KbMark } from "kbnav.slint";
 import { Dropdown } from "dropdown.slint";
 import { MenuSheet } from "menusheet.slint";
-import { SideNav, NavMetrics, NavState } from "sidenav.slint";
+import { SideNav } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
 import { IcMoreHoriz, IcSearch, IcClose } from "icons.slint";
-import { Anim } from "anim.slint";
-import { Theme } from "theme.slint";
+
+
 import { SearchField } from "searchfield.slint";
 
 export component LibraryFilterChip inherits Rectangle {
@@ -261,7 +262,7 @@ export component LibraryPage {
 
     function kb_left() {
         if (root.kb_zone == 0) {
-            root.kb_nav = Math.mod(root.kb_nav + root.nav_count - 1, root.nav_count);
+            root.kb_nav = NavState.step(root.kb_nav, -1, root.narrow);
         } else if (root.kb_zone == 1) {
             root.kb_cycle_filter(-1);
         } else {
@@ -273,7 +274,7 @@ export component LibraryPage {
 
     function kb_right() {
         if (root.kb_zone == 0) {
-            root.kb_nav = Math.mod(root.kb_nav + 1, root.nav_count);
+            root.kb_nav = NavState.step(root.kb_nav, 1, root.narrow);
         } else if (root.kb_zone == 1) {
             root.kb_cycle_filter(1);
         } else {

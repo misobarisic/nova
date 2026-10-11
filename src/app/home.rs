@@ -265,6 +265,61 @@ fn home_showcase_needs_metadata(preview: &MetaPreview) -> bool {
         .any(|value| value.as_deref().is_none_or(|value| value.trim().is_empty()))
 }
 
+/// UI-owned logo keys include the navigation target and the exact processing
+/// identity. An inactive prefetch never parks its completion in the window.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct HomeLogoIdentity {
+    index: usize,
+    generation: u64,
+    media_type: String,
+    media_id: String,
+    source_url: String,
+    url: String,
+    recipe_key: String,
+    revision: u64,
+}
+impl HomeLogoIdentity {
+    fn for_preview(preview: &MetaPreview, index: usize, generation: u64) -> Option<Self> {
+        let url = preview
+            .logo
+            .as_deref()
+            .filter(|url| !url.trim().is_empty())?
+            .to_owned();
+        Some(Self {
+            index,
+            generation,
+            media_type: preview.type_.clone(),
+            media_id: preview.id.clone(),
+            source_url: preview
+                .extra
+                .get("novaSourceUrl")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .into(),
+            recipe_key: image_cache_key(&url, ImageUse::Fixed(None)),
+            revision: image_settings_revision(),
+            url,
+        })
+    }
+    fn key(&self) -> SharedString {
+        serde_json::to_string(self)
+            .expect("Home logo identity")
+            .into()
+    }
+}
+fn clear_home_pending_logo(app: &AppWindow) {
+    app.set_home_pending_logo(Image::default());
+    app.set_home_pending_logo_identity(SharedString::default());
+}
+
+struct HomeBackdropRequest {
+    index: usize,
+    generation: u64,
+    image_revision: u64,
+    url: String,
+    preferred_url: String,
+}
+
 fn home_showcase_same_identity(left: &MetaPreview, right: &MetaPreview) -> bool {
     left.id == right.id
         && left.type_ == right.type_
@@ -809,6 +864,10 @@ impl Bridge {
                 state.home_showcase.len(),
             )
         };
+        if let Some(app) = self.app() {
+            clear_home_pending_logo(&app);
+            app.set_home_featured_logo_identity(SharedString::default());
+        }
         self.refresh_home_watch_action();
         let Some(first) = first else {
             if let Some(app) = self.app() {
@@ -1061,27 +1120,88 @@ impl Bridge {
         }
     }
 
+    /// Settings/list/target changes can invalidate parked pixels even while
+    /// Home is covered. This only releases UI ownership; it starts no work.
+    pub(super) fn invalidate_home_pending_logo(&self) {
+        let Some(app) = self.app() else { return };
+        let target_key = {
+            let state = self.shared.lock().unwrap();
+            state
+                .home_showcase_pending_index
+                .and_then(|target| {
+                    state.home_showcase.get(target).and_then(|preview| {
+                        HomeLogoIdentity::for_preview(
+                            preview,
+                            target,
+                            state.home_showcase_list_generation,
+                        )
+                    })
+                })
+                .map(|identity| identity.key())
+                .unwrap_or_default()
+        };
+        if app.get_home_pending_logo_identity() != target_key {
+            clear_home_pending_logo(&app);
+        }
+    }
+
     /// Optional logo fetches never delay navigation or backdrop readiness.
-    fn ensure_home_showcase_logo(&self, index: usize, generation: u64) {
-        let request = {
+    pub(super) fn ensure_home_showcase_logo(&self, index: usize, generation: u64) {
+        let Some(app) = self.app() else { return };
+        self.invalidate_home_pending_logo();
+        let identity = {
             let mut state = self.shared.lock().unwrap();
             if generation != state.home_showcase_list_generation {
                 return;
             }
-            let Some(url) = state
-                .home_showcase
-                .get(index)
-                .and_then(|preview| preview.logo.as_deref())
-                .filter(|url| !url.trim().is_empty())
-                .map(str::to_owned)
-            else {
+            let Some(preview) = state.home_showcase.get(index).cloned() else {
                 return;
             };
+            let displayed = state.home_showcase_index == index
+                && state
+                    .home_showcase_displayed
+                    .as_ref()
+                    .is_some_and(|shown| home_showcase_same_identity(shown, &preview));
+            let pending = state.home_showcase_pending_index == Some(index);
+            let Some(identity) = HomeLogoIdentity::for_preview(&preview, index, generation) else {
+                if displayed {
+                    app.set_home_featured_logo(Image::default());
+                    app.set_home_featured_logo_identity(SharedString::default());
+                }
+                return;
+            };
+            let key = identity.key();
+            // The window's current or target logo is already a successful
+            // delivery. Cache eviction must not trigger another download.
+            if (displayed
+                && app.get_home_featured_logo_identity() == key
+                && app.get_home_featured_logo().size().width > 0)
+                || (pending
+                    && app.get_home_pending_logo_identity() == key
+                    && app.get_home_pending_logo().size().width > 0)
+            {
+                return;
+            }
             let artwork = state.home_showcase_artwork.entry(index).or_default();
-            if artwork.logo_url != url {
-                artwork.logo_url = url.clone();
+            if artwork.logo_url != identity.url {
+                artwork.logo_url = identity.url.clone();
                 artwork.logo_loading = false;
                 artwork.logo_failed_at = None;
+            }
+            if let Some(pixels) = transparent_title_logo(decoded_cache_get(&identity.recipe_key)) {
+                let image = Image::from_rgba8(pixels);
+                if displayed {
+                    app.set_home_featured_logo(image.clone());
+                    app.set_home_featured_logo_identity(key.clone());
+                    app.set_home_featured_revision(
+                        app.get_home_featured_revision().wrapping_add(1),
+                    );
+                }
+                if pending {
+                    app.set_home_pending_logo(image);
+                    app.set_home_pending_logo_identity(key);
+                }
+                return;
             }
             if artwork.logo_loading
                 || artwork
@@ -1090,59 +1210,79 @@ impl Bridge {
             {
                 return;
             }
-            if transparent_title_logo(decoded_cache_get(&image_cache_key(
-                &url,
-                ImageUse::Fixed(None),
-            )))
-            .is_some()
-            {
-                // Logo pixels are borrowed from the shared cache when the
-                // current slide is committed; this state keeps only identity.
-                return;
-            }
             artwork.logo_loading = true;
-            url
+            identity
         };
         let bridge = self.clone();
-        let image_revision = image_settings_revision();
-        net::fetch_image(request.clone(), ImageUse::Fixed(None), move |pixels| {
+        net::fetch_image(identity.url.clone(), ImageUse::Fixed(None), move |pixels| {
             let pixels = transparent_title_logo(pixels);
             let _ = slint::invoke_from_event_loop(move || {
+                let Some(app) = bridge.app() else { return };
                 let mut state = bridge.shared.lock().unwrap();
-                if state.home_showcase_list_generation != generation {
+                if state.home_showcase_list_generation != identity.generation {
                     return;
                 }
-                if image_revision != image_settings_revision() {
-                    if let Some(artwork) = state.home_showcase_artwork.get_mut(&index)
-                        && artwork.logo_url == request
-                    {
-                        artwork.logo_loading = false;
-                    }
-                    drop(state);
-                    bridge.ensure_home_showcase_art(index, generation);
-                    return;
-                }
-                if state
-                    .home_showcase
-                    .get(index)
-                    .and_then(|preview| preview.logo.as_deref())
-                    != Some(request.as_str())
-                {
-                    return;
-                }
-                let artwork = state.home_showcase_artwork.entry(index).or_default();
-                if artwork.logo_url != request {
+                let current = state.home_showcase.get(identity.index).cloned();
+                let exact = current
+                    .as_ref()
+                    .and_then(|preview| {
+                        HomeLogoIdentity::for_preview(preview, identity.index, identity.generation)
+                    })
+                    .as_ref()
+                    == Some(&identity);
+                let artwork = state
+                    .home_showcase_artwork
+                    .entry(identity.index)
+                    .or_default();
+                if artwork.logo_url != identity.url {
                     return;
                 }
                 artwork.logo_loading = false;
+                if !exact {
+                    let target = state
+                        .home_showcase_pending_index
+                        .unwrap_or(state.home_showcase_index);
+                    let retry = target == identity.index;
+                    drop(state);
+                    bridge.invalidate_home_pending_logo();
+                    if retry {
+                        bridge.ensure_home_showcase_logo(identity.index, identity.generation);
+                    }
+                    return;
+                }
                 artwork.logo_failed_at = pixels.is_none().then(std::time::Instant::now);
-                let displayed = state.home_showcase_index == index
-                    && state.home_showcase_pending_index.is_none();
+                let displayed = state.home_showcase_index == identity.index
+                    && state
+                        .home_showcase_displayed
+                        .as_ref()
+                        .zip(current.as_ref())
+                        .is_some_and(|(shown, preview)| {
+                            home_showcase_same_identity(shown, preview)
+                        });
+                let pending = state.home_showcase_pending_index == Some(identity.index);
                 drop(state);
-                if displayed && let Some(app) = bridge.app() {
-                    app.set_home_featured_logo(pixels.map(Image::from_rgba8).unwrap_or_default());
+                let key = identity.key();
+                if displayed {
+                    app.set_home_featured_logo(
+                        pixels.clone().map(Image::from_rgba8).unwrap_or_default(),
+                    );
+                    app.set_home_featured_logo_identity(if pixels.is_some() {
+                        key.clone()
+                    } else {
+                        SharedString::default()
+                    });
                     app.set_home_featured_revision(
                         app.get_home_featured_revision().wrapping_add(1),
+                    );
+                }
+                if pending {
+                    app.set_home_pending_logo(pixels.map(Image::from_rgba8).unwrap_or_default());
+                    app.set_home_pending_logo_identity(
+                        if app.get_home_pending_logo().size().width > 0 {
+                            key
+                        } else {
+                            SharedString::default()
+                        },
                     );
                 }
             });
@@ -1151,17 +1291,32 @@ impl Bridge {
 
     fn fetch_home_showcase_artwork(&self, index: usize, generation: u64, url: String) {
         let bridge = self.clone();
-        let image_revision = image_settings_revision();
+        let preferred_url = self
+            .shared
+            .lock()
+            .unwrap()
+            .home_showcase
+            .get(index)
+            .and_then(|preview| home_showcase_art_urls(preview).into_iter().next())
+            .unwrap_or_else(|| url.clone());
+        let request = HomeBackdropRequest {
+            index,
+            generation,
+            image_revision: image_settings_revision(),
+            url: url.clone(),
+            preferred_url,
+        };
         // Keep the add-on-provided source resolution for the large hero rather
         // than using the smaller detail-banner derivative.
         net::fetch_image(url.clone(), ImageUse::Fixed(None), move |pixels| {
             let _ = slint::invoke_from_event_loop(move || {
-                bridge.finish_home_showcase_artwork(index, generation, image_revision, url, pixels);
+                bridge.finish_home_showcase_artwork_request(request, pixels);
             });
         });
     }
 
-    fn finish_home_showcase_artwork(
+    #[cfg(test)]
+    pub(super) fn finish_home_showcase_artwork(
         &self,
         index: usize,
         generation: u64,
@@ -1169,7 +1324,31 @@ impl Bridge {
         url: String,
         pixels: Option<SharedPixelBuffer<Rgba8Pixel>>,
     ) {
-        {
+        self.finish_home_showcase_artwork_request(
+            HomeBackdropRequest {
+                index,
+                generation,
+                image_revision,
+                preferred_url: url.clone(),
+                url,
+            },
+            pixels,
+        );
+    }
+
+    fn finish_home_showcase_artwork_request(
+        &self,
+        request: HomeBackdropRequest,
+        pixels: Option<SharedPixelBuffer<Rgba8Pixel>>,
+    ) {
+        let HomeBackdropRequest {
+            index,
+            generation,
+            image_revision,
+            url,
+            preferred_url,
+        } = request;
+        let (valid_url, should_commit, preferred_changed) = {
             let mut state = self.shared.lock().unwrap();
             if generation != state.home_showcase_list_generation {
                 return;
@@ -1177,7 +1356,11 @@ impl Bridge {
             let Some(preview) = state.home_showcase.get(index) else {
                 return;
             };
-            let valid_url = home_showcase_art_urls(preview).contains(&url);
+            let urls = home_showcase_art_urls(preview);
+            let valid_url = urls.contains(&url);
+            let preferred_changed = urls
+                .first()
+                .is_some_and(|current| current != &preferred_url);
             let Some(artwork) = state.home_showcase_artwork.get_mut(&index) else {
                 return;
             };
@@ -1202,17 +1385,39 @@ impl Bridge {
             if state.home_showcase_index == index && state.home_showcase_pending_index.is_none() {
                 state.home_showcase_pending_index = Some(index);
             }
+            (
+                valid_url,
+                state.home_showcase_pending_index == Some(index),
+                preferred_changed,
+            )
+        };
+        if valid_url && pixels.is_some() {
+            // A successful image need not fit the LRU, and another worker may
+            // evict it before this callback runs. Hand its pixels straight to
+            // the visible slide; inactive prefetches keep only their key.
+            if should_commit {
+                self.commit_home_showcase_index(index, generation, pixels);
+                // Metadata can add or replace the preferred background while
+                // a poster fallback is loading. Keep its delivered pixels
+                // visible, then pursue only that changed preference; ordinary
+                // failed-background fallbacks must not restart a zero-LRU loop.
+                if preferred_changed {
+                    self.shared.lock().unwrap().home_showcase_pending_index = Some(index);
+                    self.ensure_home_showcase_art(index, generation);
+                }
+            }
+        } else {
+            self.ensure_home_showcase_art(index, generation);
         }
-        self.ensure_home_showcase_art(index, generation);
     }
 
-    fn commit_home_showcase_index(
+    pub(super) fn commit_home_showcase_index(
         &self,
         index: usize,
         generation: u64,
         backdrop: Option<SharedPixelBuffer<Rgba8Pixel>>,
     ) {
-        let (preview, logo, count, same_slide) = {
+        let (preview, count, same_slide) = {
             let mut state = self.shared.lock().unwrap();
             if generation != state.home_showcase_list_generation {
                 return;
@@ -1226,11 +1431,6 @@ impl Bridge {
             let Some(preview) = state.home_showcase.get(index).cloned() else {
                 return;
             };
-            let logo = preview
-                .logo
-                .as_deref()
-                .and_then(|url| decoded_cache_get(&image_cache_key(url, ImageUse::Fixed(None))))
-                .and_then(|pixels| transparent_title_logo(Some(pixels)));
             let count = state.home_showcase.len();
             let same_slide = state
                 .home_showcase_displayed
@@ -1239,14 +1439,39 @@ impl Bridge {
             state.home_showcase_index = index;
             state.home_showcase_pending_index = None;
             state.home_showcase_displayed = Some(preview.clone());
-            (preview, logo, count, same_slide)
+            (preview, count, same_slide)
         };
 
         self.refresh_home_watch_action();
 
         if let Some(app) = self.app() {
             app.set_home_featured_title(SharedString::from(preview.title()));
-            app.set_home_featured_logo(logo.map(Image::from_rgba8).unwrap_or_default());
+            let identity = HomeLogoIdentity::for_preview(&preview, index, generation);
+            let key = identity
+                .as_ref()
+                .map(|identity| identity.key())
+                .unwrap_or_default();
+            let logo = if !key.is_empty() && app.get_home_pending_logo_identity() == key {
+                app.get_home_pending_logo()
+            } else if let Some(pixels) = identity
+                .as_ref()
+                .and_then(|identity| decoded_cache_get(&identity.recipe_key))
+                .and_then(|pixels| transparent_title_logo(Some(pixels)))
+            {
+                Image::from_rgba8(pixels)
+            } else if same_slide && !key.is_empty() && app.get_home_featured_logo_identity() == key
+            {
+                app.get_home_featured_logo()
+            } else {
+                Image::default()
+            };
+            app.set_home_featured_logo_identity(if logo.size().width > 0 {
+                key
+            } else {
+                SharedString::default()
+            });
+            app.set_home_featured_logo(logo);
+            clear_home_pending_logo(&app);
             app.set_home_featured_type(SharedString::from(&preview.type_));
             app.set_home_featured_rating(SharedString::from(Self::showcase_rating(&preview)));
             app.set_home_featured_runtime(SharedString::from(
@@ -1306,6 +1531,7 @@ impl Bridge {
             (index, state.home_showcase_list_generation, empty)
         };
         if let Some(app) = self.app() {
+            clear_home_pending_logo(&app);
             app.set_home_featured_refresh_pending(false);
         }
         if empty {
@@ -3221,6 +3447,169 @@ mod tests {
         assert!(state.home_showcase_artwork.contains_key(&0));
         assert_eq!(state.home_showcase_artwork[&0].backdrop_url, "");
         assert_eq!(home_showcase_refreshed_index(&state, &[], 1), 0);
+    }
+
+    #[test]
+    fn featured_logo_pending_and_current_pixels_survive_cache_eviction() {
+        const TEST_DIR: &str = "NOVA_HOME_LOGO_OWNERSHIP_TEST_DIR";
+        let Some(root) = std::env::var_os(TEST_DIR) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-home-logo-test-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(TEST_DIR, &root)
+                .args(["--exact", "app::home::tests::featured_logo_pending_and_current_pixels_survive_cache_eviction", "--nocapture"])
+                .output().unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        app.window().set_size(slint::PhysicalSize::new(360, 800));
+        app.window().show().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let downloads = DownloadCoordinator::new(root.join("downloads"));
+        #[cfg(feature = "desktop")]
+        let bridge = {
+            let (hi, _) = mpsc::channel();
+            let (lo, _) = mpsc::channel();
+            Bridge::new(
+                app.as_weak(),
+                PosterTx { hi, lo },
+                Arc::new(AtomicU64::new(0)),
+                player,
+                downloads,
+            )
+        };
+        #[cfg(not(feature = "desktop"))]
+        let bridge = Bridge::new(
+            app.as_weak(),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            downloads,
+        );
+        let mut preview = showcase_preview("logo-title");
+        preview.logo = Some("https://images.example/logo-owned-by-visible-slide.png".into());
+        let generation = 7;
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.home_showcase = vec![preview.clone()];
+            state.home_showcase_list_generation = generation;
+            state.home_showcase_pending_index = Some(0);
+            state
+                .home_showcase_artwork
+                .insert(0, HomeShowcaseArtwork::default());
+        }
+        let mut logo = SharedPixelBuffer::<Rgba8Pixel>::new(3, 2);
+        logo.make_mut_bytes().fill(255);
+        logo.make_mut_bytes()[3] = 0;
+        decoded_cache_insert(
+            &image_cache_key(preview.logo.as_ref().unwrap(), ImageUse::Fixed(None)),
+            logo,
+        );
+        bridge.ensure_home_showcase_logo(0, generation);
+        assert_eq!(app.get_home_pending_logo().size().width, 3);
+        assert_eq!(
+            app.get_home_featured_logo().size().width,
+            0,
+            "pending title must not paint onto the previous slide"
+        );
+        let identity = app.get_home_pending_logo_identity();
+        decoded_cache_clear();
+        bridge.commit_home_showcase_index(0, generation, Some(SharedPixelBuffer::new(1, 1)));
+        assert_eq!(app.get_home_featured_title(), "logo-title");
+        assert_eq!(app.get_home_featured_logo().size().width, 3);
+        assert_eq!(app.get_home_featured_logo_identity(), identity);
+        assert_eq!(app.get_home_pending_logo().size().width, 0);
+        assert!(app.get_home_pending_logo_identity().is_empty());
+        bridge.ensure_home_showcase_logo(0, generation);
+        assert!(
+            !bridge.shared.lock().unwrap().home_showcase_artwork[&0].logo_loading,
+            "matching UI-owned logo must prevent a duplicate fetch"
+        );
+        assert_eq!(app.get_home_featured_logo().size().width, 3);
+        // A same-slide metadata/backdrop commit must retain the live logo too.
+        bridge.shared.lock().unwrap().home_showcase_pending_index = Some(0);
+        bridge.commit_home_showcase_index(0, generation, Some(SharedPixelBuffer::new(2, 2)));
+        assert_eq!(app.get_home_featured_logo().size().width, 3);
+        app.set_home_pending_logo(app.get_home_featured_logo());
+        app.set_home_pending_logo_identity(identity.clone());
+        bridge.shared.lock().unwrap().home_showcase_pending_index = Some(1);
+        bridge.invalidate_home_pending_logo();
+        assert_eq!(
+            app.get_home_pending_logo().size().width,
+            0,
+            "target changes release parked pixels"
+        );
+        bridge.shared.lock().unwrap().home_showcase_pending_index = Some(0);
+        app.set_home_pending_logo(app.get_home_featured_logo());
+        app.set_home_pending_logo_identity(identity);
+        let mut settings = active_cache_settings();
+        settings.enabled = true;
+        settings.quality = if settings.quality == 80 { 81 } else { 80 };
+        set_cache_settings(settings);
+        bridge.invalidate_home_pending_logo();
+        assert_eq!(
+            app.get_home_pending_logo().size().width,
+            0,
+            "recipe/revision changes release parked pixels"
+        );
+        assert!(app.get_home_pending_logo_identity().is_empty());
+
+        // A fallback selected because the preferred background failed must
+        // stop after direct delivery, even when no decoded image can reside
+        // in the LRU. Its unchanged preference is not a metadata upgrade.
+        let fallback = "https://images.example/failed-background-fallback.jpg";
+        let preferred = "https://images.example/failed-preferred-background.jpg";
+        decoded_cache_clear();
+        set_decoded_cache_budget(0);
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            let mut preview = showcase_preview("fallback-title");
+            preview.background = Some(preferred.into());
+            preview.poster = Some(fallback.into());
+            state.home_showcase = vec![preview];
+            state.home_showcase_pending_index = Some(0);
+            let artwork = state.home_showcase_artwork.get_mut(&0).unwrap();
+            artwork.loading_url = Some(fallback.into());
+            artwork
+                .failed_urls
+                .insert(preferred.into(), std::time::Instant::now());
+        }
+        bridge.finish_home_showcase_artwork_request(
+            HomeBackdropRequest {
+                index: 0,
+                generation,
+                image_revision: image_settings_revision(),
+                url: fallback.into(),
+                preferred_url: preferred.into(),
+            },
+            Some(SharedPixelBuffer::new(4, 2)),
+        );
+        assert_eq!(app.get_home_featured_backdrop().size().width, 4);
+        assert!(
+            bridge.shared.lock().unwrap().home_showcase_artwork[&0]
+                .loading_url
+                .is_none()
+        );
+        assert!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .home_showcase_pending_index
+                .is_none()
+        );
     }
 
     #[test]

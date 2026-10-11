@@ -26,10 +26,10 @@ fn exercise_field(
     done: impl FnOnce(nova::AppWindow, Failures) + 'static,
 ) {
     let field = if settings {
-        ElementHandle::find_by_element_id(app, "SettingsPage::addon_url_narrow")
+        ElementHandle::find_by_element_id(app, "SettingsAddonsModule::addon_url_narrow")
             .chain(ElementHandle::find_by_element_id(
                 app,
-                "SettingsPage::addon_url_wide",
+                "SettingsAddonsModule::addon_url_wide",
             ))
             .next()
             .unwrap()

@@ -1,0 +1,205 @@
+import { SettingsBridge, SettingsContent, Theme, SettingsStyle } from "@NovaUiShared";
+
+import { PillButton, ToggleSwitch, SectionHeader, SettingsRow, SettingsCard } from "../ui/settings-controls.slint";
+
+// The shell owns scrolling and transitions. Report intrinsic layout sizes
+// only while this section is selected, so outgoing instances cannot resize it.
+export component SettingsHomeModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: SettingsContent.slot_width; height: SettingsContent.slot_height;
+    private property <length> measured_min: body_layout.min-height;
+    private property <length> measured_preferred: body_layout.preferred-height;
+    changed measured_min => { root.publish_size(); }
+    changed measured_preferred => { root.publish_size(); }
+    init => { root.publish_size(); }
+    function publish_size() {
+        if SettingsBridge.sel == 13 {
+            SettingsContent.content_min_height = root.measured_min;
+            SettingsContent.content_preferred_height = root.measured_preferred;
+        }
+    }
+    body_layout := VerticalLayout {
+        width: 100%; height: 100%; spacing: 0px;
+        VerticalLayout {
+
+            vertical-stretch: 0;
+            spacing: 18px;
+
+            SectionHeader { icon-kind: 4; label: @tr("HOME CATALOGS"); }
+            Text {
+                width: 100%; wrap: word-wrap;
+                text: @tr("Built-in and addon catalogs appear in this order on Home. Hide, move or remove any catalog.");
+                font-size: 14px; color: Theme.current.text_settings;
+            }
+            if SettingsBridge.home_row_catalog_rows.length == 0: Text {
+                width: 100%; wrap: word-wrap;
+                text: @tr("No Home catalogs selected. Add a built-in or addon catalog.");
+                font-size: 14px; color: Theme.current.text_settings;
+            }
+            for home_row[i] in SettingsBridge.home_row_catalog_rows: Rectangle {
+                background: Theme.current.card;
+                border-radius: 16px; border-width: 1px;
+                border-color: Theme.current.border_soft;
+                clip: true;
+                VerticalLayout {
+                    spacing: 0px;
+                    SettingsRow {
+                        setting-key: "home_rows";
+                        row-title: home_row.title;
+                        row-desc: home_row.builtin ? @tr("Built-in")
+                            : home_row.addon + " · " + home_row.media_type
+                                + " · " + (home_row.genre == "" ? @tr("All genres") : home_row.genre)
+                                + (home_row.available ? (home_row.enabled ? "" : " · " + @tr("Addon disabled")) : " · " + @tr("Unavailable addon"));
+                    }
+                    HorizontalLayout {
+                        padding-left: 16px; padding-right: 16px;
+                        padding-bottom: 12px; spacing: 8px;
+                        ToggleSwitch {
+                            name: home_row.title;
+                            checked: home_row.visible;
+                            focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == i * 4 && SettingsBridge.kb_active;
+                            toggled => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 16; SettingsContent.kb_home = i * 4;
+                                SettingsBridge.home_row_catalog_action(i, 0);
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        PillButton {
+                            label: "↑"; accessible-label: @tr("Move up");
+                            btn_min_width: 44px; compact: true;
+                            enabled: i > 0;
+                            focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == i * 4 + 1 && SettingsBridge.kb_active;
+                            clicked => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 16; SettingsContent.kb_home = (i - 1) * 4 + 1;
+                                SettingsBridge.home_row_catalog_action(i, 1);
+                            }
+                        }
+                        PillButton {
+                            label: "↓"; accessible-label: @tr("Move down");
+                            btn_min_width: 44px; compact: true;
+                            enabled: i + 1 < SettingsBridge.home_row_catalog_rows.length;
+                            focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == i * 4 + 2 && SettingsBridge.kb_active;
+                            clicked => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 16; SettingsContent.kb_home = (i + 1) * 4 + 2;
+                                SettingsBridge.home_row_catalog_action(i, 2);
+                            }
+                        }
+                        PillButton {
+                            label: @tr("Remove"); destructive: true; compact: true;
+                            focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == i * 4 + 3 && SettingsBridge.kb_active;
+                            clicked => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 16; SettingsContent.kb_home = i * 4 + 3;
+                                SettingsBridge.home_row_catalog_action(i, 3);
+                            }
+                        }
+                    }
+                }
+            }
+            PillButton {
+                label: @tr("Add catalog"); primary: true; roomy: true;
+                focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == SettingsBridge.home_row_catalog_rows.length * 4 && SettingsBridge.kb_active;
+                clicked => {
+                    SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                    SettingsBridge.kb_zone = 16; SettingsContent.kb_home = SettingsBridge.home_row_catalog_rows.length * 4;
+                    SettingsBridge.home_row_catalog_add_requested();
+                }
+            }
+            SettingsCard { SettingsRow {
+                setting-key: "home_episode_artwork";
+                row-title: @tr("Episode artwork on Home");
+                row-desc: @tr("Use episode thumbnails in Continue Watching and Upcoming. Turn off to use show posters.");
+                ToggleSwitch {
+                    name: @tr("Episode artwork on Home");
+                    checked <=> SettingsBridge.home_episode_artwork;
+                    focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == SettingsBridge.home_row_catalog_rows.length * 4 + 1 && SettingsBridge.kb_active;
+                    toggled => {
+                        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                        SettingsBridge.kb_zone = 16; SettingsContent.kb_home = SettingsBridge.home_row_catalog_rows.length * 4 + 1;
+                        SettingsContent.schedule_setting("home_episode_artwork");
+                    }
+                }
+            } }
+
+            SectionHeader {
+                icon-kind: 4;
+                label: @tr("FEATURED SHOWCASE");
+            }
+
+            Text {
+                width: 100%;
+                text: @tr("Choose addon catalogs and optional genres for the rotating banner. Each selection contributes up to five titles.");
+                font-size: 14px;
+                color: Theme.current.text_settings;
+                wrap: word-wrap;
+            }
+
+            Rectangle {
+                background: Theme.current.card;
+                border-radius: 16px;
+                border-width: 1px;
+                border-color: Theme.current.border_soft;
+                clip: true;
+
+                VerticalLayout {
+                    spacing: 0px;
+
+                    if SettingsBridge.home_catalog_rows.length == 0: Rectangle {
+                        background: Theme.current.card;
+                        min-height: 64px;
+
+                        Text {
+                            x: 16px;
+                            y: (parent.height - self.height) / 2;
+                            width: parent.width - 32px;
+                            text: @tr("No featured catalogs selected. Add one to choose its genre.");
+                            font-size: 14px;
+                            color: Theme.current.text_settings;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    for home[i] in SettingsBridge.home_catalog_rows: SettingsRow {
+                        tinted: Math.mod(i, 2) == 0;
+                        setting-key: "home_catalog_sources";
+                        row-title: home.title;
+                        row-desc: home.addon + " · " + home.media_type
+                        + " · " + (home.genre == "" ? @tr("All genres") : home.genre)
+                        + (home.available ? (home.enabled ? "" : " · " + @tr("Addon disabled")) : " · " + @tr("Unavailable addon"));
+
+                        home_catalog_remove := PillButton {
+                            label: @tr("Remove");
+                            destructive: true;
+                            roomy: true;
+                            focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == SettingsBridge.home_row_catalog_rows.length * 4 + i + 2 && SettingsBridge.kb_active;
+                            clicked => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 16;
+                                SettingsContent.kb_home = SettingsBridge.home_row_catalog_rows.length * 4 + i + 2;
+                                SettingsBridge.home_catalog_removed(i);
+                            }
+                        }
+                    }
+                }
+            }
+
+            home_catalog_add := PillButton {
+                label: @tr("Add catalog");
+                primary: true;
+                roomy: true;
+                focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == SettingsBridge.home_row_catalog_rows.length * 4 + SettingsBridge.home_catalog_rows.length + 2 && SettingsBridge.kb_active;
+                clicked => {
+                    SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                    SettingsBridge.kb_zone = 16;
+                    SettingsContent.kb_home = SettingsBridge.home_row_catalog_rows.length * 4 + SettingsBridge.home_catalog_rows.length + 2;
+                    SettingsBridge.home_catalog_add_requested();
+                }
+            }
+
+        }
+    }
+}

@@ -1,0 +1,13 @@
+[package]
+name = "nova-settings-container-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+slint = { workspace = true }
+i-slint-core = { workspace = true }
+nova-settings-module-probe = { path = "../settings-library" }
+
+[build-dependencies]
+slint-build = { workspace = true }

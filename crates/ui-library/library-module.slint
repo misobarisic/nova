@@ -1,0 +1,51 @@
+import { LibraryPage } from "../ui/library.slint";
+import { LibraryBridge } from "@NovaUiShared";
+
+export component LibraryModule inherits Window {
+    default-font-family: "Roboto";
+    background: transparent;
+    width: LibraryBridge.viewport_width; height: LibraryBridge.viewport_height;
+    LibraryPage {
+        width: 100%; height: 100%;
+        library <=> LibraryBridge.library;
+        category_rows <=> LibraryBridge.category_rows;
+        category_names <=> LibraryBridge.category_names;
+        category_labels <=> LibraryBridge.category_labels;
+        category_index <=> LibraryBridge.category_index;
+        library_filter_category <=> LibraryBridge.library_filter_category;
+        query <=> LibraryBridge.query;
+        sort_index <=> LibraryBridge.sort_index;
+        list_view <=> LibraryBridge.list_view;
+        search_open <=> LibraryBridge.search_open;
+        library_empty_hint <=> LibraryBridge.library_empty_hint;
+        kb_zone <=> LibraryBridge.kb_zone;
+        kb_nav <=> LibraryBridge.kb_nav;
+        kb_f <=> LibraryBridge.kb_f;
+        kb_idx <=> LibraryBridge.kb_idx;
+        kb_active <=> LibraryBridge.kb_active;
+        scroll_y <=> LibraryBridge.scroll_y;
+        nav-viewport-width <=> LibraryBridge.nav-viewport-width;
+        min_cols <=> LibraryBridge.min_cols;
+        system_back_request <=> LibraryBridge.system_back_request;
+        more_open <=> LibraryBridge.more_open;
+        narrow <=> LibraryBridge.narrow;
+        safe-top <=> LibraryBridge.safe-top;
+        safe-left <=> LibraryBridge.safe-left;
+        safe-right <=> LibraryBridge.safe-right;
+        safe-bottom <=> LibraryBridge.safe-bottom;
+        touch_menus <=> LibraryBridge.touch_menus;
+        view_changed() => { LibraryBridge.view_changed(); }
+        discover_picked() => { LibraryBridge.discover_picked(); }
+        home_picked() => { LibraryBridge.home_picked(); }
+        library_picked() => { LibraryBridge.library_picked(); }
+        settings_picked() => { LibraryBridge.settings_picked(); }
+        more_picked() => { LibraryBridge.more_picked(); }
+        about_picked() => { LibraryBridge.about_picked(); }
+        library_filter_picked(arg0) => { LibraryBridge.library_filter_picked(arg0); }
+        library_item_picked(arg0) => { LibraryBridge.library_item_picked(arg0); }
+        remove_library_item(arg0) => { LibraryBridge.remove_library_item(arg0); }
+        library_watch_action(arg0, arg1) => { LibraryBridge.library_watch_action(arg0, arg1); }
+        library_status_action(arg0, arg1) => { LibraryBridge.library_status_action(arg0, arg1); }
+        library_visible_range(arg0, arg1) => { LibraryBridge.library_visible_range(arg0, arg1); }
+    }
+}

@@ -1,0 +1,26 @@
+import { CalendarBridge, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadEpisode, DownloadGroup, SettingsDestination } from "@NovaUiShared";
+// Only mount-specific inputs live here; persistent state is connected once
+// by page-bindings.slint, outside the conditional ComponentContainer.
+
+export component CalendarHost inherits Rectangle {
+    preferred-width: 100%; preferred-height: 100%;
+    in-out property <bool> artwork-active <=> CalendarBridge.artwork-active;
+    in-out property <length> nav-viewport-width <=> CalendarBridge.nav-viewport-width;
+    in-out property <bool> external_navigation <=> CalendarBridge.external_navigation;
+    in-out property <bool> active <=> CalendarBridge.active;
+    in-out property <[CalendarDay]> cells <=> CalendarBridge.cells;
+    in-out property <[CalendarDay]> week_cells <=> CalendarBridge.week_cells;
+    in-out property <[CalendarRelease]> rows <=> CalendarBridge.rows;
+    in-out property <[CalendarRelease]> later <=> CalendarBridge.later;
+    in-out property <string> title <=> CalendarBridge.title;
+    in-out property <string> day_title <=> CalendarBridge.day_title;
+    in-out property <int> count <=> CalendarBridge.count;
+    in-out property <length> safe-top <=> CalendarBridge.safe-top;
+    in-out property <length> safe-left <=> CalendarBridge.safe-left;
+    in-out property <length> safe-right <=> CalendarBridge.safe-right;
+    in-out property <length> safe-bottom <=> CalendarBridge.safe-bottom;
+    in-out property <int> system_back_request <=> CalendarBridge.system_back_request;
+    in-out property <length> viewport_width <=> CalendarBridge.viewport_width;
+    in-out property <length> viewport_height <=> CalendarBridge.viewport_height;
+    ComponentContainer { width: 100%; height: 100%; component-factory: CalendarBridge.factory; }
+}
