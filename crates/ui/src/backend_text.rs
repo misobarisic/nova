@@ -512,6 +512,12 @@ pub fn tr(english: &str) -> &str {
         "Download worker stopped unexpectedly." => {
             "Radna dretva za preuzimanje neočekivano se zaustavila."
         }
+        "HTTP 429: download remained rate limited after retries" => {
+            "HTTP 429: ograničenje broja zahtjeva ostalo je na snazi nakon ponovnih pokušaja"
+        }
+        "HTTP 429: server cooldown exceeds the download retry budget; try again later" => {
+            "HTTP 429: poslužitelj zahtijeva dulje čekanje od dopuštenog za ponovne pokušaje preuzimanja; pokušajte kasnije"
+        }
         "This stream cannot be downloaded here." => "Ovaj se zapis ovdje ne može preuzeti.",
         "HLS, DASH, and YouTube streams cannot be downloaded here." => {
             "HLS, DASH i YouTube zapisi ne mogu se preuzeti ovdje."

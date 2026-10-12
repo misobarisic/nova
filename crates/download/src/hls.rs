@@ -236,12 +236,16 @@ async fn get(
     headers: &[(String, String)],
     cancel: &CancellationToken,
 ) -> Result<Response, DownloadError> {
-    let response = tokio::time::timeout(
+    let response = super::http::send_request_retrying_rate_limits(
+        client,
+        url,
+        0,
+        &DownloadResume::default(),
+        headers,
+        cancel,
         TIMEOUT,
-        super::http::send_request(client, url, 0, &DownloadResume::default(), headers, cancel),
     )
-    .await
-    .map_err(|_| invalid("HLS request timed out"))??;
+    .await?;
     if response.status() != reqwest::StatusCode::OK {
         return Err(DownloadError::HttpStatus {
             status: response.status().as_u16(),

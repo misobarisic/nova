@@ -1468,6 +1468,10 @@ fn localized_download_error(error: &str) -> String {
         "Downloaded file is missing." | "Preuzeta datoteka nedostaje." => {
             text::tr("Downloaded file is missing.").to_string()
         }
+        "HTTP 429: download remained rate limited after retries"
+        | "HTTP 429: server cooldown exceeds the download retry budget; try again later" => {
+            text::tr(error).to_string()
+        }
         _ => error.to_string(),
     }
 }

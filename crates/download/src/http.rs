@@ -2,7 +2,7 @@ use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "android")]
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use reqwest::header::{
     ACCEPT_ENCODING, ETAG, HeaderMap, HeaderName, HeaderValue, IF_RANGE, LAST_MODIFIED, RANGE,
@@ -26,6 +26,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const READ_STALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// TCP connect timeout (DNS + handshake), independent of the header timeout.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_RATE_LIMIT_RETRIES: u32 = 6;
+const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(5 * 60);
 
 #[cfg(not(target_os = "android"))]
 pub fn new_http_client() -> Result<Client, DownloadError> {
@@ -247,17 +249,16 @@ where
         if cancellation.is_cancelled() {
             return Err(DownloadError::Cancelled);
         }
-        let response = tokio::time::timeout(
+        let response = send_request_retrying_rate_limits(
+            client,
+            &url,
+            offset,
+            &resume,
+            &headers,
+            &cancellation,
             request_timeout,
-            send_request(client, &url, offset, &resume, &headers, &cancellation),
         )
-        .await
-        .map_err(|_| {
-            DownloadError::InvalidResponse(format!(
-                "request to {url} timed out after {}s",
-                request_timeout.as_secs()
-            ))
-        })??;
+        .await?;
         let final_url = response.url().to_string();
         if is_unsupported_download_url(&final_url) {
             return Err(DownloadError::UnsupportedUrl(final_url));
@@ -569,7 +570,79 @@ struct ContentRange {
     total: Option<u64>,
 }
 
-pub(super) async fn send_request(
+fn retry_after_delay(headers: &HeaderMap, now: SystemTime) -> Option<Duration> {
+    let value = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim();
+    if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        // An overflowing but otherwise valid delay is still a demand to wait,
+        // not permission to fall back to a shorter cooldown.
+        return Some(Duration::from_secs(value.parse().unwrap_or(u64::MAX)));
+    }
+    httpdate::parse_http_date(value)
+        .ok()
+        .map(|date| date.duration_since(now).unwrap_or_default())
+}
+
+pub(super) async fn send_request_retrying_rate_limits(
+    client: &Client,
+    url: &Url,
+    offset: u64,
+    resume: &DownloadResume,
+    headers: &[(String, String)],
+    cancellation: &CancellationToken,
+    request_timeout: Duration,
+) -> Result<Response, DownloadError> {
+    let mut waited = Duration::ZERO;
+    for retry in 0..=MAX_RATE_LIMIT_RETRIES {
+        if cancellation.is_cancelled() {
+            return Err(DownloadError::Cancelled);
+        }
+        // The header deadline covers one attempt, not the CDN's cooldown.
+        let response = tokio::time::timeout(
+            request_timeout,
+            send_request(client, url, offset, resume, headers, cancellation),
+        )
+        .await
+        .map_err(|_| {
+            DownloadError::InvalidResponse(format!(
+                "request to {url} timed out after {}s",
+                request_timeout.as_secs()
+            ))
+        })??;
+        if response.status() != StatusCode::TOO_MANY_REQUESTS {
+            return Ok(response);
+        }
+        if retry == MAX_RATE_LIMIT_RETRIES {
+            return Err(DownloadError::HttpStatus {
+                status: 429,
+                message: "download remained rate limited after retries".into(),
+            });
+        }
+        let delay = retry_after_delay(response.headers(), SystemTime::now())
+            .unwrap_or_else(|| Duration::from_secs(1 << retry));
+        if delay > MAX_RATE_LIMIT_WAIT.saturating_sub(waited) {
+            // Never shorten Retry-After and hit the server before its deadline.
+            return Err(DownloadError::HttpStatus {
+                status: 429,
+                message: "server cooldown exceeds the download retry budget; try again later"
+                    .into(),
+            });
+        }
+        drop(response);
+        tokio::select! {
+            biased;
+            _ = cancellation.wait_cancelled() => return Err(DownloadError::Cancelled),
+            _ = tokio::time::sleep(delay) => {}
+        }
+        waited += delay;
+    }
+    unreachable!("the last rate-limited attempt returns an error")
+}
+
+async fn send_request(
     client: &Client,
     url: &Url,
     offset: u64,
@@ -952,6 +1025,42 @@ mod tests {
 
     use super::*;
     use crate::{format_bytes, sanitize_filename};
+
+    #[test]
+    fn retry_after_accepts_seconds_dates_and_elapsed_deadlines() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let future = httpdate::fmt_http_date(now + Duration::from_secs(60));
+        let past = httpdate::fmt_http_date(now - Duration::from_secs(60));
+        let mut headers = HeaderMap::new();
+        for (value, expected) in [
+            ("60", Duration::from_secs(60)),
+            (" 60 ", Duration::from_secs(60)),
+            ("0", Duration::ZERO),
+            (future.as_str(), Duration::from_secs(60)),
+            (past.as_str(), Duration::ZERO),
+            ("18446744073709551616", Duration::from_secs(u64::MAX)),
+        ] {
+            headers.insert(
+                reqwest::header::RETRY_AFTER,
+                HeaderValue::from_str(value).unwrap(),
+            );
+            assert_eq!(retry_after_delay(&headers, now), Some(expected), "{value}");
+        }
+    }
+
+    #[test]
+    fn missing_or_malformed_retry_after_uses_fallback() {
+        let now = SystemTime::UNIX_EPOCH;
+        let mut headers = HeaderMap::new();
+        assert_eq!(retry_after_delay(&headers, now), None);
+        for value in ["", "soon", "-1", "+60", "1.5", "60 seconds"] {
+            headers.insert(
+                reqwest::header::RETRY_AFTER,
+                HeaderValue::from_str(value).unwrap(),
+            );
+            assert_eq!(retry_after_delay(&headers, now), None, "{value}");
+        }
+    }
 
     fn test_path(name: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
