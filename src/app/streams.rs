@@ -184,11 +184,7 @@ pub(crate) fn stream_source_for_addon(
         return StreamSource::Unsupported;
     };
     let url = format!("nova-provider://{provider}");
-    if owner_url.trim_end_matches('/') != url
-        || !nova_providers::bundled_providers()
-            .iter()
-            .any(|definition| definition.url == url)
-    {
+    if owner_url.trim_end_matches('/') != url || !nova_providers::has_installed_provider(&url) {
         return StreamSource::Unsupported;
     }
     StreamSource::Resolver {
@@ -201,10 +197,7 @@ pub(crate) fn stream_source_for_addon(
 
 /// A remote Stremio addon cannot inject internal provider status messages.
 pub(crate) fn provider_stream_warnings(bytes: &[u8], owner_url: &str) -> Vec<(String, String)> {
-    if !nova_providers::bundled_providers()
-        .iter()
-        .any(|provider| provider.url == owner_url)
-    {
+    if !nova_providers::has_installed_provider(owner_url) {
         return vec![];
     }
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {

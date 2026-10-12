@@ -50,6 +50,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
         on_cancel_reencode => invoke_settings_bridge_cancel_reencode(),
         on_tracking_reset => invoke_settings_bridge_tracking_reset(),
         on_addon_filter_changed => invoke_settings_bridge_addon_filter_changed(),
+        on_addon_zip_import_requested => invoke_settings_bridge_addon_zip_import_requested(),
         on_discover_picked => invoke_settings_bridge_discover_picked(),
         on_home_picked => invoke_settings_bridge_home_picked(),
         on_back_picked => invoke_settings_bridge_back_picked(),

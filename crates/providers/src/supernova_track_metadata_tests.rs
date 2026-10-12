@@ -20,7 +20,7 @@ fn evaluate(script: &str) -> Value {
 
 #[test]
 fn public_probe_separates_dual_audio_and_subtitles_without_filename_labels() {
-    let fixture = include_str!("../plugins/supernova/fixtures/hokuto-tracks.json");
+    let fixture = include_str!("../test-fixtures/addons/supernova/fixtures/hokuto-tracks.json");
     let result = evaluate(&format!(
         "const file={fixture};return S.animetoshoTracks(file,{{fileName:file.filename,sizeBytes:file.size,fileId:file.id}},file.torrent_id);"
     ));
@@ -37,7 +37,7 @@ fn public_probe_separates_dual_audio_and_subtitles_without_filename_labels() {
 
 #[test]
 fn undefined_probe_languages_stay_unknown() {
-    let fixture = include_str!("../plugins/supernova/fixtures/unknown-tracks.json");
+    let fixture = include_str!("../test-fixtures/addons/supernova/fixtures/unknown-tracks.json");
     let result = evaluate(&format!(
         "const file={fixture};return S.animetoshoTracks(file,{{fileName:file.filename,sizeBytes:file.size,fileId:file.id}},file.torrent_id);"
     ));
@@ -73,7 +73,7 @@ fn selected_file_requires_matching_hash_exact_name_size_and_unique_membership() 
 
 #[test]
 fn probe_must_belong_to_the_selected_torrent_and_file() {
-    let fixture = include_str!("../plugins/supernova/fixtures/hokuto-tracks.json");
+    let fixture = include_str!("../test-fixtures/addons/supernova/fixtures/hokuto-tracks.json");
     let result = evaluate(&format!(
         "const file={fixture};const target={{fileName:file.filename,sizeBytes:file.size,fileId:file.id}};return [S.animetoshoTracks({{...file,id:1}},target,file.torrent_id),S.animetoshoTracks(file,target,1),S.animetoshoTracks(file,{{...target,sizeBytes:1}},file.torrent_id),S.animetoshoTracks(file,{{...target,fileName:'other.mkv'}},file.torrent_id)];"
     ));
@@ -82,7 +82,7 @@ fn probe_must_belong_to_the_selected_torrent_and_file() {
 
 #[test]
 fn source_probes_reuse_memory_cache_and_respect_spare_request_budget() {
-    let fixture = include_str!("../plugins/supernova/fixtures/hokuto-tracks.json");
+    let fixture = include_str!("../test-fixtures/addons/supernova/fixtures/hokuto-tracks.json");
     let result = evaluate(&format!(
         r#"
         const file={fixture};

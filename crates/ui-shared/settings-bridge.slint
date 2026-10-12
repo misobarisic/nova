@@ -32,6 +32,8 @@ export global SettingsBridge {
     in-out property <int> addon_capability_filter: 0;
     in-out property <bool> cinemeta_installed: false;
     in-out property <string> addon_url: "";
+    in-out property <bool> addon_zip_import_busy: false;
+    in-out property <string> addon_zip_import_status: "";
     in-out property <[CategoryRow]> category_rows: [];
     in-out property <string> category_input: "";
     in-out property <[HomeCatalogRow]> home_catalog_rows: [];
@@ -155,6 +157,7 @@ export global SettingsBridge {
     callback playback_language_search(string, bool);
     callback playback_language_picked(string, bool);
     callback addon_added(string);
+    callback addon_zip_import_requested();
     callback addon_toggled(int);
     callback addon_remove(int);
     callback addon_move_up(int);

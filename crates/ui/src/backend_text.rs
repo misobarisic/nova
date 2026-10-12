@@ -71,6 +71,19 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Choose an addon ZIP file…" => "Odaberite ZIP datoteku dodatka…",
+        "Reading addon ZIP…" => "Čitanje ZIP datoteke dodatka…",
+        "Installing addon ZIP…" => "Instaliranje ZIP datoteke dodatka…",
+        "Addon installed" => "Dodatak je instaliran",
+        "Addon package unavailable on this device" => "Paket dodatka nije dostupan na ovom uređaju",
+        "The addon ZIP could not be read" => "Nije moguće pročitati ZIP datoteku dodatka",
+        "The addon ZIP exceeds the 8 MiB size limit" => {
+            "ZIP datoteka dodatka premašuje ograničenje veličine od 8 MiB"
+        }
+        "The addon ZIP could not be installed" => "Nije moguće instalirati ZIP datoteku dodatka",
+        "The addon file picker could not be opened" => {
+            "Nije moguće otvoriti odabir datoteke dodatka"
+        }
         "No video frame is available" => "Nema dostupnog kadra videozapisa",
         "Playback changed before the screenshot was saved" => {
             "Reprodukcija se promijenila prije spremanja snimke zaslona"

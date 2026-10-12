@@ -3412,16 +3412,14 @@ mod source_lookup_tests {
         assert_eq!(lookup.media_id, "tt1727587");
         assert_eq!(lookup.title, "Sintel");
         assert!(lookup.season.is_none() && lookup.episode.is_none());
-        let provider = nova_providers::bundled_providers()
-            .iter()
-            .find(|provider| provider.url == nova_providers::SUPERNOVA_PROVIDER_URL)
-            .unwrap();
+        let _packages = super::super::tests::provider_package_fixture_guard();
+        let provider = super::super::tests::provider_package_fixture("supernova");
         let addon = Installed {
-            url: provider.url.into(),
+            url: provider.url(),
             label: "Supernova".into(),
             enabled: true,
             configure_ok: Some(false),
-            manifest: Addon::parse_manifest(provider.addon_manifest.as_bytes()).unwrap(),
+            manifest: provider.addon_manifest().clone(),
             available: true,
             generation: 1,
         };
@@ -3435,6 +3433,7 @@ mod source_lookup_tests {
 
     #[test]
     fn foreign_library_episode_uses_contextual_source_route_and_keeps_original_ids() {
+        let _packages = super::super::tests::provider_package_fixture_guard();
         let modal = modal();
         let lookup = source_stream_lookup(&modal, &modal.request_id).unwrap();
         assert_eq!(lookup.media_id, "tt0994314");
@@ -3448,12 +3447,9 @@ mod source_lookup_tests {
             label: "AniKoto".into(),
             enabled: true,
             configure_ok: Some(false),
-            manifest: Addon::parse_manifest(
-                nova_providers::bundled_providers()[0]
-                    .addon_manifest
-                    .as_bytes(),
-            )
-            .unwrap(),
+            manifest: super::super::tests::provider_package_fixture("anikoto")
+                .addon_manifest()
+                .clone(),
             available: true,
             generation: 1,
         };
@@ -3478,6 +3474,7 @@ mod source_lookup_tests {
 
     #[test]
     fn native_source_episodes_use_confirmed_aliases_for_compatible_addons() {
+        let _packages = super::super::tests::provider_package_fixture_guard();
         let mut modal = modal();
         modal.id = "anikoto:asterisk-season-2".into();
         modal.request_id = "anikoto:ep:native-episode-1".into();
@@ -3504,12 +3501,9 @@ mod source_lookup_tests {
         assert!(stream_endpoint(&addon, "series", &modal.request_id, None, &ids).is_none());
         addon.enabled = true;
         addon.url = nova_providers::ANIKOTO_PROVIDER_URL.into();
-        addon.manifest = Addon::parse_manifest(
-            nova_providers::bundled_providers()[0]
-                .addon_manifest
-                .as_bytes(),
-        )
-        .unwrap();
+        addon.manifest = super::super::tests::provider_package_fixture("anikoto")
+            .addon_manifest()
+            .clone();
         let url = stream_endpoint(&addon, "series", &modal.request_id, None, &ids).unwrap();
         assert!(url.ends_with("/stream/series/anikoto:ep:native-episode-1.json"));
         assert_eq!(modal.videos[0].id, modal.request_id);

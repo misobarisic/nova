@@ -271,6 +271,8 @@ export component AppWindow inherits Window {
         page_scrolls <=> root.settings_page_scrolls;
         addon_rows <=> root.addon_rows;
         addon_search_text <=> root.addon_search_text;
+        addon_zip_import_busy <=> root.addon_zip_import_busy;
+        addon_zip_import_status <=> root.addon_zip_import_status;
         addon_capability_filter <=> root.addon_capability_filter;
         addon_url <=> root.addon_url;
         category_rows <=> root.category_rows;
@@ -566,6 +568,8 @@ export component AppWindow inherits Window {
     in-out property <int> catalog_combo_idx: -1;
     in-out property <int> genre_combo_idx: 0;
     in-out property <string> addon_url: "";
+    in-out property <bool> addon_zip_import_busy: false;
+    in-out property <string> addon_zip_import_status: "";
     in-out property <string> search_text: "";
     in-out property <bool> discover_search_open: false;
     in-out property <bool> discover_search_focused: false;
@@ -1135,6 +1139,7 @@ export component AppWindow inherits Window {
 
 
     callback addon_added(string);
+    callback addon_zip_import_requested();
     callback addon_toggled(int);
     callback addon_remove(int);
     callback addon_move_up(int);
@@ -1545,6 +1550,7 @@ export component AppWindow inherits Window {
     public function settings_bridge_playback_language_search(query: string, subtitles: bool) { root.playback_language_search(query, subtitles); }
     public function settings_bridge_playback_language_picked(code: string, subtitles: bool) { root.playback_language_picked(code, subtitles); }
     public function settings_bridge_addon_added(u: string) { root.addon_added(u); }
+    public function settings_bridge_addon_zip_import_requested() { root.addon_zip_import_requested(); }
     public function settings_bridge_addon_toggled(i: int) { root.addon_toggled(i); }
     public function settings_bridge_addon_remove(i: int) { root.addon_remove(i); }
     public function settings_bridge_addon_move_up(i: int) { root.addon_move_up(i); }

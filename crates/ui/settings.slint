@@ -44,6 +44,8 @@ export component SettingsPage {
     callback addon_filter_changed();
     in property <bool> cinemeta_installed: false;
     in-out property <string> addon_url: "";
+    in-out property <bool> addon_zip_import_busy: false;
+    in-out property <string> addon_zip_import_status: "";
     in-out property <[CategoryRow]> category_rows: [];
     in-out property <[HomeCatalogRow]> home_catalog_rows: [];
     in-out property <[HomeCatalogRow]> home_row_catalog_rows: [];
@@ -197,6 +199,7 @@ export component SettingsPage {
     callback about_picked();
     callback more_picked();
     callback addon_added(string);
+    callback addon_zip_import_requested();
     callback addon_toggled(int);
     callback addon_remove(int);
     callback addon_move_up(int);
@@ -1342,7 +1345,7 @@ export component SettingsPage {
         if (root.kb_zone == 0) {
             if (!root.phone_layout) { root.kb_nav = NavState.step(root.kb_nav, 1, false); }
         } else if (root.kb_zone == 1) {
-            if (root.kb_actl < 1) {
+            if (root.kb_actl < 2) {
                 root.kb_actl += 1;
             }
         } else if (root.kb_zone == 2) {
@@ -1417,8 +1420,10 @@ export component SettingsPage {
         } else if (root.kb_zone == 1) {
             if (root.kb_actl == 0) {
                 root.kb_edit = 1;
-            } else {
+            } else if (root.kb_actl == 1) {
                 root.addon_added(root.addon_url);
+            } else if (!root.addon_zip_import_busy) {
+                root.addon_zip_import_requested();
             }
         } else if (root.kb_zone == 2) {
             root.kb_fire_addon_col();

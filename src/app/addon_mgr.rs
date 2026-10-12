@@ -77,6 +77,15 @@ impl Bridge {
         }
     }
 
+    pub(super) fn invalidate_package_generation(&self, url: &str) {
+        let mut state = self.shared.lock().unwrap();
+        if let Some(addon) = state.installed.iter_mut().find(|addon| addon.url == url) {
+            addon.generation = ADDON_GENERATION.fetch_add(1, Ordering::Relaxed);
+        }
+        state.refreshing.remove(url);
+        state.stream_prefetch = Default::default();
+    }
+
     pub(super) fn install_new(&self, raw: &str, enabled: bool, label: Option<String>) {
         let addon = match Addon::new(raw) {
             Ok(a) => a,
@@ -104,6 +113,12 @@ impl Bridge {
         }
 
         let generation = self.ensure_desired_addon(&base, enabled, None, label.clone());
+        if base.starts_with("nova-provider://") {
+            if let Some(manifest) = nova_providers::configured_provider_manifest(&base) {
+                self.install_ok(base, manifest, enabled, Some(false), label);
+            }
+            return;
+        }
         if !self.shared.lock().unwrap().refreshing.insert(base.clone()) {
             return;
         }
@@ -160,7 +175,7 @@ impl Bridge {
         });
     }
 
-    fn ensure_desired_addon(
+    pub(super) fn ensure_desired_addon(
         &self,
         base: &str,
         enabled: bool,
@@ -432,6 +447,12 @@ impl Bridge {
             }
         }
         self.ensure_desired_addon(&base, enabled, configure, label.clone());
+        if base.starts_with("nova-provider://") {
+            if let Some(manifest) = nova_providers::configured_provider_manifest(&base) {
+                self.install_ok(base, manifest, enabled, configure, label);
+            }
+            return;
+        }
         match read_cached_manifest_for(&base) {
             Some(manifest) => self.install_ok(base, manifest, enabled, configure, label),
             None => self.install_new(url, enabled, label),
@@ -445,13 +466,19 @@ impl Bridge {
         if self.shared.lock().unwrap().loading_addons {
             return;
         }
+        let persisted = read_persisted_addons();
         let addons: Vec<AddonStore> = {
             let state = self.shared.lock().unwrap();
             state
                 .installed
                 .iter()
                 .map(|a| AddonStore {
-                    capabilities: nova_providers::provider_capabilities(&a.url),
+                    capabilities: nova_providers::provider_capabilities(&a.url).or_else(|| {
+                        persisted
+                            .iter()
+                            .find(|old| old.url == a.url)
+                            .and_then(|old| old.capabilities)
+                    }),
                     url: a.url.clone(),
                     enabled: a.enabled,
                     configure_ok: a.configure_ok,
@@ -598,6 +625,7 @@ impl Bridge {
             }
             removed.url
         };
+        addon_packages::remove(self, &removed_url);
         nova_providers::configure_provider_capabilities(&removed_url, Default::default());
         if let Some(app) = self.app()
             && app.get_addon_config_url().as_str() == removed_url
@@ -943,6 +971,9 @@ impl Bridge {
                         Some(config) if config.metadata => text::tr("Metadata"),
                         Some(config) if config.streams => text::tr("Streams for other sources"),
                         Some(_) => text::tr("No capabilities enabled"),
+                        None if a.url.starts_with("nova-provider://") && !a.available => {
+                            text::tr("Addon package unavailable on this device")
+                        }
                         None => "",
                     },
                 ),

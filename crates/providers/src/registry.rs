@@ -9,7 +9,7 @@ use addons::Manifest;
 use percent_encoding::percent_decode_str;
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
@@ -18,6 +18,55 @@ use url::Url;
 pub const ANIKOTO_PROVIDER_URL: &str = "nova-provider://anikoto";
 pub const SUPERNOVA_PROVIDER_URL: &str = "nova-provider://supernova";
 const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
+
+fn packages() -> &'static Mutex<Vec<Arc<crate::AddonPackage>>> {
+    static PACKAGES: OnceLock<Mutex<Vec<Arc<crate::AddonPackage>>>> = OnceLock::new();
+    PACKAGES.get_or_init(|| {
+        #[cfg(not(test))]
+        let initial = Vec::new();
+        #[cfg(test)]
+        let initial = bundled_providers().iter().map(test_package).collect();
+        Mutex::new(initial)
+    })
+}
+fn known_ids() -> &'static Mutex<HashSet<String>> {
+    static IDS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    IDS.get_or_init(|| Mutex::new(HashSet::from(["anikoto".into(), "supernova".into()])))
+}
+/// Atomically replace the installed snapshot. Workers retain their package Arc.
+pub fn installed_packages() -> Vec<Arc<crate::AddonPackage>> {
+    packages().lock().unwrap().clone()
+}
+pub fn set_installed_packages(installed: Vec<Arc<crate::AddonPackage>>) {
+    mark_known_provider_ids(installed.iter().map(|p| p.id().to_owned()).collect());
+    *packages().lock().unwrap() = installed;
+}
+pub fn mark_known_provider_ids(ids: Vec<String>) {
+    known_ids().lock().unwrap().extend(ids);
+}
+fn installed_provider(url: &str) -> Option<Arc<crate::AddonPackage>> {
+    let base = url.trim_end_matches('/');
+    packages()
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|p| p.url() == base)
+        .cloned()
+}
+pub fn has_installed_provider(url: &str) -> bool {
+    installed_provider(url).is_some()
+}
+pub fn provider_asset_bytes(raw_url: &str) -> Option<Arc<[u8]>> {
+    let url = Url::parse(raw_url).ok()?;
+    if url.scheme() != "nova-provider" || url.query().is_some() || url.fragment().is_some() {
+        return None;
+    }
+    let package = installed_provider(&format!("nova-provider://{}", url.host_str()?))?;
+    let path = percent_decode_str(url.path().strip_prefix('/')?)
+        .decode_utf8()
+        .ok()?;
+    package.asset(&path)
+}
 
 /// User-selected contributions; metadata includes catalog browsing and search.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -39,11 +88,7 @@ fn capability_configs() -> &'static Mutex<HashMap<String, ProviderCapabilities>>
     CONFIGS.get_or_init(Default::default)
 }
 pub fn supports_capability_config(url: &str) -> bool {
-    bundled_providers().iter().any(|p| {
-        p.url == url.trim_end_matches('/')
-            && serde_json::from_str::<PluginManifest>(p.plugin_manifest)
-                .is_ok_and(|m| m.capabilities.configurable_capabilities)
-    })
+    installed_provider(url).is_some_and(|p| p.plugin.capabilities.configurable_capabilities)
 }
 pub fn provider_capabilities(url: &str) -> Option<ProviderCapabilities> {
     supports_capability_config(url).then(|| {
@@ -66,28 +111,27 @@ pub fn configure_provider_capabilities(url: &str, config: ProviderCapabilities) 
 /// Always start from the source manifest, so re-enabling a contribution cannot
 /// be limited by an earlier filtered manifest cached on disk.
 pub fn configured_provider_manifest(url: &str) -> Option<Manifest> {
-    let config = provider_capabilities(url)?;
-    let source = bundled_providers()
-        .iter()
-        .find(|p| p.url == url.trim_end_matches('/'))?;
-    manifest_with_capabilities(source, config)
+    let source = installed_provider(url)?;
+    match provider_capabilities(url) {
+        Some(config) => manifest_with_capabilities(&source, config),
+        None => Some(source.addon.clone()),
+    }
 }
 fn manifest_with_capabilities(
-    source: &BundledProvider,
+    source: &crate::AddonPackage,
     config: ProviderCapabilities,
 ) -> Option<Manifest> {
-    let manifest: PluginManifest = serde_json::from_str(source.plugin_manifest).ok()?;
-    let addon: Value = serde_json::from_str(source.addon_manifest).ok()?;
-    let runtime = PluginRuntime::new(manifest, source.source);
+    let runtime = PluginRuntime::new(source.plugin.clone(), source.source.clone());
     let result = runtime
         .invoke(
             crate::MemoryProviderHost::new(),
-            &json!({"op":"manifest", "manifest":addon, "config":config}),
+            &json!({"op":"manifest", "manifest":source.addon, "config":config}),
         )
         .ok()?;
     serde_json::from_value(result).ok()
 }
 
+#[cfg(test)]
 pub struct BundledProvider {
     pub url: &'static str,
     pub registration_key: &'static str,
@@ -99,43 +143,48 @@ pub struct BundledProvider {
 
 /// Only explicitly bundled assets resolve locally; arbitrary provider paths
 /// cannot become filesystem reads or network redirects.
+#[cfg(test)]
 pub fn bundled_asset_bytes(url: &str) -> Option<&'static [u8]> {
     match url {
         "nova-provider://supernova/logo.jpg" => {
-            Some(include_bytes!("../plugins/supernova/logo.jpg"))
+            Some(include_bytes!("../test-fixtures/addons/supernova/logo.jpg"))
         }
         _ => None,
     }
 }
 
+#[cfg(test)]
 pub fn bundled_providers() -> &'static [BundledProvider] {
-    static PROVIDERS: &[BundledProvider] = &[
-        BundledProvider {
-            url: ANIKOTO_PROVIDER_URL,
-            registration_key: "providers:bundled:v1",
-            default_enabled: true,
-            plugin_manifest: include_str!("../plugins/anikoto/manifest.json"),
-            addon_manifest: include_str!("../plugins/anikoto/stremio-manifest.json"),
-            source: include_str!("../plugins/anikoto/index.js"),
-        },
-        BundledProvider {
-            url: SUPERNOVA_PROVIDER_URL,
-            registration_key: "providers:supernova:v1",
-            default_enabled: false,
-            plugin_manifest: include_str!("../plugins/supernova/manifest.json"),
-            addon_manifest: include_str!("../plugins/supernova/stremio-manifest.json"),
-            source: include_str!(concat!(env!("OUT_DIR"), "/supernova.js")),
-        },
-    ];
-    PROVIDERS
+    static PROVIDERS: OnceLock<Vec<BundledProvider>> = OnceLock::new();
+    PROVIDERS.get_or_init(|| {
+        vec![
+            BundledProvider {
+                url: ANIKOTO_PROVIDER_URL,
+                registration_key: "providers:bundled:v1",
+                default_enabled: true,
+                plugin_manifest: include_str!("../test-fixtures/addons/anikoto/manifest.json"),
+                addon_manifest: include_str!(
+                    "../test-fixtures/addons/anikoto/stremio-manifest.json"
+                ),
+                source: include_str!("../test-fixtures/addons/anikoto/index.js"),
+            },
+            BundledProvider {
+                url: SUPERNOVA_PROVIDER_URL,
+                registration_key: "providers:supernova:v1",
+                default_enabled: false,
+                plugin_manifest: include_str!("../test-fixtures/addons/supernova/manifest.json"),
+                addon_manifest: include_str!(
+                    "../test-fixtures/addons/supernova/stremio-manifest.json"
+                ),
+                source: supernova_test_source(),
+            },
+        ]
+    })
 }
 
 pub fn provider_settings_schema(url: &str) -> Option<Vec<crate::plugin_settings::SettingField>> {
-    let source = bundled_providers()
-        .iter()
-        .find(|p| p.url == url.trim_end_matches('/'))?;
-    let manifest: PluginManifest = serde_json::from_str(source.plugin_manifest).ok()?;
-    (!manifest.configuration.is_empty()).then_some(manifest.configuration)
+    let source = installed_provider(url)?;
+    (!source.plugin.configuration.is_empty()).then(|| source.plugin.configuration.clone())
 }
 
 pub fn supports_provider_configuration(url: &str) -> bool {
@@ -151,20 +200,15 @@ pub fn provider_owns_id(provider_url: &str, id: &str) -> bool {
 }
 
 pub fn private_provider_id(id: &str) -> bool {
-    bundled_providers()
-        .iter()
-        .any(|p| provider_owns_id(p.url, id))
+    id.split_once(':')
+        .is_some_and(|(provider, _)| known_ids().lock().unwrap().contains(provider))
 }
 
 pub fn supports_contextual_streams(provider_url: &str) -> bool {
     if provider_capabilities(provider_url).is_some_and(|config| !config.streams) {
         return false;
     }
-    bundled_providers()
-        .iter()
-        .find(|p| p.url == provider_url.trim_end_matches('/'))
-        .and_then(|p| serde_json::from_str::<PluginManifest>(p.plugin_manifest).ok())
-        .is_some_and(|p| p.capabilities.contextual_streams)
+    installed_provider(provider_url).is_some_and(|p| p.plugin.capabilities.contextual_streams)
 }
 
 pub fn stream_lookup_url(
@@ -234,7 +278,7 @@ pub fn fetch_builtin_addon_with_timeout(
     fetch_builtin_addon_with_progress_and_timeout(raw_url, timeout, Arc::new(|_| {}))
 }
 
-/// Fetches a bundled response with validated complete stream snapshots. All
+/// Fetches an installed provider response with validated complete stream snapshots. All
 /// callbacks run on the invoking worker, never on the UI event loop.
 pub fn fetch_builtin_addon_with_progress(
     raw_url: &str,
@@ -252,35 +296,33 @@ fn fetch_builtin_addon_with_progress_and_timeout(
         Ok(url) if url.scheme() == "nova-provider" => url,
         _ => return None,
     };
-    let Some(definition) = bundled_providers().iter().find(|p| {
-        Url::parse(p.url)
-            .ok()
-            .is_some_and(|base| base.host_str() == url.host_str())
-    }) else {
-        return Some(Err(ProviderHostError("unknown bundled provider".into())));
+    let Some(definition) = url
+        .host_str()
+        .and_then(|id| installed_provider(&format!("nova-provider://{id}")))
+    else {
+        return Some(Err(ProviderHostError(
+            "provider package is unavailable on this device".into(),
+        )));
     };
     let path = decoded_path_segments(&url);
     if path.last().is_some_and(|s| s == "manifest.json") {
         return Some(
             serde_json::to_vec(
-                &configured_provider_manifest(definition.url).unwrap_or_else(|| {
-                    serde_json::from_str(definition.addon_manifest).expect("bundled manifest")
-                }),
+                &configured_provider_manifest(&definition.url())
+                    .unwrap_or_else(|| definition.addon.clone()),
             )
             .map_err(|e| ProviderHostError(e.to_string())),
         );
     }
     let execute = || {
-        let mut manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest)
-            .map_err(|e| ProviderHostError(e.to_string()))?;
+        let mut manifest = definition.plugin.clone();
         manifest.limits.request_timeout_ms = manifest
             .limits
             .request_timeout_ms
             .min(timeout.as_millis().clamp(1, 60_000) as u64);
-        let addon: Manifest = serde_json::from_str(definition.addon_manifest)
-            .map_err(|e| ProviderHostError(e.to_string()))?;
+        let addon = definition.addon.clone();
         let request = parse_protocol_request(&path, &manifest.id)?;
-        let config = provider_capabilities(definition.url).unwrap_or_default();
+        let config = provider_capabilities(&definition.url()).unwrap_or_default();
         match &request {
             ProtocolRequest::Catalog { .. } if !config.metadata => {
                 return Ok(br#"{"metas":[]}"#.to_vec());
@@ -302,7 +344,7 @@ fn fetch_builtin_addon_with_progress_and_timeout(
             manifest.limits.redirects,
             manifest.limits.requests_per_operation,
         ));
-        let mut provider = JsProvider::new(manifest, addon, definition.source);
+        let mut provider = JsProvider::new(manifest, addon, &definition.source);
         provider.config = config;
         let provider = Arc::new(provider);
         let host: Arc<dyn ProviderHost> = if matches!(
@@ -916,10 +958,9 @@ pub fn stable_stream_identity(
     stream: &addons::Stream,
 ) -> String {
     let owner = owner_url.trim_end_matches('/');
-    let owned_id = bundled_providers()
-        .iter()
-        .find(|definition| definition.url == owner)
-        .and_then(|definition| Url::parse(definition.url).ok())
+    let owned_id = Url::parse(owner)
+        .ok()
+        .filter(|url| url.scheme() == "nova-provider")
         .and_then(|url| url.host_str().map(str::to_owned))
         .and_then(|provider| {
             stream
@@ -979,25 +1020,20 @@ pub fn resolve_provider_stream(
     if cancelled() {
         return Err(ProviderResolveError::cancelled());
     }
-    let definition = bundled_providers()
-        .iter()
-        .find(|p| p.url == provider_url.trim_end_matches('/'))
-        .ok_or_else(ProviderResolveError::generic)?;
+    let definition = installed_provider(provider_url).ok_or_else(ProviderResolveError::generic)?;
     if token.is_empty() || token.len() > 8192 {
         return Err(ProviderResolveError::generic());
     }
-    let config = provider_capabilities(definition.url).unwrap_or_default();
+    let config = provider_capabilities(&definition.url()).unwrap_or_default();
     if !config.streams {
         return Err(ProviderResolveError::generic());
     }
-    let mut manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest)
-        .map_err(|_| ProviderResolveError::generic())?;
+    let mut manifest = definition.plugin.clone();
     manifest.limits.request_timeout_ms = manifest
         .limits
         .resolver_timeout_ms
         .min(timeout.as_millis().clamp(1, 60_000) as u64);
-    let addon = serde_json::from_str(definition.addon_manifest)
-        .map_err(|_| ProviderResolveError::generic())?;
+    let addon = definition.addon.clone();
     let host = Arc::new(
         ScopedHttpHost::new(
             crate::host::session_state(),
@@ -1009,7 +1045,7 @@ pub fn resolve_provider_stream(
         )
         .with_cancellation(cancelled.clone()),
     );
-    let mut provider = JsProvider::new(manifest, addon, definition.source);
+    let mut provider = JsProvider::new(manifest, addon, &definition.source);
     provider.config = config;
     let result = provider.resolve_stream(host, token);
     if cancelled() {
@@ -1036,7 +1072,7 @@ pub(crate) fn resolve_with_snapshot_for_test(
     manifest.limits.request_timeout_ms = manifest.limits.resolver_timeout_ms;
     let addon: Manifest = serde_json::from_str(definition.addon_manifest)
         .map_err(|_| ProviderResolveError::generic())?;
-    let mut provider = JsProvider::new(manifest, addon, definition.source);
+    let mut provider = JsProvider::new(manifest, addon, &definition.source);
     provider.settings = Ok(crate::plugin_settings::SettingsSnapshot {
         values,
         generation: crate::plugin_settings::settings_generation(),
@@ -1204,9 +1240,7 @@ fn parse_protocol_request(
             }
             Ok(ProtocolRequest::Lookup { request })
         }
-        _ => Err(ProviderHostError(
-            "unknown bundled provider endpoint".into(),
-        )),
+        _ => Err(ProviderHostError("unknown provider endpoint".into())),
     }
 }
 
@@ -1281,3 +1315,89 @@ pub(crate) fn media_preview(media: MediaItem) -> Value {
 #[cfg(test)]
 #[path = "registry_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+fn supernova_test_source() -> &'static str {
+    static SOURCE: OnceLock<String> = OnceLock::new();
+    SOURCE.get_or_init(|| {
+        [
+            include_str!("../test-fixtures/addons/supernova/core.js"),
+            include_str!("../test-fixtures/addons/supernova/matching.js"),
+            include_str!("../test-fixtures/addons/supernova/evidence.js"),
+            include_str!("../test-fixtures/addons/supernova/enrichment.js"),
+            include_str!("../test-fixtures/addons/supernova/metadata.js"),
+            include_str!("../test-fixtures/addons/supernova/presentation.js"),
+            include_str!("../test-fixtures/addons/supernova/sources/nyaa.js"),
+            include_str!("../test-fixtures/addons/supernova/sources/animetosho.js"),
+            include_str!("../test-fixtures/addons/supernova/sources/apibay.js"),
+            include_str!("../test-fixtures/addons/supernova/sources/knaben.js"),
+            include_str!("../test-fixtures/addons/supernova/sources/stremthru.js"),
+            include_str!("../test-fixtures/addons/supernova/debrid/torbox.js"),
+            include_str!("../test-fixtures/addons/supernova/index.js"),
+        ]
+        .join("\n;\n")
+    })
+}
+
+#[cfg(test)]
+fn test_package(source: &BundledProvider) -> Arc<crate::AddonPackage> {
+    Arc::new(crate::AddonPackage {
+        plugin: serde_json::from_str(source.plugin_manifest).unwrap(),
+        addon: serde_json::from_str(source.addon_manifest).unwrap(),
+        source: source.source.into(),
+        assets: Default::default(),
+        digest: String::new(),
+    })
+}
+
+#[cfg(test)]
+mod installed_registry_tests {
+    use super::*;
+    #[test]
+    fn snapshot_install_remove_keeps_private_namespace_and_assets_local() {
+        let before = installed_packages();
+        let package = Arc::new(crate::AddonPackage {
+            plugin: serde_json::from_value(json!({"formatVersion":1,"id":"registryfixture","name":"Fixture","version":"1.0.0","entry":"index.js","permissions":{}})).unwrap(),
+            addon: serde_json::from_value(json!({"id":"nova.registryfixture","name":"Fixture","version":"1.0.0"})).unwrap(),
+            source: "globalThis.novaProvider={handle:function(){return {streams:[]};}};".into(),
+            assets: std::collections::BTreeMap::from([("logo.jpg".into(), Arc::from([1u8,2,3]))]),
+            digest: String::new(),
+        });
+        let url = package.url();
+        assert!(!has_installed_provider(&url));
+        let mut installed = before.clone();
+        installed.push(package.clone());
+        set_installed_packages(installed);
+        assert!(has_installed_provider(&url));
+        assert_eq!(
+            configured_provider_manifest(&url).unwrap().id,
+            "nova.registryfixture"
+        );
+        assert_eq!(
+            &*provider_asset_bytes(&format!("{url}/logo.jpg")).unwrap(),
+            &[1, 2, 3]
+        );
+        assert!(provider_asset_bytes(&format!("{url}/index.js")).is_none());
+        assert!(
+            provider_asset_bytes(&format!("{url}/logo.jpg?redirect=https://example.org")).is_none()
+        );
+        assert!(
+            fetch_builtin_addon(&format!("{url}/manifest.json"))
+                .unwrap()
+                .is_ok()
+        );
+        set_installed_packages(before);
+        assert!(!has_installed_provider(&url));
+        assert!(provider_asset_bytes(&format!("{url}/logo.jpg")).is_none());
+        assert!(private_provider_id("registryfixture:saved"));
+        assert!(
+            fetch_builtin_addon(&format!("{url}/manifest.json"))
+                .unwrap()
+                .is_err()
+        );
+        // An in-flight worker's snapshot stays usable after registry removal.
+        assert_eq!(package.addon_manifest().id, "nova.registryfixture");
+        mark_known_provider_ids(vec!["unavailablefixture".into()]);
+        assert!(private_provider_id("unavailablefixture:saved"));
+    }
+}

@@ -280,6 +280,7 @@ fn run_headless_sync(env: &mut jni::JNIEnv, context: &JObject) -> Result<String,
     let path: String = env.get_string(&jpath).map_err(|e| e.to_string())?.into();
     nova_config::set_android_files_dir(PathBuf::from(path));
     crate::storage::init_at(&nova_config::app_data_dir());
+    super::addon_packages::configure_blob_store();
 
     let settings = nova_sync::read_settings();
     if !settings.enabled || !settings.background_enabled || JOB_CANCEL.load(Ordering::Acquire) {

@@ -1468,7 +1468,8 @@ mod stream_source_tests {
     }
 
     #[test]
-    fn only_the_bundled_owner_can_supply_a_deferred_resolver_or_warnings() {
+    fn only_the_installed_owner_can_supply_a_deferred_resolver_or_warnings() {
+        let _packages = super::provider_package_fixture_guard();
         let mut row = stream(None, None, None, None);
         row.extra.insert(
             "novaResolver".into(),
@@ -1858,5 +1859,41 @@ mod stream_row_shape_tests {
         assert_eq!(model.iter().collect::<Vec<_>>(), rows);
         update_stream_rows(&model, &[]);
         assert_eq!(model.row_count(), 0);
+    }
+}
+
+/// Small packages retain the former sources' identity/capability contracts,
+/// with inert JavaScript so these routing tests do not bundle production code.
+pub(super) fn provider_package_fixture(id: &str) -> std::sync::Arc<nova_providers::AddonPackage> {
+    let bytes: &[u8] = match id {
+        "anikoto" => include_bytes!("test-fixtures/anikoto.zip"),
+        "supernova" => include_bytes!("test-fixtures/supernova.zip"),
+        _ => panic!("unknown test package"),
+    };
+    nova_providers::AddonPackage::parse(bytes).unwrap()
+}
+
+pub(super) struct ProviderPackageFixtureGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    previous: Vec<std::sync::Arc<nova_providers::AddonPackage>>,
+}
+
+impl Drop for ProviderPackageFixtureGuard {
+    fn drop(&mut self) {
+        nova_providers::set_installed_packages(std::mem::take(&mut self.previous));
+    }
+}
+
+pub(super) fn provider_package_fixture_guard() -> ProviderPackageFixtureGuard {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let previous = nova_providers::installed_packages();
+    nova_providers::set_installed_packages(vec![
+        provider_package_fixture("anikoto"),
+        provider_package_fixture("supernova"),
+    ]);
+    ProviderPackageFixtureGuard {
+        _lock: lock,
+        previous,
     }
 }

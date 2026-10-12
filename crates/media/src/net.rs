@@ -331,7 +331,7 @@ mod imp {
 }
 
 pub(crate) fn blocking_image_bytes(url: &str) -> Option<Vec<u8>> {
-    if let Some(bytes) = nova_providers::bundled_asset_bytes(url) {
+    if let Some(bytes) = nova_providers::provider_asset_bytes(url) {
         return Some(bytes.to_vec());
     }
     imp::blocking_image_bytes(url)

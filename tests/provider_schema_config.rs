@@ -159,8 +159,14 @@ fn schema_only_configuration_saves_and_confirms_global_removal() {
         assert!(!app.get_addon_config_open());
         assert!(app.get_show_settings());
     }
-    // Exercise the shipped schema, whose controls require scrolling
+    // Exercise the installed fixture schema, whose controls require scrolling
     // at phone widths, with the actual Croatian catalog and backend labels.
+    nova_providers::set_installed_packages(vec![
+        nova_providers::AddonPackage::parse(include_bytes!(
+            "../src/app/test-fixtures/supernova.zip"
+        ))
+        .unwrap(),
+    ]);
     let weak = app.as_weak();
     app.on_addon_configure(move |url| {
         let app = weak.upgrade().unwrap();

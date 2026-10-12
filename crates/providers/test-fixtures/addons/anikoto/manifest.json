@@ -25,6 +25,8 @@
     "requestsPerOperation": 32
   },
   "capabilities": {
-    "contextualStreams": true, "configurableCapabilities": true
-  }
+    "contextualStreams": true,
+    "configurableCapabilities": true
+  },
+  "assets": []
 }

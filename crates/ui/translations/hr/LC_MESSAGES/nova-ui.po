@@ -2442,3 +2442,7 @@ msgstr "Željeni jezik titlova"
 
 msgid "Take screenshot"
 msgstr "Snimi zaslon"
+
+#: ../ui-settings-addons/addons-module.slint
+msgid "Install addon ZIP…"
+msgstr "Instaliraj ZIP dodatka…"

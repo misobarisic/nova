@@ -1642,7 +1642,7 @@ fn source_manifest_and_operations_honor_independent_capabilities() {
     for metadata in [false, true] {
         for streams in [false, true] {
             let config = ProviderCapabilities { streams, metadata };
-            let manifest = manifest_with_capabilities(source, config).unwrap();
+            let manifest = manifest_with_capabilities(&test_package(source), config).unwrap();
             assert_eq!(manifest.has_meta(), metadata);
             assert_eq!(manifest.has_catalogs(), metadata);
             assert_eq!(manifest.has_streams(), streams);

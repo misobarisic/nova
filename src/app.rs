@@ -266,6 +266,10 @@ struct Shared {
     stream_prefetch: stream_prefetch::Cache,
     stream_prefetch_live_session: Option<u64>,
     installed: Vec<Installed>,
+    package_descriptors: std::collections::BTreeMap<String, addon_packages::PackageDescriptor>,
+    loaded_packages: std::collections::BTreeMap<String, Arc<nova_providers::AddonPackage>>,
+    package_fetches: HashMap<String, Arc<AtomicBool>>,
+    package_retry_at: HashMap<String, std::time::Instant>,
     /// In-flight and failed addon logo URLs; successes live in the image cache.
     addon_logo_requested: std::collections::HashSet<String>,
     chosen_addon: usize,
@@ -733,6 +737,8 @@ struct Bridge {
 
 mod about;
 mod addon_mgr;
+mod addon_packages;
+mod addon_picker;
 mod bridge;
 mod calendar;
 mod catalog;

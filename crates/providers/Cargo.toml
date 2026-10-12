@@ -3,9 +3,11 @@ name = "nova-providers"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true
-description = "Normalized media providers and the bundled JavaScript source runtime"
+description = "Normalized media providers and the installed JavaScript package runtime"
 
 [dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }
+semver = "1"
 addons = { path = "../addons", default-features = false }
 aws-lc-rs = "1.18"
 base64 = "0.22"

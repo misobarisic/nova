@@ -350,6 +350,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Handler wiring.
     let b = bridge.clone();
     app.on_addon_added(move |url| b.add_addon(&url));
+    app.on_addon_zip_import_requested(super::addon_picker::pick_zip);
 
     let b = bridge.clone();
     app.on_addon_toggled(move |i| {
@@ -882,6 +883,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // extra URLs from NOVA_ADDONS / --addon. Both are installed from their
     // cached manifest when available (no server ping); the cache is only
     // populated by a live fetch the first time an addon is installed.
+    addon_packages::initialize(&bridge);
     let persisted = read_persisted_addons();
     let mut extra = configured_addon_urls();
     if !owns_addon_setup && persisted.is_empty() && extra.is_empty() {
@@ -919,43 +921,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     for url in &extra {
         bridge.install_persisted(url, true, None, None);
     }
-    // Register this bundled-source generation once. Its ordinary addon row
-    // preserves disable/remove choices on subsequent launches.
-    for provider in nova_providers::bundled_providers() {
-        // Disabled opt-in sources can be offered without changing onboarding's
-        // active addon choices. Never overwrite an explicit install or revive
-        // a synced removal received before this build knew the provider.
-        if (!owns_addon_setup || !provider.default_enabled)
-            && nova_storage::get_str(provider.registration_key).is_none()
-        {
-            let manifest = Addon::parse_manifest(provider.addon_manifest.as_bytes())
-                .expect("valid bundled addon manifest");
-            let has_choice = persisted
-                .iter()
-                .any(|addon| addon.url.trim_end_matches('/') == provider.url)
-                || extra
-                    .iter()
-                    .any(|url| url.trim_end_matches('/') == provider.url)
-                || nova_sync::local_store().ok().is_some_and(|store| {
-                    store
-                        .lock()
-                        .unwrap()
-                        .record(sync::DOMAIN_ADDONS, provider.url)
-                        .is_some()
-                });
-            if !has_choice {
-                bridge.install_persisted(
-                    provider.url,
-                    provider.default_enabled,
-                    Some(false),
-                    Some(manifest.name),
-                );
-            }
-            nova_storage::set_str(provider.registration_key, "1");
-        }
-    }
     bridge.shared.lock().unwrap().loading_addons = false;
     bridge.persist_installed();
+    addon_packages::reconcile(&bridge);
 
     // Restore preferences before deriving Home models: applying Home with
     // temporary defaults would prune the saved poster-rail catalog cache.
@@ -1257,6 +1225,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         Duration::from_secs(2),
         move || {
             sync_tick_bridge.replay_sync_projection();
+            addon_packages::reconcile(&sync_tick_bridge);
             // Android doesn't surface connectivity changes to native code, so
             // poll the active network and hand changes to iroh.
             #[cfg(target_os = "android")]

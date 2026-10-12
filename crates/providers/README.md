@@ -1,12 +1,12 @@
 # Content providers
 
-Nova bundles AniKoto and the optional Supernova JavaScript provider. AniKoto appears in Settings → Addons
-and in the series catalog/search flows. The `nova-provider://anikoto` transport
-adapts its normalized output to the app's existing Stremio response parser, so
-library entries, episode progress, metadata caches, downloads, and sync use the
-same paths as other sources. The addon can be disabled or removed; it is
-registered once per installation (`providers:bundled:v1`). Paste the transport
-URL into Addons to reinstall it.
+Nova runs locally installed JavaScript ZIP addons. AniKoto and Supernova source
+packages are maintained in the separate `nova-addons` repository. Import a ZIP
+in Settings → Addons to install it on this device. The `nova-provider://<id>`
+transport adapts normalized output to the existing Stremio parser, so library,
+progress, metadata, downloads and sync retain their ordinary paths. A synced
+addon record automatically fetches its validated ZIP from a paired device when
+the archive is missing locally; see [addon packages](../../docs/addon-packages.md).
 
 The normal Configure gear opens a sheet with independent Streams and Metadata
 switches. Metadata includes catalog browsing and search; disabling it preserves
@@ -19,15 +19,14 @@ continues to use the addon’s own website and install URL.
 
 The Yuzono Android extensions contain Kotlin code for Aniyomi's APIs. Adding a
 source here means porting its requests and parsing to Nova's JavaScript API.
-This version loads trusted source files bundled at compile time.
+This version loads bounded, explicitly imported ZIP packages.
 
 ## Supernova
 
-`nova-provider://supernova` is installed **disabled** once per installation
-(`providers:supernova:v1`). Enable it in Addons and use its normal Configure
-gear to select sources you may use. Nyaa, AnimeTosho, The Pirate Bay / APIBay and
+`nova-provider://supernova` becomes available after importing its ZIP package.
+Use its normal Configure gear to select sources you may use. Nyaa, AnimeTosho, The Pirate Bay / APIBay and
 Knaben are initially off. Its stream-only manifest adds neither catalogs nor metadata and never
-changes a title's library, tracking or episode identity. Its bundled `logo.jpg`
+changes a title's library, tracking or episode identity. Its declared `logo.jpg`
 is loaded through the shared image pipeline using a local provider asset URI;
 Addon logos work offline on desktop and Android.
 
@@ -161,10 +160,11 @@ Successful clearing invalidates in-flight cache operations, preventing old
 searches from repopulating it. Startup restores retained unfamiliar sync records
 before seeding settings, including unknown fields and deletion tombstones.
 
-`build.rs` concatenates the trusted `plugins/supernova/{core,matching,metadata,presentation,index}.js`
-and source/debrid modules. `supernova_tests.rs` uses real QuickJS/parsers with
-deterministic HTTP fixtures; `supernova_live_tests.rs` is explicitly ignored
-in normal test runs. See the bundled `NOTICE.md` for source/protocol references.
+The package manifest declares thirteen source/debrid scripts in evaluation order.
+`supernova_tests.rs` uses real QuickJS/parsers with deterministic HTTP fixtures;
+`supernova_live_tests.rs` is explicitly ignored in normal test runs. Test-only
+source snapshots live in `test-fixtures/addons/`; production notices and licenses
+live in the separate source checkout and travel in each ZIP.
 
 The generic `plugin_settings::cache_gc(now)` maintenance hook removes expired,
 invalid, over-budget and obsolete-settings entries, then atomically persists
@@ -251,7 +251,7 @@ completion callbacks remain subject to the configured script-processing budget.
 ## Files and interface
 
 - `src/models.rs` / `src/ids.rs`: normalized provider models and typed external IDs.
-- `src/registry.rs`: bundled provider definitions, generic JS provider adapter,
+- `src/registry.rs`: installed package snapshots, generic JS provider adapter,
   source ownership, and `nova-provider://<provider-id>` protocol dispatch.
 - `src/runtime.rs` / `src/host.rs`: QuickJS capabilities, HTTP policy, DNS
   validation/pinning, and bounded shared session storage.
@@ -260,8 +260,8 @@ completion callbacks remain subject to the configured script-processing budget.
 - `src/sequence.rs` / `src/matching.rs`: provider-neutral candidate matching and
   forward/reverse episode alignment.
 - `src/stremio.rs`: Stremio normalization, including typed identity claims.
-- `plugins/anikoto/`: site scraping, source-family discovery, playback extraction,
-  permission manifest, addon manifest, and notice.
+- `src/package.rs`: bounded ZIP parser and package identity validation.
+- `test-fixtures/addons/`: test-only source snapshots and HTTP fixtures.
 
 Invoke providers on background workers. A source exposes
 `globalThis.novaProvider.handle(request)` and returns a JSON-compatible value:
@@ -282,7 +282,7 @@ show path and native episode number; expiring server tokens are fetched only
 at playback time. Descriptors/catalogs come from the addon manifest.
 `capabilities.contextualStreams` enables the contextual `resolve/series/...`
 transport, rather than app code checking a particular provider name.
-`capabilities.configurableCapabilities` opts a bundled source into the local
+`capabilities.configurableCapabilities` opts an installed source into the local
 configuration sheet. It must implement `manifest` with the unfiltered source
 manifest and `config: { streams, metadata }`, and gate exposed actions using
 that config. The bridge also gates protocol requests before HTTP and injects
@@ -504,3 +504,38 @@ It resolves the selected tracker directly or via AniList's official MAL
 cross-reference, then offers bounded alias search and explicit manual alignment.
 IMDb/TMDB sources remain supported by this manual path; no curated mapping dataset
 is bundled. See [anime tracking behavior](../../docs/tracking-behavior.md).
+
+## Installed ZIP addons
+
+Production JavaScript sources are maintained in the separate `nova-addons`
+repository under `addons/<id>`. This crate embeds source snapshots exclusively
+under `cfg(test)` in `test-fixtures/addons`; production has no source fallback
+and no build-time JavaScript concatenation.
+
+`AddonPackage::parse` loads one addon from a ZIP, optionally inside one enclosing
+directory. Required files are `manifest.json`, `stremio-manifest.json`, `LICENSE`
+and `NOTICE.md`. An absent `scripts` declaration defaults to `[entry]`; an
+explicit list is nonempty, unique and ordered, with `entry` last exactly once. Scripts are
+UTF-8 `.js` files, joined with `\n;\n`. `assets` explicitly lists local resources.
+Every archived file must be declared or be one of the four required documents.
+IDs use lowercase ASCII letters, digits, `_` and `-`; semantic versions and the
+Stremio `nova.<id>` identity/version must match. Archives are limited to 8 MiB,
+16 MiB expanded, 256 entries and 2 MiB assembled JavaScript. Unsafe paths,
+duplicate entries, symlinks, encrypted entries and missing files are rejected.
+The parser validates configuration defaults/collections and compiles the exact
+global JavaScript syntax in a bounded QuickJS context without executing addon
+code, installing host APIs or reading user preferences.
+
+The app supplies immutable snapshots with `set_installed_packages`; ongoing
+workers retain their package `Arc`. `mark_known_provider_ids` preserves removed
+or unavailable private namespaces. Assets resolve through `provider_asset_bytes`
+only from an installed package's declaration. Compatibility-named
+`fetch_builtin_addon*` functions now dispatch installed packages.
+
+Build distributable ZIPs with `scripts/package-addon.py --source-root PATH
+--all` (or one positional addon ID). The source root is explicit; only manifest
+inputs and license/notices are included. The tool uses sorted entries, stored
+compression, fixed timestamps and permissions, emits a SHA-256 file, and verifies
+every output with this crate's `validate-package` example before publishing it.
+Pass `--validator PATH` to reuse a prebuilt validator. Build outputs, fixtures,
+credentials and undeclared files never enter the archive.

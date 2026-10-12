@@ -29,6 +29,10 @@ pub struct PluginManifest {
     pub name: String,
     pub version: String,
     pub entry: String,
+    #[serde(default)]
+    pub scripts: Vec<String>,
+    #[serde(default)]
+    pub assets: Vec<String>,
     pub permissions: PluginPermissions,
     #[serde(default)]
     pub capabilities: PluginCapabilities,
@@ -1671,6 +1675,8 @@ mod tests {
 
     fn manifest() -> PluginManifest {
         PluginManifest {
+            scripts: Vec::new(),
+            assets: Vec::new(),
             format_version: 1,
             id: "fixture".into(),
             name: "Fixture".into(),

@@ -24,6 +24,7 @@ use super::playback_preferences::PREFERENCES_KEY;
 use nova_config::playback_preferences::PreferenceValue;
 pub(crate) const DOMAIN_VIEWING_ACTIVITY: &str = "viewing_activity";
 pub(crate) const DOMAIN_NEW_EPISODES_HIDDEN: &str = "new_episodes_hidden";
+pub(crate) const DOMAIN_PACKAGES: &str = addon_packages::DOMAIN;
 pub(crate) const DOMAIN_PLUGIN_SETTINGS: &str = "plugin_settings";
 pub(crate) const DOMAIN_ADDONS: &str = "addons";
 pub(crate) const DOMAIN_SETTINGS: &str = "settings";
@@ -103,6 +104,7 @@ fn sync_records(domain: &str, records: Vec<(String, String, u64)>) {
         DOMAIN_NEW_EPISODES_HIDDEN => NEW_EPISODES_HIDDEN_KEY,
         DOMAIN_ADDONS => "addons",
         DOMAIN_PLUGIN_SETTINGS => plugin_settings::KEY,
+        DOMAIN_PACKAGES => addon_packages::KEY,
         DOMAIN_SETTINGS | DOMAIN_CATEGORY => "settings",
         DOMAIN_CONTINUE_HIDDEN => "continue_hidden",
         _ => "",
@@ -129,6 +131,11 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
     }
     let domains: Vec<SnapshotDomainRecords> = match key {
         plugin_settings::KEY => vec![(DOMAIN_PLUGIN_SETTINGS, plugin_settings::records(raw)?)],
+        addon_packages::KEY => vec![(
+            DOMAIN_PACKAGES,
+            addon_packages::records(raw)
+                .map_err(|e| storage::Error::new(storage::ErrorKind::Schema, e))?,
+        )],
         "library" => {
             let entries: Vec<LibraryEntry> = serde_json::from_str(raw)?;
             vec![(
@@ -182,23 +189,7 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
         }
         "addons" => {
             let addons: Vec<AddonStore> = serde_json::from_str(raw)?;
-            let mut records = addons
-                .iter()
-                .map(|a| {
-                    Ok((
-                        a.url.clone(),
-                        serde_json::to_string(&SyncedAddon {
-                            capabilities: a.capabilities,
-                            label: a.label.clone(),
-                            enabled: a.enabled,
-                            configure_ok: None,
-                        })?,
-                        0,
-                    ))
-                })
-                .collect::<Result<Vec<_>, serde_json::Error>>()?;
-            records.push(addon_order_record(&addons));
-            vec![(DOMAIN_ADDONS, records)]
+            vec![(DOMAIN_ADDONS, addon_records(&addons)?)]
         }
         "settings" => {
             let settings: CacheSettings = serde_json::from_str(raw)?;
@@ -320,6 +311,81 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
         nova_sync::request_local_sync();
     }
     Ok(())
+}
+
+fn addon_records(addons: &[AddonStore]) -> Result<Vec<(String, String, u64)>, serde_json::Error> {
+    let mut records = addons
+        .iter()
+        .map(|addon| {
+            Ok((
+                addon.url.clone(),
+                serde_json::to_string(&SyncedAddon {
+                    capabilities: addon.capabilities,
+                    label: addon.label.clone(),
+                    enabled: addon.enabled,
+                    configure_ok: None,
+                })?,
+                0,
+            ))
+        })
+        .collect::<Result<Vec<_>, serde_json::Error>>()?;
+    records.push(addon_order_record(addons));
+    Ok(records)
+}
+
+/// Package selection and addon membership are one durable user action. Archive
+/// bytes are staged first; a failed metadata commit leaves the active addon intact.
+pub(super) fn persist_package_state(
+    addons: &[AddonStore],
+    packages: &std::collections::BTreeMap<String, addon_packages::PackageDescriptor>,
+) -> Result<(), String> {
+    let commit = || -> nova_sync::Result<()> {
+        if !writable_key("addons") || !writable_key(addon_packages::KEY) {
+            return Err(storage::Error::new(
+                storage::ErrorKind::Schema,
+                "unreadable addon state retained",
+            )
+            .into());
+        }
+        let addon_raw = serde_json::to_string(addons)?;
+        let package_raw = serde_json::to_string(packages)?;
+        let domains = [
+            (DOMAIN_ADDONS, addon_records(addons)?),
+            (
+                DOMAIN_PACKAGES,
+                addon_packages::records(&package_raw)
+                    .map_err(|e| storage::Error::new(storage::ErrorKind::Schema, e))?,
+            ),
+        ];
+        let owner = nova_sync::local_store()?;
+        let dev = nova_sync::local_device()?;
+        let mut store = owner.lock().unwrap();
+        // Stage the complete action away from the live owner. A failed save
+        // must not leave a package selection queued for a later background retry.
+        let mut candidate = store.clone();
+        let mut changed = false;
+        for (domain, records) in domains {
+            changed |= nova_sync::prepare_snapshot(
+                &mut candidate,
+                dev,
+                domain,
+                &records,
+                None,
+                applying(),
+                false,
+            )?;
+        }
+        candidate.queue_extra("addons", Some(addon_raw));
+        candidate.queue_extra(addon_packages::KEY, Some(package_raw));
+        candidate.save()?;
+        *store = candidate;
+        drop(store);
+        if changed && !applying() {
+            nova_sync::request_local_sync();
+        }
+        Ok(())
+    };
+    commit().map_err(|e| e.to_string())
 }
 
 pub(crate) fn notify_library(entries: &[LibraryEntry]) {
@@ -761,6 +827,7 @@ impl Bridge {
             (NEW_EPISODES_HIDDEN_KEY, DOMAIN_NEW_EPISODES_HIDDEN),
             ("addons", DOMAIN_ADDONS),
             (plugin_settings::KEY, DOMAIN_PLUGIN_SETTINGS),
+            (addon_packages::KEY, DOMAIN_PACKAGES),
             ("settings", DOMAIN_SETTINGS),
         ] {
             let result = (|| -> nova_sync::Result<()> {
@@ -769,7 +836,7 @@ impl Bridge {
                 }
                 let state = self.shared.lock().unwrap();
                 let raw = match key {
-                    plugin_settings::KEY => {
+                    plugin_settings::KEY | addon_packages::KEY => {
                         storage::try_get_str(key)?.unwrap_or_else(|| "{}".into())
                     }
                     "library" => serde_json::to_string(&state.entries)?,
@@ -957,6 +1024,28 @@ impl Bridge {
                 DOMAIN_VIEWING_ACTIVITY => self.sync_apply_viewing_activity(),
                 DOMAIN_NEW_EPISODES_HIDDEN => self.sync_apply_new_episodes_hidden(),
                 DOMAIN_ADDONS => self.sync_apply_addons(),
+                DOMAIN_PACKAGES => {
+                    let result = (|| -> Result<(), String> {
+                        let Some(store) = projection_store() else {
+                            return Ok(());
+                        };
+                        let records: std::collections::BTreeMap<String, serde_json::Value> = store
+                            .records(DOMAIN_PACKAGES)
+                            .into_iter()
+                            .map(|(url, raw)| {
+                                serde_json::from_str(&raw)
+                                    .map(|value| (url, value))
+                                    .map_err(|e| e.to_string())
+                            })
+                            .collect::<Result<_, _>>()?;
+                        let raw = serde_json::to_string(&records).map_err(|e| e.to_string())?;
+                        addon_packages::project(self, &raw)
+                    })();
+                    if let Err(error) = result {
+                        storage::report(storage::Error::new(storage::ErrorKind::Schema, error));
+                        continue;
+                    }
+                }
                 DOMAIN_PLUGIN_SETTINGS => {
                     let result = (|| -> nova_sync::Result<()> {
                         let Some(store) = projection_store() else {
@@ -1012,6 +1101,7 @@ impl Bridge {
                 }
             }
         }
+        addon_packages::reconcile(self);
         // Publish once after the whole batch, so every surface sees the same
         // merged state. Startup publishes its initial models after this replay.
         if publish_models && models_changed {
@@ -1329,6 +1419,31 @@ impl Bridge {
             }
         }
         self.persist_installed();
+        let snapshot: Vec<AddonStore> = self
+            .shared
+            .lock()
+            .unwrap()
+            .installed
+            .iter()
+            .map(|addon| AddonStore {
+                capabilities: desired
+                    .iter()
+                    .find(|d| d.url == addon.url)
+                    .and_then(|d| d.capabilities)
+                    .or_else(|| nova_providers::provider_capabilities(&addon.url))
+                    .or_else(|| {
+                        read_persisted_addons()
+                            .into_iter()
+                            .find(|old| old.url == addon.url)
+                            .and_then(|old| old.capabilities)
+                    }),
+                url: addon.url.clone(),
+                enabled: addon.enabled,
+                configure_ok: addon.configure_ok,
+                label: addon.label.clone(),
+            })
+            .collect();
+        write_persisted_addons(&snapshot);
         self.apply_addon_rows();
         if labels_changed {
             // The apply guard suppresses the normal notify hook; re-publish the
@@ -1474,6 +1589,13 @@ impl Bridge {
 
     /// Stop the sync engine and drop its endpoint.
     pub(super) fn stop_sync(&self) {
+        {
+            let mut state = self.shared.lock().unwrap();
+            for cancel in state.package_fetches.values() {
+                cancel.store(true, Ordering::Release);
+            }
+            state.package_fetches.clear();
+        }
         #[cfg(feature = "desktop")]
         {
             self.sync_start_generation.fetch_add(1, Ordering::AcqRel);
@@ -1490,6 +1612,7 @@ impl Bridge {
     /// Refresh the Settings → Sync readout from the engine (enable flag,
     /// identity, peers, status line).
     pub(super) fn sync_status_to_ui(&self) {
+        addon_packages::reconcile(self);
         let Some(app) = self.app() else {
             return;
         };

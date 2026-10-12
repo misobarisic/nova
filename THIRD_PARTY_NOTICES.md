@@ -47,13 +47,15 @@ libraries: `libm`, `libandroid`, `libOpenSLES`, `libEGL`, `libdl`, and
 
 ## AniKoto provider behavior
 
-The bundled AniKoto provider adapts request, VRF transformation, MegaPlay
+The AniKoto test fixture adapts request, VRF transformation, MegaPlay
 decryption/token signing, and Mewcdn extraction behavior
 from the [AniKoto extension in `yuzono/anime-extensions`](https://github.com/yuzono/anime-extensions).
 The upstream extension is licensed under Apache-2.0; its license is available
 at <https://github.com/yuzono/anime-extensions/blob/master/LICENSE>. Nova's
 JavaScript source is an independent port and does not include the extension's
-Kotlin source. See [`crates/providers/plugins/anikoto/NOTICE.md`](crates/providers/plugins/anikoto/NOTICE.md).
+Kotlin source. Production AniKoto packages are maintained in the separate `nova-addons`
+repository and carry their own notices. See the retained test attribution in
+[`crates/providers/test-fixtures/addons/anikoto/NOTICE.md`](crates/providers/test-fixtures/addons/anikoto/NOTICE.md).
 
 The checked-in source inventory and hashes are maintained in
 [`assets/open_source_project_sources.tsv`](assets/open_source_project_sources.tsv),

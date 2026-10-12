@@ -42,13 +42,17 @@ used by the build, includes their license texts, and opens source links. The
 catalog is generated from the locked dependency graph at build time. See
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the vendor inventory.
 
+Nova starts without bundled JavaScript addons or an addon repository. Install a
+local addon ZIP from Settings → Addons; see [addon packages](docs/addon-packages.md)
+for packaging AniKoto and Supernova separately.
+
 ## Where things live
 
 - `src/` — app logic + UI bridge (state, pages, playback, sync wiring)
 - `crates/ui/` — Slint components (`.slint` sources of truth for the UI)
 - `crates/sync/` — cross-device record sync over iroh
 - `crates/tracking/` — MAL/AniList accounts, episode mappings and progress delivery
-- `crates/providers/` — addon metadata, identity matching and bundled providers
+- `crates/providers/` — addon metadata, identity matching and ZIP-installed providers
 - `crates/player/` — in-window mpv playback (+ Android JNI glue)
 - `crates/torrent/`, `crates/download/`, `crates/media/`, `crates/storage/`, `crates/config/`, `crates/addons/`
 - `tests/` — headless Slint integration tests (run with `i-slint-backend-testing`, no display)

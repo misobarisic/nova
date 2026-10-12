@@ -348,3 +348,7 @@ msgstr "Preferred subtitle language"
 
 msgid "Take screenshot"
 msgstr "Take screenshot"
+
+#: ../ui-settings-addons/addons-module.slint
+msgid "Install addon ZIP…"
+msgstr "Install addon ZIP…"

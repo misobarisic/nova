@@ -234,6 +234,41 @@ export component SettingsAddonsModule inherits Window {
                             }
                         }
                     } }
+                PillButton {
+                    label: @tr("Install addon ZIP…");
+                    roomy: true;
+                    enabled: !SettingsBridge.addon_zip_import_busy;
+                    focused: SettingsBridge.kb_zone == 1 && SettingsContent.kb_actl == 2 && SettingsBridge.kb_active;
+                    clicked => {
+                        SettingsContent.focus_shell();
+                        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                        SettingsBridge.kb_zone = 1;
+                        SettingsContent.kb_actl = 2;
+                        SettingsBridge.addon_zip_import_requested();
+                    }
+                }
+                if SettingsBridge.addon_zip_import_status != "": zip_status := Rectangle {
+                    width: 100%; min-width: 0px;
+                    min-height: zip_status_measure.height;
+                    vertical-stretch: 0;
+                    Text {
+                        width: 100%; height: parent.height;
+                        text: SettingsBridge.addon_zip_import_status;
+                        font-size: 14px;
+                        color: Theme.current.text_settings;
+                        wrap: word-wrap;
+                    }
+                    // At phone widths, publish the actual wrapped status height
+                    // so the shell's scroll extent includes errors in full.
+                    Rectangle {
+                        height: 0px; clip: true;
+                        zip_status_measure := Text {
+                            width: zip_status.width;
+                            text: SettingsBridge.addon_zip_import_status;
+                            font-size: 14px; wrap: word-wrap;
+                        }
+                    }
+                }
                 if !SettingsBridge.cinemeta_installed: cinemeta_suggestion := Rectangle {
                     min-width: 0px;
                     vertical-stretch: 0;

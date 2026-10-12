@@ -26,6 +26,7 @@ mod frame;
 mod hlc;
 mod local;
 mod merge;
+mod package;
 mod pair;
 mod progress;
 mod protocol;
@@ -35,6 +36,9 @@ pub use local::{commit_snapshot, local_device, local_store, prepare_snapshot, pr
 
 pub use hlc::Hlc;
 pub use merge::{Record, Version};
+pub use package::{
+    MAX_PACKAGE_BYTES, PACKAGE_ALPN, PackageBlobStore, configure_package_store, fetch_package,
+};
 pub use pair::{ALPN as PAIR_ALPN, IncomingPair, Invite, PairCallback, PairEvent, PairHandler};
 pub use protocol::ALPN;
 pub use store::{AckFloor, Store};
@@ -564,9 +568,12 @@ impl SyncEngine {
         ));
         pair_handler.set_sync_notify(sync_notify.clone());
 
+        let stop = Arc::new(AtomicBool::new(false));
+        let package_handler = Arc::new(package::PackageHandler::new(peers.clone(), stop.clone()));
         let router = rt.block_on(async {
             Router::builder(endpoint.clone())
                 .accept(ALPN, handler.clone())
+                .accept(PACKAGE_ALPN, package_handler)
                 .accept(pair::ALPN, pair_handler.clone())
                 .accept(
                     protocol::REMOVE_ALPN,
@@ -575,7 +582,6 @@ impl SyncEngine {
                 .spawn()
         });
 
-        let stop = Arc::new(AtomicBool::new(false));
         let cadence_notify = Arc::new(tokio::sync::Notify::new());
         let changes = Arc::new(Mutex::new(ChangeSchedule::default()));
         let change_notify = Arc::new(tokio::sync::Notify::new());
@@ -931,6 +937,22 @@ impl SyncEngine {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .domains()
+    }
+
+    /// Fetch registered package bytes on the engine runtime. Call from a
+    /// blocking worker; the returned content still needs application validation.
+    pub fn fetch_package(&self, hash: &str, cancel: Arc<AtomicBool>) -> Result<Vec<u8>> {
+        anyhow::ensure!(read_settings().enabled, "sync is disabled");
+        anyhow::ensure!(!self.stop.load(Ordering::Acquire), "sync engine stopped");
+        let endpoint = self.endpoint.clone();
+        let peers = self.peers.clone();
+        let stop = self.stop.clone();
+        let hash = hash.to_owned();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        self.rt.spawn(async move {
+            let _ = tx.send(package::fetch(endpoint, peers, stop, hash, cancel).await);
+        });
+        rx.recv().context("package transfer worker stopped")?
     }
 
     /// Stop the router and background loops. The engine must not be reused.

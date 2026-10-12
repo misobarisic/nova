@@ -53,6 +53,9 @@ fn row_controls(app: &nova::AppWindow) -> Vec<(String, Rect)> {
     if let Some(copy) = ElementHandle::find_by_element_id(app, "AddonRowCard::addon_copy").next() {
         out.push(("Copy link".into(), rect(&copy)));
     }
+    // Installation actions sit above the rows and are not part of this fit
+    // check, including translated URL buttons and the ZIP installer.
+    out.retain(|(_, bounds)| row_of(app, *bounds).is_some());
     out
 }
 
@@ -135,6 +138,8 @@ fn addon_row_controls_fit_their_row() {
     app.window().show().unwrap();
     app.set_show_settings(true);
     app.set_show_home(false);
+    // Match the installed Cinemeta fixture: production hides its suggestion.
+    app.set_cinemeta_installed(true);
     // A row with a configure page renders every control (Configure included).
     app.set_addon_rows(
         Rc::new(VecModel::from(vec![nova::AddonRow {

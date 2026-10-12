@@ -10,3 +10,7 @@ web-console.log
 
 # Generated visual output
 /output/
+
+/dist/
+
+__pycache__/

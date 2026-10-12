@@ -47,6 +47,8 @@ export component SettingsModule inherits Window {
         addon_capability_filter <=> SettingsBridge.addon_capability_filter;
         cinemeta_installed <=> SettingsBridge.cinemeta_installed;
         addon_url <=> SettingsBridge.addon_url;
+        addon_zip_import_busy <=> SettingsBridge.addon_zip_import_busy;
+        addon_zip_import_status <=> SettingsBridge.addon_zip_import_status;
         category_rows <=> SettingsBridge.category_rows;
         category_input <=> SettingsBridge.category_input;
         home_catalog_rows <=> SettingsBridge.home_catalog_rows;
@@ -166,6 +168,7 @@ export component SettingsModule inherits Window {
         playback_language_search(arg0, arg1) => { SettingsBridge.playback_language_search(arg0, arg1); }
         playback_language_picked(arg0, arg1) => { SettingsBridge.playback_language_picked(arg0, arg1); }
         addon_added(arg0) => { SettingsBridge.addon_added(arg0); }
+        addon_zip_import_requested => { SettingsBridge.addon_zip_import_requested(); }
         addon_toggled(arg0) => { SettingsBridge.addon_toggled(arg0); }
         addon_remove(arg0) => { SettingsBridge.addon_remove(arg0); }
         addon_move_up(arg0) => { SettingsBridge.addon_move_up(arg0); }

@@ -415,6 +415,22 @@ pub fn settings_snapshot(
     })
 }
 
+/// Check schema declarations without reading or mutating the settings service.
+pub(crate) fn validate_schema(schema: &[SettingField]) -> Result<(), ProviderHostError> {
+    if schema.len() > 128 {
+        return Err(error("provider configuration exceeds field limit"));
+    }
+    validate_collection_schema(schema)?;
+    let mut keys = std::collections::HashSet::new();
+    for field in schema {
+        if !keys.insert(&field.key) {
+            return Err(error("duplicate setting key"));
+        }
+        field.validate(&field.default)?;
+    }
+    Ok(())
+}
+
 fn validate_collection_schema(schema: &[SettingField]) -> Result<(), ProviderHostError> {
     for field in schema {
         validate_collection_metadata(field)?;

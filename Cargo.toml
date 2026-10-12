@@ -97,6 +97,7 @@ live-preview = ["nova-ui/live-preview"]
 slint = { workspace = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+semver = "1"
 # Addon protocol (URL building + response parsing). HTTP lives in nova-media.
 addons = { path = "crates/addons", default-features = false }
 nova-providers = { path = "crates/providers" }
@@ -128,6 +129,9 @@ qrcode = { version = "0.14", default-features = false }
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemallocator = "0.6"
 
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
+
 # Android background execution: JNI bridge to the Java foreground service and
 # JobScheduler job, plus the Context/JavaVM that android-activity publishes
 # through ndk-context.
@@ -144,6 +148,7 @@ ndk-context = "0.1"
 rqrr = { version = "0.11", default-features = false }
 
 [dev-dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }
 # Headless UI tests (drag-scroll regression): drives the real AppWindow
 # through synthetic pointer events, no display needed.
 i-slint-backend-testing = { workspace = true }
@@ -216,6 +221,10 @@ categories = ["android.intent.category.LAUNCHER"]
 name = ".QrScanActivity"
 exported = false
 orientation = "portrait"
+
+[[package.metadata.android.application.activity]]
+name = ".AddonImportActivity"
+exported = false
 
 # Download foreground service: keeps the process (and its transfer threads)
 # alive while a stream download is running, including with the screen off.
