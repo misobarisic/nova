@@ -290,6 +290,23 @@ export component SettingsPlayerModule inherits Window {
                         }
                     }
                 }
+                if SettingsBridge.player_backend_index == 0: SettingsRow {
+                    setting-key: "prefetch_next_episode_streams";
+                    row-title: @tr("Prefetch next episode streams");
+                    row-desc: @tr("Look up available sources shortly before the next episode buttons appear. Sources stay in memory; playback starts only after you choose.");
+                    Segmented {
+                        labels: [@tr("Off"), @tr("On")];
+                        current_index: SettingsBridge.prefetch_next_episode_streams ? 1 : 0;
+                        focused: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 1 && SettingsBridge.kb_active;
+                        picked(i) => {
+                            SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                            SettingsBridge.kb_zone = 9;
+                            SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 1;
+                            SettingsBridge.prefetch_next_episode_streams = i == 1;
+                            SettingsContent.schedule_setting("prefetch_next_episode_streams");
+                        }
+                    }
+                }
             }
         }
     }

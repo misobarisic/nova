@@ -1,7 +1,7 @@
 //! Stream selection enters from Home and Detail without delaying navbar Back.
 use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle, Model, VecModel, platform::WindowEvent};
-use std::{rc::Rc, time::Duration};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 #[derive(Clone, Copy, Debug)]
 enum Origin {
@@ -205,6 +205,7 @@ fn entrance_slides_and_fades_for_each_origin_and_respects_motion_settings() {
 fn row(index: usize) -> nova::StreamRow {
     nova::StreamRow {
         id: format!("row-{index}").into(),
+        reveal_new: true,
         text: format!("Source {index} · 1080p").into(),
         is_download: index == 0,
         download_action: 1,
@@ -264,6 +265,7 @@ fn new_streams_stagger_upward_while_progress_and_retained_rows_stay_visible() {
             // The backend sends the same in-place progress notifications.
             let mut download = model.row_data(0).unwrap();
             download.download_progress = frame as f32 / 60.0;
+            download.reveal_new = false;
             model.set_row_data(0, download);
         }
     }
@@ -291,6 +293,57 @@ fn new_streams_stagger_upward_while_progress_and_retained_rows_stay_visible() {
     assert!(row_element(&app, 4).computed_opacity() > 0.99);
     model.remove(1);
     assert!(row_element(&app, 1).computed_opacity() > 0.99);
+    // A metadata/progress update keeps the delegate and its held gesture alive.
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let capture = actions.clone();
+    app.on_stream_action_requested(move |id| capture.borrow_mut().push(id.to_string()));
+    let picks = Rc::new(RefCell::new(Vec::new()));
+    let capture = picks.clone();
+    app.on_stream_picked(move |index| capture.borrow_mut().push(index));
+    let first = row_element(&app, 0);
+    let pos = first.absolute_position();
+    let size = first.size();
+    let position = slint::LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0);
+    app.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: slint::platform::PointerEventButton::Left,
+    });
+    row_frames(&app, &model, 200);
+    let mut updated = model.row_data(0).unwrap();
+    updated.download_progress = 0.75;
+    updated.reveal_new = false;
+    model.set_row_data(0, updated);
+    row_frames(&app, &model, 450);
+    app.window().dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: slint::platform::PointerEventButton::Left,
+    });
+    assert_eq!(actions.borrow().as_slice(), &["row-0"]);
+    assert!(
+        picks.borrow().is_empty(),
+        "a held row opens actions instead of playback"
+    );
+    app.set_detail_kb_s(1);
+    app.set_kb_active(true);
+    // Full snapshot reordering can recreate a delegate for an existing ID.
+    // It must retain immediate visibility instead of replaying its entrance.
+    let mut moved = model.row_data(1).unwrap();
+    moved.reveal_new = false;
+    model.remove(1);
+    model.insert(3, moved);
+    // Production reconciliation restores the selected ID's new absolute index.
+    app.set_detail_kb_s(3);
+    assert!(row_element(&app, 1).computed_opacity() > 0.99);
+    row_frames(&app, &model, 50);
+    assert!(row_element(&app, 1).computed_opacity() > 0.99);
+    app.window().dispatch_event(WindowEvent::KeyPressed {
+        text: slint::platform::Key::Return.into(),
+    });
+    app.window().dispatch_event(WindowEvent::KeyReleased {
+        text: slint::platform::Key::Return.into(),
+    });
+    assert_eq!(picks.borrow().as_slice(), &[3]);
+    assert_eq!(model.row_data(3).unwrap().id.as_str(), "row-1");
     app.window().set_size(slint::PhysicalSize::new(1280, 900));
     assert!(row_element(&app, 0).computed_opacity() > 0.99);
     for master_off in [true, false] {

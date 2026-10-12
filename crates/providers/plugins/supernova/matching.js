@@ -144,9 +144,182 @@
       `${title} ${String(lookup.absoluteEpisode).padStart(2,"0")}` : numbered;
     return [...new Set([title, episode])].slice(0,2);
   };
+  S.SORT_DEFAULT = ["cached","resolution","size","pack","seeders","language","codec","subtitle"].map(key=>({key,direction:"desc"}));
+  S.sortOrder = settings => {
+    const order = settings["sort.order"];
+    const valid = Array.isArray(order) && order.length >= 5 && order.length <= S.SORT_DEFAULT.length &&
+      new Set(order.map(item=>item && item.key)).size === order.length &&
+      order.every(item=>item && S.SORT_DEFAULT.some(known=>known.key === item.key) && ["asc","desc"].includes(item.direction)) &&
+      S.SORT_DEFAULT.slice(0,5).every(known=>order.some(item=>item.key === known.key));
+    // Adding criteria must not discard a saved permutation or its directions.
+    return valid ? [...order,...S.SORT_DEFAULT.filter(known=>!order.some(item=>item.key === known.key))] : S.SORT_DEFAULT;
+  };
+  const releaseLanguages = {
+    en:"eng|english", ja:"jpn|japanese", hr:"hrv|croatian", de:"deu|ger|german",
+    fr:"fra|fre|french", es:"spa|spanish", it:"ita|italian", pt:"por|portuguese",
+    ru:"rus|russian", ko:"kor|korean", zh:"zho|chi|chinese|mandarin|cantonese",
+    ar:"ara|arabic", hi:"hin|hindi", nl:"nld|dut|dutch", pl:"pol|polish",
+    tr:"tur|turkish", sv:"swe|swedish", no:"nor|norwegian", da:"dan|danish",
+    fi:"fin|finnish", cs:"ces|cze|czech", hu:"hun|hungarian", ro:"ron|rum|romanian",
+    uk:"ukr|ukrainian", el:"ell|gre|greek", he:"heb|hebrew", th:"tha|thai",
+    vi:"vie|vietnamese", id:"ind|indonesian"
+  };
+  const languageAliases = Object.values(releaseLanguages).join("|");
+  const languageClaims = (text,subtitle) => {
+    const labels = String(text || "").normalize("NFKC");
+    return Object.keys(releaseLanguages).filter(code=>{
+      const pattern = new RegExp("(?:^|[^\\p{L}\\p{N}])(" + releaseLanguages[code] + ")(?=$|[^\\p{L}\\p{N}])", "giu");
+      let match;
+      while ((match = pattern.exec(labels))) {
+        const before = labels.slice(0,pattern.lastIndex - match[1].length).split(/[\[\]\n|]/).pop();
+        const after = labels.slice(pattern.lastIndex);
+        const list = "[ ._:-]*(?:[/,;+&][ ._:-]*(?:" + languageAliases + ")[ ._:-]*)*";
+        const audioSuffix = new RegExp("^" + list + "audio\\b", "i").test(after);
+        const subtitleSuffix = new RegExp("^" + list + "(?:subs?|subtitles?)\\b", "i").test(after);
+        const subtitlePrefix = new RegExp("\\b(?:subs?|subtitles?)[ ._:-]*(?:(?:" + languageAliases + ")[ ._:-]*[/,;+&][ ._:-]*)*$", "i").test(before);
+        const isSubtitle = !audioSuffix && (subtitleSuffix || subtitlePrefix);
+        // Generic release language labels remain audio hints; subtitles need an
+        // explicit subtitle marker, and unnamed Multi-Subs proves no language.
+        if (isSubtitle === subtitle) return true;
+      }
+      return false;
+    });
+  };
+  S.releaseLanguages = text => languageClaims(text,false);
+  S.releaseSubtitleLanguages = text => languageClaims(text,true);
+  const preferredLanguageRank = (languages,preferred) => {
+    if (!Array.isArray(preferred) || preferred.length === 0) return null;
+    const found = new Set(languages);
+    const index = preferred.findIndex(code=>typeof code === "string" && found.has(code));
+    return index < 0 ? null : -index;
+  };
+  S.languageRank = (texts,settings,metadata) => {
+    const preferred = settings["language.prefs"];
+    if (!Array.isArray(preferred) || !preferred.length) return null;
+    return preferredLanguageRank(metadata && Array.isArray(metadata.audioLanguages) ? metadata.audioLanguages : texts.flatMap(S.releaseLanguages),preferred);
+  };
+  S.subtitleRank = (texts,settings,metadata) => {
+    const preferred = settings["subtitle.prefs"];
+    if (!Array.isArray(preferred) || !preferred.length) return null;
+    return preferredLanguageRank(metadata && Array.isArray(metadata.subtitleLanguages) ? metadata.subtitleLanguages : texts.flatMap(S.releaseSubtitleLanguages),preferred);
+  };
+  const displayedLanguages = line => Object.keys(releaseLanguages).filter(code=>
+    new RegExp("(?:^|[^\\p{L}\\p{N}])(?:" + code + "|" + releaseLanguages[code] + ")(?=$|[^\\p{L}\\p{N}])", "iu").test(line));
+  S.releaseVideoCodec = text => {
+    const codecs = new Set();
+    for (const value of Array.isArray(text) ? text : [text]) {
+      const original = String(value || "").normalize("NFKC");
+      // Leading bracket groups and trailing release groups are identities,
+      // rather than codec metadata (a group may itself contain "AV1").
+      const labels = (stripGroup(original) || original).replace(/-[\p{L}\p{N}]+\s*$/u, "");
+      for (const [codec,pattern] of [["avc","h[ .]?264|x264|avc"],["hevc","h[ .]?265|x265|hevc"],["av1","av1"]]) {
+        if (new RegExp("(?:^|[^\\p{L}\\p{N}])(?:" + pattern + ")(?=$|[^\\p{L}\\p{N}])", "iu").test(labels)) codecs.add(codec);
+      }
+    }
+    // Conflicting title/file labels cannot establish a codec preference.
+    return codecs.size === 1 ? [...codecs][0] : null;
+  };
+  S.codecRank = (texts,settings,metadata) => {
+    const preferred = settings["codec.prefs"];
+    if (!Array.isArray(preferred) || preferred.length === 0) return null;
+    const codec = metadata && Object.prototype.hasOwnProperty.call(metadata,"videoCodec") ? metadata.videoCodec : S.releaseVideoCodec(texts);
+    if (!["avc","hevc","av1"].includes(codec)) return null;
+    const index = preferred.indexOf(codec);
+    return index < 0 ? null : -index;
+  };
+  S.resolution = title => {
+    const match = String(title || "").match(/\b(4320|2160|1440|1080|720|576|480|360)p\b/i);
+    if (match) return Number(match[1]);
+    return /\b(?:4k|uhd)\b/i.test(title || "") ? 2160 : /\b8k\b/i.test(title || "") ? 4320 : null;
+  };
+  S.pack = title => {
+    if (typeof title !== "string" || !title.trim()) return null;
+    return /\b(?:batch|complete|collection|season[ ._-]*pack)\b|\b(?:S\d{1,2}[ ._-]*E\d{1,4}[ ._-]*[-~+&,][ ._-]*(?:E)?\d|episodes?[ ._-]*\d+[ ._-]*[-~][ ._-]*\d+)/i.test(title)
+      || (/\b(?:season[ ._-]*|S)\d{1,2}(?!\d)/i.test(title) && !/\bS\d{1,2}[ ._-]*E\d|\b\d{1,2}x\d{1,4}/i.test(title)) ? 1 : 0;
+  };
+  const compareText = (a,b) => a < b ? -1 : a > b ? 1 : 0;
+  S.sortCompare = (a,b,order,metrics,identity) => {
+    for (const criterion of order) {
+      const av = metrics(a,criterion.key), bv = metrics(b,criterion.key);
+      // Missing reported metadata never becomes attractive when reversed.
+      if (av === null && bv !== null) return 1;
+      if (bv === null && av !== null) return -1;
+      if (av !== null && av !== bv) return (av < bv ? -1 : 1) * (criterion.direction === "asc" ? 1 : -1);
+    }
+    return compareText(identity(a),identity(b));
+  };
+  // One sort snapshot owns its metrics: later metadata upgrades build fresh
+  // values, while comparisons reuse each row/key instead of parsing repeatedly.
+  const memoizedMetrics = calculate => {
+    const values = new Map();
+    return (row,key) => {
+      if (!values.has(row)) values.set(row,new Map());
+      const cached = values.get(row);
+      if (!cached.has(key)) cached.set(key,calculate(row,key));
+      return cached.get(key);
+    };
+  };
+  S.sortRows = (rows,settings) => {
+    const order = S.sortOrder(settings);
+    const preferenceKeys = {language:"language.prefs",subtitle:"subtitle.prefs",codec:"codec.prefs"};
+    const facts = new Map();
+    const metrics = memoizedMetrics((row,key)=>{
+    if (preferenceKeys[key] && !(Array.isArray(settings[preferenceKeys[key]]) && settings[preferenceKeys[key]].length)) return null;
+    if (!facts.has(row)) {
+      const token = row.resolver && typeof row.resolver.token === "string" ? S.json(row.resolver.token) : null;
+      const lines = String(row.description || "").split("\n");
+      const filename = lines.find(line=>line.startsWith("📁 "));
+      const release = lines.find(line=>line.startsWith("🗂️ "));
+      const title = token && typeof token.title === "string" ? token.title : release ? release.slice("🗂️ ".length) : filename ? filename.slice(3) : lines[0];
+      facts.set(row,{token,lines,title});
+    }
+    const {token,lines,title} = facts.get(row);
+    switch (key) {
+      case "cached": return row.resolver ? 1 : 0;
+      case "resolution": return S.resolution(title) || S.resolution(row.title);
+      case "size": return S.number(row.size);
+      case "pack": return S.pack(title);
+      case "seeders": return S.number(row.seeders);
+      case "language":
+      case "subtitle":
+      case "codec": {
+        const fileName = token && typeof token.fileName === "string" ? token.fileName.split(/[\\/]/).pop() : "";
+        const codecLabel = lines[0].startsWith("🎞️ ") ? lines[0].slice(4).split(" · ").find(label=>["AVC","HEVC","AV1"].includes(label)) || "" : "";
+        if (key === "codec") {
+          if (/\bCodec unknown\b/i.test(lines[0])) return null;
+          const metadata = token && token.trackMetadata || (codecLabel ? {videoCodec:{AVC:"avc",HEVC:"hevc",AV1:"av1"}[codecLabel]} : null);
+          return S.codecRank([title,fileName],settings,metadata);
+        }
+        const line = lines.find(line=>line.startsWith(key === "language" ? "🌐 " : "💬 "));
+        const property = key === "language" ? "audioLanguages" : "subtitleLanguages";
+        const metadata = token && token.trackMetadata ? token.trackMetadata : line ? {[property]:displayedLanguages(line)} : null;
+        return key === "language" ? S.languageRank([title,fileName],settings,metadata) : S.subtitleRank([title,fileName],settings,metadata);
+      }
+      default: return null;
+    }
+    });
+    return rows.sort((a,b)=>S.sortCompare(a,b,order,metrics,row=>row.id));
+  };
   S.rank = (records, settings) => {
     const quality = settings["quality.preferred"] || "1080p";
-    const score = record => (quality === "any" || new RegExp("\\b" + quality + "\\b", "i").test(record.title) ? 1000000 : 0) + Math.min(record.seeders || 0, 999999);
-    return records.sort((a,b) => score(b) - score(a) || a.title.localeCompare(b.title));
+    const qualityPattern = quality === "any" ? null : new RegExp("\\b" + quality + "\\b", "i");
+    const preferred = new Map(records.map(record=>[record,!qualityPattern || qualityPattern.test(record.title)]));
+    const order = S.sortOrder(settings);
+    // Preserve the existing quality preference for the bounded inspection pool.
+    // Availability is unknown here; visible proved rows use the full sort order.
+    const metrics = memoizedMetrics((record,key)=>{
+      switch (key) {
+        case "resolution": return S.resolution(record.title);
+        case "size": return S.number(record.sizeBytes);
+        case "pack": return S.pack(record.title);
+        case "seeders": return S.number(record.seeders);
+        case "language": return S.languageRank([record.title],settings,record.trackMetadata);
+        case "subtitle": return S.subtitleRank([record.title],settings,record.trackMetadata);
+        case "codec": return S.codecRank([record.title],settings,record.trackMetadata);
+        default: return null;
+      }
+    });
+    return records.sort((a,b)=>Number(preferred.get(b))-Number(preferred.get(a)) || S.sortCompare(a,b,order,metrics,
+      record=>`${record.infoHash}:${record.fileIdx === null || record.fileIdx === undefined ? "unknown" : record.fileIdx}`));
   };
 })();

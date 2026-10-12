@@ -4,6 +4,7 @@ import { SettingSyncModal } from "settings-sync-modal.slint";
 
 import { ScrollView } from "scrollview.slint";
 import { Dropdown } from "dropdown.slint";
+import { IcSettingsGear } from "icons.slint";
 import { SearchField } from "searchfield.slint";
 
 import { SideNav } from "sidenav.slint";
@@ -116,6 +117,7 @@ export component SettingsPage {
     // change to this default.
     in-out property <float> playback_speed: 1.0;
     in-out property <bool> android_auto_continue: false;
+    in-out property <bool> prefetch_next_episode_streams: true;
     in-out property <int> episode_start_index: 1;
     // Look and feel (Settings → Look and feel): master + per-category switches.
     in-out property <bool> true_black: false;
@@ -1193,8 +1195,8 @@ export component SettingsPage {
     }
 
     function kb_player_n() -> int {
-        if (root.is_android) { return root.player_backend_index == 0 ? 7 : 2; }
-        return root.player_backend_index == 0 ? 5 : 3;
+        if (root.is_android) { return root.player_backend_index == 0 ? 8 : 2; }
+        return root.player_backend_index == 0 ? 6 : 3;
     }
 
     function kb_player_clamp() {
@@ -1218,6 +1220,9 @@ export component SettingsPage {
             root.kb_player_language_step(root.audio_language_choice_index, d, false);
         } else if (root.kb_pr == root.kb_player_subtitle_language_row()) {
             root.kb_player_language_step(root.subtitle_language_choice_index, d, true);
+        } else if (root.player_backend_index == 0 && root.kb_pr == root.kb_player_speed_row() + 1) {
+            root.prefetch_next_episode_streams = d > 0;
+            root.schedule_setting("prefetch_next_episode_streams");
         } else if (root.kb_pr == root.kb_player_speed_row()) {
             // The backend applies ± a step and re-quantizes; the property
             // comes back with the snapped value.
@@ -2078,35 +2083,111 @@ export component SettingsPage {
             TouchArea { }
             config_focus := FocusScope {
                 property <int> selected: 0;
+                property <int> action: 0;
+                property <int> picker_choice: 0;
+                property <int> scan_direction: 1;
                 property <int> editing: -1;
+                property <int> save_version: 0;
+                // Store the declared controller key, so identically named items
+                // in different collections cannot open one another's editors.
+                property <string> collection_editing: "";
                 property <bool> confirm_visible: root.plugin_clear_confirm;
                 changed confirm_visible => { if self.confirm_visible { config_scroll.content-y = Math.min(0px, config_scroll.visible-height - config_scroll.content-height); } }
                 public function reveal(y: length,h: length) {
                     if y < 0px { config_scroll.content-y -= y; }
                     else if y + h > config_scroll.visible-height { config_scroll.content-y -= y + h - config_scroll.visible-height; }
                 }
-                init => { self.focus(); }
+                function available(index: int) -> bool {
+                    if index >= root.plugin_setting_rows.length { return index == root.plugin_setting_rows.length + 2 || root.plugin_setting_rows.length > 0; }
+                    let row = root.plugin_setting_rows[index];
+                    if row.kind == "collection-header" || row.kind == "sort-header" || row.kind == "priority-header" { return false; }
+                    if row.kind == "collection-picker" { return true; }
+                    if row.collection == "" { return true; }
+                    if row.item_role == "member" || row.item_role == "enabled" { return row.configured; }
+                    return row.item_controller == self.collection_editing && self.collection_editing != "";
+                }
+                function next(index: int, direction: int) -> int {
+                    self.scan_direction = direction;
+                    return Math.mod(index + direction + root.plugin_setting_rows.length + 3, root.plugin_setting_rows.length + 3);
+                }
+                function actions(index: int) -> int {
+                    if index >= root.plugin_setting_rows.length { return 1; }
+                    let row = root.plugin_setting_rows[index];
+                    if row.kind == "boolean" && row.collection != "" && (row.item_role == "member" || row.item_role == "enabled") { return row.has_editor ? (self.collection_editing == row.key ? 3 : 2) : 1; }
+                    if row.kind == "sort-criterion" || row.kind == "priority-criterion" { return 3; }
+                    if row.kind == "string" || row.kind == "secret" || row.kind == "integer" { return 2; }
+                    return 1;
+                }
+                function remove(index: int) {
+                    let row = root.plugin_setting_rows[index];
+                    if row.kind != "boolean" || row.collection == "" || (row.item_role != "member" && row.item_role != "enabled") { return; }
+                    // The backend attaches a secret key only to account rows.
+                    // Removing a source therefore preserves its custom URL.
+                    if row.item_role == "enabled" && row.options.length > 0 { root.plugin_setting_changed(root.addon_config_url, row.options[0], ""); }
+                    root.plugin_setting_changed(root.addon_config_url, row.key, "false");
+                    self.collection_editing = "";
+                    self.editing = -1;
+                }
+                // Slint functions are analyzed as bindings, so scan hidden rows
+                // in deferred ticks rather than recursively calling a function.
+                Timer {
+                    interval: 1ms;
+                    running: !root.addon_config_capabilities && !config_focus.available(config_focus.selected);
+                    triggered => { config_focus.selected = config_focus.next(config_focus.selected, config_focus.scan_direction); config_focus.action = config_focus.scan_direction < 0 ? config_focus.actions(config_focus.selected) - 1 : 0; }
+                }
+                init => { self.selected = root.addon_config_capabilities ? 0 : self.next(-1, 1); self.focus(); }
                 key-pressed(e) => {
                     if e.repeat && e.text != Key.UpArrow && e.text != Key.DownArrow { accept }
-                    else if e.text == Key.Back || e.text == Key.Escape || e.text == Key.Backspace {
+                    else if e.text == Key.Back || e.text == Key.Escape {
                         if root.plugin_clear_confirm { root.plugin_clear_confirm = false; }
+                        else if self.editing >= 0 { self.editing = -1; self.focus(); }
+                        else if self.collection_editing != "" { self.collection_editing = ""; self.selected = self.next(-1, 1); self.action = 0; }
                         else { root.close_addon_config(); } accept
                     } else if !root.addon_config_capabilities {
-                        SettingsStyle.keyboard-mode = true;
-                        if e.text == Key.Tab || e.text == Key.DownArrow || e.text == Key.UpArrow {
+                        if self.editing >= 0 && e.text != Key.Tab && e.text != Key.UpArrow && e.text != Key.DownArrow { reject }
+                        else if e.text == Key.Tab || e.text == Key.DownArrow || e.text == Key.UpArrow {
+                            SettingsStyle.keyboard-mode = true;
                             self.editing = -1;
                             self.focus();
-                            self.selected = Math.mod(self.selected + (e.text == Key.UpArrow ? root.plugin_setting_rows.length + 2 : 1), root.plugin_setting_rows.length + 3);
+                            if e.text == Key.Tab && !e.modifiers.shift && self.action + 1 < self.actions(self.selected) { self.action += 1; }
+                            else if e.text == Key.Tab && e.modifiers.shift && self.action > 0 { self.action -= 1; }
+                            else {
+                                self.selected = self.next(self.selected, e.text == Key.UpArrow || (e.text == Key.Tab && e.modifiers.shift) ? -1 : 1);
+                                self.action = e.text == Key.Tab && e.modifiers.shift ? self.actions(self.selected) - 1 : 0;
+                                self.picker_choice = 0;
+                            }
                             accept
-                        } else if self.editing >= 0 && e.text == Key.Return { reject }
-                        else if e.text == Key.Return || e.text == " " || e.text == Key.LeftArrow || e.text == Key.RightArrow {
+                        } else if e.text == Key.Return || e.text == " " || e.text == Key.LeftArrow || e.text == Key.RightArrow {
+                            SettingsStyle.keyboard-mode = true;
+                            if !self.available(self.selected) { self.selected = self.next(self.selected, 1); self.action = 0; }
                             if self.selected < root.plugin_setting_rows.length {
-                                if root.plugin_setting_rows[self.selected].kind == "boolean" {
-                                    root.plugin_setting_changed(root.addon_config_url, root.plugin_setting_rows[self.selected].key, root.plugin_setting_rows[self.selected].checked ? "false" : "true");
-                                } else if root.plugin_setting_rows[self.selected].kind == "choice" && root.plugin_setting_rows[self.selected].options.length > 0 {
-                                    root.plugin_setting_changed(root.addon_config_url, root.plugin_setting_rows[self.selected].key,
-                                        root.plugin_setting_rows[self.selected].options[Math.mod(root.plugin_setting_rows[self.selected].selected + (e.text == Key.LeftArrow ? root.plugin_setting_rows[self.selected].options.length - 1 : 1), root.plugin_setting_rows[self.selected].options.length)]);
-                                } else if e.text == Key.Return { self.editing = self.selected; }
+                                let row = root.plugin_setting_rows[self.selected];
+                                if (row.kind == "collection-picker" || row.kind == "priority-picker") && row.options.length > 0 {
+                                    if e.text == Key.LeftArrow || e.text == Key.RightArrow { self.picker_choice = Math.mod(self.picker_choice + (e.text == Key.LeftArrow ? row.options.length - 1 : 1), row.options.length); }
+                                    else {
+                                        let choice = row.options[Math.mod(self.picker_choice, row.options.length)];
+                                        if row.kind == "priority-picker" {
+                                            root.plugin_setting_changed(root.addon_config_url, row.key, choice);
+                                        } else {
+                                            root.plugin_setting_changed(root.addon_config_url, choice, "true");
+                                            self.collection_editing = choice;
+                                        }
+                                        self.selected = self.next(-1, 1);
+                                        self.action = 0;
+                                    }
+                                } else if row.kind == "sort-criterion" || row.kind == "priority-criterion" {
+                                    if self.action == 2 || (self.action == 0 && row.selected > 0) || (self.action == 1 && row.selected + 1 < row.labels.length) {
+                                        root.plugin_setting_changed(root.addon_config_url, row.key, row.options[self.action]);
+                                    }
+                                } else if row.kind == "boolean" && row.collection != "" && (row.item_role == "member" || row.item_role == "enabled") {
+                                    if self.action == 2 { self.remove(self.selected); }
+                                    else if self.action == 0 { root.plugin_setting_changed(root.addon_config_url, row.key, row.checked ? "false" : "true"); }
+                                    else if row.has_editor { self.collection_editing = self.collection_editing == row.key ? "" : row.key; }
+                                } else if row.kind == "boolean" { root.plugin_setting_changed(root.addon_config_url, row.key, row.checked ? "false" : "true"); }
+                                else if row.kind == "choice" && row.options.length > 0 {
+                                    root.plugin_setting_changed(root.addon_config_url, row.key, row.options[Math.mod(row.selected + (e.text == Key.LeftArrow ? row.options.length - 1 : 1), row.options.length)]);
+                                } else if self.action == 1 { self.save_version += 1; }
+                                else { self.editing = self.selected; }
                             } else if self.selected == root.plugin_setting_rows.length { root.plugin_cache_clear(root.addon_config_url); }
                             else if self.selected == root.plugin_setting_rows.length + 1 {
                                 if root.plugin_clear_confirm { root.plugin_clear_confirm = false; root.plugin_settings_clear(root.addon_config_url); }
@@ -2114,16 +2195,12 @@ export component SettingsPage {
                             } else { root.close_addon_config(); }
                             accept
                         } else { reject }
-                    }
-                    else if e.text == Key.UpArrow {
-                        self.selected = Math.max(0, self.selected - 1); accept
-                    } else if e.text == Key.DownArrow || e.text == Key.Tab {
-                        self.selected = Math.mod(self.selected + 1, 3); accept
-                    } else if e.text == Key.Return || e.text == " " || e.text == Key.LeftArrow || e.text == Key.RightArrow {
+                    } else if e.text == Key.UpArrow { self.selected = Math.max(0, self.selected - 1); accept }
+                    else if e.text == Key.DownArrow || e.text == Key.Tab { self.selected = Math.mod(self.selected + 1, 3); accept }
+                    else if e.text == Key.Return || e.text == " " || e.text == Key.LeftArrow || e.text == Key.RightArrow {
                         if self.selected == 0 { root.addon_config_streams = !root.addon_config_streams; root.save_addon_config(); }
                         else if self.selected == 1 { root.addon_config_metadata = !root.addon_config_metadata; root.save_addon_config(); }
-                        else { root.close_addon_config(); }
-                        accept
+                        else { root.close_addon_config(); } accept
                     } else { reject }
                 }
                 config_scroll := ScrollView {
@@ -2161,33 +2238,175 @@ export component SettingsPage {
                             text: @tr("This addon provides no content while both options are off.");
                             color: Theme.current.text_settings; font-size: 13px; wrap: word-wrap;
                         }
-                        for field[index] in root.plugin_setting_rows: VerticalLayout {
-                            property <bool> kb_current: SettingsStyle.keyboard-mode && config_focus.selected == index;
-                            changed kb_current => { if self.kb_current { config_focus.reveal(self.absolute-position.y - config_scroll.absolute-position.y, self.height); } }
-                            spacing: 6px;
-                            Text { text: field.label; color: SettingsStyle.keyboard-mode && config_focus.selected == index ? Theme.current.focus_ring : Theme.current.text_settings; font-size: 14px; wrap: word-wrap; }
-                            if field.kind == "boolean": ToggleSwitch {
-                                name: field.label; checked: field.checked;
-                                focused: SettingsStyle.keyboard-mode && config_focus.selected == index;
-                                toggled => { root.plugin_setting_changed(root.addon_config_url, field.key, self.checked ? "true" : "false"); }
-                            }
-                            if field.kind == "choice": Dropdown {
-                                border-color: SettingsStyle.keyboard-mode && config_focus.selected == index ? Theme.current.focus_ring : Theme.current.control_border;
-                                model: field.options; labels: field.labels; current-index: field.selected; roomy: true;
-                                selected(value) => { root.plugin_setting_changed(root.addon_config_url, field.key, value); }
-                            }
-                            if field.kind == "string" || field.kind == "secret" || field.kind == "integer": HorizontalLayout {
-                                spacing: 8px;
-                                plugin_input := SearchField {
-                                    property <bool> edit_active: config_focus.editing == index;
-                                    changed edit_active => { if self.edit_active { self.focus(); } }
-                                    accessible-role: text-input; accessible-label: field.label;
-                                    horizontal-stretch: 1;
-                                    text: field.value; input-type: field.kind == "secret" ? InputType.password : InputType.text; roomy: true;
-                                    focus_changed(focused) => { if focused { config_focus.selected = index; config_focus.editing = index; } }
-                                    accepted(value) => { root.plugin_setting_changed(root.addon_config_url, field.key, value); }
+                        // A collection owns one outlined card; item identity remains on leaf rows.
+                        for group[group_index] in root.plugin_setting_rows: config_group := SettingsCard {
+                            visible: group.kind == "collection-header" || (group.collection == "" && group.kind != "sort-criterion" && group.kind != "priority-criterion" && group.kind != "priority-picker");
+                            height: self.visible ? group_content.preferred-height : 0px;
+                            group_content := VerticalLayout {
+                                padding: 12px; spacing: 0px;
+                                for field[index] in root.plugin_setting_rows: config_row := VerticalLayout {
+                                    property <bool> kb_current: self.visible && SettingsStyle.keyboard-mode && config_focus.selected == index;
+                                    changed kb_current => { if self.kb_current { config_focus.reveal(self.absolute-position.y - config_scroll.absolute-position.y, self.height); } }
+                                    visible: config_group.visible && (group.kind == "collection-header" ? field.collection == group.collection : group.kind == "sort-header" || group.kind == "priority-header" ? field.key == group.key : index == group_index)
+                                        && (field.kind == "collection-header" || field.kind == "sort-header" || field.kind == "priority-header" || config_focus.available(index));
+                                    // Invisible model rows still contribute layout constraints.
+                                    // Collapse them so one group's unrelated fields cannot hide
+                                    // the following sections beyond an inflated scroll extent.
+                                    height: self.visible ? self.preferred-height : 0px;
+                                    vertical-stretch: 0;
+                                    padding-top: self.visible ? 8px : 0px;
+                                    padding-bottom: self.visible ? 8px : 0px;
+                                    spacing: self.visible ? 6px : 0px;
+                                    if field.kind == "sort-header": VerticalLayout {
+                                        spacing: 4px;
+                                        Text { text: field.label; color: Theme.current.text_bright; font-size: 16px; font-weight: 700; }
+                                        Text { text: @tr("Higher priority first. Unknown values last."); color: Theme.current.text_settings; font-size: 12px; wrap: word-wrap; }
+                                    }
+                                    if field.kind == "priority-header": VerticalLayout {
+                                        spacing: 4px;
+                                        Text { text: field.label; color: Theme.current.text_bright; font-size: 16px; font-weight: 700; }
+                                        Text { text: @tr("First choice ranks highest. Unlabelled releases stay last."); color: Theme.current.text_settings; font-size: 12px; wrap: word-wrap; }
+                                    }
+                                    if field.kind == "sort-criterion" || field.kind == "priority-criterion": Text {
+                                        text: (field.selected + 1) + ". " + field.label;
+                                        color: SettingsStyle.keyboard-mode && config_focus.selected == index ? Theme.current.focus_ring : Theme.current.text_settings;
+                                        font-size: 14px; wrap: word-wrap;
+                                    }
+                                    if field.kind == "sort-criterion" || field.kind == "priority-criterion": HorizontalLayout {
+                                        spacing: 6px;
+                                        PillButton {
+                                            label: @tr("Up"); roomy: true;
+                                            enabled: field.selected > 0;
+                                            focused: SettingsStyle.keyboard-mode && config_focus.selected == index && config_focus.action == 0;
+                                            clicked => { root.plugin_setting_changed(root.addon_config_url, field.key, field.options[0]); }
+                                        }
+                                        PillButton {
+                                            label: @tr("Down"); roomy: true;
+                                            enabled: field.selected + 1 < field.labels.length;
+                                            focused: SettingsStyle.keyboard-mode && config_focus.selected == index && config_focus.action == 1;
+                                            clicked => { root.plugin_setting_changed(root.addon_config_url, field.key, field.options[1]); }
+                                        }
+                                        PillButton {
+                                            label: field.kind == "priority-criterion" ? @tr("Remove") : field.checked ? @tr("High first") : @tr("Low first"); roomy: true;
+                                            focused: SettingsStyle.keyboard-mode && config_focus.selected == index && config_focus.action == 2;
+                                            clicked => { root.plugin_setting_changed(root.addon_config_url, field.key, field.options[2]); }
+                                        }
+                                        Rectangle { horizontal-stretch: 1; }
+                                    }
+                                    if field.kind == "collection-header": Text { text: field.collection_label; color: Theme.current.text_bright; font-size: 16px; font-weight: 700; }
+                                    if field.kind == "collection-picker" || field.kind == "priority-picker": Dropdown {
+                                        border-color: self.kb_current ? Theme.current.focus_ring : Theme.current.control_border;
+                                        property <bool> kb_current: SettingsStyle.keyboard-mode && config_focus.selected == index;
+                                        model: field.options; labels: field.labels;
+                                        current-index: self.kb_current ? config_focus.picker_choice : -1;
+                                        placeholder-text: field.label; roomy: true;
+                                        accessible-role: combobox;
+                                        accessible-label: field.label;
+                                        selected(value) => {
+                                            if field.kind == "priority-picker" {
+                                                root.plugin_setting_changed(root.addon_config_url, field.key, value);
+                                            } else {
+                                                config_focus.collection_editing = value;
+                                                root.plugin_setting_changed(root.addon_config_url, value, "true");
+                                            }
+                                        }
+                                    }
+                                    if field.kind == "boolean" && field.collection != "" && (field.item_role == "member" || field.item_role == "enabled") && field.configured: VerticalLayout {
+                                        spacing: 8px;
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            VerticalLayout {
+                                                horizontal-stretch: 1; spacing: 3px;
+                                                Text { text: field.label; color: Theme.current.text_bright; font-size: 14px; wrap: word-wrap; }
+                                                if field.item_role == "enabled": Text { text: @tr("Configured"); color: Theme.current.text_settings; font-size: 12px; }
+                                            }
+                                            ToggleSwitch {
+                                                name: field.label; checked: field.checked;
+                                                focused: SettingsStyle.keyboard-mode && config_focus.selected == index && config_focus.action == 0;
+                                                toggled => { root.plugin_setting_changed(root.addon_config_url, field.key, self.checked ? "true" : "false"); }
+                                            }
+                                            if field.has_editor: PillButton {
+                                                label: ""; width: 44px; roomy: true;
+                                                accessible-label: @tr("Edit") + " " + field.label;
+                                                focused: SettingsStyle.keyboard-mode && config_focus.selected == index && config_focus.action == 1;
+                                                IcSettingsGear { x: 12px; y: 12px; width: 20px; height: 20px; fill: Theme.current.text_settings; }
+                                                clicked => { config_focus.collection_editing = config_focus.collection_editing == field.key ? "" : field.key; }
+                                            }
+                                        }
+                                        if config_focus.collection_editing == field.key: HorizontalLayout {
+                                            PillButton {
+                                                label: @tr("Remove"); roomy: true; destructive: true;
+                                                focused: SettingsStyle.keyboard-mode && config_focus.selected == index && config_focus.action == 2;
+                                                clicked => { config_focus.remove(index); }
+                                            }
+                                            Rectangle { horizontal-stretch: 1; }
+                                        }
+                                        Rectangle { height: 1px; background: Theme.current.control_border; }
+                                    }
+                                    if config_row.visible && field.collection != "" && (field.item_role == "secret" || field.item_role == "url") && config_focus.collection_editing == field.item_controller: collection_editor := VerticalLayout {
+                                        property <bool> reveal_pending: true;
+                                        // Opening an editor can put it below the current
+                                        // viewport. Reveal after its wrapped height settles.
+                                        Timer {
+                                            interval: 16ms;
+                                            running: collection_editor.reveal_pending;
+                                            triggered => {
+                                                collection_editor.reveal_pending = false;
+                                                config_focus.reveal(collection_editor.absolute-position.y - config_scroll.absolute-position.y, collection_editor.height);
+                                            }
+                                        }
+                                        spacing: 6px;
+                                        Text { text: field.label; color: Theme.current.text_settings; font-size: 14px; wrap: word-wrap; }
+                                        collection_input := SearchField {
+                                            property <int> save_version: config_focus.save_version;
+                                            changed save_version => { if config_focus.selected == index && config_focus.action == 1 { root.plugin_setting_changed(root.addon_config_url, field.key, self.full-text); } }
+                                            property <bool> edit_active: config_focus.editing == index;
+                                            changed edit_active => { if self.edit_active { self.focus(); } }
+                                            accessible-role: text-input; accessible-label: field.label;
+                                            text: field.value;
+                                            input-type: field.kind == "secret" ? InputType.password : InputType.text; roomy: true;
+                                            focus_changed(focused) => {
+                                                if focused { config_focus.selected = index; config_focus.editing = index; config_focus.action = 0; }
+                                                else if config_focus.editing == index { config_focus.editing = -1; }
+                                            }
+                                            accepted(value) => { root.plugin_setting_changed(root.addon_config_url, field.key, value); }
+                                        }
+                                        PillButton {
+                                            label: @tr("Save"); roomy: true;
+                                            focused: SettingsStyle.keyboard-mode && config_focus.selected == index && config_focus.action == 1;
+                                            clicked => { root.plugin_setting_changed(root.addon_config_url, field.key, collection_input.full-text); }
+                                        }
+                                    }
+                                    if field.collection == "" && field.kind != "collection-header" && field.kind != "collection-picker" && field.kind != "sort-header" && field.kind != "sort-criterion" && field.kind != "priority-header" && field.kind != "priority-criterion" && field.kind != "priority-picker": Text { text: field.label; color: SettingsStyle.keyboard-mode && config_focus.selected == index ? Theme.current.focus_ring : Theme.current.text_settings; font-size: 14px; wrap: word-wrap; }
+                                    if field.collection == "" && field.kind == "boolean": ToggleSwitch {
+                                        name: field.label; checked: field.checked;
+                                        focused: SettingsStyle.keyboard-mode && config_focus.selected == index;
+                                        toggled => { root.plugin_setting_changed(root.addon_config_url, field.key, self.checked ? "true" : "false"); }
+                                    }
+                                    if field.collection == "" && field.kind == "choice": Dropdown {
+                                        border-color: SettingsStyle.keyboard-mode && config_focus.selected == index ? Theme.current.focus_ring : Theme.current.control_border;
+                                        model: field.options; labels: field.labels; current-index: field.selected; roomy: true;
+                                        selected(value) => { root.plugin_setting_changed(root.addon_config_url, field.key, value); }
+                                    }
+                                    if field.collection == "" && (field.kind == "string" || field.kind == "secret" || field.kind == "integer"): HorizontalLayout {
+                                        spacing: 8px;
+                                        plugin_input := SearchField {
+                                            property <int> save_version: config_focus.save_version;
+                                            changed save_version => { if config_focus.selected == index && config_focus.action == 1 { root.plugin_setting_changed(root.addon_config_url, field.key, self.full-text); } }
+                                            property <bool> edit_active: config_focus.editing == index;
+                                            changed edit_active => { if self.edit_active { self.focus(); } }
+                                            accessible-role: text-input; accessible-label: field.label;
+                                            horizontal-stretch: 1;
+                                            text: field.value; input-type: field.kind == "secret" ? InputType.password : InputType.text; roomy: true;
+                                            focus_changed(focused) => {
+                                                if focused { config_focus.selected = index; config_focus.editing = index; }
+                                                else if config_focus.editing == index { config_focus.editing = -1; }
+                                            }
+                                            accepted(value) => { root.plugin_setting_changed(root.addon_config_url, field.key, value); }
+                                        }
+                                        PillButton { label: @tr("Save"); roomy: true; focused: SettingsStyle.keyboard-mode && config_focus.selected == index && config_focus.action == 1; clicked => { root.plugin_setting_changed(root.addon_config_url, field.key, plugin_input.full-text); } }
+                                    }
                                 }
-                                PillButton { label: @tr("Save"); roomy: true; clicked => { root.plugin_setting_changed(root.addon_config_url, field.key, plugin_input.full-text); } }
                             }
                         }
                         if root.plugin_settings_notice != "": Text { text: root.plugin_settings_notice; color: Theme.current.text_settings; wrap: word-wrap; }
@@ -2195,16 +2414,16 @@ export component SettingsPage {
                             property <bool> kb_current: SettingsStyle.keyboard-mode && config_focus.selected >= root.plugin_setting_rows.length;
                             changed kb_current => { if self.kb_current { config_focus.reveal(self.absolute-position.y - config_scroll.absolute-position.y,self.height); } }
                             spacing: 8px;
-                            PillButton { width: 100%; wrap_label: true; label: @tr("Clear plugin cache"); roomy: true; focused: SettingsStyle.keyboard-mode && config_focus.selected == root.plugin_setting_rows.length; clicked => { root.plugin_cache_clear(root.addon_config_url); } }
-                            PillButton { width: 100%; wrap_label: true; label: @tr("Remove configuration everywhere"); roomy: true; focused: SettingsStyle.keyboard-mode && config_focus.selected == root.plugin_setting_rows.length + 1; clicked => { root.plugin_clear_confirm = true; } }
+                            PillButton { width: 100%; wrap_label: true; label: @tr("Clear plugin cache"); roomy: true; focused: SettingsStyle.keyboard-mode && config_focus.selected == root.plugin_setting_rows.length; clicked => { config_focus.editing = -1; config_focus.selected = root.plugin_setting_rows.length; config_focus.focus(); root.plugin_cache_clear(root.addon_config_url); } }
+                            PillButton { width: 100%; wrap_label: true; label: @tr("Remove configuration everywhere"); roomy: true; focused: SettingsStyle.keyboard-mode && config_focus.selected == root.plugin_setting_rows.length + 1; clicked => { config_focus.editing = -1; config_focus.selected = root.plugin_setting_rows.length + 1; config_focus.focus(); root.plugin_clear_confirm = true; } }
                         }
                         if root.plugin_clear_confirm: VerticalLayout {
                             spacing: 8px;
                             Text { text: @tr("Remove this configuration on all synced devices?"); color: Theme.current.text_settings; wrap: word-wrap; }
                             VerticalLayout {
                                 spacing: 8px;
-                                PillButton { width: 100%; wrap_label: true; label: @tr("Cancel"); roomy: true; clicked => { root.plugin_clear_confirm = false; } }
-                                PillButton { width: 100%; wrap_label: true; label: @tr("Remove configuration"); roomy: true; clicked => { root.plugin_clear_confirm = false; root.plugin_settings_clear(root.addon_config_url); } }
+                                PillButton { width: 100%; wrap_label: true; label: @tr("Cancel"); roomy: true; clicked => { config_focus.editing = -1; config_focus.focus(); root.plugin_clear_confirm = false; } }
+                                PillButton { width: 100%; wrap_label: true; label: @tr("Remove configuration"); roomy: true; clicked => { config_focus.editing = -1; config_focus.focus(); root.plugin_clear_confirm = false; root.plugin_settings_clear(root.addon_config_url); } }
                             }
                         }
                         PillButton {

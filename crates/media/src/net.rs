@@ -47,10 +47,22 @@ mod imp {
         url: String,
         then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
     ) {
+        fetch_bytes_with_progress(url, std::sync::Arc::new(|_| {}), then);
+    }
+
+    /// Full stream snapshots and the final result use this same worker thread.
+    /// Ordinary HTTP addons produce only the final continuation.
+    pub fn fetch_bytes_with_progress(
+        url: String,
+        on_progress: std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+        then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
+    ) {
         std::thread::Builder::new()
             .name(format!("fetch {}", short_url(&url)))
             .spawn(move || {
-                let result = if let Some(result) = nova_providers::fetch_builtin_addon(&url) {
+                let result = if let Some(result) =
+                    nova_providers::fetch_builtin_addon_with_progress(&url, on_progress)
+                {
                     result.map_err(|error| FetchError::new(None, error.to_string()))
                 } else {
                     get_blocking(&url).map_err(|error| to_fetch_error(&url, error))
@@ -217,12 +229,28 @@ mod imp {
         url: String,
         then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
     ) {
+        fetch_bytes_with_progress(url, std::sync::Arc::new(|_| {}), then);
+    }
+
+    /// Full stream snapshots and the final result use this same worker thread.
+    /// Ordinary HTTP addons produce only the final continuation.
+    pub fn fetch_bytes_with_progress(
+        url: String,
+        on_progress: std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+        then: impl FnOnce(Result<Vec<u8>, FetchError>) + Send + 'static,
+    ) {
         std::thread::Builder::new()
             .name(format!("fetch {}", short_url(&url)))
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    get_with_retries(&url)
-                        .map(|bytes| nova_providers::enrich_addon_response(&url, bytes))
+                    let result = if let Some(result) =
+                        nova_providers::fetch_builtin_addon_with_progress(&url, on_progress)
+                    {
+                        result.map_err(|error| FetchError::new(None, error.to_string()))
+                    } else {
+                        get_with_retries(&url)
+                    };
+                    result.map(|bytes| nova_providers::enrich_addon_response(&url, bytes))
                 }));
                 then(match result {
                     Ok(r) => r,
@@ -303,11 +331,14 @@ mod imp {
 }
 
 pub(crate) fn blocking_image_bytes(url: &str) -> Option<Vec<u8>> {
+    if let Some(bytes) = nova_providers::bundled_asset_bytes(url) {
+        return Some(bytes.to_vec());
+    }
     imp::blocking_image_bytes(url)
 }
-pub use imp::fetch_bytes;
 #[cfg(target_os = "android")]
 pub use imp::install_panic_hook;
+pub use imp::{fetch_bytes, fetch_bytes_with_progress};
 
 /// The transport is platform-specific; recipe processing and cache ownership are shared.
 pub fn fetch_image(

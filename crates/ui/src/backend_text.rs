@@ -68,7 +68,57 @@ pub fn tr(english: &str) -> &str {
             "Postavke nije moguće spremiti. Pokušajte ponovno."
         }
         "APIBay (movies and TV)" => "APIBay (filmovi i serije)",
+        "The Pirate Bay / APIBay (movies and TV)" => "The Pirate Bay / APIBay (filmovi i serije)",
+        "Preferred languages" => "Željeni jezici",
+        "Preferred audio languages" => "Željeni jezici zvuka",
+        "Preferred audio language" => "Željeni jezik zvuka",
+        "Preferred subtitle languages" => "Željeni jezici titlova",
+        "Preferred subtitle language" => "Željeni jezik titlova",
+        "Preferred language" => "Željeni jezik",
+        "Preferred video codecs" => "Željeni videokodeci",
+        "Preferred video codec" => "Željeni videokodek",
+        "Add preference" => "Dodaj željenu opciju",
+        "English" => "Engleski",
+        "Japanese" => "Japanski",
+        "Croatian" => "Hrvatski",
+        "German" => "Njemački",
+        "French" => "Francuski",
+        "Spanish" => "Španjolski",
+        "Italian" => "Talijanski",
+        "Portuguese" => "Portugalski",
+        "Russian" => "Ruski",
+        "Korean" => "Korejski",
+        "Chinese" => "Kineski",
+        "Arabic" => "Arapski",
+        "Hindi" => "Hindski",
+        "Dutch" => "Nizozemski",
+        "Polish" => "Poljski",
+        "Turkish" => "Turski",
+        "Swedish" => "Švedski",
+        "Norwegian" => "Norveški",
+        "Danish" => "Danski",
+        "Finnish" => "Finski",
+        "Czech" => "Češki",
+        "Hungarian" => "Mađarski",
+        "Romanian" => "Rumunjski",
+        "Ukrainian" => "Ukrajinski",
+        "Greek" => "Grčki",
+        "Hebrew" => "Hebrejski",
+        "Thai" => "Tajski",
+        "Vietnamese" => "Vijetnamski",
+        "Indonesian" => "Indonezijski",
+        "Torrent sources" => "Torrent izvori",
+        "Debrid providers" => "Debrid pružatelji",
+        "Add source" => "Dodaj izvor",
+        "Add provider" => "Dodaj pružatelja",
+        "StremThru URL" => "StremThru URL",
         "Preferred quality" => "Željena kvaliteta",
+        "Sort order" => "Redoslijed sortiranja",
+        "Cached availability" => "Dostupnost u predmemoriji",
+        "Resolution" => "Razlučivost",
+        "Size" => "Veličina",
+        "Season pack" => "Paket sezone",
+        "Reported seeders" => "Prijavljeni seederi",
         "Minimum seeders" => "Najmanji broj seedera",
         "Playback mode" => "Način reprodukcije",
         "Any" => "Bilo koja",
@@ -80,9 +130,6 @@ pub fn tr(english: &str) -> &str {
         "Resolving stream…" => "Priprema streama…",
         "This stream selection is out of date. Reload streams." => {
             "Odabrani stream više nije aktualan. Ponovno učitajte streamove."
-        }
-        "Direct torrent results are hidden while P2P streaming is disabled." => {
-            "Izravni torrent rezultati skriveni su dok je P2P reprodukcija isključena."
         }
         "Select a source in addon configuration." => "Odaberite izvor u postavkama dodatka.",
         "Source unavailable. Other sources are still usable." => {
@@ -96,6 +143,12 @@ pub fn tr(english: &str) -> &str {
             "Uključite TorBox i unesite API ključ za reprodukciju iz predmemorije."
         }
         "Could not resolve this stream." => "Stream nije moguće pripremiti.",
+        "Reload streams and select Download again to refresh this download." => {
+            "Ponovno učitajte streamove i odaberite Preuzmi za osvježavanje preuzimanja."
+        }
+        "Could not download this stream. Retry or check the addon configuration." => {
+            "Stream nije moguće preuzeti. Pokušajte ponovno ili provjerite postavke dodatka."
+        }
         "Could not resolve this stream. Try another result or check the addon configuration." => {
             "Stream nije moguće pripremiti. Odaberite drugi rezultat ili provjerite postavke dodatka."
         }

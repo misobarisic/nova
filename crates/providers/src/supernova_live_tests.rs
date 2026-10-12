@@ -597,34 +597,34 @@ const ANIME_PIPELINE_DIAGNOSTICS: &str = r#"
     return sorted;
   };
   const cacheStatus = {};
-  const httpBatch = nova.http.batch;
-  nova.http.batch = raw => {
-    const requests = S.json(raw);
-    const rawResult = httpBatch(raw);
-    const responses = S.json(rawResult);
-    if (Array.isArray(requests)) requests.forEach((request,index) => {
-      if (!String(request.url).startsWith('https://api.torbox.app/v1/api/torrents/checkcached?')) return;
-      const match = request.url.match(/[?&]hash=([^&]+)/);
-      const hashes = match ? match[1].split(',').map(S.hash).filter(Boolean) : [];
-      const response = Array.isArray(responses) && responses[index];
-      const body = response && S.json(response.body);
-      const okay = response && response.status===200 && body && body.success===true && body.data && typeof body.data==='object';
-      for (const hash of hashes) cacheStatus[hash] = okay ? 'not_cached' : 'check_failed';
-      if (okay) for (const hash of hashes) {
-        const entry = body.data[hash] || body.data[hash.toUpperCase()];
-        if (entry && S.hash(entry.hash)===hash) cacheStatus[hash] = 'advertised_cached';
-      }
-    });
-    return rawResult;
+  const inspectAvailability = (request,response) => {
+    if (!request || !String(request.url).startsWith('https://api.torbox.app/v1/api/torrents/checkcached?')) return;
+    const match=request.url.match(/[?&]hash=([^&]+)/);
+    const hashes=match ? match[1].split(',').map(S.hash).filter(Boolean) : [];
+    const body=response && S.json(response.body);
+    const okay=response && response.status===200 && body && body.success===true && body.data && typeof body.data==='object';
+    for(const hash of hashes)cacheStatus[hash]=okay ? 'not_cached' : 'check_failed';
+    if(okay)for(const hash of hashes){const entry=body.data[hash] || body.data[hash.toUpperCase()];if(entry && S.hash(entry.hash)===hash)cacheStatus[hash]='advertised_cached';}
   };
+  const httpBatch=nova.http.batch;
+  nova.http.batch=raw=>{const requests=S.json(raw),result=httpBatch(raw),responses=S.json(result);if(Array.isArray(requests))requests.forEach((request,index)=>inspectAvailability(request,Array.isArray(responses) && responses[index]));return result;};
+  const httpBatchEach=nova.http.batchEach;
+  nova.http.batchEach=(raw,callback)=>{const requests=S.json(raw);return httpBatchEach(raw,(index,response)=>{inspectAvailability(requests && requests[index],S.json(response));callback(index,response);});};
+  const publications=[];
+  const publish=nova.streams.publish;
+  let publishStarted=0;
+  nova.streams.publish=raw=>{const rows=S.json(raw);publications.push({elapsedMs:Date.now()-publishStarted,rows:Array.isArray(rows)?rows.length:0});return publish(raw);};
   let cache = {};
   let cacheHits = 0;
   nova.cache.get = key => { if (cache[key]) cacheHits++; return cache[key] || ''; };
   nova.cache.set = (key, value) => { cache[key] = value; return ''; };
   nova.cache.remove = key => { delete cache[key]; return ''; };
+  nova.cache.getMemory = key => { if (cache['memory:' + key]) cacheHits++; return cache['memory:' + key] || ''; };
+  nova.cache.setMemory = (key,value) => { cache['memory:' + key] = value; return ''; };
   const handle = globalThis.novaProvider.handle;
   globalThis.novaProvider.handle = request => {
     cache = request.diagnosticCache || {};
+    publishStarted=Date.now();
     const result = handle(request);
     for (const id of Object.keys(stats)) {
       stats[id].matchedRecords = matched[id].size;
@@ -635,7 +635,7 @@ const ANIME_PIPELINE_DIAGNOSTICS: &str = r#"
     const publicCandidates = [...candidates.values()].map(record => ({title:record.title,infoHash:record.infoHash,fileIdx:record.fileIdx,sources:record.sources,
       kind:S.matches(record,request.lookup) ? 'individual' : 'pack_or_title_only',
       torboxStatus:cachedRows.has(record.infoHash) ? 'cached_playable' : cacheStatus[record.infoHash] || 'not_checked'}));
-    return {result,stats,cacheHits,directRows:rows.filter(row=>row.info_hash).length,cachedRows:cachedRows.size,preCapCandidates,publicCandidates,diagnosticCache:cache};
+    return {result,stats,cacheHits,publications,directRows:rows.filter(row=>row.info_hash).length,cachedRows:cachedRows.size,preCapCandidates,publicCandidates,diagnosticCache:cache};
   };
 })();
 "#;
@@ -702,6 +702,13 @@ fn live_public_anime_discovery_pipeline() {
             eprintln!(
                 "live anime result: case={case} repeat={repeat} cache_hits={cache_hits} direct_rows={direct_rows} warnings={warnings}"
             );
+            for snapshot in output["publications"].as_array().into_iter().flatten() {
+                let elapsed = snapshot["elapsedMs"].as_u64().unwrap_or_default();
+                let count = snapshot["rows"].as_u64().unwrap_or_default();
+                eprintln!(
+                    "live anime snapshot: case={case} repeat={repeat} elapsed_ms={elapsed} rows={count}"
+                );
+            }
             let cached_rows = output["cachedRows"].as_u64().unwrap_or_default();
             let pre_cap = output["preCapCandidates"].as_u64().unwrap_or_default();
             let candidates = output["publicCandidates"]

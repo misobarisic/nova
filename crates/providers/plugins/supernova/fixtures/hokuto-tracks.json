@@ -1,0 +1,741 @@
+{
+  "id": 1377287,
+  "filename": "[Judas] Hokuto no Ken (2026) - S01E07.mkv",
+  "size": 421517473,
+  "torrent_id": 764685,
+  "info": {
+    "ffprobe": {
+      "streams": [
+        {
+          "codec_type": "video",
+          "codec_name": "hevc",
+          "tags": {
+            "language": "jpn",
+            "title": "[Judas] x265 10b",
+            "BPS": "1863625",
+            "DURATION": "00:24:16.080000000",
+            "NUMBER_OF_FRAMES": "34911",
+            "NUMBER_OF_BYTES": "339198457",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 1,
+            "dub": 0,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "audio",
+          "codec_name": "eac3",
+          "channels": 2,
+          "channel_layout": "stereo",
+          "tags": {
+            "language": "jpn",
+            "title": "Japanese",
+            "BPS": "224000",
+            "DURATION": "00:24:16.096000000",
+            "NUMBER_OF_FRAMES": "45503",
+            "NUMBER_OF_BYTES": "40770688",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 1,
+            "dub": 0,
+            "original": 1,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "audio",
+          "codec_name": "eac3",
+          "channels": 2,
+          "channel_layout": "stereo",
+          "tags": {
+            "language": "eng",
+            "title": "English",
+            "BPS": "224000",
+            "DURATION": "00:24:16.096000000",
+            "NUMBER_OF_FRAMES": "45503",
+            "NUMBER_OF_BYTES": "40770688",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "eng",
+            "title": "English",
+            "BPS": "36",
+            "DURATION": "00:00:04.588000000",
+            "NUMBER_OF_FRAMES": "1",
+            "NUMBER_OF_BYTES": "21",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 1,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 1,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "eng",
+            "title": "English",
+            "BPS": "44",
+            "DURATION": "00:23:38.000000000",
+            "NUMBER_OF_FRAMES": "227",
+            "NUMBER_OF_BYTES": "7909",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "fre",
+            "title": "French",
+            "BPS": "51",
+            "DURATION": "00:21:59.818000000",
+            "NUMBER_OF_FRAMES": "223",
+            "NUMBER_OF_BYTES": "8563",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "fre",
+            "title": "French",
+            "BPS": "53",
+            "DURATION": "00:21:59.818000000",
+            "NUMBER_OF_FRAMES": "223",
+            "NUMBER_OF_BYTES": "8825",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "ger",
+            "title": "German",
+            "BPS": "61",
+            "DURATION": "00:22:02.363000000",
+            "NUMBER_OF_FRAMES": "235",
+            "NUMBER_OF_BYTES": "10136",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "ita",
+            "title": "Italian",
+            "BPS": "52",
+            "DURATION": "00:22:00.027000000",
+            "NUMBER_OF_FRAMES": "227",
+            "NUMBER_OF_BYTES": "8609",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "spa",
+            "title": "Spanish[ESP]",
+            "BPS": "51",
+            "DURATION": "00:21:59.944000000",
+            "NUMBER_OF_FRAMES": "218",
+            "NUMBER_OF_BYTES": "8439",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "spa",
+            "title": "Spanish[LAT]",
+            "BPS": "50",
+            "DURATION": "00:22:02.363000000",
+            "NUMBER_OF_FRAMES": "232",
+            "NUMBER_OF_BYTES": "8388",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "por",
+            "title": "Portuguese[BR]",
+            "BPS": "54",
+            "DURATION": "00:22:02.029000000",
+            "NUMBER_OF_FRAMES": "223",
+            "NUMBER_OF_BYTES": "9072",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "ara",
+            "title": "Arabic",
+            "BPS": "76",
+            "DURATION": "00:23:38.000000000",
+            "NUMBER_OF_FRAMES": "227",
+            "NUMBER_OF_BYTES": "13477",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "chi",
+            "title": "Simplified_CR",
+            "BPS": "40",
+            "DURATION": "00:23:38.000000000",
+            "NUMBER_OF_FRAMES": "227",
+            "NUMBER_OF_BYTES": "7150",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "chi",
+            "title": "Traditional_CR",
+            "BPS": "40",
+            "DURATION": "00:23:38.000000000",
+            "NUMBER_OF_FRAMES": "227",
+            "NUMBER_OF_BYTES": "7237",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "jpn",
+            "title": "Japanese",
+            "BPS": "55",
+            "DURATION": "00:23:36.957000000",
+            "NUMBER_OF_FRAMES": "334",
+            "NUMBER_OF_BYTES": "9780",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 0,
+            "original": 1,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "jpn",
+            "title": "Japanese",
+            "BPS": "65",
+            "DURATION": "00:23:36.957000000",
+            "NUMBER_OF_FRAMES": "345",
+            "NUMBER_OF_BYTES": "11576",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 0,
+            "original": 1,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 1,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "hin",
+            "title": "HIN",
+            "BPS": "113",
+            "DURATION": "00:23:38.000000000",
+            "NUMBER_OF_FRAMES": "227",
+            "NUMBER_OF_BYTES": "20131",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "ind",
+            "title": "Indonesian",
+            "BPS": "48",
+            "DURATION": "00:23:38.000000000",
+            "NUMBER_OF_FRAMES": "225",
+            "NUMBER_OF_BYTES": "8623",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "kor",
+            "title": "Korean",
+            "BPS": "41",
+            "DURATION": "00:23:38.000000000",
+            "NUMBER_OF_FRAMES": "227",
+            "NUMBER_OF_BYTES": "7389",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "may",
+            "title": "Malay",
+            "BPS": "46",
+            "DURATION": "00:23:38.000000000",
+            "NUMBER_OF_FRAMES": "227",
+            "NUMBER_OF_BYTES": "8199",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "dut",
+            "title": "Dutch",
+            "BPS": "43",
+            "DURATION": "00:23:38.000000000",
+            "NUMBER_OF_FRAMES": "227",
+            "NUMBER_OF_BYTES": "7690",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "pol",
+            "title": "Polish",
+            "BPS": "40",
+            "DURATION": "00:23:38.000000000",
+            "NUMBER_OF_FRAMES": "225",
+            "NUMBER_OF_BYTES": "7144",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "tha",
+            "title": "Thai",
+            "BPS": "121",
+            "DURATION": "00:21:59.944000000",
+            "NUMBER_OF_FRAMES": "211",
+            "NUMBER_OF_BYTES": "20068",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "subtitle",
+          "codec_name": "subrip",
+          "tags": {
+            "language": "tur",
+            "title": "Turkish",
+            "BPS": "44",
+            "DURATION": "00:23:38.000000000",
+            "NUMBER_OF_FRAMES": "215",
+            "NUMBER_OF_BYTES": "7963",
+            "_STATISTICS_WRITING_APP": "mkvmerge v95.0 ('Goodbye Stranger') 64-bit",
+            "_STATISTICS_WRITING_DATE_UTC": "2026-05-08 22:06:27",
+            "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+          },
+          "disposition": {
+            "default": 0,
+            "dub": 1,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        }
+      ]
+    }
+  }
+}

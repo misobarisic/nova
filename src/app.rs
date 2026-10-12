@@ -219,6 +219,8 @@ pub(crate) struct PendingStream {
 #[derive(Clone)]
 struct StreamUi {
     id: String,
+    /// Transport identity, separate from the potentially shared display label.
+    owner_url: String,
     display: String,
     card: StreamCardText,
     source: StreamSource,
@@ -261,6 +263,8 @@ struct HomeCatalogGroup {
 
 #[derive(Default)]
 struct Shared {
+    stream_prefetch: stream_prefetch::Cache,
+    stream_prefetch_live_session: Option<u64>,
     installed: Vec<Installed>,
     /// In-flight and failed addon logo URLs; successes live in the image cache.
     addon_logo_requested: std::collections::HashSet<String>,
@@ -324,11 +328,18 @@ struct Shared {
     /// A metadata refresh can rerun the same episode with new stream aliases.
     /// Older addon replies must not modify the new search's rows or pills.
     stream_generation: u64,
+    /// Visible row identities whose entrance has already been published.
+    stream_revealed_ids: HashSet<String>,
+    /// Display labels for pending transport identities.
+    stream_owner_labels: HashMap<String, String>,
+    stream_owner_order: Vec<String>,
+    /// Owners whose current snapshot was served from a local stream cache.
+    stream_cached_owners: HashSet<String>,
     /// Labels of the addons shown as filter pills, in installed-addon order.
     /// Pending addons are included until they answer (then dropped if they
     /// returned nothing).
     stream_addons: Vec<String>,
-    /// Labels of the addons still being queried (pills show a spinner).
+    /// Transport URLs still being queried (pills show a spinner until final).
     stream_pending: Vec<String>,
     /// Bounded semantic diagnostics returned by bundled providers only.
     stream_warnings: HashMap<String, Vec<(String, String)>>,
@@ -555,6 +566,7 @@ struct PlaybackTarget {
     session: u64,
     next_episode_dismissed: bool,
     next_episode_id: String,
+    next_episode_prefetched: Option<stream_prefetch::PlaybackKey>,
     /// Position the engine should open at (resume). `None` when starting
     /// fresh / already watched / no saved position.
     resume_pos: Option<f64>,
@@ -711,7 +723,6 @@ struct Bridge {
     /// require explicit recovery without blocking playback.
     tracking: tracking::StateHandle,
     downloads_seen: Arc<AtomicU64>,
-    stream_seq: Arc<AtomicU64>,
     image_usage_scan: Arc<Mutex<settings::DiskUsageScan>>,
     torrent_usage_scan: Arc<Mutex<settings::DiskUsageScan>>,
     #[cfg(feature = "desktop")]
@@ -740,6 +751,7 @@ mod posters;
 mod run;
 mod settings;
 mod settings_sync;
+mod stream_prefetch;
 pub use run::run;
 
 mod qr;

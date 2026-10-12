@@ -925,6 +925,18 @@ pub struct Player {
 }
 
 impl Player {
+    /// Speculative work must not start while Android playback is backgrounded.
+    pub fn can_prefetch_streams(&self) -> bool {
+        #[cfg(target_os = "android")]
+        {
+            !self.state.recovery.lock().unwrap().waiting()
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            true
+        }
+    }
+
     /// Create the mpv core and install the rendering notifier on `app`'s
     /// window (the underlay render context is created at the first
     /// `RenderingSetup`, when the GL context is current).

@@ -18,6 +18,8 @@ mod stremio;
 mod supernova_live_tests;
 #[cfg(test)]
 mod supernova_tests;
+#[cfg(test)]
+mod supernova_track_metadata_tests;
 mod torrent_metadata;
 
 pub use host::{
@@ -39,11 +41,12 @@ pub use models::{
     StreamRequest,
 };
 pub use registry::{
-    ANIKOTO_PROVIDER_URL, ProviderCapabilities, SUPERNOVA_PROVIDER_URL, bundled_providers,
-    configure_provider_capabilities, configured_provider_manifest, fetch_builtin_addon,
-    fetch_builtin_addon_with_timeout, private_provider_id, provider_capabilities, provider_owns_id,
-    provider_settings_schema, resolve_provider_stream, stream_lookup_url,
-    supports_capability_config, supports_contextual_streams, supports_provider_configuration,
+    ANIKOTO_PROVIDER_URL, ProviderCapabilities, SUPERNOVA_PROVIDER_URL, bundled_asset_bytes,
+    bundled_providers, configure_provider_capabilities, configured_provider_manifest,
+    fetch_builtin_addon, fetch_builtin_addon_with_progress, fetch_builtin_addon_with_timeout,
+    private_provider_id, provider_capabilities, provider_owns_id, provider_settings_schema,
+    resolve_provider_stream, stable_stream_identity, stream_lookup_url, supports_capability_config,
+    supports_contextual_streams, supports_provider_configuration,
 };
 pub use runtime::{
     EphemeralPlaybackCredential, PluginCapabilities, PluginLimits, PluginManifest,

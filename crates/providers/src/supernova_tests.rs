@@ -15,6 +15,11 @@ const KEY: &str = "fixture-private-api-key";
 const CACHE_SHIM: &str = r#"
     nova.cache.get = key => nova.storage.get('fixture-cache:' + key);
     nova.cache.set = (key,value,ttl) => nova.storage.set('fixture-cache:' + key, value);
+    nova.cache.getMemory = key => nova.storage.get('fixture-memory:' + key);
+    nova.cache.setMemory = (key,value,ttl) => nova.storage.set('fixture-memory:' + key, value);
+    // Source fixtures capture publications locally; runtime/registry fixtures
+    // separately exercise generation and ownership guards against real hosts.
+    nova.streams.publish = rows => nova.storage.set('fixture-publication', rows);
 "#;
 
 #[derive(Default)]
@@ -23,6 +28,7 @@ struct FixtureHost {
     requests: Mutex<Vec<HttpRequest>>,
     storage: Mutex<HashMap<String, String>>,
     logs: Mutex<Vec<String>>,
+    publications: Mutex<Vec<Value>>,
 }
 impl FixtureHost {
     fn response(&self, route: &str, status: u16, body: impl Into<Vec<u8>>) {
@@ -76,10 +82,24 @@ impl ProviderHost for FixtureHost {
         self.storage.lock().unwrap().get(key).cloned()
     }
     fn storage_set(&self, key: &str, value: &str) -> Result<(), ProviderHostError> {
+        if key.ends_with(":fixture-publication") {
+            self.publications
+                .lock()
+                .unwrap()
+                .push(serde_json::from_str(value).unwrap());
+            return Ok(());
+        }
         self.storage
             .lock()
             .unwrap()
             .insert(key.into(), value.into());
+        Ok(())
+    }
+    fn publish_streams(&self, rows: &str) -> Result<(), ProviderHostError> {
+        self.publications
+            .lock()
+            .unwrap()
+            .push(serde_json::from_str(rows).unwrap());
         Ok(())
     }
     fn log(&self, message: &str) {
@@ -1159,16 +1179,21 @@ fn torznab_pages_preserve_item_attributes_and_public_metainfo_identity() {
         .iter()
         .filter(|request| request.url.contains("feed.animetosho.org/api"))
         .collect::<Vec<_>>();
-    assert!(pages.len() >= 2 && pages.len() <= 4);
+    assert!(pages.len() >= 3 && pages.len() <= 5);
     assert!(
         pages
             .iter()
             .any(|request| request.url.contains("offset=150"))
     );
     assert!(
-        !pages
+        pages
             .iter()
             .any(|request| request.url.contains("offset=300"))
+    );
+    assert!(
+        !pages
+            .iter()
+            .any(|request| request.url.contains("offset=450"))
     );
     assert!(
         !calls
@@ -1207,7 +1232,7 @@ fn main_json_fallback_uses_hash_mirror_when_metainfo_url_is_missing() {
 }
 
 #[test]
-fn nyaa_only_follows_one_advertised_second_page_without_category_filter() {
+fn nyaa_follows_advertised_primary_pages_and_caps_episode_variant() {
     let (host, hash) = nyaa_fixture(&["Example S01E02.mkv"], "Example S01E02 2020 1080p");
     host.response("nyaa.si/",200,format!("{}<ul class='pagination'><li><a href='?q=Example&amp;p=2'>2</a></li><li><a href='?q=Example&amp;p=3'>3</a></li></ul>",nyaa("Example S01E02 2020 1080p",&hash)).into_bytes());
     assert_eq!(
@@ -1222,9 +1247,10 @@ fn nyaa_only_follows_one_advertised_second_page_without_category_filter() {
         .iter()
         .filter(|request| request.url.starts_with("https://nyaa.si/?"))
         .collect::<Vec<_>>();
-    assert!(pages.len() <= 4);
+    assert!(pages.len() <= 5);
     assert!(pages.iter().any(|request| request.url.contains("p=2")));
-    assert!(!pages.iter().any(|request| request.url.contains("p=3")
+    assert!(pages.iter().any(|request| request.url.contains("p=3")));
+    assert!(!pages.iter().any(|request| request.url.contains("p=4")
         || request.url.contains("c=1_2")
         || request.url.contains("s=seeders")));
 }
@@ -1236,8 +1262,7 @@ fn null_file_proof_is_retried_without_renewing_discovery_expiry() {
     let script = "const native=novaProvider.handle; novaProvider.handle=request=>{Date.now=()=>request.fakeNow;return native(request);};";
     let runtime = runtime_with_suffix(script);
     let result=runtime.invoke(host.clone(),&json!({"op":"lookupStreams","lookup":lookup(),"settings":settings("nyaa","direct"),"fakeNow":100000})).unwrap();
-    assert_eq!(result["streams"], json!([]));
-    assert!(!result["warnings"].as_array().unwrap().is_empty());
+    assert_eq!(result, json!([]));
     let cache_entry = || {
         host.storage
             .lock()
@@ -1320,4 +1345,1111 @@ fn optional_batch_fake_clock_stops_before_reserved_availability_budget() {
                 .as_u64()
                 .is_some_and(|timeout| (200..=3000).contains(&timeout)))
     );
+}
+
+fn assert_same_cached_targets(first: &Value, repeated: &Value) {
+    if repeated.is_object() {
+        assert_eq!(repeated["cacheHit"], true);
+    }
+    let first = first.as_array().unwrap();
+    let repeated = repeated
+        .get("streams")
+        .unwrap_or(repeated)
+        .as_array()
+        .unwrap();
+    assert_eq!(first.len(), repeated.len());
+    for (initial, cached) in first.iter().zip(repeated) {
+        for field in ["id", "info_hash", "file_idx", "resolver"] {
+            assert_eq!(initial.get(field), cached.get(field));
+        }
+        let annotation_count = cached["description"]
+            .as_str()
+            .unwrap()
+            .matches("Cached discovery; peer availability unverified.")
+            .count();
+        assert_eq!(
+            annotation_count,
+            usize::from(cached.get("resolver").is_none())
+        );
+    }
+}
+
+const RESULT_CACHE_CLOCK: &str = r#"
+  const handleResultCache=novaProvider.handle;
+  const rankResultCache=Supernova.rank;
+  let resultCacheMiss=false;
+  Supernova.rank=(...args)=>{if(!resultCacheMiss){nova.log('result-cache-miss');resultCacheMiss=true;}return rankResultCache(...args);};
+  novaProvider.handle=request=>{resultCacheMiss=false;Date.now=()=>request.fakeNow;return handleResultCache(request);};
+"#;
+
+#[test]
+fn verified_result_cache_reuses_exact_episode_across_runtime_reload_without_http() {
+    for mode in ["direct", "preferred", "cached"] {
+        let (host, hash) = nyaa_fixture(&["Example S01E02.mkv"], "Example S01E02 2020 1080p");
+        host.account(
+            &hash,
+            json!([{"id":77,"name":"Example S01E02.mkv","size":4}]),
+        );
+        let request = json!({"op":"lookupStreams","lookup":lookup(),"settings":settings("nyaa",mode),"fakeNow":100000});
+        let first = runtime_with_suffix(RESULT_CACHE_CLOCK)
+            .invoke(host.clone(), &request)
+            .unwrap();
+        assert!(!first.as_array().unwrap().is_empty());
+        let calls = host.requests.lock().unwrap().len();
+        let repeated = runtime_with_suffix(RESULT_CACHE_CLOCK)
+            .invoke(host.clone(), &request)
+            .unwrap();
+        assert_same_cached_targets(&first, &repeated);
+        assert_eq!(host.requests.lock().unwrap().len(), calls, "{mode}");
+        assert_eq!(
+            host.logs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|line| line.ends_with("result-cache-miss"))
+                .count(),
+            1
+        );
+        let persisted = host.storage.lock().unwrap();
+        let result_entries = persisted
+            .iter()
+            .filter(|(key, _)| key.contains("results:v1:"))
+            .collect::<Vec<_>>();
+        assert_eq!(result_entries.len(), 1);
+        let payload: Value = serde_json::from_str(result_entries[0].1).unwrap();
+        assert_eq!(payload["expiresAt"], 1000);
+        assert!(!result_entries[0].1.contains(KEY));
+        assert!(!result_entries[0].1.contains("https://"));
+        assert!(!result_entries[0].1.contains("Authorization"));
+    }
+}
+
+#[test]
+fn verified_result_cache_identity_expiry_and_clear_require_fresh_operation() {
+    let (host, hash) = nyaa_fixture(&["Example S01E02.mkv"], "Example S01E02 2020 1080p");
+    host.account(
+        &hash,
+        json!([{"id":77,"name":"Example S01E02.mkv","size":4}]),
+    );
+    let base = json!({"op":"lookupStreams","lookup":lookup(),"settings":settings("nyaa","preferred"),"fakeNow":100000});
+    runtime_with_suffix(RESULT_CACHE_CLOCK)
+        .invoke(host.clone(), &base)
+        .unwrap();
+    let mut variants = vec![];
+    let mut episode = base.clone();
+    episode["lookup"]["episode"] = json!(3);
+    variants.push(episode);
+    let mut mode = base.clone();
+    mode["settings"]["playback.mode"] = json!("cached");
+    variants.push(mode);
+    let mut source = base.clone();
+    source["settings"]["sources.animetosho"] = json!(true);
+    variants.push(source);
+    let mut expiry = base.clone();
+    expiry["fakeNow"] = json!(1001000);
+    variants.push(expiry);
+    for (index, request) in variants.iter().enumerate() {
+        runtime_with_suffix(RESULT_CACHE_CLOCK)
+            .invoke(host.clone(), request)
+            .unwrap();
+        assert_eq!(
+            host.logs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|line| line.ends_with("result-cache-miss"))
+                .count(),
+            index + 2
+        );
+    }
+    host.storage.lock().unwrap().clear();
+    runtime_with_suffix(RESULT_CACHE_CLOCK)
+        .invoke(host.clone(), &base)
+        .unwrap();
+    assert_eq!(
+        host.logs
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| line.ends_with("result-cache-miss"))
+            .count(),
+        6
+    );
+}
+
+#[test]
+fn verified_result_cache_rejects_malformed_or_sensitive_rows_and_partial_errors() {
+    for corruption in ["null", "url", "secret"] {
+        let (host, _) = nyaa_fixture(&["Example S01E02.mkv"], "Example S01E02 2020 1080p");
+        let request = json!({"op":"lookupStreams","lookup":lookup(),"settings":settings("nyaa","direct"),"fakeNow":100000});
+        runtime_with_suffix(RESULT_CACHE_CLOCK)
+            .invoke(host.clone(), &request)
+            .unwrap();
+        for (key, raw) in host.storage.lock().unwrap().iter_mut() {
+            if key.contains("results:v1:") {
+                let mut payload: Value = serde_json::from_str(raw).unwrap();
+                match corruption {
+                    "null" => payload["streams"] = json!([null]),
+                    "url" => payload["streams"][0]["url"] = json!("https://example.com/secret"),
+                    _ => {
+                        payload["streams"][0]["description"] =
+                            json!("fixture%2Dprivate%2Dapi%2Dkey")
+                    }
+                }
+                *raw = payload.to_string();
+            }
+        }
+        runtime_with_suffix(RESULT_CACHE_CLOCK)
+            .invoke(host.clone(), &request)
+            .unwrap();
+        assert_eq!(
+            host.logs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|line| line.ends_with("result-cache-miss"))
+                .count(),
+            2
+        );
+    }
+    let (host, _) = nyaa_fixture(&["Example S01E02.mkv"], "Example S01E02 2020 1080p");
+    host.response("/v1/api/torrents/checkcached", 503, b"{}".to_vec());
+    let request = json!({"op":"lookupStreams","lookup":lookup(),"settings":settings("nyaa","preferred"),"fakeNow":100000});
+    for _ in 0..2 {
+        let output = runtime_with_suffix(RESULT_CACHE_CLOCK)
+            .invoke(host.clone(), &request)
+            .unwrap();
+        assert!(!output["streams"].as_array().unwrap().is_empty());
+        assert!(!output["warnings"].as_array().unwrap().is_empty());
+    }
+    assert!(
+        !host
+            .storage
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|key| key.contains("results:v1:"))
+    );
+    assert_eq!(
+        host.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.contains("checkcached"))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn lookup_publishes_verified_whole_lists_and_cached_results_immediately() {
+    let (host, hash) = nyaa_fixture(&["Example S01E02.mkv"], "Example S01E02 2020 1080p");
+    host.account(
+        &hash,
+        json!([{"id":77,"name":"Example S01E02.mkv","size":4}]),
+    );
+    let first = run_lookup(host.clone(), "nyaa", "preferred");
+    let snapshots = host.publications.lock().unwrap().clone();
+    assert_eq!(snapshots.len(), 2);
+    assert_eq!(snapshots[0].as_array().unwrap().len(), 1);
+    assert!(snapshots[0][0].get("resolver").is_some());
+    assert_eq!(snapshots[1], first);
+    assert_eq!(snapshots[1][0]["id"], snapshots[0][0]["id"]);
+    let calls = host.requests.lock().unwrap().len();
+    let cached = run_lookup(host.clone(), "nyaa", "preferred");
+    assert_same_cached_targets(&first, &cached);
+    assert_eq!(host.requests.lock().unwrap().len(), calls);
+    let repeated = host.publications.lock().unwrap();
+    assert_eq!(repeated.len(), 3);
+    assert_eq!(repeated[2], cached);
+}
+
+#[test]
+fn deeper_advertised_pack_is_checked_once_after_first_page_progress() {
+    let host = Arc::new(FixtureHost::default());
+    let hashes = (1..=6)
+        .map(|index| format!("{index:040x}"))
+        .collect::<Vec<_>>();
+    for (page, hash) in hashes.iter().enumerate() {
+        host.response(&format!("/page/{page}"),200,format!("{}<ul class='pagination'><li><a href='?p=6'>6</a></li><li><a href='?p=99'>99</a></li></ul>",nyaa("Example (2020) S01 Complete 1080p",hash)).into_bytes());
+    }
+    host.account(
+        &hashes[5],
+        json!([{"id":77,"name":"Example S01E02.mkv","size":4}]),
+    );
+    let suffix = "Supernova.sources.nyaa.url=(query,lookup,page=0)=>'https://nyaa.si/page/'+page;";
+    let output = runtime_with_suffix(suffix)
+        .invoke(
+            host.clone(),
+            &json!({"op":"lookupStreams","lookup":lookup(),"settings":settings("nyaa","cached")}),
+        )
+        .unwrap();
+    let rows = output.get("streams").unwrap_or(&output).as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0]["id"].as_str().unwrap().starts_with(&hashes[5]));
+    let calls = host.requests.lock().unwrap();
+    let first_check = calls
+        .iter()
+        .position(|request| request.url.contains("checkcached"))
+        .unwrap();
+    let deep_page = calls
+        .iter()
+        .position(|request| request.url.ends_with("/page/5"))
+        .unwrap();
+    assert!(first_check < deep_page);
+    assert!(!calls.iter().any(|request| request.url.ends_with("/page/6")));
+    let mut checked = HashMap::<String, usize>::new();
+    for request in calls
+        .iter()
+        .filter(|request| request.url.contains("checkcached"))
+    {
+        let url = url::Url::parse(&request.url).unwrap();
+        for hash in url
+            .query_pairs()
+            .find(|(key, _)| key == "hash")
+            .unwrap()
+            .1
+            .split(',')
+        {
+            *checked.entry(hash.into()).or_default() += 1;
+        }
+    }
+    assert_eq!(checked.len(), 6);
+    assert!(checked.values().all(|count| *count == 1));
+    assert!(calls.len() <= 48);
+    assert_eq!(
+        host.publications.lock().unwrap().last().unwrap(),
+        &json!(rows)
+    );
+}
+
+#[test]
+fn filled_discovery_pool_keeps_crawling_and_admits_better_ranked_later_pack() {
+    let host = Arc::new(FixtureHost::default());
+    let row = |index: usize, seeders: u64| json!({"infoHash":format!("{index:040x}"),"title":"Example (2020) S01 Complete 1080p","sizeBytes":4,"seeders":seeders,"torrentUrl":null,"sources":["Nyaa"]});
+    host.json(
+        "/page/0",
+        json!((1..=150).map(|index| row(index, 1)).collect::<Vec<_>>()),
+    );
+    host.json(
+        "/page/1",
+        json!((151..=300).map(|index| row(index, 1)).collect::<Vec<_>>()),
+    );
+    host.json("/page/2", json!([row(301, 1000)]));
+    host.json("/page/3", json!([row(302, 2000)]));
+    let selected = format!("{:040x}", 302);
+    host.account(
+        &selected,
+        json!([{"id":77,"name":"Example S01E02.mkv","size":4}]),
+    );
+    let suffix = r#"Supernova.sources.nyaa.url=(query,lookup,page=0)=>'https://nyaa.si/page/'+page;Supernova.sources.nyaa.parse=JSON.parse;Supernova.sources.nyaa.pages=()=>4;
+      let retained=[];const cacheSet=Supernova.cacheSet;
+      Supernova.cacheSet=(key,payload,ttl)=>{if(payload.records)retained=payload.records;cacheSet(key,payload,ttl);};
+      const handle=novaProvider.handle;novaProvider.handle=request=>{const result=handle(request);return {result,retainedCount:retained.length,firstHash:retained[0] && retained[0].infoHash};};"#;
+    let output = runtime_with_suffix(suffix)
+        .invoke(
+            host.clone(),
+            &json!({"op":"lookupStreams","lookup":lookup(),"settings":settings("nyaa","cached")}),
+        )
+        .unwrap();
+    let result = &output["result"];
+    let rows = result.get("streams").unwrap_or(result).as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0]["id"].as_str().unwrap().starts_with(&selected));
+    assert!(
+        host.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| request.url.ends_with("/page/3"))
+    );
+    // The real cache permits 1 MiB; the fixture's legacy storage shim permits
+    // only 16 KiB. Inspect the intended bounded cache payload directly here.
+    assert_eq!(output["retainedCount"], 300);
+    assert_eq!(output["firstHash"], selected);
+}
+
+#[test]
+fn knaben_v2_get_pages_use_verified_hash_and_exact_metainfo_file() {
+    let host = Arc::new(FixtureHost::default());
+    let (bytes, hash) = torrent(&["Example S01E02.mkv"]);
+    host.json("api.knaben.org/v2/search",json!({"total":{"value":151,"relation":"eq"},"hits":[
+        {"title":"Example S01E02 2020 1080p","hash":hash.to_uppercase(),"magnetUrl":format!("magnet:?xt=urn:btih:{hash}"),"bytes":4,"seeders":3,"liveSeeders":7,
+         "link":"https://untrusted.example/download-proxy","cachedOrigin":"https://private-value.invalid/"}
+    ]}));
+    let mirror = format!(
+        "https://itorrents.net/torrent/{}.torrent",
+        hash.to_uppercase()
+    );
+    host.response(&mirror, 200, bytes);
+    let rows = run_lookup(host.clone(), "knaben", "direct");
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0]["info_hash"], hash);
+    assert_eq!(rows[0]["file_idx"], 0);
+    assert_eq!(rows[0]["seeders"], 7);
+    assert_eq!(rows[0]["source"], "Knaben");
+    let calls = host.requests.lock().unwrap();
+    assert!(calls.iter().all(|request| request.method == "GET"));
+    assert!(calls.iter().any(|request| request.url.contains("f=150")));
+    assert!(!calls.iter().any(|request| request.url.contains("f=300")
+        || request.url.contains("untrusted.example")
+        || request.url.contains("xxx")
+        || request.url.contains("unsafe")));
+    assert!(calls.iter().any(|request| request.url == mirror));
+    assert!(
+        !host
+            .storage
+            .lock()
+            .unwrap()
+            .values()
+            .any(|raw| raw.contains("private-value") || raw.contains("download-proxy"))
+    );
+}
+
+#[test]
+fn knaben_valid_empty_and_malformed_feeds_fail_source_locally() {
+    for (body, warning) in [
+        ("{\"hits\":[],\"total\":{\"value\":0}}", false),
+        ("[]", true),
+        ("{\"hits\":null}", true),
+        ("not JSON", true),
+    ] {
+        let host = Arc::new(FixtureHost::default());
+        host.response("api.knaben.org/v2/search", 200, body.as_bytes().to_vec());
+        let output = run_lookup_raw(host.clone(), "knaben", "direct");
+        if warning {
+            assert_eq!(output["streams"], json!([]));
+            assert_eq!(output["warnings"][0]["source"], "Knaben");
+        } else {
+            assert_eq!(output, json!([]));
+        }
+        assert!(
+            !host
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| request.url.contains("itorrents"))
+        );
+    }
+}
+
+#[test]
+fn knaben_parser_rejects_hash_conflicts_and_configuration_preserves_pirate_bay_key() {
+    let valid = "0123456789012345678901234567890123456789";
+    let other = "1123456789012345678901234567890123456789";
+    let body=json!({"hits":[null,{"title":"Conflict","hash":valid,"magnetUrl":format!("magnet:?xt=urn:btih:{other}")},
+        {"title":"Unsupported","hash":"abc"},{"title":"No hash"},
+        {"title":"Valid","hash":valid,"bytes":"12","seeders":"2"},
+        {"title":"Magnet only","magnetUrl":format!("magnet:?xt=urn:btih:{other}")}],"total":{"value":999999999}}).to_string();
+    let suffix = "novaProvider.handle=request=>({records:Supernova.sources.knaben.parse(request.body),pages:Supernova.sources.knaben.pages(request.body)});";
+    let output = runtime_with_suffix(suffix)
+        .invoke(crate::MemoryProviderHost::new(), &json!({"body":body}))
+        .unwrap();
+    assert_eq!(output["records"].as_array().unwrap().len(), 2);
+    assert_eq!(output["records"][0]["infoHash"], valid);
+    assert_eq!(output["records"][1]["infoHash"], other);
+    assert_eq!(output["pages"], 6);
+    let provider = crate::bundled_providers()
+        .iter()
+        .find(|provider| provider.url == crate::SUPERNOVA_PROVIDER_URL)
+        .unwrap();
+    let manifest: Value = serde_json::from_str(provider.plugin_manifest).unwrap();
+    let schema = manifest["configuration"].as_array().unwrap();
+    assert!(
+        schema
+            .iter()
+            .any(|field| field["key"] == "sources.knaben" && field["default"] == false)
+    );
+    assert!(schema.iter().any(|field| field["key"] == "sources.apibay"
+        && field["label"].as_str().unwrap().contains("The Pirate Bay")));
+}
+
+#[test]
+fn knaben_zero_seed_inventory_reaches_verified_torbox_availability() {
+    let host = Arc::new(FixtureHost::default());
+    let hash = "0123456789012345678901234567890123456789";
+    host.json("api.knaben.org/v2/search",json!({"hits":[{"title":"Example S01E02 2020 1080p","hash":hash,"bytes":4,"seeders":0,"liveSeeders":0}],"total":{"value":1}}));
+    host.account(
+        hash,
+        json!([{"id":77,"name":"Example S01E02.mkv","size":4}]),
+    );
+    let rows = run_lookup(host.clone(), "knaben", "cached");
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert!(rows[0].get("resolver").is_some());
+    assert_eq!(rows[0]["seeders"], Value::Null);
+    let requests = host.requests.lock().unwrap();
+    assert!(
+        requests
+            .iter()
+            .filter(|request| request.url.starts_with("https://api.knaben.org/"))
+            .all(|request| url::Url::parse(&request.url)
+                .unwrap()
+                .query_pairs()
+                .any(|(key, value)| key == "dead" && value.is_empty()))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.url.contains("checkcached"))
+    );
+    assert!(requests.iter().all(|request| request.method == "GET"));
+}
+
+fn stremthru_feed(hash: &str, label: &str) -> String {
+    format!(
+        r#"<rss xmlns:t="http://torznab.com/schemas/2015/feed"><channel><item><title>Example S01E02 2020 1080p</title><t:attr name="infohash" value="{hash}"/><t:attr name="size" value="4"/><t:attr name="indexername" value="{label}"/><t:attr name="seeders" value="99"/></item></channel></rss>"#
+    )
+}
+
+#[test]
+fn stremthru_imdb_inventory_keeps_provenance_and_requires_exact_file_proof() {
+    let host = Arc::new(FixtureHost::default());
+    let (bytes, hash) = torrent(&["Example S01E02.mkv"]);
+    host.response(
+        "/v0/torznab/api",
+        200,
+        stremthru_feed(&hash, "Knaben").into_bytes(),
+    );
+    host.response(
+        &format!(
+            "https://itorrents.net/torrent/{}.torrent",
+            hash.to_uppercase()
+        ),
+        200,
+        bytes,
+    );
+    let rows = run_lookup(host.clone(), "stremthru", "direct");
+    assert_eq!(rows[0]["info_hash"], hash);
+    assert_eq!(rows[0]["file_idx"], 0);
+    assert_eq!(rows[0]["source"], "StremThru|Knaben");
+    assert_eq!(rows[0]["seeders"], Value::Null);
+    let requests = host.requests.lock().unwrap();
+    let discovery = requests
+        .iter()
+        .filter(|request| request.url.contains("/v0/torznab/api"))
+        .collect::<Vec<_>>();
+    assert_eq!(discovery.len(), 1);
+    assert!(discovery[0].url.contains("imdbid=tt123"));
+    assert!(requests.iter().all(|request| request.method == "GET"));
+}
+
+#[test]
+fn stremthru_movie_inventory_keeps_cached_web_release_without_franchise_mismatches() {
+    // Public inventory labels and the account's nested filename reproduce the
+    // reported missing movie. Remakes remain excluded even when also cached.
+    let host = Arc::new(FixtureHost::default());
+    let hash = "b65c9fe80d9c428d49d3a33d615eecbdbdf36e6a";
+    let title = "Resident Evil 2026.1080p.WEB-DL.AAC.x264-rothebehap.mp4";
+    let feed = format!(
+        r#"<rss xmlns:t="http://torznab.com/schemas/2015/feed"><channel>
+        <item><title>{title}</title><t:attr name="infohash" value="{hash}"/><t:attr name="size" value="3981252034"/><t:attr name="imdb" value="35538033"/></item>
+        <item><title>Resident.Evil.Extinction.2007.Blu-ray.Remux.1080p.mkv</title><t:attr name="infohash" value="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"/><t:attr name="size" value="20000000000"/></item>
+        <item><title>Resident.Evil.Welcome.to.Raccoon.City.2021.1080p.BluRay.mkv</title><t:attr name="infohash" value="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"/><t:attr name="size" value="13000000000"/></item>
+        </channel></rss>"#
+    );
+    host.response("/v0/torznab/api", 200, feed.into_bytes());
+    host.account(
+        hash,
+        json!([{"id":0,"name":format!("{title}/{title}"),"size":3981252034_u64}]),
+    );
+    let movie =
+        json!({"mediaId":"tt35538033","mediaType":"movie","title":"Resident Evil","year":"2026"});
+    let result = runtime()
+        .invoke(
+            host.clone(),
+            &json!({"op":"lookupStreams","lookup":movie,"settings":settings("stremthru","cached")}),
+        )
+        .unwrap();
+    let rows = result.get("streams").unwrap_or(&result).as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["title"], "[TB⚡] Supernova 1080p");
+    let description = rows[0]["description"].as_str().unwrap();
+    assert!(description.contains("🎞️ WEB-DL · AVC"));
+    assert_eq!(
+        description.lines().last(),
+        Some(format!("📁 {title}").as_str())
+    );
+    let token: Value =
+        serde_json::from_str(rows[0]["resolver"]["token"].as_str().unwrap()).unwrap();
+    assert_eq!(token["infoHash"], hash);
+    assert_eq!(token["fileName"], format!("{title}/{title}"));
+    let requests = host.requests.lock().unwrap();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.url.contains("imdbid=tt35538033"))
+    );
+    assert!(requests.iter().all(|request| request.method == "GET"));
+    let availability = requests
+        .iter()
+        .find(|request| request.url.contains("checkcached"))
+        .unwrap();
+    assert!(
+        !availability
+            .url
+            .contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    );
+    assert!(
+        !availability
+            .url
+            .contains("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    );
+}
+
+#[test]
+fn stremthru_non_imdb_title_search_and_configured_url_change_do_not_reuse_old_results() {
+    let host = Arc::new(FixtureHost::default());
+    let (bytes, hash) = torrent(&["Example S01E02.mkv"]);
+    host.response(
+        "/v0/torznab/api",
+        200,
+        stremthru_feed(&hash, "Knaben").into_bytes(),
+    );
+    host.response(
+        &format!(
+            "https://itorrents.net/torrent/{}.torrent",
+            hash.to_uppercase()
+        ),
+        200,
+        bytes,
+    );
+    let mut native_lookup = lookup();
+    native_lookup["mediaId"] = json!("kitsu:42");
+    let mut preferences = settings("stremthru", "direct");
+    let request = json!({"op":"lookupStreams","lookup":native_lookup,"settings":preferences});
+    let first = runtime().invoke(host.clone(), &request).unwrap();
+    assert_eq!(first.as_array().unwrap().len(), 1);
+    let calls = host.requests.lock().unwrap().len();
+    runtime().invoke(host.clone(), &request).unwrap();
+    assert_eq!(host.requests.lock().unwrap().len(), calls);
+    preferences["stremthru.url"] = json!("https://alternate.stremthru.example/");
+    let changed = runtime()
+        .invoke(
+            host.clone(),
+            &json!({"op":"lookupStreams","lookup":native_lookup,"settings":preferences}),
+        )
+        .unwrap();
+    assert_eq!(changed[0]["info_hash"], hash);
+    let calls = host.requests.lock().unwrap();
+    let endpoints = calls
+        .iter()
+        .filter(|request| request.url.contains("/v0/torznab/api"))
+        .collect::<Vec<_>>();
+    assert_eq!(endpoints.len(), 2);
+    assert!(
+        endpoints[1]
+            .url
+            .starts_with("https://alternate.stremthru.example/")
+    );
+    assert!(
+        endpoints
+            .iter()
+            .all(|request| request.url.contains("q=Example")
+                && request.url.contains("year=2020")
+                && !request.url.contains("imdbid")
+                && !request.url.contains("kitsu"))
+    );
+    assert!(
+        !host
+            .storage
+            .lock()
+            .unwrap()
+            .values()
+            .any(|value| value.contains("alternate.stremthru.example"))
+    );
+}
+
+#[test]
+fn stremthru_xml_rejects_invalid_hashes_magnets_and_untrusted_indexer_labels() {
+    let hash = "0123456789012345678901234567890123456789";
+    for label in [
+        "https://key.example",
+        "Bearer credential",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "Knaben",
+    ] {
+        let body = stremthru_feed(hash, label);
+        let script =
+            "novaProvider.handle=request=>Supernova.sources.stremthru.parse(request.body);";
+        let rows = runtime_with_suffix(script)
+            .invoke(crate::MemoryProviderHost::new(), &json!({"body":body}))
+            .unwrap();
+        assert_eq!(
+            rows[0]["sources"][0],
+            if label == "Knaben" {
+                "StremThru|Knaben"
+            } else {
+                "StremThru"
+            }
+        );
+    }
+    let script = "novaProvider.handle=request=>Supernova.sources.stremthru.parse(request.body);";
+    for body in [stremthru_feed("abc","Knaben"),stremthru_feed(hash,"Knaben").replace("Example S01E02 2020 1080p","Invalid Magnet"),stremthru_feed(hash,"Knaben").replace("</item>","<t:attr name='magneturl' value='magnet:?xt=urn:btih:1123456789012345678901234567890123456789'/></item>")] {
+        assert_eq!(runtime_with_suffix(script).invoke(crate::MemoryProviderHost::new(),&json!({"body":body})).unwrap(),json!([]));
+    }
+    let host = Arc::new(FixtureHost::default());
+    let mut preferences = settings("stremthru", "direct");
+    preferences["stremthru.url"] = json!("http://localhost:8080");
+    let output = runtime()
+        .invoke(
+            host.clone(),
+            &json!({"op":"lookupStreams","lookup":lookup(),"settings":preferences}),
+        )
+        .unwrap();
+    assert_eq!(output["streams"], json!([]));
+    assert!(host.requests.lock().unwrap().is_empty());
+    let manifest: Value = serde_json::from_str(
+        crate::bundled_providers()
+            .iter()
+            .find(|provider| provider.url == crate::SUPERNOVA_PROVIDER_URL)
+            .unwrap()
+            .plugin_manifest,
+    )
+    .unwrap();
+    assert!(
+        manifest["configuration"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field["key"] == "sources.stremthru" && field["default"] == false)
+    );
+    assert!(
+        manifest["configuration"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field["key"] == "stremthru.url"
+                && field["default"] == "https://stremthru.13377001.xyz")
+    );
+}
+
+#[test]
+fn configurable_sort_criteria_directions_unknowns_and_stable_ties() {
+    let script = r#"novaProvider.handle=request=>{
+      const order=[{key:request.criterion,direction:request.direction},...Supernova.SORT_DEFAULT.filter(item=>item.key!==request.criterion)];
+      return Supernova.sortRows(request.rows,{"sort.order":order}).map(row=>row.id);
+    };"#;
+    let row = |id: &str, title: &str, size: Value, seeders: Value, cached: bool| {
+        let mut value = json!({"id":id,"description":title,"size":size,"seeders":seeders});
+        if cached {
+            value["resolver"] = json!({"provider_id":"supernova"});
+        }
+        value
+    };
+    for (criterion, low, high, unknown) in [
+        (
+            "cached",
+            row("low", "Example 1080p", json!(10), json!(10), false),
+            row("high", "Example 1080p", json!(10), json!(10), true),
+            None,
+        ),
+        (
+            "resolution",
+            row("low", "Example 720p", json!(10), json!(10), false),
+            row("high", "Example 4K", json!(10), json!(10), false),
+            Some(row("unknown", "Example", json!(10), json!(10), false)),
+        ),
+        (
+            "size",
+            row("low", "Example 1080p", json!(0), json!(10), false),
+            row("high", "Example 1080p", json!(100), json!(10), false),
+            Some(row(
+                "unknown",
+                "Example 1080p",
+                Value::Null,
+                json!(10),
+                false,
+            )),
+        ),
+        (
+            "pack",
+            row("low", "Example S01E02 1080p", json!(10), json!(10), false),
+            row(
+                "high",
+                "Example S01 Complete 1080p",
+                json!(10),
+                json!(10),
+                false,
+            ),
+            Some(row("unknown", "", json!(10), json!(10), false)),
+        ),
+        (
+            "seeders",
+            row("low", "Example 1080p", json!(10), json!(0), false),
+            row("high", "Example 1080p", json!(10), json!(100), false),
+            Some(row(
+                "unknown",
+                "Example 1080p",
+                json!(10),
+                Value::Null,
+                false,
+            )),
+        ),
+    ] {
+        for direction in ["asc", "desc"] {
+            let mut rows = vec![high.clone(), low.clone()];
+            if let Some(unknown) = &unknown {
+                rows.push(unknown.clone());
+            }
+            let output = runtime_with_suffix(script)
+                .invoke(
+                    crate::MemoryProviderHost::new(),
+                    &json!({"criterion":criterion,"direction":direction,"rows":rows}),
+                )
+                .unwrap();
+            let mut expected = if direction == "asc" {
+                vec!["low", "high"]
+            } else {
+                vec!["high", "low"]
+            };
+            if unknown.is_some() {
+                expected.push("unknown");
+            }
+            assert_eq!(output, json!(expected), "{criterion}/{direction}");
+        }
+    }
+    let a = row("a:1:p2p", "Example 1080p", json!(10), json!(10), false);
+    let b = row("a:2:p2p", "Example 1080p", json!(10), json!(10), false);
+    for rows in [vec![a.clone(), b.clone()], vec![b, a]] {
+        let output = runtime_with_suffix(script)
+            .invoke(
+                crate::MemoryProviderHost::new(),
+                &json!({"criterion":"seeders","direction":"desc","rows":rows}),
+            )
+            .unwrap();
+        assert_eq!(output, json!(["a:1:p2p", "a:2:p2p"]));
+    }
+}
+
+#[test]
+fn explicit_sort_merges_cached_and_direct_before_cap_and_preserves_quality_retention() {
+    let script = r#"novaProvider.handle=()=>{
+      const settings={"quality.preferred":"720p","sort.order":[{key:"resolution",direction:"desc"},...Supernova.SORT_DEFAULT.filter(item=>item.key!=="resolution")]};
+      const direct={id:"high:0:p2p",description:"Example S01E02 2160p",size:10,seeders:null};
+      const cached=Array.from({length:55},(_,index)=>({id:`low:${index}:torbox`,description:"Example S01E02 720p",size:10,seeders:null,resolver:{provider_id:"supernova"}}));
+      const records=[{infoHash:"high",title:"Example 2160p",sizeBytes:10,seeders:100},{infoHash:"low",title:"Example 720p",sizeBytes:10,seeders:0}];
+      return {rows:Supernova.sortRows([...cached,direct],settings).slice(0,Supernova.MAX).map(row=>row.id),retained:Supernova.rank(records,settings).map(record=>record.infoHash)};
+    };"#;
+    let output = runtime_with_suffix(script)
+        .invoke(crate::MemoryProviderHost::new(), &json!({}))
+        .unwrap();
+    assert_eq!(output["rows"][0], "high:0:p2p");
+    assert_eq!(output["rows"].as_array().unwrap().len(), 50);
+    assert_eq!(output["retained"], json!(["low", "high"]));
+}
+
+#[test]
+fn progressive_sort_and_cache_follow_changed_whole_field_order() {
+    let host = Arc::new(FixtureHost::default());
+    let (bytes, hash) = torrent(&["Example S01E02.mkv"]);
+    let cached_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    host.json("/page/0",json!([
+        {"infoHash":hash,"title":"Example 2020 S01E02 2160p","sizeBytes":10,"seeders":10,"torrentUrl":"https://example.com/direct.torrent","sources":["Nyaa"]},
+        {"infoHash":cached_hash,"title":"Example 2020 S01E02 720p","sizeBytes":10,"seeders":10,"torrentUrl":null,"sources":["Nyaa"]}
+    ]));
+    host.response("/direct.torrent", 200, bytes);
+    host.account(
+        cached_hash,
+        json!([{"id":4,"name":"Example S01E02.mkv","size":10}]),
+    );
+    let script = r#"Supernova.sources.nyaa.url=()=>"https://nyaa.si/page/0";Supernova.sources.nyaa.parse=JSON.parse;Supernova.sources.nyaa.pages=()=>1;"#;
+    let mut preferences = settings("nyaa", "preferred");
+    let mut request = json!({"op":"lookupStreams","lookup":lookup(),"settings":preferences});
+    let first = runtime_with_suffix(script)
+        .invoke(host.clone(), &request)
+        .unwrap();
+    let rows = first.get("streams").unwrap_or(&first).as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows[0]["resolver"].is_object());
+    let requests = host.requests.lock().unwrap().len();
+    let cached = runtime_with_suffix(script)
+        .invoke(host.clone(), &request)
+        .unwrap();
+    assert_eq!(cached["cacheHit"], true);
+    assert_eq!(cached["streams"].as_array().unwrap().len(), 2);
+    assert_eq!(host.requests.lock().unwrap().len(), requests);
+    preferences["sort.order"] = json!([
+        {"key":"resolution","direction":"desc"},{"key":"cached","direction":"desc"},{"key":"size","direction":"desc"},{"key":"pack","direction":"desc"},{"key":"seeders","direction":"desc"}
+    ]);
+    request["settings"] = preferences;
+    let second = runtime_with_suffix(script)
+        .invoke(host.clone(), &request)
+        .unwrap();
+    let rows = second.get("streams").unwrap_or(&second).as_array().unwrap();
+    assert_eq!(rows[0]["info_hash"], hash);
+    assert!(host.requests.lock().unwrap().len() > requests);
+    let publications = host.publications.lock().unwrap();
+    assert_eq!(publications.last().unwrap(), &json!(rows));
+    // Reordering preserves the exact stream identities between snapshots.
+    let mut before = first
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["id"].clone())
+        .collect::<Vec<_>>();
+    let mut after = rows.iter().map(|row| row["id"].clone()).collect::<Vec<_>>();
+    before.sort_by_key(Value::to_string);
+    after.sort_by_key(Value::to_string);
+    assert_eq!(before, after);
+}
+
+#[test]
+fn preferred_release_languages_reorder_explicit_labels_and_keep_unknown_last() {
+    let script = r#"novaProvider.handle=request=>{
+      const settings={"language.prefs":request.preferences,"quality.preferred":"any","sort.order":[{key:"language",direction:request.direction || "desc"},...Supernova.SORT_DEFAULT.filter(item=>item.key!=="language")]};
+      const rows=[{id:"english",description:"Example 1080p [ENG]"},{id:"japanese",description:"Example 1080p Japanese"},{id:"multi",description:"Example 1080p [ENG JPN Dual Audio]"},{id:"unknown",description:"Example 1080p Multi Audio"},{id:"subtitle",description:"Example 1080p English Subs"},{id:"filename",description:"Example 1080p",resolver:{token:JSON.stringify({fileName:"English/Example [JPN].mkv"})}}];
+      const records=rows.map((row,index)=>({title:row.description,infoHash:String(index)}));
+      const legacy=[{key:"seeders",direction:"asc"},{key:"size",direction:"asc"},{key:"cached",direction:"desc"},{key:"pack",direction:"desc"},{key:"resolution",direction:"asc"}];
+      return {rows:Supernova.sortRows(rows,settings).map(row=>row.id),records:Supernova.rank(records,settings).map(record=>record.infoHash),legacy:Supernova.sortOrder({"sort.order":legacy}),labels:request.labels.map(Supernova.releaseLanguages)};
+    };"#;
+    let invoke = |preferences: Value, direction: &str| {
+        runtime_with_suffix(script).invoke(crate::MemoryProviderHost::new(), &json!({"preferences":preferences,"direction":direction,"labels":["ENG","English","JPN","Japanese","Dual Audio","Multi","English Subtitles","Subtitles: English","ENGlishman","English/Japanese"]})).unwrap()
+    };
+    let english = invoke(json!(["en", "ja"]), "desc");
+    assert_eq!(
+        english["rows"],
+        json!([
+            "english", "multi", "filename", "japanese", "subtitle", "unknown"
+        ])
+    );
+    assert_eq!(english["records"], json!(["0", "2", "1", "3", "4", "5"]));
+    assert_eq!(
+        english["labels"],
+        json!([
+            ["en"],
+            ["en"],
+            ["ja"],
+            ["ja"],
+            [],
+            [],
+            [],
+            [],
+            [],
+            ["en", "ja"]
+        ])
+    );
+    assert_eq!(
+        english["legacy"][0],
+        json!({"key":"seeders","direction":"asc"})
+    );
+    assert_eq!(
+        english["legacy"][5],
+        json!({"key":"language","direction":"desc"})
+    );
+    assert_eq!(
+        invoke(json!(["ja", "en"]), "desc")["rows"],
+        json!([
+            "filename", "japanese", "multi", "english", "subtitle", "unknown"
+        ])
+    );
+    assert_eq!(
+        invoke(json!(["en", "ja"]), "asc")["rows"],
+        json!([
+            "filename", "japanese", "english", "multi", "subtitle", "unknown"
+        ])
+    );
+    assert_eq!(
+        invoke(json!([]), "desc")["rows"],
+        json!([
+            "filename", "english", "japanese", "multi", "subtitle", "unknown"
+        ])
+    );
+}
+
+#[test]
+fn preferred_video_codecs_rank_explicit_aliases_and_preserve_old_sort_orders() {
+    let script = r#"novaProvider.handle=request=>{
+      const settings={"codec.prefs":request.preferences,"quality.preferred":"any","sort.order":[{key:"codec",direction:request.direction},...Supernova.SORT_DEFAULT.filter(item=>item.key!=="codec")]};
+      const rows=[{id:"avc",description:"Example 1080p x264"},{id:"hevc",description:"Example 1080p H.265"},{id:"av1",description:"Example 1080p AV1"},{id:"unknown",description:"Example 1080p"},{id:"conflict",description:"Example 1080p x264 HEVC"},{id:"filename",description:"Example 1080p",resolver:{token:JSON.stringify({fileName:"AV1/Example [HEVC].mkv"})}}];
+      const records=rows.map((row,index)=>({title:row.description,infoHash:String(index)}));
+      const old=[{key:"seeders",direction:"asc"},{key:"size",direction:"asc"},{key:"cached",direction:"desc"},{key:"pack",direction:"desc"},{key:"resolution",direction:"asc"}];
+      const six=[{key:"language",direction:"asc"},...old];
+      return {rows:Supernova.sortRows(rows,settings).map(row=>row.id),records:Supernova.rank(records,settings).map(record=>record.infoHash),old:Supernova.sortOrder({"sort.order":old}),six:Supernova.sortOrder({"sort.order":six}),labels:request.labels.map(Supernova.releaseVideoCodec),contradictoryFile:Supernova.codecRank(["Example AVC","Example HEVC.mkv"],settings)};
+    };"#;
+    let invoke = |preferences: Value, direction: &str| {
+        runtime_with_suffix(script).invoke(crate::MemoryProviderHost::new(), &json!({"preferences":preferences,"direction":direction,"labels":["H264","h.264","x264","AVC","H265","h.265","x265","HEVC","AV1","HEVC AVC","[AV1Fans] Example 1080p","[AV1] Example 1080p","Example.S01EAV1","Example 1080p-AV1","Example [AV1]"]})).unwrap()
+    };
+    let avc = invoke(json!(["avc", "hevc", "av1"]), "desc");
+    assert_eq!(
+        avc["rows"],
+        json!(["avc", "filename", "hevc", "av1", "conflict", "unknown"])
+    );
+    assert_eq!(avc["records"], json!(["0", "1", "2", "3", "4", "5"]));
+    assert_eq!(
+        avc["labels"],
+        json!([
+            "avc", "avc", "avc", "avc", "hevc", "hevc", "hevc", "hevc", "av1", null, null, null,
+            null, null, "av1"
+        ])
+    );
+    assert_eq!(avc["contradictoryFile"], Value::Null);
+    assert_eq!(avc["old"][0], json!({"key":"seeders","direction":"asc"}));
+    assert_eq!(avc["old"][5], json!({"key":"language","direction":"desc"}));
+    assert_eq!(avc["old"][6], json!({"key":"codec","direction":"desc"}));
+    assert_eq!(avc["six"][0], json!({"key":"language","direction":"asc"}));
+    assert_eq!(avc["six"][6], json!({"key":"codec","direction":"desc"}));
+    assert_eq!(
+        invoke(json!(["av1", "hevc", "avc"]), "desc")["rows"],
+        json!(["av1", "filename", "hevc", "avc", "conflict", "unknown"])
+    );
+    assert_eq!(
+        invoke(json!(["avc", "hevc", "av1"]), "asc")["rows"],
+        json!(["av1", "filename", "hevc", "avc", "conflict", "unknown"])
+    );
+    assert_eq!(
+        invoke(json!([]), "desc")["rows"],
+        json!(["filename", "av1", "avc", "conflict", "hevc", "unknown"])
+    );
+}
+
+#[test]
+fn rich_stream_labels_keep_explicit_metadata_and_hide_cached_peer_counts() {
+    let script = r#"novaProvider.handle=()=>{
+      const S=Supernova;
+      const record={infoHash:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',title:'Example.2026.1080p.WEB-DL.DDP5.1.H.265-GROUP.mkv',fileIdx:0,sizeBytes:4000000000,seeders:23,sources:['StremThru|Public']};
+      const token=JSON.stringify({title:record.title,fileName:'folder/Example.2026.1080p.WEB-DL.DDP5.1.H.265-GROUP.[ENG].mkv'});
+      const cached=S.row(record,true,token),direct=S.row({...record,fileName:'folder/Example.2026.1080p.mkv'},false);
+      const unknown=S.row({...record,title:'Example.2026.1080p.Multi.Audio.mkv',fileName:undefined,seeders:null},false);
+      const conflicting=S.row(record,true,JSON.stringify({title:record.title,fileName:'Example.2026.1080p.x264.mkv'}));
+      const links=S.row({...record,title:'Example 1080p https://example.test/private?token=secret',fileName:undefined,sources:['https://example.test/private']},false);
+      return {cached,direct,unknown,conflicting,links,annotated:S.cachedDiscoveryDescription(direct.description)};
+    };"#;
+    let output = runtime_with_suffix(script)
+        .invoke(crate::MemoryProviderHost::new(), &json!({}))
+        .unwrap();
+    assert_eq!(output["cached"]["title"], "[TB⚡] Supernova 1080p");
+    assert_eq!(output["cached"]["seeders"], Value::Null);
+    let description = output["cached"]["description"].as_str().unwrap();
+    assert!(description.contains("🎞️ WEB-DL · HEVC"));
+    assert!(!description.lines().next().unwrap().contains("GROUP"));
+    assert!(description.contains("🔊 E-AC-3 · 5.1"));
+    assert!(description.contains("🔎 StremThru|Public"));
+    assert!(description.contains("🌐 Audio: English"));
+    assert!(
+        description
+            .lines()
+            .last()
+            .unwrap()
+            .starts_with("📁 Example.")
+    );
+    assert!(!description.contains("seeders") && !description.contains("peers"));
+    assert_eq!(output["direct"]["title"], "Supernova P2P 1080p");
+    assert_eq!(output["direct"]["seeders"], 23);
+    assert!(
+        output["direct"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("23 reported seeders")
+    );
+    let unknown = output["unknown"]["description"].as_str().unwrap();
+    assert!(!unknown.contains("🌐") && !unknown.contains("🔊"));
+    assert!(unknown.contains("peers unverified"));
+    assert!(
+        !output["conflicting"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("HEVC")
+    );
+    assert!(
+        !output["links"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("https://")
+    );
+    assert!(
+        !output["links"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("secret")
+    );
+    let annotated = output["annotated"].as_str().unwrap();
+    assert!(annotated.contains("Cached discovery; peer availability unverified."));
+    assert!(annotated.lines().last().unwrap().starts_with("📁 "));
+}
+
+#[test]
+fn rich_stream_metadata_does_not_replace_release_evidence_for_ranking() {
+    let script = r#"novaProvider.handle=()=>{
+      const S=Supernova,base={fileIdx:0,sizeBytes:10,seeders:1,sources:['Public']};
+      const record=(hash,title)=>({...base,infoHash:hash.repeat(40),title});
+      const cached=S.row(record('a','Example S01 complete 2160p HEVC [ENG]'),true,JSON.stringify({title:'Example S01 complete 2160p HEVC [ENG]',fileName:'folder/Episode.1080p.mkv'}));
+      const direct=S.row({...record('b','Example S01E01 1080p'),fileName:'Episode.mkv'},false);
+      const filename=S.row(record('c','Example S01E01 720p'),false);
+      const settings={"sort.order":[{key:'resolution',direction:'desc'},...S.SORT_DEFAULT.filter(item=>item.key!=='resolution')]};
+      return S.sortRows([filename,direct,cached],settings).map(row=>row.id);
+    };"#;
+    let output = runtime_with_suffix(script)
+        .invoke(crate::MemoryProviderHost::new(), &json!({}))
+        .unwrap();
+    assert_eq!(
+        output,
+        json!([
+            format!("{}:0:torbox", "a".repeat(40)),
+            format!("{}:0:p2p", "b".repeat(40)),
+            format!("{}:0:p2p", "c".repeat(40))
+        ])
+    );
+}
+
+#[test]
+fn audio_and_subtitle_preferences_use_distinct_file_track_metadata() {
+    let script = r#"novaProvider.handle=request=>{
+      const settings={"language.prefs":["en","ja"],"subtitle.prefs":["en","ja"],"quality.preferred":"any","sort.order":[{key:request.key,direction:request.direction},...Supernova.SORT_DEFAULT.filter(item=>item.key!==request.key)]};
+      const records=[{infoHash:"japanese",title:"Example 1080p",trackMetadata:{audioLanguages:["ja"],subtitleLanguages:["en"]}},{infoHash:"english",title:"Example 1080p",trackMetadata:{audioLanguages:["en"],subtitleLanguages:["ja"]}},{infoHash:"empty",title:"Example English Japanese Subs 1080p",trackMetadata:{audioLanguages:[],subtitleLanguages:[]}},{infoHash:"unknown",title:"Example Multi Audio Multi-Subs 1080p"}];
+      const rows=[{id:"japanese",description:"📁 Example 1080p\n🌐 ja\n💬 eng"},{id:"english",description:"📁 Example 1080p\n🌐 English\n💬 Japanese"},{id:"empty",description:"📁 Example English Japanese Subs 1080p\n🌐 Unknown\n💬 Unknown"},{id:"unknown",description:"Example Multi Audio Multi-Subs 1080p"}];
+      return {records:Supernova.rank(records,settings).map(record=>record.infoHash),rows:Supernova.sortRows(rows,settings).map(row=>row.id),audio:request.labels.map(Supernova.releaseLanguages),subtitles:request.labels.map(Supernova.releaseSubtitleLanguages)};
+    };"#;
+    for (key, direction, expected) in [
+        (
+            "language",
+            "desc",
+            json!(["english", "japanese", "empty", "unknown"]),
+        ),
+        (
+            "language",
+            "asc",
+            json!(["japanese", "english", "empty", "unknown"]),
+        ),
+        (
+            "subtitle",
+            "desc",
+            json!(["japanese", "english", "empty", "unknown"]),
+        ),
+        (
+            "subtitle",
+            "asc",
+            json!(["english", "japanese", "empty", "unknown"]),
+        ),
+    ] {
+        let output = runtime_with_suffix(script).invoke(crate::MemoryProviderHost::new(), &json!({"key":key,"direction":direction,"labels":["Japanese English Subs","English/Japanese Subs","Subtitles: English, Japanese","English audio Japanese subtitles","Multi-Subs","English"]})).unwrap();
+        assert_eq!(output["records"], expected, "records {key}/{direction}");
+        assert_eq!(output["rows"], expected, "rows {key}/{direction}");
+        assert_eq!(output["audio"], json!([["ja"], [], [], ["en"], [], ["en"]]));
+        assert_eq!(
+            output["subtitles"],
+            json!([["en"], ["en", "ja"], ["en", "ja"], ["ja"], [], []])
+        );
+    }
+}
+
+#[test]
+fn inspected_unknown_metadata_suppresses_contradictory_release_hints() {
+    let script = r#"novaProvider.handle=()=>{
+      const settings={"language.prefs":["en"],"subtitle.prefs":["en"],"codec.prefs":["avc"]};
+      const records=[{infoHash:"a",title:"English English Subs AVC",trackMetadata:{audioLanguages:[],subtitleLanguages:[],videoCodec:null}},{infoHash:"b",title:"Example",trackMetadata:{audioLanguages:["en"],subtitleLanguages:["en"],videoCodec:"avc"}}];
+      const rows=[{id:"a",description:"🎞️ 1080p · Codec unknown\n📁 Example English English Subs AVC.mkv\n🌐 Audio: Unspecified\n💬 Subtitles: Unspecified"},{id:"b",description:"🎞️ 1080p · AVC\n📁 Example.mkv\n🌐 Audio: English\n💬 Subtitles: English"}];
+      return ["language","subtitle","codec"].map(key=>{
+        const sort={...settings,"quality.preferred":"any","sort.order":[{key,direction:"asc"},...Supernova.SORT_DEFAULT.filter(item=>item.key!==key)]};
+        return {key,records:Supernova.rank([...records],sort).map(record=>record.infoHash),rows:Supernova.sortRows([...rows],sort).map(row=>row.id)};
+      });
+    };"#;
+    let output = runtime_with_suffix(script)
+        .invoke(crate::MemoryProviderHost::new(), &json!({}))
+        .unwrap();
+    for (index, key) in ["language", "subtitle", "codec"].iter().enumerate() {
+        assert_eq!(output[index]["key"], json!(key));
+        assert_eq!(output[index]["records"], json!(["b", "a"]));
+        assert_eq!(output[index]["rows"], json!(["b", "a"]));
+    }
 }

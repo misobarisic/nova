@@ -184,6 +184,12 @@ pub trait ProviderHost: Send + Sync {
         self.get(&request.url, &request.headers)
     }
 
+    /// Publish a complete provisional stream list. The registry host validates
+    /// ownership and contracts before forwarding to the current app request.
+    fn publish_streams(&self, _rows: &str) -> Result<(), ProviderHostError> {
+        Ok(())
+    }
+
     fn host_work_elapsed(&self, _duration: Duration) {}
 
     fn metadata_available(&self, caller: &str) -> bool {

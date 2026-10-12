@@ -1,6 +1,6 @@
 (() => {
   "use strict";
-  const S = globalThis.Supernova = { sources: {}, VERSION: 2, MAX: 50, CANDIDATE_MAX: 150 };
+  const S = globalThis.Supernova = { sources: {}, VERSION: 2, MAX: 50, CANDIDATE_MAX: 300, RESULT_TTL: 900 };
   S.json = raw => { try { return JSON.parse(raw); } catch (_) { return null; } };
   S.hash = value => /^[a-f\d]{40}$/i.test(String(value || "")) ? String(value).toLowerCase() : null;
   S.magnetHash = value => {
@@ -26,6 +26,12 @@
   S.cacheSet = (key, value, ttl) => {
     try { nova.cache.set(key, JSON.stringify(value), ttl); } catch (_) { /* Cache failure cannot break discovery. */ }
   };
+  S.resultCacheGet = key => {
+    try { return S.json(nova.cache.getMemory(key)); } catch (_) { return null; }
+  };
+  S.resultCacheSet = (key, value, ttl) => {
+    try { nova.cache.setMemory(key, JSON.stringify(value), ttl); } catch (_) { /* This process-only cache is optional. */ }
+  };
   S.http = request => {
     const response = S.json(nova.http.request(JSON.stringify(request)));
     if (!response || response.error || response.status < 200 || response.status >= 300) return null;
@@ -38,29 +44,22 @@
         (!authority[1].includes(":") || /:443$/.test(authority[1]) || /^\[[a-f\d:.]+\]$/i.test(authority[1]))) return raw;
     return S.hash(hash) ? `https://itorrents.net/torrent/${hash.toUpperCase()}.torrent` : null;
   };
-  S.batch = (requests, deadline) => {
+  S.batch = (requests, deadline, onComplete) => {
     const result = [];
     for (let i = 0; i < requests.length; i += 3) {
       const remaining = deadline === undefined ? 3150 : deadline - Date.now();
       if (remaining <= 350) {
-        result.push(...requests.slice(i).map(() => ({error:"Optional HTTP stage budget exhausted"})));
+        const skipped = requests.slice(i).map(() => ({error:"Optional HTTP stage budget exhausted"}));
+        if (onComplete) skipped.forEach((response,index)=>onComplete(i+index,response));
+        result.push(...skipped);
         break;
       }
       const timeoutMs = Math.max(200,Math.min(3000,remaining - 150));
       const wave = requests.slice(i,i + 3).map(request => ({...request,timeoutMs:Math.min(request.timeoutMs || 3000,timeoutMs)}));
-      const rows = S.json(nova.http.batch(JSON.stringify(wave)));
+      const rows = S.json(onComplete ? nova.http.batchEach(JSON.stringify(wave),(index,raw)=>onComplete(i+index,S.json(raw))) : nova.http.batch(JSON.stringify(wave)));
       result.push(...(Array.isArray(rows) ? rows : wave.map(() => ({error:"Source unavailable"}))));
     }
     return result;
   };
-  S.row = (record, torbox, token) => {
-    const quality = String(record.title).match(/\b(2160|1080|720|480)p\b/i);
-    return {
-      id: `${record.infoHash}:${record.fileIdx === null || record.fileIdx === undefined ? "unknown" : record.fileIdx}:${torbox ? "torbox" : "p2p"}`,
-      title: `Supernova · ${torbox ? "TorBox cached" : "P2P"}${quality ? " · " + quality[0] : ""}`,
-      description: `${record.title}\n${record.sources.join(" + ")}${record.seeders === null ? " · peers unverified" : " · " + record.seeders + " reported seeders"}`,
-      source: record.sources.join(" + "), seeders: record.seeders, size: record.sizeBytes,
-      ...(torbox ? {resolver:{provider_id:"supernova",token}} : {info_hash:record.infoHash,file_idx:record.fileIdx}),
-    };
-  };
+
 })();

@@ -97,6 +97,17 @@ pub struct BundledProvider {
     pub source: &'static str,
 }
 
+/// Only explicitly bundled assets resolve locally; arbitrary provider paths
+/// cannot become filesystem reads or network redirects.
+pub fn bundled_asset_bytes(url: &str) -> Option<&'static [u8]> {
+    match url {
+        "nova-provider://supernova/logo.jpg" => {
+            Some(include_bytes!("../plugins/supernova/logo.jpg"))
+        }
+        _ => None,
+    }
+}
+
 pub fn bundled_providers() -> &'static [BundledProvider] {
     static PROVIDERS: &[BundledProvider] = &[
         BundledProvider {
@@ -220,6 +231,23 @@ pub fn fetch_builtin_addon_with_timeout(
     raw_url: &str,
     timeout: Duration,
 ) -> Option<Result<Vec<u8>, ProviderHostError>> {
+    fetch_builtin_addon_with_progress_and_timeout(raw_url, timeout, Arc::new(|_| {}))
+}
+
+/// Fetches a bundled response with validated complete stream snapshots. All
+/// callbacks run on the invoking worker, never on the UI event loop.
+pub fn fetch_builtin_addon_with_progress(
+    raw_url: &str,
+    on_progress: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+) -> Option<Result<Vec<u8>, ProviderHostError>> {
+    fetch_builtin_addon_with_progress_and_timeout(raw_url, Duration::from_secs(60), on_progress)
+}
+
+fn fetch_builtin_addon_with_progress_and_timeout(
+    raw_url: &str,
+    timeout: Duration,
+    on_progress: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+) -> Option<Result<Vec<u8>, ProviderHostError>> {
     let url = match Url::parse(raw_url) {
         Ok(url) if url.scheme() == "nova-provider" => url,
         _ => return None,
@@ -276,12 +304,99 @@ pub fn fetch_builtin_addon_with_timeout(
         ));
         let mut provider = JsProvider::new(manifest, addon, definition.source);
         provider.config = config;
+        let provider = Arc::new(provider);
+        let host: Arc<dyn ProviderHost> = if matches!(
+            &request,
+            ProtocolRequest::Streams { .. } | ProtocolRequest::Lookup { .. }
+        ) {
+            Arc::new(StreamsPublisherHost {
+                inner: host,
+                provider: provider.clone(),
+                on_progress: on_progress.clone(),
+            })
+        } else {
+            host
+        };
         let value = provider
             .protocol_response(host, request)
             .map_err(|e| ProviderHostError(e.to_string()))?;
         serde_json::to_vec(&value).map_err(|e| ProviderHostError(e.to_string()))
     };
     Some(execute())
+}
+
+struct StreamsPublisherHost {
+    inner: Arc<dyn ProviderHost>,
+    provider: Arc<JsProvider>,
+    on_progress: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+}
+impl ProviderHost for StreamsPublisherHost {
+    fn cancelled(&self) -> bool {
+        self.inner.cancelled() || !self.provider.streams_configuration_current()
+    }
+    fn publish_streams(&self, raw: &str) -> Result<(), ProviderHostError> {
+        if self.cancelled() {
+            return Err(ProviderHostError(
+                "provider stream publication cancelled".into(),
+            ));
+        }
+        if raw.len() > RESPONSE_LIMIT {
+            return Err(ProviderHostError(
+                "provider streams exceeded their byte limit".into(),
+            ));
+        }
+        let value = serde_json::from_str(raw)
+            .map_err(|_| ProviderHostError("invalid provider stream snapshot".into()))?;
+        let response = self
+            .provider
+            .streams_response(value)
+            .map_err(|error| ProviderHostError(error.to_string()))?;
+        let bytes = serde_json::to_vec(&response)
+            .map_err(|_| ProviderHostError("invalid provider stream snapshot".into()))?;
+        if self.cancelled() {
+            return Err(ProviderHostError(
+                "provider stream publication cancelled".into(),
+            ));
+        }
+        (self.on_progress)(bytes);
+        Ok(())
+    }
+    fn request(
+        &self,
+        request: &crate::HttpRequest,
+    ) -> Result<crate::HttpResponse, ProviderHostError> {
+        self.inner.request(request)
+    }
+    fn get(
+        &self,
+        url: &str,
+        headers: &std::collections::BTreeMap<String, String>,
+    ) -> Result<crate::HttpResponse, ProviderHostError> {
+        self.inner.get(url, headers)
+    }
+    fn storage_get(&self, key: &str) -> Option<String> {
+        self.inner.storage_get(key)
+    }
+    fn storage_set(&self, key: &str, value: &str) -> Result<(), ProviderHostError> {
+        self.inner.storage_set(key, value)
+    }
+    fn log(&self, message: &str) {
+        self.inner.log(message)
+    }
+    fn host_work_elapsed(&self, duration: Duration) {
+        self.inner.host_work_elapsed(duration)
+    }
+    fn metadata_available(&self, caller: &str) -> bool {
+        self.inner.metadata_available(caller)
+    }
+    fn metadata_enrich(
+        &self,
+        request: crate::EnrichmentRequest,
+        caller: &str,
+        budget: Duration,
+    ) -> crate::EnrichmentResult {
+        self.inner.metadata_enrich(request, caller, budget)
+    }
 }
 
 struct JsProvider {
@@ -518,6 +633,122 @@ impl JsProvider {
         }
         Ok(response)
     }
+    fn streams_configuration_current(&self) -> bool {
+        let Ok(settings) = &self.settings else {
+            return false;
+        };
+        (!self.track_settings
+            || settings.generation == crate::plugin_settings::settings_generation())
+            && provider_capabilities(&format!("nova-provider://{}", self.descriptor.id))
+                .unwrap_or_default()
+                == self.config
+            && self.config.streams
+    }
+    fn streams_response(&self, result: Value) -> Result<Value, ProviderError> {
+        let stream_rows = result
+            .as_array()
+            .or_else(|| result.get("streams").and_then(Value::as_array))
+            .ok_or_else(|| {
+                ProviderError::InvalidData("provider stream result was not a list".into())
+            })?;
+        if stream_rows.len() > 256 {
+            return Err(ProviderError::InvalidData(
+                "provider streams exceeded their row limit".into(),
+            ));
+        }
+        let mut identities = std::collections::BTreeSet::new();
+        let streams = stream_rows
+            .iter()
+            .map(|value| {
+                if contains_sensitive_playback_flag(value)
+                    || self.value_contains_private_setting(value)
+                {
+                    return Err(ProviderError::InvalidData(
+                        "provider stream contains private settings".into(),
+                    ));
+                }
+                let stream: ProviderStream = serde_json::from_value(value.clone())
+                    .map_err(|error| ProviderError::InvalidData(error.to_string()))?;
+                if stream.id.is_empty()
+                    || stream.id.len() > 8192
+                    || !identities.insert(stream.id.clone())
+                {
+                    return Err(ProviderError::InvalidData(
+                        "invalid or duplicate provider stream identity".into(),
+                    ));
+                }
+                stream_to_stremio(&stream, &self.descriptor.id)
+            })
+            .collect::<Result<Vec<_>, ProviderError>>()?;
+        let mut response = json!({"streams":streams});
+        if let Some(cache_hit) = result.get("cacheHit") {
+            let cache_hit = cache_hit.as_bool().ok_or_else(|| {
+                ProviderError::InvalidData("invalid provider cache origin".into())
+            })?;
+            if cache_hit {
+                response["novaCacheHit"] = json!(true);
+            }
+        }
+        if let Some(warnings) = result.get("warnings") {
+            let warnings = warnings
+                .as_array()
+                .filter(|warnings| warnings.len() <= 16)
+                .ok_or_else(|| ProviderError::InvalidData("invalid provider warnings".into()))?;
+            let warnings = warnings
+                .iter()
+                .map(|warning| {
+                    let message = warning
+                        .as_str()
+                        .or_else(|| warning.get("message").and_then(Value::as_str))
+                        .ok_or_else(|| {
+                            ProviderError::InvalidData("invalid provider warning".into())
+                        })?;
+                    if warning
+                        .get("source")
+                        .is_some_and(|source| !source.is_null() && !source.is_string())
+                    {
+                        return Err(ProviderError::InvalidData(
+                            "invalid provider warning source".into(),
+                        ));
+                    }
+                    let source = warning.get("source").and_then(Value::as_str);
+                    if message.trim().is_empty()
+                        || message.len() > 256
+                        || message.chars().any(char::is_control)
+                        || source.is_some_and(|source| {
+                            source.len() > 64 || source.chars().any(char::is_control)
+                        })
+                    {
+                        return Err(ProviderError::InvalidData(
+                            "invalid provider warning".into(),
+                        ));
+                    }
+                    if self.contains_private_setting(message)
+                        || source.is_some_and(|source| self.contains_private_setting(source))
+                    {
+                        return Ok(json!({"message":"A provider source is unavailable."}));
+                    }
+                    Ok(match source {
+                        Some(source) => json!({"source":source,"message":message}),
+                        None => json!({"message":message}),
+                    })
+                })
+                .collect::<Result<Vec<_>, ProviderError>>()?;
+            if !warnings.is_empty() {
+                response["novaWarnings"] = json!(warnings);
+            }
+        }
+        if serde_json::to_vec(&response)
+            .map_err(|error| ProviderError::InvalidData(error.to_string()))?
+            .len()
+            > RESPONSE_LIMIT
+        {
+            return Err(ProviderError::InvalidData(
+                "provider streams exceeded their byte limit".into(),
+            ));
+        }
+        Ok(response)
+    }
     fn protocol_response(
         &self,
         host: Arc<dyn ProviderHost>,
@@ -623,81 +854,7 @@ impl JsProvider {
                     _ => unreachable!(),
                 };
                 let result = self.call(host, request)?;
-                let stream_rows = result
-                    .as_array()
-                    .or_else(|| result.get("streams").and_then(Value::as_array))
-                    .ok_or_else(|| {
-                        ProviderError::InvalidData("provider stream result was not a list".into())
-                    })?;
-                let streams = stream_rows
-                    .iter()
-                    .map(|value| {
-                        if contains_sensitive_playback_flag(value)
-                            || self.value_contains_private_setting(value)
-                        {
-                            return Err(ProviderError::InvalidData(
-                                "provider stream contains private settings".into(),
-                            ));
-                        }
-                        let stream: ProviderStream = serde_json::from_value(value.clone())
-                            .map_err(|error| ProviderError::InvalidData(error.to_string()))?;
-                        stream_to_stremio(&stream, &self.descriptor.id)
-                    })
-                    .collect::<Result<Vec<_>, ProviderError>>()?;
-                let mut response = json!({"streams":streams});
-                if let Some(warnings) = result.get("warnings") {
-                    let warnings = warnings
-                        .as_array()
-                        .filter(|warnings| warnings.len() <= 16)
-                        .ok_or_else(|| {
-                            ProviderError::InvalidData("invalid provider warnings".into())
-                        })?;
-                    let warnings = warnings
-                        .iter()
-                        .map(|warning| {
-                            let message = warning
-                                .as_str()
-                                .or_else(|| warning.get("message").and_then(Value::as_str))
-                                .ok_or_else(|| {
-                                    ProviderError::InvalidData("invalid provider warning".into())
-                                })?;
-                            if warning
-                                .get("source")
-                                .is_some_and(|source| !source.is_null() && !source.is_string())
-                            {
-                                return Err(ProviderError::InvalidData(
-                                    "invalid provider warning source".into(),
-                                ));
-                            }
-                            let source = warning.get("source").and_then(Value::as_str);
-                            if message.trim().is_empty()
-                                || message.len() > 256
-                                || message.chars().any(char::is_control)
-                                || source.is_some_and(|source| {
-                                    source.len() > 64 || source.chars().any(char::is_control)
-                                })
-                            {
-                                return Err(ProviderError::InvalidData(
-                                    "invalid provider warning".into(),
-                                ));
-                            }
-                            if self.contains_private_setting(message)
-                                || source
-                                    .is_some_and(|source| self.contains_private_setting(source))
-                            {
-                                return Ok(json!({"message":"A provider source is unavailable."}));
-                            }
-                            Ok(match source {
-                                Some(source) => json!({"source":source,"message":message}),
-                                None => json!({"message":message}),
-                            })
-                        })
-                        .collect::<Result<Vec<_>, ProviderError>>()?;
-                    if !warnings.is_empty() {
-                        response["novaWarnings"] = json!(warnings);
-                    }
-                }
-                Ok(response)
+                self.streams_response(result)
             }
         }
     }
@@ -718,6 +875,7 @@ fn contains_sensitive_playback_flag(value: &Value) -> bool {
 fn stream_to_stremio(stream: &ProviderStream, provider_id: &str) -> Result<Value, ProviderError> {
     stream.validate(provider_id)?;
     let mut result = json!({
+        "novaProviderStreamId": format!("{provider_id}:{}",stream.id),
         "name": stream.title,
         "description": stream.description,
         "subtitles": stream.subtitles.iter().enumerate().map(|(index, subtitle)| json!({
@@ -747,6 +905,67 @@ fn stream_to_stremio(stream: &ProviderStream, provider_id: &str) -> Result<Value
         result["source"] = json!(source);
     }
     Ok(result)
+}
+
+/// Stable UI identity for one owner's request, independent of display labels,
+/// reported peers, response order and partial/final snapshot timing. Private
+/// playback targets are hashed, never embedded in a UI key.
+pub fn stable_stream_identity(
+    owner_url: &str,
+    request_id: &str,
+    stream: &addons::Stream,
+) -> String {
+    let owner = owner_url.trim_end_matches('/');
+    let owned_id = bundled_providers()
+        .iter()
+        .find(|definition| definition.url == owner)
+        .and_then(|definition| Url::parse(definition.url).ok())
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .and_then(|provider| {
+            stream
+                .extra
+                .get("novaProviderStreamId")
+                .and_then(Value::as_str)
+                .filter(|identity| {
+                    identity.len() <= 8257
+                        && identity
+                            .strip_prefix(&format!("{provider}:"))
+                            .is_some_and(|id| !id.is_empty())
+                })
+                .map(str::to_owned)
+        });
+    let identity = if let Some(id) = owned_id {
+        json!({"owner":owner,"request":request_id,"providerStream":id})
+    } else {
+        let headers = stream
+            .extra
+            .get("behaviorHints")
+            .and_then(|hints| hints.get("proxyHeaders"))
+            .and_then(|headers| headers.get("request"))
+            .and_then(Value::as_object)
+            .map(|headers| {
+                headers
+                    .iter()
+                    .filter_map(|(name, value)| {
+                        value
+                            .as_str()
+                            .map(|value| (name.to_ascii_lowercase(), value.to_owned()))
+                    })
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+        json!({"owner":owner,"request":request_id,"url":stream.url,"youtube":stream.yt_id,
+            "infoHash":stream.info_hash.as_ref().map(|hash|hash.trim().to_ascii_lowercase()),"fileIdx":stream.file_idx,
+            "headers":headers,"subtitles":stream.subtitles.iter().map(|subtitle|json!({"url":subtitle.url,"language":subtitle.lang})).collect::<Vec<_>>()})
+    };
+    let data = serde_json::to_vec(&identity).expect("stream identity serializes");
+    let hash = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, &data);
+    let hex: String = hash
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("stream-{hex}")
 }
 
 /// Resolves a deferred token only inside its registered owner's sandbox. The

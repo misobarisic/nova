@@ -1047,7 +1047,22 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // In-app player overlay callbacks (same window).
     let p = player.clone();
-    app.on_toggle_pause(move || p.toggle());
+    let b = bridge.clone();
+    app.on_toggle_pause(move || {
+        let was_paused = b.app().is_some_and(|app| app.get_is_paused());
+        p.toggle();
+        if was_paused {
+            b.refresh_next_episode_prompt();
+        } else {
+            // mpv publishes the new pause state asynchronously. Revoke the
+            // speculative lease now instead of rearming from the old UI value.
+            let mut state = b.shared.lock().unwrap();
+            state.stream_prefetch_live_session = None;
+            if let Some(playing) = state.playback.as_mut() {
+                playing.next_episode_prefetched = None;
+            }
+        }
+    });
 
     let p = player.clone();
     app.on_seek(move |pos| p.seek(pos));

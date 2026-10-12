@@ -25,18 +25,41 @@ This version loads trusted source files bundled at compile time.
 
 `nova-provider://supernova` is installed **disabled** once per installation
 (`providers:supernova:v1`). Enable it in Addons and use its normal Configure
-gear to select sources you may use. Nyaa, AnimeTosho and APIBay are initially
-off. Its stream-only manifest adds neither catalogs nor metadata and never
-changes a title's library, tracking or episode identity.
+gear to select sources you may use. Nyaa, AnimeTosho, The Pirate Bay / APIBay and
+Knaben are initially off. Its stream-only manifest adds neither catalogs nor metadata and never
+changes a title's library, tracking or episode identity. Its bundled `logo.jpg`
+is loaded through the shared image pipeline using a local provider asset URI;
+Addon logos work offline on desktop and Android.
 
 Discovery runs on-device in QuickJS. Nyaa and AnimeTosho adapters port Comet's
 broad title queries and request/parsing approach: unfiltered Nyaa HTML and
-AnimeTosho Torznab XML, with the main-site JSON feed as a fallback. APIBay
-supplies movie/TV JSON. Each source has at most two query variants and two pages
-per query; native GET batches run at most three requests concurrently. Three-second
+AnimeTosho Torznab XML, with the main-site JSON feed as a fallback. The Pirate
+Bay / APIBay supplies movie/TV JSON (the stored `sources.apibay` key is preserved).
+Knaben uses its public v2 GET search API directly on-device; no StremThru
+server or account is required. Knaben hashes use the HTTPS metainfo mirror and
+the same exact file proof as other sources. Zero-seeder Knaben inventory is
+included for TorBox checks; listing or peer counts alone never prove playback.
+StremThru ports Comet's Torznab discovery adapter, using the public default
+instance or a configured HTTPS StremThru URL. Confirmed IMDb IDs use IMDb
+search; other IDs use the officially supported title/year search without
+inventing an IMDb mapping. Safe indexer labels retain provenance such as
+`StremThru|Knaben`. No StremThru account, debrid mutation or playback proxy is
+used; hash metainfo and exact file proofs remain required.
+Each source has at most two query variants; advertised
+pagination is capped at six canonical-title pages and two episode-variant pages.
+Native GET batches run at most three requests concurrently. Three-second
 request limits and optional-stage deadlines preserve partial results within a
-20-second lookup budget. Up to 150 ranked hashes reach TorBox availability checks
-in three concurrent batches; the display remains capped at 50 rows.
+20-second lookup budget. Up to 300 ranked candidates are retained per wave.
+First-page availability is checked before deeper source pages; only new hashes
+reach TorBox in waves of up to three 50-hash batches, within a 48-request ceiling. The display remains
+capped at 50 rows.
+
+Sort order offers cached status, resolution, size, season packs, reported
+peers, preferred audio language, subtitle language and video codec, with movable priority and independent high/low direction. Unknown values
+stay last; stable IDs break ties. Combined TorBox/P2P snapshots sort before the
+50-row cap. Preferred quality still biases the bounded candidate inspection
+pool; the explicit sort order controls the final visible list. `sort.order` is
+one ordinary persisted and synced plugin field, with no separate storage key.
 Search metadata is cached locally for a day; partial failures and empty results
 get a short retry TTL, and empty failed searches are not cached. Source access
 can change or fail independently; no anti-bot bypass or background catalog exists.
@@ -55,9 +78,19 @@ filenames also require a verified torrent root/container identifying the series.
 It never asks the playback engine to guess the largest file. Conservative
 matching may omit valid releases, especially differently titled editions and
 later-season releases containing a year different from the series metadata.
-Seeder counts are upstream reports. Reused discovery rows explicitly identify
-cached discovery and unverified peer availability; TorBox availability is still
-checked live independently of that cache.
+Seeder counts are upstream reports. Reused direct-P2P discovery rows explicitly identify
+cached discovery and unverified peer availability; cached TorBox rows omit seed/peer counts; TorBox availability is still
+checked independently of that discovery cache. Nonempty, warning-free verified
+stream lists have a separate 15-minute process-memory cache for the exact lookup and source/
+quality/playback configuration, so reopening the same episode avoids HTTP.
+The final-list cache never retains empty or error responses. This cache contains only P2P
+file proofs and owned resolver tokens; choosing TorBox still checks availability
+and requests a fresh playback link. Expiry, the existing TTL/LRU budget, settings
+changes and Clear plugin cache bound its lifetime; no background cleanup runs.
+Trusted provider result envelopes may mark `cacheHit: true`; the host exposes this as response-only `novaCacheHit`. Together with typed app-cache deliveries this promotes cached owners in the All filter, without inspecting provider names or display strings. Restart drops this verified-list cache. The durable discovery-metadata cache is
+independent; disk persistence of verified lists and scheduled GC are follow-ons.
+
+AnimeTosho optionally supplies selected-file track metadata through its documented torrent/file JSON API. The torrent hash, unique basename and byte size, torrent ID and file ID must match before ffprobe audio/subtitle languages, video codec, audio codecs and channels are used. Base rows publish before at most three probes (six spare GETs, up to 2.8 seconds within the existing operation deadline/request budget). Failures preserve playable rows. Successful normalized probes remain memory-only for 24 hours; missing metadata gets a 60-second retry TTL. The selected episode is never assigned languages from the whole pack. Confirmed metadata overrides conflicting filenames, including explicitly unspecified languages/codecs; other sources retain conservative release-label hints. Rich rows keep quality/codec, audio, source and separate audio/subtitle language lines; the selected filename is last, release groups stay out of the codec line, and TorBox-cached rows omit peer counts.
 
 Direct P2P uses the existing torrent engine and its P2P setting. The optional
 TorBox preferred/cached-only modes require a configured key. Lookup only checks
@@ -99,10 +132,17 @@ Successful clearing invalidates in-flight cache operations, preventing old
 searches from repopulating it. Startup restores retained unfamiliar sync records
 before seeding settings, including unknown fields and deletion tombstones.
 
-`build.rs` concatenates the trusted `plugins/supernova/{core,matching,index}.js`
+`build.rs` concatenates the trusted `plugins/supernova/{core,matching,metadata,presentation,index}.js`
 and source/debrid modules. `supernova_tests.rs` uses real QuickJS/parsers with
 deterministic HTTP fixtures; `supernova_live_tests.rs` is explicitly ignored
 in normal test runs. See the bundled `NOTICE.md` for source/protocol references.
+
+The generic `plugin_settings::cache_gc(now)` maintenance hook removes expired,
+invalid, over-budget and obsolete-settings entries, then atomically persists
+what remains. It also collects disk entries already expired by a cache read;
+a failed write restores the previous in-memory cache. Future GC passes can call
+this hook without changing settings generations, preferences or other caches.
+No cleanup schedule is installed by the provider service.
 
 ## Generic plugin services
 
@@ -114,9 +154,22 @@ lookups require both. Resolver operations receive a new immutable settings
 snapshot and return a validated direct stream.
 
 `configuration` in the plugin manifest describes boolean, string, secret,
-integer and choice controls with typed defaults/options/bounds. Nova renders
+integer, choice, sort-order and ordered-choices controls with typed defaults/options/bounds. Nova renders
 the schema using its existing controls, saves text with Enter or Save, and
 validates each explicit update. Unknown persisted fields survive unchanged.
+
+Optional `collection`/`item` metadata groups boolean controllers and their
+associated URL or secret into configured-item lists with predefined Add pickers.
+`member` controllers describe sources; `enabled` controllers describe accounts,
+which remain listed when disabled but retain a key. Editors are keyed by the
+declared controller, so matching item names in different groups cannot collide.
+Removal disables a source while preserving its URL; account removal explicitly
+clears its declared secret before disabling it. One secret per item is supported. The generic `sort-order` field type validates a
+complete unique priority list and applies move/direction actions against the
+latest snapshot before persisting the whole field. Valid legacy orders retain their existing priorities/directions and append new criteria. The generic `ordered-choices` field supports Add/Up/Down/Remove for a unique subset of predefined choices; Supernova uses audio languages (`language.prefs`, retained legacy key), subtitle languages (`subtitle.prefs`) and video codecs (`codec.prefs`), all neutral when empty. Empty/missing evidence stays last. Explicit audio and subtitle labels are parsed separately; generic Multi/Dual/Subs categories never invent a track language.
+Supernova uses these generic lists for torrent sources and debrid providers;
+TorBox is the sole predefined debrid provider initially. Existing flat keys and
+sync records are unchanged.
 
 ```js
 JSON.parse(nova.http.request(JSON.stringify({
@@ -124,6 +177,14 @@ JSON.parse(nova.http.request(JSON.stringify({
 }))); // status + body (text), or an independent error
 // responseType: "binary" returns bodyBase64 instead, for torrent metainfo.
 JSON.parse(nova.http.batch(JSON.stringify([{method: "GET", url: "https://allowed.example/feed"}])));
+// Completion callbacks run on the invoking QuickJS worker, in completion order;
+// the returned array still follows request order. Up to three GETs per batch.
+JSON.parse(nova.http.batchEach(JSON.stringify(requests), (index, responseJson) => {
+  const response = JSON.parse(responseJson);
+}));
+// Stream operations may publish bounded replacement snapshots before returning.
+// Each row needs a stable unique ID; send the whole current list, not a delta.
+nova.streams.publish(JSON.stringify(streams));
 // POST requires permissions.httpPost, with body.type text/json/urlencoded/multipart.
 JSON.parse(nova.xml.select(xml, "item", JSON.stringify({title: {selector: "title"}})));
 // value: "attributes" returns a JSON array of matching sibling attribute maps.
@@ -135,6 +196,10 @@ nova.settings.remove("quality.preferred");
 nova.cache.set("lookup:v1:opaque-digest", JSON.stringify(result), 86400);
 JSON.parse(nova.cache.get("lookup:v1:opaque-digest") || "null");
 nova.cache.remove("lookup:v1:opaque-digest");
+// Same scope, TTL and stale-operation validation, with no disk writes:
+nova.cache.setMemory("results:v1:opaque-digest", JSON.stringify(streams), 900);
+JSON.parse(nova.cache.getMemory("results:v1:opaque-digest") || "null");
+nova.cache.removeMemory("results:v1:opaque-digest");
 ```
 
 HTTP revalidates and pins public DNS for each target. Bearer requests and POST
@@ -144,6 +209,15 @@ are bounded. Optional cache failures do not fail searches; settings edits are
 acknowledged only after durable persistence. Cache reads/writes compare the
 captured generation atomically; remote projection and local edits share the
 same service mutation lock.
+
+Stream publications use the same owner, payload and credential validation as the
+final response, with at most 16 snapshots per operation. The media transport
+forwards validated lists to the app, which replaces that owner's rows while
+retaining other addons and keeps its spinner until the final response. Stable
+SHA-256 identities preserve keyboard selection through reordered lists; only
+newly visible IDs animate. Ordinary remote addons still return one final list.
+Batch waits credit only the invoking thread's blocked time, so JavaScript
+completion callbacks remain subject to the configured script-processing budget.
 
 ## Files and interface
 
@@ -341,9 +415,12 @@ CSS fields have `{ selector, value }`. An empty selector means the row itself;
 
 ## Runtime limits
 
-Each operation gets a fresh QuickJS heap (32 MiB, 512 KiB stack), a 5-second
-script budget excluding blocking HTTP time, and a whole-operation deadline
-(AniKoto: 30 seconds). HTTP is HTTPS GET on port 443 to declared domains only.
+Each operation gets a fresh QuickJS heap (32 MiB, 512 KiB stack), a script
+budget excluding blocking HTTP time, and a whole-operation deadline
+(AniKoto: 30 seconds). The optional manifest limit `scriptTimeMs` defaults to
+5,000 ms and is capped at 10,000 ms; Supernova requests 10,000 ms for matching,
+metadata processing and configurable sorting, while AniKoto retains the default.
+Increasing this limit does not extend the whole-operation deadline. HTTP is HTTPS GET on port 443 to declared domains only.
 Every redirect and DNS result is checked; private/reserved addresses, URL
 credentials, and system proxy routing are denied. Response bodies and final
 JSON output are capped at 2 MiB. AniKoto permits 32 requests, including
@@ -364,6 +441,8 @@ files reach in-app mpv and survive resume prompts and Android decoder reloads.
 English subtitles are ordered first when supplied by MegaPlay. Headers are
 also persisted with MP4 download jobs.
 Finite HLS episodes can also be downloaded through `nova-download`: the highest-bandwidth variant and its audio/subtitle groups, initialization maps, byte ranges and ordinary AES-128 keys are saved as a local playlist bundle. Provider headers accompany playlist, segment and key requests. Completed segments survive pause/resume; partial segments restart. Removing the episode download removes its entire bundle, including keys, subtitles and partial files. Automatic watched cleanup waits until the active HLS episode closes so the ending remains playable. Live playlists, DASH and unsupported encryption remain unavailable for offline download.
+
+Deferred streams also support Download: each attempt resolves a fresh link, while credentials, selection tokens and playback URLs remain process-only. Signed HTTP transfers restart partial files on retry and never write URL/validator sidecars. Unfinished jobs after restart require selecting Download again; completed media remains offline. Private HLS download is unavailable because its playlist bundle would retain signed URLs. Ordinary direct MP4/HLS and P2P downloads keep their existing resume behavior.
 
 ## Checks
 

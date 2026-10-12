@@ -330,6 +330,60 @@ fn tracking_preserves_detail_tab_with_reachable_confirmation() {
             settle().await;
             let scroll = tracking_scroll(&app);
             assert!(scroll.size().height >= 80.0);
+            // The actions opened from a release must stay with that release,
+            // even when the tracking viewport is narrow or has been resized.
+            let viewport = scroll.absolute_position();
+            let viewport_size = scroll.size();
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                    position: slint::LogicalPosition::new(
+                        viewport.x + viewport_size.width / 2.0,
+                        viewport.y + viewport_size.height / 2.0,
+                    ),
+                    delta_x: 0.0,
+                    delta_y: 10_000.0,
+                });
+            settle().await;
+            ElementHandle::find_by_accessible_label(&app, "More")
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+                .expect("first linked-entry More button")
+                .single_click(slint::platform::PointerEventButton::Left)
+                .await;
+            settle().await;
+            let menu_action = ElementHandle::find_by_accessible_label(&app, "Edit tracker entry")
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+                .expect("opened linked-entry actions");
+            // Accessibility omits clipped buttons. Reveal the following cards,
+            // then compare their positions against the retained menu handle.
+            scroll_to_end(&app).await;
+            let next_entry_more = ElementHandle::find_by_accessible_label(&app, "More")
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+                .expect("next linked-entry More button");
+            assert!(
+                menu_action.absolute_position().y < next_entry_more.absolute_position().y,
+                "entry actions remain under their own More trigger at {width}x{height}"
+            );
+            assert!(
+                menu_action.absolute_position().x >= 0.0
+                    && menu_action.absolute_position().x + menu_action.size().width <= width as f32 + 1.0,
+                "entry actions stay within the window at {width}x{height}"
+            );
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                    position: slint::LogicalPosition::new(
+                        viewport.x + viewport_size.width / 2.0,
+                        viewport.y + viewport_size.height / 2.0,
+                    ),
+                    delta_x: 0.0,
+                    delta_y: 10_000.0,
+                });
+            settle().await;
+            ElementHandle::find_by_accessible_label(&app, "Back to review")
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+                .expect("close linked-entry actions")
+                .single_click(slint::platform::PointerEventButton::Left)
+                .await;
+            settle().await;
             scroll_to_end(&app).await;
             for label in ["Choose another release", "Add missing releases"] {
                 let action = ElementHandle::find_by_accessible_label(&app, label)

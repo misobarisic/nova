@@ -468,6 +468,9 @@ cache_settings_type! {
     /// Android: resume on returning only if playing before backgrounding. Local-only.
     #[serde(default)]
     pub android_auto_continue: bool,
+    /// Warm the next episode source list in memory near the end of playback.
+    #[serde(default = "default_true")]
+    pub prefetch_next_episode_streams: bool,
     /// Master switch for UI animations (Settings → Look and feel). When off,
     /// every transition and hover effect becomes instant.
     #[serde(default = "default_true")]
@@ -606,6 +609,7 @@ impl Default for CacheSettings {
             default_subtitle_language: String::new(),
             episode_start_behavior: EpisodeStartBehavior::Resume,
             android_auto_continue: false,
+            prefetch_next_episode_streams: true,
             animations: true,
             anim_transitions: true,
             anim_hover: true,
@@ -1074,6 +1078,7 @@ mod tests {
         let settings: CacheSettings = serde_json::from_str(older).unwrap();
         assert_eq!(settings.language, Language::English);
         assert!(!settings.android_auto_continue);
+        assert!(settings.prefetch_next_episode_streams);
         assert_eq!(
             settings.episode_start_behavior,
             EpisodeStartBehavior::Resume

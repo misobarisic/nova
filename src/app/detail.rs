@@ -3,6 +3,18 @@ use super::*;
 
 const STREAM_PAGE_SIZE: usize = 25;
 
+#[derive(Clone)]
+struct StreamResponseContext {
+    request_id: String,
+    generation: u64,
+    addon: String,
+    owner_url: String,
+    owner_generation: u64,
+    settings_generation: u64,
+    tracks_settings: bool,
+    cache_hit: bool,
+}
+
 /// Number of pages a season of `total` filtered episodes needs (always ≥ 1).
 pub(crate) fn page_count(total: usize) -> usize {
     total.div_ceil(EPISODE_PAGE_SIZE).max(1)
@@ -318,64 +330,17 @@ impl Bridge {
         // Endpoint URLs built on the main thread (pure URL math); the rows
         // are then fetched addon-by-addon via fetch-continuations. Each URL
         // carries its addon label so results can be grouped into pills.
-        let stream_urls: Vec<(String, String, String, u64)> = {
+        let stream_urls = {
             let state = self.shared.lock().unwrap();
-            let lookup = state
-                .modal_item
-                .as_ref()
-                .and_then(|modal| source_stream_lookup(modal, &request_id));
-            let stream_ids = state
-                .modal_item
-                .as_ref()
-                .map(|modal| episode_stream_ids(modal, &request_id))
-                .unwrap_or_default();
-            state
-                .installed
-                .iter()
-                .filter_map(|a| {
-                    let video = state
-                        .modal_item
-                        .as_ref()
-                        .and_then(|modal| modal.videos.iter().find(|v| v.id == request_id));
-                    let owner = video
-                        .and_then(|v| v.extra.get("novaSourceUrl"))
-                        .and_then(serde_json::Value::as_str);
-                    let aliases = stream_ids
-                        .iter()
-                        .filter(|id| {
-                            if public_stream_id(id) {
-                                return true;
-                            }
-                            video
-                                .and_then(|v| v.extra.get("novaStreamIds"))
-                                .and_then(serde_json::Value::as_array)
-                                .and_then(|ids| {
-                                    ids.iter()
-                                        .position(|value| value.as_str() == Some(id.as_str()))
-                                })
-                                .and_then(|i| {
-                                    video?.extra.get("novaConnections")?.as_array()?.get(i)
-                                })
-                                .and_then(|c| c.get("addonId"))
-                                .and_then(serde_json::Value::as_str)
-                                .is_some_and(|id| id == nova_providers::addon_metadata_id(&a.url))
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    stream_endpoint_owned(
-                        a,
-                        &modal_type,
-                        &request_id,
-                        lookup.as_ref(),
-                        &aliases,
-                        owner,
-                    )
-                    .map(|url| (a.label.clone(), url, a.url.clone(), a.generation))
-                })
-                .collect()
+            stream_search_urls_for(&state, &request_id)
         };
 
-        let requested: Vec<String> = stream_urls.iter().map(|(l, ..)| l.clone()).collect();
+        let mut seen_labels = HashSet::new();
+        let requested: Vec<String> = stream_urls
+            .iter()
+            .map(|(label, ..)| label.clone())
+            .filter(|label| seen_labels.insert(label.clone()))
+            .collect();
         let addon_count = requested.len();
         // Show one pill per addon being queried right away (spinner), then
         // drop each one that answers with no streams.
@@ -385,10 +350,20 @@ impl Bridge {
                 m.request_id = request_id.clone();
             }
             state.stream_generation = state.stream_generation.wrapping_add(1);
+            state.stream_revealed_ids.clear();
             state.streams.clear();
             state.stream_all.clear();
             state.stream_addons = requested.clone();
-            state.stream_pending = requested.clone();
+            state.stream_pending = stream_urls
+                .iter()
+                .map(|(_, _, owner, _)| owner.clone())
+                .collect();
+            state.stream_owner_order = state.stream_pending.clone();
+            state.stream_cached_owners.clear();
+            state.stream_owner_labels = stream_urls
+                .iter()
+                .map(|(label, _, owner, _)| (owner.clone(), label.clone()))
+                .collect();
             state.stream_warnings.clear();
             state.stream_filter = 0;
             state.stream_generation
@@ -406,7 +381,7 @@ impl Bridge {
         }
         // Show already-downloaded rows for this request immediately, before
         // the first addon answers. Addon streams keep streaming in per addon
-        // (see `stream_addon_loaded`), pinned below the downloads.
+        // (see `stream_addon_updated`), pinned below the downloads.
         self.apply_stream_filter();
         // `apply_stream_filter` picks the generic hint; restore the specific
         // "no addon provides streams" message when there is nothing to query.
@@ -421,111 +396,165 @@ impl Bridge {
         // after the slowest one. An addon that fails or returns nothing is
         // reported with an empty row list so its pill is removed.
         for (addon, url, owner_url, owner_generation) in stream_urls {
-            let bridge = self.clone();
-            let request_id = request_id.clone();
-            let settings_generation = nova_providers::plugin_settings::settings_generation();
-            let tracks_settings = nova_providers::provider_settings_schema(&owner_url)
-                .is_some_and(|schema| !schema.is_empty());
-            net::fetch_bytes(url, move |result| {
-                let warnings = result
-                    .as_ref()
-                    .ok()
-                    .map(|bytes| provider_stream_warnings(bytes, &owner_url))
-                    .unwrap_or_else(|| {
-                        if tracks_settings {
-                            vec![(
-                                addon.clone(),
-                                "Provider unavailable. Try again later.".into(),
-                            )]
-                        } else {
-                            vec![]
-                        }
-                    });
-                let new_rows: Vec<StreamUi> = result
-                    .ok()
-                    .and_then(|bytes| Addon::parse_streams(&bytes).ok())
-                    .map(|streams| {
-                        streams
-                            .into_iter()
-                            .take(80)
-                            .map(|s| {
-                                let id = format!(
-                                    "stream-{:016x}",
-                                    bridge.stream_seq.fetch_add(1, Ordering::Relaxed)
-                                );
-                                StreamUi {
-                                    id,
-                                    // Rows render multi-line; see
-                                    // `stream_display` for how the label +
-                                    // detail lines are chosen.
-                                    display: stream_display(&s),
-                                    card: stream_card_text(&s),
-                                    source: stream_source_for_addon(
-                                        &s,
-                                        &owner_url,
-                                        owner_generation,
-                                        settings_generation,
-                                    ),
-                                    addon: addon.clone(),
-                                    download: None,
-                                }
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let bridge2 = bridge.clone();
-                let addon2 = addon.clone();
-                let request_id2 = request_id.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    let installed = bridge2
-                        .shared
-                        .lock()
-                        .unwrap()
-                        .installed
-                        .iter()
-                        .any(|addon| {
-                            addon.url == owner_url
-                                && addon.enabled
-                                && addon.available
-                                && addon.generation == owner_generation
-                        });
-                    let stale = !installed
-                        || (tracks_settings
-                            && settings_generation
-                                != nova_providers::plugin_settings::settings_generation());
-                    {
-                        let mut state = bridge2.shared.lock().unwrap();
-                        if state.stream_generation != generation
-                            || !state
-                                .modal_item
-                                .as_ref()
-                                .is_some_and(|modal| modal.request_id == request_id2)
-                        {
-                            return;
-                        }
-                        state.stream_warnings.insert(
-                            addon2.clone(),
-                            if stale {
-                                vec![(
-                                    addon2.clone(),
-                                    "This stream selection is out of date. Reload streams.".into(),
-                                )]
-                            } else {
-                                warnings
-                            },
-                        );
-                    }
-                    // Even a stale reply completes its old spinner; it must
-                    // never publish rows made with a previous configuration.
-                    bridge2.stream_addon_loaded(
-                        request_id2,
-                        generation,
-                        addon2,
-                        if stale { vec![] } else { new_rows },
+            let context = StreamResponseContext {
+                request_id: request_id.clone(),
+                generation,
+                addon,
+                tracks_settings: nova_providers::provider_settings_schema(&owner_url)
+                    .is_some_and(|schema| !schema.is_empty()),
+                owner_url,
+                owner_generation,
+                settings_generation: nova_providers::plugin_settings::settings_generation(),
+                cache_hit: false,
+            };
+            let partial_bridge = self.clone();
+            let partial_context = context.clone();
+            let final_bridge = self.clone();
+            self.request_streams_with_prefetch_cache(
+                url,
+                context.owner_url.clone(),
+                context.owner_generation,
+                context.settings_generation,
+                Arc::new(move |bytes| {
+                    partial_bridge.receive_stream_response(
+                        partial_context.clone(),
+                        Ok(bytes),
+                        false,
                     );
-                });
-            });
+                }),
+                move |result| {
+                    let mut context = context;
+                    let result = result.map(|response| {
+                        context.cache_hit = response.cache_hit;
+                        response.bytes
+                    });
+                    final_bridge.receive_stream_response(context, result, true);
+                },
+            );
         }
+    }
+
+    /// Each provider publication is a replacement snapshot. Decode on the
+    /// worker; only the event-loop closure can mutate the active picker.
+    fn receive_stream_response(
+        &self,
+        mut context: StreamResponseContext,
+        result: Result<Vec<u8>, net::FetchError>,
+        complete: bool,
+    ) {
+        let warnings = result
+            .as_ref()
+            .ok()
+            .map(|bytes| provider_stream_warnings(bytes, &context.owner_url))
+            .unwrap_or_else(|| {
+                if context.tracks_settings {
+                    vec![(
+                        context.addon.clone(),
+                        "Provider unavailable. Try again later.".into(),
+                    )]
+                } else {
+                    vec![]
+                }
+            });
+        let failed = result.is_err();
+        let mut ids = HashSet::new();
+        let new_rows = result
+            .ok()
+            .and_then(|bytes| Addon::parse_streams(&bytes).ok())
+            .map(|streams| {
+                streams
+                    .into_iter()
+                    .take(80)
+                    .filter_map(|stream| {
+                        let id = format!(
+                            "{}:{}",
+                            context.generation,
+                            nova_providers::stable_stream_identity(
+                                &context.owner_url,
+                                &context.request_id,
+                                &stream
+                            )
+                        );
+                        if !ids.insert(id.clone()) {
+                            return None;
+                        }
+                        Some(StreamUi {
+                            id,
+                            owner_url: context.owner_url.clone(),
+                            display: stream_display(&stream),
+                            card: stream_card_text(&stream),
+                            source: stream_source_for_addon(
+                                &stream,
+                                &context.owner_url,
+                                context.owner_generation,
+                                context.settings_generation,
+                            ),
+                            addon: context.addon.clone(),
+                            download: None,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let bridge = self.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            let stale = {
+                let state = bridge.shared.lock().unwrap();
+                !state.installed.iter().any(|addon| {
+                    addon.url == context.owner_url
+                        && addon.enabled
+                        && addon.available
+                        && addon.generation == context.owner_generation
+                }) || (context.tracks_settings
+                    && context.settings_generation
+                        != nova_providers::plugin_settings::settings_generation())
+            };
+            if stale && !complete {
+                return;
+            }
+            let rows = {
+                let mut state = bridge.shared.lock().unwrap();
+                if !stream_response_is_current(&state, &context.request_id, context.generation) {
+                    return;
+                }
+                let displayed_warnings = if stale {
+                    vec![(
+                        context.addon.clone(),
+                        "This stream selection is out of date. Reload streams.".into(),
+                    )]
+                } else if failed
+                    && state
+                        .stream_all
+                        .iter()
+                        .any(|row| row.owner_url == context.owner_url)
+                {
+                    // Valid progressive results remain usable after a late
+                    // timeout; the provider is not unavailable to this picker.
+                    vec![]
+                } else {
+                    warnings
+                };
+                state
+                    .stream_warnings
+                    .insert(context.owner_url.clone(), displayed_warnings);
+                if stale {
+                    context.cache_hit = false;
+                    vec![]
+                } else if failed {
+                    // A late network failure cannot erase already validated
+                    // partial results from the same unchanged operation.
+                    state
+                        .stream_all
+                        .iter()
+                        .filter(|row| row.owner_url == context.owner_url)
+                        .cloned()
+                        .collect()
+                } else {
+                    new_rows
+                }
+            };
+            bridge.stream_addon_updated(context, rows, complete);
+        });
     }
 
     /// Series-like item: try to list its episodes (seasons) from the first
@@ -2485,21 +2514,43 @@ impl Bridge {
     /// One addon answered the stream query: merge its rows into the list and
     /// refresh the UI immediately. An empty `new_rows` drops the addon's pill
     /// (it returned nothing).
-    pub(super) fn stream_addon_loaded(
+    fn stream_addon_updated(
         &self,
-        request_id: String,
-        generation: u64,
-        addon: String,
+        context: StreamResponseContext,
         new_rows: Vec<StreamUi>,
+        complete: bool,
     ) {
+        let StreamResponseContext {
+            request_id,
+            generation,
+            addon,
+            owner_url,
+            cache_hit,
+            ..
+        } = context;
         let (was_empty, addons, loading, searching, filter) = {
             let mut state = self.shared.lock().unwrap();
             if !stream_response_is_current(&state, &request_id, generation) {
                 return;
             }
             let was_empty = state.stream_all.is_empty();
-            state.stream_pending.retain(|p| p != &addon);
-            if new_rows.is_empty() {
+            if complete {
+                state.stream_pending.retain(|owner| owner != &owner_url);
+                if cache_hit && !new_rows.is_empty() {
+                    state.stream_cached_owners.insert(owner_url.clone());
+                } else {
+                    state.stream_cached_owners.remove(&owner_url);
+                }
+            }
+            // A snapshot can insert anywhere, reorder, or remove rows without
+            // duplicating earlier publications or touching a namesake addon.
+            replace_stream_snapshot(&mut state.stream_all, &owner_url, new_rows);
+            let label_pending = state
+                .stream_pending
+                .iter()
+                .any(|owner| state.stream_owner_labels.get(owner).unwrap_or(owner) == &addon);
+            if complete && !label_pending && !state.stream_all.iter().any(|row| row.addon == addon)
+            {
                 // Returned nothing: remove its pill and fall back to All if it
                 // was the active filter.
                 if let Some(pos) = state.stream_addons.iter().position(|a| a == &addon) {
@@ -2509,15 +2560,18 @@ impl Bridge {
                         state.stream_filter = 0;
                     }
                 }
-            } else {
-                state.stream_all.extend(new_rows);
             }
             let addons: Vec<SharedString> =
                 state.stream_addons.iter().map(SharedString::from).collect();
             let loading: Vec<bool> = state
                 .stream_addons
                 .iter()
-                .map(|a| state.stream_pending.contains(a))
+                .map(|label| {
+                    state
+                        .stream_pending
+                        .iter()
+                        .any(|owner| state.stream_owner_labels.get(owner).unwrap_or(owner) == label)
+                })
                 .collect();
             let searching = !state.stream_pending.is_empty();
             let filter = state.stream_filter;
@@ -2574,10 +2628,16 @@ impl Bridge {
                 .filter(|s| filter == 0 || selected.as_deref().is_some_and(|a| a == s.addon))
                 .cloned()
                 .collect();
-            // "All" always lists streams grouped by addon priority (the
-            // installed addon order), regardless of which addon answered
-            // first. Within an addon the arrival order is kept (stable sort).
-            if filter == 0 {
+            // Cached snapshots lead All without changing provider ranking or
+            // the installed order within either cache-origin group.
+            if !state.stream_owner_order.is_empty() {
+                sort_streams_by_owner(
+                    &mut filtered,
+                    &state.stream_owner_order,
+                    &state.stream_cached_owners,
+                    filter == 0,
+                );
+            } else if filter == 0 {
                 sort_streams_by_addon(&mut filtered, &state.stream_addons);
             }
             (
@@ -2624,14 +2684,7 @@ impl Bridge {
         }
         let mut filtered = filtered;
         if !active_torrent_settings().enabled {
-            let before = filtered.len();
             filtered.retain(|stream| !matches!(stream.source, StreamSource::Torrent { .. }));
-            if before != filtered.len() {
-                hint.push('\n');
-                hint.push_str(text::tr(
-                    "Direct torrent results are hidden while P2P streaming is disabled.",
-                ));
-            }
         }
         let mut displayed: Vec<StreamUi> = self
             .downloads
@@ -2641,6 +2694,7 @@ impl Bridge {
                 let path = job.artifact_path.clone().unwrap_or_default();
                 StreamUi {
                     id: format!("download:{}", job.id),
+                    owner_url: String::new(),
                     display: job.display.clone(),
                     card: downloaded_stream_card(&job),
                     source: StreamSource::Downloaded {
@@ -2665,6 +2719,7 @@ impl Bridge {
                     + if details.is_empty() { 0 } else { 1 };
                 StreamRow {
                     id: SharedString::from(&row.id),
+                    reveal_new: false,
                     text: SharedString::from(&row.display),
                     title: SharedString::from(&row.card.title),
                     metadata: SharedString::from(&row.card.metadata),
@@ -2701,31 +2756,69 @@ impl Bridge {
     /// addon batches insert/remove by stable ID so retained rows also keep
     /// their reveal state instead of fading out again with every response.
     pub(super) fn apply_stream_filter(&self) {
+        self.apply_stream_filter_with_focus(true);
+    }
+
+    fn apply_stream_filter_with_focus(&self, preserve_focus: bool) {
+        let Some(app) = self.app() else {
+            return;
+        };
+        let previous_focus = app.get_detail_kb_s().max(0) as usize;
+        let focused_id = if preserve_focus {
+            self.shared
+                .lock()
+                .unwrap()
+                .streams
+                .get(previous_focus)
+                .map(|row| row.id.clone())
+        } else {
+            None
+        };
         let (displayed, stream_rows, hint) = self.compute_stream_view();
+        let focused_index = focused_id
+            .as_ref()
+            .and_then(|id| displayed.iter().position(|row| &row.id == id))
+            // A replacement can remove the focused row. Keep Enter usable by
+            // falling back to the nearest remaining index, including its page.
+            .or_else(|| {
+                preserve_focus.then(|| previous_focus.min(displayed.len().saturating_sub(1)))
+            });
+        if app.get_stream_action_open()
+            && !displayed
+                .iter()
+                .any(|row| row.id == app.get_stream_action_id().as_str())
+        {
+            app.set_stream_action_open(false);
+        }
         let (page, page_count, page_start, total, page_rows) = {
             let mut state = self.shared.lock().unwrap();
             let page_count = stream_rows.len().div_ceil(STREAM_PAGE_SIZE).max(1);
+            if let Some(index) = focused_index {
+                state.stream_page = index / STREAM_PAGE_SIZE;
+            }
             state.stream_page = state.stream_page.min(page_count - 1);
             let page = state.stream_page;
             let start = page * STREAM_PAGE_SIZE;
             let end = (start + STREAM_PAGE_SIZE).min(stream_rows.len());
             state.streams = displayed;
             state.stream_hint = None;
-            (
-                page,
-                page_count,
-                start,
-                stream_rows.len(),
-                stream_rows[start..end].to_vec(),
-            )
-        };
-        let Some(app) = self.app() else {
-            return;
+            let page_rows = stream_rows[start..end]
+                .iter()
+                .cloned()
+                .map(|mut row| {
+                    row.reveal_new = state.stream_revealed_ids.insert(row.id.to_string());
+                    row
+                })
+                .collect::<Vec<_>>();
+            (page, page_count, start, stream_rows.len(), page_rows)
         };
         app.set_stream_page(page as i32);
         app.set_stream_page_count(page_count as i32);
         app.set_stream_page_start(page_start as i32);
         app.set_stream_total(total as i32);
+        if let Some(index) = focused_index {
+            app.set_detail_kb_s(index as i32);
+        }
         let model = app.get_streams();
         let existing = model.as_any().downcast_ref::<VecModel<StreamRow>>();
         if let Some(model) = existing {
@@ -2742,7 +2835,7 @@ impl Bridge {
             let mut state = self.shared.lock().unwrap();
             state.stream_page = page;
         }
-        self.apply_stream_filter();
+        self.apply_stream_filter_with_focus(false);
     }
 
     /// A filter pill was tapped (0 = All, else 1-based addon index).
@@ -2756,7 +2849,7 @@ impl Bridge {
                 return;
             }
         }
-        self.apply_stream_filter();
+        self.apply_stream_filter_with_focus(false);
         if let Some(app) = self.app() {
             app.set_stream_filter(index as i32);
             app.set_detail_kb_s(0);
@@ -2769,6 +2862,10 @@ impl Bridge {
         {
             let mut state = self.shared.lock().unwrap();
             state.stream_generation = state.stream_generation.wrapping_add(1);
+            state.stream_revealed_ids.clear();
+            state.stream_owner_labels.clear();
+            state.stream_owner_order.clear();
+            state.stream_cached_owners.clear();
             state.streams.clear();
             state.stream_all.clear();
             state.stream_addons.clear();
@@ -2964,6 +3061,68 @@ impl Bridge {
             self.open_stream_action(app.get_stream_action_id().as_str());
         }
     }
+}
+
+/// Prefetch and the visible picker must use identical ownership and alias
+/// routing. Building a successor lookup does not alter the opened Detail item.
+pub(super) fn stream_search_urls_for(
+    state: &Shared,
+    request_id: &str,
+) -> Vec<(String, String, String, u64)> {
+    let Some(modal) = state.modal_item.as_ref() else {
+        return vec![];
+    };
+    let lookup = state
+        .modal_item
+        .as_ref()
+        .and_then(|modal| source_stream_lookup(modal, request_id));
+    let stream_ids = state
+        .modal_item
+        .as_ref()
+        .map(|modal| episode_stream_ids(modal, request_id))
+        .unwrap_or_default();
+    state
+        .installed
+        .iter()
+        .filter_map(|a| {
+            let video = state
+                .modal_item
+                .as_ref()
+                .and_then(|modal| modal.videos.iter().find(|v| v.id == request_id));
+            let owner = video
+                .and_then(|v| v.extra.get("novaSourceUrl"))
+                .and_then(serde_json::Value::as_str);
+            let aliases = stream_ids
+                .iter()
+                .filter(|id| {
+                    if public_stream_id(id) {
+                        return true;
+                    }
+                    video
+                        .and_then(|v| v.extra.get("novaStreamIds"))
+                        .and_then(serde_json::Value::as_array)
+                        .and_then(|ids| {
+                            ids.iter()
+                                .position(|value| value.as_str() == Some(id.as_str()))
+                        })
+                        .and_then(|i| video?.extra.get("novaConnections")?.as_array()?.get(i))
+                        .and_then(|c| c.get("addonId"))
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|id| id == nova_providers::addon_metadata_id(&a.url))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            stream_endpoint_owned(
+                a,
+                &modal.type_,
+                request_id,
+                lookup.as_ref(),
+                &aliases,
+                owner,
+            )
+            .map(|url| (a.label.clone(), url, a.url.clone(), a.generation))
+        })
+        .collect()
 }
 
 fn stream_response_is_current(state: &Shared, request_id: &str, generation: u64) -> bool {
@@ -3525,6 +3684,35 @@ fn sort_streams_by_addon(rows: &mut [StreamUi], addon_order: &[String]) {
     });
 }
 
+fn sort_streams_by_owner(
+    rows: &mut [StreamUi],
+    owner_order: &[String],
+    cached_owners: &HashSet<String>,
+    prioritize_cached: bool,
+) {
+    rows.sort_by_key(|row| {
+        (
+            prioritize_cached && !cached_owners.contains(&row.owner_url),
+            owner_order
+                .iter()
+                .position(|owner| owner == &row.owner_url)
+                .unwrap_or(usize::MAX),
+        )
+    });
+}
+
+/// Full publications replace one transport's rows; labels are presentation,
+/// so two addons with the same label must not erase each other's results.
+fn replace_stream_snapshot(rows: &mut Vec<StreamUi>, owner: &str, snapshot: Vec<StreamUi>) {
+    rows.retain(|row| row.owner_url != owner);
+    let mut ids = HashSet::new();
+    rows.extend(
+        snapshot
+            .into_iter()
+            .filter(|row| row.owner_url == owner && ids.insert(row.id.clone())),
+    );
+}
+
 /// Whether the currently pushed stream-row model has the same shape as `rows`
 /// (same length and same row ids in the same order). When true the rows can be
 /// updated in place — preserving their Slint delegates and the Android
@@ -3835,6 +4023,146 @@ mod tests {
         });
         app.set_modal_visible(true);
         app.set_detail_is_movie(true);
+        // Cumulative publications keep their pending spinner until final,
+        // preserve focused identities through ranked insertion/reordering,
+        // and isolate addons that happen to share a display label.
+        let context = StreamResponseContext {
+            request_id: "movie".into(),
+            generation: 1,
+            addon: "Same label".into(),
+            owner_url: "owner-a".into(),
+            owner_generation: 0,
+            settings_generation: 0,
+            tracks_settings: false,
+            cache_hit: false,
+        };
+        let owned = |owner: &str, id: &str| {
+            let mut row = row(owner, id);
+            row.addon = "Same label".into();
+            row
+        };
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.stream_generation = 1;
+            state.stream_addons = vec!["Same label".into()];
+            state.stream_pending = vec!["owner-a".into(), "owner-b".into()];
+            state.stream_owner_order = state.stream_pending.clone();
+            state.stream_owner_labels = HashMap::from([
+                ("owner-a".into(), "Same label".into()),
+                ("owner-b".into(), "Same label".into()),
+            ]);
+        }
+        bridge.stream_addon_updated(
+            context.clone(),
+            vec![owned("owner-a", "a"), owned("owner-a", "b")],
+            false,
+        );
+        assert!(app.get_streams_searching());
+        assert!(app.get_stream_loading().row_data(0).unwrap());
+        assert!(app.get_streams().row_data(0).unwrap().reveal_new);
+        app.set_detail_kb_s(0);
+        bridge.stream_addon_updated(
+            context.clone(),
+            vec![
+                owned("owner-a", "new"),
+                owned("owner-a", "b"),
+                owned("owner-a", "a"),
+            ],
+            false,
+        );
+        assert_eq!(app.get_detail_kb_s(), 2);
+        assert_eq!(app.get_streams().row_data(2).unwrap().id, "a");
+        assert!(!app.get_streams().row_data(2).unwrap().reveal_new);
+        assert!(app.get_streams().row_data(0).unwrap().reveal_new);
+        let mut other_context = context.clone();
+        other_context.owner_url = "owner-b".into();
+        bridge.stream_addon_updated(other_context, vec![owned("owner-b", "other")], true);
+        assert!(app.get_streams_searching());
+        bridge.stream_addon_updated(
+            context.clone(),
+            vec![
+                owned("owner-a", "a"),
+                owned("owner-a", "new"),
+                owned("owner-a", "b"),
+            ],
+            true,
+        );
+        assert!(!app.get_streams_searching());
+        assert!(!app.get_stream_loading().row_data(0).unwrap());
+        assert_eq!(app.get_detail_kb_s(), 0);
+        assert_eq!(
+            app.get_streams()
+                .iter()
+                .map(|row| row.id.to_string())
+                .collect::<Vec<_>>(),
+            ["a", "new", "b", "other"]
+        );
+        assert_eq!(bridge.shared.lock().unwrap().stream_all.len(), 4);
+        let mut cached_context = context.clone();
+        cached_context.owner_url = "owner-b".into();
+        cached_context.cache_hit = true;
+        bridge.stream_addon_updated(
+            cached_context.clone(),
+            vec![owned("owner-b", "other")],
+            true,
+        );
+        assert_eq!(
+            app.get_streams()
+                .iter()
+                .map(|row| row.id.to_string())
+                .collect::<Vec<_>>(),
+            ["other", "a", "new", "b"],
+            "cached owners lead All independently of matching addon labels"
+        );
+        assert_eq!(
+            app.get_detail_kb_s(),
+            1,
+            "cache promotion preserves focused identity"
+        );
+        bridge.shared.lock().unwrap().stream_filter = 1;
+        bridge.apply_stream_filter();
+        assert_eq!(
+            app.get_streams()
+                .iter()
+                .map(|row| row.id.to_string())
+                .collect::<Vec<_>>(),
+            ["a", "new", "b", "other"],
+            "selecting an addon preserves its original owner order"
+        );
+        bridge.shared.lock().unwrap().stream_filter = 0;
+        cached_context.cache_hit = false;
+        bridge.stream_addon_updated(cached_context, vec![owned("owner-b", "other")], true);
+        app.set_detail_kb_s(2);
+        app.set_stream_action_id("b".into());
+        app.set_stream_action_open(true);
+        bridge.stream_addon_updated(context.clone(), vec![], true);
+        assert_eq!(
+            app.get_detail_kb_s(),
+            0,
+            "removed focus clamps to the remaining owner row"
+        );
+        assert_eq!(app.get_streams().row_data(0).unwrap().id, "other");
+        assert!(
+            !app.get_stream_action_open(),
+            "removed stream actions must close"
+        );
+        bridge.clear_streams();
+        let mut stale_context = context;
+        stale_context.cache_hit = true;
+        bridge.stream_addon_updated(stale_context, vec![owned("owner-a", "late")], true);
+        assert!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .stream_cached_owners
+                .is_empty()
+        );
+        assert_eq!(
+            app.get_streams().row_count(),
+            0,
+            "old generations cannot repopulate a closed search"
+        );
         bridge.refresh_watch_action();
         assert_eq!(app.get_detail_watch_label(), text::tr("Start"));
         bridge.watch_now();
@@ -3999,12 +4327,44 @@ mod tests {
     fn row(addon: &str, id: &str) -> StreamUi {
         StreamUi {
             id: id.into(),
+            owner_url: addon.into(),
             display: id.into(),
             card: StreamCardText::default(),
             source: StreamSource::Unsupported,
             addon: addon.into(),
             download: None,
         }
+    }
+
+    #[test]
+    fn full_stream_snapshots_replace_one_owner_and_keep_ranked_insertions() {
+        let mut other = row("other-owner", "other");
+        other.addon = "Same label".into();
+        let owned = |id: &str| {
+            let mut row = row("owner", id);
+            row.addon = "Same label".into();
+            row
+        };
+        let mut rows = vec![other, owned("a")];
+        replace_stream_snapshot(
+            &mut rows,
+            "owner",
+            vec![owned("new"), owned("b"), owned("a")],
+        );
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            ["other", "new", "b", "a"]
+        );
+        replace_stream_snapshot(&mut rows, "owner", vec![owned("a"), owned("b"), owned("b")]);
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            ["other", "a", "b"]
+        );
+        replace_stream_snapshot(&mut rows, "owner", vec![]);
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            ["other"]
+        );
     }
 
     #[test]

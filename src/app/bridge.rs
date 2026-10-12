@@ -44,7 +44,6 @@ impl Bridge {
             downloads,
             tracking: Arc::new(tracking::TrackingHandle::new()),
             downloads_seen: Arc::new(AtomicU64::new(0)),
-            stream_seq: Arc::new(AtomicU64::new(1)),
             image_usage_scan: Arc::default(),
             torrent_usage_scan: Arc::default(),
             #[cfg(feature = "desktop")]

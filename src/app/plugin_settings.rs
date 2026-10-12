@@ -116,45 +116,254 @@ impl Bridge {
                 };
                 let schema = nova_providers::provider_settings_schema(url).unwrap_or_default();
                 let snapshot = service::settings_snapshot(plugin, &schema)?;
-                Ok(schema
-                    .into_iter()
-                    .map(|field| {
-                        let value = snapshot.values.get(&field.key).unwrap_or(&field.default);
-                        nova_ui::PluginSettingRow {
-                            key: field.key.clone().into(),
-                            label: text::tr(&field.label).into(),
-                            kind: field.kind.into(),
-                            value: value
-                                .as_str()
-                                .map(str::to_owned)
-                                .unwrap_or_else(|| value.to_string())
-                                .into(),
-                            checked: value.as_bool().unwrap_or(false),
-                            selected: field
+                let value_for = |key: &str| {
+                    schema
+                        .iter()
+                        .find(|f| f.key == key)
+                        .map(|f| snapshot.values.get(key).unwrap_or(&f.default).clone())
+                        .unwrap_or(serde_json::Value::Null)
+                };
+                let configured = |field: &nova_providers::plugin_settings::SettingField| match field
+                    .item_role
+                    .as_deref()
+                {
+                    Some("member") => value_for(&field.key).as_bool().unwrap_or(false),
+                    Some("enabled") => {
+                        value_for(&field.key).as_bool().unwrap_or(false)
+                            || schema.iter().any(|f| {
+                                f.item == field.item
+                                    && f.collection == field.collection
+                                    && f.item_role.as_deref() == Some("secret")
+                                    && !value_for(&f.key).as_str().unwrap_or_default().is_empty()
+                            })
+                    }
+                    _ => false,
+                };
+                let make_row = |field: &nova_providers::plugin_settings::SettingField| {
+                    let value = snapshot.values.get(&field.key).unwrap_or(&field.default);
+                    nova_ui::PluginSettingRow {
+                        key: field.key.clone().into(),
+                        label: text::tr(&field.label).into(),
+                        kind: field.kind.clone().into(),
+                        value: value
+                            .as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| value.to_string())
+                            .into(),
+                        checked: value.as_bool().unwrap_or(false),
+                        selected: field
+                            .options
+                            .iter()
+                            .position(|option| option.value == *value)
+                            .map(|n| n as i32)
+                            .unwrap_or(-1),
+                        options: Rc::new(VecModel::from(
+                            field
                                 .options
                                 .iter()
-                                .position(|option| option.value == *value)
-                                .map(|n| n as i32)
-                                .unwrap_or(-1),
-                            options: Rc::new(VecModel::from(
-                                field
-                                    .options
-                                    .iter()
-                                    .map(|o| SharedString::from(o.value.to_string()))
-                                    .collect::<Vec<_>>(),
-                            ))
+                                .map(|o| SharedString::from(o.value.to_string()))
+                                .collect::<Vec<_>>(),
+                        ))
+                        .into(),
+                        labels: Rc::new(VecModel::from(
+                            field
+                                .options
+                                .iter()
+                                .map(|o| SharedString::from(text::tr(&o.label)))
+                                .collect::<Vec<_>>(),
+                        ))
+                        .into(),
+                        collection: field.collection.clone().unwrap_or_default().into(),
+                        collection_label: field
+                            .collection_label
+                            .as_deref()
+                            .map(text::tr)
+                            .unwrap_or_default()
                             .into(),
-                            labels: Rc::new(VecModel::from(
-                                field
-                                    .options
-                                    .iter()
-                                    .map(|o| SharedString::from(text::tr(&o.label)))
-                                    .collect::<Vec<_>>(),
-                            ))
+                        collection_add_label: field
+                            .collection_add_label
+                            .as_deref()
+                            .map(text::tr)
+                            .unwrap_or_default()
                             .into(),
+                        item: field.item.clone().unwrap_or_default().into(),
+                        item_role: field.item_role.clone().unwrap_or_default().into(),
+                        item_controller: field.item_controller.clone().unwrap_or_default().into(),
+                        configured: configured(field),
+                        has_editor: schema.iter().any(|candidate| {
+                            candidate.collection == field.collection
+                                && candidate.item_controller.as_deref() == Some(&field.key)
+                                && matches!(candidate.item_role.as_deref(), Some("secret" | "url"))
+                        }),
+                    }
+                };
+                let mut rows = Vec::new();
+                let mut groups = Vec::<String>::new();
+                for field in &schema {
+                    if let Some(group) = &field.collection
+                        && !groups.contains(group)
+                    {
+                        groups.push(group.clone());
+                    }
+                }
+                for group in groups {
+                    let fields = schema
+                        .iter()
+                        .filter(|f| f.collection.as_deref() == Some(&group))
+                        .collect::<Vec<_>>();
+                    let Some(first) = fields.first() else {
+                        continue;
+                    };
+                    // Structural rows must not inherit the first item's identity or state.
+                    let header = nova_ui::PluginSettingRow {
+                        kind: "collection-header".into(),
+                        collection: group.clone().into(),
+                        collection_label: text::tr(first.collection_label.as_deref().unwrap_or(""))
+                            .into(),
+                        ..Default::default()
+                    };
+                    rows.push(header);
+                    for field in &fields {
+                        if matches!(field.item_role.as_deref(), Some("member" | "enabled"))
+                            && configured(field)
+                        {
+                            let mut row = make_row(field);
+                            // Account removal clears the declared credential before disabling.
+                            // Source rows keep their associated URL when removed.
+                            if field.item_role.as_deref() == Some("enabled") {
+                                row.options = Rc::new(VecModel::from(
+                                    fields
+                                        .iter()
+                                        .filter(|candidate| {
+                                            candidate.item == field.item
+                                                && candidate.item_role.as_deref() == Some("secret")
+                                        })
+                                        .map(|candidate| SharedString::from(candidate.key.clone()))
+                                        .collect::<Vec<_>>(),
+                                ))
+                                .into();
+                            }
+                            rows.push(row);
                         }
-                    })
-                    .collect())
+                    }
+                    for field in &fields {
+                        if matches!(field.item_role.as_deref(), Some("secret" | "url")) {
+                            rows.push(make_row(field));
+                        }
+                    }
+                    let mut keys = Vec::new();
+                    let mut labels = Vec::new();
+                    for field in &fields {
+                        if matches!(field.item_role.as_deref(), Some("member" | "enabled"))
+                            && !configured(field)
+                        {
+                            keys.push(SharedString::from(field.key.clone()));
+                            labels.push(SharedString::from(text::tr(&field.label)));
+                        }
+                    }
+                    if !keys.is_empty() {
+                        let mut picker = nova_ui::PluginSettingRow {
+                            kind: "collection-picker".into(),
+                            collection: group.clone().into(),
+                            label: text::tr(first.collection_add_label.as_deref().unwrap_or("Add"))
+                                .into(),
+                            ..Default::default()
+                        };
+                        picker.options = Rc::new(VecModel::from(keys)).into();
+                        picker.labels = Rc::new(VecModel::from(labels)).into();
+                        picker.selected = -1;
+                        rows.push(picker);
+                    }
+                }
+                for field in schema.iter().filter(|field| field.collection.is_none()) {
+                    if field.kind == "ordered-choices" {
+                        let value = snapshot.values.get(&field.key).unwrap_or(&field.default);
+                        let chosen = value.as_array().cloned().unwrap_or_default();
+                        let mut header = make_row(field);
+                        header.kind = "priority-header".into();
+                        rows.push(header);
+                        for (index, choice) in chosen.iter().enumerate() {
+                            let Some(option) =
+                                field.options.iter().find(|option| option.value == *choice)
+                            else {
+                                continue;
+                            };
+                            let mut row = make_row(field);
+                            row.kind = "priority-criterion".into();
+                            row.item = choice.as_str().unwrap_or_default().into();
+                            row.label = text::tr(&option.label).into();
+                            row.selected = index as i32;
+                            row.labels = Rc::new(VecModel::from(
+                                chosen
+                                    .iter()
+                                    .map(|choice| SharedString::from(choice.to_string()))
+                                    .collect::<Vec<_>>(),
+                            ))
+                            .into();
+                            row.options = Rc::new(VecModel::from(["up", "down", "remove"].into_iter().map(|action| SharedString::from(serde_json::json!({"priorityAction":action,"choice":choice}).to_string())).collect::<Vec<_>>())).into();
+                            rows.push(row);
+                        }
+                        let available = field
+                            .options
+                            .iter()
+                            .filter(|option| !chosen.contains(&option.value))
+                            .collect::<Vec<_>>();
+                        if !available.is_empty() {
+                            let mut picker = make_row(field);
+                            picker.kind = "priority-picker".into();
+                            picker.label = text::tr("Add preference").into();
+                            picker.selected = -1;
+                            picker.options = Rc::new(VecModel::from(available.iter().map(|option| SharedString::from(serde_json::json!({"priorityAction":"add","choice":option.value}).to_string())).collect::<Vec<_>>())).into();
+                            picker.labels = Rc::new(VecModel::from(
+                                available
+                                    .iter()
+                                    .map(|option| SharedString::from(text::tr(&option.label)))
+                                    .collect::<Vec<_>>(),
+                            ))
+                            .into();
+                            rows.push(picker);
+                        }
+                        continue;
+                    }
+                    if field.kind != "sort-order" {
+                        rows.push(make_row(field));
+                        continue;
+                    }
+                    let mut header = make_row(field);
+                    header.kind = "sort-header".into();
+                    rows.push(header);
+                    let value = snapshot.values.get(&field.key).unwrap_or(&field.default);
+                    for (index, criterion) in value.as_array().into_iter().flatten().enumerate() {
+                        let key = criterion["key"].as_str().unwrap_or_default();
+                        let Some(option) = field
+                            .options
+                            .iter()
+                            .find(|option| option.value.as_str() == Some(key))
+                        else {
+                            continue;
+                        };
+                        let mut row = make_row(field);
+                        row.kind = "sort-criterion".into();
+                        row.item = key.into();
+                        row.label = text::tr(&option.label).into();
+                        row.selected = index as i32;
+                        row.checked = criterion["direction"] == "desc";
+                        row.options = Rc::new(VecModel::from(
+                            ["up", "down", "toggle"]
+                                .into_iter()
+                                .map(|action| {
+                                    SharedString::from(
+                                        serde_json::json!({"sortAction":action,"criterion":key})
+                                            .to_string(),
+                                    )
+                                })
+                                .collect::<Vec<_>>(),
+                        ))
+                        .into();
+                        rows.push(row);
+                    }
+                }
+                Ok(rows)
             })();
         match rows {
             Ok(rows) => app.set_plugin_setting_rows(Rc::new(VecModel::from(rows)).into()),
@@ -164,15 +373,31 @@ impl Bridge {
     pub(super) fn change_plugin_setting(&self, url: &str, key: &str, raw: &str) {
         let result = (|| {
             let plugin = plugin_id(url).ok_or_else(|| provider_error("invalid provider URL"))?;
-            let field = nova_providers::provider_settings_schema(url)
-                .unwrap_or_default()
-                .into_iter()
+            let schema = nova_providers::provider_settings_schema(url).unwrap_or_default();
+            let field = schema
+                .iter()
                 .find(|f| f.key == key)
                 .ok_or_else(|| provider_error("unknown configuration field"))?;
             let value = if matches!(field.kind.as_str(), "string" | "secret") {
                 serde_json::Value::String(raw.into())
             } else {
-                serde_json::from_str(raw).map_err(provider_error)?
+                let parsed: serde_json::Value =
+                    serde_json::from_str(raw).map_err(provider_error)?;
+                if field.kind == "sort-order" && parsed.is_object() {
+                    let snapshot = service::settings_snapshot(plugin, &schema)?;
+                    field.apply_sort_action(
+                        snapshot.values.get(key).unwrap_or(&field.default),
+                        &parsed,
+                    )?
+                } else if field.kind == "ordered-choices" && parsed.is_object() {
+                    let snapshot = service::settings_snapshot(plugin, &schema)?;
+                    field.apply_priority_action(
+                        snapshot.values.get(key).unwrap_or(&field.default),
+                        &parsed,
+                    )?
+                } else {
+                    parsed
+                }
             };
             field.validate(&value)?;
             service::set_setting(plugin, key, value)

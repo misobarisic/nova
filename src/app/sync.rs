@@ -2117,6 +2117,25 @@ mod tests {
     }
 
     #[test]
+    fn next_episode_prefetch_syncs_and_can_be_overridden() {
+        let settings = CacheSettings {
+            prefetch_next_episode_streams: false,
+            ..Default::default()
+        };
+        let fields: HashMap<_, _> = settings_fields(&settings)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert_eq!(
+            fields
+                .get("prefetch_next_episode_streams")
+                .map(String::as_str),
+            Some("false")
+        );
+        assert!(setting_can_override("prefetch_next_episode_streams"));
+    }
+
+    #[test]
     fn episode_start_behavior_syncs_as_an_independent_setting() {
         let local = CacheSettings {
             episode_start_behavior: nova_config::EpisodeStartBehavior::Ask,

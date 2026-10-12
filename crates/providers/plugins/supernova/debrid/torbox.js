@@ -29,7 +29,7 @@
     url:BASE + route,method:body ? "POST" : "GET",
     headers:{Authorization:"Bearer " + key},...(body ? {body} : {}),...(timeoutMs ? {timeoutMs} : {}),
   }))));
-  const cached = (records, key, timeoutMs, warnings = null) => {
+  const cached = (records, key, timeoutMs, warnings = null, onAvailable = null) => {
     const hashes = [...new Set(records.map(record => S.hash(record.infoHash)).filter(Boolean))].slice(0,150);
     if (!hashes.length) return {};
     const groups = [];
@@ -40,11 +40,11 @@
     const requests = groups.map(group => ({
       url:BASE + route(group),method:"GET",headers:{Authorization:"Bearer " + key},timeoutMs:timeoutMs || 3000,
     }));
-    const responses = warnings ? S.json(nova.http.batch(JSON.stringify(requests))) : null;
     const safe = {};
-    groups.forEach((group,index) => {
+    const consume = (index,response) => {
+      const group = groups[index];
       let data;
-      try { data = warnings ? apiData(Array.isArray(responses) ? responses[index] : null) : api(route(group),key,null,timeoutMs); }
+      try { data = apiData(response); }
       catch (error) {
         if (!warnings) throw error;
         const message = error.code ? error.message : "TorBox is unavailable. Try again later.";
@@ -56,10 +56,16 @@
         const entry = data[hash] || data[hash.toUpperCase()];
         if (entry && S.hash(entry.hash) === hash && Array.isArray(entry.files)) safe[hash] = entry;
       }
-    });
+      if (onAvailable) onAvailable(safe);
+    };
+    if (warnings && onAvailable) nova.http.batchEach(JSON.stringify(requests),(index,raw)=>consume(index,S.json(raw)));
+    else {
+      const responses = warnings ? S.json(nova.http.batch(JSON.stringify(requests))) : null;
+      groups.forEach((group,index) => consume(index,warnings ? (Array.isArray(responses) ? responses[index] : null) : {status:200,body:JSON.stringify({success:true,data:api(route(group),key,null,timeoutMs)})}));
+    }
     return safe;
   };
-  S.torboxOptions = (records, lookup, settings, warnings, timeoutMs = 3000) => {
+  S.torboxOptions = (records, lookup, settings, warnings, timeoutMs = 3000, onRows = null) => {
     if (settings["playback.mode"] === "direct") return [];
     if (!settings["torbox.enabled"] || !settings["torbox.apiKey"]) {
       if (warnings) warnings.push({source:"TorBox",message:"Enable TorBox and configure its API key to use cached playback."});
@@ -68,8 +74,7 @@
     try {
       // Cache no credentials, links or account objects; live availability is
       // rechecked per lookup and again on selection to contain stale state.
-      const available = cached(records, keyFor(settings), timeoutMs, warnings || []);
-      return records.flatMap(record => {
+      const rowsFor = available => records.flatMap(record => {
         const entry = available[record.infoHash];
         const file = entry && S.chooseFile(entry.files, record, lookup, true, entry.name);
         if (!file || file.infected === true || file.zipped === true) return [];
@@ -77,6 +82,8 @@
           fileName:String(file.name || file.path),lookup,sources:record.sources});
         return [S.row({...record,sizeBytes:S.number(file.size) || record.sizeBytes},true,token)];
       });
+      const available = cached(records,keyFor(settings),timeoutMs,warnings || [],onRows ? available=>onRows(rowsFor(available)) : null);
+      return rowsFor(available);
     } catch (error) {
       nova.log(`Supernova TorBox: ${error.code || "unavailable"}`);
       if (warnings) warnings.push({source:"TorBox",message:error.message || "TorBox is unavailable. Try again later."});

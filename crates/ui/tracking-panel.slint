@@ -256,19 +256,26 @@ export component TrackingPanel inherits Rectangle {
                                     text: root.active_entry_id == row.id ? @tr("Back to review") : @tr("More"); quiet: true;
                                     clicked => {
                                         if root.active_entry_id == row.id { root.close_entry(); }
-                                        else { root.close_entry(); DetailContent.activate_entry(row.id, index); }
+                                        else {
+                                            root.close_entry();
+                                            DetailContent.activate_entry(row.id, index);
+                                            root.entry_more = true;
+                                        }
                                     }
+                                }
+                                // Keep the expanded actions in the row that
+                                // opened them. The entry factory reports its
+                                // measured height to this slot as before.
+                                if root.active_entry_id == row.id: Rectangle {
+                                    width: 100%; height: DetailContent.entry_height;
+                                    vertical-stretch: 0;
+                                    ComponentContainer { width: 100%; height: 100%; component-factory: DetailContent.entry_factory; }
+                                    changed width => { DetailContent.entry_slot_width = self.width; }
+                                    init => { DetailContent.entry_slot_width = self.width; }
                                 }
 
                             }
                         }
-                    }
-                    if root.active_entry_id != "": Rectangle {
-                        width: 100%; height: DetailContent.entry_height;
-                        vertical-stretch: 0;
-                        ComponentContainer { width: 100%; height: 100%; component-factory: DetailContent.entry_factory; }
-                        changed width => { DetailContent.entry_slot_width = self.width; }
-                        init => { DetailContent.entry_slot_width = self.width; }
                     }
                     if root.setup_unmapped != "" && root.setup_review: Text { text: root.setup_unmapped; color: Theme.current.text_tracking_warning; font-size: 13px; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
                     if root.setup_review: VerticalLayout {

@@ -3,9 +3,13 @@ fn main() {
     let files = [
         "core.js",
         "matching.js",
+        "metadata.js",
+        "presentation.js",
         "sources/nyaa.js",
         "sources/animetosho.js",
         "sources/apibay.js",
+        "sources/knaben.js",
+        "sources/stremthru.js",
         "debrid/torbox.js",
         "index.js",
     ];

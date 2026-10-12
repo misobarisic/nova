@@ -2272,3 +2272,242 @@ fn supernova_explicit_wildcard_retains_final_transport_and_secret_scope() {
     }
     assert!(credential_playback_provider(json!({"id":"resolved","title":"Resolved","url":"https://independent.example/dld/file?token=private%2Ftoken"})).resolve_stream(crate::MemoryProviderHost::new(),"opaque").is_err());
 }
+
+fn progress_fixture_provider(source: &str) -> JsProvider {
+    let definition = &bundled_providers()[0];
+    let mut manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest).unwrap();
+    manifest.id = "fixture-progress".into();
+    manifest.configuration.clear();
+    let addon: Manifest = serde_json::from_str(definition.addon_manifest).unwrap();
+    JsProvider::new(manifest, addon, source)
+}
+fn progress_fixture_host(
+    provider: Arc<JsProvider>,
+    events: Arc<Mutex<Vec<Value>>>,
+) -> Arc<StreamsPublisherHost> {
+    Arc::new(StreamsPublisherHost {
+        inner: crate::MemoryProviderHost::new(),
+        provider,
+        on_progress: Arc::new(move |bytes| {
+            events
+                .lock()
+                .unwrap()
+                .push(serde_json::from_slice(&bytes).unwrap());
+        }),
+    })
+}
+
+#[test]
+fn progressive_stream_snapshots_arrive_before_final_with_owned_stable_ids() {
+    let provider = Arc::new(progress_fixture_provider(
+        r#"
+        globalThis.novaProvider={handle(){
+            const one={id:'one',title:'One',url:'https://cdn.example/one.mp4'};
+            const two={id:'two',title:'Two',info_hash:'abcdef0123456789abcdef0123456789abcdef01',file_idx:0};
+            if(nova.streams.publish(JSON.stringify([one]))!=='') throw new Error('first snapshot rejected');
+            if(nova.streams.publish(JSON.stringify({streams:[two,one],warnings:[{source:'Fixture',message:'Peers unverified.'}]}))!=='') throw new Error('second snapshot rejected');
+            return [two,one];
+        }};
+    "#,
+    ));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let host = progress_fixture_host(provider.clone(), events.clone());
+    let final_result = provider
+        .protocol_response(
+            host,
+            ProtocolRequest::Streams {
+                episode_id: "one".into(),
+            },
+        )
+        .unwrap();
+    let mut events = events.lock().unwrap();
+    assert_eq!(
+        events.len(),
+        2,
+        "snapshots must exist before final response returns"
+    );
+    assert_eq!(events[0]["streams"].as_array().unwrap().len(), 1);
+    assert_eq!(events[1]["streams"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        events[0]["streams"][0]["novaProviderStreamId"],
+        "fixture-progress:one"
+    );
+    assert_eq!(
+        events[1]["streams"][1]["novaProviderStreamId"],
+        "fixture-progress:one"
+    );
+    assert_eq!(
+        events[1]["novaWarnings"],
+        json!([{"source":"Fixture","message":"Peers unverified."}])
+    );
+    assert_eq!(events[1]["streams"], final_result["streams"]);
+    events.push(final_result);
+    assert_eq!(events.len(), 3);
+}
+
+#[test]
+fn provider_cache_origin_is_validated_and_serialized_as_response_metadata() {
+    let provider = progress_fixture_provider("globalThis.novaProvider={handle(){return []}};");
+    let rows = json!([{"id":"one","title":"One","url":"https://cdn.example/file"}]);
+    let cached = provider
+        .streams_response(json!({"streams":rows.clone(),"cacheHit":true}))
+        .unwrap();
+    assert_eq!(cached["novaCacheHit"], true);
+    assert!(cached["streams"][0].get("novaCacheHit").is_none());
+    for envelope in [
+        json!({"streams":rows.clone()}),
+        json!({"streams":rows.clone(),"cacheHit":false}),
+    ] {
+        assert!(
+            provider
+                .streams_response(envelope)
+                .unwrap()
+                .get("novaCacheHit")
+                .is_none()
+        );
+    }
+    for invalid in [json!("true"), json!(1), Value::Null] {
+        assert!(
+            provider
+                .streams_response(json!({"streams":rows.clone(),"cacheHit":invalid}))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn snapshots_and_final_streams_share_private_owner_union_and_size_validation() {
+    let mut provider = progress_fixture_provider("globalThis.novaProvider={handle(){return []}};");
+    provider.secret_keys = vec!["key".into()];
+    provider
+        .settings
+        .as_mut()
+        .unwrap()
+        .values
+        .insert("key".into(), json!("private/token"));
+    let provider = Arc::new(provider);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let host = progress_fixture_host(provider.clone(), events.clone());
+    for rows in [
+        json!([{"id":"one","title":"One","url":"https://cdn.example/file","info_hash":"abcdef0123456789abcdef0123456789abcdef01"}]),
+        json!([{"id":"one","title":"One","resolver":{"provider_id":"foreign","token":"opaque"}}]),
+        json!([{"id":"one","title":"One","url":"https://cdn.example/private%2Ftoken"}]),
+        json!([{"id":"one","title":"One","url":"http://127.0.0.1/file"}]),
+        json!([{"id":"one","title":"One","url":"https://cdn.example/file","novaSensitivePlayback":true}]),
+        json!([{"id":"same","title":"One","url":"https://cdn.example/one"},{"id":"same","title":"Two","url":"https://cdn.example/two"}]),
+        json!([{"id":"","title":"One","url":"https://cdn.example/file"}]),
+        json!({"streams":[],"warnings":["x".repeat(257)]}),
+    ] {
+        assert!(host.publish_streams(&rows.to_string()).is_err());
+        assert!(provider.streams_response(rows).is_err());
+    }
+    assert!(
+        host.publish_streams(&" ".repeat(RESPONSE_LIMIT + 1))
+            .is_err()
+    );
+    assert!(events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn progressive_publication_requires_current_settings_and_stream_configuration() {
+    let mut provider = progress_fixture_provider("globalThis.novaProvider={handle(){return []}};");
+    provider.track_settings = true;
+    provider.settings.as_mut().unwrap().generation = u64::MAX;
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let stale = progress_fixture_host(Arc::new(provider), events.clone());
+    let snapshot = json!([{"id":"one","title":"One","url":"https://cdn.example/one"}]).to_string();
+    assert!(stale.cancelled());
+    assert!(stale.publish_streams(&snapshot).is_err());
+    let mut provider = progress_fixture_provider("globalThis.novaProvider={handle(){return []}};");
+    provider.config.streams = false;
+    let disabled = progress_fixture_host(Arc::new(provider), events.clone());
+    assert!(disabled.cancelled());
+    assert!(disabled.publish_streams(&snapshot).is_err());
+    assert!(events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn provider_progress_entry_preserves_old_manifest_fetch_and_remote_fallback() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let output = events.clone();
+    let url = format!("{ANIKOTO_PROVIDER_URL}/manifest.json");
+    let expected = fetch_builtin_addon(&url).unwrap().unwrap();
+    let actual = fetch_builtin_addon_with_progress(
+        &url,
+        Arc::new(move |bytes| output.lock().unwrap().push(bytes)),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(actual, expected);
+    assert!(events.lock().unwrap().is_empty());
+    assert!(
+        fetch_builtin_addon_with_progress(
+            "https://remote.example/stream/series/id.json",
+            Arc::new(|_| panic!("remote provider must not publish"))
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn stable_stream_keys_ignore_labels_reordering_and_forged_remote_provider_ids() {
+    let mut stream:addons::Stream=serde_json::from_value(json!({"url":"https://cdn.example/video","name":"First","description":"5 seeders","behaviorHints":{"proxyHeaders":{"request":{"Referer":"https://site.example","Origin":"https://site.example"}}}})).unwrap();
+    let key = stable_stream_identity("https://remote.example", "tt123:1:1", &stream);
+    stream.name = Some("Changed".into());
+    stream.description = Some("10 reported seeders".into());
+    stream.extra.insert("seeders".into(), json!(10));
+    stream
+        .extra
+        .insert("novaProviderStreamId".into(), json!("anikoto:forged"));
+    stream.extra.insert("behaviorHints".into(),json!({"proxyHeaders":{"request":{"origin":"https://site.example","referer":"https://site.example"}}}));
+    assert_eq!(
+        key,
+        stable_stream_identity("https://remote.example/", "tt123:1:1", &stream)
+    );
+    assert_ne!(
+        key,
+        stable_stream_identity("https://other.example", "tt123:1:1", &stream)
+    );
+    assert_ne!(
+        key,
+        stable_stream_identity("https://remote.example", "tt123:1:2", &stream)
+    );
+    stream.url = Some("https://cdn.example/other".into());
+    assert_ne!(
+        key,
+        stable_stream_identity("https://remote.example", "tt123:1:1", &stream)
+    );
+    stream
+        .extra
+        .insert("novaProviderStreamId".into(), json!("anikoto:owned"));
+    let owned = stable_stream_identity(ANIKOTO_PROVIDER_URL, "tt123:1:1", &stream);
+    stream.url = Some("https://cdn.example/refreshed-token".into());
+    assert_eq!(
+        owned,
+        stable_stream_identity(ANIKOTO_PROVIDER_URL, "tt123:1:1", &stream)
+    );
+    stream
+        .extra
+        .insert("novaProviderStreamId".into(), json!("supernova:foreign"));
+    let foreign = stable_stream_identity(ANIKOTO_PROVIDER_URL, "tt123:1:1", &stream);
+    stream.url = Some("https://cdn.example/another-token".into());
+    assert_ne!(
+        foreign,
+        stable_stream_identity(ANIKOTO_PROVIDER_URL, "tt123:1:1", &stream)
+    );
+    let mut torrent: addons::Stream = serde_json::from_value(
+        json!({"infoHash":"ABCDEF0123456789ABCDEF0123456789ABCDEF01","fileIdx":0}),
+    )
+    .unwrap();
+    let first = stable_stream_identity("https://remote.example", "tt123:1:1", &torrent);
+    torrent.info_hash = torrent.info_hash.map(|hash| hash.to_ascii_lowercase());
+    assert_eq!(
+        first,
+        stable_stream_identity("https://remote.example", "tt123:1:1", &torrent)
+    );
+    torrent.file_idx = Some(1);
+    assert_ne!(
+        first,
+        stable_stream_identity("https://remote.example", "tt123:1:1", &torrent)
+    );
+}

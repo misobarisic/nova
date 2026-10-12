@@ -13,8 +13,8 @@ mod http;
 
 pub use http::{
     download_http, download_http_for_job, download_http_for_job_blocking, download_http_resume,
-    download_http_with_options, download_http_with_request, is_manifest_content_type,
-    is_manifest_url, new_http_client,
+    download_http_with_options, download_http_with_request, download_http_with_request_blocking,
+    is_manifest_content_type, is_manifest_url, new_http_client,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,6 +201,7 @@ impl DownloadJob {
             destination: destination.into(),
             resume: (!resume.is_empty()).then_some(resume),
             headers: self.source.headers().unwrap_or_default().to_vec(),
+            private_source: false,
         })
     }
 
@@ -311,6 +312,9 @@ pub struct HttpDownloadRequest {
     pub destination: PathBuf,
     pub resume: Option<DownloadResume>,
     pub headers: Vec<(String, String)>,
+    /// Signed resolver URLs must never reach resume sidecars or HLS bundles.
+    /// Private transfers restart their partial file on retry.
+    pub private_source: bool,
 }
 
 impl Default for HttpDownloadRequest {
@@ -320,6 +324,7 @@ impl Default for HttpDownloadRequest {
             destination: PathBuf::new(),
             resume: None,
             headers: Vec::new(),
+            private_source: false,
         }
     }
 }
@@ -331,6 +336,7 @@ impl HttpDownloadRequest {
             destination: destination.into(),
             resume: None,
             headers: Vec::new(),
+            private_source: false,
         }
     }
 

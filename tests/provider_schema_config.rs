@@ -2,7 +2,7 @@
 #[path = "support/destinations.rs"]
 mod destinations;
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
-use slint::{ComponentHandle, LogicalPosition, SharedString, VecModel};
+use slint::{ComponentHandle, LogicalPosition, Model, SharedString, VecModel};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 fn settle() {
@@ -159,13 +159,13 @@ fn schema_only_configuration_saves_and_confirms_global_removal() {
         assert!(!app.get_addon_config_open());
         assert!(app.get_show_settings());
     }
-    // Exercise the shipped eight-field schema, whose controls require scrolling
+    // Exercise the shipped schema, whose controls require scrolling
     // at phone widths, with the actual Croatian catalog and backend labels.
     let weak = app.as_weak();
     app.on_addon_configure(move |url| {
         let app = weak.upgrade().unwrap();
         let schema = nova_providers::provider_settings_schema("nova-provider://supernova").unwrap();
-        assert_eq!(schema.len(), 8);
+        assert!(schema.iter().any(|field| field.key == "sources.knaben"));
         let rows = schema
             .into_iter()
             .map(|field| nova::PluginSettingRow {
@@ -201,6 +201,7 @@ fn schema_only_configuration_saves_and_confirms_global_removal() {
                         .collect::<Vec<_>>(),
                 ))
                 .into(),
+                ..Default::default()
             })
             .collect::<Vec<_>>();
         app.set_addon_config_url(url);
@@ -246,9 +247,19 @@ fn schema_only_configuration_saves_and_confirms_global_removal() {
             let before = changed.borrow().len();
             keypress(slint::platform::Key::Return);
             assert_eq!(changed.borrow().len(), before + 1);
-            // Tab visits all eight schema rows and reveals the bottom actions.
-            for _ in 0..8 {
+            // Text and reorder rows have multiple keyboard actions. Walk until
+            // the footer is visible rather than assuming one Tab per field.
+            for _ in 0..app.get_plugin_setting_rows().row_count() * 3 + 3 {
                 keypress(slint::platform::Key::Tab);
+                if ElementHandle::find_by_accessible_label(&app, cache_label)
+                    .next()
+                    .is_some()
+                    && ElementHandle::find_by_accessible_label(&app, remove_label)
+                        .next()
+                        .is_some()
+                {
+                    break;
+                }
             }
             for caption in [cache_label, remove_label] {
                 let item = label(&app, caption);

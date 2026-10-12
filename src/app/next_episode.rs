@@ -7,6 +7,13 @@ pub(super) fn new_session() -> u64 {
     NEXT_SESSION.fetch_add(1, Ordering::Relaxed)
 }
 
+fn near_prefetch(position: f64, duration: f64) -> bool {
+    position.is_finite()
+        && duration.is_finite()
+        && duration > 0.0
+        && position >= duration - 120.0_f64.min(duration * 0.1) - 30.0_f64.min(duration * 0.05)
+}
+
 fn near_end(position: f64, duration: f64) -> bool {
     position.is_finite()
         && duration.is_finite()
@@ -16,7 +23,7 @@ fn near_end(position: f64, duration: f64) -> bool {
 
 // A successor is relative to the playing episode, never to watched history.
 // Don't leap over an unaired immediate successor to offer a later episode.
-fn successor<'a>(videos: &'a [Video], current: &str, today: i64) -> Option<&'a Video> {
+pub(super) fn successor<'a>(videos: &'a [Video], current: &str, today: i64) -> Option<&'a Video> {
     let ordered: Vec<_> = ordered_seasons(videos)
         .into_iter()
         .filter(|season| *season > 0)
@@ -34,19 +41,27 @@ fn token(session: u64, episode: &str) -> String {
 
 impl Bridge {
     pub(super) fn clear_next_episode_prompt(&self) {
+        self.shared.lock().unwrap().stream_prefetch_live_session = None;
         if let Some(app) = self.app() {
-            app.set_next_episode_visible(false);
-            app.set_next_episode_token(SharedString::default());
+            Self::hide_next_episode_prompt(&app);
         }
+    }
+
+    // The source lookup intentionally starts before this offer. Hiding its UI
+    // must not revoke the still-eligible playback session's speculative work.
+    fn hide_next_episode_prompt(app: &AppWindow) {
+        app.set_next_episode_visible(false);
+        app.set_next_episode_token(SharedString::default());
     }
 
     pub(super) fn refresh_next_episode_prompt(&self) {
         let Some(app) = self.app() else { return };
+        self.refresh_next_episode_prefetch(&app);
         if !app.get_player_open()
             || !app.get_playback_started()
             || !near_end(app.get_position() as f64, app.get_duration() as f64)
         {
-            app.set_next_episode_visible(false);
+            Self::hide_next_episode_prompt(&app);
             return;
         }
         let offer = {
@@ -68,7 +83,7 @@ impl Bridge {
             })
         };
         let Some((session, next)) = offer else {
-            app.set_next_episode_visible(false);
+            Self::hide_next_episode_prompt(&app);
             return;
         };
         let offer_token = token(session, &next.id);
@@ -76,6 +91,82 @@ impl Bridge {
         app.set_next_episode_title(episode_row_label(&next).into());
         app.set_next_episode_context(episode_badge(&next).into());
         app.set_next_episode_visible(true);
+    }
+
+    fn refresh_next_episode_prefetch(&self, app: &AppWindow) {
+        let eligible = app.get_player_open()
+            && app.get_playback_started()
+            && !app.get_is_paused()
+            && self.player.can_prefetch_streams();
+        let request = {
+            let mut state = self.shared.lock().unwrap();
+            state.stream_prefetch_live_session =
+                if eligible && state.cache_settings.prefetch_next_episode_streams {
+                    state
+                        .playback
+                        .as_ref()
+                        .filter(|p| {
+                            !p.next_episode_dismissed
+                                && state
+                                    .modal_item
+                                    .as_ref()
+                                    .is_some_and(|m| m.id == p.series_id)
+                        })
+                        .map(|p| p.session)
+                } else {
+                    None
+                };
+            if !state.cache_settings.prefetch_next_episode_streams {
+                if let Some(playing) = state.playback.as_mut() {
+                    playing.next_episode_prefetched = None;
+                }
+                return;
+            }
+            if !eligible {
+                if let Some(playing) = state.playback.as_mut() {
+                    playing.next_episode_prefetched = None;
+                }
+                return;
+            }
+            if !near_prefetch(app.get_position() as f64, app.get_duration() as f64) {
+                return;
+            }
+            let Some(playing) = state.playback.as_ref() else {
+                return;
+            };
+            if playing.session == 0 || playing.next_episode_dismissed {
+                return;
+            }
+            let Some(modal) = state
+                .modal_item
+                .as_ref()
+                .filter(|m| m.id == playing.series_id)
+            else {
+                return;
+            };
+            let Some(next) = successor(&modal.videos, &playing.episode_id, today_days()) else {
+                return;
+            };
+            let key = stream_prefetch::PlaybackKey {
+                session: playing.session,
+                series: playing.series_id.clone(),
+                episode: next.id.clone(),
+                settings: nova_providers::plugin_settings::settings_generation(),
+                owners: state
+                    .installed
+                    .iter()
+                    .filter(|a| a.enabled && a.available)
+                    .map(|a| (a.url.clone(), a.generation))
+                    .collect(),
+            };
+            let playing = state.playback.as_mut().unwrap();
+            if playing.next_episode_prefetched.as_ref() == Some(&key) {
+                return;
+            }
+            playing.next_episode_prefetched = Some(key.clone());
+            (key.episode, key.session)
+        };
+        self.prefetch_episode_streams(request.0, request.1);
     }
 
     pub(super) fn dismiss_next_episode(&self, offer_token: &str) {
@@ -150,6 +241,19 @@ mod tests {
             (5.0, f64::INFINITY),
         ] {
             assert!(!near_end(pos, dur));
+        }
+    }
+
+    #[test]
+    fn prefetch_leads_prompt_by_thirty_seconds_bounded_for_short_episodes() {
+        assert!(!near_prefetch(1289.0, 1440.0));
+        assert!(near_prefetch(1290.0, 1440.0));
+        assert!(!near_end(1290.0, 1440.0));
+        assert!(!near_prefetch(84.0, 100.0));
+        assert!(near_prefetch(85.0, 100.0));
+        assert!(!near_end(85.0, 100.0));
+        for (pos, dur) in [(0.0, 0.0), (f64::NAN, 100.0), (5.0, f64::INFINITY)] {
+            assert!(!near_prefetch(pos, dur));
         }
     }
 
@@ -262,6 +366,43 @@ mod tests {
         bridge.refresh_next_episode_prompt();
         assert!(!app.get_next_episode_visible(), "loading cannot offer next");
         app.set_playback_started(true);
+        app.set_is_paused(false);
+        app.set_position(1290.0);
+        bridge.refresh_next_episode_prompt();
+        assert!(
+            !app.get_next_episode_visible(),
+            "prefetch precedes the offer"
+        );
+        // Repeated preprompt polls hide the UI while preserving the worker's
+        // eligibility to store its response before the banner appears.
+        bridge.refresh_next_episode_prompt();
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            let playing = state.playback.as_ref().unwrap();
+            assert_eq!(state.stream_prefetch_live_session, Some(playing.session));
+            assert_eq!(playing.episode_id, "episode-50");
+            assert_eq!(
+                playing.next_episode_prefetched.as_ref().unwrap().episode,
+                "episode-51"
+            );
+            assert_eq!(state.modal_item.as_ref().unwrap().request_id, "episode-50");
+            state.cache_settings.prefetch_next_episode_streams = false;
+        }
+        bridge.refresh_next_episode_prompt();
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            assert!(
+                state
+                    .playback
+                    .as_ref()
+                    .unwrap()
+                    .next_episode_prefetched
+                    .is_none()
+            );
+            assert!(state.stream_prefetch_live_session.is_none());
+            state.cache_settings.prefetch_next_episode_streams = true;
+        }
+        app.set_position(1320.0);
         bridge.refresh_next_episode_prompt();
         assert!(app.get_next_episode_visible());
         let old_token = app.get_next_episode_token();

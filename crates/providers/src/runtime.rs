@@ -17,7 +17,8 @@ use crate::{ProviderError, ProviderHost};
 
 const MAX_PLUGIN_MEMORY: usize = 32 * 1024 * 1024;
 const MAX_PLUGIN_STACK: usize = 512 * 1024;
-const MAX_PLUGIN_RUN: Duration = Duration::from_secs(5);
+const DEFAULT_PLUGIN_RUN_MS: u64 = 5_000;
+const MAX_PLUGIN_RUN_MS: u64 = 10_000;
 const MAX_PLUGIN_BODY: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -73,6 +74,7 @@ pub struct PluginCapabilities {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PluginLimits {
+    pub script_time_ms: u64,
     pub request_timeout_ms: u64,
     pub resolver_timeout_ms: u64,
     pub response_bytes: usize,
@@ -83,12 +85,19 @@ pub struct PluginLimits {
 impl Default for PluginLimits {
     fn default() -> Self {
         Self {
+            script_time_ms: DEFAULT_PLUGIN_RUN_MS,
             request_timeout_ms: 15_000,
             resolver_timeout_ms: 30_000,
             response_bytes: MAX_PLUGIN_BODY,
             redirects: 5,
             requests_per_operation: 12,
         }
+    }
+}
+
+impl PluginLimits {
+    fn script_budget(&self) -> Duration {
+        Duration::from_millis(self.script_time_ms.clamp(1, MAX_PLUGIN_RUN_MS))
     }
 }
 
@@ -132,6 +141,10 @@ impl PluginRuntime {
                 "invalid provider manifest version or ID".into(),
             ));
         }
+        let streams_allowed = matches!(
+            request.get("op").and_then(serde_json::Value::as_str),
+            Some("lookupStreams" | "streams")
+        );
         let is_details = request.get("op").and_then(serde_json::Value::as_str) == Some("details");
         let fallback = Arc::new(Mutex::new(None::<String>));
         let (settings_snapshot, settings_generation) = if let Some(values) = request
@@ -194,6 +207,7 @@ impl PluginRuntime {
             .collect();
         let budget = Arc::new(ExecutionBudget {
             started: Instant::now(),
+            script_limit: self.manifest.limits.script_budget(),
             wall_limit: Duration::from_millis(
                 self.manifest.limits.request_timeout_ms.clamp(1, 60_000),
             ),
@@ -211,6 +225,10 @@ impl PluginRuntime {
             total_response_bytes: AtomicUsize::new(0),
             storage_writes: AtomicUsize::new(0),
             log_calls: AtomicUsize::new(0),
+            stream_snapshots: AtomicUsize::new(0),
+            streams_allowed,
+            has_configuration: !self.manifest.configuration.is_empty(),
+            settings_generation,
         });
         let runtime = Runtime::new().map_err(script_error)?;
         runtime.set_memory_limit(MAX_PLUGIN_MEMORY);
@@ -294,6 +312,10 @@ struct OperationHost {
     total_response_bytes: AtomicUsize,
     storage_writes: AtomicUsize,
     log_calls: AtomicUsize,
+    stream_snapshots: AtomicUsize,
+    streams_allowed: bool,
+    has_configuration: bool,
+    settings_generation: u64,
 }
 
 impl OperationHost {
@@ -308,6 +330,7 @@ impl OperationHost {
 
 struct ExecutionBudget {
     started: Instant,
+    script_limit: Duration,
     wall_limit: Duration,
     http_micros: AtomicU64,
     host_intervals: Mutex<Vec<(Instant, Instant)>>,
@@ -321,7 +344,7 @@ impl ExecutionBudget {
         elapsed >= self.wall_limit
             || elapsed.saturating_sub(Duration::from_micros(
                 self.http_micros.load(Ordering::Relaxed),
-            )) >= MAX_PLUGIN_RUN
+            )) >= self.script_limit
     }
 }
 
@@ -359,12 +382,11 @@ impl ProviderHost for OperationHost {
                 "provider exceeded its operation time limit".into(),
             ));
         }
-        let started = Instant::now();
         let response = self.inner.request(request);
-        // Record the union of host wait intervals rather than summing parallel
-        // batch tasks, which would incorrectly grant extra script CPU time.
-        self.host_work_elapsed(started.elapsed());
-        if self.cancelled() || self.budget.expired() {
+        // Workers never credit IO time: JS may be executing a completion
+        // callback while another request is in flight. Only the invoking
+        // thread records its actual blocking waits in the capability below.
+        if self.cancelled() || self.budget.started.elapsed() >= self.budget.wall_limit {
             return Err(crate::ProviderHostError(
                 "provider operation cancelled or timed out".into(),
             ));
@@ -383,6 +405,44 @@ impl ProviderHost for OperationHost {
             ));
         }
         Ok(response)
+    }
+
+    fn publish_streams(&self, rows: &str) -> Result<(), crate::ProviderHostError> {
+        if !self.streams_allowed
+            || self.cancelled()
+            || self.budget.expired()
+            || (self.has_configuration
+                && crate::plugin_settings::settings_generation() != self.settings_generation)
+        {
+            return Err(crate::ProviderHostError(
+                "stream publication unavailable or stale".into(),
+            ));
+        }
+        if rows.len() > MAX_PLUGIN_BODY
+            || self.stream_snapshots.fetch_add(1, Ordering::Relaxed) >= 16
+        {
+            return Err(crate::ProviderHostError(
+                "stream publication exceeded its limit".into(),
+            ));
+        }
+        let value: serde_json::Value = serde_json::from_str(rows)
+            .map_err(|_| crate::ProviderHostError("invalid stream publication".into()))?;
+        let stream_rows = value
+            .as_array()
+            .or_else(|| value.get("streams").and_then(serde_json::Value::as_array));
+        let warnings_valid = value.get("warnings").is_none_or(|warnings| {
+            warnings
+                .as_array()
+                .is_some_and(|warnings| warnings.len() <= 16)
+        });
+        if !stream_rows.is_some_and(|rows| rows.len() <= 256) || !warnings_valid {
+            return Err(crate::ProviderHostError(
+                "invalid stream publication".into(),
+            ));
+        }
+        self.inner
+            .publish_streams(rows)
+            .map_err(|_| crate::ProviderHostError("stream publication rejected".into()))
     }
 
     fn metadata_available(&self, caller: &str) -> bool {
@@ -506,7 +566,10 @@ fn install_capabilities<'js>(
             if !plugin_url_allowed(&url, &permissions.domains) {
                 return serde_json::json!({"error":"URL is outside the provider's domain permissions"}).to_string();
             }
-            match host_ref.get(&url, &headers) {
+            let started = Instant::now();
+            let response = host_ref.get(&url, &headers);
+            host_ref.host_work_elapsed(started.elapsed());
+            match response {
                 Ok(response) if response.body.len() <= MAX_PLUGIN_BODY => {
                     let body = String::from_utf8_lossy(&response.body).into_owned();
                     serde_json::json!({
@@ -534,7 +597,10 @@ fn install_capabilities<'js>(
                     serde_json::json!({"error":"provider POST permission denied"}).to_string()
                 }
                 Ok(request) => {
-                    http_result(host_ref.request(&request), request.response_type).to_string()
+                    let started = Instant::now();
+                    let response = host_ref.request(&request);
+                    host_ref.host_work_elapsed(started.elapsed());
+                    http_result(response, request.response_type).to_string()
                 }
                 Err(error) => serde_json::json!({"error":error}).to_string(),
             }
@@ -546,6 +612,7 @@ fn install_capabilities<'js>(
         if raw.len() > MAX_PLUGIN_BODY { return serde_json::json!({"error":"HTTP batch is too large"}).to_string(); }
         let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(&raw) else { return serde_json::json!({"error":"invalid HTTP batch"}).to_string(); };
         if items.len() > 3 { return serde_json::json!({"error":"HTTP batch permits at most three GET requests"}).to_string(); }
+        let started = Instant::now();
         let mut results = std::thread::scope(|scope| {
             let tasks: Vec<_> = items.into_iter().map(|item| {
                 let host = &host_ref;
@@ -560,6 +627,7 @@ fn install_capabilities<'js>(
             }).collect();
             tasks.into_iter().map(|task| task.join().unwrap_or_else(|_| serde_json::json!({"error":"HTTP batch request failed"}))).collect::<Vec<_>>()
         });
+        host_ref.host_work_elapsed(started.elapsed());
         let mut output_bytes = 2usize;
         for item in &mut results {
             let size = item.to_string().len() + 1;
@@ -570,6 +638,59 @@ fn install_capabilities<'js>(
         }
         serde_json::to_string(&results).unwrap_or_else(|_| "[]".into())
     })?)?;
+    let host_ref = host.clone();
+    let domains = manifest.permissions.domains.clone();
+    http.set("batchEach", Function::new(ctx.clone(), move |raw: String, callback: Function<'js>| -> rquickjs::Result<String> {
+        if raw.len() > MAX_PLUGIN_BODY { return Ok(serde_json::json!({"error":"HTTP batch is too large"}).to_string()); }
+        let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(&raw) else { return Ok(serde_json::json!({"error":"invalid HTTP batch"}).to_string()); };
+        if items.len() > 3 { return Ok(serde_json::json!({"error":"HTTP batch permits at most three GET requests"}).to_string()); }
+        std::thread::scope(|scope| {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let count = items.len();
+            for (index,item) in items.into_iter().enumerate() {
+                let sender = sender.clone();
+                let host = &host_ref;
+                let domains = &domains;
+                scope.spawn(move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match parse_http_request(&item.to_string(),domains) {
+                        Ok(request) if request.method == "GET" => http_result(host.request(&request),request.response_type),
+                        Ok(_) => serde_json::json!({"error":"HTTP batch supports GET only"}),
+                        Err(error) => serde_json::json!({"error":error}),
+                    })).unwrap_or_else(|_| serde_json::json!({"error":"HTTP batch request failed"}));
+                    let _ = sender.send((index,result));
+                });
+            }
+            drop(sender);
+            let mut results = vec![serde_json::Value::Null;count];
+            let mut output_bytes = 2usize;
+            for _ in 0..count {
+                let started = Instant::now();
+                let received = receiver.recv();
+                host_ref.host_work_elapsed(started.elapsed());
+                let Ok((index,mut response)) = received else { break; };
+                if output_bytes.saturating_add(response.to_string().len()+1) > MAX_PLUGIN_BODY {
+                    response = serde_json::json!({"error":"HTTP batch exceeded its aggregate output limit"});
+                }
+                output_bytes += response.to_string().len()+1;
+                let raw = response.to_string();
+                results[index] = response;
+                if !host_ref.cancelled() { callback.call::<_,()>((index,raw))?; }
+            }
+            Ok(serde_json::to_string(&results).unwrap_or_else(|_| "[]".into()))
+        })
+    })?)?;
+    let streams = Object::new(ctx.clone())?;
+    let host_ref = host.clone();
+    streams.set(
+        "publish",
+        Function::new(ctx.clone(), move |rows: String| {
+            host_ref.publish_streams(&rows).map_or_else(
+                |error| crate::host::sanitize_log(&error.to_string()),
+                |()| String::new(),
+            )
+        })?,
+    )?;
+    nova.set("streams", streams)?;
     let torrent = Object::new(ctx.clone())?;
     torrent.set(
         "inspect",
@@ -799,6 +920,18 @@ fn install_settings<'js>(
             validated.insert(field.key.clone(), value.clone());
         }
     }
+    let cache_secrets = schema
+        .iter()
+        .filter(|field| field.kind == "secret")
+        .filter_map(|field| {
+            validated
+                .get(&field.key)
+                .and_then(serde_json::Value::as_str)
+        })
+        .flat_map(|value| [value, value.trim()])
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
     let snapshot = Arc::new(Mutex::new(validated));
     let read_count = reads.clone();
     let values = snapshot.clone();
@@ -873,6 +1006,76 @@ fn install_settings<'js>(
             }
         })?,
     )?;
+    // These methods share operation counters with durable cache access, but
+    // never involve nova.storage or the configured settings backend.
+    let id = plugin.clone();
+    let memory_host = host.clone();
+    let count = reads.clone();
+    cache.set(
+        "getMemory",
+        Function::new(ctx.clone(), move |key: String| {
+            if memory_host.cancelled()
+                || key.len() > 128
+                || count.fetch_add(1, Ordering::Relaxed) >= 256
+            {
+                return String::new();
+            }
+            crate::plugin_settings::cache_get_memory_for_generation(
+                &id,
+                &key,
+                unix_seconds(),
+                generation,
+            )
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+        })?,
+    )?;
+    let id = plugin.clone();
+    let memory_host = host.clone();
+    let count = writes.clone();
+    let secrets = cache_secrets.clone();
+    cache.set(
+        "setMemory",
+        Function::new(ctx.clone(), move |key: String, value: String, ttl: u64| {
+            if memory_host.cancelled()
+                || key.len() > 128
+                || value.len() > 1024 * 1024
+                || cache_contains_secret(&key, &secrets)
+                || cache_contains_secret(&value, &secrets)
+                || count.fetch_add(1, Ordering::Relaxed) >= 128
+            {
+                return "provider cache write limit exceeded".to_owned();
+            }
+            crate::plugin_settings::cache_set_memory_for_generation(
+                &id,
+                &key,
+                &value,
+                ttl,
+                unix_seconds(),
+                generation,
+            )
+            .map(|()| String::new())
+            .unwrap_or_else(|_| "could not save provider cache".into())
+        })?,
+    )?;
+    let id = plugin.clone();
+    let memory_host = host.clone();
+    let count = writes.clone();
+    cache.set(
+        "removeMemory",
+        Function::new(ctx.clone(), move |key: String| {
+            if memory_host.cancelled()
+                || key.len() > 128
+                || count.fetch_add(1, Ordering::Relaxed) >= 128
+            {
+                return "provider cache write limit exceeded".to_owned();
+            }
+            crate::plugin_settings::cache_remove_memory_for_generation(&id, &key, generation)
+                .map(|()| String::new())
+                .unwrap_or_else(|_| "could not remove provider cache".into())
+        })?,
+    )?;
     let id = plugin.clone();
     let read_host = host.clone();
     cache.set(
@@ -894,6 +1097,7 @@ fn install_settings<'js>(
     let id = plugin.clone();
     let count = writes.clone();
     let write_host = host.clone();
+    let secrets = cache_secrets;
     cache.set(
         "set",
         Function::new(ctx.clone(), move |key: String, value: String, ttl: u64| {
@@ -901,6 +1105,8 @@ fn install_settings<'js>(
                 || crate::plugin_settings::settings_generation() != generation
                 || key.len() > 128
                 || value.len() > 256 * 1024
+                || cache_contains_secret(&key, &secrets)
+                || cache_contains_secret(&value, &secrets)
                 || count.fetch_add(1, Ordering::Relaxed) >= 128
             {
                 return "provider cache write limit exceeded".to_owned();
@@ -935,6 +1141,15 @@ fn install_settings<'js>(
     nova.set("settings", settings)?;
     nova.set("cache", cache)?;
     Ok(())
+}
+
+fn cache_contains_secret(raw: &str, secrets: &[String]) -> bool {
+    let decoded = percent_encoding::percent_decode_str(raw).decode_utf8_lossy();
+    let form = raw.replace('+', " ");
+    let form = percent_encoding::percent_decode_str(&form).decode_utf8_lossy();
+    secrets
+        .iter()
+        .any(|secret| raw.contains(secret) || decoded.contains(secret) || form.contains(secret))
 }
 
 fn unix_seconds() -> u64 {
@@ -1356,10 +1571,103 @@ fn script_error(error: rquickjs::Error) -> ProviderError {
     ProviderError::Script(error.to_string())
 }
 
+// Called by the serialized service fixture rather than a separate test: cache
+// generations are global, so parallel configure/reset fixtures would race.
+#[cfg(test)]
+pub(crate) fn exercise_memory_cache_runtime() {
+    struct Host;
+    impl ProviderHost for Host {
+        fn get(
+            &self,
+            _: &str,
+            _: &BTreeMap<String, String>,
+        ) -> Result<crate::HttpResponse, crate::ProviderHostError> {
+            Err(crate::ProviderHostError("unused".into()))
+        }
+        fn storage_get(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn storage_set(&self, _: &str, _: &str) -> Result<(), crate::ProviderHostError> {
+            panic!("memory cache must not use legacy storage")
+        }
+        fn log(&self, _: &str) {}
+    }
+    let manifest: PluginManifest = serde_json::from_value(serde_json::json!({
+        "formatVersion":1,"id":"memory-fixture","name":"Fixture","version":"1","entry":"fixture.js",
+        "permissions":{},"configuration":[{"key":"key","label":"Key","type":"secret","default":"private-fixture-key"}]
+    })).unwrap();
+    let script = r#"globalThis.novaProvider={handle(){
+        const check=(ok)=>{if(!ok)throw new Error('memory cache assertion failed');};
+        check(nova.cache.getMemory('missing')==='');
+        check(nova.cache.setMemory('large','x'.repeat(1024*1024),60)==='');
+        check(nova.cache.getMemory('large').length===1024*1024);
+        check(nova.cache.setMemory('too-large','x'.repeat(1024*1024+1),60)!=='');
+        check(nova.cache.setMemory('../bad','x',60)!=='');
+        check(nova.cache.setMemory('ttl','x',2592001)!=='');
+        check(nova.cache.setMemory('secret','private-fixture-key',60)!=='');
+        check(nova.cache.setMemory('encoded','%70rivate-fixture-key',60)!=='');
+        check(nova.cache.set('secret','private-fixture-key',60)!=='');
+        check(nova.cache.removeMemory('large')==='');
+        check(nova.cache.getMemory('large')==='');
+        return {ok:true};
+    }}"#;
+    let runtime = PluginRuntime::new(manifest, script);
+    assert_eq!(
+        runtime
+            .invoke(Arc::new(Host), &serde_json::json!({}))
+            .unwrap()["ok"],
+        true
+    );
+    let stale = crate::plugin_settings::settings_generation().wrapping_sub(1);
+    let runtime = PluginRuntime::new(
+        runtime.manifest.clone(),
+        r#"globalThis.novaProvider={handle(){return {
+        set:nova.cache.setMemory('stale','x',60),get:nova.cache.getMemory('stale'),remove:nova.cache.removeMemory('stale')
+    };}}"#,
+    );
+    let result = runtime
+        .invoke(
+            Arc::new(Host),
+            &serde_json::json!({"settings":{},"settingsGeneration":stale}),
+        )
+        .unwrap();
+    assert_ne!(result["set"], "");
+    assert_eq!(result["get"], "");
+    assert_ne!(result["remove"], "");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn script_budget_defaults_and_manifest_bounds() {
+        let legacy: PluginLimits = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(legacy.script_budget(), Duration::from_secs(5));
+        for (requested, expected) in [(10_000, 10_000), (u64::MAX, 10_000), (0, 1)] {
+            let limits: PluginLimits =
+                serde_json::from_value(json!({"scriptTimeMs": requested})).unwrap();
+            assert_eq!(limits.script_budget(), Duration::from_millis(expected));
+        }
+    }
+
+    #[test]
+    fn longer_script_budget_keeps_the_wall_deadline() {
+        let mut budget = ExecutionBudget {
+            started: Instant::now() - Duration::from_secs(6),
+            script_limit: Duration::from_secs(5),
+            wall_limit: Duration::from_secs(20),
+            http_micros: AtomicU64::new(0),
+            host_intervals: Mutex::new(Vec::new()),
+        };
+        assert!(budget.expired());
+        budget.script_limit = Duration::from_secs(10);
+        assert!(!budget.expired());
+        budget.wall_limit = Duration::from_secs(5);
+        budget.http_micros.store(6_000_000, Ordering::Relaxed);
+        assert!(budget.expired());
+    }
 
     fn manifest() -> PluginManifest {
         PluginManifest {
@@ -1468,6 +1776,106 @@ mod tests {
         assert_eq!(result[1]["error"], "fixture failure");
         assert_eq!(result[2]["bodyBase64"], "b2s=");
         assert!(result[2].get("body").is_none());
+    }
+
+    struct CompletionFixture {
+        stage: (Mutex<usize>, std::sync::Condvar),
+        main_thread: std::thread::ThreadId,
+        publications: Mutex<Vec<String>>,
+    }
+    impl ProviderHost for CompletionFixture {
+        fn get(
+            &self,
+            url: &str,
+            _headers: &BTreeMap<String, String>,
+        ) -> Result<crate::HttpResponse, crate::ProviderHostError> {
+            let needed = if url.ends_with("slow") {
+                2
+            } else if url.ends_with("fail") {
+                1
+            } else {
+                0
+            };
+            let (lock, wake) = &self.stage;
+            let stage = lock.lock().unwrap();
+            let (stage, timeout) = wake
+                .wait_timeout_while(stage, Duration::from_secs(2), |stage| *stage < needed)
+                .unwrap();
+            if timeout.timed_out() && *stage < needed {
+                return Err(crate::ProviderHostError(
+                    "completion fixture timed out".into(),
+                ));
+            }
+            if url.ends_with("fail") {
+                return Err(crate::ProviderHostError("fixture failure".into()));
+            }
+            Ok(crate::HttpResponse {
+                status: 200,
+                body: b"ok".to_vec(),
+                ..Default::default()
+            })
+        }
+        fn storage_get(&self, _key: &str) -> Option<String> {
+            None
+        }
+        fn storage_set(&self, _key: &str, _value: &str) -> Result<(), crate::ProviderHostError> {
+            assert_eq!(std::thread::current().id(), self.main_thread);
+            *self.stage.0.lock().unwrap() += 1;
+            self.stage.1.notify_all();
+            Ok(())
+        }
+        fn publish_streams(&self, rows: &str) -> Result<(), crate::ProviderHostError> {
+            assert_eq!(std::thread::current().id(), self.main_thread);
+            self.publications.lock().unwrap().push(rows.to_owned());
+            Ok(())
+        }
+        fn log(&self, _message: &str) {}
+    }
+
+    #[test]
+    fn batch_each_calls_main_thread_in_completion_order_and_returns_input_order() {
+        let host = Arc::new(CompletionFixture {
+            stage: (Mutex::new(0), std::sync::Condvar::new()),
+            main_thread: std::thread::current().id(),
+            publications: Mutex::new(vec![]),
+        });
+        let script = r#"globalThis.novaProvider={handle(){
+          const completed=[];
+          const ordered=JSON.parse(nova.http.batchEach(JSON.stringify(['slow','fail','fast'].map(name=>({url:'https://example.com/'+name}))), (index,raw)=>{
+            completed.push(index);nova.storage.set('completed',String(index));
+            nova.streams.publish(JSON.stringify(completed.map(id=>({id:String(id)}))));
+          }));return {completed,ordered};
+        }};"#;
+        let result = PluginRuntime::new(manifest(), script)
+            .invoke(host.clone(), &json!({"op":"lookupStreams"}))
+            .unwrap();
+        assert_eq!(result["completed"], json!([2, 1, 0]));
+        assert_eq!(result["ordered"][0]["body"], "ok");
+        assert_eq!(result["ordered"][1]["error"], "fixture failure");
+        assert_eq!(result["ordered"][2]["body"], "ok");
+        assert_eq!(host.publications.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn stream_publications_are_operation_and_count_bounded() {
+        let host = Arc::new(CompletionFixture {
+            stage: (Mutex::new(0), std::sync::Condvar::new()),
+            main_thread: std::thread::current().id(),
+            publications: Mutex::new(vec![]),
+        });
+        let script = "globalThis.novaProvider={handle(){return Array.from({length:17},()=>nova.streams.publish('[]'));}}";
+        let runtime = PluginRuntime::new(manifest(), script);
+        let denied = runtime
+            .invoke(host.clone(), &json!({"op":"resolveStream"}))
+            .unwrap();
+        assert!(denied[0].as_str().unwrap().contains("unavailable"));
+        assert!(host.publications.lock().unwrap().is_empty());
+        let allowed = runtime
+            .invoke(host.clone(), &json!({"op":"lookupStreams"}))
+            .unwrap();
+        assert_eq!(allowed[15], "");
+        assert!(allowed[16].as_str().unwrap().contains("limit"));
+        assert_eq!(host.publications.lock().unwrap().len(), 16);
     }
 
     #[test]

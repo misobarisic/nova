@@ -25,6 +25,8 @@ export struct MediaCard {
 
 export struct StreamRow {
     id: string,
+    /// First visibility of this ID in the current stream request, not a data update.
+    reveal_new: bool,
     /// Full addon text for accessibility and legacy callers.
     text: string,
     /// Release title, separate from the smaller addon/quality and detail text.
@@ -302,4 +304,6 @@ export struct SettingsDestination { id: int, stable-id: string, group: int, titl
 export struct PluginSettingRow {
     key: string, label: string, kind: string, value: string, checked: bool,
     options: [string], labels: [string], selected: int,
+    collection: string, collection-label: string, collection-add-label: string,
+    item: string, item-role: string, item-controller: string, configured: bool, has-editor: bool,
 }

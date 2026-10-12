@@ -2264,3 +2264,178 @@ msgstr "Ukloni postavke"
 
 msgid "Save"
 msgstr "Spremi"
+
+msgid "Prefetch next episode streams"
+msgstr "Unaprijed dohvati izvore sljedeće epizode"
+
+msgid "Look up available sources shortly before the next episode buttons appear. Sources stay in memory; playback starts only after you choose."
+msgstr "Potraži dostupne izvore malo prije prikaza gumba za sljedeću epizodu. Izvori ostaju u memoriji; reprodukcija počinje tek nakon odabira."
+
+msgid "Edit"
+msgstr "Uredi"
+
+
+msgid "Torrent sources"
+msgstr "Torrent izvori"
+
+msgid "Debrid providers"
+msgstr "Debrid pružatelji"
+
+msgid "Add source"
+msgstr "Dodaj izvor"
+
+msgid "Add provider"
+msgstr "Dodaj pružatelja"
+
+msgid "Sort order"
+msgstr "Redoslijed sortiranja"
+
+msgid "Cached availability"
+msgstr "Dostupnost u predmemoriji"
+
+msgid "Resolution"
+msgstr "Razlučivost"
+
+msgid "Size"
+msgstr "Veličina"
+
+msgid "Season pack"
+msgstr "Paket sezone"
+
+msgid "Reported seeders"
+msgstr "Prijavljeni seederi"
+
+msgid "Higher priority first. Unknown values last."
+msgstr "Viši prioritet prvo. Nepoznate vrijednosti posljednje."
+
+msgid "Up"
+msgstr "Gore"
+
+msgid "Down"
+msgstr "Dolje"
+
+msgid "High first"
+msgstr "Više prvo"
+
+msgid "Low first"
+msgstr "Niže prvo"
+
+msgid "Configured"
+msgstr "Postavljeno"
+
+msgid "Preferred languages"
+msgstr "Željeni jezici"
+
+msgid "Preferred language"
+msgstr "Željeni jezik"
+
+msgid "Preferred video codecs"
+msgstr "Željeni videokodeci"
+
+msgid "Preferred video codec"
+msgstr "Željeni videokodek"
+
+msgid "Add preference"
+msgstr "Dodaj željenu opciju"
+
+msgid "First choice ranks highest. Unlabelled releases stay last."
+msgstr "Prva opcija ima prednost. Izdanja bez oznaka ostaju na kraju."
+
+msgid "English"
+msgstr "Engleski"
+
+msgid "Japanese"
+msgstr "Japanski"
+
+msgid "Croatian"
+msgstr "Hrvatski"
+
+msgid "German"
+msgstr "Njemački"
+
+msgid "French"
+msgstr "Francuski"
+
+msgid "Spanish"
+msgstr "Španjolski"
+
+msgid "Italian"
+msgstr "Talijanski"
+
+msgid "Portuguese"
+msgstr "Portugalski"
+
+msgid "Russian"
+msgstr "Ruski"
+
+msgid "Korean"
+msgstr "Korejski"
+
+msgid "Chinese"
+msgstr "Kineski"
+
+msgid "Arabic"
+msgstr "Arapski"
+
+msgid "Hindi"
+msgstr "Hindski"
+
+msgid "Dutch"
+msgstr "Nizozemski"
+
+msgid "Polish"
+msgstr "Poljski"
+
+msgid "Turkish"
+msgstr "Turski"
+
+msgid "Swedish"
+msgstr "Švedski"
+
+msgid "Norwegian"
+msgstr "Norveški"
+
+msgid "Danish"
+msgstr "Danski"
+
+msgid "Finnish"
+msgstr "Finski"
+
+msgid "Czech"
+msgstr "Češki"
+
+msgid "Hungarian"
+msgstr "Mađarski"
+
+msgid "Romanian"
+msgstr "Rumunjski"
+
+msgid "Ukrainian"
+msgstr "Ukrajinski"
+
+msgid "Greek"
+msgstr "Grčki"
+
+msgid "Hebrew"
+msgstr "Hebrejski"
+
+msgid "Thai"
+msgstr "Tajski"
+
+msgid "Vietnamese"
+msgstr "Vijetnamski"
+
+msgid "Indonesian"
+msgstr "Indonezijski"
+
+msgid "Preferred audio languages"
+msgstr "Željeni jezici zvuka"
+
+msgid "Preferred audio language"
+msgstr "Željeni jezik zvuka"
+
+msgid "Preferred subtitle languages"
+msgstr "Željeni jezici titlova"
+
+msgid "Preferred subtitle language"
+msgstr "Željeni jezik titlova"

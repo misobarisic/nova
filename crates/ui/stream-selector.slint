@@ -209,23 +209,29 @@ component StreamList {
             // Keep each row's layout slot fixed while its contents reveal.
             // In-place progress updates preserve this one-shot state and timer.
             property <bool> item_revealed: false;
-            property <bool> reveal_motion: root.stagger;
-            // Rows first shown without motion stay visible when it is enabled
-            // later; turning it off also completes any pending reveal.
-            init => { if (!self.reveal_motion) { self.item_revealed = true; } }
+            // Latch first visibility when this delegate is constructed. Progress
+            // updates mark retained rows false but must not cancel their entrance.
+            property <bool> reveal_eligible: st.reveal_new;
+            property <bool> reveal_motion: root.stagger && self.reveal_eligible;
+            // A moved retained ID may get a new delegate; show it immediately.
+            // Rows first shown without motion also stay visible when enabled later.
+            init => {
+                self.reveal_eligible = st.reveal_new;
+                if (!self.reveal_motion) { self.item_revealed = true; }
+            }
             changed reveal_motion => { if (!self.reveal_motion) { self.item_revealed = true; } }
             property <duration> item_reveal_delay: Math.min(i, 8) * 24ms;
             item_reveal_t := Timer {
                 interval: 16ms;
-                running: root.stagger && !stream_row.item_revealed;
+                running: stream_row.reveal_motion && !stream_row.item_revealed;
                 triggered => { stream_row.item_revealed = true; }
             }
             row_reveal := Rectangle {
                 width: 100%; height: 100%;
-                opacity: !root.stagger || stream_row.item_revealed ? 1.0 : 0.0;
-                y: !root.stagger || stream_row.item_revealed ? 0px : 12px;
-                animate opacity { duration: Anim.transition_fade; delay: root.stagger ? stream_row.item_reveal_delay : 0ms; easing: ease-out; }
-                animate y { duration: Anim.transition_slide; delay: root.stagger ? stream_row.item_reveal_delay : 0ms; easing: ease-out; }
+                opacity: !stream_row.reveal_motion || stream_row.item_revealed ? 1.0 : 0.0;
+                y: !stream_row.reveal_motion || stream_row.item_revealed ? 0px : 12px;
+                animate opacity { duration: stream_row.reveal_motion ? Anim.transition_fade : 0ms; delay: stream_row.reveal_motion ? stream_row.item_reveal_delay : 0ms; easing: ease-out; }
+                animate y { duration: stream_row.reveal_motion ? Anim.transition_slide : 0ms; delay: stream_row.reveal_motion ? stream_row.item_reveal_delay : 0ms; easing: ease-out; }
                 background: st.is_download ? Theme.current.stream_download : (stream_row.focused ? Theme.current.selection_wash : Theme.current.stream_card);
                 border-radius: Theme.card_corner_radius;
                 // Black cards need an edge against the black canvas; keyboard

@@ -1,0 +1,59 @@
+{
+  "id": 1332343,
+  "filename": "[JacobSwaggedUp] Steins;Gate 0 - 23β (BD 1280x720).mp4",
+  "size": 315009698,
+  "torrent_id": 730254,
+  "info": {
+    "ffprobe": {
+      "streams": [
+        {
+          "codec_type": "video",
+          "codec_name": "h264",
+          "tags": {
+            "creation_time": "2025-12-11T17:33:20.000000Z",
+            "language": "und",
+            "vendor_id": "[0][0][0][0]"
+          },
+          "disposition": {
+            "default": 1,
+            "dub": 0,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        },
+        {
+          "codec_type": "audio",
+          "codec_name": "aac",
+          "channels": 2,
+          "channel_layout": "stereo",
+          "tags": {
+            "language": "und",
+            "vendor_id": "[0][0][0][0]"
+          },
+          "disposition": {
+            "default": 1,
+            "dub": 0,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0
+          }
+        }
+      ]
+    }
+  }
+}

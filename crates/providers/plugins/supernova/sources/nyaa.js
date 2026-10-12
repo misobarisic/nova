@@ -4,11 +4,11 @@
   S.sources.nyaa = {
     name: "Nyaa", anime: true,
     // Comet searches title queries without forcing a language/category or
-    // seeder sort. Keep at most two pages rather than crawling its full result.
-    url: (query, _lookup, page = 0) => `https://nyaa.si/?q=${encodeURIComponent(query).replace(/%20/g,"+")}${page ? "&p=2" : ""}`,
+    // seeder sort. Only advertised pages enter the bounded lookup crawl.
+    url: (query, _lookup, page = 0) => `https://nyaa.si/?q=${encodeURIComponent(query).replace(/%20/g,"+")}${page ? "&p=" + (page + 1) : ""}`,
     pages: body => {
       const links = S.json(nova.html.select(body,".pagination a[href]",JSON.stringify({href:{selector:"",value:"href"}})));
-      return Array.isArray(links) && links.some(link => /(?:[?&])p=2(?:&|$)/.test(link.href)) ? 2 : 1;
+      return Array.isArray(links) ? Math.min(6,Math.max(1,...links.map(link=>Number((String(link.href).match(/(?:[?&])p=(\d+)(?:&|$)/) || [])[1]) || 1))) : 1;
     },
     parse: body => {
       const rows = S.json(nova.html.select(body, ".torrent-list tbody tr", JSON.stringify({

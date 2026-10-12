@@ -14,6 +14,40 @@ use crate::download::{
 use crate::torrent::TorrentStats;
 use nova_config::DownloadSettings;
 
+const RESOLVER_DOWNLOAD_PREFIX: &str = "nova-resolver:";
+const RESOLVER_RESELECT: &str =
+    "Reload streams and select Download again to refresh this download.";
+
+#[derive(Clone)]
+struct ResolverDownload {
+    provider_url: String,
+    token: String,
+    /// Only provider configuration changes invalidate an already queued
+    /// download. Navigation may continue while the captured episode transfers.
+    is_current: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+fn is_resolver_download(job: &DownloadJob) -> bool {
+    job.source
+        .url()
+        .is_some_and(|url| url.starts_with(RESOLVER_DOWNLOAD_PREFIX))
+}
+
+/// UI identities carry a request generation to reject stale clicks. Download
+/// identities must survive a reload; the provider's hash already incorporates
+/// its owner, request and result. Accept only that internal identity format.
+fn resolver_download_source(stream_id: &str) -> Option<JobSource> {
+    let (generation, identity) = stream_id.split_once(':')?;
+    generation.parse::<u64>().ok()?;
+    let hash = identity.strip_prefix("stream-")?;
+    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(JobSource::http(format!(
+        "{RESOLVER_DOWNLOAD_PREFIX}{identity}"
+    )))
+}
+
 const DOWNLOADS_KEY: &str = "downloads:v1";
 const DOWNLOAD_SETTINGS_KEY: &str = "download_settings";
 const DOWNLOAD_CORRUPT_PREFIX: &str = "downloads:v1.corrupt.";
@@ -59,6 +93,7 @@ struct DownloadState {
     manifest: DownloadManifest,
     active: Option<ActiveDownload>,
     last_persist: Instant,
+    resolvers: HashMap<String, ResolverDownload>,
 }
 
 #[derive(Clone)]
@@ -98,6 +133,7 @@ impl DownloadCoordinator {
                     manifest,
                     active: None,
                     last_persist: Instant::now(),
+                    resolvers: HashMap::new(),
                 }),
                 next_id: AtomicU64::new(1),
                 revision: AtomicU64::new(0),
@@ -117,6 +153,49 @@ impl DownloadCoordinator {
 
     pub(crate) fn start(&self) {
         self.schedule_next();
+    }
+
+    fn cancel_stale_resolvers(&self) {
+        let pending: Vec<_> = {
+            let state = self.inner.state();
+            state
+                .manifest
+                .jobs
+                .iter()
+                .filter(|job| {
+                    matches!(
+                        job.phase,
+                        DownloadPhase::Queued
+                            | DownloadPhase::Resolving
+                            | DownloadPhase::Downloading
+                    )
+                })
+                .filter_map(|job| {
+                    state
+                        .resolvers
+                        .get(&job.id)
+                        .map(|resolver| (job.id.clone(), resolver.clone()))
+                })
+                .collect()
+        };
+        // Owner guards read the app state; never hold the coordinator lock
+        // while checking them, since UI projections read these locks too.
+        for (id, resolver) in pending {
+            if (resolver.is_current)() {
+                continue;
+            }
+            let mut state = self.inner.state();
+            if let Some(active) = state.active.as_ref().filter(|active| active.id == id) {
+                active.cancel.cancel();
+            }
+            if let Some(job) = state.manifest.jobs.iter_mut().find(|job| job.id == id) {
+                job.phase = DownloadPhase::Failed;
+                job.error = Some(RESOLVER_RESELECT.into());
+                job.bytes_per_second = 0;
+                persist_manifest(&state.manifest);
+                self.bump_revision();
+            }
+        }
     }
 
     pub(crate) fn revision(&self) -> u64 {
@@ -186,6 +265,14 @@ impl DownloadCoordinator {
     }
 
     fn enqueue(&self, request: NewDownload) -> String {
+        self.enqueue_with_resolver(request, None)
+    }
+
+    fn enqueue_with_resolver(
+        &self,
+        request: NewDownload,
+        resolver: Option<ResolverDownload>,
+    ) -> String {
         let NewDownload {
             media_type,
             media_id,
@@ -204,6 +291,10 @@ impl DownloadCoordinator {
                 .iter()
                 .position(|job| job.request_id == request_id && job.source == source)
             {
+                if let Some(resolver) = resolver {
+                    let id = state.manifest.jobs[index].id.clone();
+                    state.resolvers.insert(id, resolver);
+                }
                 // Already have a job for this exact stream. Re-tapping
                 // "Download" on a failed job re-arms the same row (no
                 // duplicate pinned entry, and an HTTP `.part` resumes) so a
@@ -260,6 +351,9 @@ impl DownloadCoordinator {
                 job.artifact_path = Some(self.inner.root.join("http").join(&job.id).join(
                     artifact_filename(&job.id, job.file_name.as_deref().unwrap_or_default()),
                 ));
+            }
+            if let Some(resolver) = resolver {
+                state.resolvers.insert(id.clone(), resolver);
             }
             state.manifest.jobs.push(job);
             persist_manifest(&state.manifest);
@@ -320,6 +414,7 @@ impl DownloadCoordinator {
                 return;
             };
             let job = state.manifest.jobs.remove(index);
+            state.resolvers.remove(id);
             if let Some(active) = state.active.as_ref().filter(|active| active.id == id) {
                 active.remove.store(true, Ordering::Release);
                 active.cancel.cancel();
@@ -495,7 +590,62 @@ impl DownloadCoordinator {
         }
     }
 
-    fn run_http(&self, job: DownloadJob, active: ActiveDownload) {
+    fn run_http(&self, mut job: DownloadJob, active: ActiveDownload) {
+        let private_source = is_resolver_download(&job);
+        let resolver = self.inner.state().resolvers.get(&job.id).cloned();
+        if private_source {
+            let resolver = resolver.clone();
+            let Some(resolver) = resolver else {
+                self.finish(job.id, Err(RESOLVER_RESELECT.into()));
+                return;
+            };
+            let cancel = active.cancel.clone();
+            let is_current = resolver.is_current.clone();
+            let cancelled: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+                if !is_current() {
+                    cancel.cancel();
+                }
+                cancel.is_cancelled()
+            });
+            if cancelled() {
+                let error = if (resolver.is_current)() {
+                    crate::download::DownloadError::Cancelled.to_string()
+                } else {
+                    RESOLVER_RESELECT.into()
+                };
+                self.finish(job.id, Err(error));
+                return;
+            }
+            let resolved = nova_providers::resolve_provider_stream(
+                &resolver.provider_url,
+                &resolver.token,
+                Duration::from_secs(30),
+                cancelled.clone(),
+            );
+            if cancelled() {
+                let error = if (resolver.is_current)() {
+                    crate::download::DownloadError::Cancelled.to_string()
+                } else {
+                    RESOLVER_RESELECT.into()
+                };
+                self.finish(job.id, Err(error));
+                return;
+            }
+            match resolved.map(|stream| stream_source(&stream)) {
+                Ok(StreamSource::Url(url)) => job.source = JobSource::http(url),
+                Ok(StreamSource::UrlWithOptions { url, headers, .. }) => {
+                    job.source = JobSource::http_with_headers(url, headers);
+                }
+                Err(error) => {
+                    self.finish(job.id, Err(error.message));
+                    return;
+                }
+                _ => {
+                    self.finish(job.id, Err("Could not resolve this stream. Try another result or check the addon configuration.".into()));
+                    return;
+                }
+            }
+        }
         let destination = self.http_destination(&job);
         let result = match migrate_legacy_http_partial(&job, &destination)
             .map_err(crate::download::DownloadError::from)
@@ -504,18 +654,34 @@ impl DownloadCoordinator {
             Ok(client) => {
                 let id = job.id.clone();
                 let coordinator = self.clone();
-                crate::download::download_http_for_job_blocking(
+                let mut request = job.http_request(destination).expect("HTTP source");
+                request.private_source = private_source;
+                let resolver = resolver.clone();
+                let cancel = active.cancel.clone();
+                crate::download::download_http_with_request_blocking(
                     &client,
-                    &job,
-                    destination,
+                    request,
                     active.cancel.clone(),
-                    move |progress| coordinator.update_progress(&id, progress),
+                    move |progress| {
+                        if resolver
+                            .as_ref()
+                            .is_some_and(|resolver| !(resolver.is_current)())
+                        {
+                            cancel.cancel();
+                            return;
+                        }
+                        coordinator.update_progress(&id, progress);
+                    },
                 )
             }
             Err(error) => Err(error),
         };
         let result = result
             .map(|mut outcome| {
+                if private_source {
+                    outcome.etag = None;
+                    outcome.last_modified = None;
+                }
                 // The transfer reports its on-disk filename. Keep the source label
                 // readable in the UI; HLS may change the extension to a playlist.
                 let label = job.file_name.clone().unwrap_or_else(|| job_file_name(&job));
@@ -533,7 +699,25 @@ impl DownloadCoordinator {
                 };
                 outcome
             })
-            .map_err(|error| error.to_string());
+            .map_err(|error| {
+                if private_source && !error.is_cancelled() {
+                    "Could not download this stream. Retry or check the addon configuration.".into()
+                } else {
+                    error.to_string()
+                }
+            });
+        let result = if resolver
+            .as_ref()
+            .is_some_and(|resolver| !(resolver.is_current)())
+        {
+            // Do not publish a completed artifact for an invalidated owner.
+            if let Ok(outcome) = &result {
+                let _ = std::fs::remove_file(&outcome.path);
+            }
+            Err(RESOLVER_RESELECT.into())
+        } else {
+            result
+        };
         self.finish(job.id, result);
     }
 
@@ -694,7 +878,14 @@ impl DownloadCoordinator {
                             job.phase = DownloadPhase::Completed;
                         }
                         Err(error) => {
-                            if active.cancel.is_cancelled() {
+                            if error == RESOLVER_RESELECT {
+                                // A fresh explicit selection may already have
+                                // rearmed this row while the old worker exits.
+                                if job.phase != DownloadPhase::Queued {
+                                    job.phase = DownloadPhase::Failed;
+                                    job.error = Some(error);
+                                }
+                            } else if active.cancel.is_cancelled() {
                                 // Resume can queue the job while the cancelled
                                 // worker is still unwinding. Preserve that intent.
                                 if job.phase != DownloadPhase::Queued {
@@ -1105,6 +1296,12 @@ fn log_corrupt_manifest_backups() {
 /// (or moved) are demoted so the UI does not offer a dead "Play" action.
 fn normalize_manifest(manifest: &mut DownloadManifest, root: &Path) {
     for job in &mut manifest.jobs {
+        // Selection tokens and signed links are deliberately runtime-only.
+        // A restart cannot silently re-resolve an old account's request.
+        if is_resolver_download(job) && job.phase != DownloadPhase::Completed {
+            job.phase = DownloadPhase::Failed;
+            job.error = Some(RESOLVER_RESELECT.into());
+        }
         if matches!(
             job.phase,
             DownloadPhase::Resolving | DownloadPhase::Downloading
@@ -1262,6 +1459,11 @@ fn localized_download_error(error: &str) -> String {
         "Download worker stopped unexpectedly."
         | "Radna dretva za preuzimanje neočekivano se zaustavila." => {
             text::tr("Download worker stopped unexpectedly.").to_string()
+        }
+        RESOLVER_RESELECT => text::tr(RESOLVER_RESELECT).to_string(),
+        "Could not download this stream. Retry or check the addon configuration." => {
+            text::tr("Could not download this stream. Retry or check the addon configuration.")
+                .to_string()
         }
         "Downloaded file is missing." | "Preuzeta datoteka nedostaje." => {
             text::tr("Downloaded file is missing.").to_string()
@@ -1447,10 +1649,8 @@ impl Bridge {
                     StreamSource::UrlWithOptions { url, .. } => {
                         crate::download::validate_download_url(url).is_ok()
                     }
-                    StreamSource::Torrent { .. } => true,
-                    StreamSource::Unsupported
-                    | StreamSource::Downloaded { .. }
-                    | StreamSource::Resolver { .. } => false,
+                    StreamSource::Torrent { .. } | StreamSource::Resolver { .. } => true,
+                    StreamSource::Unsupported | StreamSource::Downloaded { .. } => false,
                 };
                 let mut items = vec![SheetItem {
                     label: SharedString::from(text::tr("Play stream")),
@@ -1548,6 +1748,42 @@ impl Bridge {
                 modal.map(|m| m.year.clone()).unwrap_or_default(),
             )
         };
+        let resolver = match &stream.source {
+            StreamSource::Resolver {
+                provider_url,
+                token,
+                settings_generation,
+                addon_generation,
+            } => {
+                let shared = Arc::downgrade(&self.shared);
+                let owner = provider_url.clone();
+                let settings_generation = *settings_generation;
+                let addon_generation = *addon_generation;
+                let is_current: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+                    nova_providers::plugin_settings::settings_generation() == settings_generation
+                        && shared.upgrade().is_some_and(|shared| {
+                            shared.lock().unwrap().installed.iter().any(|addon| {
+                                addon.url == owner
+                                    && addon.enabled
+                                    && addon.available
+                                    && addon.generation == addon_generation
+                            })
+                        })
+                });
+                if !is_current() {
+                    self.set_stream_hint(Some(StreamHint::Fixed(
+                        "This stream selection is out of date. Reload streams.",
+                    )));
+                    return;
+                }
+                Some(ResolverDownload {
+                    provider_url: provider_url.clone(),
+                    token: token.clone(),
+                    is_current,
+                })
+            }
+            _ => None,
+        };
         let source = match &stream.source {
             StreamSource::Url(url) => JobSource::http(url.clone()),
             StreamSource::UrlWithOptions { url, headers, .. } => {
@@ -1557,10 +1793,19 @@ impl Bridge {
                 info_hash,
                 file_idx,
             } => JobSource::torrent(info_hash.clone(), *file_idx),
-            StreamSource::Unsupported | StreamSource::Resolver { .. } => return,
+            StreamSource::Resolver { .. } => {
+                let Some(source) = resolver_download_source(&stream.id) else {
+                    self.set_stream_hint(Some(StreamHint::Fixed(
+                        "This stream selection is out of date. Reload streams.",
+                    )));
+                    return;
+                };
+                source
+            }
+            StreamSource::Unsupported => return,
             StreamSource::Downloaded { .. } => return,
         };
-        self.downloads.enqueue(NewDownload {
+        let request = NewDownload {
             media_type,
             media_id,
             request_id,
@@ -1569,7 +1814,13 @@ impl Bridge {
             display: stream.display.clone(),
             addon: stream.addon.clone(),
             source,
-        });
+        };
+        if let Some(resolver) = resolver {
+            self.downloads
+                .enqueue_with_resolver(request, Some(resolver));
+        } else {
+            self.downloads.enqueue(request);
+        }
         self.apply_stream_filter();
     }
 
@@ -1683,6 +1934,7 @@ impl Bridge {
         // Reap a transfer thread that died without finalizing before reading
         // the revision: recovery bumps it, so the UI picks up the Failed row
         // and the next queued job on this same tick.
+        self.downloads.cancel_stale_resolvers();
         self.downloads.reap_finished_worker();
         // Keep the Android foreground service in step with the queue. This is
         // deliberately before the revision early-return (the service must stop
@@ -1750,6 +2002,123 @@ mod tests {
         assert_eq!(DownloadCoordinator::action_kind(&job), 1);
         assert_eq!(DownloadCoordinator::action_label(&job), "Pause download");
         assert!((DownloadCoordinator::progress_fraction(&job) - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn resolver_download_identity_survives_generations_and_separates_results_and_owners() {
+        let stream: addons::Stream = serde_json::from_value(serde_json::json!({
+            "url": "https://fixture.example/file.mp4"
+        }))
+        .unwrap();
+        let owner = "nova://supernova";
+        let request = "tt123:2:3";
+        let stable = nova_providers::stable_stream_identity(owner, request, &stream);
+        let first = resolver_download_source(&format!("1:{stable}")).unwrap();
+        let reloaded = resolver_download_source(&format!("99:{stable}")).unwrap();
+        assert_eq!(first, reloaded);
+        let manifest = DownloadManifest::new(vec![DownloadJob::new("existing-job", first.clone())]);
+        assert_eq!(
+            manifest
+                .jobs
+                .iter()
+                .filter(|job| job.source == reloaded)
+                .count(),
+            1
+        );
+        let changed: addons::Stream = serde_json::from_value(serde_json::json!({
+            "url": "https://fixture.example/other.mp4"
+        }))
+        .unwrap();
+        for different in [
+            nova_providers::stable_stream_identity(owner, request, &changed),
+            nova_providers::stable_stream_identity("nova://other-owner", request, &stream),
+            nova_providers::stable_stream_identity(owner, "tt123:2:4", &stream),
+        ] {
+            assert_ne!(
+                first,
+                resolver_download_source(&format!("2:{different}")).unwrap()
+            );
+        }
+        assert!(resolver_download_source("1:https://private.example/?token=secret").is_none());
+        assert!(resolver_download_source("invalid:stream-short").is_none());
+    }
+
+    #[test]
+    fn resolver_restart_requires_selection_but_keeps_completed_offline_file() {
+        let root = temp_root("resolver-restart");
+        let artifact = root.join("http/completed/movie.mp4");
+        std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        std::fs::write(&artifact, b"offline").unwrap();
+        let mut incomplete = DownloadJob::new(
+            "pending",
+            JobSource::http(format!("{RESOLVER_DOWNLOAD_PREFIX}stable-id")),
+        );
+        incomplete.request_id = "tt123:2:3".into();
+        incomplete.phase = DownloadPhase::Downloading;
+        let mut completed = incomplete.clone();
+        completed.id = "completed".into();
+        completed.phase = DownloadPhase::Completed;
+        completed.artifact_path = Some(artifact);
+        let mut manifest = DownloadManifest::new(vec![incomplete, completed]);
+        normalize_manifest(&mut manifest, &root);
+        assert_eq!(manifest.jobs[0].phase, DownloadPhase::Failed);
+        assert_eq!(manifest.jobs[0].error.as_deref(), Some(RESOLVER_RESELECT));
+        assert_eq!(manifest.jobs[0].request_id, "tt123:2:3");
+        assert_eq!(manifest.jobs[1].phase, DownloadPhase::Completed);
+        let json = manifest.to_json().unwrap();
+        assert!(!json.contains("https://"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolver_owner_invalidation_cancels_active_without_persisting_token() {
+        let root = temp_root("resolver-owner");
+        let coordinator = DownloadCoordinator::new(root.clone());
+        install_active(&coordinator, "private", DownloadPhase::Resolving, false);
+        let current = Arc::new(AtomicBool::new(true));
+        let check = current.clone();
+        {
+            let mut state = coordinator.inner.state();
+            state.manifest.jobs[0].source =
+                JobSource::http(format!("{RESOLVER_DOWNLOAD_PREFIX}stream-id"));
+            state.resolvers.insert(
+                "private".into(),
+                ResolverDownload {
+                    provider_url: "nova://supernova".into(),
+                    token: "runtime-only-private-token".into(),
+                    is_current: Arc::new(move || check.load(Ordering::Acquire)),
+                },
+            );
+            assert!(
+                !state
+                    .manifest
+                    .to_json()
+                    .unwrap()
+                    .contains("runtime-only-private-token")
+            );
+        }
+        coordinator.cancel_stale_resolvers();
+        assert!(
+            !coordinator
+                .inner
+                .state()
+                .active
+                .as_ref()
+                .unwrap()
+                .cancel
+                .is_cancelled()
+        );
+        current.store(false, Ordering::Release);
+        coordinator.cancel_stale_resolvers();
+        let state = coordinator.inner.state();
+        assert!(state.active.as_ref().unwrap().cancel.is_cancelled());
+        assert_eq!(state.manifest.jobs[0].phase, DownloadPhase::Failed);
+        assert_eq!(
+            state.manifest.jobs[0].error.as_deref(),
+            Some(RESOLVER_RESELECT)
+        );
+        drop(state);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

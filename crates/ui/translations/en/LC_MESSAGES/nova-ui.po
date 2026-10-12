@@ -165,3 +165,183 @@ msgstr ""
 
 msgid "Save"
 msgstr ""
+
+msgid "Prefetch next episode streams"
+msgstr ""
+
+msgid "Look up available sources shortly before the next episode buttons appear. Sources stay in memory; playback starts only after you choose."
+msgstr ""
+
+msgid "Edit"
+msgstr ""
+
+msgid "Remove"
+msgstr ""
+
+msgid "Torrent sources"
+msgstr ""
+
+msgid "Debrid providers"
+msgstr ""
+
+msgid "Add source"
+msgstr ""
+
+msgid "Add provider"
+msgstr ""
+
+msgid "Done"
+msgstr ""
+
+msgid "Sort order"
+msgstr "Sort order"
+
+msgid "Cached availability"
+msgstr "Cached availability"
+
+msgid "Resolution"
+msgstr "Resolution"
+
+msgid "Size"
+msgstr "Size"
+
+msgid "Season pack"
+msgstr "Season pack"
+
+msgid "Reported seeders"
+msgstr "Reported seeders"
+
+msgid "Higher priority first. Unknown values last."
+msgstr "Higher priority first. Unknown values last."
+
+msgid "Up"
+msgstr "Up"
+
+msgid "Down"
+msgstr "Down"
+
+msgid "High first"
+msgstr "High first"
+
+msgid "Low first"
+msgstr "Low first"
+
+msgid "Configured"
+msgstr "Configured"
+
+msgid "Preferred languages"
+msgstr "Preferred languages"
+
+msgid "Preferred language"
+msgstr "Preferred language"
+
+msgid "Preferred video codecs"
+msgstr "Preferred video codecs"
+
+msgid "Preferred video codec"
+msgstr "Preferred video codec"
+
+msgid "Add preference"
+msgstr "Add preference"
+
+msgid "First choice ranks highest. Unlabelled releases stay last."
+msgstr "First choice ranks highest. Unlabelled releases stay last."
+
+msgid "English"
+msgstr "English"
+
+msgid "Japanese"
+msgstr "Japanese"
+
+msgid "Croatian"
+msgstr "Croatian"
+
+msgid "German"
+msgstr "German"
+
+msgid "French"
+msgstr "French"
+
+msgid "Spanish"
+msgstr "Spanish"
+
+msgid "Italian"
+msgstr "Italian"
+
+msgid "Portuguese"
+msgstr "Portuguese"
+
+msgid "Russian"
+msgstr "Russian"
+
+msgid "Korean"
+msgstr "Korean"
+
+msgid "Chinese"
+msgstr "Chinese"
+
+msgid "Arabic"
+msgstr "Arabic"
+
+msgid "Hindi"
+msgstr "Hindi"
+
+msgid "Dutch"
+msgstr "Dutch"
+
+msgid "Polish"
+msgstr "Polish"
+
+msgid "Turkish"
+msgstr "Turkish"
+
+msgid "Swedish"
+msgstr "Swedish"
+
+msgid "Norwegian"
+msgstr "Norwegian"
+
+msgid "Danish"
+msgstr "Danish"
+
+msgid "Finnish"
+msgstr "Finnish"
+
+msgid "Czech"
+msgstr "Czech"
+
+msgid "Hungarian"
+msgstr "Hungarian"
+
+msgid "Romanian"
+msgstr "Romanian"
+
+msgid "Ukrainian"
+msgstr "Ukrainian"
+
+msgid "Greek"
+msgstr "Greek"
+
+msgid "Hebrew"
+msgstr "Hebrew"
+
+msgid "Thai"
+msgstr "Thai"
+
+msgid "Vietnamese"
+msgstr "Vietnamese"
+
+msgid "Indonesian"
+msgstr "Indonesian"
+
+msgid "Preferred audio languages"
+msgstr "Preferred audio languages"
+
+msgid "Preferred audio language"
+msgstr "Preferred audio language"
+
+msgid "Preferred subtitle languages"
+msgstr "Preferred subtitle languages"
+
+msgid "Preferred subtitle language"
+msgstr "Preferred subtitle language"

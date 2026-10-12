@@ -115,14 +115,30 @@ pub fn download_http_for_job_blocking<F>(
 where
     F: FnMut(DownloadProgress) + Send,
 {
+    download_http_with_request_blocking(
+        client,
+        job.http_request(destination)?,
+        cancellation,
+        on_progress,
+    )
+}
+
+pub fn download_http_with_request_blocking<F>(
+    client: &Client,
+    request: HttpDownloadRequest,
+    cancellation: CancellationToken,
+    on_progress: F,
+) -> Result<DownloadOutcome, DownloadError>
+where
+    F: FnMut(DownloadProgress) + Send,
+{
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|error| DownloadError::InvalidResponse(error.to_string()))?;
-    runtime.block_on(download_http_for_job(
+    runtime.block_on(download_http_with_request(
         client,
-        job,
-        destination,
+        request,
         cancellation,
         on_progress,
     ))
@@ -181,6 +197,7 @@ where
         return Err(DownloadError::Cancelled);
     }
     let url = validate_download_url(&request.url)?;
+    let private_source = request.private_source;
     let headers = request.headers;
     let destination = request.destination;
     if destination.as_os_str().is_empty() {
@@ -199,15 +216,23 @@ where
     // The job manifest may predate the last received body chunk (or the
     // process may have died). Keep the representation identity with the
     // partial file, and publish it durably before any bytes of that response.
-    match fs::read(resume_path(&part)).await {
-        Ok(bytes) => match serde_json::from_slice::<PartialIdentity>(&bytes) {
-            Ok(identity) if identity.url == url.as_str() => {
-                resume = DownloadResume::new(0, identity.etag, identity.last_modified);
-            }
-            _ => resume = DownloadResume::default(),
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
+    if private_source {
+        fs::create_dir_all(parent).await?;
+        reset_part(&part).await?;
+        let _ = fs::remove_file(resume_path(&part)).await;
+        offset = 0;
+        resume = DownloadResume::default();
+    } else {
+        match fs::read(resume_path(&part)).await {
+            Ok(bytes) => match serde_json::from_slice::<PartialIdentity>(&bytes) {
+                Ok(identity) if identity.url == url.as_str() => {
+                    resume = DownloadResume::new(0, identity.etag, identity.last_modified);
+                }
+                _ => resume = DownloadResume::default(),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     if offset == 0 {
         resume = DownloadResume::default();
@@ -239,6 +264,11 @@ where
         }
         let content_type = header_string(response.headers(), "content-type").unwrap_or_default();
         if is_manifest_url(&final_url) || content_type.to_ascii_lowercase().contains("mpegurl") {
+            if private_source {
+                return Err(DownloadError::UnsupportedContentType(
+                    "private HLS download".into(),
+                ));
+            }
             return super::hls::download_hls(
                 client,
                 response,
@@ -389,17 +419,19 @@ where
     let file_name = output_file_name(&destination, response.headers(), Some(response.url()));
     let mut file = open_part(&part, offset).await?;
     file.sync_all().await?;
-    let identity = PartialIdentity {
-        url: url.to_string(),
-        etag: etag.clone(),
-        last_modified: last_modified.clone(),
-    };
-    let bytes = serde_json::to_vec(&identity)
-        .map_err(|error| DownloadError::InvalidResponse(error.to_string()))?;
-    let mut checkpoint = File::create(resume_path(&part)).await?;
-    checkpoint.write_all(&bytes).await?;
-    checkpoint.sync_all().await?;
-    drop(checkpoint);
+    if !private_source {
+        let identity = PartialIdentity {
+            url: url.to_string(),
+            etag: etag.clone(),
+            last_modified: last_modified.clone(),
+        };
+        let bytes = serde_json::to_vec(&identity)
+            .map_err(|error| DownloadError::InvalidResponse(error.to_string()))?;
+        let mut checkpoint = File::create(resume_path(&part)).await?;
+        checkpoint.write_all(&bytes).await?;
+        checkpoint.sync_all().await?;
+        drop(checkpoint);
+    }
     let started = Instant::now();
     let mut downloaded = offset;
     let mut bytes_this_run = 0u64;
@@ -954,6 +986,67 @@ mod tests {
             socket.flush().await.unwrap();
         });
         (format!("http://{address}/file.mp4"), task)
+    }
+
+    #[tokio::test]
+    async fn private_transfer_never_checkpoints_signed_url_and_restarts_partial() {
+        let root = test_path("private-url");
+        let destination = root.join("private.mp4");
+        let client = new_http_client().unwrap();
+        let (url, server) = one_shot_server(b"HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: 10\r\nETag: \"secret-validator\"\r\n\r\nabc").await;
+        let mut request =
+            HttpDownloadRequest::new(format!("{url}?token=private-credential"), &destination);
+        request.private_source = true;
+        assert!(
+            download_http_with_request(&client, request, CancellationToken::new(), |_| {})
+                .await
+                .is_err()
+        );
+        server.await.unwrap();
+        assert!(!resume_path(&part_path(&destination)).exists());
+        // Deliberately seed a prior partial: private retry always starts fresh,
+        // irrespective of old validators or a refreshed signed link.
+        fs::write(part_path(&destination), b"old-partial")
+            .await
+            .unwrap();
+        let (url, server) = one_shot_server(
+            b"HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: 3\r\n\r\nnew",
+        )
+        .await;
+        let mut request = HttpDownloadRequest::new(format!("{url}?token=refreshed"), &destination);
+        request.private_source = true;
+        let outcome =
+            download_http_with_request(&client, request, CancellationToken::new(), |_| {})
+                .await
+                .unwrap();
+        server.await.unwrap();
+        assert_eq!(fs::read(&outcome.path).await.unwrap(), b"new");
+        assert!(!resume_path(&part_path(&destination)).exists());
+        let _ = fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn private_transfer_rejects_hls_before_writing_signed_playlist() {
+        let root = test_path("private-hls");
+        let destination = root.join("private.mp4");
+        let (url, server) = one_shot_server(b"HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: 8\r\n\r\n#EXTM3U\n").await;
+        let mut request = HttpDownloadRequest::new(url, &destination);
+        request.private_source = true;
+        assert!(matches!(
+            download_http_with_request(
+                &new_http_client().unwrap(),
+                request,
+                CancellationToken::new(),
+                |_| {}
+            )
+            .await,
+            Err(DownloadError::UnsupportedContentType(_))
+        ));
+        server.await.unwrap();
+        assert!(!destination.exists());
+        assert!(!resume_path(&part_path(&destination)).exists());
+        assert!(fs::read(part_path(&destination)).await.unwrap().is_empty());
+        let _ = fs::remove_dir_all(root).await;
     }
 
     #[tokio::test]
