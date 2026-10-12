@@ -5,12 +5,25 @@ use super::*;
 struct PlaybackContext {
     title: String,
     episode_label: String,
+    osd_episode_title: String,
+    logo_url: String,
     use_modal_poster: bool,
     media_type: String,
     media_id: String,
     request_id: String,
     is_episode: bool,
     is_movie: bool,
+}
+
+/// Numbering is supplied separately by the selector; punctuation in titles is opaque.
+fn player_episode_header(number: &str, title: &str) -> String {
+    let number = number.replace(' ', "");
+    match (number.is_empty(), title.trim().is_empty()) {
+        (false, false) => format!("{number}: {title}"),
+        (false, true) => number,
+        (true, false) => title.into(),
+        (true, true) => String::new(),
+    }
 }
 
 /// A UI intent outlives metadata discovery and the resume prompt, but cannot
@@ -58,12 +71,58 @@ pub(crate) fn note_android_pause_checkpoint() {
 }
 
 impl Bridge {
+    pub(super) fn take_player_screenshot(&self) {
+        let Some(app) = self.app() else { return };
+        if !app.get_player_open() || !app.get_playback_started() || app.get_screenshot_busy() {
+            return;
+        }
+        let session = self.player.screenshot_session();
+        app.invoke_osd_mouse_moved();
+        app.set_screenshot_busy(true);
+        app.set_screenshot_notice(SharedString::default());
+        let bridge = self.clone();
+        std::thread::spawn(move || {
+            let result = bridge.player.capture_screenshot(session);
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(app) = bridge.app() else { return };
+                if !app.get_player_open() || bridge.player.screenshot_session() != session {
+                    return;
+                }
+                app.set_screenshot_busy(false);
+                let notice = match result {
+                    Ok(saved) => text::screenshot_saved(&saved.display_path),
+                    Err(error) => text::tr(&error.to_string()).to_owned(),
+                };
+                app.set_screenshot_notice(notice.clone().into());
+                app.invoke_osd_mouse_moved();
+                let weak = app.as_weak();
+                slint::Timer::single_shot(Duration::from_secs(5), move || {
+                    if let Some(app) = weak.upgrade()
+                        && bridge.player.screenshot_session() == session
+                        && !app.get_screenshot_busy()
+                        && app.get_screenshot_notice().as_str() == notice
+                    {
+                        app.set_screenshot_notice(SharedString::default());
+                    }
+                });
+            });
+        });
+    }
+
     pub(super) fn begin_playback_request(&self) -> crate::torrent::PlaybackRequest {
         self.persist_outgoing_playback();
         self.finish_playback_request();
-        let episode_label = self
+        let (episode_label, osd_episode_title) = self
             .app()
-            .map(|app| app.get_episode_context().to_string())
+            .map(|app| {
+                (
+                    app.get_episode_context().to_string(),
+                    player_episode_header(
+                        app.get_stream_episode_number().as_str(),
+                        app.get_stream_episode_title().as_str(),
+                    ),
+                )
+            })
             .unwrap_or_default();
         let token = crate::torrent::PlaybackRequest::default();
         let mut state = self.shared.lock().unwrap();
@@ -87,6 +146,8 @@ impl Bridge {
                 .map(|modal| PlaybackContext {
                     title: modal.name.clone(),
                     episode_label,
+                    osd_episode_title,
+                    logo_url: modal.logo_url.clone(),
                     use_modal_poster: true,
                     media_type: modal.type_.clone(),
                     media_id: modal.id.clone(),
@@ -99,7 +160,10 @@ impl Bridge {
         token
     }
 
-    fn playback_request_is_current(&self, token: &crate::torrent::PlaybackRequest) -> bool {
+    pub(super) fn playback_request_is_current(
+        &self,
+        token: &crate::torrent::PlaybackRequest,
+    ) -> bool {
         let state = self.shared.lock().unwrap();
         state
             .playback_intent
@@ -497,13 +561,24 @@ impl Bridge {
             return;
         };
         let request = self.begin_playback_request();
+        let episode = read_episodes_cache_for(&job.media_type, &job.media_id)
+            .and_then(|videos| videos.into_iter().find(|v| v.id == job.request_id));
         if let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut() {
             intent.context = PlaybackContext {
                 title: job.title.clone(),
-                episode_label: read_episodes_cache_for(&job.media_type, &job.media_id)
-                    .and_then(|videos| videos.into_iter().find(|v| v.id == job.request_id))
-                    .map(|video| stream_episode_context_label(&video))
+                episode_label: episode
+                    .as_ref()
+                    .map(stream_episode_context_label)
                     .unwrap_or_default(),
+                osd_episode_title: episode
+                    .as_ref()
+                    .map(|video| {
+                        let number = episode_se_label(video);
+                        let title = episode_context_label(video);
+                        player_episode_header(&number, if title == number { "" } else { &title })
+                    })
+                    .unwrap_or_default(),
+                logo_url: String::new(),
                 use_modal_poster: false,
                 media_type: job.media_type.clone(),
                 media_id: job.media_id.clone(),
@@ -771,6 +846,13 @@ impl Bridge {
                 .and_then(|t| t.resume_pos)
                 .unwrap_or(0.0)
         };
+        if let Some(app) = self.app() {
+            app.set_player_episode_title(context.osd_episode_title.clone().into());
+            app.set_player_show_title(title.clone().into());
+            app.set_screenshot_busy(false);
+            app.set_screenshot_notice(SharedString::default());
+        }
+        self.load_player_title_logo(request.clone(), context.logo_url.clone());
         let ep = (!context.episode_label.is_empty()).then_some(context.episode_label);
         let display_title = match ep {
             Some(ep) => format!("{title} · {ep}"),
@@ -1780,5 +1862,21 @@ mod preference_tests {
                 .get(&speed_key),
             Some(&PreferenceValue::Speed(1.6))
         );
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::player_episode_header;
+
+    #[test]
+    fn separate_number_and_title_preserve_title_punctuation() {
+        assert_eq!(
+            player_episode_header("S1 E1", "A title: with · punctuation"),
+            "S1E1: A title: with · punctuation"
+        );
+        assert_eq!(player_episode_header("E3", ""), "E3");
+        assert_eq!(player_episode_header("", "Special"), "Special");
+        assert_eq!(player_episode_header("", ""), "");
     }
 }

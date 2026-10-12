@@ -205,12 +205,11 @@ fn double_tap_seeks_without_revealing_controls_even_between_taps() {
         app.window()
             .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key.into() });
     };
-    key(slint::platform::Key::RightArrow);
     seeks.borrow_mut().clear();
-    key(slint::platform::Key::UpArrow);
+    key(slint::platform::Key::RightArrow);
     assert_eq!(seeks.borrow().as_slice(), [110.0]);
     assert_eq!(app.get_position(), 110.0);
-    key(slint::platform::Key::DownArrow);
+    key(slint::platform::Key::LeftArrow);
     assert_eq!(app.get_position(), 100.0);
     toggles.set(0);
     for text in [" ", "k", "K"] {

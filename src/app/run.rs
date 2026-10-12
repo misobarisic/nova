@@ -1093,6 +1093,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_resume_cancel(move || b.cancel_resume_prompt());
 
+    let b = bridge.clone();
+    app.on_take_screenshot(move || b.take_player_screenshot());
+
     let p = player.clone();
     app.on_set_volume(move |v| p.set_volume(v));
 

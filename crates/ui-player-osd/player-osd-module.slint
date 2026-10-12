@@ -19,6 +19,11 @@ export component PlayerOsdModule inherits Window {
         time_text <=> PlayerOsdBridge.time_text;
         player_status <=> PlayerOsdBridge.player_status;
         player_title <=> PlayerOsdBridge.player_title;
+        player_episode_title <=> PlayerOsdBridge.player_episode_title;
+        player_show_title <=> PlayerOsdBridge.player_show_title;
+        player_show_logo <=> PlayerOsdBridge.player_show_logo;
+        screenshot_busy <=> PlayerOsdBridge.screenshot_busy;
+        screenshot_notice <=> PlayerOsdBridge.screenshot_notice;
         decode_label <=> PlayerOsdBridge.decode_label;
         decoder_selected <=> PlayerOsdBridge.decoder_selected;
         sub_label <=> PlayerOsdBridge.sub_label;
@@ -50,6 +55,7 @@ export component PlayerOsdModule inherits Window {
         toggle_pause() => { PlayerOsdBridge.toggle_pause(); }
         seek(v) => { PlayerOsdBridge.seek(v); }
         close_player() => { PlayerOsdBridge.close_player(); }
+        take_screenshot() => { PlayerOsdBridge.take_screenshot(); }
         set_volume(v) => { PlayerOsdBridge.set_volume(v); }
         toggle_mute() => { PlayerOsdBridge.toggle_mute(); }
         pick_audio_track(i) => { PlayerOsdBridge.pick_audio_track(i); }

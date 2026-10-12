@@ -56,6 +56,36 @@ Implementation: `crates/ui/stream-selector.slint` and the AppWindow/Detail host;
 coverage includes `tests/stream_selector.rs` and the stream paging, downloads,
 wrapped-row and addon-gesture tests.
 
+## Player header, screenshots and keyboard controls
+
+The OSD header shows `S1E1: Episode title` beside Exit, with the show's title
+logo below it and its name as fallback. Movies show their title without an
+episode line. The header fades with the controls; the bottom strip retains
+playback controls and timing without repeating the title. Artwork belongs to
+the playback request, so browsing or a late logo load cannot replace it with
+another show's logo.
+
+The top-right screenshot button saves the video frame with subtitles and
+without Slint controls. It is disabled while loading or capturing. Capture
+and file writes run on a worker, with a session guard and a 20-second capture
+deadline. Desktop saves to Pictures/Nova (the configured Pictures folder on
+Linux and Windows); Android API 29+ publishes to Gallery's Pictures/Nova,
+while API 26–28 uses app-scoped Pictures/Nova. Temporary captures are removed
+afterward. Screenshots are local files and never enter device sync. A brief
+notice reports the saved location or a sanitized error.
+
+Outside player menus, Left/Right seek by ten seconds, Up/Down change volume
+(desktop five percentage points, Android one system-volume notch), Space/K
+pause or resume, and desktop F toggles fullscreen. Held pause/fullscreen keys
+toggle only once. Tab/ShiftTab move through OSD controls; Enter activates the
+focused control. Open menus retain their arrow navigation. Closing playback,
+including natural end-of-stream, leaves fullscreen before returning to the
+catalog.
+
+Implementation: `crates/ui/player.slint`, `src/app/{playback,posters,run}.rs`
+and `crates/player/src/screenshot.rs`. Header/keyboard regressions live in
+`tests/{player_osd_header,player_shortcuts}.rs`.
+
 ## Android system gestures
 
 System Back dismisses the nearest open layer without enabling keyboard focus
@@ -172,7 +202,7 @@ A replacement stream starts a new session, even for the same episode. Session
 tokens reject old actions. Banner state is memory-only:
 the banner adds no settings, storage keys, or sync records.
 
-The banner does not steal keyboard focus when it appears. Arrow navigation
+The banner does not steal keyboard focus when it appears. Tab navigation
 reaches its source and dismiss actions. Back closes an open player menu first,
 then dismisses the banner, then closes the player on a subsequent press.
 

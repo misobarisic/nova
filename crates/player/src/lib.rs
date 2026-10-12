@@ -29,6 +29,9 @@ mod android_recovery;
 #[cfg(any(target_os = "android", test))]
 mod mpv_load;
 
+mod screenshot;
+pub use screenshot::{ScreenshotError, ScreenshotSaved};
+
 mod track_preferences;
 use libmpv2::Mpv;
 use nova_config::playback_preferences::{
@@ -41,7 +44,7 @@ use std::os::raw::{c_char, c_int, c_void};
 use std::rc::Rc;
 #[cfg(target_os = "android")]
 use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -761,6 +764,8 @@ struct State {
     preferences: Mutex<PreferenceSession>,
     preference_source: Mutex<String>,
     mpv: Mutex<Option<Mpv>>,
+    /// Invalidates queued captures when a stream is replaced or closed.
+    screenshot_session: AtomicU64,
     /// Set when mpv could not be initialized / the renderer is not OpenGL.
     mpv_error: Mutex<Option<String>>,
     underlay: Mutex<Option<MpvGlUnderlay>>,
@@ -1018,6 +1023,7 @@ impl Player {
                 manual_subtitles: false,
             }),
             mpv: Mutex::new(mpv.ok()),
+            screenshot_session: AtomicU64::new(0),
             mpv_error: Mutex::new(mpv_error),
             underlay: Mutex::new(None),
             pending: Mutex::new(None),
@@ -1498,11 +1504,18 @@ impl Player {
         preferences: SessionPreferences,
         allow_external: bool,
     ) -> Result<(), String> {
+        {
+            let _mpv = self.state.mpv.lock().unwrap();
+            self.state.screenshot_session.fetch_add(1, Ordering::SeqCst);
+            self.state.started.store(false, Ordering::SeqCst);
+        }
         self.state
             .allow_external
             .store(allow_external, Ordering::SeqCst);
         if let Some(app) = self.state.app.upgrade() {
             app.set_effective_playback_speed(preferences.speed());
+            app.set_screenshot_busy(false);
+            app.set_screenshot_notice(slint::SharedString::default());
         }
         *self.state.preferences.lock().unwrap() = PreferenceSession {
             preferences,
@@ -1737,7 +1750,7 @@ impl Player {
     /// Toggle window fullscreen.
     pub fn toggle_fullscreen(&self) {
         if let Some(app) = self.state.app.upgrade() {
-            let current = app.get_is_fullscreen();
+            let current = app.window().is_fullscreen();
             app.window().set_fullscreen(!current);
             app.set_is_fullscreen(!current);
         }
@@ -2065,6 +2078,11 @@ impl Player {
 
     /// Stop playback and return to the catalog.
     pub fn close(&self) {
+        {
+            let _mpv = self.state.mpv.lock().unwrap();
+            self.state.screenshot_session.fetch_add(1, Ordering::SeqCst);
+            self.state.started.store(false, Ordering::SeqCst);
+        }
         self.state.external_handoff.store(false, Ordering::SeqCst);
         if let Ok(mpv) = self.state.mpv.lock()
             && let Some(mpv) = mpv.as_ref()
@@ -2091,6 +2109,11 @@ impl Player {
 
         if let Some(app) = self.state.app.upgrade() {
             app.set_player_open(false);
+            app.set_screenshot_busy(false);
+            app.set_screenshot_notice(slint::SharedString::default());
+            app.set_player_show_logo(slint::Image::default());
+            app.set_player_show_title(slint::SharedString::default());
+            app.set_player_episode_title(slint::SharedString::default());
             app.set_playback_started(false);
             app.set_position(0.0);
             app.set_duration(0.0);
@@ -2101,13 +2124,10 @@ impl Player {
             app.set_decoder_selected(-1);
             app.set_sub_track_label(slint::SharedString::default());
             app.set_audio_track_label(slint::SharedString::default());
-            // Android: leave fullscreen with the player, so a fullscreen press
-            // cannot leak into the catalog: Slint zeros safe-area insets for
-            // fullscreen, but catalog controls still need those insets even
-            // when backgrounds such as Home's artwork draw under the bars.
-            #[cfg(target_os = "android")]
-            if app.get_is_fullscreen() {
-                let _ = app.window().set_fullscreen(false);
+            // Playback fullscreen belongs to this overlay on every platform.
+            // Returning to the catalog also restores Android safe-area insets.
+            if app.get_is_fullscreen() || app.window().is_fullscreen() {
+                app.window().set_fullscreen(false);
                 app.set_is_fullscreen(false);
             }
             app.window().request_redraw();
@@ -2743,6 +2763,81 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn close_restores_catalog_fullscreen_and_invalidates_capture_session() {
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        let player = Player::setup(&app);
+        let session = player.screenshot_session();
+        app.set_player_open(true);
+        app.window().set_fullscreen(true);
+        app.set_is_fullscreen(true);
+        app.set_screenshot_busy(true);
+        app.set_screenshot_notice("Screenshot saved".into());
+        app.set_player_show_title("Show".into());
+        app.set_player_episode_title("Episode".into());
+        app.set_player_show_logo(slint::Image::from_rgba8(slint::SharedPixelBuffer::new(
+            2, 2,
+        )));
+        player.state.started.store(true, Ordering::SeqCst);
+        player.close();
+        assert!(!app.get_player_open());
+        assert!(!app.get_is_fullscreen());
+        assert!(!app.window().is_fullscreen());
+        assert!(!app.get_screenshot_busy());
+        assert!(app.get_screenshot_notice().is_empty());
+        assert!(app.get_player_show_title().is_empty());
+        assert!(app.get_player_episode_title().is_empty());
+        assert_eq!(app.get_player_show_logo().size().width, 0);
+        assert_eq!(app.get_player_show_logo().size().height, 0);
+        assert_ne!(session, player.screenshot_session());
+        assert_eq!(
+            player.capture_screenshot(session),
+            Err(ScreenshotError::StaleSession)
+        );
+        assert!(!player.state.started.load(Ordering::SeqCst));
+        // Window-manager fullscreen can change without the mirrored OSD flag.
+        app.window().set_fullscreen(true);
+        app.set_is_fullscreen(false);
+        player.close();
+        assert!(!app.window().is_fullscreen());
+        assert!(!app.get_is_fullscreen());
+
+        // Exercise replacement in the same UI test: Slint permits only one
+        // testing platform per process, even when test threads are separate.
+        // The headless backend cannot install an OpenGL notifier. This test exercises
+        // session queueing, not rendering; no source is loaded without that notifier.
+        *player.state.mpv_error.lock().unwrap() = None;
+        let before = player.screenshot_session();
+        app.set_screenshot_busy(true);
+        app.set_screenshot_notice("Previous capture failed".into());
+        player.state.started.store(true, Ordering::SeqCst);
+        player
+            .play_with_preferences(
+                "https://example.invalid/episode",
+                0.0,
+                &[],
+                &[],
+                SessionPreferences {
+                    audio_language: "en".into(),
+                    subtitle_language: "en".into(),
+                    default_speed: 1.0,
+                    title: TitlePreferences::default(),
+                },
+            )
+            .unwrap();
+        assert_ne!(before, player.screenshot_session());
+        assert!(!app.get_screenshot_busy());
+        assert!(app.get_screenshot_notice().is_empty());
+        assert!(!player.state.started.load(Ordering::SeqCst));
+        assert_eq!(
+            player.capture_screenshot(before),
+            Err(ScreenshotError::StaleSession)
+        );
+        player.close();
+    }
 
     #[cfg(not(target_os = "android"))]
     #[test]

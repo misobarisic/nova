@@ -37,6 +37,7 @@ export component AppWindow inherits Window {
     public function player_bridge_toggle_pause() { root.toggle_pause(); }
     public function player_bridge_seek(v: float) { root.seek(v); }
     public function player_bridge_close_player() { root.close_player(); }
+    public function player_bridge_take_screenshot() { root.take_screenshot(); }
     public function player_bridge_set_volume(v: float) { root.set_volume(v); }
     public function player_bridge_toggle_mute() { root.toggle_mute(); }
     public function player_bridge_pick_audio_track(i: int) { root.pick_audio_track(i); }
@@ -68,6 +69,11 @@ export component AppWindow inherits Window {
         time_text <=> root.time_text;
         player_status <=> root.player_status;
         player_title <=> root.player_title;
+        player_episode_title <=> root.player_episode_title;
+        player_show_title <=> root.player_show_title;
+        player_show_logo <=> root.player_show_logo;
+        screenshot_busy <=> root.screenshot_busy;
+        screenshot_notice <=> root.screenshot_notice;
         decode_label <=> root.decode_label;
         decoder_selected <=> root.decoder_selected;
         sub_label <=> root.sub_track_label;
@@ -1209,6 +1215,11 @@ export component AppWindow inherits Window {
     in-out property <string> time_text: "00:00 / 00:00";
     in-out property <string> player_status: "";
     in-out property <string> player_title: "";
+    in-out property <string> player_episode_title;
+    in-out property <string> player_show_title;
+    in-out property <image> player_show_logo;
+    in-out property <bool> screenshot_busy;
+    in-out property <string> screenshot_notice;
     // Android decoder badge ("HW+" / "HW" / "SW"); empty on other targets.
     in-out property <string> decode_label: "";
     // Android decoder-picker selection (-1 none, 0 HW+, 1 HW, 2 SW). Set
@@ -1235,6 +1246,7 @@ export component AppWindow inherits Window {
     callback toggle_pause();
     callback seek(float);
     callback close_player();
+    callback take_screenshot();
     callback resume_choice(bool);
     callback resume_cancel();
     callback set_volume(float);

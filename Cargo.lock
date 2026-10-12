@@ -5318,6 +5318,7 @@ name = "nova-player"
 version = "0.1.0"
 dependencies = [
  "glow 0.17.0",
+ "i-slint-backend-testing",
  "jni 0.22.4",
  "libc",
  "libloading",

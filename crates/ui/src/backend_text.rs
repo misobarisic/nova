@@ -23,6 +23,14 @@ pub fn set_language(language: Language) {
     *LANGUAGE.lock().unwrap() = language;
 }
 
+pub fn screenshot_saved(path: &str) -> String {
+    if croatian() {
+        format!("Snimka zaslona spremljena: {path}")
+    } else {
+        format!("Screenshot saved: {path}")
+    }
+}
+
 /// Is the UI showing Croatian?
 fn croatian() -> bool {
     *LANGUAGE.lock().unwrap() == Language::Croatian
@@ -63,6 +71,13 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "No video frame is available" => "Nema dostupnog kadra videozapisa",
+        "Playback changed before the screenshot was saved" => {
+            "Reprodukcija se promijenila prije spremanja snimke zaslona"
+        }
+        "The video frame could not be captured" => "Nije moguće snimiti kadar videozapisa",
+        "The screenshot capture timed out" => "Isteklo je vrijeme za snimanje zaslona",
+        "The screenshot could not be saved" => "Nije moguće spremiti snimku zaslona",
         "Enter a valid add-on URL." => "Unesite valjan URL dodatka.",
         "Could not save your preferences. Please try again." => {
             "Postavke nije moguće spremiti. Pokušajte ponovno."

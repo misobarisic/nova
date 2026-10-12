@@ -17,6 +17,11 @@ export global PlayerOsdBridge {
     in-out property <string> time_text;
     in-out property <string> player_status;
     in-out property <string> player_title;
+    in-out property <string> player_episode_title;
+    in-out property <string> player_show_title;
+    in-out property <image> player_show_logo;
+    in-out property <bool> screenshot_busy;
+    in-out property <string> screenshot_notice;
     in-out property <string> decode_label;
     in-out property <int> decoder_selected;
     in-out property <string> sub_label;
@@ -48,6 +53,7 @@ export global PlayerOsdBridge {
     callback toggle_pause();
     callback seek(float);
     callback close_player();
+    callback take_screenshot();
     callback set_volume(float);
     callback toggle_mute();
     callback pick_audio_track(int);

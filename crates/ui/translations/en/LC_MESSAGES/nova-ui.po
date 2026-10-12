@@ -345,3 +345,6 @@ msgstr "Preferred subtitle languages"
 
 msgid "Preferred subtitle language"
 msgstr "Preferred subtitle language"
+
+msgid "Take screenshot"
+msgstr "Take screenshot"

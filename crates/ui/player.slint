@@ -2,9 +2,10 @@ import { Theme, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShar
 
 import { ScrollView } from "scrollview.slint";
 
-import { IcPlay, IcPause, IcVolumeUp, IcVolumeOff, IcReplay10, IcForward10, IcCaptions, IcMusic, IcFullscreen, IcFullscreenExit, IcClose, IcChevronRight, IcChevronLeft, IcCheck, IcSettingsGear } from "icons.slint";
+import { IcPlay, IcPause, IcVolumeUp, IcVolumeOff, IcReplay10, IcForward10, IcCaptions, IcMusic, IcFullscreen, IcFullscreenExit, IcClose, IcChevronRight, IcChevronLeft, IcCheck, IcSettingsGear, IcCamera } from "icons.slint";
 
 import { SpeedControl } from "speedcontrol.slint";
+import { TitleArtwork } from "title-artwork.slint";
 
 
 // Rounded player control with the same purple selected surface as menus.
@@ -610,6 +611,12 @@ export component PlayerOverlay {
     in-out property <string> time_text: "00:00 / 00:00";
     in-out property <string> player_status: "";
     in-out property <string> player_title: "";
+    in property <string> player_episode_title;
+    in property <string> player_show_title;
+    in property <image> player_show_logo;
+    in property <bool> screenshot_busy;
+    in property <string> screenshot_notice;
+    callback take_screenshot();
     // Android decoder label: "HW+" = direct MediaCodec (zero-copy),
     // "HW" = MediaCodec copy-back, "SW" = software. Empty elsewhere. Shown as
     // the current value of the settings modal's decoder submenu.
@@ -703,13 +710,10 @@ export component PlayerOverlay {
         }
     }
 
-    // ---- 6-button keyboard nav (arrows + Enter + Backspace) ----
-    // Control strip (Left/Right): 0 close, 1 pause, 2 volume/mute,
-    // 3 seek-back, 4 seek-fwd, 5 subtitles, 6 audio, 7 fullscreen.
-    // Up/Down adjusts volume (on 2) or seeks ∓10s (on 3/4); Enter
-    // activates; Backspace closes a popup, else the player. With a
-    // track popup open, Up/Down moves in its list, Enter picks.
-    // Every handled key also wakes the OSD so the ring stays visible.
+    // Tab/Shift+Tab visits OSD controls; arrow keys directly seek or change
+    // volume unless a popup owns them for its existing menu navigation.
+    // 0 exit, 1 pause, 2 volume, 3/4 seek, 5/6 tracks, 7 settings,
+    // 8 fullscreen, 9 screenshot, 10/11 next-episode actions.
     property <int> kb_idx: 1;
     property <int> kb_menu: 0;
 
@@ -766,11 +770,10 @@ export component PlayerOverlay {
         }
     }
 
-    // Highest present control index: the fullscreen button (8) is hidden on
-    // Android, where the platform's own fullscreen affordance is used.
+    // Screenshot keeps index 9 on both platforms; fullscreen (8) is desktop-only.
     function kb_control_max() -> int {
-        if (root.next_episode_shown) { return 10; }
-        return root.is_android ? 7 : 8;
+        if (root.next_episode_shown) { return 11; }
+        return 9;
     }
 
     // Neighbour control in the strip, skipping buttons absent on this
@@ -790,7 +793,7 @@ export component PlayerOverlay {
 
     function kb_next() -> int {
         let raw = Math.min(root.kb_control_max(), root.kb_idx + 1);
-        if (root.is_android && raw == 8) { return root.next_episode_shown ? 9 : 7; }
+        if (root.is_android && raw == 8) { return 9; }
         if (root.is_android && raw == 2) {
             return 3;
         }
@@ -800,20 +803,25 @@ export component PlayerOverlay {
         return raw;
     }
 
-    function kb_adjust(d: int) {
-        if (root.kb_idx == 2 && !root.is_android) {
-            root.set_volume(Math.max(0, Math.min(100, root.volume + d * 5)));
-        } else if (root.kb_idx == 3 || root.kb_idx == 4) {
-            root.position = Math.max(0, Math.min(root.duration, root.position + d * 10));
-            root.seek(root.position);
-        }
+    function shortcut_seek(d: int) {
+        // Unknown/live duration cannot provide a valid upper seek bound.
+        if (!root.playback_started || root.duration <= 0) { return; }
+        root.position = Math.max(0, Math.min(root.duration, root.position + d * 10));
+        root.seek(root.position);
+    }
+
+    function shortcut_volume(d: int) {
+        if (root.is_android) { root.android_volume_step(d); }
+        else { root.set_volume(Math.max(0, Math.min(100, root.volume + d * 5))); }
     }
 
     function kb_activate() {
-        if (root.kb_idx == 9 && root.next_episode_shown) {
+        if (root.kb_idx == 10 && root.next_episode_shown) {
             root.next_episode_streams(root.next_episode_token);
-        } else if (root.kb_idx == 10 && root.next_episode_shown) {
+        } else if (root.kb_idx == 11 && root.next_episode_shown) {
             root.next_episode_dismiss(root.next_episode_token);
+        } else if (root.kb_idx == 9) {
+            if (root.playback_started && !root.screenshot_busy) { root.take_screenshot(); }
         } else if (root.kb_idx == 0) {
             root.close_player();
         } else if (root.kb_idx == 1) {
@@ -847,7 +855,7 @@ export component PlayerOverlay {
             root.settings_opened();
             root.tracks_popup_opened(0);
             root.osd_mouse_moved();
-        } else {
+        } else if (root.kb_idx == 8 && !root.is_android) {
             root.toggle_fullscreen();
         }
     }
@@ -928,7 +936,7 @@ export component PlayerOverlay {
     // fullscreen button (8) is hidden on Android (the system affordance is
     // used there).
     function kb_clamp_focus() {
-        if (!root.next_episode_shown && root.kb_idx > 8) { root.kb_idx = 1; }
+        if (!root.next_episode_shown && root.kb_idx > 9) { root.kb_idx = 1; }
         if (root.narrow && (root.kb_idx == 5 || root.kb_idx == 6)) {
             root.kb_idx = 7;
         }
@@ -1125,8 +1133,8 @@ export component PlayerOverlay {
         width: 100%;
         height: 100%;
 
-        // Key handling: 6-button nav (arrows/Enter/Backspace) plus ESC
-        // (closes a popup, else exits fullscreen). The scope takes focus
+        // Arrows seek/adjust volume, Tab navigates controls, and Escape
+        // closes the nearest popup/offer or exits fullscreen. The scope takes focus
         // on creation so it keeps receiving keys while the overlay is up.
         // Every handled key wakes the OSD so the focus ring stays visible.
         key_scope := FocusScope {
@@ -1217,21 +1225,28 @@ export component PlayerOverlay {
                     } else {
                         reject
                     }
-                } else if ((e.text == " " || e.text == "k" || e.text == "K")
-                    && !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta) {
+                } else if (e.modifiers.control || e.modifiers.alt || e.modifiers.meta) {
+                    reject
+                } else if (e.text == " " || e.text == "k" || e.text == "K") {
                     if (!e.repeat) { root.toggle_pause(); }
                     accept
+                } else if (e.text == "f" || e.text == "F") {
+                    if (!e.repeat && !root.is_android) { root.toggle_fullscreen(); }
+                    accept
                 } else if (e.text == Key.UpArrow) {
-                    root.kb_adjust(1);
+                    root.shortcut_volume(1);
                     accept
                 } else if (e.text == Key.DownArrow) {
-                    root.kb_adjust(-1);
+                    root.shortcut_volume(-1);
                     accept
                 } else if (e.text == Key.LeftArrow) {
-                    root.kb_idx = root.kb_prev();
+                    root.shortcut_seek(-1);
                     accept
                 } else if (e.text == Key.RightArrow) {
-                    root.kb_idx = root.kb_next();
+                    root.shortcut_seek(1);
+                    accept
+                } else if (e.text == Key.Tab) {
+                    root.kb_idx = e.modifiers.shift ? root.kb_prev() : root.kb_next();
                     accept
                 } else if (e.text == Key.Return) {
                     root.kb_activate();
@@ -1408,9 +1423,23 @@ export component PlayerOverlay {
         // A plain element — taps pass through to the backdrop below.
         // Stay mounted so clearing the flag can animate out; actions and the
         // transient playback rate still change immediately, not after a fade.
+        // Mirror the existing alpha ramp so the title remains readable on
+        // bright video without a hard rectangular panel behind the artwork.
+        Rectangle {
+            width: 100%; height: Math.min(190px, root.height / 2);
+            opacity: root.controls_active ? 1 : 0;
+            animate opacity { duration: Anim.player_fade; }
+            Image {
+                width: 100%; height: 100%; source: root.scrim_image;
+                image-fit: fill; colorize: Theme.current.scrim_player;
+                transform-rotation: 180deg;
+            }
+        }
         flash_pill := Rectangle {
             x: (parent.width - self.width) / 2;
-            y: (root.flash_show ? 16px : 10px) + root.safe-top;
+            y: (root.flash_show ? 16px : 10px) + root.safe-top
+                + (root.controls_active && root.screenshot_notice != "" ? Math.max(40px, player_header.height) + screenshot_message.height + 20px
+                    : (root.controls_active && (root.player_show_title != "" || root.player_episode_title != "") ? player_header.height + 12px : 0px));
             width: flash_lbl.preferred-width + 28px;
             height: 36px;
             border-radius: 18px;
@@ -1427,6 +1456,65 @@ export component PlayerOverlay {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
             }
+        }
+
+        player_header := VerticalLayout {
+            x: root.safe-left + 68px; y: root.safe-top + 16px;
+            width: Math.max(0px, root.width - root.safe-left - root.safe-right - 140px);
+            height: episode_heading.height + title_art.height + 6px;
+            spacing: 6px;
+            opacity: root.controls_active ? 1 : 0;
+            animate opacity { duration: Anim.player_fade; }
+            episode_heading := Text {
+                text: root.player_episode_title;
+                height: root.player_episode_title == "" ? 0px : 22px;
+                font-size: root.narrow ? 14px : 16px;
+                font-weight: 600; color: Theme.current.text_bright;
+                overflow: elide; max-lines: 1;
+            }
+            title_art := TitleArtwork {
+                title: root.player_show_title; logo: root.player_show_logo;
+                width: Math.min(parent.width, root.narrow ? 260px : 400px);
+                logo-height: Math.min(root.narrow ? 48px : 64px, root.height / 7);
+                font-size: root.narrow ? 20px : 26px; max-lines: 1;
+            }
+        }
+        screenshot_button := Rectangle {
+            x: root.width - root.safe-right - self.width - 16px;
+            y: root.safe-top + 16px;
+            width: 40px; height: 40px; border-radius: 20px;
+            property <bool> can_capture: root.playback_started && !root.screenshot_busy;
+            accessible-role: button; accessible-label: @tr("Take screenshot");
+            accessible-enabled: self.can_capture;
+            border-width: root.kb_active && root.kb_idx == 9 && root.open_popup == 0 ? 2px : 0px;
+            border-color: Theme.current.focus_ring;
+            background: screenshot_touch.has-hover ? Theme.current.player_control_hover : Theme.current.player_control;
+            opacity: root.controls_active ? 1 : 0;
+            animate opacity { duration: Anim.player_fade; }
+            IcCamera {
+                x: 8px; y: 8px; width: 24px; height: 24px;
+                fill: Theme.current.text_bright;
+                opacity: screenshot_button.can_capture ? 1 : 0.4;
+            }
+            screenshot_touch := TouchArea {
+                width: 100%; height: 100%; mouse-cursor: pointer;
+                clicked => {
+                    if (!root.guard_osd_control()) { return; }
+                    root.kb_active = false; root.kb_idx = 9;
+                    if (screenshot_button.can_capture) { root.take_screenshot(); }
+                }
+            }
+        }
+        screenshot_message := Text {
+            visible: root.screenshot_notice != "";
+            x: Math.max(root.safe-left + 16px, root.width - root.safe-right - self.width - 16px);
+            y: root.safe-top + 16px + Math.max(40px, player_header.height) + 8px;
+            width: Math.min(240px, Math.max(0px, root.width - root.safe-left - root.safe-right - 32px));
+            text: root.screenshot_notice; font-size: 12px;
+            color: Theme.current.text_player_caption;
+            horizontal-alignment: right; wrap: word-wrap; max-lines: 2; overflow: elide;
+            opacity: root.controls_active ? 1 : 0;
+            animate opacity { duration: Anim.player_fade; }
         }
 
         // ---- Close button (top-left, below the status bar) ---------
@@ -1936,22 +2024,7 @@ export component PlayerOverlay {
                         }
                     }
 
-                    // Title (hidden on narrow: see time text above).
-                    if root.player_title != "" && !root.narrow: Rectangle {
-                        horizontal-stretch: 1;
-                        height: 40px;
-
-                        Text {
-                            text: root.player_title;
-                            color: Theme.current.text_player_caption;
-                            font-size: 13px;
-                            vertical-alignment: center;
-                            horizontal-alignment: center;
-                            overflow: elide;
-                        }
-                    }
-
-                    if root.player_title == "" || root.narrow: Rectangle {
+                    Rectangle {
                         horizontal-stretch: 1;
                         height: 40px;
                     }
@@ -2159,7 +2232,7 @@ export component PlayerOverlay {
                 root.height - self.height - (root.controls_active ? 80px : 16px));
             title: root.next_episode_title;
             context: root.next_episode_context;
-            focused_action: root.kb_active ? (root.kb_idx == 9 ? 1 : root.kb_idx == 10 ? 2 : 0) : 0;
+            focused_action: root.kb_active ? (root.kb_idx == 10 ? 1 : root.kb_idx == 11 ? 2 : 0) : 0;
             choose => { root.next_episode_streams(root.next_episode_token); }
             dismiss => { root.next_episode_dismiss(root.next_episode_token); }
         }

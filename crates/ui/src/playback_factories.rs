@@ -13,6 +13,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_toggle_pause => invoke_player_bridge_toggle_pause(),
             on_seek => invoke_player_bridge_seek(arg0),
             on_close_player => invoke_player_bridge_close_player(),
+            on_take_screenshot => invoke_player_bridge_take_screenshot(),
             on_set_volume => invoke_player_bridge_set_volume(arg0),
             on_toggle_mute => invoke_player_bridge_toggle_mute(),
             on_pick_audio_track => invoke_player_bridge_pick_audio_track(arg0),

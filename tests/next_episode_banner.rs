@@ -228,14 +228,31 @@ fn banner_fits_and_routes_actions_without_interrupting_playback() {
     assert_eq!(*closes.borrow(), 0);
     app.set_next_episode_visible(true);
     settle(&app);
-    // Arrow navigation reaches both new actions, skipping Android's absent fullscreen.
-    for _ in 0..12 {
-        key(&app, slint::platform::Key::RightArrow);
+    // Tab navigation reaches the camera and banner, skipping Android's absent fullscreen.
+    for _ in 0..10 {
+        key(&app, slint::platform::Key::Tab);
     }
-    key(&app, slint::platform::Key::LeftArrow);
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Shift.into(),
+        });
+    key(&app, slint::platform::Key::Tab);
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+            text: slint::platform::Key::Shift.into(),
+        });
     key(&app, slint::platform::Key::Return);
     assert_eq!(choices.borrow().len(), 3);
-    key(&app, slint::platform::Key::LeftArrow);
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Shift.into(),
+        });
+    key(&app, slint::platform::Key::Tab); // Camera.
+    key(&app, slint::platform::Key::Tab); // Settings gear.
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+            text: slint::platform::Key::Shift.into(),
+        });
     key(&app, slint::platform::Key::Return); // Settings gear.
     assert!(banner(&app).is_none(), "banner must yield to player menus");
     key(&app, slint::platform::Key::Escape);
