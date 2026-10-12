@@ -307,6 +307,7 @@ fn convert_stream(index: usize, stream: Stream) -> Option<ProviderStream> {
                 language: subtitle.lang,
             })
             .collect(),
+        ..Default::default()
     })
 }
 

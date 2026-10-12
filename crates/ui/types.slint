@@ -297,3 +297,9 @@ export struct DownloadGroup {
 }
 
 export struct SettingsDestination { id: int, stable-id: string, group: int, title: string, description: string, terms: string, aliases: string, parent: int }
+
+// Declarative provider fields; values never become part of addon URLs.
+export struct PluginSettingRow {
+    key: string, label: string, kind: string, value: string, checked: bool,
+    options: [string], labels: [string], selected: int,
+}

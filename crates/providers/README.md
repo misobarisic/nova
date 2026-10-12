@@ -1,6 +1,6 @@
 # Content providers
 
-Nova bundles AniKoto as a JavaScript provider. It appears in Settings → Addons
+Nova bundles AniKoto and the optional Supernova JavaScript provider. AniKoto appears in Settings → Addons
 and in the series catalog/search flows. The `nova-provider://anikoto` transport
 adapts its normalized output to the app's existing Stremio response parser, so
 library entries, episode progress, metadata caches, downloads, and sync use the
@@ -20,6 +20,130 @@ continues to use the addon’s own website and install URL.
 The Yuzono Android extensions contain Kotlin code for Aniyomi's APIs. Adding a
 source here means porting its requests and parsing to Nova's JavaScript API.
 This version loads trusted source files bundled at compile time.
+
+## Supernova
+
+`nova-provider://supernova` is installed **disabled** once per installation
+(`providers:supernova:v1`). Enable it in Addons and use its normal Configure
+gear to select sources you may use. Nyaa, AnimeTosho and APIBay are initially
+off. Its stream-only manifest adds neither catalogs nor metadata and never
+changes a title's library, tracking or episode identity.
+
+Discovery runs on-device in QuickJS. Nyaa and AnimeTosho adapters port Comet's
+broad title queries and request/parsing approach: unfiltered Nyaa HTML and
+AnimeTosho Torznab XML, with the main-site JSON feed as a fallback. APIBay
+supplies movie/TV JSON. Each source has at most two query variants and two pages
+per query; native GET batches run at most three requests concurrently. Three-second
+request limits and optional-stage deadlines preserve partial results within a
+20-second lookup budget. Up to 150 ranked hashes reach TorBox availability checks
+in three concurrent batches; the display remains capped at 50 rows.
+Search metadata is cached locally for a day; partial failures and empty results
+get a short retry TTL, and empty failed searches are not cached. Source access
+can change or fail independently; no anti-bot bypass or background catalog exists.
+
+Matching requires the title and movie year/confirmed IMDb ID, or a compatible
+series inventory. Canonical title parsing keeps numeric sequels distinct and
+separates title numbers from episode ranges. Season packs may reach inspection;
+playback still requires exactly one file proving the requested episode. Anime
+absolute numbering requires Nova's verified alignment. Wrong episodes, samples,
+ambiguous videos and unsupported hashes are omitted. Before emitting P2P, up to
+six unverified candidates per lookup fetch bounded metainfo; subsequent cache
+hits retry remaining files without extending the original discovery expiry.
+`torrent_metadata.rs` hashes the original v1 info dictionary and returns original
+file indexes. JS verifies the hash and selects one matching video; bare episode
+filenames also require a verified torrent root/container identifying the series.
+It never asks the playback engine to guess the largest file. Conservative
+matching may omit valid releases, especially differently titled editions and
+later-season releases containing a year different from the series metadata.
+Seeder counts are upstream reports. Reused discovery rows explicitly identify
+cached discovery and unverified peer availability; TorBox availability is still
+checked live independently of that cache.
+
+Direct P2P uses the existing torrent engine and its P2P setting. The optional
+TorBox preferred/cached-only modes require a configured key. Lookup only checks
+availability; it never creates a torrent. A selected TorBox row rechecks current
+settings/cache, reuses a verified account torrent or creates with
+`add_only_if_cached=true` and `seed=3`, verifies the unique video against the
+account file list, then requests a fresh link. TorBox file IDs are separate from
+P2P indexes. Missing keys, uncached or ambiguous files, account errors and rate
+limits never silently start an uncached transfer or substitute another video.
+The existing playback token, addon revision and settings generation reject
+stale completions after Back, suspend, replacement or configuration edits.
+
+The API key is an ordinary persisted and synced preference, masked in the
+sheet. TorBox's documented `requestdl` token parameter is used only internally;
+request URLs, credentials and expiring playback URLs never enter discovery
+records, resolver tokens or logs. Resolve errors shown in Nova use fixed text.
+TorBox also returns credential-bearing CDN links. A manifest-declared exception
+permits those links only at the final resolver boundary, for the declared HTTPS
+CDN policy, path and matching credential parameter. Supernova currently opts
+into `domains: ["*"]` for HTTP and final playback, allowing all public domains
+as requested. Other providers retain their existing domain allowlists. Nova
+passes credential-bearing links to in-app playback
+only; external-player preferences and Android external fallbacks do not receive
+them. The link is retained in memory for playback/recovery and never saved or
+synced. Other stream fields and ordinary lookup rows still reject credentials.
+No live credentials belong in fixtures; ignored live tests read a temporary
+key file and prohibit POST requests.
+
+`plugin_settings` sync uses independent `plugin/field` records and tombstones,
+retaining unknown plugin IDs/fields. Operation snapshots include only fields
+declared by the installed schema, so large future settings do not prevent older
+providers from running. Disable/removal preserves settings.
+The gear offers a separate confirmed **Remove configuration everywhere**
+action and **Clear plugin cache**. Cache JSON lives locally at `plugin_cache:v1`
+in the existing database, with a 20 MiB logical budget, 1024 records and a 1 MiB
+entry limit; physical database allocation need not immediately shrink. Cache
+clearing preserves preferences, images and torrent downloads.
+Successful clearing invalidates in-flight cache operations, preventing old
+searches from repopulating it. Startup restores retained unfamiliar sync records
+before seeding settings, including unknown fields and deletion tombstones.
+
+`build.rs` concatenates the trusted `plugins/supernova/{core,matching,index}.js`
+and source/debrid modules. `supernova_tests.rs` uses real QuickJS/parsers with
+deterministic HTTP fixtures; `supernova_live_tests.rs` is explicitly ignored
+in normal test runs. See the bundled `NOTICE.md` for source/protocol references.
+
+## Generic plugin services
+
+Normalized streams choose exactly one direct URL, v1 hash/file index or owned
+`resolver: { provider_id, token }`. The Stremio adapter maps resolver selections
+to the Nova-only `novaResolver` extra; ordinary remote addons cannot use it to
+invoke another provider. Movie contextual lookups omit season/episode; series
+lookups require both. Resolver operations receive a new immutable settings
+snapshot and return a validated direct stream.
+
+`configuration` in the plugin manifest describes boolean, string, secret,
+integer and choice controls with typed defaults/options/bounds. Nova renders
+the schema using its existing controls, saves text with Enter or Save, and
+validates each explicit update. Unknown persisted fields survive unchanged.
+
+```js
+JSON.parse(nova.http.request(JSON.stringify({
+  method: "GET", url: "https://allowed.example/feed", timeoutMs: 1500,
+}))); // status + body (text), or an independent error
+// responseType: "binary" returns bodyBase64 instead, for torrent metainfo.
+JSON.parse(nova.http.batch(JSON.stringify([{method: "GET", url: "https://allowed.example/feed"}])));
+// POST requires permissions.httpPost, with body.type text/json/urlencoded/multipart.
+JSON.parse(nova.xml.select(xml, "item", JSON.stringify({title: {selector: "title"}})));
+// value: "attributes" returns a JSON array of matching sibling attribute maps.
+// It keeps Torznab name/value fields associated with their owning item.
+JSON.parse(nova.torrent.inspect(base64Metainfo)); // verified infoHash + original files/indexes
+JSON.parse(nova.settings.get("quality.preferred")); // frozen operation snapshot
+nova.settings.set("quality.preferred", JSON.stringify("1080p"));
+nova.settings.remove("quality.preferred");
+nova.cache.set("lookup:v1:opaque-digest", JSON.stringify(result), 86400);
+JSON.parse(nova.cache.get("lookup:v1:opaque-digest") || "null");
+nova.cache.remove("lookup:v1:opaque-digest");
+```
+
+HTTP revalidates and pins public DNS for each target. Bearer requests and POST
+cannot redirect to another origin. Methods/bodies, aggregate bytes and requests,
+DNS/redirect/read time, XML entities/depth/items and torrent nodes/paths/pieces
+are bounded. Optional cache failures do not fail searches; settings edits are
+acknowledged only after durable persistence. Cache reads/writes compare the
+captured generation atomically; remote projection and local edits share the
+same service mutation lock.
 
 ## Files and interface
 

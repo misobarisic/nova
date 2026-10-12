@@ -776,6 +776,8 @@ struct State {
     started: AtomicBool,
     /// A successful external handoff closes the overlay but keeps the source alive.
     external_handoff: AtomicBool,
+    /// Sensitive resolved URLs must never leave through OS arguments/intents.
+    allow_external: AtomicBool,
     /// The OSD thumb (or a programmatic seek) moved ahead of mpv and a seek is
     /// in flight. The `tick` scrub guard only engages while this is set, so an
     /// initial resume (opened at the saved position via the load-time `start`
@@ -1011,6 +1013,7 @@ impl Player {
             pending_subtitles: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),
             external_handoff: AtomicBool::new(false),
+            allow_external: AtomicBool::new(true),
             seek_pending: AtomicBool::new(false),
             reported: AtomicBool::new(false),
             opened_at: Mutex::new(Instant::now()),
@@ -1462,6 +1465,30 @@ impl Player {
         subtitles: &[String],
         preferences: SessionPreferences,
     ) -> Result<(), String> {
+        self.play_with_preferences_and_policy(
+            url,
+            start_pos_secs,
+            headers,
+            subtitles,
+            preferences,
+            true,
+        )
+    }
+
+    /// Queue playback while retaining a source's external-handoff policy through
+    /// Android decoder recovery. Ordinary streams keep their existing fallback.
+    pub fn play_with_preferences_and_policy(
+        &self,
+        url: &str,
+        start_pos_secs: f64,
+        headers: &[(String, String)],
+        subtitles: &[String],
+        preferences: SessionPreferences,
+        allow_external: bool,
+    ) -> Result<(), String> {
+        self.state
+            .allow_external
+            .store(allow_external, Ordering::SeqCst);
         if let Some(app) = self.state.app.upgrade() {
             app.set_effective_playback_speed(preferences.speed());
         }
@@ -2033,6 +2060,7 @@ impl Player {
             let _ = mpv.command("stop", &[]);
         }
         *self.state.pending.lock().unwrap() = None;
+        self.state.preference_source.lock().unwrap().clear();
         self.state.pending_headers.lock().unwrap().clear();
         self.state.pending_subtitles.lock().unwrap().clear();
         #[cfg(target_os = "android")]
@@ -2376,7 +2404,8 @@ impl Player {
     /// takes it).
     #[cfg(target_os = "android")]
     fn hand_off_to_external_player(&self) -> bool {
-        if !self.state.last_headers.lock().unwrap().is_empty()
+        if !self.state.allow_external.load(Ordering::SeqCst)
+            || !self.state.last_headers.lock().unwrap().is_empty()
             || !self.state.last_subtitles.lock().unwrap().is_empty()
         {
             return false;

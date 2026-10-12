@@ -22,6 +22,9 @@ pub(super) struct PlaybackIntent {
     request_id: String,
     pending: bool,
     in_app: bool,
+    // Credential-bearing resolver links stay inside the in-app player, including
+    // a delayed resume prompt. Never pass them through OS process arguments.
+    private_playback: bool,
     context: PlaybackContext,
 }
 
@@ -48,6 +51,7 @@ impl PlaybackIntent {
 pub(crate) fn note_android_pause_checkpoint() {
     let bridge = super::bridge::with_global_bridge(Clone::clone);
     if let Some(bridge) = bridge {
+        bridge.cancel_pending_playback();
         bridge.note_player_progress_from_ui();
         bridge.persist_outgoing_playback();
     }
@@ -76,6 +80,7 @@ impl Bridge {
                 .unwrap_or_default(),
             pending: true,
             in_app: false,
+            private_playback: false,
             context: state
                 .modal_item
                 .as_ref()
@@ -349,6 +354,125 @@ impl Bridge {
     /// runs on the main/UI thread.
     pub(super) fn open_player(&self, url: String) -> bool {
         self.open_player_with_options(url, Vec::new(), Vec::new())
+    }
+
+    /// A bundled resolver runs entirely on a worker. The existing playback
+    /// token protects metadata changes, Back, suspend and replacement picks;
+    /// addon/settings revisions additionally protect configuration changes.
+    pub(super) fn play_provider_resolver(
+        &self,
+        provider_url: String,
+        token: String,
+        settings_generation: u64,
+        addon_generation: u64,
+    ) {
+        let request = self.begin_playback_request();
+        let bridge = self.clone();
+        let check_bridge = self.clone();
+        let check_request = request.clone();
+        let check_url = provider_url.clone();
+        let cancelled: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+            !check_bridge.playback_request_is_current(&check_request)
+                || nova_providers::plugin_settings::settings_generation() != settings_generation
+                || !check_bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .installed
+                    .iter()
+                    .any(|addon| {
+                        addon.url == check_url
+                            && addon.enabled
+                            && addon.available
+                            && addon.generation == addon_generation
+                    })
+        });
+        if cancelled() {
+            self.finish_playback_request();
+            self.set_stream_hint(Some(StreamHint::Fixed(
+                "This stream selection is out of date. Reload streams.",
+            )));
+            return;
+        }
+        self.set_stream_hint(Some(StreamHint::Fixed("Resolving stream…")));
+        std::thread::spawn(move || {
+            let result = nova_providers::resolve_provider_stream(
+                &provider_url,
+                &token,
+                Duration::from_secs(30),
+                cancelled.clone(),
+            );
+            let _ = slint::invoke_from_event_loop(move || {
+                if cancelled() {
+                    // Only finish our own pending intent: a newer selection
+                    // may already be resolving or playing on this UI thread.
+                    if bridge.playback_request_is_current(&request) {
+                        bridge.finish_playback_request();
+                        bridge.set_stream_hint(Some(StreamHint::Fixed(
+                            "This stream selection is out of date. Reload streams.",
+                        )));
+                    }
+                    return;
+                }
+                let private_playback = result.as_ref().is_ok_and(|stream| {
+                    stream
+                        .extra
+                        .get("novaSensitivePlayback")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true)
+                });
+                if let Some(intent) = bridge.shared.lock().unwrap().playback_intent.as_mut() {
+                    intent.private_playback = private_playback;
+                }
+                match result.map(|stream| stream_source(&stream)) {
+                    Ok(StreamSource::Url(url)) => {
+                        bridge.set_stream_hint(None);
+                        if !private_playback && nova_config::active_cache_settings().player_external
+                        {
+                            bridge.mark_playback_opened(false);
+                            let _ = crate::player::open_external(&url);
+                        } else if !bridge.open_requested_stream(
+                            request,
+                            url.clone(),
+                            Vec::new(),
+                            Vec::new(),
+                        ) {
+                            if private_playback {
+                                bridge.finish_playback_request();
+                                bridge.set_stream_hint(Some(StreamHint::Fixed(
+                                    "This stream requires the in-app player, which is unavailable.",
+                                )));
+                            } else {
+                                bridge.mark_playback_opened(false);
+                                let _ = crate::player::open_external(&url);
+                            }
+                        }
+                    }
+                    Ok(StreamSource::UrlWithOptions {
+                        url,
+                        headers,
+                        subtitles,
+                    }) => {
+                        if !bridge.open_requested_stream(request, url, headers, subtitles) {
+                            bridge.finish_playback_request();
+                            bridge.set_stream_hint(Some(StreamHint::Fixed(
+                                "This stream requires the in-app player, which is unavailable.",
+                            )));
+                        } else {
+                            bridge.set_stream_hint(None);
+                        }
+                    }
+                    Err(error) => {
+                        bridge.finish_playback_request();
+                        bridge.set_stream_hint(Some(StreamHint::ResolverFailure(error.message)));
+                    }
+                    _ => {
+                        bridge.finish_playback_request();
+                        bridge.set_stream_hint(Some(StreamHint::Fixed("Could not resolve this stream. Try another result or check the addon configuration.")));
+                    }
+                }
+            });
+        });
     }
 
     pub(super) fn open_player_with_options(
@@ -666,10 +790,21 @@ impl Bridge {
         }
 
         let preferences = self.prepare_playback_preferences();
-        match self
-            .player
-            .play_with_preferences(&url, start_at, &headers, &subtitles, preferences)
-        {
+        let allow_external = !self
+            .shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_ref()
+            .is_some_and(|intent| intent.private_playback);
+        match self.player.play_with_preferences_and_policy(
+            &url,
+            start_at,
+            &headers,
+            &subtitles,
+            preferences,
+            allow_external,
+        ) {
             Ok(()) => {
                 self.mark_playback_opened(true);
                 true
@@ -1484,6 +1619,7 @@ mod preference_tests {
                 request_id: "episode-one".into(),
                 pending: false,
                 in_app: true,
+                private_playback: false,
                 context: PlaybackContext {
                     media_type: "series".into(),
                     media_id: "title".into(),

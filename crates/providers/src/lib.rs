@@ -9,12 +9,21 @@ mod ids;
 mod matching;
 mod metadata;
 mod models;
+pub mod plugin_settings;
 mod registry;
 mod runtime;
 mod sequence;
 mod stremio;
+#[cfg(test)]
+mod supernova_live_tests;
+#[cfg(test)]
+mod supernova_tests;
+mod torrent_metadata;
 
-pub use host::{HttpResponse, MemoryProviderHost, ProviderHost, ProviderHostError, ScopedHttpHost};
+pub use host::{
+    HttpBody, HttpRequest, HttpResponse, HttpResponseType, MemoryProviderHost, ProviderHost,
+    ProviderHostError, ScopedHttpHost,
+};
 pub use ids::{ExternalId, IdNamespace, IdResolution};
 pub use matching::{MetadataMatch, match_metadata};
 pub use metadata::{
@@ -25,17 +34,21 @@ pub use metadata::{
 };
 pub use models::{
     CatalogRequest, ContentProvider, Episode, ExternalIds, MediaItem, MediaRequest,
-    ProviderCatalog, ProviderDescriptor, ProviderError, ProviderFuture, ProviderStream,
-    ProviderSubtitle, SearchRequest, StreamLookupRequest, StreamRequest,
+    ProviderCatalog, ProviderDescriptor, ProviderError, ProviderFuture, ProviderResolveError,
+    ProviderStream, ProviderStreamResolver, ProviderSubtitle, SearchRequest, StreamLookupRequest,
+    StreamRequest,
 };
 pub use registry::{
-    ANIKOTO_PROVIDER_URL, ProviderCapabilities, bundled_providers, configure_provider_capabilities,
-    configured_provider_manifest, fetch_builtin_addon, fetch_builtin_addon_with_timeout,
-    private_provider_id, provider_capabilities, provider_owns_id, stream_lookup_url,
-    supports_capability_config, supports_contextual_streams,
+    ANIKOTO_PROVIDER_URL, ProviderCapabilities, SUPERNOVA_PROVIDER_URL, bundled_providers,
+    configure_provider_capabilities, configured_provider_manifest, fetch_builtin_addon,
+    fetch_builtin_addon_with_timeout, private_provider_id, provider_capabilities, provider_owns_id,
+    provider_settings_schema, resolve_provider_stream, stream_lookup_url,
+    supports_capability_config, supports_contextual_streams, supports_provider_configuration,
 };
 pub use runtime::{
-    PluginCapabilities, PluginLimits, PluginManifest, PluginPermissions, PluginRuntime,
+    EphemeralPlaybackCredential, PluginCapabilities, PluginLimits, PluginManifest,
+    PluginPermissions, PluginRuntime,
 };
 pub use sequence::{EpisodeResolution, SequenceEpisode, SourceSequence, resolve_episode};
 pub use stremio::{StremioProvider, normalize_external_ids};
+pub use torrent_metadata::{TorrentMetadata, TorrentMetadataFile, inspect_torrent_metadata};

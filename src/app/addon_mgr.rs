@@ -823,7 +823,7 @@ impl Bridge {
     /// without a configure page get no Configure button instead of a dead
     /// browser tab. Empty otherwise.
     pub(super) fn addon_config_url(installed: &Installed) -> String {
-        if nova_providers::supports_capability_config(&installed.url) {
+        if nova_providers::supports_provider_configuration(&installed.url) {
             return installed.url.clone();
         }
         if installed.configure_ok == Some(true) {

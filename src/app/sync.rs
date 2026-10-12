@@ -24,6 +24,7 @@ use super::playback_preferences::PREFERENCES_KEY;
 use nova_config::playback_preferences::PreferenceValue;
 pub(crate) const DOMAIN_VIEWING_ACTIVITY: &str = "viewing_activity";
 pub(crate) const DOMAIN_NEW_EPISODES_HIDDEN: &str = "new_episodes_hidden";
+pub(crate) const DOMAIN_PLUGIN_SETTINGS: &str = "plugin_settings";
 pub(crate) const DOMAIN_ADDONS: &str = "addons";
 pub(crate) const DOMAIN_SETTINGS: &str = "settings";
 pub(crate) const DOMAIN_CATEGORY: &str = "category";
@@ -101,6 +102,7 @@ fn sync_records(domain: &str, records: Vec<(String, String, u64)>) {
         DOMAIN_VIEWING_ACTIVITY => VIEWING_ACTIVITY_KEY,
         DOMAIN_NEW_EPISODES_HIDDEN => NEW_EPISODES_HIDDEN_KEY,
         DOMAIN_ADDONS => "addons",
+        DOMAIN_PLUGIN_SETTINGS => plugin_settings::KEY,
         DOMAIN_SETTINGS | DOMAIN_CATEGORY => "settings",
         DOMAIN_CONTINUE_HIDDEN => "continue_hidden",
         _ => "",
@@ -126,6 +128,7 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
         .into());
     }
     let domains: Vec<SnapshotDomainRecords> = match key {
+        plugin_settings::KEY => vec![(DOMAIN_PLUGIN_SETTINGS, plugin_settings::records(raw)?)],
         "library" => {
             let entries: Vec<LibraryEntry> = serde_json::from_str(raw)?;
             vec![(
@@ -757,6 +760,7 @@ impl Bridge {
             (VIEWING_ACTIVITY_KEY, DOMAIN_VIEWING_ACTIVITY),
             (NEW_EPISODES_HIDDEN_KEY, DOMAIN_NEW_EPISODES_HIDDEN),
             ("addons", DOMAIN_ADDONS),
+            (plugin_settings::KEY, DOMAIN_PLUGIN_SETTINGS),
             ("settings", DOMAIN_SETTINGS),
         ] {
             let result = (|| -> nova_sync::Result<()> {
@@ -765,6 +769,9 @@ impl Bridge {
                 }
                 let state = self.shared.lock().unwrap();
                 let raw = match key {
+                    plugin_settings::KEY => {
+                        storage::try_get_str(key)?.unwrap_or_else(|| "{}".into())
+                    }
                     "library" => serde_json::to_string(&state.entries)?,
                     "episode_progress" => serde_json::to_string(&state.progress)?,
                     PREFERENCES_KEY => serde_json::to_string(
@@ -950,6 +957,34 @@ impl Bridge {
                 DOMAIN_VIEWING_ACTIVITY => self.sync_apply_viewing_activity(),
                 DOMAIN_NEW_EPISODES_HIDDEN => self.sync_apply_new_episodes_hidden(),
                 DOMAIN_ADDONS => self.sync_apply_addons(),
+                DOMAIN_PLUGIN_SETTINGS => {
+                    let result = (|| -> nova_sync::Result<()> {
+                        let Some(store) = projection_store() else {
+                            return Ok(());
+                        };
+                        nova_providers::plugin_settings::apply_settings_projection(|| {
+                            let values =
+                                plugin_settings::project(store.records(DOMAIN_PLUGIN_SETTINGS))?;
+                            serde_json::to_string(&values).map_err(|error| {
+                                nova_providers::ProviderHostError(error.to_string())
+                            })
+                        })
+                        .map_err(|e| storage::Error::new(storage::ErrorKind::Schema, e))?;
+                        if publish_models
+                            && let Some(app) = self.app().filter(|app| app.get_addon_config_open())
+                        {
+                            self.refresh_plugin_settings_ui(&app.get_addon_config_url());
+                        }
+                        Ok(())
+                    })();
+                    if let Err(error) = result {
+                        storage::report(storage::Error::new(
+                            storage::ErrorKind::Transaction,
+                            error,
+                        ));
+                        continue;
+                    }
+                }
                 DOMAIN_SETTINGS | DOMAIN_CATEGORY => self.sync_apply_settings(publish_models),
                 DOMAIN_CONTINUE_HIDDEN => self.sync_apply_continue_hidden(),
                 nova_tracking::peer::TRACKING_DOMAIN => {

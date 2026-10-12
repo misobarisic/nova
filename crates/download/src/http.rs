@@ -957,6 +957,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hashed_long_unicode_artifact_download_creates_and_removes_resume_sidecar() {
+        let (url, server) = one_shot_server(b"HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: 3\r\nETag: \"fixture\"\r\n\r\nabc").await;
+        let root = test_path("hashed-long-unicode");
+        let name = crate::artifact_filename(
+            "distinct-download-key",
+            &format!("{}.MP4", "東京ć".repeat(300)),
+        );
+        let destination = root.join(&name);
+        let client = new_http_client().unwrap();
+        let outcome = download_http(&client, url, &destination, CancellationToken::new(), |_| {})
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(outcome.path, destination);
+        assert_eq!(fs::read(&outcome.path).await.unwrap(), b"abc");
+        assert!(!part_path(&outcome.path).exists());
+        assert!(!resume_path(&part_path(&outcome.path)).exists());
+        assert!(
+            resume_path(&part_path(&outcome.path))
+                .file_name()
+                .unwrap()
+                .len()
+                <= 255
+        );
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn forwards_provider_headers_and_keeps_transfer_headers_owned_by_downloader() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/file.mp4", listener.local_addr().unwrap());

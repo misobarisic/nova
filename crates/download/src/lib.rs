@@ -130,6 +130,8 @@ pub struct DownloadJob {
     /// from committed bundle assets when a paused download resumes.
     #[serde(skip)]
     pub resource_progress: Option<(u64, u64)>,
+    /// Chosen HTTP destination (including queued jobs), or the completed
+    /// artifact path. UI labels stay independent from the on-disk basename.
     pub artifact_path: Option<PathBuf>,
     /// Actual shared torrent bundle and resolved file, saved before completion.
     pub torrent_directory: Option<PathBuf>,
@@ -607,6 +609,49 @@ pub fn format_progress(downloaded: u64, total: Option<u64>) -> String {
     }
 }
 
+/// Disk names are independent of unbounded provider labels. A full stable hash
+/// keeps distinct download identities separate, while reserving room for both
+/// `.part` and `.part.resume.json` on filesystems with 255-byte components.
+pub fn artifact_filename(download_key: &str, label: &str) -> String {
+    let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, download_key.as_bytes());
+    let hash: String = digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let extension = label
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(label)
+        .rsplit_once('.')
+        .map(|(_, extension)| extension)
+        .filter(|extension| {
+            !extension.is_empty()
+                && extension.len() <= 16
+                && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+        .map(str::to_ascii_lowercase)
+        .filter(|extension| {
+            matches!(
+                extension.as_str(),
+                "mp4"
+                    | "mkv"
+                    | "webm"
+                    | "avi"
+                    | "mov"
+                    | "m4v"
+                    | "ts"
+                    | "m2ts"
+                    | "mpeg"
+                    | "mpg"
+                    | "m3u8"
+                    | "bin"
+            )
+        })
+        .unwrap_or_else(|| "bin".into());
+    format!("download-{hash}.{extension}")
+}
+
 pub fn sanitize_filename(input: &str) -> String {
     let basename = input.rsplit(['/', '\\']).next().unwrap_or(input);
     let mut cleaned = String::with_capacity(basename.len());
@@ -760,6 +805,44 @@ mod tests {
         assert_eq!(job.bytes_downloaded, 0);
         assert_eq!(job.total_bytes, None);
         assert!(job.etag.is_none());
+    }
+
+    #[test]
+    fn artifact_names_hash_identity_preserve_media_extensions_and_bound_sidecars() {
+        let long = format!("{}.MKV", "ć東京".repeat(300));
+        let name = artifact_filename("abc", &long);
+        assert_eq!(
+            name,
+            "download-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.mkv"
+        );
+        assert_eq!(artifact_filename("abc", &long), name);
+        assert_ne!(artifact_filename("other-key", &long), name);
+        assert_ne!(
+            artifact_filename("episode-1", "same.mp4"),
+            artifact_filename("episode-2", "same.mp4")
+        );
+        let destination = Path::new("http").join(&name);
+        let part = part_path(&destination);
+        let sidecar = format!(
+            "{}.resume.json",
+            part.file_name().unwrap().to_str().unwrap()
+        );
+        assert!(name.len() < 100);
+        assert!(sidecar.len() <= 255);
+        for (label, extension) in [
+            ("../../movie.MP4", "mp4"),
+            ("C:\\movie.mkv", "mkv"),
+            ("movie.mp4?token=unsafe", "bin"),
+            ("movie.part", "bin"),
+            ("movie...", "bin"),
+            ("NUL", "bin"),
+            ("movie.m3u8", "m3u8"),
+        ] {
+            let name = artifact_filename("key", label);
+            assert_eq!(Path::new(&name).components().count(), 1);
+            assert!(name.ends_with(&format!(".{extension}")));
+            assert!(!name.contains(['/', '\\']));
+        }
     }
 
     #[test]

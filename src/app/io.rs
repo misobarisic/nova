@@ -29,7 +29,10 @@ pub(crate) fn metadata_cache_key(key: &str) -> bool {
         || key.starts_with("manifest:")
         || matches!(
             key,
-            "provider_metadata_cache:v1" | "home:showcase:v1" | "tracking:catalog_cache:v1"
+            "provider_metadata_cache:v1"
+                | "plugin_cache:v1"
+                | "home:showcase:v1"
+                | "tracking:catalog_cache:v1"
         )
 }
 

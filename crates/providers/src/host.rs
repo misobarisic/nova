@@ -10,10 +10,143 @@ use std::{
     time::{Duration, Instant},
 };
 
+use serde::{Deserialize, Serialize};
+
 use reqwest::{
     Method, Url,
     header::{HeaderName, HeaderValue},
 };
+
+const MAX_REQUEST_BODY: usize = 256 * 1024;
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum HttpResponseType {
+    #[default]
+    Text,
+    Binary,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HttpRequest {
+    pub url: String,
+    #[serde(default, rename = "timeoutMs")]
+    pub timeout_ms: Option<u64>,
+    #[serde(default, rename = "responseType")]
+    pub response_type: HttpResponseType,
+    #[serde(default = "get_method")]
+    pub method: String,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    #[serde(default)]
+    pub body: Option<HttpBody>,
+}
+
+fn get_method() -> String {
+    "GET".into()
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "lowercase")]
+pub enum HttpBody {
+    Text(String),
+    Json(serde_json::Value),
+    Urlencoded(BTreeMap<String, String>),
+    Multipart(BTreeMap<String, String>),
+}
+
+impl HttpRequest {
+    pub fn get(url: &str, headers: &BTreeMap<String, String>) -> Self {
+        Self {
+            url: url.into(),
+            timeout_ms: None,
+            response_type: HttpResponseType::Text,
+            method: get_method(),
+            headers: headers.clone(),
+            body: None,
+        }
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), ProviderHostError> {
+        if !matches!(self.method.as_str(), "GET" | "POST")
+            || (self.method == "GET" && self.body.is_some())
+        {
+            return Err(ProviderHostError(
+                "only GET without a body and POST are supported".into(),
+            ));
+        }
+        if self.url.len() > 8192
+            || self.headers.len() > 16
+            || self
+                .headers
+                .iter()
+                .map(|(k, v)| k.len() + v.len())
+                .sum::<usize>()
+                > 8192
+        {
+            return Err(ProviderHostError(
+                "provider HTTP arguments exceeded their byte limit".into(),
+            ));
+        }
+        self.encoded_body()?;
+        Ok(())
+    }
+
+    fn encoded_body(&self) -> Result<Option<(Vec<u8>, &'static str)>, ProviderHostError> {
+        let Some(body) = &self.body else {
+            return Ok(None);
+        };
+        let (bytes, content_type) = match body {
+            HttpBody::Text(text) => (text.as_bytes().to_vec(), "text/plain; charset=utf-8"),
+            HttpBody::Json(value) => (
+                serde_json::to_vec(value)
+                    .map_err(|_| ProviderHostError("invalid JSON request body".into()))?,
+                "application/json",
+            ),
+            HttpBody::Urlencoded(fields) => {
+                let mut encoded = url::form_urlencoded::Serializer::new(String::new());
+                for (key, value) in fields {
+                    encoded.append_pair(key, value);
+                }
+                (
+                    encoded.finish().into_bytes(),
+                    "application/x-www-form-urlencoded",
+                )
+            }
+            HttpBody::Multipart(fields) => {
+                // Text-only forms deliberately exclude filenames and binary uploads.
+                // Reject boundary collisions instead of permitting injected parts.
+                let boundary = "nova-provider-form-7ad596ab";
+                let mut encoded = String::new();
+                if fields.len() > 64 {
+                    return Err(ProviderHostError("too many form fields".into()));
+                }
+                for (key, value) in fields {
+                    if key.len() > 128
+                        || !key
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+                        || value.contains(boundary)
+                    {
+                        return Err(ProviderHostError("invalid multipart field".into()));
+                    }
+                    encoded.push_str(&format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n"));
+                }
+                encoded.push_str(&format!("--{boundary}--\r\n"));
+                (
+                    encoded.into_bytes(),
+                    "multipart/form-data; boundary=nova-provider-form-7ad596ab",
+                )
+            }
+        };
+        if bytes.len() > MAX_REQUEST_BODY {
+            return Err(ProviderHostError(
+                "provider request body exceeded its byte limit".into(),
+            ));
+        }
+        Ok(Some((bytes, content_type)))
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct HttpResponse {
@@ -37,6 +170,20 @@ impl std::error::Error for ProviderHostError {}
 /// Capabilities exposed to a source implementation. JS code receives this
 /// interface through Nova's host API; it never gets a socket or filesystem.
 pub trait ProviderHost: Send + Sync {
+    fn cancelled(&self) -> bool {
+        false
+    }
+
+    fn request(&self, request: &HttpRequest) -> Result<HttpResponse, ProviderHostError> {
+        request.validate()?;
+        if request.method != "GET" {
+            return Err(ProviderHostError(
+                "HTTP POST is unavailable on this host".into(),
+            ));
+        }
+        self.get(&request.url, &request.headers)
+    }
+
     fn host_work_elapsed(&self, _duration: Duration) {}
 
     fn metadata_available(&self, caller: &str) -> bool {
@@ -75,6 +222,9 @@ pub struct ScopedHttpHost {
     redirect_limit: usize,
     request_limit: usize,
     requests: AtomicUsize,
+    total_response_bytes: AtomicUsize,
+    total_request_bytes: AtomicUsize,
+    cancellation: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 
 impl ScopedHttpHost {
@@ -95,10 +245,34 @@ impl ScopedHttpHost {
             redirect_limit: redirect_limit.min(10),
             request_limit: request_limit.min(64),
             requests: AtomicUsize::new(0),
+            total_response_bytes: AtomicUsize::new(0),
+            total_request_bytes: AtomicUsize::new(0),
+            cancellation: None,
         }
     }
 
-    fn check_url(&self, url: &Url) -> Result<(String, Vec<SocketAddr>), ProviderHostError> {
+    pub fn with_cancellation(mut self, cancellation: Arc<dyn Fn() -> bool + Send + Sync>) -> Self {
+        self.cancellation = Some(cancellation);
+        self
+    }
+
+    fn check_active(&self) -> Result<(), ProviderHostError> {
+        if self.cancelled() {
+            return Err(ProviderHostError("provider operation cancelled".into()));
+        }
+        if Instant::now() >= self.deadline {
+            return Err(ProviderHostError(
+                "provider exceeded its operation time limit".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_url(
+        &self,
+        url: &Url,
+        deadline: Instant,
+    ) -> Result<(String, Vec<SocketAddr>), ProviderHostError> {
         if url.scheme() != "https" || url.port().is_some_and(|port| port != 443) {
             return Err(ProviderHostError(
                 "only HTTPS on port 443 is available to providers".into(),
@@ -137,7 +311,7 @@ impl ScopedHttpHost {
                     let _ = send.send(result);
                 });
                 receive
-                    .recv_timeout(self.deadline.saturating_duration_since(Instant::now()))
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                     .map_err(|_| ProviderHostError("provider DNS lookup timed out".into()))?
                     .map_err(|error| {
                         ProviderHostError(format!("DNS lookup failed for {host}: {error}"))
@@ -159,6 +333,25 @@ impl ProviderHost for ScopedHttpHost {
         raw_url: &str,
         headers: &BTreeMap<String, String>,
     ) -> Result<HttpResponse, ProviderHostError> {
+        self.request(&HttpRequest::get(raw_url, headers))
+    }
+
+    fn cancelled(&self) -> bool {
+        self.base.cancelled() || self.cancellation.as_ref().is_some_and(|check| check())
+    }
+
+    fn request(&self, input: &HttpRequest) -> Result<HttpResponse, ProviderHostError> {
+        input.validate()?;
+        self.check_active()?;
+        let deadline = request_deadline(self.deadline, input.timeout_ms);
+        let headers = &input.headers;
+        let raw_url = &input.url;
+        let mut method = if input.method == "POST" {
+            Method::POST
+        } else {
+            Method::GET
+        };
+        let mut body = input.encoded_body()?;
         let count = self.requests.fetch_add(1, Ordering::Relaxed) + 1;
         if count > self.request_limit {
             return Err(ProviderHostError(
@@ -168,8 +361,16 @@ impl ProviderHost for ScopedHttpHost {
 
         let mut target = Url::parse(raw_url)
             .map_err(|error| ProviderHostError(format!("invalid provider URL: {error}")))?;
-        let original_host = target.host_str().unwrap_or_default().to_ascii_lowercase();
+        let original_origin = target.origin();
+        let sensitive = method == Method::POST
+            || headers.keys().any(|name| {
+                matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "authorization" | "cookie"
+                )
+            });
         for redirect in 0..=self.redirect_limit {
+            self.check_active()?;
             if redirect > 0
                 && self.requests.fetch_add(1, Ordering::Relaxed) + 1 > self.request_limit
             {
@@ -177,18 +378,14 @@ impl ProviderHost for ScopedHttpHost {
                     "provider exceeded its per-operation request limit".into(),
                 ));
             }
-            let remaining = self.deadline.saturating_duration_since(Instant::now());
+            let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return Err(ProviderHostError(
-                    "provider exceeded its operation time limit".into(),
-                ));
+                return Err(ProviderHostError("provider HTTP request timed out".into()));
             }
-            let (host, addresses) = self.check_url(&target)?;
-            let remaining = self.deadline.saturating_duration_since(Instant::now());
+            let (host, addresses) = self.check_url(&target, deadline)?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return Err(ProviderHostError(
-                    "provider exceeded its operation time limit".into(),
-                ));
+                return Err(ProviderHostError("provider HTTP request timed out".into()));
             }
             let builder = reqwest::blocking::Client::builder()
                 .no_proxy()
@@ -202,13 +399,28 @@ impl ProviderHost for ScopedHttpHost {
             let client = builder.build().map_err(|error| {
                 ProviderHostError(format!("could not create provider HTTP client: {error}"))
             })?;
-            let mut request = client.request(Method::GET, target.clone());
+            let mut request = client.request(method.clone(), target.clone());
+            if let Some((bytes, content_type)) = &body {
+                if self
+                    .total_request_bytes
+                    .fetch_add(bytes.len(), Ordering::Relaxed)
+                    .saturating_add(bytes.len())
+                    > 4 * MAX_REQUEST_BODY
+                {
+                    return Err(ProviderHostError(
+                        "provider exceeded its aggregate request body limit".into(),
+                    ));
+                }
+                request = request
+                    .header(reqwest::header::CONTENT_TYPE, *content_type)
+                    .body(bytes.clone());
+            }
             for (name, value) in headers {
                 let lower_name = name.to_ascii_lowercase();
                 if matches!(
                     lower_name.as_str(),
                     "host" | "content-length" | "connection" | "proxy-authorization"
-                ) || (host != original_host
+                ) || (target.origin() != original_origin
                     && matches!(lower_name.as_str(), "authorization" | "cookie"))
                 {
                     continue;
@@ -221,8 +433,16 @@ impl ProviderHost for ScopedHttpHost {
                 };
                 request = request.header(name, value);
             }
+            self.check_active()?;
             let mut response = request.send().map_err(|error| {
-                ProviderHostError(format!("provider HTTP request failed: {error}"))
+                ProviderHostError(format!(
+                    "provider HTTP request failed: {}",
+                    if error.is_timeout() {
+                        "timeout"
+                    } else {
+                        "transport error"
+                    }
+                ))
             })?;
             let status = response.status();
             if status.is_redirection() {
@@ -238,9 +458,19 @@ impl ProviderHost for ScopedHttpHost {
                     .ok_or_else(|| {
                         ProviderHostError("provider redirect has no valid Location".into())
                     })?;
-                target = target.join(location).map_err(|error| {
-                    ProviderHostError(format!("invalid provider redirect: {error}"))
-                })?;
+                let next = target
+                    .join(location)
+                    .map_err(|_| ProviderHostError("invalid provider redirect".into()))?;
+                if !redirect_allowed(&target, &next, sensitive) {
+                    return Err(ProviderHostError(
+                        "authenticated or POST requests cannot redirect across origins".into(),
+                    ));
+                }
+                if matches!(status.as_u16(), 301..=303) && method == Method::POST {
+                    method = Method::GET;
+                    body = None;
+                }
+                target = next;
                 continue;
             }
 
@@ -267,12 +497,24 @@ impl ProviderHost for ScopedHttpHost {
                 .by_ref()
                 .take(self.response_bytes as u64 + 1)
                 .read_to_end(&mut body)
-                .map_err(|error| {
-                    ProviderHostError(format!("could not read provider response: {error}"))
-                })?;
+                .map_err(|_| ProviderHostError("could not read provider response".into()))?;
             if body.len() > self.response_bytes {
                 return Err(ProviderHostError(
                     "provider response exceeded its byte limit".into(),
+                ));
+            }
+            self.check_active()?;
+            if Instant::now() >= deadline {
+                return Err(ProviderHostError("provider HTTP request timed out".into()));
+            }
+            if self
+                .total_response_bytes
+                .fetch_add(body.len(), Ordering::Relaxed)
+                .saturating_add(body.len())
+                > self.response_bytes.saturating_mul(4)
+            {
+                return Err(ProviderHostError(
+                    "provider exceeded its aggregate response byte limit".into(),
                 ));
             }
             return Ok(HttpResponse {
@@ -294,11 +536,42 @@ impl ProviderHost for ScopedHttpHost {
     }
 
     fn log(&self, message: &str) {
-        self.base.log(message)
+        self.base.log(&sanitize_log(message))
     }
 }
 
+fn request_deadline(operation_deadline: Instant, timeout_ms: Option<u64>) -> Instant {
+    timeout_ms
+        .map(|timeout| {
+            (Instant::now() + Duration::from_millis(timeout.clamp(100, 60_000)))
+                .min(operation_deadline)
+        })
+        .unwrap_or(operation_deadline)
+}
+
+fn redirect_allowed(current: &Url, next: &Url, sensitive: bool) -> bool {
+    !sensitive || current.origin() == next.origin()
+}
+
+pub(crate) fn sanitize_log(message: &str) -> String {
+    // Diagnostic URLs can contain passkeys or query tokens; omit their full
+    // value, as well as common credential fields and authorization headers.
+    static SENSITIVE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let regex = SENSITIVE.get_or_init(|| regex::Regex::new(r"(?i)https?://[^\s]+|bearer\s+[^\s]+|(?:api[_-]?key|token|password|authorization)\s*[:=]\s*[^\s,;]+").unwrap());
+    let bounded: String = message
+        .chars()
+        .take(512)
+        .filter(|c| !c.is_control())
+        .collect();
+    regex.replace_all(&bounded, "[redacted]").into_owned()
+}
+
 fn domain_matches(host: &str, allowed: &str) -> bool {
+    // Only an explicit full wildcard opts out of domain scoping; transport
+    // scheme, credentials, DNS pinning and public-IP checks still apply.
+    if allowed == "*" {
+        return !host.is_empty();
+    }
     let allowed = allowed
         .trim_start_matches("*.")
         .trim_end_matches('.')
@@ -306,7 +579,7 @@ fn domain_matches(host: &str, allowed: &str) -> bool {
     !allowed.is_empty() && (host == allowed || host.ends_with(&format!(".{allowed}")))
 }
 
-fn is_public_ip(ip: IpAddr) -> bool {
+pub(crate) fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
             let [a, b, c, _] = ip.octets();
@@ -407,10 +680,7 @@ impl ProviderHost for MemoryProviderHost {
     }
 
     fn log(&self, message: &str) {
-        eprintln!(
-            "nova provider: {}",
-            message.chars().take(512).collect::<String>()
-        );
+        eprintln!("nova provider: {}", sanitize_log(message));
     }
 }
 
@@ -423,6 +693,113 @@ pub(crate) fn session_state() -> Arc<MemoryProviderHost> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn soft_request_deadline_is_bounded_by_operation_and_minimum_timeout() {
+        let started = Instant::now();
+        let operation = started + Duration::from_secs(8);
+        let request: HttpRequest =
+            serde_json::from_str(r#"{"url":"https://example.com","timeoutMs":1500}"#).unwrap();
+        let deadline = request_deadline(operation, request.timeout_ms);
+        assert!(deadline.duration_since(started) >= Duration::from_millis(1500));
+        assert!(deadline.duration_since(started) < Duration::from_secs(2));
+        assert_eq!(request_deadline(operation, None), operation);
+        assert_eq!(request_deadline(operation, Some(60000)), operation);
+        assert!(
+            request_deadline(operation, Some(0)).duration_since(started)
+                >= Duration::from_millis(100)
+        );
+    }
+
+    #[test]
+    fn post_and_authenticated_redirects_cannot_change_origin() {
+        let current = Url::parse("https://example.com/api").unwrap();
+        let same = Url::parse("https://example.com/other").unwrap();
+        let other = Url::parse("https://cdn.example.com/other").unwrap();
+        assert!(redirect_allowed(&current, &same, true));
+        assert!(!redirect_allowed(&current, &other, true));
+        assert!(redirect_allowed(&current, &other, false));
+    }
+
+    #[test]
+    fn request_encodings_are_bounded_and_multipart_cannot_inject_parts() {
+        let mut request = HttpRequest {
+            url: "https://example.com".into(),
+            timeout_ms: None,
+            response_type: HttpResponseType::Text,
+            method: "POST".into(),
+            headers: BTreeMap::new(),
+            body: Some(HttpBody::Multipart(BTreeMap::from([
+                ("magnet".into(), "magnet:test".into()),
+                ("add_only_if_cached".into(), "true".into()),
+            ]))),
+        };
+        let (body, content_type) = request.encoded_body().unwrap().unwrap();
+        let body = String::from_utf8(body).unwrap();
+        assert!(content_type.starts_with("multipart/form-data"));
+        assert!(body.contains("name=\"add_only_if_cached\"\r\n\r\ntrue\r\n"));
+        request.body = Some(HttpBody::Multipart(BTreeMap::from([(
+            "bad\r\nfield".into(),
+            "value".into(),
+        )])));
+        assert!(request.validate().is_err());
+        request.body = Some(HttpBody::Text("x".repeat(MAX_REQUEST_BODY + 1)));
+        assert!(request.validate().is_err());
+        request.body = Some(HttpBody::Urlencoded(BTreeMap::from([(
+            "a".into(),
+            "x & y".into(),
+        )])));
+        assert_eq!(request.encoded_body().unwrap().unwrap().0, b"a=x+%26+y");
+    }
+
+    #[test]
+    fn cancellation_prevents_network_and_diagnostics_hide_credentials() {
+        let host = ScopedHttpHost::new(
+            MemoryProviderHost::new(),
+            vec!["example.com".into()],
+            Duration::from_secs(1),
+            1024,
+            0,
+            1,
+        )
+        .with_cancellation(Arc::new(|| true));
+        assert!(
+            host.get("https://example.com", &BTreeMap::new())
+                .unwrap_err()
+                .0
+                .contains("cancelled")
+        );
+        let message = sanitize_log(
+            "failed https://api.example.com/?key=secret Bearer topsecret token=hidden",
+        );
+        assert!(!message.contains("secret"));
+        assert!(!message.contains("hidden"));
+    }
+
+    #[test]
+    fn explicit_wildcard_keeps_transport_and_public_address_policy() {
+        assert!(domain_matches("independent.example", "*"));
+        assert!(!domain_matches("independent.example", "scoped.example"));
+        assert!(!domain_matches("independent.example", "*."));
+        let host = ScopedHttpHost::new(
+            MemoryProviderHost::new(),
+            vec!["*".into()],
+            Duration::from_secs(1),
+            1024,
+            0,
+            8,
+        );
+        for url in [
+            "http://independent.example/",
+            "https://user:secret@independent.example/",
+            "https://independent.example:444/",
+            "https://127.0.0.1/",
+            "https://10.0.0.1/",
+            "https://[::1]/",
+        ] {
+            assert!(host.get(url, &BTreeMap::new()).is_err());
+        }
+    }
 
     #[test]
     fn public_address_policy_blocks_local_and_reserved_networks() {

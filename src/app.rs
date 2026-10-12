@@ -192,6 +192,14 @@ pub(crate) enum StreamSource {
         info_hash: String,
         file_idx: Option<u32>,
     },
+    /// An installed bundled provider owns this non-secret selection token.
+    /// A fresh playable URL is requested only after the user chooses the row.
+    Resolver {
+        provider_url: String,
+        token: String,
+        settings_generation: u64,
+        addon_generation: u64,
+    },
     /// Nothing playable here (e.g. a YouTube-only stream with no direct URL).
     Unsupported,
     /// A completed local download represented in the stream list.
@@ -322,6 +330,8 @@ struct Shared {
     stream_addons: Vec<String>,
     /// Labels of the addons still being queried (pills show a spinner).
     stream_pending: Vec<String>,
+    /// Bounded semantic diagnostics returned by bundled providers only.
+    stream_warnings: HashMap<String, Vec<(String, String)>>,
     /// A one-off, localized stream hint. Derived stream-list hints are
     /// rebuilt from `stream_pending`/`stream_all`; this stores only hints whose
     /// source is an action or status outside that model.
@@ -396,6 +406,7 @@ enum StreamHint {
     LoadingEpisodes(usize),
     Playing(String),
     P2pUnavailable(String),
+    ResolverFailure(String),
 }
 
 impl StreamHint {
@@ -405,6 +416,7 @@ impl StreamHint {
             Self::LoadingEpisodes(count) => text::loading_episodes(*count),
             Self::Playing(name) => text::playing(name),
             Self::P2pUnavailable(error) => text::p2p_unavailable(error),
+            Self::ResolverFailure(message) => text::tr(message).to_owned(),
         }
     }
 }
@@ -723,6 +735,7 @@ mod onboarding;
 mod page_artwork;
 mod playback;
 mod playback_preferences;
+mod plugin_settings;
 mod posters;
 mod run;
 mod settings;

@@ -19,9 +19,9 @@ pub use generated::*;
 pub use nova_ui_shared::{
     AddonRow, CalCell, CalendarDay, CalendarRelease, CategoryRow, ContinueRow, DownloadEpisode,
     DownloadGroup, DownloadRow, EpisodeRow, HomeCatalogCard, HomeCatalogRow, HomeCatalogSection,
-    LicenseSource, MediaCard, SeasonCard, SettingSyncInfo, SheetItem, StreamRow, SyncInvite,
-    SyncPeer, ThemePalette, TrackRow, TrackingAccountRow, TrackingCandidateRow, TrackingLinkRow,
-    TrackingMappingRow, TrackingSetupRow, UpcomingRow,
+    LicenseSource, MediaCard, PluginSettingRow, SeasonCard, SettingSyncInfo, SheetItem, StreamRow,
+    SyncInvite, SyncPeer, ThemePalette, TrackRow, TrackingAccountRow, TrackingCandidateRow,
+    TrackingLinkRow, TrackingMappingRow, TrackingSetupRow, UpcomingRow,
 };
 // Native page callbacks route through AppWindow without keeping it alive.
 macro_rules! forward_app_callbacks {

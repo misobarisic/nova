@@ -278,6 +278,9 @@ impl Bridge {
             app.set_torrent_max_mb(settings.max_mb as f32);
             app.set_torrent_down_limit(settings.down_limit_kbps as f32);
             app.set_torrent_no_cache(settings.no_cache);
+            if app.get_stream_selector_open() {
+                self.apply_stream_filter();
+            }
         }
         self.refresh_torrent_disk_usage();
     }
@@ -986,6 +989,7 @@ impl Bridge {
             state.stream_all.clear();
             state.stream_addons.clear();
             state.stream_pending.clear();
+            state.stream_warnings.clear();
             state.stream_filter = 0;
         }
         if let Some(app) = self.app() {

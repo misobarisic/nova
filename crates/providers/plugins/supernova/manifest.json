@@ -1,0 +1,26 @@
+{
+  "formatVersion": 1,
+  "id": "supernova",
+  "name": "Supernova",
+  "version": "0.1.0",
+  "entry": "index.js",
+  "permissions": {
+    "domains": ["*"],
+    "httpPost": true,
+    "ephemeralPlaybackCredentials": [
+      {"setting":"torbox.apiKey","domains":["*"],"queryParameters":["token"],"pathPrefix":"/dld/"}
+    ]
+  },
+  "limits": { "requestTimeoutMs": 20000, "responseBytes": 2097152, "redirects": 3, "requestsPerOperation": 24 },
+  "capabilities": { "contextualStreams": true, "deferredStreams": true },
+  "configuration": [
+    {"key":"sources.nyaa","label":"Nyaa","type":"boolean","default":false},
+    {"key":"sources.animetosho","label":"AnimeTosho","type":"boolean","default":false},
+    {"key":"sources.apibay","label":"APIBay (movies and TV)","type":"boolean","default":false},
+    {"key":"quality.preferred","label":"Preferred quality","type":"choice","default":"1080p","options":[{"value":"any","label":"Any"},{"value":"720p","label":"720p"},{"value":"1080p","label":"1080p"},{"value":"2160p","label":"2160p / 4K"}]},
+    {"key":"seeders.minimum","label":"Minimum seeders","type":"integer","default":0,"min":0,"max":10000},
+    {"key":"playback.mode","label":"Playback mode","type":"choice","default":"direct","options":[{"value":"direct","label":"Direct P2P"},{"value":"preferred","label":"Prefer cached TorBox"},{"value":"cached","label":"Cached TorBox only"}]},
+    {"key":"torbox.enabled","label":"Use TorBox","type":"boolean","default":false},
+    {"key":"torbox.apiKey","label":"TorBox API key","type":"secret","default":""}
+  ]
+}

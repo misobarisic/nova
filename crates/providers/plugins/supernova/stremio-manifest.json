@@ -1,0 +1,10 @@
+{
+  "id": "nova.supernova",
+  "name": "Supernova",
+  "version": "0.1.0",
+  "description": "On-device torrent discovery with optional cached-only TorBox playback. Enable and configure permitted sources first.",
+  "types": ["movie", "series"],
+  "resources": ["stream"],
+  "catalogs": [],
+  "behaviorHints": {"configurable": true}
+}

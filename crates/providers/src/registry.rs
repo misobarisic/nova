@@ -1,3 +1,4 @@
+use crate::models::ProviderResolveError;
 use crate::{
     CatalogRequest, ContentProvider, Episode, MediaItem, MediaRequest, PluginManifest,
     PluginRuntime, ProviderCatalog, ProviderDescriptor, ProviderError, ProviderFuture,
@@ -15,6 +16,7 @@ use std::{
 use url::Url;
 
 pub const ANIKOTO_PROVIDER_URL: &str = "nova-provider://anikoto";
+pub const SUPERNOVA_PROVIDER_URL: &str = "nova-provider://supernova";
 const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
 
 /// User-selected contributions; metadata includes catalog browsing and search.
@@ -89,20 +91,44 @@ fn manifest_with_capabilities(
 pub struct BundledProvider {
     pub url: &'static str,
     pub registration_key: &'static str,
+    pub default_enabled: bool,
     pub plugin_manifest: &'static str,
     pub addon_manifest: &'static str,
     pub source: &'static str,
 }
 
 pub fn bundled_providers() -> &'static [BundledProvider] {
-    static PROVIDERS: &[BundledProvider] = &[BundledProvider {
-        url: ANIKOTO_PROVIDER_URL,
-        registration_key: "providers:bundled:v1",
-        plugin_manifest: include_str!("../plugins/anikoto/manifest.json"),
-        addon_manifest: include_str!("../plugins/anikoto/stremio-manifest.json"),
-        source: include_str!("../plugins/anikoto/index.js"),
-    }];
+    static PROVIDERS: &[BundledProvider] = &[
+        BundledProvider {
+            url: ANIKOTO_PROVIDER_URL,
+            registration_key: "providers:bundled:v1",
+            default_enabled: true,
+            plugin_manifest: include_str!("../plugins/anikoto/manifest.json"),
+            addon_manifest: include_str!("../plugins/anikoto/stremio-manifest.json"),
+            source: include_str!("../plugins/anikoto/index.js"),
+        },
+        BundledProvider {
+            url: SUPERNOVA_PROVIDER_URL,
+            registration_key: "providers:supernova:v1",
+            default_enabled: false,
+            plugin_manifest: include_str!("../plugins/supernova/manifest.json"),
+            addon_manifest: include_str!("../plugins/supernova/stremio-manifest.json"),
+            source: include_str!(concat!(env!("OUT_DIR"), "/supernova.js")),
+        },
+    ];
     PROVIDERS
+}
+
+pub fn provider_settings_schema(url: &str) -> Option<Vec<crate::plugin_settings::SettingField>> {
+    let source = bundled_providers()
+        .iter()
+        .find(|p| p.url == url.trim_end_matches('/'))?;
+    let manifest: PluginManifest = serde_json::from_str(source.plugin_manifest).ok()?;
+    (!manifest.configuration.is_empty()).then_some(manifest.configuration)
+}
+
+pub fn supports_provider_configuration(url: &str) -> bool {
+    supports_capability_config(url) || provider_settings_schema(url).is_some()
 }
 
 pub fn provider_owns_id(provider_url: &str, id: &str) -> bool {
@@ -154,13 +180,26 @@ pub fn stream_lookup_url(
 }
 
 fn validate_stream_lookup(request: &StreamLookupRequest) -> Result<(), ProviderHostError> {
-    if request.media_type != "series"
+    let episode_context_valid = match request.media_type.as_str() {
+        "series" => {
+            request.season.is_some_and(|n| (1..=100).contains(&n))
+                && request.episode.is_some_and(|n| (1..=10_000).contains(&n))
+        }
+        "movie" => {
+            request.season.is_none()
+                && request.episode.is_none()
+                && request.absolute_episode.is_none()
+                && request.season_episode_count.is_none()
+                && request.series_episode_count.is_none()
+                && request.episode_title.is_none()
+        }
+        _ => false,
+    };
+    if !episode_context_valid
         || request.media_id.is_empty()
         || request.title.trim().is_empty()
         || request.title.len() > 1024
         || request.media_id.len() > 1024
-        || !(1..=100).contains(&request.season)
-        || !(1..=10_000).contains(&request.episode)
         || request
             .season_episode_count
             .is_some_and(|n| !(1..=10_000).contains(&n))
@@ -249,11 +288,29 @@ struct JsProvider {
     descriptor: ProviderDescriptor,
     runtime: PluginRuntime,
     config: ProviderCapabilities,
+    settings: Result<crate::plugin_settings::SettingsSnapshot, String>,
+    track_settings: bool,
+    secret_keys: Vec<String>,
+    playback_credentials: Vec<crate::runtime::EphemeralPlaybackCredential>,
 }
 
 impl JsProvider {
     fn new(manifest: PluginManifest, addon: Manifest, source: &str) -> Self {
+        let settings =
+            crate::plugin_settings::settings_snapshot(&manifest.id, &manifest.configuration)
+                .map_err(|e| e.to_string());
+        let track_settings = !manifest.configuration.is_empty();
+        let secret_keys = manifest
+            .configuration
+            .iter()
+            .filter(|field| field.kind == "secret")
+            .map(|field| field.key.clone())
+            .collect();
         Self {
+            settings,
+            track_settings,
+            secret_keys,
+            playback_credentials: manifest.permissions.ephemeral_playback_credentials.clone(),
             descriptor: ProviderDescriptor {
                 id: manifest.id.clone(),
                 name: manifest.name.clone(),
@@ -281,8 +338,185 @@ impl JsProvider {
         host: Arc<dyn ProviderHost>,
         mut request: Value,
     ) -> Result<Value, ProviderError> {
+        let settings = self
+            .settings
+            .as_ref()
+            .map_err(|error| ProviderError::Host(error.clone()))?;
+        let current = || {
+            !self.track_settings
+                || settings.generation == crate::plugin_settings::settings_generation()
+        };
+        if !current() {
+            return Err(ProviderError::Host("provider settings changed".into()));
+        }
         request["config"] = serde_json::to_value(self.config).expect("capabilities serialize");
-        self.runtime.invoke(host, &request)
+        request["settings"] = json!(settings.values);
+        request["settingsGeneration"] = json!(settings.generation);
+        let value = self.runtime.invoke(host, &request)?;
+        if !current() {
+            return Err(ProviderError::Host("provider settings changed".into()));
+        }
+        Ok(value)
+    }
+    fn contains_private_setting(&self, value: &str) -> bool {
+        let Ok(settings) = &self.settings else {
+            return false;
+        };
+        self.secret_keys
+            .iter()
+            .filter_map(|key| settings.values.get(key).and_then(Value::as_str))
+            .flat_map(|secret| [secret, secret.trim()])
+            .filter(|secret| !secret.is_empty())
+            .any(|secret| {
+                value.contains(secret)
+                    || percent_decode_str(value)
+                        .decode_utf8_lossy()
+                        .contains(secret)
+                    || percent_decode_str(&value.replace('+', " "))
+                        .decode_utf8_lossy()
+                        .contains(secret)
+            })
+    }
+    fn value_contains_private_setting(&self, value: &Value) -> bool {
+        match value {
+            Value::String(value) => self.contains_private_setting(value),
+            Value::Array(values) => values
+                .iter()
+                .any(|value| self.value_contains_private_setting(value)),
+            Value::Object(fields) => fields.iter().any(|(key, value)| {
+                self.contains_private_setting(key) || self.value_contains_private_setting(value)
+            }),
+            _ => false,
+        }
+    }
+    fn sensitive_playback_url_allowed(&self, raw: &str) -> bool {
+        let Ok(url) = Url::parse(raw) else {
+            return false;
+        };
+        if url.scheme() != "https"
+            || url.port().is_some_and(|port| port != 443)
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.fragment().is_some()
+        {
+            return false;
+        }
+        let Some(url::Host::Domain(host)) = url.host() else {
+            return false;
+        };
+        let host = host.to_ascii_lowercase();
+        let Ok(settings) = &self.settings else {
+            return false;
+        };
+        if self.playback_credentials.len() > 16 {
+            return false;
+        }
+        self.playback_credentials.iter().any(|policy| {
+            if !self.secret_keys.contains(&policy.setting)
+                || policy.domains.is_empty()
+                || policy.domains.len() > 16
+                || policy.query_parameters.is_empty()
+                || policy.query_parameters.len() > 16
+                || !policy.path_prefix.starts_with('/')
+                || !policy.path_prefix.ends_with('/')
+                || policy.path_prefix.len() > 256
+                || !url.path().starts_with(&policy.path_prefix)
+            {
+                return false;
+            }
+            if !policy.domains.iter().any(|domain| {
+                if domain == "*" {
+                    return true;
+                }
+                let domain = domain
+                    .strip_prefix("*.")
+                    .unwrap_or(domain)
+                    .to_ascii_lowercase();
+                !domain.is_empty()
+                    && domain.len() <= 253
+                    && !domain.contains(['/', ':', '@', '?', '#', '%'])
+                    && (host == domain || host.ends_with(&format!(".{domain}")))
+            }) {
+                return false;
+            }
+            let Some(secret) = settings
+                .values
+                .get(&policy.setting)
+                .and_then(Value::as_str)
+                .filter(|secret| !secret.is_empty())
+            else {
+                return false;
+            };
+            let mut pairs: Vec<(String, String)> = url
+                .query_pairs()
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .collect();
+            let mut accepted = 0;
+            for (key, value) in &mut pairs {
+                if policy.query_parameters.contains(key) {
+                    if value != secret && (secret.trim().is_empty() || value != secret.trim()) {
+                        return false;
+                    }
+                    accepted += 1;
+                    value.clear();
+                }
+            }
+            if accepted != 1 {
+                return false;
+            }
+            let mut public_url = url.clone();
+            public_url.set_query(None);
+            public_url.query_pairs_mut().extend_pairs(pairs);
+            !self.contains_private_setting(public_url.as_str())
+        })
+    }
+    fn resolve_stream(
+        &self,
+        host: Arc<dyn ProviderHost>,
+        token: &str,
+    ) -> Result<Value, ProviderResolveError> {
+        if self.contains_private_setting(token) {
+            return Err(ProviderResolveError::generic());
+        }
+        let value = self.call(host, json!({"op":"resolveStream", "token":token}))?;
+        if let Some(error) = value.get("error") {
+            let error: ProviderResolveError = serde_json::from_value(error.clone())
+                .map_err(|_| ProviderResolveError::generic())?;
+            return Err(
+                if error.validate()
+                    && !self.contains_private_setting(&error.message)
+                    && !self.contains_private_setting(&error.code)
+                {
+                    error
+                } else {
+                    ProviderResolveError::generic()
+                },
+            );
+        }
+        if contains_sensitive_playback_flag(&value) {
+            return Err(ProviderResolveError::generic());
+        }
+        let mut public_fields = value.clone();
+        if let Some(fields) = public_fields.as_object_mut() {
+            fields.remove("url");
+        }
+        if self.value_contains_private_setting(&public_fields) {
+            return Err(ProviderResolveError::generic());
+        }
+        let stream: ProviderStream =
+            serde_json::from_value(value).map_err(|_| ProviderResolveError::generic())?;
+        let sensitive = self.contains_private_setting(&stream.url);
+        if stream.resolver.is_some()
+            || (sensitive && !self.sensitive_playback_url_allowed(&stream.url))
+        {
+            return Err(ProviderResolveError::generic());
+        }
+        let mut response =
+            stream_to_stremio(&stream, &self.descriptor.id).map_err(ProviderResolveError::from)?;
+        if sensitive {
+            response["novaSensitivePlayback"] = json!(true);
+        }
+        Ok(response)
     }
     fn protocol_response(
         &self,
@@ -302,6 +536,13 @@ impl JsProvider {
                     })?
                     .iter()
                     .map(|value| {
+                        if contains_sensitive_playback_flag(value)
+                            || self.value_contains_private_setting(value)
+                        {
+                            return Err(ProviderError::InvalidData(
+                                "provider catalog contains private settings".into(),
+                            ));
+                        }
                         let item: MediaItem = serde_json::from_value(value.clone())
                             .map_err(|error| ProviderError::InvalidData(error.to_string()))?;
                         if item.provider_id != self.descriptor.id || item.source_id.is_empty() {
@@ -317,6 +558,13 @@ impl JsProvider {
             ProtocolRequest::Meta { source_id } => {
                 let result =
                     self.call(host.clone(), json!({"op":"details", "sourceId":source_id}))?;
+                if contains_sensitive_playback_flag(&result)
+                    || self.value_contains_private_setting(&result)
+                {
+                    return Err(ProviderError::InvalidData(
+                        "provider details contain private settings".into(),
+                    ));
+                }
                 let item: MediaItem =
                     serde_json::from_value(result.get("media").cloned().unwrap_or(Value::Null))
                         .map_err(|error| ProviderError::InvalidData(error.to_string()))?;
@@ -375,35 +623,207 @@ impl JsProvider {
                     _ => unreachable!(),
                 };
                 let result = self.call(host, request)?;
-                let streams = result
+                let stream_rows = result
                     .as_array()
-                    .ok_or_else(|| ProviderError::InvalidData("provider stream result was not a list".into()))?
+                    .or_else(|| result.get("streams").and_then(Value::as_array))
+                    .ok_or_else(|| {
+                        ProviderError::InvalidData("provider stream result was not a list".into())
+                    })?;
+                let streams = stream_rows
                     .iter()
                     .map(|value| {
+                        if contains_sensitive_playback_flag(value)
+                            || self.value_contains_private_setting(value)
+                        {
+                            return Err(ProviderError::InvalidData(
+                                "provider stream contains private settings".into(),
+                            ));
+                        }
                         let stream: ProviderStream = serde_json::from_value(value.clone())
                             .map_err(|error| ProviderError::InvalidData(error.to_string()))?;
-                        let headers = stream
-                            .headers
-                            .iter()
-                            .map(|(name, value)| (name.clone(), Value::String(value.clone())))
-                            .collect::<serde_json::Map<_, _>>();
-                        Ok(json!({
-                            "name":stream.title,
-                            "description":stream.description,
-                            "url":stream.url,
-                            "subtitles":stream.subtitles.iter().enumerate().map(|(index, subtitle)| json!({
-                                "id":index.to_string(),
-                                "url":subtitle.url,
-                                "lang":subtitle.language,
-                            })).collect::<Vec<_>>(),
-                            "behaviorHints":{"proxyHeaders":{"request":headers}},
-                        }))
+                        stream_to_stremio(&stream, &self.descriptor.id)
                     })
                     .collect::<Result<Vec<_>, ProviderError>>()?;
-                Ok(json!({"streams":streams}))
+                let mut response = json!({"streams":streams});
+                if let Some(warnings) = result.get("warnings") {
+                    let warnings = warnings
+                        .as_array()
+                        .filter(|warnings| warnings.len() <= 16)
+                        .ok_or_else(|| {
+                            ProviderError::InvalidData("invalid provider warnings".into())
+                        })?;
+                    let warnings = warnings
+                        .iter()
+                        .map(|warning| {
+                            let message = warning
+                                .as_str()
+                                .or_else(|| warning.get("message").and_then(Value::as_str))
+                                .ok_or_else(|| {
+                                    ProviderError::InvalidData("invalid provider warning".into())
+                                })?;
+                            if warning
+                                .get("source")
+                                .is_some_and(|source| !source.is_null() && !source.is_string())
+                            {
+                                return Err(ProviderError::InvalidData(
+                                    "invalid provider warning source".into(),
+                                ));
+                            }
+                            let source = warning.get("source").and_then(Value::as_str);
+                            if message.trim().is_empty()
+                                || message.len() > 256
+                                || message.chars().any(char::is_control)
+                                || source.is_some_and(|source| {
+                                    source.len() > 64 || source.chars().any(char::is_control)
+                                })
+                            {
+                                return Err(ProviderError::InvalidData(
+                                    "invalid provider warning".into(),
+                                ));
+                            }
+                            if self.contains_private_setting(message)
+                                || source
+                                    .is_some_and(|source| self.contains_private_setting(source))
+                            {
+                                return Ok(json!({"message":"A provider source is unavailable."}));
+                            }
+                            Ok(match source {
+                                Some(source) => json!({"source":source,"message":message}),
+                                None => json!({"message":message}),
+                            })
+                        })
+                        .collect::<Result<Vec<_>, ProviderError>>()?;
+                    if !warnings.is_empty() {
+                        response["novaWarnings"] = json!(warnings);
+                    }
+                }
+                Ok(response)
             }
         }
     }
+}
+
+fn contains_sensitive_playback_flag(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => fields.iter().any(|(key, value)| {
+            key == "novaSensitivePlayback"
+                || key == "nova_sensitive_playback"
+                || contains_sensitive_playback_flag(value)
+        }),
+        Value::Array(values) => values.iter().any(contains_sensitive_playback_flag),
+        _ => false,
+    }
+}
+
+fn stream_to_stremio(stream: &ProviderStream, provider_id: &str) -> Result<Value, ProviderError> {
+    stream.validate(provider_id)?;
+    let mut result = json!({
+        "name": stream.title,
+        "description": stream.description,
+        "subtitles": stream.subtitles.iter().enumerate().map(|(index, subtitle)| json!({
+            "id":index.to_string(), "url":subtitle.url, "lang":subtitle.language,
+        })).collect::<Vec<_>>(),
+        "behaviorHints":{"proxyHeaders":{"request":stream.headers}},
+    });
+    if !stream.url.is_empty() {
+        result["url"] = json!(stream.url);
+    }
+    if let Some(hash) = &stream.info_hash {
+        result["infoHash"] = json!(hash.to_ascii_lowercase());
+    }
+    if let Some(index) = stream.file_idx {
+        result["fileIdx"] = json!(index);
+    }
+    if let Some(resolver) = &stream.resolver {
+        result["novaResolver"] = json!({"providerId":resolver.provider_id, "token":resolver.token});
+    }
+    if let Some(size) = stream.size {
+        result["size"] = json!(size);
+    }
+    if let Some(seeders) = stream.seeders {
+        result["seeders"] = json!(seeders);
+    }
+    if let Some(source) = &stream.source {
+        result["source"] = json!(source);
+    }
+    Ok(result)
+}
+
+/// Resolves a deferred token only inside its registered owner's sandbox. The
+/// caller supplies cancellation tied to the current UI request generation.
+pub fn resolve_provider_stream(
+    provider_url: &str,
+    token: &str,
+    timeout: Duration,
+    cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+) -> Result<addons::Stream, ProviderResolveError> {
+    if cancelled() {
+        return Err(ProviderResolveError::cancelled());
+    }
+    let definition = bundled_providers()
+        .iter()
+        .find(|p| p.url == provider_url.trim_end_matches('/'))
+        .ok_or_else(ProviderResolveError::generic)?;
+    if token.is_empty() || token.len() > 8192 {
+        return Err(ProviderResolveError::generic());
+    }
+    let config = provider_capabilities(definition.url).unwrap_or_default();
+    if !config.streams {
+        return Err(ProviderResolveError::generic());
+    }
+    let mut manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest)
+        .map_err(|_| ProviderResolveError::generic())?;
+    manifest.limits.request_timeout_ms = manifest
+        .limits
+        .resolver_timeout_ms
+        .min(timeout.as_millis().clamp(1, 60_000) as u64);
+    let addon = serde_json::from_str(definition.addon_manifest)
+        .map_err(|_| ProviderResolveError::generic())?;
+    let host = Arc::new(
+        ScopedHttpHost::new(
+            crate::host::session_state(),
+            manifest.permissions.domains.clone(),
+            Duration::from_millis(manifest.limits.request_timeout_ms),
+            manifest.limits.response_bytes.min(RESPONSE_LIMIT),
+            manifest.limits.redirects,
+            manifest.limits.requests_per_operation,
+        )
+        .with_cancellation(cancelled.clone()),
+    );
+    let mut provider = JsProvider::new(manifest, addon, definition.source);
+    provider.config = config;
+    let result = provider.resolve_stream(host, token);
+    if cancelled() {
+        return Err(ProviderResolveError::cancelled());
+    }
+    let value = result?;
+    serde_json::from_value(value).map_err(|_| ProviderResolveError::generic())
+}
+
+/// The opt-in live test supplies an immutable in-memory credential snapshot;
+/// validation follows the production final-only path without saving settings.
+#[cfg(test)]
+pub(crate) fn resolve_with_snapshot_for_test(
+    host: Arc<dyn ProviderHost>,
+    token: &str,
+    values: serde_json::Map<String, Value>,
+) -> Result<Value, ProviderResolveError> {
+    let definition = bundled_providers()
+        .iter()
+        .find(|provider| provider.url == SUPERNOVA_PROVIDER_URL)
+        .ok_or_else(ProviderResolveError::generic)?;
+    let mut manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest)
+        .map_err(|_| ProviderResolveError::generic())?;
+    manifest.limits.request_timeout_ms = manifest.limits.resolver_timeout_ms;
+    let addon: Manifest = serde_json::from_str(definition.addon_manifest)
+        .map_err(|_| ProviderResolveError::generic())?;
+    let mut provider = JsProvider::new(manifest, addon, definition.source);
+    provider.settings = Ok(crate::plugin_settings::SettingsSnapshot {
+        values,
+        generation: crate::plugin_settings::settings_generation(),
+    });
+    provider.track_settings = false;
+    provider.resolve_stream(host, token)
 }
 
 impl ContentProvider for JsProvider {
@@ -482,8 +902,13 @@ impl ContentProvider for JsProvider {
                 host,
                 json!({"op":"streams", "episodeId":request.episode_id}),
             )?;
-            serde_json::from_value(value)
-                .map_err(|error| ProviderError::InvalidData(error.to_string()))
+            let rows = value.get("streams").cloned().unwrap_or(value);
+            let streams: Vec<ProviderStream> = serde_json::from_value(rows)
+                .map_err(|error| ProviderError::InvalidData(error.to_string()))?;
+            for stream in &streams {
+                stream.validate(&self.descriptor.id)?;
+            }
+            Ok(streams)
         })
     }
 }
@@ -541,7 +966,9 @@ fn parse_protocol_request(
                     .to_owned(),
             })
         }
-        Some("resolve") if segments.len() == 3 && segments[1] == "series" => {
+        Some("resolve")
+            if segments.len() == 3 && matches!(segments[1].as_str(), "movie" | "series") =>
+        {
             let data = segments[2].strip_suffix(".json").unwrap_or(&segments[2]);
             if data.len() > 8192 {
                 return Err(ProviderHostError(
@@ -551,6 +978,11 @@ fn parse_protocol_request(
             let request: StreamLookupRequest =
                 serde_json::from_str(data).map_err(|error| ProviderHostError(error.to_string()))?;
             validate_stream_lookup(&request)?;
+            if request.media_type != segments[1] {
+                return Err(ProviderHostError(
+                    "source lookup media type mismatch".into(),
+                ));
+            }
             Ok(ProtocolRequest::Lookup { request })
         }
         _ => Err(ProviderHostError(

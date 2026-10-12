@@ -150,3 +150,18 @@ msgstr "Button corner radius"
 
 msgid "Choose how rounded buttons look. Soft is the default."
 msgstr "Choose how rounded buttons look. Soft is the default."
+
+msgid "Clear plugin cache"
+msgstr ""
+
+msgid "Remove configuration everywhere"
+msgstr ""
+
+msgid "Remove this configuration on all synced devices?"
+msgstr ""
+
+msgid "Remove configuration"
+msgstr ""
+
+msgid "Save"
+msgstr ""

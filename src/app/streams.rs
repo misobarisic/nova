@@ -159,6 +159,78 @@ pub(crate) fn stream_source(s: &addons::Stream) -> StreamSource {
     StreamSource::Unsupported
 }
 
+/// Resolver envelopes from ordinary remote addons are deliberately ignored.
+/// Only the installed bundled owner may route an action into its sandbox.
+pub(crate) fn stream_source_for_addon(
+    stream: &addons::Stream,
+    owner_url: &str,
+    addon_generation: u64,
+    settings_generation: u64,
+) -> StreamSource {
+    if stream.web_url().is_some() || stream.info_hash.is_some() {
+        return stream_source(stream);
+    }
+    let Some(raw) = stream.extra.get("novaResolver") else {
+        return StreamSource::Unsupported;
+    };
+    let Some(provider) = raw.get("providerId").and_then(serde_json::Value::as_str) else {
+        return StreamSource::Unsupported;
+    };
+    let Some(token) = raw
+        .get("token")
+        .and_then(serde_json::Value::as_str)
+        .filter(|token| !token.is_empty() && token.len() <= 8192)
+    else {
+        return StreamSource::Unsupported;
+    };
+    let url = format!("nova-provider://{provider}");
+    if owner_url.trim_end_matches('/') != url
+        || !nova_providers::bundled_providers()
+            .iter()
+            .any(|definition| definition.url == url)
+    {
+        return StreamSource::Unsupported;
+    }
+    StreamSource::Resolver {
+        provider_url: url,
+        token: token.into(),
+        settings_generation,
+        addon_generation,
+    }
+}
+
+/// A remote Stremio addon cannot inject internal provider status messages.
+pub(crate) fn provider_stream_warnings(bytes: &[u8], owner_url: &str) -> Vec<(String, String)> {
+    if !nova_providers::bundled_providers()
+        .iter()
+        .any(|provider| provider.url == owner_url)
+    {
+        return vec![];
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return vec![];
+    };
+    value
+        .get("novaWarnings")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(16)
+        .filter_map(|row| {
+            let message = row.get("message")?.as_str()?;
+            let source = row
+                .get("source")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            (!message.is_empty()
+                && message.len() <= 256
+                && source.len() <= 64
+                && !message.chars().chain(source.chars()).any(char::is_control))
+            .then(|| (source.into(), message.into()))
+        })
+        .collect()
+}
+
 fn stream_subtitle_files(stream: &addons::Stream) -> Vec<String> {
     let mut total_bytes = 0usize;
     stream

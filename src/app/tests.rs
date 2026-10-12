@@ -1468,6 +1468,42 @@ mod stream_source_tests {
     }
 
     #[test]
+    fn only_the_bundled_owner_can_supply_a_deferred_resolver_or_warnings() {
+        let mut row = stream(None, None, None, None);
+        row.extra.insert(
+            "novaResolver".into(),
+            serde_json::json!({"providerId":"supernova","token":"non-secret-selection"}),
+        );
+        assert!(matches!(stream_source(&row), StreamSource::Unsupported));
+        assert!(matches!(
+            stream_source_for_addon(&row, "https://example.com", 3, 9),
+            StreamSource::Unsupported
+        ));
+        assert!(matches!(
+            stream_source_for_addon(&row, nova_providers::ANIKOTO_PROVIDER_URL, 3, 9),
+            StreamSource::Unsupported
+        ));
+        let StreamSource::Resolver {
+            provider_url,
+            token,
+            settings_generation,
+            addon_generation,
+        } = stream_source_for_addon(&row, nova_providers::SUPERNOVA_PROVIDER_URL, 3, 9)
+        else {
+            panic!("registered owner must retain resolver");
+        };
+        assert_eq!(provider_url, nova_providers::SUPERNOVA_PROVIDER_URL);
+        assert_eq!(token, "non-secret-selection");
+        assert_eq!((addon_generation, settings_generation), (3, 9));
+        let bytes = br#"{"novaWarnings":[{"source":"Nyaa","message":"Source unavailable."}]}"#;
+        assert!(provider_stream_warnings(bytes, "https://example.com").is_empty());
+        assert_eq!(
+            provider_stream_warnings(bytes, nova_providers::SUPERNOVA_PROVIDER_URL),
+            vec![("Nyaa".into(), "Source unavailable.".into())]
+        );
+    }
+
+    #[test]
     fn direct_url_maps_to_url() {
         match stream_source(&stream(None, Some("https://x/y.m3u8"), None, None)) {
             StreamSource::Url(u) => assert_eq!(u, "https://x/y.m3u8"),

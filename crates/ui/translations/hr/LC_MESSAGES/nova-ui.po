@@ -2249,3 +2249,18 @@ msgstr "Razlučivost slika"
 
 msgid "Limit the longest side without stretching or enlarging images. Original keeps the source dimensions."
 msgstr "Ograničite najdulju stranu bez rastezanja ili povećavanja slika. Izvorno zadržava dimenzije izvora."
+
+msgid "Clear plugin cache"
+msgstr "Obriši predmemoriju dodatka"
+
+msgid "Remove configuration everywhere"
+msgstr "Ukloni postavke na svim uređajima"
+
+msgid "Remove this configuration on all synced devices?"
+msgstr "Ukloniti ove postavke na svim sinkroniziranim uređajima?"
+
+msgid "Remove configuration"
+msgstr "Ukloni postavke"
+
+msgid "Save"
+msgstr "Spremi"

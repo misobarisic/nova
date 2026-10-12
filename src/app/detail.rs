@@ -318,7 +318,7 @@ impl Bridge {
         // Endpoint URLs built on the main thread (pure URL math); the rows
         // are then fetched addon-by-addon via fetch-continuations. Each URL
         // carries its addon label so results can be grouped into pills.
-        let stream_urls: Vec<(String, String)> = {
+        let stream_urls: Vec<(String, String, String, u64)> = {
             let state = self.shared.lock().unwrap();
             let lookup = state
                 .modal_item
@@ -370,12 +370,12 @@ impl Bridge {
                         &aliases,
                         owner,
                     )
-                    .map(|url| (a.label.clone(), url))
+                    .map(|url| (a.label.clone(), url, a.url.clone(), a.generation))
                 })
                 .collect()
         };
 
-        let requested: Vec<String> = stream_urls.iter().map(|(l, _)| l.clone()).collect();
+        let requested: Vec<String> = stream_urls.iter().map(|(l, ..)| l.clone()).collect();
         let addon_count = requested.len();
         // Show one pill per addon being queried right away (spinner), then
         // drop each one that answers with no streams.
@@ -389,6 +389,7 @@ impl Bridge {
             state.stream_all.clear();
             state.stream_addons = requested.clone();
             state.stream_pending = requested.clone();
+            state.stream_warnings.clear();
             state.stream_filter = 0;
             state.stream_generation
         };
@@ -419,10 +420,27 @@ impl Bridge {
         // moment it arrives, so results appear addon-by-addon instead of
         // after the slowest one. An addon that fails or returns nothing is
         // reported with an empty row list so its pill is removed.
-        for (addon, url) in stream_urls {
+        for (addon, url, owner_url, owner_generation) in stream_urls {
             let bridge = self.clone();
             let request_id = request_id.clone();
+            let settings_generation = nova_providers::plugin_settings::settings_generation();
+            let tracks_settings = nova_providers::provider_settings_schema(&owner_url)
+                .is_some_and(|schema| !schema.is_empty());
             net::fetch_bytes(url, move |result| {
+                let warnings = result
+                    .as_ref()
+                    .ok()
+                    .map(|bytes| provider_stream_warnings(bytes, &owner_url))
+                    .unwrap_or_else(|| {
+                        if tracks_settings {
+                            vec![(
+                                addon.clone(),
+                                "Provider unavailable. Try again later.".into(),
+                            )]
+                        } else {
+                            vec![]
+                        }
+                    });
                 let new_rows: Vec<StreamUi> = result
                     .ok()
                     .and_then(|bytes| Addon::parse_streams(&bytes).ok())
@@ -442,7 +460,12 @@ impl Bridge {
                                     // detail lines are chosen.
                                     display: stream_display(&s),
                                     card: stream_card_text(&s),
-                                    source: stream_source(&s),
+                                    source: stream_source_for_addon(
+                                        &s,
+                                        &owner_url,
+                                        owner_generation,
+                                        settings_generation,
+                                    ),
                                     addon: addon.clone(),
                                     download: None,
                                 }
@@ -454,7 +477,52 @@ impl Bridge {
                 let addon2 = addon.clone();
                 let request_id2 = request_id.clone();
                 let _ = slint::invoke_from_event_loop(move || {
-                    bridge2.stream_addon_loaded(request_id2, generation, addon2, new_rows);
+                    let installed = bridge2
+                        .shared
+                        .lock()
+                        .unwrap()
+                        .installed
+                        .iter()
+                        .any(|addon| {
+                            addon.url == owner_url
+                                && addon.enabled
+                                && addon.available
+                                && addon.generation == owner_generation
+                        });
+                    let stale = !installed
+                        || (tracks_settings
+                            && settings_generation
+                                != nova_providers::plugin_settings::settings_generation());
+                    {
+                        let mut state = bridge2.shared.lock().unwrap();
+                        if state.stream_generation != generation
+                            || !state
+                                .modal_item
+                                .as_ref()
+                                .is_some_and(|modal| modal.request_id == request_id2)
+                        {
+                            return;
+                        }
+                        state.stream_warnings.insert(
+                            addon2.clone(),
+                            if stale {
+                                vec![(
+                                    addon2.clone(),
+                                    "This stream selection is out of date. Reload streams.".into(),
+                                )]
+                            } else {
+                                warnings
+                            },
+                        );
+                    }
+                    // Even a stale reply completes its old spinner; it must
+                    // never publish rows made with a previous configuration.
+                    bridge2.stream_addon_loaded(
+                        request_id2,
+                        generation,
+                        addon2,
+                        if stale { vec![] } else { new_rows },
+                    );
                 });
             });
         }
@@ -2523,7 +2591,7 @@ impl Bridge {
             )
         };
 
-        let hint = if pending_count > 0 {
+        let mut hint = if pending_count > 0 {
             text::searching_streams(pending_count)
         } else if total == 0 {
             text::tr("No streams found.").to_string()
@@ -2535,6 +2603,36 @@ impl Bridge {
                 None => text::streams_found_single(filtered.len()),
             }
         };
+        let warnings = self
+            .shared
+            .lock()
+            .unwrap()
+            .stream_warnings
+            .values()
+            .flat_map(|rows| rows.iter())
+            .map(|(source, message)| {
+                if source.is_empty() {
+                    text::tr(message).to_owned()
+                } else {
+                    format!("{source}: {}", text::tr(message))
+                }
+            })
+            .collect::<Vec<_>>();
+        if !warnings.is_empty() {
+            hint.push('\n');
+            hint.push_str(&warnings.join("\n"));
+        }
+        let mut filtered = filtered;
+        if !active_torrent_settings().enabled {
+            let before = filtered.len();
+            filtered.retain(|stream| !matches!(stream.source, StreamSource::Torrent { .. }));
+            if before != filtered.len() {
+                hint.push('\n');
+                hint.push_str(text::tr(
+                    "Direct torrent results are hidden while P2P streaming is disabled.",
+                ));
+            }
+        }
         let mut displayed: Vec<StreamUi> = self
             .downloads
             .jobs_for_request(&request_id)
@@ -2675,6 +2773,7 @@ impl Bridge {
             state.stream_all.clear();
             state.stream_addons.clear();
             state.stream_pending.clear();
+            state.stream_warnings.clear();
             state.stream_filter = 0;
             state.stream_page = 0;
         }
@@ -2737,6 +2836,19 @@ impl Bridge {
                 file_idx,
             } => {
                 self.play_torrent(&stream.display, info_hash, file_idx);
+            }
+            StreamSource::Resolver {
+                provider_url,
+                token,
+                settings_generation,
+                addon_generation,
+            } => {
+                self.play_provider_resolver(
+                    provider_url,
+                    token,
+                    settings_generation,
+                    addon_generation,
+                );
             }
             StreamSource::Unsupported => {
                 self.set_stream_hint(Some(StreamHint::Fixed(
@@ -3007,6 +3119,21 @@ fn source_stream_lookup(
     modal: &ModalItem,
     request_id: &str,
 ) -> Option<nova_providers::StreamLookupRequest> {
+    if modal.type_ == "movie" && modal.id == request_id {
+        return Some(nova_providers::StreamLookupRequest {
+            media_id: modal.id.clone(),
+            media_type: modal.type_.clone(),
+            title: modal.name.clone(),
+            year: (!modal.year.is_empty()).then(|| modal.year.clone()),
+            season: None,
+            episode: None,
+            absolute_episode: None,
+            season_episode_count: None,
+            series_episode_count: None,
+            episode_title: None,
+            released: None,
+        });
+    }
     if modal.type_ != "series" {
         return None;
     }
@@ -3060,8 +3187,8 @@ fn source_stream_lookup(
         media_type: modal.type_.clone(),
         title: modal.name.clone(),
         year: (!modal.year.is_empty()).then(|| modal.year.clone()),
-        season,
-        episode,
+        season: Some(season),
+        episode: Some(episode),
         absolute_episode,
         season_episode_count: season_counts.get(&season).copied(),
         series_episode_count,
@@ -3114,12 +3241,46 @@ mod source_lookup_tests {
     }
 
     #[test]
+    fn movie_context_uses_authoritative_title_without_episode_fields() {
+        let mut modal = modal();
+        modal.type_ = "movie".into();
+        modal.id = "tt1727587".into();
+        modal.request_id = modal.id.clone();
+        modal.name = "Sintel".into();
+        modal.year = "2010".into();
+        modal.videos.clear();
+        let lookup = source_stream_lookup(&modal, &modal.request_id).unwrap();
+        assert_eq!(lookup.media_id, "tt1727587");
+        assert_eq!(lookup.title, "Sintel");
+        assert!(lookup.season.is_none() && lookup.episode.is_none());
+        let provider = nova_providers::bundled_providers()
+            .iter()
+            .find(|provider| provider.url == nova_providers::SUPERNOVA_PROVIDER_URL)
+            .unwrap();
+        let addon = Installed {
+            url: provider.url.into(),
+            label: "Supernova".into(),
+            enabled: true,
+            configure_ok: Some(false),
+            manifest: Addon::parse_manifest(provider.addon_manifest.as_bytes()).unwrap(),
+            available: true,
+            generation: 1,
+        };
+        assert!(
+            stream_endpoint(&addon, "movie", &modal.request_id, Some(&lookup), &[])
+                .unwrap()
+                .starts_with("nova-provider://supernova/resolve/movie/")
+        );
+        assert!(source_stream_lookup(&modal, "some-other-movie").is_none());
+    }
+
+    #[test]
     fn foreign_library_episode_uses_contextual_source_route_and_keeps_original_ids() {
         let modal = modal();
         let lookup = source_stream_lookup(&modal, &modal.request_id).unwrap();
         assert_eq!(lookup.media_id, "tt0994314");
-        assert_eq!(lookup.season, 2);
-        assert_eq!(lookup.episode, 1);
+        assert_eq!(lookup.season, Some(2));
+        assert_eq!(lookup.episode, Some(1));
         assert_eq!(lookup.absolute_episode, Some(26));
         assert_eq!(lookup.season_episode_count, Some(1));
         assert_eq!(lookup.series_episode_count, Some(26));

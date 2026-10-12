@@ -26,6 +26,8 @@ export component PillButton inherits Rectangle {
     // (Settings → Addons stacks seven controls on two lines). Height, colour
     // and touch target are unchanged.
     in property <bool> compact: false;
+    // Opt in for long translated actions in constrained configuration sheets.
+    in property <bool> wrap_label: false;
     callback clicked();
     // Expose the label to the accessibility tree (and headless tests, which
     // locate a specific pill by label rather than by traversal index).
@@ -33,7 +35,7 @@ export component PillButton inherits Rectangle {
     accessible-label: label;
     accessible-enabled: root.enabled;
     width: Math.max(pill_lbl.preferred-width + (root.compact ? 20px : 28px), self.btn_min_width);
-    height: 44px;
+    height: root.wrap_label ? Math.max(44px, pill_lbl.preferred-height + 16px) : 44px;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     property <bool> outlined: Theme.true_black && !root.primary;
     property <bool> keyboard_focused: (root.focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled;
@@ -45,9 +47,14 @@ export component PillButton inherits Rectangle {
     animate background { duration: Anim.hover_fast; }
 
     pill_lbl := Text {
+        x: root.wrap_label ? 14px : 0px;
+        width: root.wrap_label ? Math.max(1px, root.width - 28px) : root.width;
+        height: root.height;
+        wrap: root.wrap_label ? word-wrap : no-wrap;
         text: label;
         font-size: 13px;
         color: root.destructive ? Theme.current.text_destructive : (primary ? Theme.current.on_accent : Theme.current.text_settings);
+        horizontal-alignment: center;
         vertical-alignment: center;
     }
 

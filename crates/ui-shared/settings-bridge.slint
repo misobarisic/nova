@@ -1,6 +1,6 @@
 // The Settings contract is shared by the small host and the compiled page.
 // Mutable properties are linked across their globals before page initialization.
-import { MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease } from "../ui/types.slint";
+import { PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease } from "../ui/types.slint";
 
 export global SettingsBridge {
     callback focus_shell();
@@ -134,9 +134,15 @@ export global SettingsBridge {
     in-out property <length> safe-right: 0px;
     in-out property <length> safe-bottom: 0px;
     in-out property <length> scroll_y: 0px;
+    in-out property <[PluginSettingRow]> plugin_setting_rows;
+    in-out property <string> plugin_settings_notice;
+    callback plugin_setting_changed(string,string,string);
+    callback plugin_settings_clear(string);
+    callback plugin_cache_clear(string);
     in-out property <bool> addon_config_open: false;
     in-out property <string> addon_config_url;
     in-out property <string> addon_config_label;
+    in-out property <bool> addon_config_capabilities: true;
     in-out property <bool> addon_config_streams: true;
     in-out property <bool> addon_config_metadata: true;
     pure callback search_matches(string, string) -> bool;

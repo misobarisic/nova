@@ -116,11 +116,106 @@ pub struct ProviderStream {
     pub title: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
     pub url: String,
+    #[serde(default)]
+    pub info_hash: Option<String>,
+    #[serde(default)]
+    pub file_idx: Option<u32>,
+    #[serde(default)]
+    pub resolver: Option<ProviderStreamResolver>,
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub seeders: Option<u32>,
+    #[serde(default)]
+    pub source: Option<String>,
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
     #[serde(default)]
     pub subtitles: Vec<ProviderSubtitle>,
+}
+
+/// An opaque deferred playback token can only be returned to its owning provider.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderStreamResolver {
+    pub provider_id: String,
+    pub token: String,
+}
+
+impl ProviderStream {
+    pub fn validate(&self, provider_id: &str) -> Result<(), ProviderError> {
+        let invalid = || ProviderError::InvalidData("invalid provider stream target".into());
+        if usize::from(!self.url.is_empty())
+            + usize::from(self.info_hash.is_some())
+            + usize::from(self.resolver.is_some())
+            != 1
+        {
+            return Err(invalid());
+        }
+        if !self.url.is_empty() {
+            validate_playback_url(&self.url)?;
+        }
+        for subtitle in &self.subtitles {
+            validate_playback_url(&subtitle.url)?;
+        }
+        if self.headers.iter().any(|(name, value)| {
+            name.is_empty()
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+                || value.chars().any(char::is_control)
+        }) {
+            return Err(invalid());
+        }
+        if self
+            .info_hash
+            .as_ref()
+            .is_some_and(|hash| hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()))
+            || (self.file_idx.is_some() && self.info_hash.is_none())
+        {
+            return Err(invalid());
+        }
+        if let Some(resolver) = &self.resolver
+            && (resolver.provider_id != provider_id
+                || resolver.token.is_empty()
+                || resolver.token.len() > 8192)
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+}
+
+fn validate_playback_url(raw: &str) -> Result<(), ProviderError> {
+    let invalid = || ProviderError::InvalidData("invalid provider playback URL".into());
+    if raw.chars().any(char::is_control) || raw.len() > 16_384 {
+        return Err(invalid());
+    }
+    let url = url::Url::parse(raw).map_err(|_| invalid())?;
+    if !matches!(url.scheme(), "https" | "http")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(invalid());
+    }
+    let public = match url.host() {
+        Some(url::Host::Ipv4(ip)) => crate::host::is_public_ip(ip.into()),
+        Some(url::Host::Ipv6(ip)) => crate::host::is_public_ip(ip.into()),
+        Some(url::Host::Domain(host)) => {
+            let host = host.trim_end_matches('.').to_ascii_lowercase();
+            !host.is_empty()
+                && host.contains('.')
+                && !["localhost", "local", "internal", "home", "lan"]
+                    .iter()
+                    .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+        }
+        None => false,
+    };
+    if !public {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -166,8 +261,10 @@ pub struct StreamLookupRequest {
     pub media_type: String,
     pub title: String,
     pub year: Option<String>,
-    pub season: u32,
-    pub episode: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub season: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub episode: Option<u32>,
     pub absolute_episode: Option<u32>,
     /// Counts include regular numbered episodes only. Missing or incomplete
     /// metadata leaves them unknown, rather than inventing season boundaries.
@@ -177,6 +274,49 @@ pub struct StreamLookupRequest {
     pub series_episode_count: Option<u32>,
     pub episode_title: Option<String>,
     pub released: Option<String>,
+}
+
+/// A bounded user-facing resolver failure, separate from internal host errors.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderResolveError {
+    pub code: String,
+    pub message: String,
+}
+impl ProviderResolveError {
+    pub fn generic() -> Self {
+        Self {
+            code: "provider_error".into(),
+            message: "Could not resolve this stream.".into(),
+        }
+    }
+    pub fn cancelled() -> Self {
+        Self {
+            code: "cancelled".into(),
+            message: "Provider operation cancelled.".into(),
+        }
+    }
+    pub fn validate(&self) -> bool {
+        !self.code.is_empty()
+            && self.code.len() <= 64
+            && self
+                .code
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            && !self.message.trim().is_empty()
+            && self.message.len() <= 256
+            && !self.message.chars().any(char::is_control)
+    }
+}
+impl std::fmt::Display for ProviderResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for ProviderResolveError {}
+impl From<ProviderError> for ProviderResolveError {
+    fn from(_: ProviderError) -> Self {
+        Self::generic()
+    }
 }
 
 #[derive(Clone, Debug)]

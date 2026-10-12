@@ -1,5 +1,5 @@
 import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
-import { MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
+import { PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
 // Types and globals have one shared compiled definition. Page visual trees
 // live in independent factory products, never imported into AppWindow.
 
@@ -356,9 +356,12 @@ export component AppWindow inherits Window {
         sync_pair_prompt_code <=> root.sync_pair_prompt_code;
         kb_active <=> root.kb_active;
         scroll_y <=> root.settings_scroll_y;
+        plugin_setting_rows <=> root.plugin_setting_rows;
+        plugin_settings_notice <=> root.plugin_settings_notice;
         addon_config_open <=> root.addon_config_open;
         addon_config_url <=> root.addon_config_url;
         addon_config_label <=> root.addon_config_label;
+        addon_config_capabilities <=> root.addon_config_capabilities;
         addon_config_streams <=> root.addon_config_streams;
         addon_config_metadata <=> root.addon_config_metadata;
     }
@@ -1128,9 +1131,15 @@ export component AppWindow inherits Window {
     callback addon_remove(int);
     callback addon_move_up(int);
     callback addon_move_down(int);
+    in-out property <[PluginSettingRow]> plugin_setting_rows;
+    in-out property <string> plugin_settings_notice;
+    callback plugin_setting_changed(string,string,string);
+    callback plugin_settings_clear(string);
+    callback plugin_cache_clear(string);
     in-out property <bool> addon_config_open: false;
     in-out property <string> addon_config_url;
     in-out property <string> addon_config_label;
+    in-out property <bool> addon_config_capabilities: true;
     in-out property <bool> addon_config_streams: true;
     in-out property <bool> addon_config_metadata: true;
     callback addon_capabilities_changed(string, bool, bool);
@@ -1527,6 +1536,9 @@ export component AppWindow inherits Window {
     public function settings_bridge_addon_move_up(i: int) { root.addon_move_up(i); }
     public function settings_bridge_addon_move_down(i: int) { root.addon_move_down(i); }
     public function settings_bridge_addon_capabilities_changed(u: string, s: bool, m: bool) { root.addon_capabilities_changed(u,s,m); }
+    public function settings_bridge_plugin_setting_changed(u: string,k: string,v: string) { root.plugin_setting_changed(u,k,v); }
+    public function settings_bridge_plugin_settings_clear(u: string) { root.plugin_settings_clear(u); }
+    public function settings_bridge_plugin_cache_clear(u: string) { root.plugin_cache_clear(u); }
     public function settings_bridge_addon_configure(u: string) { root.addon_configure(u); }
     public function settings_bridge_addon_refresh(i: int) { root.addon_refresh(i); }
     public function settings_bridge_addon_copy_link(u: string) { root.addon_copy_link(u); }

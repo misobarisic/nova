@@ -5285,6 +5285,7 @@ dependencies = [
 name = "nova-download"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "m3u8-rs",
  "reqwest",
  "rustls",
@@ -5337,6 +5338,7 @@ dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
  "percent-encoding",
+ "quick-xml 0.42.0",
  "regex",
  "reqwest",
  "rquickjs",

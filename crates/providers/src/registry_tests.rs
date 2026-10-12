@@ -423,8 +423,8 @@ fn foreign_lookup(season: u32) -> StreamLookupRequest {
         media_type: "series".into(),
         title: "Code Geass".into(),
         year: Some("2006–2008".into()),
-        season,
-        episode: 1,
+        season: Some(season),
+        episode: Some(1),
         absolute_episode: Some(if season == 1 { 1 } else { 26 }),
         season_episode_count: None,
         series_episode_count: None,
@@ -542,7 +542,7 @@ fn foreign_lookup_rejects_wrong_year_unknown_episodes_and_specials() {
     for (year, episode) in [("2020", 1), ("2006", 99)] {
         let mut lookup = foreign_lookup(1);
         lookup.year = Some(year.into());
-        lookup.episode = episode;
+        lookup.episode = Some(episode);
         let result = provider
             .protocol_response(
                 host.clone(),
@@ -552,11 +552,11 @@ fn foreign_lookup_rejects_wrong_year_unknown_episodes_and_specials() {
         assert!(result["streams"].as_array().unwrap().is_empty());
     }
     let mut lookup = foreign_lookup(1);
-    lookup.season = 0;
+    lookup.season = Some(0);
     assert!(stream_lookup_url(ANIKOTO_PROVIDER_URL, &lookup).is_err());
-    lookup.season = u32::MAX;
+    lookup.season = Some(u32::MAX);
     assert!(stream_lookup_url(ANIKOTO_PROVIDER_URL, &lookup).is_err());
-    lookup.season = 1;
+    lookup.season = Some(1);
     lookup.title = "Title / 東京 & \"quoted\"".into();
     let ProtocolRequest::Lookup { request: decoded } =
         request(&stream_lookup_url(ANIKOTO_PROVIDER_URL, &lookup).unwrap())
@@ -668,8 +668,8 @@ fn mapping_lookup(title: &str, season: u32, episode: u32) -> StreamLookupRequest
         media_type: "series".into(),
         title: title.into(),
         year: Some("2015".into()),
-        season,
-        episode,
+        season: Some(season),
+        episode: Some(episode),
         absolute_episode: Some(episode + (season - 1) * 24),
         season_episode_count: Some(24),
         series_episode_count: Some(24),
@@ -726,8 +726,8 @@ fn standalone_season_one_numbering_resolves_the_named_later_season_source() {
         Some("https://anikototv.to/watch/second/ep-1".into())
     );
     assert_eq!(lookup.media_id, "kitsu:50024");
-    assert_eq!(lookup.season, 1);
-    lookup.episode = 2;
+    assert_eq!(lookup.season, Some(1));
+    lookup.episode = Some(2);
     lookup.absolute_episode = Some(2);
     lookup.episode_title = Some("Episode 2".into());
     assert_eq!(mapped_referer(host, &lookup), None);
@@ -751,7 +751,7 @@ fn main_series_later_season_uses_its_available_native_source() {
         mapped_referer(host.clone(), &lookup),
         Some("https://anikototv.to/watch/second/ep-1".into())
     );
-    lookup.episode = 2;
+    lookup.episode = Some(2);
     lookup.absolute_episode = Some(172);
     lookup.episode_title = Some("Episode 2".into());
     assert_eq!(mapped_referer(host, &lookup), None);
@@ -1713,4 +1713,562 @@ fn provider_capabilities_default_and_round_trip() {
     }
     assert!(supports_capability_config(ANIKOTO_PROVIDER_URL));
     assert!(!supports_capability_config("https://torrentio.strem.fun"));
+}
+
+#[test]
+fn normalized_stream_targets_are_exclusive_and_resolvers_are_owned() {
+    let direct: ProviderStream = serde_json::from_value(json!({
+        "id":"one", "title":"Direct", "url":"https://video.example/file.mp4"
+    }))
+    .unwrap();
+    let mapped = stream_to_stremio(&direct, "fixture").unwrap();
+    assert_eq!(mapped["url"], direct.url);
+    assert!(mapped.get("infoHash").is_none());
+    assert!(mapped.get("novaResolver").is_none());
+
+    let torrent: ProviderStream = serde_json::from_value(json!({
+        "id":"two", "title":"Torrent", "info_hash":"ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+        "file_idx":2, "size":123456789, "seeders":42, "source":"Fixture"
+    }))
+    .unwrap();
+    let mapped = stream_to_stremio(&torrent, "fixture").unwrap();
+    assert_eq!(
+        mapped["infoHash"],
+        "abcdef0123456789abcdef0123456789abcdef01"
+    );
+    assert_eq!(mapped["fileIdx"], 2);
+    assert_eq!(mapped["size"], 123456789);
+    assert_eq!(mapped["seeders"], 42);
+    assert_eq!(mapped["source"], "Fixture");
+    assert!(mapped.get("url").is_none());
+    let decoded: addons::Stream = serde_json::from_value(mapped).unwrap();
+    assert_eq!(decoded.file_idx, Some(2));
+    assert!(decoded.info_hash.is_some());
+
+    let deferred: ProviderStream = serde_json::from_value(json!({
+        "id":"three", "title":"Deferred", "resolver":{"provider_id":"fixture", "token":"opaque-token"}
+    })).unwrap();
+    assert_eq!(
+        stream_to_stremio(&deferred, "fixture").unwrap()["novaResolver"],
+        json!({"providerId":"fixture", "token":"opaque-token"})
+    );
+    assert!(stream_to_stremio(&deferred, "foreign").is_err());
+    for invalid in [
+        ProviderStream::default(),
+        ProviderStream {
+            info_hash: torrent.info_hash.clone(),
+            ..direct.clone()
+        },
+        ProviderStream {
+            resolver: deferred.resolver.clone(),
+            ..direct.clone()
+        },
+        ProviderStream {
+            resolver: deferred.resolver.clone(),
+            ..torrent.clone()
+        },
+        ProviderStream {
+            info_hash: Some("abc".into()),
+            ..torrent.clone()
+        },
+        ProviderStream {
+            info_hash: Some("g".repeat(40)),
+            ..torrent.clone()
+        },
+        ProviderStream {
+            info_hash: Some("f".repeat(64)),
+            ..torrent.clone()
+        },
+        ProviderStream {
+            file_idx: Some(0),
+            ..direct
+        },
+    ] {
+        assert!(stream_to_stremio(&invalid, "fixture").is_err());
+    }
+}
+
+#[test]
+fn contextual_movies_omit_episode_context_and_series_require_it() {
+    let movie: StreamLookupRequest = serde_json::from_value(json!({
+        "mediaId":"tt100", "mediaType":"movie", "title":"Example", "year":"2020"
+    }))
+    .unwrap();
+    assert!(validate_stream_lookup(&movie).is_ok());
+    let data = format!("{}.json", serde_json::to_string(&movie).unwrap());
+    assert!(matches!(
+        parse_protocol_request(&["resolve".into(), "movie".into(), data.clone()], "fixture"),
+        Ok(ProtocolRequest::Lookup { .. })
+    ));
+    assert!(parse_protocol_request(&["resolve".into(), "series".into(), data], "fixture").is_err());
+    let mut invalid_movie = movie.clone();
+    invalid_movie.episode = Some(1);
+    assert!(validate_stream_lookup(&invalid_movie).is_err());
+    let mut series = movie;
+    series.media_type = "series".into();
+    assert!(validate_stream_lookup(&series).is_err());
+    series.season = Some(1);
+    assert!(validate_stream_lookup(&series).is_err());
+    series.episode = Some(1);
+    assert!(validate_stream_lookup(&series).is_ok());
+    series.season = Some(0);
+    assert!(validate_stream_lookup(&series).is_err());
+}
+
+#[test]
+fn cancelled_resolution_stops_before_running_a_provider() {
+    assert!(
+        resolve_provider_stream(
+            ANIKOTO_PROVIDER_URL,
+            "opaque",
+            Duration::from_secs(5),
+            Arc::new(|| true)
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("cancelled")
+    );
+    assert!(
+        resolve_provider_stream(
+            "nova-provider://foreign",
+            "opaque",
+            Duration::from_secs(5),
+            Arc::new(|| false)
+        )
+        .is_err()
+    );
+    assert!(
+        resolve_provider_stream(
+            ANIKOTO_PROVIDER_URL,
+            "",
+            Duration::from_secs(5),
+            Arc::new(|| false)
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn resolve_stream_action_forwards_token_and_requires_a_final_target() {
+    let definition = &bundled_providers()[0];
+    let manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest).unwrap();
+    let addon: Manifest = serde_json::from_str(definition.addon_manifest).unwrap();
+    let provider = JsProvider::new(
+        manifest.clone(),
+        addon.clone(),
+        r#"
+        globalThis.novaProvider = { handle(request) {
+            if (request.op !== 'resolveStream' || request.token !== 'opaque' || !request.config.streams)
+                throw new Error('incorrect resolver request');
+            return {id:'resolved', title:'Resolved', url:'https://video.example/final.mp4'};
+        }};
+    "#,
+    );
+    let stream = provider
+        .resolve_stream(crate::MemoryProviderHost::new(), "opaque")
+        .unwrap();
+    assert_eq!(stream["url"], "https://video.example/final.mp4");
+    let provider = JsProvider::new(
+        manifest,
+        addon,
+        r#"
+        globalThis.novaProvider = { handle() {
+            return {id:'recursive', title:'Recursive', resolver:{provider_id:'anikoto',token:'another'}};
+        }};
+    "#,
+    );
+    assert!(
+        provider
+            .resolve_stream(crate::MemoryProviderHost::new(), "opaque")
+            .is_err()
+    );
+}
+
+#[test]
+fn playback_urls_reject_local_targets_credentials_and_controls() {
+    for url in [
+        "http://127.0.0.1/video",
+        "http://10.0.0.1/video",
+        "http://[::1]/video",
+        "http://localhost/video",
+        "https://host.local/video",
+        "https://user:pass@cdn.example/video",
+        "https://cdn.example/video\n",
+        "file:///tmp/video.mkv",
+        "ftp://cdn.example/video",
+    ] {
+        let stream = ProviderStream {
+            url: url.into(),
+            ..Default::default()
+        };
+        assert!(stream.validate("fixture").is_err(), "{url:?}");
+    }
+    let stream = ProviderStream {
+        url: "https://cdn.example/video".into(),
+        ..Default::default()
+    };
+    assert!(stream.validate("fixture").is_ok());
+}
+
+#[test]
+fn deferred_final_stream_cannot_expose_private_settings() {
+    let definition = &bundled_providers()[0];
+    let mut manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest).unwrap();
+    manifest.configuration = serde_json::from_value(json!([
+        {"key":"key", "label":"Key", "type":"secret", "default":"private/token"}
+    ]))
+    .unwrap();
+    let addon: Manifest = serde_json::from_str(definition.addon_manifest).unwrap();
+    for source in [
+        "globalThis.novaProvider={handle(r){return {id:'x',title:'x',url:'https://cdn.example/'+r.settings.key}}}",
+        "globalThis.novaProvider={handle(){return {id:'x',title:'x',url:'https://cdn.example/private%2Ftoken'}}}",
+        "globalThis.novaProvider={handle(r){return {id:'x',title:'x',url:'https://cdn.example/file',headers:{Authorization:r.settings.key}}}}",
+    ] {
+        let mut provider = JsProvider::new(manifest.clone(), addon.clone(), source);
+        // This contract check does not mutate global preferences; another test
+        // may independently exercise settings generations at the same time.
+        provider.track_settings = false;
+        let error = provider
+            .resolve_stream(crate::MemoryProviderHost::new(), "opaque")
+            .unwrap_err();
+        assert_eq!(error.code, "provider_error");
+        assert!(!error.to_string().contains("private/token"));
+    }
+}
+
+#[test]
+fn provider_warning_envelopes_preserve_streams_without_playable_error_rows() {
+    let definition = &bundled_providers()[0];
+    let manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest).unwrap();
+    let addon: Manifest = serde_json::from_str(definition.addon_manifest).unwrap();
+    let provider = JsProvider::new(
+        manifest.clone(),
+        addon.clone(),
+        r#"
+        globalThis.novaProvider={handle(){return {streams:[{id:'one',title:'One',url:'https://cdn.example/video'}],
+            warnings:['A source is unavailable.',{source:'Fixture',message:'Try again later.'}]}}};
+    "#,
+    );
+    let result = provider
+        .protocol_response(
+            crate::MemoryProviderHost::new(),
+            ProtocolRequest::Streams {
+                episode_id: "one".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(result["streams"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        result["novaWarnings"],
+        json!([{"message":"A source is unavailable."},{"source":"Fixture","message":"Try again later."}])
+    );
+    let provider = JsProvider::new(
+        manifest,
+        addon,
+        r#"
+        globalThis.novaProvider={handle(){return {streams:[],warnings:[]}}};
+    "#,
+    );
+    let result = provider
+        .protocol_response(
+            crate::MemoryProviderHost::new(),
+            ProtocolRequest::Streams {
+                episode_id: "one".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(result, json!({"streams":[]}));
+}
+
+#[test]
+fn provider_warning_bounds_and_typed_resolver_errors_are_validated() {
+    let definition = &bundled_providers()[0];
+    let manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest).unwrap();
+    let addon: Manifest = serde_json::from_str(definition.addon_manifest).unwrap();
+    for source in [
+        "globalThis.novaProvider={handle(){return {streams:[],warnings:Array(17).fill('Unavailable.')}}}",
+        "globalThis.novaProvider={handle(){return {streams:[],warnings:['x'.repeat(257)]}}}",
+        "globalThis.novaProvider={handle(){return {streams:[],warnings:[{source:'x'.repeat(65),message:'Unavailable.'}]}}}",
+    ] {
+        let provider = JsProvider::new(manifest.clone(), addon.clone(), source);
+        assert!(
+            provider
+                .protocol_response(
+                    crate::MemoryProviderHost::new(),
+                    ProtocolRequest::Streams {
+                        episode_id: "one".into()
+                    }
+                )
+                .is_err()
+        );
+    }
+    let provider = JsProvider::new(
+        manifest.clone(),
+        addon.clone(),
+        r#"
+        globalThis.novaProvider={handle(){return {error:{code:'rate_limit',message:'Service is rate limited. Try again later.'}}}};
+    "#,
+    );
+    let error = provider
+        .resolve_stream(crate::MemoryProviderHost::new(), "opaque")
+        .unwrap_err();
+    assert_eq!(error.code, "rate_limit");
+    assert_eq!(error.message, "Service is rate limited. Try again later.");
+    for source in [
+        "globalThis.novaProvider={handle(){throw new Error('raw upstream body secret')}}",
+        "globalThis.novaProvider={handle(){return {error:{code:'x'.repeat(65),message:'Invalid.'}}}}",
+        "globalThis.novaProvider={handle(){return {error:{code:'bad code',message:'Invalid.'}}}}",
+        "globalThis.novaProvider={handle(){return {error:{code:'bad',message:'x'.repeat(257)}}}}",
+    ] {
+        let provider = JsProvider::new(manifest.clone(), addon.clone(), source);
+        let error = provider
+            .resolve_stream(crate::MemoryProviderHost::new(), "opaque")
+            .unwrap_err();
+        assert_eq!(error, ProviderResolveError::generic());
+    }
+}
+
+#[test]
+fn warnings_and_typed_errors_cannot_return_private_settings() {
+    let definition = &bundled_providers()[0];
+    let mut manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest).unwrap();
+    manifest.configuration = serde_json::from_value(
+        json!([{"key":"key","label":"Key","type":"secret","default":"private/token"}]),
+    )
+    .unwrap();
+    let addon: Manifest = serde_json::from_str(definition.addon_manifest).unwrap();
+    let mut provider = JsProvider::new(
+        manifest.clone(),
+        addon.clone(),
+        r#"
+        globalThis.novaProvider={handle(){return {streams:[],warnings:[{source:'Source',message:'private%2Ftoken'}]}}};
+    "#,
+    );
+    provider.track_settings = false;
+    let response = provider
+        .protocol_response(
+            crate::MemoryProviderHost::new(),
+            ProtocolRequest::Streams {
+                episode_id: "one".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        response["novaWarnings"],
+        json!([{"message":"A provider source is unavailable."}])
+    );
+    let mut provider = JsProvider::new(
+        manifest,
+        addon,
+        r#"
+        globalThis.novaProvider={handle(){return {error:{code:'invalid_key',message:'private%2Ftoken'}}}};
+    "#,
+    );
+    provider.track_settings = false;
+    assert_eq!(
+        provider
+            .resolve_stream(crate::MemoryProviderHost::new(), "opaque")
+            .unwrap_err(),
+        ProviderResolveError::generic()
+    );
+}
+
+fn credential_playback_provider(result: Value) -> JsProvider {
+    let definition = &bundled_providers()[0];
+    let mut manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest).unwrap();
+    manifest.configuration = serde_json::from_value(
+        json!([{"key":"key","label":"Key","type":"secret","default":"private/token"}]),
+    )
+    .unwrap();
+    manifest.permissions.ephemeral_playback_credentials=serde_json::from_value(json!([{"setting":"key","domains":["tb-cdn.io"],"queryParameters":["token"],"pathPrefix":"/dld/"}])).unwrap();
+    let addon: Manifest = serde_json::from_str(definition.addon_manifest).unwrap();
+    let mut provider = JsProvider::new(
+        manifest,
+        addon,
+        &format!("globalThis.novaProvider={{handle(){{return {};}}}}", result),
+    );
+    provider.track_settings = false;
+    provider
+}
+
+#[test]
+fn scoped_ephemeral_playback_credential_requires_trusted_final_url() {
+    for url in [
+        "https://tb-cdn.io/dld/file?token=private%2Ftoken",
+        "https://cdn.region.tb-cdn.io:443/dld/file?token=private%2Ftoken&filename=public.mp4",
+    ] {
+        let provider =
+            credential_playback_provider(json!({"id":"resolved","title":"Resolved","url":url}));
+        let response = provider
+            .resolve_stream(crate::MemoryProviderHost::new(), "opaque")
+            .unwrap();
+        assert_eq!(response["url"], url);
+        assert_eq!(response["novaSensitivePlayback"], true);
+    }
+    for url in [
+        "https://evil-tb-cdn.io/dld/file?token=private%2Ftoken",
+        "https://tb-cdn.io.evil.test/dld/file?token=private%2Ftoken",
+        "http://tb-cdn.io/dld/file?token=private%2Ftoken",
+        "https://tb-cdn.io:444/dld/file?token=private%2Ftoken",
+        "https://user@tb-cdn.io/dld/file?token=private%2Ftoken",
+        "https://tb-cdn.io/dld/file?token=private%2Ftoken#fragment",
+        "https://tb-cdn.io/other/file?token=private%2Ftoken",
+        "https://tb-cdn.io/dld/private%2Ftoken?token=private%2Ftoken",
+        "https://tb-cdn.io/dld/file?token=private%2Ftoken&other=private%2Ftoken",
+        "https://tb-cdn.io/dld/file?token=private%2Ftoken&token=private%2Ftoken",
+        "https://tb-cdn.io/dld/file?token=private%2Ftoken&token=wrong",
+        "https://tb-cdn.io/dld/file?other=private%2Ftoken",
+        "https://127.0.0.1/dld/file?token=private%2Ftoken",
+    ] {
+        let provider =
+            credential_playback_provider(json!({"id":"resolved","title":"Resolved","url":url}));
+        assert!(
+            provider
+                .resolve_stream(crate::MemoryProviderHost::new(), "opaque")
+                .is_err(),
+            "invalid scoped credential URL was accepted"
+        );
+    }
+    let provider = credential_playback_provider(
+        json!({"id":"resolved","title":"Resolved","url":"https://cdn.example/file"}),
+    );
+    assert!(
+        provider
+            .resolve_stream(crate::MemoryProviderHost::new(), "opaque")
+            .unwrap()
+            .get("novaSensitivePlayback")
+            .is_none()
+    );
+}
+
+#[test]
+fn ephemeral_credential_permission_does_not_authorize_other_fields_or_catalog_rows() {
+    let valid = json!({"id":"resolved","title":"Resolved","url":"https://tb-cdn.io/dld/file?token=private%2Ftoken"});
+    for (field, value) in [
+        ("title", json!("private/token")),
+        ("description", json!("private%2Ftoken")),
+        ("headers", json!({"Authorization":"private/token"})),
+        (
+            "subtitles",
+            json!([{"url":"https://tb-cdn.io/dld/sub?token=private%2Ftoken","language":"en"}]),
+        ),
+        ("unused", json!({"secret":"private/token"})),
+        ("novaSensitivePlayback", json!(true)),
+        ("behaviorHints", json!({"novaSensitivePlayback":true})),
+    ] {
+        let mut result = valid.clone();
+        result[field] = value;
+        let provider = credential_playback_provider(result);
+        assert!(
+            provider
+                .resolve_stream(crate::MemoryProviderHost::new(), "opaque")
+                .is_err(),
+            "private field or forged sensitive flag accepted"
+        );
+    }
+    let provider = credential_playback_provider(valid.clone());
+    assert!(
+        provider
+            .resolve_stream(crate::MemoryProviderHost::new(), "private%2Ftoken")
+            .is_err()
+    );
+    let provider = credential_playback_provider(json!([valid]));
+    assert!(
+        provider
+            .protocol_response(
+                crate::MemoryProviderHost::new(),
+                ProtocolRequest::Streams {
+                    episode_id: "ep:fixture".into()
+                }
+            )
+            .is_err()
+    );
+    let provider = credential_playback_provider(
+        json!([{"id":"x","title":"private/token","info_hash":"0123456789012345678901234567890123456789","file_idx":0}]),
+    );
+    assert!(
+        provider
+            .protocol_response(
+                crate::MemoryProviderHost::new(),
+                ProtocolRequest::Streams {
+                    episode_id: "ep:fixture".into()
+                }
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn ephemeral_playback_handles_pasted_secret_whitespace_conservatively() {
+    let mut provider = credential_playback_provider(
+        json!({"id":"resolved","title":"Resolved","url":"https://cdn.tb-cdn.io/dld/file?token=private%2Ftoken"}),
+    );
+    provider
+        .settings
+        .as_mut()
+        .unwrap()
+        .values
+        .insert("key".into(), json!("  private/token\n  "));
+    let response = provider
+        .resolve_stream(crate::MemoryProviderHost::new(), "opaque")
+        .unwrap();
+    assert_eq!(response["novaSensitivePlayback"], true);
+    assert!(provider.contains_private_setting("private%2Ftoken"));
+    assert!(provider.contains_private_setting("private/token"));
+    assert!(
+        !provider
+            .sensitive_playback_url_allowed("https://evil.example/dld/file?token=private%2Ftoken")
+    );
+}
+
+#[test]
+fn supernova_explicit_wildcard_retains_final_transport_and_secret_scope() {
+    let definition = bundled_providers()
+        .iter()
+        .find(|provider| provider.url == SUPERNOVA_PROVIDER_URL)
+        .unwrap();
+    let manifest: PluginManifest = serde_json::from_str(definition.plugin_manifest).unwrap();
+    assert_eq!(manifest.permissions.domains, ["*"]);
+    let policy = &manifest.permissions.ephemeral_playback_credentials[0];
+    assert_eq!(policy.domains, ["*"]);
+    let make = |url: &str| {
+        let mut provider =
+            credential_playback_provider(json!({"id":"resolved","title":"Resolved","url":url}));
+        provider.playback_credentials = vec![crate::runtime::EphemeralPlaybackCredential {
+            setting: "key".into(),
+            domains: policy.domains.clone(),
+            query_parameters: policy.query_parameters.clone(),
+            path_prefix: policy.path_prefix.clone(),
+        }];
+        provider
+    };
+    for url in [
+        "https://nexus-286.weur.tb-cdn.st/dld/file?token=private%2Ftoken",
+        "https://independent.example/dld/file?token=private%2Ftoken",
+    ] {
+        assert_eq!(
+            make(url)
+                .resolve_stream(crate::MemoryProviderHost::new(), "opaque")
+                .unwrap()["novaSensitivePlayback"],
+            true
+        );
+    }
+    for url in [
+        "http://independent.example/dld/file?token=private%2Ftoken",
+        "https://independent.example:444/dld/file?token=private%2Ftoken",
+        "https://user@independent.example/dld/file?token=private%2Ftoken",
+        "https://127.0.0.1/dld/file?token=private%2Ftoken",
+        "https://localhost/dld/file?token=private%2Ftoken",
+        "https://service.internal/dld/file?token=private%2Ftoken",
+        "https://independent.example/other/file?token=private%2Ftoken",
+        "https://independent.example/dld/file?token=private%2Ftoken&other=private%2Ftoken",
+        "https://independent.example/dld/file?token=private%2Ftoken#fragment",
+    ] {
+        assert!(
+            make(url)
+                .resolve_stream(crate::MemoryProviderHost::new(), "opaque")
+                .is_err()
+        );
+    }
+    assert!(credential_playback_provider(json!({"id":"resolved","title":"Resolved","url":"https://independent.example/dld/file?token=private%2Ftoken"})).resolve_stream(crate::MemoryProviderHost::new(),"opaque").is_err());
 }

@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use crate::download::{
     CancellationToken, DownloadJob, DownloadManifest, DownloadOutcome, DownloadPhase,
-    DownloadProgress, DownloadSource as JobSource, format_bytes, format_percent, part_path,
-    sanitize_filename,
+    DownloadProgress, DownloadSource as JobSource, artifact_filename, format_bytes, format_percent,
+    part_path, sanitize_filename,
 };
 use crate::torrent::TorrentStats;
 use nova_config::DownloadSettings;
@@ -253,6 +253,14 @@ impl DownloadCoordinator {
             job.display = display;
             job.addon = addon;
             job.file_name = Some(job_file_name(&job));
+            if job.source.is_http() {
+                // Preserve the readable label separately from the disk path.
+                // Persist the chosen path before the first transfer so restart
+                // never re-derives it from a subsequently refreshed UI title.
+                job.artifact_path = Some(self.inner.root.join("http").join(&job.id).join(
+                    artifact_filename(&job.id, job.file_name.as_deref().unwrap_or_default()),
+                ));
+            }
             state.manifest.jobs.push(job);
             persist_manifest(&state.manifest);
             self.bump_revision();
@@ -489,7 +497,10 @@ impl DownloadCoordinator {
 
     fn run_http(&self, job: DownloadJob, active: ActiveDownload) {
         let destination = self.http_destination(&job);
-        let result = match crate::download::new_http_client() {
+        let result = match migrate_legacy_http_partial(&job, &destination)
+            .map_err(crate::download::DownloadError::from)
+            .and_then(|()| crate::download::new_http_client())
+        {
             Ok(client) => {
                 let id = job.id.clone();
                 let coordinator = self.clone();
@@ -503,7 +514,26 @@ impl DownloadCoordinator {
             }
             Err(error) => Err(error),
         };
-        let result = result.map_err(|error| error.to_string());
+        let result = result
+            .map(|mut outcome| {
+                // The transfer reports its on-disk filename. Keep the source label
+                // readable in the UI; HLS may change the extension to a playlist.
+                let label = job.file_name.clone().unwrap_or_else(|| job_file_name(&job));
+                outcome.file_name = if outcome
+                    .path
+                    .extension()
+                    .is_some_and(|extension| extension == "m3u8")
+                {
+                    Path::new(&label)
+                        .with_extension("m3u8")
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    label
+                };
+                outcome
+            })
+            .map_err(|error| error.to_string());
         self.finish(job.id, result);
     }
 
@@ -774,12 +804,7 @@ impl DownloadCoordinator {
     }
 
     fn http_destination(&self, job: &DownloadJob) -> PathBuf {
-        let name = job
-            .file_name
-            .clone()
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| job_file_name(job));
-        self.inner.root.join("http").join(&job.id).join(name)
+        http_job_destination(&self.inner.root, job)
     }
 
     fn remove_artifacts(&self, job: &DownloadJob) {
@@ -846,6 +871,138 @@ fn canonical_for_root(path: &Path) -> PathBuf {
         return parent.join(name);
     }
     path.to_path_buf()
+}
+
+// A 240-byte display filename fits alone but its 17-byte resume suffix does
+// not. Keep legacy destinations only when every sibling can fit too.
+fn legacy_http_filename(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.chars().any(|character| {
+            character.is_control()
+                || matches!(
+                    character,
+                    '/' | '\\' | '<' | '>' | ':' | '"' | '|' | '?' | '*'
+                )
+        })
+        && !name.ends_with([' ', '.'])
+        && !crate::download::is_reserved_filename(name)
+}
+fn http_job_destination(root: &Path, job: &DownloadJob) -> PathBuf {
+    let directory = root.join("http").join(&job.id);
+    if let Some(path) = &job.artifact_path
+        && path
+            .parent()
+            .is_some_and(|parent| canonical_for_root(parent) == canonical_for_root(&directory))
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                legacy_http_filename(name)
+                    && (name.len() <= 238
+                        || (job.phase == DownloadPhase::Completed && path.is_file()))
+            })
+    {
+        return path.clone();
+    }
+    if let Some(name) = job.file_name.as_deref()
+        && legacy_http_filename(name)
+        && name.len() <= 238
+    {
+        return directory.join(name);
+    }
+    directory.join(artifact_filename(
+        &job.id,
+        job.file_name.as_deref().unwrap_or(&job.display),
+    ))
+}
+fn resume_sidecar(path: &Path) -> PathBuf {
+    let mut name = part_path(path).into_os_string();
+    name.push(".resume.json");
+    PathBuf::from(name)
+}
+/// Create a sibling without replacing an existing transfer. Some Android
+/// external filesystems cannot hard-link; copy into a create_new file there.
+fn copy_file_no_replace(from: &Path, to: &Path) -> std::io::Result<bool> {
+    let mut source = std::fs::File::open(from)?;
+    let mut target = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(to)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if let Err(error) = std::io::copy(&mut source, &mut target).and_then(|_| target.sync_all()) {
+        drop(target);
+        let _ = std::fs::remove_file(to);
+        return Err(error);
+    }
+    Ok(true)
+}
+fn link_or_copy_no_replace(from: &Path, to: &Path) -> std::io::Result<bool> {
+    match std::fs::hard_link(from, to) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(_) => copy_file_no_replace(from, to),
+    }
+}
+/// Move an oversized legacy partial into the new short name on its worker.
+/// Keep the original body and validator until both siblings are ready. If a
+/// competing transfer already owns either new path, preserve its whole pair.
+fn migrate_legacy_http_partial(job: &DownloadJob, destination: &Path) -> std::io::Result<()> {
+    let Some(directory) = destination.parent() else {
+        return Ok(());
+    };
+    let legacy = job
+        .artifact_path
+        .as_ref()
+        .filter(|path| {
+            path.parent()
+                .is_some_and(|parent| canonical_for_root(parent) == canonical_for_root(directory))
+        })
+        .cloned()
+        .or_else(|| {
+            job.file_name
+                .as_deref()
+                .filter(|name| legacy_http_filename(name))
+                .map(|name| directory.join(name))
+        });
+    let Some(legacy) = legacy.filter(|legacy| legacy != destination) else {
+        return Ok(());
+    };
+    let old_part = part_path(&legacy);
+    let new_part = part_path(destination);
+    let old_sidecar = resume_sidecar(&legacy);
+    let new_sidecar = resume_sidecar(destination);
+    let regular_file = |path: &Path| {
+        std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+    };
+    if !regular_file(&old_part) || new_part.exists() || new_sidecar.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(directory)?;
+    if !link_or_copy_no_replace(&old_part, &new_part)? {
+        return Ok(());
+    }
+    if regular_file(&old_sidecar) {
+        match link_or_copy_no_replace(&old_sidecar, &new_sidecar) {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = std::fs::remove_file(&new_part);
+                return Ok(());
+            }
+            Err(error) => {
+                let _ = std::fs::remove_file(&new_part);
+                return Err(error);
+            }
+        }
+        std::fs::remove_file(old_sidecar)?;
+    }
+    std::fs::remove_file(old_part)?;
+    Ok(())
 }
 
 fn job_file_name(job: &DownloadJob) -> String {
@@ -1291,7 +1448,9 @@ impl Bridge {
                         crate::download::validate_download_url(url).is_ok()
                     }
                     StreamSource::Torrent { .. } => true,
-                    StreamSource::Unsupported | StreamSource::Downloaded { .. } => false,
+                    StreamSource::Unsupported
+                    | StreamSource::Downloaded { .. }
+                    | StreamSource::Resolver { .. } => false,
                 };
                 let mut items = vec![SheetItem {
                     label: SharedString::from(text::tr("Play stream")),
@@ -1398,7 +1557,7 @@ impl Bridge {
                 info_hash,
                 file_idx,
             } => JobSource::torrent(info_hash.clone(), *file_idx),
-            StreamSource::Unsupported => return,
+            StreamSource::Unsupported | StreamSource::Resolver { .. } => return,
             StreamSource::Downloaded { .. } => return,
         };
         self.downloads.enqueue(NewDownload {
@@ -1617,6 +1776,149 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn long_http_labels_use_stable_hash_paths_with_readable_job_metadata() {
+        let root = temp_root("long-http-name");
+        let label = format!("{}.mkv", "ć".repeat(300));
+        let mut job = DownloadJob::new(
+            "download-long",
+            JobSource::http("https://cdn.example/video.mkv"),
+        );
+        job.title = "Readable episode title".into();
+        job.display = label.clone();
+        job.file_name = Some(job_file_name(&job));
+        assert_eq!(job.file_name.as_ref().unwrap().len(), 240);
+        let destination = http_job_destination(&root, &job);
+        assert!(destination.file_name().unwrap().len() < 100);
+        assert_eq!(destination.extension().unwrap(), "mkv");
+        assert!(resume_sidecar(&destination).file_name().unwrap().len() <= 255);
+        let restored: DownloadJob =
+            serde_json::from_str(&serde_json::to_string(&job).unwrap()).unwrap();
+        assert_eq!(http_job_destination(&root, &restored), destination);
+        assert_eq!(restored.title, "Readable episode title");
+        assert_eq!(restored.display, label);
+        let directory = destination.parent().unwrap();
+        std::fs::create_dir_all(directory).unwrap();
+        let old_partial = part_path(directory.join(job.file_name.as_ref().unwrap()));
+        std::fs::write(&old_partial, b"downloaded bytes").unwrap();
+        migrate_legacy_http_partial(&job, &destination).unwrap();
+        assert_eq!(
+            std::fs::read(part_path(&destination)).unwrap(),
+            b"downloaded bytes"
+        );
+        assert!(!old_partial.exists());
+        migrate_legacy_http_partial(&restored, &destination).unwrap();
+        assert_eq!(
+            std::fs::read(part_path(&destination)).unwrap(),
+            b"downloaded bytes"
+        );
+        let completed = directory.join(job.file_name.as_ref().unwrap());
+        std::fs::write(&completed, b"completed old artifact").unwrap();
+        job.phase = DownloadPhase::Completed;
+        job.artifact_path = Some(completed.clone());
+        assert_eq!(http_job_destination(&root, &job), completed);
+        assert!(artifact_is_valid(&job, &root));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_http_destinations_and_partial_validators_remain_compatible() {
+        let root = temp_root("legacy-http-name");
+        let directory = root.join("http/download-legacy");
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut job = DownloadJob::new(
+            "download-legacy",
+            JobSource::http("https://cdn.example/movie.mp4"),
+        );
+        job.file_name = Some("movie.mp4".into());
+        let legacy = directory.join("movie.mp4");
+        assert_eq!(http_job_destination(&root, &job), legacy);
+        std::fs::write(&legacy, b"completed legacy file").unwrap();
+        job.artifact_path = Some(legacy.clone());
+        job.phase = DownloadPhase::Completed;
+        assert!(artifact_is_valid(&job, &root));
+        assert_eq!(http_job_destination(&root, &job), legacy);
+        // Exercise the migration pair independently: both files must retain
+        // their contents if a future saved destination needs a new basename.
+        std::fs::write(part_path(&legacy), b"partial").unwrap();
+        std::fs::write(resume_sidecar(&legacy), b"validator identity").unwrap();
+        let hashed = directory.join(artifact_filename(&job.id, "movie.mp4"));
+        migrate_legacy_http_partial(&job, &hashed).unwrap();
+        assert_eq!(std::fs::read(part_path(&hashed)).unwrap(), b"partial");
+        assert_eq!(
+            std::fs::read(resume_sidecar(&hashed)).unwrap(),
+            b"validator identity"
+        );
+        assert!(
+            legacy.is_file(),
+            "completed legacy artifact must remain unchanged"
+        );
+        assert!(!part_path(&legacy).exists());
+        assert!(!resume_sidecar(&legacy).exists());
+        // Never replace a body/validator already belonging to a resumed job.
+        std::fs::write(part_path(&legacy), b"old partial").unwrap();
+        std::fs::write(resume_sidecar(&legacy), b"old validator").unwrap();
+        migrate_legacy_http_partial(&job, &hashed).unwrap();
+        assert_eq!(std::fs::read(part_path(&hashed)).unwrap(), b"partial");
+        assert_eq!(
+            std::fs::read(resume_sidecar(&hashed)).unwrap(),
+            b"validator identity"
+        );
+        assert_eq!(std::fs::read(part_path(&legacy)).unwrap(), b"old partial");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn partial_migration_copy_fallback_and_stale_siblings_never_overwrite() {
+        let root = temp_root("http-migration-copy");
+        let directory = root.join("http/download-copy");
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut job = DownloadJob::new(
+            "download-copy",
+            JobSource::http("https://cdn.example/movie.mp4"),
+        );
+        job.file_name = Some("old.mp4".into());
+        let legacy = directory.join("old.mp4");
+        let destination = directory.join(artifact_filename(&job.id, "movie.mp4"));
+        std::fs::write(part_path(&legacy), b"original body").unwrap();
+        std::fs::write(resume_sidecar(&legacy), b"original validator").unwrap();
+        std::fs::write(resume_sidecar(&destination), b"existing validator").unwrap();
+        migrate_legacy_http_partial(&job, &destination).unwrap();
+        assert!(!part_path(&destination).exists());
+        assert_eq!(std::fs::read(part_path(&legacy)).unwrap(), b"original body");
+        assert_eq!(
+            std::fs::read(resume_sidecar(&legacy)).unwrap(),
+            b"original validator"
+        );
+        assert_eq!(
+            std::fs::read(resume_sidecar(&destination)).unwrap(),
+            b"existing validator"
+        );
+        // Exercise the fallback directly, regardless of the test filesystem's
+        // hard-link support. create_new preserves an already-owned body.
+        assert!(copy_file_no_replace(&part_path(&legacy), &part_path(&destination)).unwrap());
+        assert!(!copy_file_no_replace(&resume_sidecar(&legacy), &part_path(&destination)).unwrap());
+        assert_eq!(
+            std::fs::read(part_path(&destination)).unwrap(),
+            b"original body"
+        );
+        assert_eq!(std::fs::read(part_path(&legacy)).unwrap(), b"original body");
+        migrate_legacy_http_partial(&job, &destination).unwrap();
+        assert_eq!(
+            std::fs::read(resume_sidecar(&destination)).unwrap(),
+            b"existing validator"
+        );
+        let rollback = directory.join("rollback.part");
+        assert!(copy_file_no_replace(&directory.join("missing-source"), &rollback).is_err());
+        assert!(!rollback.exists());
+        assert!(copy_file_no_replace(&directory, &rollback).is_err());
+        assert!(
+            !rollback.exists(),
+            "failed stream copy must remove its new file"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

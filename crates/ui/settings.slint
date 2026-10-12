@@ -1,5 +1,5 @@
 import { SettingsSectionHost } from "settings-section-host.slint";
-import { SettingsContent, SettingsSync, Theme, TrackingAccountRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, NavMetrics, NavState, Anim, SliderGesture, SettingsStyle, SettingsDestinations } from "@NovaUiShared";
+import { SettingsContent, SettingsSync, Theme, PluginSettingRow, TrackingAccountRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, NavMetrics, NavState, Anim, SliderGesture, SettingsStyle, SettingsDestinations } from "@NovaUiShared";
 import { SettingSyncModal } from "settings-sync-modal.slint";
 
 import { ScrollView } from "scrollview.slint";
@@ -199,9 +199,16 @@ export component SettingsPage {
     callback addon_remove(int);
     callback addon_move_up(int);
     callback addon_move_down(int);
+    property <bool> plugin_clear_confirm: false;
+    in-out property <[PluginSettingRow]> plugin_setting_rows;
+    in-out property <string> plugin_settings_notice;
+    callback plugin_setting_changed(string,string,string);
+    callback plugin_settings_clear(string);
+    callback plugin_cache_clear(string);
     in-out property <bool> addon_config_open: false;
     in-out property <string> addon_config_url;
     in-out property <string> addon_config_label;
+    in-out property <bool> addon_config_capabilities: true;
     in-out property <bool> addon_config_streams: true;
     in-out property <bool> addon_config_metadata: true;
     callback addon_capabilities_changed(string, bool, bool);
@@ -649,6 +656,7 @@ export component SettingsPage {
     }
 
     function close_addon_config() {
+        root.plugin_clear_confirm = false;
         root.addon_config_open = false;
         nav_scope.focus();
     }
@@ -2062,7 +2070,7 @@ export component SettingsPage {
             x: (parent.width - self.width) / 2;
             y: root.phone_layout ? parent.height - self.height - root.safe-bottom : (parent.height - self.height) / 2;
             width: Math.min(480px, parent.width - root.safe-left - root.safe-right - 24px);
-            height: Math.min(370px, parent.height - root.safe-top - root.safe-bottom - 24px);
+            height: Math.min(root.plugin_setting_rows.length > 0 ? 650px : 370px, parent.height - root.safe-top - root.safe-bottom - 24px);
             background: Theme.current.card;
             border-width: 1px;
             border-color: Theme.current.dialog_border;
@@ -2070,12 +2078,44 @@ export component SettingsPage {
             TouchArea { }
             config_focus := FocusScope {
                 property <int> selected: 0;
+                property <int> editing: -1;
+                property <bool> confirm_visible: root.plugin_clear_confirm;
+                changed confirm_visible => { if self.confirm_visible { config_scroll.content-y = Math.min(0px, config_scroll.visible-height - config_scroll.content-height); } }
+                public function reveal(y: length,h: length) {
+                    if y < 0px { config_scroll.content-y -= y; }
+                    else if y + h > config_scroll.visible-height { config_scroll.content-y -= y + h - config_scroll.visible-height; }
+                }
                 init => { self.focus(); }
                 key-pressed(e) => {
                     if e.repeat && e.text != Key.UpArrow && e.text != Key.DownArrow { accept }
                     else if e.text == Key.Back || e.text == Key.Escape || e.text == Key.Backspace {
-                        root.close_addon_config(); accept
-                    } else if e.text == Key.UpArrow {
+                        if root.plugin_clear_confirm { root.plugin_clear_confirm = false; }
+                        else { root.close_addon_config(); } accept
+                    } else if !root.addon_config_capabilities {
+                        SettingsStyle.keyboard-mode = true;
+                        if e.text == Key.Tab || e.text == Key.DownArrow || e.text == Key.UpArrow {
+                            self.editing = -1;
+                            self.focus();
+                            self.selected = Math.mod(self.selected + (e.text == Key.UpArrow ? root.plugin_setting_rows.length + 2 : 1), root.plugin_setting_rows.length + 3);
+                            accept
+                        } else if self.editing >= 0 && e.text == Key.Return { reject }
+                        else if e.text == Key.Return || e.text == " " || e.text == Key.LeftArrow || e.text == Key.RightArrow {
+                            if self.selected < root.plugin_setting_rows.length {
+                                if root.plugin_setting_rows[self.selected].kind == "boolean" {
+                                    root.plugin_setting_changed(root.addon_config_url, root.plugin_setting_rows[self.selected].key, root.plugin_setting_rows[self.selected].checked ? "false" : "true");
+                                } else if root.plugin_setting_rows[self.selected].kind == "choice" && root.plugin_setting_rows[self.selected].options.length > 0 {
+                                    root.plugin_setting_changed(root.addon_config_url, root.plugin_setting_rows[self.selected].key,
+                                        root.plugin_setting_rows[self.selected].options[Math.mod(root.plugin_setting_rows[self.selected].selected + (e.text == Key.LeftArrow ? root.plugin_setting_rows[self.selected].options.length - 1 : 1), root.plugin_setting_rows[self.selected].options.length)]);
+                                } else if e.text == Key.Return { self.editing = self.selected; }
+                            } else if self.selected == root.plugin_setting_rows.length { root.plugin_cache_clear(root.addon_config_url); }
+                            else if self.selected == root.plugin_setting_rows.length + 1 {
+                                if root.plugin_clear_confirm { root.plugin_clear_confirm = false; root.plugin_settings_clear(root.addon_config_url); }
+                                else { root.plugin_clear_confirm = true; }
+                            } else { root.close_addon_config(); }
+                            accept
+                        } else { reject }
+                    }
+                    else if e.text == Key.UpArrow {
                         self.selected = Math.max(0, self.selected - 1); accept
                     } else if e.text == Key.DownArrow || e.text == Key.Tab {
                         self.selected = Math.mod(self.selected + 1, 3); accept
@@ -2086,7 +2126,7 @@ export component SettingsPage {
                         accept
                     } else { reject }
                 }
-                ScrollView {
+                config_scroll := ScrollView {
                     width: 100%; height: 100%;
                     content-width: self.visible-width;
                     mouse-drag-pan-enabled: true;
@@ -2094,7 +2134,7 @@ export component SettingsPage {
                         padding: 20px; spacing: 12px;
                         Text { text: @tr("Addon configuration"); color: Theme.current.text_bright; font-size: 19px; font-weight: 700; }
                         Text { text: root.addon_config_label; color: Theme.current.text_settings; font-size: 14px; }
-                        SettingsCard {
+                        if root.addon_config_capabilities: SettingsCard {
                             VerticalLayout {
                                 spacing: 0px;
                                 SettingsRow {
@@ -2117,11 +2157,61 @@ export component SettingsPage {
                                 }
                             }
                         }
-                        if !root.addon_config_streams && !root.addon_config_metadata: Text {
+                        if root.addon_config_capabilities && !root.addon_config_streams && !root.addon_config_metadata: Text {
                             text: @tr("This addon provides no content while both options are off.");
                             color: Theme.current.text_settings; font-size: 13px; wrap: word-wrap;
                         }
-                        PillButton { label: @tr("Close"); roomy: true; focused: SettingsStyle.keyboard-mode && config_focus.selected == 2; clicked => { root.close_addon_config(); } }
+                        for field[index] in root.plugin_setting_rows: VerticalLayout {
+                            property <bool> kb_current: SettingsStyle.keyboard-mode && config_focus.selected == index;
+                            changed kb_current => { if self.kb_current { config_focus.reveal(self.absolute-position.y - config_scroll.absolute-position.y, self.height); } }
+                            spacing: 6px;
+                            Text { text: field.label; color: SettingsStyle.keyboard-mode && config_focus.selected == index ? Theme.current.focus_ring : Theme.current.text_settings; font-size: 14px; wrap: word-wrap; }
+                            if field.kind == "boolean": ToggleSwitch {
+                                name: field.label; checked: field.checked;
+                                focused: SettingsStyle.keyboard-mode && config_focus.selected == index;
+                                toggled => { root.plugin_setting_changed(root.addon_config_url, field.key, self.checked ? "true" : "false"); }
+                            }
+                            if field.kind == "choice": Dropdown {
+                                border-color: SettingsStyle.keyboard-mode && config_focus.selected == index ? Theme.current.focus_ring : Theme.current.control_border;
+                                model: field.options; labels: field.labels; current-index: field.selected; roomy: true;
+                                selected(value) => { root.plugin_setting_changed(root.addon_config_url, field.key, value); }
+                            }
+                            if field.kind == "string" || field.kind == "secret" || field.kind == "integer": HorizontalLayout {
+                                spacing: 8px;
+                                plugin_input := SearchField {
+                                    property <bool> edit_active: config_focus.editing == index;
+                                    changed edit_active => { if self.edit_active { self.focus(); } }
+                                    accessible-role: text-input; accessible-label: field.label;
+                                    horizontal-stretch: 1;
+                                    text: field.value; input-type: field.kind == "secret" ? InputType.password : InputType.text; roomy: true;
+                                    focus_changed(focused) => { if focused { config_focus.selected = index; config_focus.editing = index; } }
+                                    accepted(value) => { root.plugin_setting_changed(root.addon_config_url, field.key, value); }
+                                }
+                                PillButton { label: @tr("Save"); roomy: true; clicked => { root.plugin_setting_changed(root.addon_config_url, field.key, plugin_input.full-text); } }
+                            }
+                        }
+                        if root.plugin_settings_notice != "": Text { text: root.plugin_settings_notice; color: Theme.current.text_settings; wrap: word-wrap; }
+                        if root.plugin_setting_rows.length > 0: VerticalLayout {
+                            property <bool> kb_current: SettingsStyle.keyboard-mode && config_focus.selected >= root.plugin_setting_rows.length;
+                            changed kb_current => { if self.kb_current { config_focus.reveal(self.absolute-position.y - config_scroll.absolute-position.y,self.height); } }
+                            spacing: 8px;
+                            PillButton { width: 100%; wrap_label: true; label: @tr("Clear plugin cache"); roomy: true; focused: SettingsStyle.keyboard-mode && config_focus.selected == root.plugin_setting_rows.length; clicked => { root.plugin_cache_clear(root.addon_config_url); } }
+                            PillButton { width: 100%; wrap_label: true; label: @tr("Remove configuration everywhere"); roomy: true; focused: SettingsStyle.keyboard-mode && config_focus.selected == root.plugin_setting_rows.length + 1; clicked => { root.plugin_clear_confirm = true; } }
+                        }
+                        if root.plugin_clear_confirm: VerticalLayout {
+                            spacing: 8px;
+                            Text { text: @tr("Remove this configuration on all synced devices?"); color: Theme.current.text_settings; wrap: word-wrap; }
+                            VerticalLayout {
+                                spacing: 8px;
+                                PillButton { width: 100%; wrap_label: true; label: @tr("Cancel"); roomy: true; clicked => { root.plugin_clear_confirm = false; } }
+                                PillButton { width: 100%; wrap_label: true; label: @tr("Remove configuration"); roomy: true; clicked => { root.plugin_clear_confirm = false; root.plugin_settings_clear(root.addon_config_url); } }
+                            }
+                        }
+                        PillButton {
+                            property <bool> kb_current: SettingsStyle.keyboard-mode && config_focus.selected == (root.addon_config_capabilities ? 2 : root.plugin_setting_rows.length + 2);
+                            changed kb_current => { if self.kb_current && !root.addon_config_capabilities { config_focus.reveal(self.absolute-position.y - config_scroll.absolute-position.y,self.height); } }
+                            label: @tr("Close"); roomy: true; focused: self.kb_current; clicked => { root.close_addon_config(); }
+                        }
                     }
                 }
             }

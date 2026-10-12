@@ -1,4 +1,4 @@
-import { MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed } from "@NovaUiShared";
+import { PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed } from "@NovaUiShared";
 
 // These nonvisual components live for the entire AppWindow lifetime.
 // Linking a remounted host to an already-connected backend/global pool
@@ -227,9 +227,12 @@ export component SettingsBindings {
     in-out property <string> sync_pair_prompt_code <=> SettingsBridge.sync_pair_prompt_code;
     in-out property <bool> kb_active <=> SettingsBridge.kb_active;
     in-out property <length> scroll_y <=> SettingsBridge.scroll_y;
+    in-out property <[PluginSettingRow]> plugin_setting_rows <=> SettingsBridge.plugin_setting_rows;
+    in-out property <string> plugin_settings_notice <=> SettingsBridge.plugin_settings_notice;
     in-out property <bool> addon_config_open <=> SettingsBridge.addon_config_open;
     in-out property <string> addon_config_url <=> SettingsBridge.addon_config_url;
     in-out property <string> addon_config_label <=> SettingsBridge.addon_config_label;
+    in-out property <bool> addon_config_capabilities <=> SettingsBridge.addon_config_capabilities;
     in-out property <bool> addon_config_streams <=> SettingsBridge.addon_config_streams;
     in-out property <bool> addon_config_metadata <=> SettingsBridge.addon_config_metadata;
 }

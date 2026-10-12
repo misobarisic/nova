@@ -58,7 +58,7 @@ fn plural(n: u64, one: &'static str, few: &'static str, many: &'static str) -> &
 }
 
 /// Croatian for a fixed backend-built string; unknown keys stay English.
-pub fn tr(english: &'static str) -> &'static str {
+pub fn tr(english: &str) -> &str {
     if !croatian() {
         return english;
     }
@@ -67,6 +67,64 @@ pub fn tr(english: &'static str) -> &'static str {
         "Could not save your preferences. Please try again." => {
             "Postavke nije moguće spremiti. Pokušajte ponovno."
         }
+        "APIBay (movies and TV)" => "APIBay (filmovi i serije)",
+        "Preferred quality" => "Željena kvaliteta",
+        "Minimum seeders" => "Najmanji broj seedera",
+        "Playback mode" => "Način reprodukcije",
+        "Any" => "Bilo koja",
+        "Direct P2P" => "Izravno P2P",
+        "Prefer cached TorBox" => "Prednost TorBox predmemoriji",
+        "Cached TorBox only" => "Samo TorBox predmemorija",
+        "Use TorBox" => "Koristi TorBox",
+        "TorBox API key" => "TorBox API ključ",
+        "Resolving stream…" => "Priprema streama…",
+        "This stream selection is out of date. Reload streams." => {
+            "Odabrani stream više nije aktualan. Ponovno učitajte streamove."
+        }
+        "Direct torrent results are hidden while P2P streaming is disabled." => {
+            "Izravni torrent rezultati skriveni su dok je P2P reprodukcija isključena."
+        }
+        "Select a source in addon configuration." => "Odaberite izvor u postavkama dodatka.",
+        "Source unavailable. Other sources are still usable." => {
+            "Izvor nije dostupan. Ostali izvori i dalje su dostupni."
+        }
+        "Source returned an unsupported response." => "Izvor je vratio nepodržan odgovor.",
+        "Provider unavailable. Try again later." => {
+            "Pružatelj nije dostupan. Pokušajte ponovno kasnije."
+        }
+        "Enable TorBox and configure its API key to use cached playback." => {
+            "Uključite TorBox i unesite API ključ za reprodukciju iz predmemorije."
+        }
+        "Could not resolve this stream." => "Stream nije moguće pripremiti.",
+        "Could not resolve this stream. Try another result or check the addon configuration." => {
+            "Stream nije moguće pripremiti. Odaberite drugi rezultat ili provjerite postavke dodatka."
+        }
+        "Configure a TorBox API key first." => "Najprije unesite TorBox API ključ.",
+        "The TorBox API key is invalid." => "TorBox API ključ nije valjan.",
+        "TorBox rejected the API key or account permissions." => {
+            "TorBox je odbio API ključ ili dozvole računa."
+        }
+        "TorBox is rate limited. Try again later." => {
+            "Dosegnuto je ograničenje TorBox zahtjeva. Pokušajte kasnije."
+        }
+        "TorBox is unavailable. Try again later." => "TorBox nije dostupan. Pokušajte kasnije.",
+        "This torrent is no longer cached on TorBox." => "Torrent više nije u TorBox predmemoriji.",
+        "TorBox account limits prevent playback." => {
+            "Ograničenja TorBox računa sprječavaju reprodukciju."
+        }
+        "TorBox could not resolve this stream." => "TorBox ne može pripremiti ovaj stream.",
+        "Invalid Supernova stream selection." => "Odabrani Supernova stream nije valjan.",
+        "TorBox playback is disabled." => "TorBox reprodukcija je isključena.",
+        "TorBox could not confirm the cached torrent." => {
+            "TorBox ne može potvrditi torrent u predmemoriji."
+        }
+        "TorBox has not made this cached torrent available yet. Try again later." => {
+            "TorBox još nije pripremio torrent iz predmemorije. Pokušajte kasnije."
+        }
+        "Cannot determine the correct video file." => {
+            "Nije moguće odrediti ispravnu videodatoteku."
+        }
+        "TorBox returned an invalid playback URL." => "TorBox je vratio nevaljan URL reprodukcije.",
         "On" => "Uključeno",
         "Off" => "Isključeno",
         "Automatic" => "Automatski",

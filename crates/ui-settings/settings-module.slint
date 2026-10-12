@@ -149,9 +149,12 @@ export component SettingsModule inherits Window {
         safe-right <=> SettingsBridge.safe-right;
         safe-bottom <=> SettingsBridge.safe-bottom;
         scroll_y <=> SettingsBridge.scroll_y;
+        plugin_setting_rows <=> SettingsBridge.plugin_setting_rows;
+        plugin_settings_notice <=> SettingsBridge.plugin_settings_notice;
         addon_config_open <=> SettingsBridge.addon_config_open;
         addon_config_url <=> SettingsBridge.addon_config_url;
         addon_config_label <=> SettingsBridge.addon_config_label;
+        addon_config_capabilities <=> SettingsBridge.addon_config_capabilities;
         addon_config_streams <=> SettingsBridge.addon_config_streams;
         addon_config_metadata <=> SettingsBridge.addon_config_metadata;
         search_matches(arg0, arg1) => { SettingsBridge.search_matches(arg0, arg1); }
@@ -168,6 +171,9 @@ export component SettingsModule inherits Window {
         addon_move_up(arg0) => { SettingsBridge.addon_move_up(arg0); }
         addon_move_down(arg0) => { SettingsBridge.addon_move_down(arg0); }
         addon_capabilities_changed(arg0, arg1, arg2) => { SettingsBridge.addon_capabilities_changed(arg0, arg1, arg2); }
+        plugin_setting_changed(arg0,arg1,arg2) => { SettingsBridge.plugin_setting_changed(arg0,arg1,arg2); }
+        plugin_settings_clear(arg0) => { SettingsBridge.plugin_settings_clear(arg0); }
+        plugin_cache_clear(arg0) => { SettingsBridge.plugin_cache_clear(arg0); }
         addon_configure(arg0) => { SettingsBridge.addon_configure(arg0); }
         addon_refresh(arg0) => { SettingsBridge.addon_refresh(arg0); }
         addon_copy_link(arg0) => { SettingsBridge.addon_copy_link(arg0); }

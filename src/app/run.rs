@@ -134,6 +134,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let owns_addon_setup = onboarding::owns_addon_setup();
     app.set_onboarding_visible(onboarding_visible);
     nova_providers::set_metadata_cache(Arc::new(io::ProviderMetadataCache));
+    if let Err(error) = nova_providers::plugin_settings::configure_plugin_settings(Arc::new(
+        plugin_settings::Backend,
+    )) {
+        io::block_unreadable(plugin_settings::KEY);
+        storage::report(storage::Error::new(storage::ErrorKind::Schema, error));
+    }
     crate::web_log("nova: window created");
 
     // Player scrim: femtovg's gradient fills render as flat fills in this
@@ -402,8 +408,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
     });
     let b = bridge.clone();
+    app.on_plugin_setting_changed({
+        let b = bridge.clone();
+        move |url, key, value| {
+            b.change_plugin_setting(&url, &key, &value);
+        }
+    });
+    app.on_plugin_settings_clear({
+        let b = bridge.clone();
+        move |url| {
+            b.clear_plugin_settings(&url, false);
+        }
+    });
+    app.on_plugin_cache_clear({
+        let b = bridge.clone();
+        move |url| {
+            b.clear_plugin_settings(&url, true);
+        }
+    });
     app.on_addon_configure(move |url| {
-        if let Some(config) = nova_providers::provider_capabilities(&url) {
+        if nova_providers::supports_provider_configuration(&url) {
+            let config = nova_providers::provider_capabilities(&url).unwrap_or_default();
             if let Some(app) = b.app() {
                 let label = b
                     .shared
@@ -414,6 +439,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .find(|a| a.url == url.as_str())
                     .map(|a| a.label.clone())
                     .unwrap_or_default();
+                app.set_addon_config_capabilities(nova_providers::supports_capability_config(&url));
+                app.set_plugin_settings_notice("".into());
+                b.refresh_plugin_settings_ui(&url);
                 app.set_addon_config_label(label.into());
                 app.set_addon_config_url(url);
                 app.set_addon_config_streams(config.streams);
@@ -894,10 +922,35 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Register this bundled-source generation once. Its ordinary addon row
     // preserves disable/remove choices on subsequent launches.
     for provider in nova_providers::bundled_providers() {
-        if !owns_addon_setup && nova_storage::get_str(provider.registration_key).is_none() {
+        // Disabled opt-in sources can be offered without changing onboarding's
+        // active addon choices. Never overwrite an explicit install or revive
+        // a synced removal received before this build knew the provider.
+        if (!owns_addon_setup || !provider.default_enabled)
+            && nova_storage::get_str(provider.registration_key).is_none()
+        {
             let manifest = Addon::parse_manifest(provider.addon_manifest.as_bytes())
                 .expect("valid bundled addon manifest");
-            bridge.install_persisted(provider.url, true, Some(false), Some(manifest.name));
+            let has_choice = persisted
+                .iter()
+                .any(|addon| addon.url.trim_end_matches('/') == provider.url)
+                || extra
+                    .iter()
+                    .any(|url| url.trim_end_matches('/') == provider.url)
+                || nova_sync::local_store().ok().is_some_and(|store| {
+                    store
+                        .lock()
+                        .unwrap()
+                        .record(sync::DOMAIN_ADDONS, provider.url)
+                        .is_some()
+                });
+            if !has_choice {
+                bridge.install_persisted(
+                    provider.url,
+                    provider.default_enabled,
+                    Some(false),
+                    Some(manifest.name),
+                );
+            }
             nova_storage::set_str(provider.registration_key, "1");
         }
     }
@@ -935,6 +988,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Only unapplied records need replay; snapshots already materialized
     // by previous launches/local writes are authoritative and cheap to load.
     bridge.restore_playback_preferences_schema();
+    if let Err(error) = plugin_settings::restore_retained_settings() {
+        storage::report(storage::Error::new(storage::ErrorKind::Transaction, error));
+    }
     bridge.seed_playback_default_settings();
     bridge.sync_seed();
     bridge.restore_sync_projection();
