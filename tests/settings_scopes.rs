@@ -400,6 +400,73 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
         has_shared: true,
         shared_supported: true,
     });
+    // A badge beside a SettingsRow title supplies the natural text width.
+    // The same label must stay compact in vertical cards and the comparison
+    // sheet, whose cross-axis used to stretch it across all available space.
+    for key in ["torrent_dir", "sync_device_name"] {
+        rows.push(nova::SettingSyncInfo {
+            key: key.into(),
+            status: 1,
+            ..Default::default()
+        });
+    }
+    app.set_show_torrents(true);
+    for language in ["en", "hr"] {
+        slint::select_bundled_translation(language).unwrap();
+        for width in [320, 390, 1280] {
+            app.window().set_size(slint::PhysicalSize::new(width, 1400));
+            for status in [0, 1, 2] {
+                for key in ["language", "torrent_dir", "sync_device_name"] {
+                    let index = rows.iter().position(|row| row.key == key).unwrap();
+                    let mut row = rows.row_data(index).unwrap();
+                    row.status = status;
+                    rows.set_row_data(index, row);
+                }
+                app.set_settings_selected_id(3);
+                app.set_settings_scroll_y(0.0);
+                settle(&app);
+                let reference = badge(&app, "language");
+                let natural_width = reference.size().width;
+                reference.mock_single_click(slint::platform::PointerEventButton::Left);
+                settle(&app);
+                let panel = ElementHandle::find_by_element_id(&app, "SettingSyncModal::panel")
+                    .next()
+                    .unwrap();
+                let modal_badge = panel
+                    .query_descendants()
+                    .match_predicate(|e| {
+                        e.accessible_id().as_deref() == Some("setting-scope:language")
+                    })
+                    .find_first()
+                    .expect("comparison sheet scope badge");
+                assert!(
+                    (modal_badge.size().width - natural_width).abs() < 0.5,
+                    "{language}/{width}/{status}: modal badge {} must fit its text width {natural_width}",
+                    modal_badge.size().width,
+                );
+                app.global::<nova::SettingsSync>().set_open(false);
+                for (page, key) in [(4, "torrent_dir"), (7, "sync_device_name")] {
+                    app.set_settings_selected_id(page);
+                    app.set_settings_scroll_y(0.0);
+                    settle(&app);
+                    let scope = badge(&app, key);
+                    let position = scope.absolute_position();
+                    let size = scope.size();
+                    assert!(
+                        (size.width - natural_width).abs() < 0.5,
+                        "{language}/{width}/{status}/{key}: vertical card badge {} must fit its text width {natural_width}",
+                        size.width,
+                    );
+                    assert!(position.x >= -0.5 && position.x + size.width <= width as f32 + 0.5);
+                }
+            }
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
+    let index = rows.iter().position(|row| row.key == "language").unwrap();
+    let mut language = rows.row_data(index).unwrap();
+    language.status = 1;
+    rows.set_row_data(index, language);
     app.set_settings_selected_id(3);
     app.window().set_size(slint::PhysicalSize::new(390, 844));
     app.global::<nova::Anim>().set_enabled(true);

@@ -203,7 +203,7 @@ export component SettingsSyncModule inherits Window {
                             font-weight: 600;
                             color: Theme.current.text_bright;
                         }
-                        SettingSyncBadge { max-width: parent.width; setting_key: "sync_device_name"; setting_title: @tr("Device name"); }
+                        SettingSyncBadge { max-width: Math.min(self.preferred-width, parent.width); setting_key: "sync_device_name"; setting_title: @tr("Device name"); }
 
                         SearchField {
                             show-pointer-focus: false; keyboard-mode: SettingsBridge.kb_active;

@@ -62,7 +62,7 @@ export component SettingSyncModal inherits Rectangle {
                     PillButton { label: "×"; btn_min_width: 44px; compact: true; clicked => { root.close(); } }
                 }
                 Text { text: SettingsSync.selected_title; font-size: 16px; font-weight: 600; color: Theme.current.text_bright; wrap: word-wrap; }
-                SettingSyncBadge { max-width: content.width; setting_key: SettingsSync.selected_key; setting_title: SettingsSync.selected_title; }
+                SettingSyncBadge { max-width: Math.min(self.preferred-width, content.width); setting_key: SettingsSync.selected_key; setting_title: SettingsSync.selected_title; }
                 Rectangle { height: 1px; background: Theme.current.border_subtle; }
                 Text { text: @tr("Value on this device"); font-size: 13px; color: Theme.current.text_settings; }
                 Text { text: root.info.local_value; font-size: 16px; color: Theme.current.text_bright; wrap: word-wrap; }

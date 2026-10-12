@@ -81,7 +81,7 @@ export component SettingsP2pModule inherits Window {
                                         font-weight: 600;
                                         color: Theme.current.text_bright;
                                     }
-                                    SettingSyncBadge { max-width: parent.width; setting_key: "torrent_dir"; setting_title: @tr("Download folder"); }
+                                    SettingSyncBadge { max-width: Math.min(self.preferred-width, parent.width); setting_key: "torrent_dir"; setting_title: @tr("Download folder"); }
 
                                     Text {
                                         text: @tr("Where P2P data is stored. Leave empty to use the default app cache folder.");
@@ -148,7 +148,7 @@ export component SettingsP2pModule inherits Window {
                                         color: Theme.current.text_bright;
                                         wrap: word-wrap;
                                     }
-                                    SettingSyncBadge { max-width: parent.width; setting_key: "torrent_dir"; setting_title: @tr("Download folder"); }
+                                    SettingSyncBadge { max-width: Math.min(self.preferred-width, parent.width); setting_key: "torrent_dir"; setting_title: @tr("Download folder"); }
 
                                     Text {
                                         text: @tr("Where P2P data is stored. Leave empty to use the default app cache folder.");
@@ -265,7 +265,7 @@ export component SettingsP2pModule inherits Window {
                                         color: Theme.current.text_bright;
                                         wrap: word-wrap;
                                     }
-                                    SettingSyncBadge { max-width: parent.width; setting_key: "torrent_max_mb"; setting_title: @tr("Cache size limit"); }
+                                    SettingSyncBadge { max-width: Math.min(self.preferred-width, parent.width); setting_key: "torrent_max_mb"; setting_title: @tr("Cache size limit"); }
 
                                     Text {
                                         text: @tr("Maximum disk space for downloaded P2P data. Least-recently-used items are removed first once exceeded.");
@@ -362,7 +362,7 @@ export component SettingsP2pModule inherits Window {
                                         color: Theme.current.text_bright;
                                         wrap: word-wrap;
                                     }
-                                    SettingSyncBadge { max-width: parent.width; setting_key: "torrent_down_limit"; setting_title: @tr("Download rate limit"); }
+                                    SettingSyncBadge { max-width: Math.min(self.preferred-width, parent.width); setting_key: "torrent_down_limit"; setting_title: @tr("Download rate limit"); }
 
                                     Text {
                                         text: @tr("Cap the download speed. 0 means unlimited.");

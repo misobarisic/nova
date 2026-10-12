@@ -25,6 +25,9 @@ export component SettingSyncBadge inherits Rectangle {
     accessible-description: root.setting_title;
     accessible-id: "setting-scope:" + root.setting_key;
     preferred-width: badge_text.preferred-width + 34px;
+    // Vertical layouts stretch their cross-axis even when stretch is zero.
+    // Keep the pill at its text width; callers also cap it to the available space.
+    max-width: self.preferred-width;
     horizontal-stretch: 0;
     height: 26px;
     border-radius: 6px;

@@ -46,10 +46,10 @@ component AccountEditor inherits Rectangle {
         Text { text: root.entry.state; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0; }
         SettingsRow { setting-key: "tracking_automatic_" + root.entry.service; row-title: @tr("Automatic tracking for linked releases"); ToggleSwitch { name: @tr("Automatic tracking for linked releases"); checked: root.entry.automatic; toggled => { root.automatic(root.entry.service, self.checked); } } }
         Text { text: @tr("Public client ID"); color: Theme.current.text_settings; }
-        SettingSyncBadge { max-width: parent.width; setting_key: "tracking_client_" + root.entry.service; setting_title: @tr("Public client ID"); }
+        SettingSyncBadge { max-width: Math.min(self.preferred-width, parent.width); setting_key: "tracking_client_" + root.entry.service; setting_title: @tr("Public client ID"); }
         client_input := SettingsInput { text <=> root.client; placeholder-text: @tr("Public client ID"); accessible-label: @tr("Public client ID"); }
         Text { text: @tr("Registered redirect URL"); color: Theme.current.text_settings; }
-        SettingSyncBadge { max-width: parent.width; setting_key: "tracking_redirect_" + root.entry.service; setting_title: @tr("Registered redirect URL"); }
+        SettingSyncBadge { max-width: Math.min(self.preferred-width, parent.width); setting_key: "tracking_redirect_" + root.entry.service; setting_title: @tr("Registered redirect URL"); }
         redirect_input := SettingsInput { text <=> root.redirect; placeholder-text: @tr("Registered redirect URL"); accessible-label: @tr("Registered redirect URL"); }
         if !root.entry.signing_in: PillButton {
             label: root.entry.connected ? @tr("Reconnect") : @tr("Connect");
