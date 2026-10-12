@@ -167,6 +167,58 @@ fn nyaa_fixture(names: &[&str], title: &str) -> (Arc<FixtureHost>, String) {
     host.response("/download/7.torrent", 200, bytes);
     (host, hash)
 }
+
+#[test]
+fn nyaa_descriptions_upgrade_proved_streams_and_survive_result_cache_hits() {
+    for mode in ["direct", "cached"] {
+        let (host, hash) = nyaa_fixture(&["Example S01E02.mkv"], "Example S01E02 2020");
+        host.account(
+            &hash,
+            json!([{"id":77,"name":"Example S01E02.mkv","size":4}]),
+        );
+        host.response("/view/7", 200, format!(r#"<html><body>
+          <div class="panel-body"><kbd>{hash}</kbd></div>
+          <a href="/download/7.torrent">torrent</a><a href="magnet:?xt=urn:btih:{hash}">magnet</a>
+          <div id="torrent-description">HEVC 10bit SoftSubbed - 1920 x 1080&#10;**Audio**: Japanese - English&#10;**Subtitles**: French&#10;Plot: An English traveller meets a German friend.</div>
+          <div id="comments">Audio: German</div></body></html>"#));
+        let first = run_lookup(host.clone(), "nyaa", mode);
+        assert_eq!(first.as_array().unwrap().len(), 1, "{mode}: {first}");
+        let row = &first[0];
+        assert!(row["title"].as_str().unwrap().contains("1080p"), "{row}");
+        let description = row["description"].as_str().unwrap();
+        assert!(description.contains("🎞️ HEVC"), "{description}");
+        assert!(
+            description.contains("🌐 Audio: Japanese · English"),
+            "{description}"
+        );
+        assert!(
+            description.contains("💬 Subtitles: French"),
+            "{description}"
+        );
+        assert!(!description.contains("German"));
+        if mode == "cached" {
+            let publications = host.publications.lock().unwrap();
+            assert!(
+                publications.first().unwrap()[0]["description"]
+                    .as_str()
+                    .unwrap()
+                    .find("🌐 Audio")
+                    .is_none()
+            );
+            assert_eq!(publications.first().unwrap()[0]["id"], row["id"]);
+        }
+        let calls = host.requests.lock().unwrap().len();
+        let second = run_lookup_raw(host.clone(), "nyaa", mode);
+        assert_eq!(second["cacheHit"], true);
+        assert_eq!(host.requests.lock().unwrap().len(), calls);
+        assert!(
+            second["streams"][0]["description"]
+                .as_str()
+                .unwrap()
+                .contains("💬 Subtitles: French")
+        );
+    }
+}
 fn cached_fixture() -> (Arc<FixtureHost>, String, Value) {
     let (host, hash) = nyaa_fixture(&["Example S01E02.mkv"], "Example S01E02 2020 1080p");
     // Cache IDs intentionally differ from P2P indices and account file IDs.

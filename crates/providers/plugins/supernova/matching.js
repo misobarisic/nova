@@ -303,19 +303,19 @@
   S.rank = (records, settings) => {
     const quality = settings["quality.preferred"] || "1080p";
     const qualityPattern = quality === "any" ? null : new RegExp("\\b" + quality + "\\b", "i");
-    const preferred = new Map(records.map(record=>[record,!qualityPattern || qualityPattern.test(record.title)]));
+    const preferred = new Map(records.map(record=>[record,!qualityPattern || qualityPattern.test(record.title) || String(S.recordMetadata(record).resolution)+"p"===quality]));
     const order = S.sortOrder(settings);
     // Preserve the existing quality preference for the bounded inspection pool.
     // Availability is unknown here; visible proved rows use the full sort order.
     const metrics = memoizedMetrics((record,key)=>{
       switch (key) {
-        case "resolution": return S.resolution(record.title);
+        case "resolution": { const metadata=S.recordMetadata(record); return Object.prototype.hasOwnProperty.call(metadata,"resolution") ? metadata.resolution : S.resolution(record.title); }
         case "size": return S.number(record.sizeBytes);
         case "pack": return S.pack(record.title);
         case "seeders": return S.number(record.seeders);
-        case "language": return S.languageRank([record.title],settings,record.trackMetadata);
-        case "subtitle": return S.subtitleRank([record.title],settings,record.trackMetadata);
-        case "codec": return S.codecRank([record.title],settings,record.trackMetadata);
+        case "language": return S.languageRank([record.title],settings,S.recordMetadata(record));
+        case "subtitle": return S.subtitleRank([record.title],settings,S.recordMetadata(record));
+        case "codec": return S.codecRank([record.title],settings,S.recordMetadata(record));
         default: return null;
       }
     });

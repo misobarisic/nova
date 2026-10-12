@@ -9,7 +9,7 @@
     const enabled = Object.keys(S.sources).filter(id => settings["sources." + id] === true);
     if (!enabled.length) return {streams:[],warnings:[{source:"Supernova",message:"Select a source in addon configuration."}]};
     const sourceConfiguration = enabled.includes("stremthru") ? {stremthru:settings["stremthru.url"] || "https://stremthru.13377001.xyz"} : {};
-    const resultIdentity = JSON.stringify({v:S.VERSION,presentationVersion:2,lookup,enabled,sourceConfiguration,quality:settings["quality.preferred"],sort:S.sortOrder(settings),languages:settings["language.prefs"] || [],subtitles:settings["subtitle.prefs"] || [],codecs:settings["codec.prefs"] || [],seeders:settings["seeders.minimum"],mode:settings["playback.mode"],torbox:settings["torbox.enabled"]});
+    const resultIdentity = JSON.stringify({v:S.VERSION,presentationVersion:3,lookup,enabled,sourceConfiguration,quality:settings["quality.preferred"],sort:S.sortOrder(settings),languages:settings["language.prefs"] || [],subtitles:settings["subtitle.prefs"] || [],codecs:settings["codec.prefs"] || [],seeders:settings["seeders.minimum"],mode:settings["playback.mode"],torbox:settings["torbox.enabled"]});
     const resultKey = "results:v1:" + nova.crypto.hmacSha256Base64Url(resultIdentity,"supernova-results-v1");
     const text = (value,limit) => typeof value === "string" && value.length > 0 && value.length <= limit;
     const only = (value,keys) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key));
@@ -49,7 +49,7 @@
     // check or prevent already-proved direct files from reaching the caller.
     const discoveryDeadline = deadline - (settings["playback.mode"] === "cached" ? 500 : 6500);
     const optionalDeadline = discoveryDeadline - (settings["playback.mode"] === "direct" ? 0 : 3000);
-    const identity = JSON.stringify({v:S.VERSION,fetchVersion:3,lookup,enabled,sourceConfiguration,quality:settings["quality.preferred"],sort:S.sortOrder(settings),languages:settings["language.prefs"] || [],subtitles:settings["subtitle.prefs"] || [],codecs:settings["codec.prefs"] || [],seeders:settings["seeders.minimum"]});
+    const identity = JSON.stringify({v:S.VERSION,fetchVersion:4,lookup,enabled,sourceConfiguration,quality:settings["quality.preferred"],sort:S.sortOrder(settings),languages:settings["language.prefs"] || [],subtitles:settings["subtitle.prefs"] || [],codecs:settings["codec.prefs"] || [],seeders:settings["seeders.minimum"]});
     const cacheKey = "lookup:v3:" + nova.crypto.hmacSha256Base64Url(identity,"supernova-matcher-v2");
     const cached = S.cacheGet(cacheKey);
     const now = Math.floor(started / 1000);
@@ -60,6 +60,8 @@
       Array.isArray(record.sources) && record.sources.length > 0 && record.sources.length <= 8 && record.sources.every(source => typeof source === "string" && source.length > 0 && source.length <= 64) &&
       (record.animetoshoId === undefined || record.animetoshoId === null || (S.number(record.animetoshoId)>0 && S.number(record.animetoshoId)<=9999999999)) &&
       (record.trackMetadata === undefined || (S.validTrackMetadata(record.trackMetadata) && record.trackMetadata.fileName===record.fileName && record.trackMetadata.fileSize===record.sizeBytes)) &&
+      (record.sourceMetadata === undefined || record.sourceMetadata === null || S.validReleaseEvidence(record.sourceMetadata)) &&
+      (record.details === undefined || (Array.isArray(record.details) && record.details.length<=8 && record.details.every(S.validDetailReference))) &&
       (record.fileName === undefined || (typeof record.fileName === "string" && record.fileName.length > 0 && record.fileName.length <= 2048)) &&
       validNumber(record.fileIdx) && (record.fileIdx === null || S.number(record.fileIdx) <= 4294967295) && validNumber(record.sizeBytes) && validNumber(record.seeders) &&
       (record.torrentUrl === null || (typeof record.torrentUrl === "string" && S.metainfoUrl(record.torrentUrl,null) === record.torrentUrl)));
@@ -76,6 +78,7 @@
     let torbox = [];
     const availableRows = new Map(), checkedHashes = new Set();
     let discoveryRequests=0;
+    let descriptionRequests=0;
     const discoveryRequestLimit=48-(settings["playback.mode"] === "cached" ? 0 : 6);
     const currentRows = () => {
       const ranked = records || [];
@@ -84,6 +87,11 @@
       const rows = S.sortRows([...torbox.map(row=>({...row})),...direct],settings).slice(0,S.MAX);
       if (discoveryCacheHit) for (const row of rows) if (!row.resolver) row.description = S.cachedDiscoveryDescription(row.description);
       return rows;
+    };
+    const enrichEvidence = () => {
+      const used=S.enrichReleaseEvidence(records,availableRows,Math.min(discoveryDeadline,Date.now()+2200),Math.min(6-descriptionRequests,discoveryRequestLimit-discoveryRequests),()=>publish(currentRows()),enabled);
+      descriptionRequests+=used;discoveryRequests+=used;
+      records=S.rank(records,settings);
     };
     const checkNew = () => {
       if (settings["playback.mode"] === "direct") return;
@@ -130,6 +138,7 @@
             if (row.seeders !== null) existing.seeders = Math.max(existing.seeders || 0,row.seeders);
             if (!existing.torrentUrl) existing.torrentUrl = row.torrentUrl;
             if (!existing.animetoshoId && S.number(row.animetoshoId)>0) existing.animetoshoId=row.animetoshoId;
+            S.mergeRecordEvidence(existing,row);
           } else merged.set(row.infoHash,{...row,fileIdx:null});
         }
         if (!search.fallback && source.pages) {
@@ -155,6 +164,7 @@
         records=all.slice(0,S.CANDIDATE_MAX);
         merged.clear();for (const record of records) merged.set(record.infoHash,record);
         checkNew();
+        enrichEvidence();
         pending.sort((a,b)=>a.variant-b.variant || a.page-b.page);
       }
       if (pending.length) discoveryIncomplete=true;
@@ -163,6 +173,7 @@
       records=S.rank(records.filter(record=>S.candidateMatches(record,lookup)),settings).slice(0,S.CANDIDATE_MAX);
       publish(currentRows());
       checkNew();
+      enrichEvidence();
     }
     const inspectionDeadline = deadline - 500;
     const toInspect = settings["playback.mode"] !== "cached" ? records.filter(record => S.number(record.fileIdx) === null && record.torrentUrl).sort((a,b)=>(a.metainfoAttemptAt || 0)-(b.metainfoAttemptAt || 0)).slice(0,6) : [];

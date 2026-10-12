@@ -27,7 +27,10 @@
         seeders:S.number(row.liveSeeders) ?? S.number(row.seeders),
         // Knaben's `link` may be an indexer download proxy, not metainfo.
         // Use the hash mirror and retain exact hash/file verification.
-        torrentUrl:S.metainfoUrl(null,infoHash),sources:["Knaben"]}];
+        torrentUrl:S.metainfoUrl(null,infoHash),sources:["Knaben"],
+        // The API's searchable description is source evidence; external
+        // details/link URLs are never followed or retained for enrichment.
+        sourceMetadata:S.releaseEvidence(typeof row.description==='string'?row.description:'')}];
     }),
   };
 })();

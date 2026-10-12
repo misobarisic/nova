@@ -15,7 +15,13 @@ mod runtime;
 mod sequence;
 mod stremio;
 #[cfg(test)]
+mod supernova_description_tests;
+#[cfg(test)]
+mod supernova_evidence_tests;
+#[cfg(test)]
 mod supernova_live_tests;
+#[cfg(test)]
+mod supernova_source_evidence_tests;
 #[cfg(test)]
 mod supernova_tests;
 #[cfg(test)]

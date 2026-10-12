@@ -3,6 +3,8 @@ fn main() {
     let files = [
         "core.js",
         "matching.js",
+        "evidence.js",
+        "enrichment.js",
         "metadata.js",
         "presentation.js",
         "sources/nyaa.js",

@@ -40,21 +40,24 @@
     const fileLabel = basename(display(fileName));
     const tracks = S.validTrackMetadata(record.trackMetadata)
       && record.trackMetadata.fileName === fileName && record.trackMetadata.fileSize === record.sizeBytes ? record.trackMetadata : null;
+    const evidence = S.recordMetadata(record,tracks);
     const release = releaseMetadata(record.title);
     const file = releaseMetadata(basename(fileName));
     const metadata = Object.fromEntries(Object.keys(release).map(key=>[key,release[key] || file[key]]));
-    const codec = tracks ? tracks.videoCodec : S.releaseVideoCodec([record.title,basename(fileName)]);
-    metadata.video = codec ? {avc:"AVC",hevc:"HEVC",av1:"AV1"}[codec] : tracks ? "Codec unknown" : /\bXviD\b/i.test(record.title + " " + basename(fileName)) ? "XviD" : null;
-    const resolution = S.resolution(record.title) || S.resolution(basename(fileName));
+    const hasCodec = Object.prototype.hasOwnProperty.call(evidence,"videoCodec");
+    const codec = hasCodec ? evidence.videoCodec : S.releaseVideoCodec([record.title,basename(fileName)]);
+    metadata.video = codec ? {avc:"AVC",hevc:"HEVC",av1:"AV1"}[codec] : hasCodec ? "Codec unknown" : /\bXviD\b/i.test(record.title + " " + basename(fileName)) ? "XviD" : null;
+    if (Object.prototype.hasOwnProperty.call(evidence,"releaseSource")) metadata.source=evidence.releaseSource;
+    const resolution = Object.prototype.hasOwnProperty.call(evidence,"resolution") ? evidence.resolution : S.resolution(record.title) || S.resolution(basename(fileName));
     const video = [metadata.source,metadata.video].filter(Boolean).map(display);
-    const audio = tracks ? [...tracks.audioCodecs,...tracks.audioChannels] : [metadata.audio,metadata.channels,metadata.atmos ? "Atmos" : null].filter(Boolean);
-    const languages = tracks ? tracks.audioLanguages : [...new Set([record.title,basename(fileName)].flatMap(S.releaseLanguages))];
-    const subtitles = tracks ? tracks.subtitleLanguages : [...new Set([record.title,basename(fileName)].flatMap(S.releaseSubtitleLanguages))];
+    const audio = [...(evidence.audioCodecs || [metadata.audio].filter(Boolean)),...(evidence.audioChannels || [metadata.channels].filter(Boolean)),metadata.atmos ? "Atmos" : null].filter(Boolean);
+    const languages = evidence.audioLanguages || [...new Set([record.title,basename(fileName)].flatMap(S.releaseLanguages))];
+    const subtitles = evidence.subtitleLanguages || [...new Set([record.title,basename(fileName)].flatMap(S.releaseSubtitleLanguages))];
     const provenance = display(record.sources.join(" + "));
     const peers = torbox ? "" : record.seeders === null ? " · peers unverified" : ` · ${record.seeders} reported seeders`;
     const lines = [video.length ? "🎞️ " + video.join(" · ") : null,audio.length ? "🔊 " + audio.join(" · ") : null,
-      "🔎 " + provenance + peers,languages.length || tracks ? "🌐 Audio: " + (languages.map(code=>languageLabels[code] || code.toUpperCase()).join(" · ") || "Unspecified") : null,
-      subtitles.length || tracks ? "💬 Subtitles: " + (subtitles.map(code=>languageLabels[code] || code.toUpperCase()).join(" · ") || "Unspecified") : null,
+      "🔎 " + provenance + peers,languages.length || evidence.audioLanguages ? "🌐 Audio: " + (languages.map(code=>languageLabels[code] || code.toUpperCase()).join(" · ") || "Unspecified") : null,
+      subtitles.length || evidence.subtitleLanguages ? "💬 Subtitles: " + (subtitles.map(code=>languageLabels[code] || code.toUpperCase()).join(" · ") || "Unspecified") : null,
       record.title !== basename(fileName) ? "🗂️ " + display(record.title) : null,"📁 " + fileLabel].filter(Boolean);
     return {
       id:`${record.infoHash}:${record.fileIdx === null || record.fileIdx === undefined ? "unknown" : record.fileIdx}:${torbox ? "torbox" : "p2p"}`,

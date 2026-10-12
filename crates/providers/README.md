@@ -90,7 +90,36 @@ changes and Clear plugin cache bound its lifetime; no background cleanup runs.
 Trusted provider result envelopes may mark `cacheHit: true`; the host exposes this as response-only `novaCacheHit`. Together with typed app-cache deliveries this promotes cached owners in the All filter, without inspecting provider names or display strings. Restart drops this verified-list cache. The durable discovery-metadata cache is
 independent; disk persistence of verified lists and scheduled GC are follow-ons.
 
-AnimeTosho optionally supplies selected-file track metadata through its documented torrent/file JSON API. The torrent hash, unique basename and byte size, torrent ID and file ID must match before ffprobe audio/subtitle languages, video codec, audio codecs and channels are used. Base rows publish before at most three probes (six spare GETs, up to 2.8 seconds within the existing operation deadline/request budget). Failures preserve playable rows. Successful normalized probes remain memory-only for 24 hours; missing metadata gets a 60-second retry TTL. The selected episode is never assigned languages from the whole pack. Confirmed metadata overrides conflicting filenames, including explicitly unspecified languages/codecs; other sources retain conservative release-label hints. Rich rows keep quality/codec, audio, source and separate audio/subtitle language lines; the selected filename is last, release groups stay out of the codec line, and TorBox-cached rows omit peer counts.
+AnimeTosho optionally supplies selected-file track metadata through its documented torrent/file JSON API. The torrent hash, unique basename and byte size, torrent ID and file ID must match before ffprobe audio/subtitle languages, video codec, audio codecs and channels are used. Base rows publish before at most three probes (six spare GETs, up to 2.8 seconds within the existing operation deadline/request budget). Failures preserve playable rows. Successful normalized probes remain memory-only for 24 hours; missing metadata gets a 60-second retry TTL. The selected episode is never assigned languages from the whole pack. Confirmed metadata overrides conflicting filenames, including explicitly unspecified languages/codecs. Uploader descriptions and filename labels remain release-level hints rather than proof of selected-file tracks. Rich rows keep quality/codec, audio, source and separate audio/subtitle language lines; the selected filename is last, release groups stay out of the codec line, and TorBox-cached rows omit peer counts.
+
+Release evidence is shared across source adapters: `evidence.js` recognizes labelled
+audio/subtitle inventories, Markdown/HTML tables, MediaInfo sections, and bounded
+encode specifications. `enrichment.js` applies normalized facts to ranking and rich
+rows, with selected-file probes taking per-field precedence. Conflicting codecs,
+resolution or release-source claims remain unknown; plot text, categories, links
+and comments do not establish track languages. Unsupported names in a clearly
+delimited language list do not discard its recognized languages. Raw descriptions
+and their links are never retained. Normalized source evidence and validated numeric
+detail references may accompany the existing discovery records.
+
+Nyaa stores its source-owned view ID and optionally reads `#torrent-description`,
+requiring the returned page's ID, infohash and magnet to match. AnimeTosho's native
+Nyaa references use this path only when Nyaa is enabled; its selected-file ffprobe
+path remains separate. Knaben uses a returned description when present. StremThru
+uses feed descriptions and typed audio/codec/resolution attributes, leaving its
+ambiguous general language attribute unused. The Pirate Bay / APIBay optionally
+reads `t.php?id=...` and accepts a description only with matching ID and infohash;
+this is best effort (the live endpoint returned 403 during validation). No external
+article, uploader information, comment or image links are crawled.
+
+At most six optional detail GETs share the existing 48-request ceiling per lookup,
+with 1-second request timeouts and 2.2-second wave deadlines inside the operation
+deadline. Available cached TorBox rows publish before detail upgrades; metadata
+changes retain row identities. Detail failures do not suppress streams. Normalized
+detail facts use process-memory TTL/LRU caching for 24 hours (60 seconds for misses);
+settings edits and cache clearing retain the existing generation guards. Discovery
+and final-list recipe versions change so older entries cannot mask newly available
+enrichment.
 
 Direct P2P uses the existing torrent engine and its P2P setting. The optional
 TorBox preferred/cached-only modes require a configured key. Lookup only checks
