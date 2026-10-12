@@ -1431,7 +1431,7 @@ export component PlayerOverlay {
             animate opacity { duration: Anim.player_fade; }
             Image {
                 width: 100%; height: 100%; source: root.scrim_image;
-                image-fit: fill; colorize: Theme.current.scrim_player;
+                image-fit: fill;
                 transform-rotation: 180deg;
             }
         }
@@ -1666,13 +1666,14 @@ export component PlayerOverlay {
             // femtovg's gradient fills render as flat fills in this
             // environment, so the scrim is a runtime-generated 220×220
             // alpha-ramp image. Repeated columns preserve the ease curve
-            // without stretching a thin colorized texture across the screen.
+            // without stretching a thin texture across the screen. Its pixels
+            // are already black: avoid the redundant colorization/offscreen
+            // pass when compositing this fade over the video.
             Image {
                 width: 100%;
                 height: 100%;
                 source: root.scrim_image;
                 image-fit: fill;
-                colorize: Theme.current.scrim_player;
             }
             // Visible when the wake timer says so, and always while loading or a
             // popup is open — the auto-hide countdown applies whether playing
