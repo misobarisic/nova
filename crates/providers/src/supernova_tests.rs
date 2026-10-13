@@ -1465,9 +1465,11 @@ fn verified_result_cache_reuses_exact_episode_across_runtime_reload_without_http
         let persisted = host.storage.lock().unwrap();
         let result_entries = persisted
             .iter()
-            .filter(|(key, _)| key.contains("results:v1:"))
+            .filter(|(key, _)| key.contains("results:v2:"))
             .collect::<Vec<_>>();
         assert_eq!(result_entries.len(), 1);
+        assert!(result_entries[0].0.contains("fixture-cache:"));
+        assert!(!result_entries[0].0.contains("fixture-memory:"));
         let payload: Value = serde_json::from_str(result_entries[0].1).unwrap();
         assert_eq!(payload["expiresAt"], 1000);
         assert!(!result_entries[0].1.contains(KEY));
@@ -1538,7 +1540,7 @@ fn verified_result_cache_rejects_malformed_or_sensitive_rows_and_partial_errors(
             .invoke(host.clone(), &request)
             .unwrap();
         for (key, raw) in host.storage.lock().unwrap().iter_mut() {
-            if key.contains("results:v1:") {
+            if key.contains("results:v2:") {
                 let mut payload: Value = serde_json::from_str(raw).unwrap();
                 match corruption {
                     "null" => payload["streams"] = json!([null]),
@@ -1580,7 +1582,7 @@ fn verified_result_cache_rejects_malformed_or_sensitive_rows_and_partial_errors(
             .lock()
             .unwrap()
             .keys()
-            .any(|key| key.contains("results:v1:"))
+            .any(|key| key.contains("results:v2:"))
     );
     assert_eq!(
         host.requests
@@ -2504,4 +2506,146 @@ fn inspected_unknown_metadata_suppresses_contradictory_release_hints() {
         assert_eq!(output[index]["records"], json!(["b", "a"]));
         assert_eq!(output[index]["rows"], json!(["b", "a"]));
     }
+}
+
+#[test]
+fn torbox_progress_proves_each_available_candidate_once() {
+    let script = r#"
+      novaProvider.handle=request=>{
+        const S=Supernova,choose=S.chooseFile,render=S.row;
+        let proofs=0,renders=0;const snapshots=[];
+        S.chooseFile=(...args)=>{proofs++;return choose(...args);};
+        S.row=(...args)=>{renders++;return render(...args);};
+        const records=Array.from({length:150},(_,index)=>({
+          infoHash:(index+1).toString(16).padStart(40,'0'),title:'Example (2020) S01 Complete 1080p',
+          sources:['Fixture'],seeders:null,fileIdx:null,sizeBytes:4
+        }));
+        const warnings=[];
+        const rows=S.torboxOptions(records,request.lookup,request.settings,warnings,3000,
+          rows=>snapshots.push(rows.map(row=>row.id)));
+        return {proofs,renders,snapshots,ids:rows.map(row=>row.id),warnings};
+      };
+    "#;
+    let host = Arc::new(FixtureHost::default());
+    let entries = (1..=150)
+        .map(|index| {
+            let hash = format!("{index:040x}");
+            let files = if index == 1 {
+                // A rejected ambiguous proof must not be retried for each later batch.
+                json!([{"id":1,"name":"Example S01E02.mkv","size":4},
+                       {"id":2,"name":"Example S01E02.mp4","size":4}])
+            } else {
+                json!([{"id":1,"name":"Example S01E02.mkv","size":4}])
+            };
+            (hash.clone(), json!({"hash":hash,"files":files}))
+        })
+        .collect::<serde_json::Map<_, _>>();
+    host.json(
+        "/v1/api/torrents/checkcached",
+        json!({"success":true,"data":entries}),
+    );
+    let output = runtime_with_suffix(script)
+        .invoke(
+            host.clone(),
+            &json!({"op":"fixture","lookup":lookup(),"settings":settings("nyaa","cached")}),
+        )
+        .unwrap();
+    assert_eq!(output["proofs"], 150, "{output}");
+    assert_eq!(output["renders"], 149);
+    assert_eq!(output["warnings"], json!([]));
+    let expected = (2..=150)
+        .map(|index| format!("{index:040x}:unknown:torbox"))
+        .collect::<Vec<_>>();
+    assert_eq!(output["ids"], json!(expected));
+    let snapshots = output["snapshots"].as_array().unwrap();
+    assert_eq!(snapshots.len(), 3);
+    assert_eq!(snapshots.last().unwrap(), &output["ids"]);
+    assert!(
+        snapshots
+            .windows(2)
+            .all(|pair| pair[0].as_array().unwrap().len() < pair[1].as_array().unwrap().len())
+    );
+    assert_eq!(host.requests.lock().unwrap().len(), 3);
+}
+
+#[test]
+fn partial_proved_list_retries_missing_files_before_result_cache_hit() {
+    for fail_second in [false, true] {
+        let host = Arc::new(FixtureHost::default());
+        let count = if fail_second { 2 } else { 7 };
+        let records = (1..=count)
+            .map(|index| {
+                let (bytes, hash) = torrent(&[&format!("Example S01E02 release{index}.mkv")]);
+                let route = format!("/fixture-{index}.torrent");
+                if fail_second && index == 2 {
+                    host.response(&route, 503, b"Unavailable".to_vec());
+                } else {
+                    host.response(&route, 200, bytes);
+                }
+                json!({"infoHash":hash,"title":"Example S01E02 2020 1080p","sources":["Nyaa"],"seeders":1,"sizeBytes":4,"torrentUrl":format!("https://nyaa.si{route}")})
+            })
+            .collect::<Vec<_>>();
+        host.json("nyaa.si/", json!(records));
+        let script = "Supernova.sources.nyaa.parse=JSON.parse;Supernova.sources.nyaa.pages=()=>1;";
+        let first = runtime_with_suffix(script)
+            .invoke(host.clone(), &json!({"op":"lookupStreams","lookup":lookup(),"settings":settings("nyaa","direct")}))
+            .unwrap();
+        assert_eq!(first.as_array().unwrap().len(), count - 1);
+        if fail_second {
+            let (bytes, _) = torrent(&["Example S01E02 release2.mkv"]);
+            host.response("/fixture-2.torrent", 200, bytes);
+        }
+        let before = host.requests.lock().unwrap().len();
+        let second = runtime_with_suffix(script)
+            .invoke(host.clone(), &json!({"op":"lookupStreams","lookup":lookup(),"settings":settings("nyaa","direct")}))
+            .unwrap();
+        assert_ne!(second["cacheHit"], true, "{second}");
+        assert_eq!(second.as_array().unwrap().len(), count);
+        assert_eq!(host.requests.lock().unwrap().len(), before + 1);
+        let third = runtime_with_suffix(script)
+            .invoke(host.clone(), &json!({"op":"lookupStreams","lookup":lookup(),"settings":settings("nyaa","direct")}))
+            .unwrap();
+        assert_eq!(third["cacheHit"], true);
+        assert_eq!(host.requests.lock().unwrap().len(), before + 1);
+    }
+}
+
+#[test]
+fn partial_discovery_result_cache_keeps_short_retry_expiry() {
+    let (host, hash) = nyaa_fixture(&["Example S01E02.mkv"], "Example S01E02 2020 1080p");
+    host.json("nyaa.si/", json!([
+        {"infoHash":hash,"title":"Example S01E02 2020 1080p","sources":["Nyaa"],"seeders":1,"sizeBytes":4,"torrentUrl":"https://nyaa.si/download/7.torrent"},
+        {"infoHash":"ffffffffffffffffffffffffffffffffffffffff","title":"Example S01E02 2020 720p","sources":["Nyaa"],"seeders":1,"sizeBytes":4,"torrentUrl":null}
+    ]));
+    let script = format!(
+        "{RESULT_CACHE_CLOCK}\nSupernova.sources.nyaa.parse=JSON.parse;Supernova.sources.nyaa.pages=()=>1;Supernova.CANDIDATE_MAX=1;"
+    );
+    let mut request = json!({"op":"lookupStreams","lookup":lookup(),"settings":settings("nyaa","direct"),"fakeNow":100000});
+    let first = runtime_with_suffix(&script)
+        .invoke(host.clone(), &request)
+        .unwrap();
+    assert_eq!(first.as_array().unwrap().len(), 1);
+    let expires_at = host
+        .storage
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(key, _)| key.contains("results:v2:"))
+        .map(|(_, raw)| serde_json::from_str::<Value>(raw).unwrap()["expiresAt"].clone())
+        .unwrap();
+    assert_eq!(expires_at, 160);
+    let calls = host.requests.lock().unwrap().len();
+    request["fakeNow"] = json!(110000);
+    let repeated = runtime_with_suffix(&script)
+        .invoke(host.clone(), &request)
+        .unwrap();
+    assert_eq!(repeated["cacheHit"], true);
+    assert_eq!(host.requests.lock().unwrap().len(), calls);
+    request["fakeNow"] = json!(161000);
+    let refreshed = runtime_with_suffix(&script)
+        .invoke(host.clone(), &request)
+        .unwrap();
+    assert_ne!(refreshed["cacheHit"], true);
+    assert_eq!(refreshed.as_array().unwrap().len(), 1);
+    assert!(host.requests.lock().unwrap().len() > calls);
 }

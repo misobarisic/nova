@@ -81,7 +81,7 @@ fn probe_must_belong_to_the_selected_torrent_and_file() {
 }
 
 #[test]
-fn source_probes_reuse_memory_cache_and_respect_spare_request_budget() {
+fn source_probes_reuse_cache_and_respect_spare_request_budget() {
     let fixture = include_str!("../test-fixtures/addons/supernova/fixtures/hokuto-tracks.json");
     let result = evaluate(&format!(
         r#"

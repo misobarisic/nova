@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "id": "supernova",
   "name": "Supernova",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "entry": "index.js",
   "permissions": {
     "domains": [

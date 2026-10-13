@@ -5,21 +5,16 @@ update.
 
 ## Stream cache persistence and scheduled cleanup
 
-Verified Supernova lists currently live only in process memory for 15 minutes;
-the shared next-episode prefetch cache retains successful addon responses for
-five minutes. Both expire on access and have entry/byte limits. Restart drops
-them. Supernova's older discovery-metadata cache remains device-local on disk.
+Implemented for Supernova: validated stream lists, discovery and normalized
+metadata now persist in the OS cache directory with TTL/LRU bounds. A worker
+prunes the disk cache at startup and every five minutes; reads enforce expiry
+immediately. See `src/app/plugin_cache.rs` and the provider guide. TorBox still
+checks availability and requests a fresh link on selection.
 
-Future work may persist validated torrent file proofs and owned resolver
-tokens, with versioned recipes, TTLs and bounded maintenance passes. Never
-persist expiring playback URLs, authorization headers or API keys in these
-entries. Ordinary remote addon stream URLs must remain memory-only unless a
-safe refresh contract exists. Preserve the fresh TorBox check/link on selection.
-
-The existing `plugin_settings::cache_gc(now)` hook can persist pruning of the
-durable discovery cache, but no periodic caller is installed. A future idle
-maintenance scheduler should bound its work, handle cancellation/storage failure,
-and keep cache cleanup independent of settings, sync and torrent downloads.
+The shared next-episode prefetch cache remains in memory for five minutes.
+Ordinary remote addon stream URLs remain memory-only unless a safe refresh
+contract is introduced. Expiring playback URLs, authorization headers and API
+keys must never enter persisted stream caches.
 
 ## Android video-restoration latency
 

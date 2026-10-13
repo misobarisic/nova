@@ -9,8 +9,8 @@
     const enabled = Object.keys(S.sources).filter(id => settings["sources." + id] === true);
     if (!enabled.length) return {streams:[],warnings:[{source:"Supernova",message:"Select a source in addon configuration."}]};
     const sourceConfiguration = enabled.includes("stremthru") ? {stremthru:settings["stremthru.url"] || "https://stremthru.13377001.xyz"} : {};
-    const resultIdentity = JSON.stringify({v:S.VERSION,presentationVersion:3,lookup,enabled,sourceConfiguration,quality:settings["quality.preferred"],sort:S.sortOrder(settings),languages:settings["language.prefs"] || [],subtitles:settings["subtitle.prefs"] || [],codecs:settings["codec.prefs"] || [],seeders:settings["seeders.minimum"],mode:settings["playback.mode"],torbox:settings["torbox.enabled"]});
-    const resultKey = "results:v1:" + nova.crypto.hmacSha256Base64Url(resultIdentity,"supernova-results-v1");
+    const resultIdentity = JSON.stringify({v:S.VERSION,presentationVersion:4,lookup,enabled,sourceConfiguration,quality:settings["quality.preferred"],sort:S.sortOrder(settings),languages:settings["language.prefs"] || [],subtitles:settings["subtitle.prefs"] || [],codecs:settings["codec.prefs"] || [],seeders:settings["seeders.minimum"],mode:settings["playback.mode"],torbox:settings["torbox.enabled"]});
+    const resultKey = "results:v2:" + nova.crypto.hmacSha256Base64Url(resultIdentity,"supernova-results-v2");
     const text = (value,limit) => typeof value === "string" && value.length > 0 && value.length <= limit;
     const only = (value,keys) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key));
     const safeValue = value => {
@@ -201,10 +201,15 @@
     if ((!discoveryCacheHit || toInspect.length) && remainingTtl > 0 && !(sourceFailed && !records.length)) S.cacheSet(cacheKey,{records:records.map(record=>{const {trackMetadata,...discovery}=record;return discovery;}),warnings:sourceWarnings,discoveryExpiresAt:expiresAt},remainingTtl);
     const streams = currentRows();
     publish(streams,true);
-    // This short cache stores proved list rows, never resolved playback links.
+    // This short disk cache stores proved list rows, never resolved playback links.
     // Errors and empty results retry immediately; selecting TorBox always resolves
     // afresh. The service supplies settings/clear invalidation and bounded LRU.
-    if (!warnings.length && streams.length && streams.every(validRow)) S.resultCacheSet(resultKey,{streams,expiresAt:Math.floor(Date.now()/1000)+S.RESULT_TTL},S.RESULT_TTL);
+    // A partial proved list must not hide the next bounded metainfo retry.
+    // Also retain discovery's original expiry, including its short retry TTL
+    // when pagination, request budgets or source work could not finish.
+    const pendingProof = settings["playback.mode"] !== "cached" && records.some(record=>S.number(record.fileIdx) === null && record.torrentUrl);
+    const resultTtl = Math.min(S.RESULT_TTL,remainingTtl);
+    if (!warnings.length && !pendingProof && resultTtl > 0 && streams.length && streams.every(validRow)) S.resultCacheSet(resultKey,{streams,expiresAt:Math.floor(Date.now()/1000)+resultTtl},resultTtl);
     return warnings.length ? {streams,warnings} : streams;
   };
   globalThis.novaProvider = {

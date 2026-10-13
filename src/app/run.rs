@@ -139,6 +139,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     )) {
         io::block_unreadable(plugin_settings::KEY);
         storage::report(storage::Error::new(storage::ErrorKind::Schema, error));
+    } else {
+        plugin_cache::start_gc_worker();
     }
     crate::web_log("nova: window created");
 

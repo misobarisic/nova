@@ -752,6 +752,7 @@ mod onboarding;
 mod page_artwork;
 mod playback;
 mod playback_preferences;
+mod plugin_cache;
 mod plugin_settings;
 mod posters;
 mod run;

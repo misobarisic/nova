@@ -50,7 +50,9 @@ Native GET batches run at most three requests concurrently. Three-second
 request limits and optional-stage deadlines preserve partial results within a
 20-second lookup budget. Up to 300 ranked candidates are retained per wave.
 First-page availability is checked before deeper source pages; only new hashes
-reach TorBox in waves of up to three 50-hash batches, within a 48-request ceiling. The display remains
+reach TorBox in waves of up to three 50-hash batches, within a 48-request ceiling.
+Each availability operation proves and formats each returned candidate once,
+reusing both successful and rejected proofs across progressive batch snapshots. The display remains
 capped at 50 rows.
 
 Sort order offers cached status, resolution, size, season packs, reported
@@ -80,16 +82,20 @@ later-season releases containing a year different from the series metadata.
 Seeder counts are upstream reports. Reused direct-P2P discovery rows explicitly identify
 cached discovery and unverified peer availability; cached TorBox rows omit seed/peer counts; TorBox availability is still
 checked independently of that discovery cache. Nonempty, warning-free verified
-stream lists have a separate 15-minute process-memory cache for the exact lookup and source/
+stream lists have a separate cache lasting up to 15 minutes for the exact lookup and source/
 quality/playback configuration, so reopening the same episode avoids HTTP.
 The final-list cache never retains empty or error responses. This cache contains only P2P
 file proofs and owned resolver tokens; choosing TorBox still checks availability
-and requests a fresh playback link. Expiry, the existing TTL/LRU budget, settings
-changes and Clear plugin cache bound its lifetime; no background cleanup runs.
-Trusted provider result envelopes may mark `cacheHit: true`; the host exposes this as response-only `novaCacheHit`. Together with typed app-cache deliveries this promotes cached owners in the All filter, without inspecting provider names or display strings. Restart drops this verified-list cache. The durable discovery-metadata cache is
-independent; disk persistence of verified lists and scheduled GC are follow-ons.
+and requests a fresh playback link. Expiry, the shared TTL/LRU budget, settings
+changes, Clear plugin cache and periodic garbage collection bound its lifetime.
+Verified lists and normalized discovery/evidence metadata persist in the OS cache
+directory (`~/.cache/nova/plugins/cache-v1.json` on Linux with the default XDG
+layout; Android app cache storage), so restarting Nova can reuse unexpired results.
+The result-list expiry never extends discovery expiry. Missing P2P file proofs
+keep the list out of this cache so reopening can retry the next bounded set.
+Trusted provider result envelopes may mark `cacheHit: true`; the host exposes this as response-only `novaCacheHit`. Together with typed app-cache deliveries this promotes cached owners in the All filter, without inspecting provider names or display strings. The discovery-metadata and verified-list entries remain independent.
 
-AnimeTosho optionally supplies selected-file track metadata through its documented torrent/file JSON API. The torrent hash, unique basename and byte size, torrent ID and file ID must match before ffprobe audio/subtitle languages, video codec, audio codecs and channels are used. Base rows publish before at most three probes (six spare GETs, up to 2.8 seconds within the existing operation deadline/request budget). Failures preserve playable rows. Successful normalized probes remain memory-only for 24 hours; missing metadata gets a 60-second retry TTL. The selected episode is never assigned languages from the whole pack. Confirmed metadata overrides conflicting filenames, including explicitly unspecified languages/codecs. Uploader descriptions and filename labels remain release-level hints rather than proof of selected-file tracks. Rich rows keep quality/codec, audio, source and separate audio/subtitle language lines; the selected filename is last, release groups stay out of the codec line, and TorBox-cached rows omit peer counts.
+AnimeTosho optionally supplies selected-file track metadata through its documented torrent/file JSON API. The torrent hash, unique basename and byte size, torrent ID and file ID must match before ffprobe audio/subtitle languages, video codec, audio codecs and channels are used. Base rows publish before at most three probes (six spare GETs, up to 2.8 seconds within the existing operation deadline/request budget). Failures preserve playable rows. Successful normalized probes are cached for 24 hours; missing metadata gets a 60-second retry TTL. The selected episode is never assigned languages from the whole pack. Confirmed metadata overrides conflicting filenames, including explicitly unspecified languages/codecs. Uploader descriptions and filename labels remain release-level hints rather than proof of selected-file tracks. Rich rows keep quality/codec, audio, source and separate audio/subtitle language lines; the selected filename is last, release groups stay out of the codec line, and TorBox-cached rows omit peer counts.
 
 Release evidence is shared across source adapters: `evidence.js` recognizes labelled
 audio/subtitle inventories, Markdown/HTML tables, MediaInfo sections, and bounded
@@ -115,7 +121,7 @@ At most six optional detail GETs share the existing 48-request ceiling per looku
 with 1-second request timeouts and 2.2-second wave deadlines inside the operation
 deadline. Available cached TorBox rows publish before detail upgrades; metadata
 changes retain row identities. Detail failures do not suppress streams. Normalized
-detail facts use process-memory TTL/LRU caching for 24 hours (60 seconds for misses);
+detail facts use persistent TTL/LRU caching for 24 hours (60 seconds for misses);
 settings edits and cache clearing retain the existing generation guards. Discovery
 and final-list recipe versions change so older entries cannot mask newly available
 enrichment.
@@ -152,9 +158,10 @@ retaining unknown plugin IDs/fields. Operation snapshots include only fields
 declared by the installed schema, so large future settings do not prevent older
 providers from running. Disable/removal preserves settings.
 The gear offers a separate confirmed **Remove configuration everywhere**
-action and **Clear plugin cache**. Cache JSON lives locally at `plugin_cache:v1`
-in the existing database, with a 20 MiB logical budget, 1024 records and a 1 MiB
-entry limit; physical database allocation need not immediately shrink. Cache
+action and **Clear plugin cache**. Cache JSON lives locally in the OS cache directory, with a 20 MiB logical
+budget, 1024 records and a 1 MiB entry limit; retained `plugin_cache:v1` database
+entries migrate to the cache file. Android Settings → App info → Clear cache
+can remove these disposable files without deleting preferences. Cache
 clearing preserves preferences, images and torrent downloads.
 Successful clearing invalidates in-flight cache operations, preventing old
 searches from repopulating it. Startup restores retained unfamiliar sync records
@@ -169,9 +176,9 @@ live in the separate source checkout and travel in each ZIP.
 The generic `plugin_settings::cache_gc(now)` maintenance hook removes expired,
 invalid, over-budget and obsolete-settings entries, then atomically persists
 what remains. It also collects disk entries already expired by a cache read;
-a failed write restores the previous in-memory cache. Future GC passes can call
-this hook without changing settings generations, preferences or other caches.
-No cleanup schedule is installed by the provider service.
+a failed write restores the previous in-memory cache. A periodic maintenance
+worker uses this hook without changing settings generations, preferences or other
+caches.
 
 ## Generic plugin services
 
@@ -471,7 +478,7 @@ English subtitles are ordered first when supplied by MegaPlay. Headers are
 also persisted with MP4 download jobs.
 Finite HLS episodes can also be downloaded through `nova-download`: the highest-bandwidth variant and its audio/subtitle groups, initialization maps, byte ranges and ordinary AES-128 keys are saved as a local playlist bundle. Provider headers accompany playlist, segment and key requests. Completed segments survive pause/resume; partial segments restart. Removing the episode download removes its entire bundle, including keys, subtitles and partial files. Automatic watched cleanup waits until the active HLS episode closes so the ending remains playable. Live playlists, DASH and unsupported encryption remain unavailable for offline download.
 
-Deferred streams also support Download: each attempt resolves a fresh link, while credentials, selection tokens and playback URLs remain process-only. Signed HTTP transfers restart partial files on retry and never write URL/validator sidecars. Unfinished jobs after restart require selecting Download again; completed media remains offline. Private HLS download is unavailable because its playlist bundle would retain signed URLs. Ordinary direct MP4/HLS and P2P downloads keep their existing resume behavior.
+Deferred streams also support Download: each attempt resolves a fresh link. Download-job credentials, selection tokens and playback URLs remain process-only; the separate Supernova result cache can retain validated non-secret resolver tokens. Signed HTTP transfers restart partial files on retry and never write URL/validator sidecars. Unfinished jobs after restart require selecting Download again; completed media remains offline. Private HLS download is unavailable because its playlist bundle would retain signed URLs. Ordinary direct MP4/HLS and P2P downloads keep their existing resume behavior.
 
 ## Checks
 

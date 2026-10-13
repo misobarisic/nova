@@ -74,13 +74,26 @@
     try {
       // Cache no credentials, links or account objects; live availability is
       // rechecked per lookup and again on selection to contain stale state.
+      // Completion callbacks contain cumulative availability. Keep both proved
+      // rows and rejected files operation-local so later batches/final return
+      // do not repeat a pack's file proof or rebuild unchanged rich labels.
+      // Reconstruct snapshots in discovery order, independent of completion order.
+      const proved = new Map();
       const rowsFor = available => records.flatMap(record => {
-        const entry = available[record.infoHash];
-        const file = entry && S.chooseFile(entry.files, record, lookup, true, entry.name);
-        if (!file || file.infected === true || file.zipped === true) return [];
-        const token = JSON.stringify({version:S.VERSION,infoHash:record.infoHash,title:record.title,
-          fileName:String(file.name || file.path),lookup,sources:record.sources});
-        return [S.row({...record,sizeBytes:S.number(file.size) || record.sizeBytes},true,token)];
+        if (!proved.has(record)) {
+          const entry = available[record.infoHash];
+          if (!entry) return [];
+          const file = S.chooseFile(entry.files, record, lookup, true, entry.name);
+          let row = null;
+          if (file && file.infected !== true && file.zipped !== true) {
+            const token = JSON.stringify({version:S.VERSION,infoHash:record.infoHash,title:record.title,
+              fileName:String(file.name || file.path),lookup,sources:record.sources});
+            row = S.row({...record,sizeBytes:S.number(file.size) || record.sizeBytes},true,token);
+          }
+          proved.set(record,row);
+        }
+        const row = proved.get(record);
+        return row ? [row] : [];
       });
       const available = cached(records,keyFor(settings),timeoutMs,warnings || [],onRows ? available=>onRows(rowsFor(available)) : null);
       return rowsFor(available);

@@ -27,10 +27,10 @@
     try { nova.cache.set(key, JSON.stringify(value), ttl); } catch (_) { /* Cache failure cannot break discovery. */ }
   };
   S.resultCacheGet = key => {
-    try { return S.json(nova.cache.getMemory(key)); } catch (_) { return null; }
+    try { return S.json(nova.cache.get(key)); } catch (_) { return null; }
   };
   S.resultCacheSet = (key, value, ttl) => {
-    try { nova.cache.setMemory(key, JSON.stringify(value), ttl); } catch (_) { /* This process-only cache is optional. */ }
+    try { nova.cache.set(key, JSON.stringify(value), ttl); } catch (_) { /* Persisting normalized results is optional. */ }
   };
   S.http = request => {
     const response = S.json(nova.http.request(JSON.stringify(request)));

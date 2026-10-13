@@ -2,7 +2,6 @@
 use super::*;
 use nova_providers::plugin_settings::{self as service, PluginSettingsBackend, SettingsMap};
 pub(super) const KEY: &str = "plugin_settings";
-const CACHE_KEY: &str = "plugin_cache:v1";
 pub(super) struct Backend;
 impl PluginSettingsBackend for Backend {
     fn load_settings(&self) -> Result<Option<String>, nova_providers::ProviderHostError> {
@@ -12,10 +11,10 @@ impl PluginSettingsBackend for Backend {
         persist_sync_snapshot(KEY, raw, false).map_err(provider_error)
     }
     fn load_cache(&self) -> Result<Option<String>, nova_providers::ProviderHostError> {
-        storage::try_get_str(CACHE_KEY).map_err(provider_error)
+        plugin_cache::load()
     }
     fn save_cache(&self, raw: &str) -> Result<(), nova_providers::ProviderHostError> {
-        storage::try_set_cached_str(CACHE_KEY, raw).map_err(provider_error)
+        plugin_cache::save(raw)
     }
 }
 fn provider_error(error: impl std::fmt::Display) -> nova_providers::ProviderHostError {
@@ -497,6 +496,9 @@ mod startup_tests {
             ));
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .env(ROOT,&root)
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .env("LOCALAPPDATA", root.join("cache"))
+                .env("NOVA_CACHE_DIR", root.join("cache"))
                 .args(["--exact","app::plugin_settings::startup_tests::retained_unfamiliar_domain_restores_before_seed_without_echo","--nocapture"])
                 .output().unwrap();
             let _ = std::fs::remove_dir_all(root);

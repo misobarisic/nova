@@ -581,11 +581,14 @@ fn prune_cache(state: &mut Service, now: u64) {
     prune_entries(&mut state.cache, now);
 }
 fn prune_entries(cache: &mut BTreeMap<String, CacheEntry>, now: u64) {
-    cache.retain(|_, entry| {
+    cache.retain(|id, entry| {
         entry.expires > now
             && entry.value.len() <= CACHE_ENTRY_LIMIT
             && validate_plugin(&entry.plugin).is_ok()
             && validate_key(&entry.key).is_ok()
+            // The serialized map key is untrusted cache data too. Check it
+            // before reads can select another plugin's embedded entry.
+            && id == &format!("{}/{}", entry.plugin, entry.key)
     });
     while cache.len() > CACHE_COUNT_LIMIT
         || cache
@@ -734,7 +737,7 @@ fn save_cache(state: &Service) -> Result<(), ProviderHostError> {
         .ok_or_else(|| error("plugin cache unavailable"))?
         .save_cache(&raw)
 }
-/// Maintenance hook for future GC passes. Persist even if a prior read already
+/// Maintenance hook for background GC passes. Persist even if a prior read already
 /// removed expired entries in memory: their durable rows still need collection.
 /// This leaves preference generations and valid active cache entries untouched.
 pub fn cache_gc(now: u64) -> Result<usize, ProviderHostError> {
@@ -1078,6 +1081,22 @@ mod tests {
             .unwrap();
         assert!(service().lock().unwrap().memory_cache.is_empty());
         cache_set("test", "one", "cached", 10, 100).unwrap();
+        let before_restart = settings_generation();
+        configure_plugin_settings(backend.clone()).unwrap();
+        let after_restart = settings_generation();
+        assert_ne!(before_restart, after_restart);
+        // A fresh runtime can reuse a persisted entry with unchanged settings;
+        // workers from before reconfiguration still cannot publish or read it.
+        assert_eq!(
+            cache_get_for_generation("test", "one", 109, after_restart)
+                .unwrap()
+                .as_deref(),
+            Some("cached")
+        );
+        assert!(cache_get_for_generation("test", "one", 109, before_restart).is_err());
+        assert!(
+            cache_set_for_generation("test", "one", "obsolete", 10, 100, before_restart).is_err()
+        );
         assert_eq!(
             cache_get("test", "one", 109).unwrap().as_deref(),
             Some("cached")
@@ -1122,6 +1141,28 @@ mod tests {
             Some("retained")
         );
         assert_eq!(settings_generation(), gc_generation);
+        // Cache files can be edited, corrupted, or evicted independently of
+        // preferences. Reject mismatched identities at load, before a GC pass.
+        let mut poisoned = saved;
+        let mut alias = poisoned["test/valid"].clone();
+        alias.value = "wrong entry".into();
+        poisoned.insert("test/alias".into(), alias);
+        *backend.cache.lock().unwrap() = Some(serde_json::to_string(&poisoned).unwrap());
+        configure_plugin_settings(backend.clone()).unwrap();
+        assert!(!service().lock().unwrap().cache.contains_key("test/alias"));
+        assert!(cache_get("test", "alias", 111).unwrap().is_none());
+        assert_eq!(
+            cache_get("test", "valid", 111).unwrap().as_deref(),
+            Some("retained")
+        );
+        // Simulate an OS cache eviction followed by a process restart.
+        *backend.cache.lock().unwrap() = None;
+        configure_plugin_settings(backend.clone()).unwrap();
+        assert!(cache_get("test", "valid", 111).unwrap().is_none());
+        assert_eq!(
+            settings_snapshot("test", &fields).unwrap().values["enabled"],
+            true
+        );
         cache_set("test", "one", "old credentials", 100, 100).unwrap();
         set_setting("test", "enabled", Value::Bool(false)).unwrap();
         configure_plugin_settings(backend.clone()).unwrap();
