@@ -60,7 +60,7 @@ it dismisses an open actions sheet first and ignores held-key repeats.
 
 Implementation: `crates/ui/stream-selector.slint` and the AppWindow/Detail host;
 `src/app/{detail,library,home,run}.rs` own entry/exit and callback wiring. Headless
-coverage includes `tests/stream_selector.rs` and the stream paging, downloads,
+coverage includes `tests/streams_layout/selector.rs` and the stream paging, downloads,
 wrapped-row and addon-gesture tests.
 
 ## Player header, screenshots and keyboard controls
@@ -116,7 +116,7 @@ catalog.
 
 Implementation: `crates/ui/player.slint`, `src/app/{playback,posters,run}.rs`
 and `crates/player/src/{screenshot,gpu_screenshot}.rs`. Header/keyboard regressions live in
-`tests/{player_osd_header,player_shortcuts}.rs`.
+`tests/player/{osd_header,shortcuts}.rs`.
 
 ## Android system gestures
 
@@ -167,7 +167,7 @@ a brightness/volume swipe. Releasing restores the effective title/default playba
 speed and leaves OSD visibility unchanged.
 
 Implementation and headless input coverage: `crates/ui/player.slint` and
-`tests/{player_gestures,player_double_tap,player_hold_motion}.rs`.
+`tests/player/{gestures,double_tap,hold_motion}.rs`.
 
 ## Playback defaults and title preferences
 
@@ -196,7 +196,7 @@ Android playback recovery use the same session preferences.
 Implementation: `src/app/playback_preferences.rs` owns persistence and OSD
 callbacks; `crates/config/src/playback_preferences.rs` matches semantic choices;
 `crates/player/src/track_preferences.rs` reads mpv metadata. Regression coverage
-includes their unit tests and `tests/playback_preferences_ui.rs`.
+includes their unit tests and `tests/settings_preferences/playback_preferences_ui.rs`.
 
 ## Next-episode banner
 
@@ -247,7 +247,7 @@ callbacks and close cleanup. `crates/ui/player.slint` renders the banner through
 the AppWindow `next_episode_*` properties/callbacks.
 
 Regression coverage lives beside the policy in `src/app/next_episode.rs` and
-in `tests/next_episode_banner.rs` for headless layout, navigation and input.
+in `tests/shared_layout/next_episode_banner.rs` for headless layout, navigation and input.
 
 ## Torrent request and file ownership
 
@@ -264,3 +264,31 @@ manifest and restored before cache sweeping. Multiple episode jobs can share a
 single torrent handle and its selected files. Removing one owner preserves the
 bundle for sibling downloads or active playback; torrent cleanup never deletes
 an episode's parent directory through the generic HTTP artifact path.
+
+
+## Player integration test pilot
+
+`cargo test --test ui_player` links the six Player integration modules into one
+executable. The existing assertions and mock/system-clock choices stay in
+`tests/player/{double_tap,gestures,hold_motion,osd_header,osd_touch,shortcuts}.rs`.
+Each case calls `tests/support/isolation.rs` before accessing Slint: the parent
+reexecutes the same binary with an exact case filter, fresh data/cache/temp
+roots and a receipt from the selected body. This preserves backend, locale and
+storage isolation while keeping normal Cargo filtering and failure reporting.
+The native loading-dimmer fixture remains ignored unless explicitly selected.
+Discover and Library now use the same helper in their own suites; their
+measurements are recorded in `docs/project-structure.md` under Testing.
+
+A local default-Nix measurement on 2026-10-13 used two Cargo jobs and the same
+symbol-stripped test profile for both layouts. Dependencies were already built;
+case incremental caches were cleared for the executable-build comparison.
+Single-case rebuilds changed the same assertion message and report the median
+of three samples. All probe edits were restored. These are small local samples,
+not whole-project clean-build measurements or general performance guarantees.
+
+| Measurement | Six separate targets | One Player suite |
+|---|---:|---:|
+| Linked executables | 6 | 1 |
+| Combined executable size | 995.19 MiB | 174.97 MiB |
+| Build with cached dependencies | 12.286 s | 3.723 s |
+| Single-case edit rebuild, median | 3.065 s | 3.164 s |

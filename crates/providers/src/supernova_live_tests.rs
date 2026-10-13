@@ -14,12 +14,14 @@ use std::{
     time::Duration,
 };
 
+type PublicDiagnostic = (String, u16, usize, bool, bool, &'static str);
+
 struct ReadOnlyLiveHost {
     network: ScopedHttpHost,
     nyaa: Option<String>,
     denied_posts: AtomicUsize,
     gets: AtomicUsize,
-    public_diagnostics: Mutex<Vec<(String, u16, usize, bool, bool, &'static str)>>,
+    public_diagnostics: Mutex<Vec<PublicDiagnostic>>,
 }
 
 impl ProviderHost for ReadOnlyLiveHost {
@@ -298,13 +300,12 @@ fn candidate(file: &Value) -> Option<(String, Value)> {
             captures[1].to_owned(),
             json!({"mediaType":"series","season":season,"episode":episode}),
         )
-    } else if let Some(captures) = movie.captures(&clean) {
+    } else {
+        let captures = movie.captures(&clean)?;
         (
             captures[1].to_owned(),
             json!({"mediaType":"movie","year":captures[2].to_owned()}),
         )
-    } else {
-        return None;
     };
     let title = title
         .replace(['.', '_'], " ")

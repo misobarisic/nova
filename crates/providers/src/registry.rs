@@ -1072,7 +1072,7 @@ pub(crate) fn resolve_with_snapshot_for_test(
     manifest.limits.request_timeout_ms = manifest.limits.resolver_timeout_ms;
     let addon: Manifest = serde_json::from_str(definition.addon_manifest)
         .map_err(|_| ProviderResolveError::generic())?;
-    let mut provider = JsProvider::new(manifest, addon, &definition.source);
+    let mut provider = JsProvider::new(manifest, addon, definition.source);
     provider.settings = Ok(crate::plugin_settings::SettingsSnapshot {
         values,
         generation: crate::plugin_settings::settings_generation(),

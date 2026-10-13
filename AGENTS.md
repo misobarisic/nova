@@ -40,7 +40,7 @@ cargo clippy --workspace --locked -- -D warnings
 cargo check                         # whole workspace (default = desktop)
 cargo test -p nova-sync --lib       # fast unit tests for the sync crate
 cargo test                          # workspace tests (app unit + integration)
-cargo test --test settings_sync_overflow   # headless Slint UI regression tests
+cargo test --test ui_settings_sync -- sync_overflow:: # headless Slint UI regression
 ```
 
 - Android is built with `--no-default-features --features android`; verify

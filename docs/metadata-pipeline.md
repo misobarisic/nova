@@ -226,7 +226,7 @@ The remaining architectural improvements are:
 - `crates/media/src/cache_tests.rs`: corrupt-cache recovery, atomic/format
   handling, valid resized pixel-buffer dimensions (including 680 × 1000 TVDB
   posters), sized images and an HTTP 503 → successful PNG download.
-- `src/app/page_artwork.rs::tests` and `src/app/downloads_page.rs::tests`: later rows beyond 80, URL/recipe/view revision rejection, inactive/offscreen release, queue deduplication/four-slot transport-and-delivery cap/shared-buffer fanout/cooldowns and replacement of nonempty cached group artwork. `tests/page_artwork_visibility.rs` checks real native scrolling through 150 Calendar/Downloads rows at phone/desktop widths and Detail/player/More overlay exit.
+- `src/app/page_artwork.rs::tests` and `src/app/downloads/page.rs::tests`: later rows beyond 80, URL/recipe/view revision rejection, inactive/offscreen release, queue deduplication/four-slot transport-and-delivery cap/shared-buffer fanout/cooldowns and replacement of nonempty cached group artwork. `tests/downloads/page_artwork_visibility.rs` checks real native scrolling through 150 Calendar/Downloads rows at phone/desktop widths and Detail/player/More overlay exit.
 - `src/app/home.rs::tests::featured_logo_pending_and_current_pixels_survive_cache_eviction`: an isolated cache-hit fixture parks the pending logo, evicts decoded pixels before commit, retains the matching current logo without refetching, and releases obsolete target/recipe ownership.
 - Existing Home headless tests cover card layout, featured crossfade/rotation,
   paging gestures and carousel behavior independently of external servers.

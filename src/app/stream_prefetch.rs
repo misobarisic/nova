@@ -440,7 +440,9 @@ mod tests {
         let fixture = std::thread::spawn(move || {
             let (mut socket, _) = server.accept().unwrap();
             let mut request = [0; 4096];
-            socket.read(&mut request).unwrap();
+            // This fixture only needs to know the request started; a partial
+            // header is enough before holding the response for cancellation.
+            assert!(socket.read(&mut request).unwrap() > 0);
             accepted_tx.send(()).unwrap();
             release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
             let body = br#"{"streams":[{"url":"https://example.test/video"}]}"#;

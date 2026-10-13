@@ -1,0 +1,28 @@
+//! Settings preferences regressions: one executable, isolated cases.
+
+#[path = "support/isolation.rs"]
+mod isolation;
+
+#[path = "support/destinations.rs"]
+mod destinations;
+
+#[path = "support/settings.rs"]
+mod settings_support;
+
+#[path = "settings_preferences/downloads.rs"]
+mod downloads;
+
+#[path = "settings_preferences/home_catalogs.rs"]
+mod home_catalogs;
+
+#[path = "settings_preferences/image_resolution.rs"]
+mod image_resolution;
+
+#[path = "settings_preferences/playback_speed.rs"]
+mod playback_speed;
+
+#[path = "settings_preferences/screenshot_format.rs"]
+mod screenshot_format;
+
+#[path = "settings_preferences/playback_preferences_ui.rs"]
+mod playback_preferences_ui;

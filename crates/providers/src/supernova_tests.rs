@@ -313,10 +313,9 @@ fn source_html_json_and_rss_feed_real_torrent_file_selection() {
 
 #[test]
 fn wrong_episode_missing_hash_and_ambiguous_files_are_not_playable() {
-    for title in ["Example S01E03 2020 1080p"] {
-        let (host, _) = nyaa_fixture(&["Example S01E02.mkv"], title);
-        assert_eq!(run_lookup(host, "nyaa", "direct"), json!([]), "{title}");
-    }
+    let title = "Example S01E03 2020 1080p";
+    let (host, _) = nyaa_fixture(&["Example S01E02.mkv"], title);
+    assert_eq!(run_lookup(host, "nyaa", "direct"), json!([]), "{title}");
     let (host, _) = nyaa_fixture(&["Example S01E02.mkv"], "Example S01E02 2020");
     host.response(
         "nyaa.si/",

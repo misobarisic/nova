@@ -46,7 +46,7 @@ fn touch_scroll_release_and_cancel_do_not_strand_row_highlights() {
     app.global::<ControlInput>().set_touch_feedback(true);
     app.show().unwrap();
     let palette = app.global::<Theme>().get_current();
-    let base: slint::Brush = palette.card.into();
+    let base: slint::Brush = palette.card;
     let hover: slint::Brush = palette.settings_control.into();
     assert_ne!(base, hover);
     assert_eq!(app.get_first_fill(), base);

@@ -15,8 +15,8 @@
 # "Prikažite…", "Izbrišite…", "Pridružite se". Two labels are deliberately
 # shorter than the literal translation so the phone-width rows still fit
 # ("Copy link" → "Kopirajte URL", "Create invite" → "Nova pozivnica"); the
-# Croatian-width phases in tests/settings_addon_row_fit.rs and
-# tests/settings_sync_overflow.rs guard that.
+# Croatian-width phases in tests/addons/addon_row_fit.rs and
+# tests/settings_sync/sync_overflow.rs guard that.
 #
 # Values that are identifiers in the data rather than prose stay as they are:
 # stored category names, addon names, stream/codec labels, `JPEG`/`WebP`,

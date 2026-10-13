@@ -1472,7 +1472,7 @@ mod tests {
             watch_status: WatchStatus::Auto,
             added_at_secs: 1,
         };
-        let entries = vec![
+        let entries = [
             entry("same", "series", "Series"),
             entry("same", "movie", "Movie"),
             entry("unknown", "series", "Unknown episodes"),
@@ -1576,7 +1576,7 @@ mod tests {
             watch_status: WatchStatus::Auto,
             added_at_secs: 1,
         };
-        let entries = vec![entry("series"), entry("movie")];
+        let entries = [entry("series"), entry("movie")];
         let identities = entries
             .iter()
             .enumerate()

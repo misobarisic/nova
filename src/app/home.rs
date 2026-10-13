@@ -4082,7 +4082,7 @@ mod tests {
         write_episodes_cache_for(
             "series",
             "returning",
-            &vec![
+            &[
                 video("returning:old", 1, 1, Some(&fixture_release(-10))),
                 video("returning:new", 1, 2, Some(&aired)),
             ],

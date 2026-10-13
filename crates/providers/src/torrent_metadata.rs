@@ -377,7 +377,7 @@ mod tests {
             "d6:lengthi2e4:pathl7:one.mkvee".repeat(MAX_FILES + 1)
         );
         assert!(inspect_torrent_metadata(&wrap(excessive_files.as_bytes())).is_err());
-        assert!(inspect_torrent_metadata(&vec![b'l'; MAX_DEPTH + 2]).is_err());
+        assert!(inspect_torrent_metadata(&[b'l'; MAX_DEPTH + 2]).is_err());
         assert!(inspect_torrent_metadata(&vec![0; MAX_BYTES + 1]).is_err());
         let valid = wrap(SINGLE_INFO);
         for end in 0..valid.len() {
