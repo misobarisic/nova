@@ -5,7 +5,7 @@ use slint::{ComponentHandle, LogicalPosition, platform::WindowEvent};
 slint::slint! {
     import { LibraryFilterChip } from "../crates/ui/library.slint";
     import { StreamFilterPill } from "../crates/ui/stream-selector.slint";
-    export { Theme } from "@NovaUiShared";
+    export { Theme, Anim } from "@NovaUiShared";
 
     export component PillHarness inherits Window {
         width: 280px;
@@ -13,10 +13,11 @@ slint::slint! {
         in property <bool> touch_feedback: true;
         in property <bool> selected: false;
         out property <brush> library_fill: library.background;
+        out property <length> library_width: library.width;
         out property <brush> stream_fill: stream.background;
         out property <int> picks: 0;
         library := LibraryFilterChip {
-            x: 20px; y: 20px; width: 180px;
+            x: 20px; y: 20px;
             label: "Watching";
             touch_feedback: root.touch_feedback;
             selected: root.selected;
@@ -48,6 +49,35 @@ fn touch_release_and_cancel_clear_both_pills_while_mouse_hover_still_works() {
     let app = PillHarness::new().unwrap();
     app.show().unwrap();
     let original = app.global::<Theme>().get_current();
+    // Selection fades without changing natural pill width, and rapid changes
+    // retarget from the current fill instead of completing a stale selection.
+    let width = app.get_library_width();
+    let base = app.get_library_fill();
+    let advance = |ms| {
+        for _ in 0..ms {
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1));
+            let _ = app.get_library_fill();
+        }
+    };
+    app.set_selected(true);
+    advance(50);
+    assert_ne!(app.get_library_fill(), base);
+    assert_ne!(app.get_library_fill(), original.primary_button);
+    assert_eq!(app.get_library_width(), width);
+    app.set_selected(false);
+    advance(150);
+    assert_eq!(app.get_library_fill(), base);
+    for (master, hover) in [(true, false), (false, true)] {
+        app.global::<Anim>().set_enabled(master);
+        app.global::<Anim>().set_hover(hover);
+        app.set_selected(true);
+        advance(1);
+        assert_eq!(app.get_library_fill(), original.primary_button);
+        app.set_selected(false);
+        advance(1);
+        assert_eq!(app.get_library_fill(), base);
+    }
+    app.global::<Anim>().set_enabled(false);
     for black in [false, true] {
         let mut palette = original.clone();
         if black {

@@ -269,3 +269,242 @@ fn completed_episode_actions_keep_job_identity_across_layouts() {
     );
     assert_eq!(*backs.borrow(), 8);
 }
+
+#[test]
+fn group_expansion_retargets_without_squeezing_rows_or_animating_model_updates() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "group_expansion_retargets_without_squeezing_rows_or_animating_model_updates"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_show_home(false);
+    app.set_show_downloads(true);
+    let episodes = Rc::new(VecModel::from(vec![
+        nova::DownloadEpisode {
+            id: "episode".into(),
+            title: "Episode".into(),
+            action_label: "Play".into(),
+            ..Default::default()
+        };
+        2
+    ]));
+    let groups = Rc::new(VecModel::from(vec![nova::DownloadGroup {
+        id: "group".into(),
+        title: "Series".into(),
+        episodes: episodes.clone().into(),
+        ..Default::default()
+    }]));
+    app.set_downloads_page_groups(groups.clone().into());
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = actions.clone();
+    app.on_downloads_page_action(move |id, kind| recorded.borrow_mut().push((id, kind)));
+    let height = || {
+        ElementHandle::find_by_element_type_name(&app, "DownloadSeriesCard")
+            .next()
+            .unwrap()
+            .size()
+            .height
+    };
+    let advance = |ms| {
+        for _ in 0..ms {
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1));
+            let _ = height();
+            let card = ElementHandle::find_by_element_type_name(&app, "DownloadSeriesCard")
+                .next()
+                .unwrap();
+            let toggle = ElementHandle::find_by_accessible_label(
+                &app,
+                if groups.row_data(0).unwrap().collapsed {
+                    "Expand series"
+                } else {
+                    "Collapse series"
+                },
+            )
+            .next()
+            .unwrap();
+            let card_top = card.absolute_position().y;
+            let toggle_top = toggle.absolute_position().y;
+            assert!(
+                toggle_top >= card_top && toggle_top + toggle.size().height <= card_top + 86.0,
+                "chevron must stay inside the fixed header throughout expansion: card top={card_top}, toggle top={toggle_top}"
+            );
+        }
+    };
+    let collapse = |collapsed| {
+        let mut group = groups.row_data(0).unwrap();
+        group.collapsed = collapsed;
+        groups.set_row_data(0, group);
+    };
+    app.show().unwrap();
+    for (width, viewport_height) in [(390, 900), (820, 390), (1280, 900)] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, viewport_height));
+        app.global::<nova::Anim>().set_enabled(true);
+        app.global::<nova::Anim>().set_transitions(true);
+        advance(300);
+        assert_eq!(height(), 250.0);
+        collapse(true);
+        advance(70);
+        assert!(
+            height() > 86.0 && height() < 250.0,
+            "collapse must be gradual"
+        );
+        for row in ElementHandle::find_by_element_type_name(&app, "DownloadEpisodeRow") {
+            assert_eq!(row.size().height, 82.0, "clipped rows keep their geometry");
+        }
+        if let Some(play) = ElementHandle::find_by_accessible_label(&app, "Play").next() {
+            click_element(&app, &play);
+            assert!(actions.borrow().is_empty(), "closing rows are inert");
+        }
+        let halfway = height();
+        collapse(false);
+        advance(70);
+        assert!(
+            height() > halfway && height() < 250.0,
+            "reopening reverses the exit"
+        );
+        advance(300);
+        assert_eq!(height(), 250.0);
+        // Periodic backend progress publication must keep focus and height.
+        let mut row = episodes.row_data(0).unwrap();
+        row.progress = 0.6;
+        episodes.set_row_data(0, row);
+        advance(1);
+        assert_eq!(height(), 250.0);
+        for (master, transitions) in [(true, false), (false, true)] {
+            app.global::<nova::Anim>().set_enabled(master);
+            app.global::<nova::Anim>().set_transitions(transitions);
+            collapse(true);
+            advance(1);
+            assert_eq!(height(), 86.0, "disabled motion collapses immediately");
+            collapse(false);
+            advance(1);
+            assert_eq!(height(), 250.0);
+        }
+        app.global::<nova::Anim>().set_enabled(true);
+        app.global::<nova::Anim>().set_transitions(true);
+        collapse(true);
+        advance(60);
+        app.global::<nova::Anim>().set_enabled(false);
+        advance(1);
+        assert_eq!(height(), 86.0, "disabling mid-exit snaps to the target");
+        collapse(false);
+        advance(1);
+    }
+}
+
+#[test]
+#[ignore = "requires a desktop display; SLINT_BACKEND=winit SLINT_RENDERER=femtovg"]
+fn chevron_rotation_paints_intermediate_frames_inside_the_header() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "chevron_rotation_paints_intermediate_frames_inside_the_header"
+    )) {
+        return;
+    }
+    let app = nova::AppWindow::new().unwrap();
+    nova_ui::initialize_fonts(app.window());
+    app.set_show_home(false);
+    app.set_show_downloads(true);
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    let groups = Rc::new(VecModel::from(vec![nova::DownloadGroup {
+        id: "series".into(),
+        title: "Downloaded series".into(),
+        episodes: Rc::new(VecModel::from(vec![nova::DownloadEpisode {
+            id: "episode".into(),
+            title: "Episode".into(),
+            action_label: "Play".into(),
+            ..Default::default()
+        }]))
+        .into(),
+        ..Default::default()
+    }]));
+    app.set_downloads_page_groups(groups.clone().into());
+    app.show().unwrap();
+    let weak = app.as_weak();
+    let frames = Rc::new(RefCell::new(Vec::<Vec<bool>>::new()));
+    let started = Rc::new(std::cell::Cell::new(None::<std::time::Instant>));
+    let attempts = Rc::new(std::cell::Cell::new(0));
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(25),
+        move || {
+            let app = weak.upgrade().unwrap();
+            if started.get().is_none() {
+                attempts.set(attempts.get() + 1);
+                assert!(attempts.get() < 40, "chevron fixture never painted");
+                // The GPU canvas is created on the first presentation. Let
+                // that and any page entrance finish before sampling rotation.
+                if attempts.get() < 14 {
+                    app.window().request_redraw();
+                    return;
+                }
+            }
+            let collapsed = groups.row_data(0).unwrap().collapsed;
+            let toggle = ElementHandle::find_by_accessible_label(
+                &app,
+                if collapsed {
+                    "Expand series"
+                } else {
+                    "Collapse series"
+                },
+            )
+            .next()
+            .unwrap();
+            let p = toggle.absolute_position();
+            let card = ElementHandle::find_by_element_type_name(&app, "DownloadSeriesCard")
+                .next()
+                .unwrap();
+            assert!(
+                p.y >= card.absolute_position().y
+                    && p.y + toggle.size().height <= card.absolute_position().y + 86.0
+            );
+            let snapshot = app.window().take_snapshot().unwrap();
+            let scale = app.window().scale_factor();
+            // Crop the stationary button interior, excluding its border and title.
+            // Comparing painted masks catches a snapping/non-rendered rotation,
+            // which inspecting the animation property alone cannot establish.
+            let x = ((p.x + 6.0) * scale).round() as u32;
+            let y = ((p.y + 6.0) * scale).round() as u32;
+            let side = (32.0 * scale).round() as u32;
+            let mask = (y..y + side)
+                .flat_map(|row| (x..x + side).map(move |col| (row, col)))
+                .map(|(row, col)| {
+                    let pixel = snapshot.as_slice()[(row * snapshot.width() + col) as usize];
+                    pixel.r > 200 && pixel.g > 200 && pixel.b > 200
+                })
+                .collect::<Vec<_>>();
+            if started.get().is_none() {
+                if mask.iter().filter(|pixel| **pixel).count() < 8 {
+                    return;
+                }
+                frames.borrow_mut().push(mask);
+                started.set(Some(std::time::Instant::now()));
+                let mut group = groups.row_data(0).unwrap();
+                group.collapsed = true;
+                groups.set_row_data(0, group);
+            } else {
+                frames.borrow_mut().push(mask);
+                if started.get().unwrap().elapsed() >= std::time::Duration::from_millis(350) {
+                    let frames = frames.borrow();
+                    let first = frames.first().unwrap();
+                    let last = frames.last().unwrap();
+                    assert_ne!(first, last, "expanded and collapsed chevrons differ");
+                    assert!(
+                        frames.iter().any(|frame| frame != first && frame != last),
+                        "GPU must paint intermediate chevron angles"
+                    );
+                    slint::quit_event_loop().unwrap();
+                }
+            }
+            app.window().request_redraw();
+        },
+    );
+    app.run().unwrap();
+}

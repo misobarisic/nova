@@ -3,6 +3,81 @@ use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer, VecModel};
 use std::{rc::Rc, time::Duration};
 
+#[test]
+fn tab_underline_retargets_and_resizes_without_moving_content() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "tab_underline_retargets_and_resizes_without_moving_content"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_show_home(false);
+    app.set_modal_visible(true);
+    app.set_in_library(true);
+    app.set_selected_title("Stable tabs".into());
+    app.show().unwrap();
+    let underline = || element(&app, "DetailTabs::tab_underline");
+    let advance = |ms| {
+        for _ in 0..ms {
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+            let _ = underline().absolute_position();
+        }
+    };
+    for width in [390, 820, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 1400));
+        app.set_detail_is_movie(false);
+        app.set_detail_tab(0);
+        app.global::<nova::Anim>().set_enabled(true);
+        app.global::<nova::Anim>().set_transitions(true);
+        advance(300);
+        let start = underline().absolute_position();
+        let top = title_y(&app);
+        app.set_detail_tab(3);
+        advance(80);
+        let middle = underline().absolute_position();
+        assert!(middle.x > start.x);
+        app.set_detail_tab(4);
+        advance(300);
+        let end = underline().absolute_position();
+        assert!(end.x > middle.x);
+        assert_eq!(start.y, end.y, "tab content must not move vertically");
+        assert_still_at(&app, top);
+        for (master, transitions) in [(true, false), (false, true)] {
+            app.global::<nova::Anim>().set_enabled(master);
+            app.global::<nova::Anim>().set_transitions(transitions);
+            app.set_detail_tab(0);
+            advance(1);
+            assert_eq!(underline().absolute_position().x, start.x);
+            app.set_detail_tab(4);
+            advance(1);
+            assert_eq!(underline().absolute_position().x, end.x);
+        }
+        app.global::<nova::Anim>().set_enabled(true);
+        app.global::<nova::Anim>().set_transitions(true);
+        app.set_detail_tab(0);
+        advance(70);
+        app.global::<nova::Anim>().set_enabled(false);
+        advance(1);
+        assert_eq!(underline().absolute_position().x, start.x);
+        // Movies omit Episodes: Tracking uses the second slot, including
+        // after a viewport resize, with no delayed position adjustment.
+        app.set_detail_is_movie(true);
+        app.set_detail_tab(4);
+        advance(1);
+        let movie_x = underline().absolute_position().x;
+        assert!(movie_x > start.x && movie_x < end.x);
+        app.window()
+            .set_size(slint::PhysicalSize::new(width + 20, 1400));
+        advance(1);
+        let resized = underline().absolute_position();
+        advance(300);
+        assert_eq!(underline().absolute_position(), resized);
+    }
+}
+
 fn settle() {
     for _ in 0..10 {
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));

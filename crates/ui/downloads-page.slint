@@ -1,15 +1,16 @@
-import { Theme, ControlInput, NavMetrics, DownloadEpisode, DownloadGroup } from "@NovaUiShared";
+import { Theme, Anim, ControlInput, NavMetrics, DownloadEpisode, DownloadGroup } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 import { SearchField } from "searchfield.slint";
 import { SideNav } from "sidenav.slint";
 import { LibraryFilterChip } from "filter-chip.slint";
-import { IcChevronDown, IcChevronUp } from "icons.slint";
+import { IcChevronDown } from "icons.slint";
 import { PageHeader } from "page-header.slint";
 
 
 
 component DownloadButton inherits Rectangle {
+    in property <bool> enabled: true;
     in property <string> label;
     in property <bool> selected: false;
     in property <bool> chevron: false;
@@ -19,22 +20,21 @@ component DownloadButton inherits Rectangle {
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     background: root.selected ? Theme.current.accent : (touch.has-hover ? Theme.current.control_hover : Theme.current.control);
     accessible-role: button; accessible-label: root.label;
+    accessible-enabled: root.enabled;
     label-text := Text { visible: !root.chevron; text: root.label; color: root.selected ? Theme.current.on_accent : Theme.current.text_bright; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
-    if root.chevron && !root.expanded: IcChevronDown {
+    if root.chevron: IcChevronDown {
         width: 24px; height: 24px;
         x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
         fill: Theme.current.text_bright;
-    }
-    if root.chevron && root.expanded: IcChevronUp {
-        width: 24px; height: 24px;
-        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-        fill: Theme.current.text_bright;
+        transform-rotation: root.expanded ? 180deg : 0deg;
+        animate transform-rotation { duration: Anim.transition_fade; easing: ease-in-out; }
     }
     border-width: key-focus.has-focus ? 2px : 0px; border-color: Theme.current.focus_ring;
-    key-focus := FocusScope { key-pressed(e) => { if (e.text == Key.Return || e.text == " ") { if (!e.repeat) { root.picked(); } accept } else { reject } } }
-    touch := TouchArea { mouse-cursor: pointer; clicked => { key-focus.focus(); root.picked(); } }
+    key-focus := FocusScope { enabled: root.enabled; key-pressed(e) => { if (e.text == Key.Return || e.text == " ") { if (!e.repeat) { root.picked(); } accept } else { reject } } }
+    touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { key-focus.focus(); root.picked(); } }
 }
 component DownloadEpisodeRow inherits Rectangle {
+    in property <bool> enabled: true;
     in property <DownloadEpisode> episode;
     in property <bool> narrow;
     callback action(string, int);
@@ -55,8 +55,8 @@ component DownloadEpisodeRow inherits Rectangle {
                 text: root.episode.state == 2 ? @tr("Watched") : @tr("Unwatched"); color: root.episode.state == 2 ? Theme.current.accent : Theme.current.text_muted; font-size: 11px;
             }
         }
-        DownloadButton { width: root.narrow ? 58px : 80px; label: root.episode.action_label; picked => { root.action(root.episode.id, 0); } }
-        DownloadButton { width: 44px; label: "×"; accessible-label: @tr("Remove download"); picked => { root.action(root.episode.id, 1); } }
+        DownloadButton { enabled: root.enabled; width: root.narrow ? 58px : 80px; label: root.episode.action_label; picked => { root.action(root.episode.id, 0); } }
+        DownloadButton { enabled: root.enabled; width: 44px; label: "×"; accessible-label: @tr("Remove download"); picked => { root.action(root.episode.id, 1); } }
     }
 }
 component DownloadSeriesCard inherits Rectangle {
@@ -77,21 +77,31 @@ component DownloadSeriesCard inherits Rectangle {
     callback action(string,int);
     border-radius: 10px; border-width: 1px; border-color: Theme.current.border_strong;
     background: Theme.current.artwork_canvas; clip: true;
-    height: 86px + (root.group.collapsed ? 0px : root.group.episodes.length * 82px);
-    VerticalLayout { spacing: 0px;
-        Rectangle { height: 86px; background: Theme.current.control;
-            Image { source: root.group.artwork; width: 100%; height: 100%; image-fit: cover; }
-            Rectangle { width: 100%; height: 100%; background: #00000090; }
-            HorizontalLayout { padding: 14px; spacing: 10px;
-                VerticalLayout { spacing: 5px;
-                    Text { vertical-stretch: 0; text: root.group.title; color: Theme.current.text_bright; font-size: 17px; font-weight: 700; overflow: elide; }
-                    Text { vertical-stretch: 0; text: root.group.subtitle; color: Theme.current.text_secondary; font-size: 12px; overflow: elide; }
-                }
-                DownloadButton { width: 44px; chevron: true; expanded: !root.group.collapsed; accessible-label: root.group.collapsed ? @tr("Expand series") : @tr("Collapse series"); picked => { root.toggled(root.group.id); } }
+    // Animate only the collapse state; live progress/model updates must not
+    // resize the card gradually. Keep full-height rows behind a clipping lane
+    // until the exit finishes instead of squeezing or dropping them at once.
+    private property <float> expansion: root.group.collapsed ? 0 : 1;
+    animate expansion { duration: Anim.transition_fade; easing: ease-in-out; }
+    private property <float> shown-expansion: Anim.enabled && Anim.transitions ? root.expansion : (root.group.collapsed ? 0 : 1);
+    height: 86px + root.shown-expansion * root.group.episodes.length * 82px;
+    // Without an explicit anchor Slint centers this fixed-height child in
+    // the animated card, moving the artwork and clipping the toggle in rows.
+    Rectangle { x: 0px; y: 0px; width: 100%; height: 86px; background: Theme.current.control;
+        Image { source: root.group.artwork; width: 100%; height: 100%; image-fit: cover; }
+        Rectangle { width: 100%; height: 100%; background: #00000090; }
+        HorizontalLayout { padding: 14px; spacing: 10px;
+            VerticalLayout { spacing: 5px;
+                Text { vertical-stretch: 0; text: root.group.title; color: Theme.current.text_bright; font-size: 17px; font-weight: 700; overflow: elide; }
+                Text { vertical-stretch: 0; text: root.group.subtitle; color: Theme.current.text_secondary; font-size: 12px; overflow: elide; }
             }
+            DownloadButton { width: 44px; chevron: true; expanded: !root.group.collapsed; accessible-label: root.group.collapsed ? @tr("Expand series") : @tr("Collapse series"); picked => { root.toggled(root.group.id); } }
         }
-        if !root.group.collapsed: VerticalLayout { spacing: 0px;
-            for episode in root.group.episodes: DownloadEpisodeRow { episode: episode; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } }
+    }
+    if root.shown-expansion > 0: Rectangle {
+        y: 86px; width: 100%; height: root.shown-expansion * root.group.episodes.length * 82px;
+        clip: true;
+        VerticalLayout { y: 0px; width: 100%; height: root.group.episodes.length * 82px; spacing: 0px;
+            for episode in root.group.episodes: DownloadEpisodeRow { enabled: !root.group.collapsed; episode: episode; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } }
         }
     }
 }

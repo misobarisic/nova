@@ -703,14 +703,14 @@ msgstr "Glavni prekidač. Isključite ga da svi prijelazi i efekti prelaska poka
 msgid "Page transitions"
 msgstr "Prijelazi stranica"
 
-msgid "Slide and fade when opening settings subpages and detail pages."
-msgstr "Klizanje i postupno pojavljivanje pri otvaranju podstranica postavki i stranica pojedinosti."
+msgid "Slide and fade between pages, move tab indicators and expand download groups."
+msgstr "Klizanje i postupno pojavljivanje između stranica, pomicanje oznaka kartica i proširivanje grupa preuzimanja."
 
 msgid "Hover effects"
 msgstr "Efekti prelaska pokazivača"
 
-msgid "Card lift and the highlight on buttons, toggles and rows."
-msgstr "Podizanje kartica i isticanje gumba, prekidača i redaka."
+msgid "Card lift and highlight fades on buttons, toggles, rows and filter pills."
+msgstr "Podizanje kartica i postupno isticanje gumba, prekidača, redaka i filtara."
 
 msgid "Player OSD"
 msgstr "OSD reproduktora"

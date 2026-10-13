@@ -49,12 +49,16 @@ component DetailTabs inherits Rectangle {
     vertical-stretch: 0;
     property <int> count: 1 + (root.episodes_visible ? 1 : 0) + (root.tracking_visible ? 1 : 0);
     property <length> gap: root.narrow ? 4px : 24px;
+    private property <length> tab-width: root.narrow ? (root.width - (root.count - 1) * root.gap) / root.count : Math.min(140px, (root.width - (root.count - 1) * root.gap) / root.count);
+    private property <float> selected-slot: root.selected == 0 ? 0 : root.selected == 3 ? 1 : (root.episodes_visible ? 2 : 1);
+    private property <float> underline-slot: root.selected-slot;
+    animate underline-slot { duration: Anim.transition_fade; easing: ease-out; }
     Rectangle { y: parent.height - 1px; height: 1px; width: 100%; background: Theme.current.border_overlay; }
     HorizontalLayout {
         spacing: root.gap;
         alignment: start;
         for tab in root.episodes_visible ? (root.tracking_visible ? [0, 3, 4] : [0, 3]) : (root.tracking_visible ? [0, 4] : [0]): Rectangle {
-            width: root.narrow ? (root.width - (root.count - 1) * root.gap) / root.count : Math.min(140px, (root.width - (root.count - 1) * root.gap) / root.count);
+            width: root.tab-width;
             height: 48px;
             border-radius: 4px;
             border-width: tab_focus.has-focus || (root.kb_active && root.focused && root.kb_tab == tab) ? 2px : 0px;
@@ -62,13 +66,6 @@ component DetailTabs inherits Rectangle {
             accessible-role: button;
             accessible-label: tab == 0 ? @tr("Overview") : tab == 3 ? @tr("Episodes") : @tr("Tracking");
             forward-focus: tab_focus;
-            Rectangle {
-                y: parent.height - 4px;
-                height: 4px;
-                width: 100%;
-                border-radius: 2px;
-                background: root.selected == tab ? Theme.current.accent_vivid : transparent;
-            }
             Text {
                 text: tab == 0 ? @tr("Overview") : tab == 3 ? @tr("Episodes") : @tr("Tracking");
                 color: root.selected == tab ? Theme.current.text_bright : Theme.current.text_detail_tab;
@@ -86,6 +83,14 @@ component DetailTabs inherits Rectangle {
             }
             TouchArea { mouse-cursor: pointer; clicked => { root.picked(tab); } }
         }
+    }
+    // Only selection moves. Resizing recalculates geometry immediately and
+    // never shifts the tab content or its keyboard focus targets.
+    tab_underline := Rectangle {
+        x: (Anim.enabled && Anim.transitions ? root.underline-slot : root.selected-slot) * (root.tab-width + root.gap);
+        y: parent.height - 4px;
+        width: root.tab-width; height: 4px; border-radius: 2px;
+        background: Theme.current.accent_vivid;
     }
 }
 

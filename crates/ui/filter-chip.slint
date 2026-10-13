@@ -1,4 +1,4 @@
-import { Theme } from "@NovaUiShared";
+import { Theme, Anim } from "@NovaUiShared";
 
 export component LibraryFilterChip inherits Rectangle {
     in property <string> label;
@@ -21,18 +21,25 @@ export component LibraryFilterChip inherits Rectangle {
     changed x => { if (root.selected) { root.reveal(root.x, root.width); } }
     changed width => { if (root.selected) { root.reveal(root.x, root.width); } }
     height: 40px;
-    width: chip_text.preferred-width + 28px;
+    // Selection changes weight, but must not shift adjacent pills or their rail.
+    width: chip_measure.preferred-width + 28px;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     border-width: chip_focus.has-focus ? 2px : 1px;
     border-color: chip_focus.has-focus ? Theme.current.focus_ring : root.selected ? Theme.current.accent : Theme.current.border_strong;
     // Android keeps the touch pointer over the last tapped item after Up.
     // Pressed clears on release/cancel; desktop still has real hover.
     background: root.selected ? Theme.current.primary_button : ((root.touch_feedback ? chip_touch.pressed : chip_touch.has-hover) ? Theme.current.control_hover : Theme.current.hero_control);
+    animate background { duration: Anim.hover_fast; }
     accessible-role: button;
     accessible-label: root.label;
+    chip_measure := Text {
+        visible: false;
+        text: root.label; font-size: 13px; font-weight: 600;
+    }
     chip_text := Text {
         text: root.label;
         color: root.selected ? Theme.current.on_accent : Theme.current.text_secondary;
+        animate color { duration: Anim.hover_fast; }
         font-size: 13px;
         font-weight: root.selected ? 600 : 400;
         horizontal-alignment: center;
