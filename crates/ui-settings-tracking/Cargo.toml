@@ -5,6 +5,10 @@ edition = "2024"
 license.workspace = true
 links = "novasettingstracking"
 
+[lib]
+# UI coverage lives in the root integration suites. Re-enable before adding unit tests.
+test = false
+
 [dependencies]
 slint = { workspace = true }
 i-slint-core = { workspace = true, features = ["image-decoders", "svg"] }

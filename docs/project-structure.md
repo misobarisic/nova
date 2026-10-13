@@ -44,7 +44,8 @@ make android-run-release
 # For an emulator: append ANDROID_TARGET=x86_64-linux-android
 
 # Tests
-cargo test                              # workspace tests (app unit + integration)
+cargo test                              # root app unit + integration tests
+cargo test --workspace                  # also leaf-crate unit + documentation tests
 cargo test -p nova-sync --lib            # sync crate unit tests (fast)
 cargo test --test ui_settings_sync -- sync_overflow:: # headless Slint UI regression tests
 cargo test --test ui_discover --test ui_library --test ui_player # isolated UI suites
@@ -95,6 +96,14 @@ The workspace's `dev` profile disables debug information and strips symbols;
 the default `test` profile inherits these settings. Incremental compilation
 remains enabled. This reduces linked executable size while making development
 and test backtraces less detailed. Release and `dev-release` also strip symbols.
+
+The 27 generated UI leaf libraries declare `[lib] test = false` to skip empty
+unit-test harnesses during default workspace test selection. Their normal
+libraries still build for the app and root UI integration suites; the main
+`nova-ui` library keeps its seven real unit tests. Explicit `--lib` or
+`--all-targets` selection can still request the empty harnesses. Documentation
+tests remain enabled separately. Plain root `cargo test` and targeted
+`--test ui_*` commands already exclude leaf-library unit harnesses.
 
 **Features** (root `Cargo.toml`):
 - `desktop` (default): enables Slint's Winit/FemtoVG backend.
@@ -991,18 +1000,64 @@ hero fade fixture reports the same stripe at width 390, phase 1, pixel
 against its width assertion. These failures predate the consolidation; the
 assertions and native selection remain unchanged.
 
-A follow-up trial found 27 generated `nova-ui-*` leaf libraries with no unit
-tests; the main `nova-ui` library has seven real tests and stays enabled.
-Temporarily setting `[lib] test = false` removed all 27 empty harnesses from
-a successful workspace `--no-run` build while preserving the main library’s
-test target. Rebuilding just Home and Settings Categories’ empty harnesses,
-with cached dependencies and two jobs, cost 13.71 s and produced 219.57 MiB
-of incremental cache plus 1.63 MiB of executables. The first manifest change
-triggered dependent UI rebuilds and took 99.07 s, so this is not a steady-state
-27-crate speedup measurement. All trial manifests were restored; no empty
-harnesses are disabled in this change. Cargo’s `test` flag governs default
-selection; explicitly selecting libraries can still build their harnesses,
-and documentation tests have a separate `doctest` flag.
+### Generated UI empty-harness measurements
+
+A local default-Nix comparison on 2026-10-13 audited all 27 generated UI leaf
+libraries: none contain unit tests, while the main `nova-ui` library has seven
+real tests. `[lib] test = false` is now set only on those 27 leaves. Their
+normal libraries remain dependencies of the app and UI integration suites;
+the trial retained all 41 other test targets. Re-enable a leaf’s harness before
+adding Rust unit tests there.
+
+Measurements used two Cargo jobs, the symbol-stripped profile and cached
+normal dependencies. The fresh-build sample removed only those 27 test
+executables, their matching fingerprints and their individually identified
+incremental caches; exactly 27 empty harnesses rebuilt. This measures avoidable
+work when those caches are missing, not a whole-project clean build. Cached
+build and Player-edit rows are medians of three samples. The second enabled
+measurement follows the disabled trial to expose order/cache effects.
+
+| Measurement | Harnesses enabled | Disabled | Re-enabled comparison |
+|---|---:|---:|---:|
+| Fully cached workspace `--no-run` | 0.868 s | 0.790 s | 0.807 s |
+| Targeted Player test edit | 4.478 s | 3.248 s | 3.937 s |
+
+The 27 fresh empty harnesses took **158.58 s wall / 297.77 s CPU**, generated
+**3.17 GiB of incremental cache**, and linked **22.07 MiB of executables**.
+Executing all 27 already-built empty binaries sequentially took a median
+**0.047 s**. This optimization primarily avoids compilation and cache growth;
+warm build and execution savings are small. Both enabled and disabled targeted
+Player commands built zero empty leaf harnesses, so the observed edit timing
+variation is not a demonstrated benefit of this flag. Plain root `cargo test`
+also selects only the root package; the broader benefit applies to default
+`cargo test --workspace` or default test selection on the leaf packages.
+Explicit library/all-target selection may override the flag.
+
+Changing manifests caused a **98.33 s** one-time build while switching off and
+**130.75 s** while switching back, rebuilding dependent targets. These transition
+costs are excluded from cached and fresh-harness comparisons. All temporary
+source probes and trial settings were restored before applying the final flag.
+Every build was guarded by a 60 GiB cushion above the requested 50 GiB floor;
+minimum free space was **146.92 GiB**.
+
+After validation, 54 obsolete generated-leaf harness cache directories and
+54 executables across current/older variants were removed: **11.96 GiB** of
+unique file contents. The caches were identified by their unit-harness
+`test::test_main_static` object reference; every removed executable’s
+`--list` reported zero tests. Normal library and nonempty-test artifacts were
+preserved, and a default workspace `--no-run` remained warm after cleanup.
+Formatting, workspace Clippy/check, the sync unit tests and full workspace
+tests passed with the final manifest flags.
+
+A separate documentation-test audit passed with **zero cases in all 39 jobs**.
+Cargo’s 27 generated-leaf documentation jobs accounted for approximately
+**30.37 s of the 35.71 s total**, measured between serial `Doc-tests` markers.
+`test = false` does not skip those jobs. Setting `doctest = false` on the same
+empty leaves is a separate possible runtime optimization; its saving is
+estimated from this audit, not measured in a disabled comparison, and it is
+not applied here. The main `nova-ui` and all other libraries retain their
+unit/documentation coverage.
+
 
 
 ## 9. Conventions & gotchas
@@ -1153,7 +1208,7 @@ and documentation tests have a separate `doctest` flag.
 | Sync invite QR / Android camera scan | `src/app/qr.rs`, `src/app/android_qr.rs`, `android/java/dev/misob/nova/QrScanActivity.java`, `crates/ui-settings-sync/sync-module.slint`, `src/app/run.rs` |
 | Android background execution (downloads/sign-in FGS + periodic sync) | `src/app/android_bg.rs`, `android/java/dev/misob/nova/{NovaBackgroundService,NovaAuthService,NovaSyncJobService}.java`, `nova_sync::SyncEngine::setup`, `DownloadCoordinator::has_active_work` |
 | Cargo profiles / symbol stripping | Root `Cargo.toml` (`dev`, inherited `test`, `dev-release`, `release`); `.cargo/config.toml` aliases and `flake.nix` toolchains |
-| Consolidated UI tests / per-case subprocess isolation | `tests/ui_*.rs`, matching case folders under `tests/`, shared `tests/support/isolation.rs`; suite boundaries, filtering and measurements in §8 Testing |
+| Consolidated UI tests / per-case subprocess isolation | `tests/ui_*.rs`, matching case folders under `tests/`, shared `tests/support/isolation.rs`; suite boundaries, filtering, measurements and generated-leaf harness selection in §8 Testing |
 | App paths / shared settings | `crates/config/src/lib.rs` (absolute XDG roots with HOME/temp fallback) |
 | Persistence backend / metadata compression / equivalent writes | `crates/storage/src/{lib,codec}.rs`, `src/app/io.rs` (`metadata_cache_key`) |
 | Sync diagnostic events / log filtering | `src/diagnostics.rs`, `crates/sync/src/{lib,protocol,pair,store}.rs`, `src/app/sync.rs`; `RUST_LOG=nova_sync=debug` (no `NOVA_SYNC_DEBUG`) |
