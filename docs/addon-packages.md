@@ -17,7 +17,8 @@ episode IDs, and existing plugin setting keys. Importing the corresponding ZIP
 makes a retained but unavailable AniKoto or Supernova installation usable again;
 it does not change library identities. Reimporting identical bytes is idempotent.
 An update must use a higher semantic version: downgrades and different bytes
-claiming the same version are rejected.
+claiming the same version are rejected. Synced selections obey the same rule;
+a rejected selection cannot become active after restarting the app.
 
 With sync enabled, paired devices share the desired addon list, settings and
 package descriptors. A device missing an archive automatically requests it

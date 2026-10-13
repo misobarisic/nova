@@ -301,8 +301,29 @@ pub(super) fn initialize(bridge: &Bridge) {
 }
 
 pub(super) fn project(bridge: &Bridge, raw: &str) -> Result<(), String> {
-    let descriptors = parse(raw)?;
-    sync::persist_sync_snapshot(KEY, raw, false).map_err(|e| e.to_string())?;
+    let mut descriptors = parse(raw)?;
+    {
+        let state = bridge.shared.lock().unwrap();
+        for (id, incoming) in &mut descriptors {
+            // LWW sync clocks do not establish package version precedence.
+            // Keep rejection durable: checking only at activation leaves the
+            // rejected descriptor on disk, where startup would trust it.
+            let loaded = state
+                .loaded_packages
+                .get(id)
+                .map(|package| PackageDescriptor::from_package(package));
+            for accepted in [state.package_descriptors.get(id), loaded.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                if accepted_update(Some(accepted), incoming).is_err() {
+                    *incoming = accepted.clone();
+                }
+            }
+        }
+    }
+    let raw = serde_json::to_string(&descriptors).map_err(|e| e.to_string())?;
+    sync::persist_sync_snapshot(KEY, &raw, false).map_err(|e| e.to_string())?;
     bridge.shared.lock().unwrap().package_descriptors = descriptors.clone();
     remember_ids(&descriptors, &snapshot_addons(bridge));
     Ok(())
@@ -972,6 +993,37 @@ mod tests {
                 newer_package.sha256()
             );
 
+            // A paired device's later sync clock cannot make an older or
+            // conflicting package valid, including after a process restart.
+            for rejected in [
+                fixture_zip("example", "1.0.0", "remote downgrade"),
+                fixture_zip("example", "2.0.0", "remote conflicting bytes"),
+            ] {
+                let rejected_package = AddonPackage::parse(&rejected).unwrap();
+                store_archive(&rejected_package, &rejected).unwrap();
+                let mut incoming = bridge.shared.lock().unwrap().package_descriptors.clone();
+                incoming.insert(
+                    "example".into(),
+                    PackageDescriptor::from_package(&rejected_package),
+                );
+                {
+                    let _guard = sync::ApplyingGuard::new();
+                    project(&bridge, &serde_json::to_string(&incoming).unwrap()).unwrap();
+                }
+                assert_eq!(
+                    read_json::<BTreeMap<String, PackageDescriptor>>(KEY).unwrap()["example"],
+                    PackageDescriptor::from_package(&newer_package)
+                );
+                // Startup rebuilds the registry solely from durable state.
+                bridge.shared.lock().unwrap().loaded_packages.clear();
+                nova_providers::set_installed_packages(Vec::new());
+                initialize(&bridge);
+                assert_eq!(
+                    bridge.shared.lock().unwrap().loaded_packages["example"].sha256(),
+                    newer_package.sha256()
+                );
+            }
+
             // Removal supersedes a local import already parsing on a worker.
             // No event-loop yield occurs until after removal, so even an early
             // worker completion cannot commit its queued callback first.
@@ -1027,8 +1079,14 @@ mod tests {
                 "example".into(),
                 PackageDescriptor::from_package(&future_package),
             );
-            sync::persist_package_state(&snapshot_addons(&bridge), &desired).unwrap();
-            bridge.shared.lock().unwrap().package_descriptors = desired;
+            {
+                let _guard = sync::ApplyingGuard::new();
+                project(&bridge, &serde_json::to_string(&desired).unwrap()).unwrap();
+            }
+            assert_eq!(
+                bridge.shared.lock().unwrap().package_descriptors["example"],
+                PackageDescriptor::from_package(&future_package)
+            );
             reconcile(&bridge);
             let cancelled_receipt =
                 bridge.shared.lock().unwrap().package_fetches[future_package.sha256()].clone();
