@@ -145,7 +145,6 @@ impl Bridge {
             app.set_discover_kb_idx(index as i32);
         }
         self.clear_streams();
-        app.set_modal_visible(true);
         // Reset any leftover episode-picker state from a previous item.
         app.set_modal_episodes(false);
         app.set_detail_watch_label(text::tr("Start").into());
@@ -170,7 +169,6 @@ impl Bridge {
         );
         // Backdrop is painted below via the sync cache fast path (cached
         // reentry paints instantly; misses blank + async-load).
-        app.set_detail_tab(0);
         app.set_episode_filter(SharedString::default());
 
         // Detail always resolves its own recipe: a grid-sized completion must
@@ -218,8 +216,10 @@ impl Bridge {
         self.persist_backdrop_for(&item_id, &backdrop_url);
         // Backfill persisted header text for the same reason.
         self.persist_header_for(&item_id, &header.0, &header.1, &header.2, false);
-        // Same-entry reopen restores tab/filter/focus (else resets).
+        // Configure the incoming shell before it can render. Metadata must
+        // not swap Overview for Episodes after the entrance has begun.
         self.restore_detail_snapshot(&item_id);
+        app.set_modal_visible(true);
 
         if modal_type == "movie" {
             self.cancel_watch_now();
@@ -1133,23 +1133,8 @@ impl Bridge {
             .position(|v| v.id == episode_id)
     }
 
-    /// Video id of the `index`-th filter-narrowed episode row of `season`.
-    pub(super) fn filtered_row_id(
-        videos: &[Video],
-        season: u32,
-        filter: &str,
-        index: usize,
-    ) -> Option<String> {
-        season_episodes(videos, season)
-            .iter()
-            .filter(|v| episode_matches_filter(v, filter))
-            .nth(index)
-            .map(|v| v.id.clone())
-    }
-
-    /// Snapshot the open modal's position (tab, season, focused episode /
-    /// streams, filter, keyboard focus) so reopening the same entry restores
-    /// it. No-op when no modal is open.
+    /// Remember content choices for the next visit, not navigation focus.
+    /// No-op when no modal is open.
     pub(super) fn save_detail_snapshot(&self) {
         let Some(app) = self.app() else {
             return;
@@ -1162,16 +1147,8 @@ impl Bridge {
             };
             let season_val = m.seasons.get(m.season_index).copied();
             let filter = app.get_episode_filter().to_string();
-            let kb_ep = app.get_detail_kb_ep().max(0) as usize;
-            let episode_id = match season_val {
-                Some(season) if app.get_modal_episodes() => {
-                    Self::filtered_row_id(&m.videos, season, &filter, kb_ep)
-                }
-                _ => None,
-            };
-            // The streams view is deliberately not restored: reopening an
-            // entry lands on the episode list (same season), never
-            // auto-opens a previously picked episode's streams.
+            // A later visit restores the content choices underneath, not
+            // the temporary stream selector or its navigation position.
             (
                 m.id.clone(),
                 DetailSnapshot {
@@ -1183,16 +1160,7 @@ impl Bridge {
                         app.get_detail_tab()
                     },
                     season: season_val,
-                    episode_id,
-                    stream_idx: app.get_detail_kb_s().max(0) as usize,
-                    stream_request: m.request_id.clone(),
                     filter,
-                    kb_zone: app.get_detail_kb_zone(),
-                    kb_top: app.get_detail_kb_top(),
-                    kb_tab: app.get_detail_kb_tab(),
-                    kb_ci: app.get_detail_kb_ci(),
-                    kb_ep: app.get_detail_kb_ep(),
-                    kb_s: app.get_detail_kb_s(),
                 },
             )
         };
@@ -1203,10 +1171,8 @@ impl Bridge {
             .insert(snap.0, snap.1);
     }
 
-    /// Restore a saved position for `id` (same-entry reopen): tab, filter
-    /// and keyboard focus now; season/episode/stream views restore once
-    /// their async data arrives (show_episode_picker / apply_streams).
-    /// Resets to defaults when no snapshot exists (different entry).
+    /// Choose the initial tab/filter before mounting; season resolves when
+    /// metadata arrives. Keyboard navigation starts at Back on every visit.
     pub(super) fn restore_detail_snapshot(&self, id: &str) {
         let Some(app) = self.app() else {
             return;
@@ -1218,36 +1184,19 @@ impl Bridge {
             .detail_snapshots
             .get(id)
             .cloned();
-        match snap {
-            Some(s) => {
-                app.set_detail_tab(if app.get_detail_is_movie() && s.tab == 3 {
-                    0
-                } else {
-                    s.tab
-                });
-                app.set_episode_filter(SharedString::from(&s.filter));
-                app.set_detail_kb_zone(s.kb_zone);
-                app.set_detail_kb_top(s.kb_top);
-                app.set_detail_kb_tab(if app.get_detail_is_movie() && s.kb_tab == 3 {
-                    0
-                } else {
-                    s.kb_tab
-                });
-                app.set_detail_kb_ci(s.kb_ci);
-                app.set_detail_kb_ep(s.kb_ep);
-                app.set_detail_kb_s(s.kb_s);
-            }
-            None => {
-                app.set_detail_tab(0);
-                app.set_episode_filter(SharedString::default());
-                app.set_detail_kb_zone(0);
-                app.set_detail_kb_top(0);
-                app.set_detail_kb_tab(0);
-                app.set_detail_kb_ci(2);
-                app.set_detail_kb_ep(0);
-                app.set_detail_kb_s(0);
-            }
-        }
+        let tab = if app.get_detail_is_movie() {
+            0
+        } else {
+            snap.as_ref().map_or(3, |s| if s.tab == 0 { 0 } else { 3 })
+        };
+        app.set_detail_tab(tab);
+        app.set_episode_filter(snap.map_or_else(SharedString::default, |s| s.filter.into()));
+        app.set_detail_kb_zone(0);
+        app.set_detail_kb_top(0);
+        app.set_detail_kb_tab(tab);
+        app.set_detail_kb_ci(2);
+        app.set_detail_kb_ep(0);
+        app.set_detail_kb_s(0);
     }
 
     /// Main thread: switch the modal to the season/episode picker.
@@ -1753,33 +1702,12 @@ impl Bridge {
             app.set_season_combo_idx(season_idx as i32);
             self.clear_streams();
             self.set_stream_hint(None);
-            // Series land on the Episodes tab; a same-entry reopen restores
-            // its saved tab instead (e.g. Overview).
-            app.set_detail_tab(snapshot.as_ref().map(|s| s.tab).unwrap_or(3));
+            // The tab was chosen before mounting. A late response must not
+            // overwrite an Overview choice made while episodes were loading.
         }
         self.apply_season_cards();
         self.dispatch_season_thumbs();
         self.refresh_episode_rows();
-        // Restore the focused episode row (resolved by id against the rows
-        // just built, so refreshes/reorderings fall back gracefully).
-        if let Some(snap) = snapshot.as_ref()
-            && let Some(ep_id) = snap.episode_id.as_ref()
-        {
-            let idx = {
-                let state = self.shared.lock().unwrap();
-                state.modal_item.as_ref().and_then(|m| {
-                    let season = m.seasons.get(m.season_index).copied()?;
-                    let filter = self
-                        .app()
-                        .map(|a| a.get_episode_filter().to_string())
-                        .unwrap_or_default();
-                    Self::filtered_row_index(&m.videos, season, &filter, ep_id)
-                })
-            };
-            if let (Some(app), Some(i)) = (self.app(), idx) {
-                app.set_detail_kb_ep(i as i32);
-            }
-        }
         // Cached metadata can satisfy Watch Now before the refresh answers.
         self.resolve_watch_now();
     }
@@ -2528,7 +2456,7 @@ impl Bridge {
             cache_hit,
             ..
         } = context;
-        let (was_empty, searching) = {
+        let searching = {
             let mut state = self.shared.lock().unwrap();
             if !stream_response_is_current(&state, &request_id, generation) {
                 return;
@@ -2539,7 +2467,6 @@ impl Bridge {
                 .checked_sub(1)
                 .and_then(|i| state.stream_addons.get(i))
                 .cloned();
-            let was_empty = state.stream_all.is_empty();
             if complete {
                 state.stream_pending.retain(|owner| owner != &owner_url);
                 if cache_hit && !new_rows.is_empty() {
@@ -2572,32 +2499,12 @@ impl Bridge {
                         .map_or(0, |index| index + 1);
                 }
             }
-            let searching = !state.stream_pending.is_empty();
-            (was_empty, searching)
+            !state.stream_pending.is_empty()
         };
 
         self.apply_stream_filter();
         if let Some(app) = self.app() {
             app.set_streams_searching(searching);
-            // Same-entry reopen: restore the saved stream focus once the
-            // first results land (never fights the user's own navigation).
-            if was_empty {
-                let restore_s = {
-                    let state = self.shared.lock().unwrap();
-                    match state.modal_item.as_ref() {
-                        Some(m) => state
-                            .detail_snapshots
-                            .get(&m.id)
-                            .filter(|s| s.stream_request == request_id)
-                            .map(|s| s.stream_idx),
-                        None => None,
-                    }
-                };
-                if let Some(i) = restore_s {
-                    let count = self.shared.lock().unwrap().streams.len();
-                    app.set_detail_kb_s(i.min(count.saturating_sub(1)) as i32);
-                }
-            }
         }
     }
 
@@ -4394,6 +4301,56 @@ mod tests {
         bridge.restore_detail_after_playback();
         assert!(!app.get_stream_selector_open());
         assert_eq!(app.get_detail_kb_ep(), 6);
+
+        // Reopening remembers content choices, never a prior navigation
+        // position. Late metadata also respects a tab picked while loading.
+        app.set_detail_tab(0);
+        app.set_episode_filter("Episode".into());
+        app.set_detail_kb_zone(3);
+        app.set_detail_kb_top(2);
+        app.set_detail_kb_ci(1);
+        app.set_detail_kb_s(4);
+        bridge.save_detail_snapshot();
+        bridge.restore_detail_snapshot("series");
+        assert_eq!(app.get_detail_tab(), 0);
+        assert_eq!(app.get_episode_filter(), "Episode");
+        assert_eq!(app.get_detail_kb_zone(), 0);
+        assert_eq!(app.get_detail_kb_top(), 0);
+        assert_eq!(app.get_detail_kb_ci(), 2);
+        assert_eq!(app.get_detail_kb_ep(), 0);
+        assert_eq!(app.get_detail_kb_s(), 0);
+        let videos = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .unwrap()
+            .videos
+            .clone();
+        bridge.show_episode_picker("series".into(), videos.clone());
+        assert_eq!(app.get_season_combo_idx(), 1);
+        assert_eq!(app.get_detail_tab(), 0);
+        app.set_detail_tab(3);
+        bridge.show_episode_picker("series".into(), videos);
+        assert_eq!(
+            app.get_detail_tab(),
+            3,
+            "metadata must not reapply the old tab"
+        );
+        bridge.restore_detail_snapshot("new-series");
+        assert_eq!(
+            app.get_detail_tab(),
+            3,
+            "series choose Episodes before mounting"
+        );
+        assert!(app.get_episode_filter().is_empty());
+        app.set_detail_is_movie(true);
+        bridge.restore_detail_snapshot("new-movie");
+        assert_eq!(app.get_detail_tab(), 0);
+        app.set_detail_is_movie(false);
+        app.set_detail_tab(3);
+        bridge.refresh_episode_rows();
         bridge.episode_picked(0);
         app.set_detail_deep_stream(true);
         bridge.stream_selector_back();

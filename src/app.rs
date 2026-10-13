@@ -506,27 +506,14 @@ struct ModalItem {
     genres: Vec<String>,
 }
 
-/// Detail-view position snapshot for one item: written on modal close,
-/// consumed when the same entry is reopened so Back returns to the same
-/// previous state (tab, season, focused episode/stream, keyboard focus).
-/// Season is stored by value and episodes by id so list refreshes or
-/// reorderings resolve gracefully (fall back to defaults when absent).
+/// Remember content choices for a title, without carrying keyboard focus
+/// into a later visit. New Detail shells start at the top; playback return
+/// uses its own explicit episode reveal instead of this snapshot.
 #[derive(Clone, Debug, Default)]
 struct DetailSnapshot {
     tab: i32,
     season: Option<u32>,
-    /// Focused episode row on the list (video id).
-    episode_id: Option<String>,
-    /// Stream-list focus: index valid for `stream_request`.
-    stream_idx: usize,
-    stream_request: String,
     filter: String,
-    kb_zone: i32,
-    kb_top: i32,
-    kb_tab: i32,
-    kb_ci: i32,
-    kb_ep: i32,
-    kb_s: i32,
 }
 
 // ---------------------------------------------------------------------------

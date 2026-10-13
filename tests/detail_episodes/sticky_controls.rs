@@ -8,6 +8,7 @@ fn settle() {
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
     }
 }
+#[track_caller]
 fn element(app: &nova::AppWindow, id: &str) -> ElementHandle {
     ElementHandle::find_by_element_id(app, id).next().expect(id)
 }
@@ -76,6 +77,9 @@ fn episode_and_manual_tracking_search_pin_to_their_viewport() {
     app.window().set_size(slint::PhysicalSize::new(820, 390));
     app.window().show().unwrap();
     settle();
+    let initial_title_y = element(&app, "DetailPage::detail_title")
+        .absolute_position()
+        .y;
     scroll(&app, "DetailPage::det_scroll", -10000.0);
     let toolbar = element(&app, "DetailEpisodesModule::episode_toolbar");
     let view = element(&app, "DetailPage::det_scroll");
@@ -99,6 +103,18 @@ fn episode_and_manual_tracking_search_pin_to_their_viewport() {
             >= view.absolute_position().y
     );
     scroll(&app, "DetailPage::det_scroll", 10000.0);
+    assert!(
+        (element(&app, "DetailPage::detail_title")
+            .absolute_position()
+            .y
+            - initial_title_y)
+            .abs()
+            < 1.0
+    );
+    // The stable title/logo slot can put the toolbar below this short
+    // viewport at the very top. Bring it into view before querying it: the
+    // test backend excludes clipped items. It must still be below the pin.
+    scroll(&app, "DetailPage::det_scroll", -160.0);
     assert!(
         element(&app, "DetailEpisodesModule::episode_toolbar")
             .absolute_position()

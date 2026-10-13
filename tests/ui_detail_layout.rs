@@ -9,6 +9,9 @@ mod overflow;
 #[path = "detail_layout/row_height.rs"]
 mod row_height;
 
+#[path = "detail_layout/opening.rs"]
+mod opening;
+
 #[path = "detail_layout/scrim_render.rs"]
 mod scrim_render;
 

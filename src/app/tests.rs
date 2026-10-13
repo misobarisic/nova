@@ -1183,12 +1183,6 @@ mod episodes_cache_tests {
             Bridge::filtered_row_index(&videos, 1, "s1e2 name", "s1e1"),
             None
         );
-        // Inverse mapping agrees.
-        assert_eq!(
-            Bridge::filtered_row_id(&videos, 1, "", 1),
-            Some("s1e2".to_string())
-        );
-        assert_eq!(Bridge::filtered_row_id(&videos, 1, "", 7), None);
     }
 }
 
