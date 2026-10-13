@@ -5343,6 +5343,7 @@ version = "0.1.0"
 dependencies = [
  "glow 0.17.0",
  "i-slint-backend-testing",
+ "image",
  "jni 0.22.4",
  "libc",
  "libloading",
@@ -5353,6 +5354,7 @@ dependencies = [
  "png",
  "serde_json",
  "slint",
+ "webp",
  "zbus",
 ]
 

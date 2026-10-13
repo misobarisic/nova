@@ -148,6 +148,9 @@ pub fn tr(english: &str) -> &str {
         "Season pack" => "Paket sezone",
         "Reported seeders" => "Prijavljeni seederi",
         "Number of seeds" => "Broj seedera",
+        "PNG (lossless)" => "PNG (bez gubitaka)",
+        "WebP (lossless)" => "WebP (bez gubitaka)",
+        "WebP (lossy)" => "WebP (s gubicima)",
         "Minimum seeders" => "Najmanji broj seedera",
         "Playback mode" => "Način reprodukcije",
         "Any" => "Bilo koja",
@@ -1343,7 +1346,10 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         | "detail_backdrop_max_side"
         | "episode_thumbnail_max_side"
         | "player_episode_backdrop_max_side" => format!("{number} px"),
-        "quality" | "status_bar_gradient" => format!("{}%", value),
+        "quality"
+        | "screenshot_jpeg_quality"
+        | "screenshot_webp_quality"
+        | "status_bar_gradient" => format!("{}%", value),
         "card_corner_radius" => match value.as_u64() {
             Some(0) => tr("Square").into(),
             Some(4) => tr("Subtle").into(),
@@ -1367,6 +1373,13 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
             Some(16) => tr("Comfortable").into(),
             Some(32) => tr("Spacious").into(),
             _ => format!("{number} px"),
+        },
+        "screenshot_format" => match value.as_str() {
+            Some("png") => tr("PNG (lossless)").into(),
+            Some("jpeg") => "JPEG".into(),
+            Some("webp_lossless") => tr("WebP (lossless)").into(),
+            Some("webp_lossy") => tr("WebP (lossy)").into(),
+            _ => value.to_string(),
         },
         "playback_speed" => format!("{}×", value),
         "default_audio_language" if value.as_str() == Some("") => tr("Automatic").into(),

@@ -179,8 +179,8 @@ fn settings_navigation_survives_search_back_breakpoints_and_recreation() {
         app.set_cache_rewriting(false);
         app.set_settings_search_query("  jPeG   QUALITY ".into());
         settle().await;
-        assert_eq!(links(&app), ["settings:image-cache"]);
-        for query in ["Resume", "VLC", "1.25×"] {
+        assert_eq!(links(&app), ["settings:player", "settings:image-cache"]);
+        for query in ["Resume", "VLC", "1.25×", "Screenshot folder"] {
             app.set_settings_search_query(query.into());
             settle().await;
             assert_eq!(links(&app), ["settings:player"], "option label {query}");
@@ -232,12 +232,12 @@ fn settings_navigation_survives_search_back_breakpoints_and_recreation() {
         slint::select_bundled_translation("hr").unwrap();
         app.set_settings_search_query("kvaliteta".into());
         settle().await;
-        assert_eq!(links(&app), ["settings:image-cache"]);
+        assert_eq!(links(&app), ["settings:player", "settings:image-cache"]);
         app.set_settings_search_query("quality".into());
         settle().await;
         assert_eq!(
             links(&app),
-            ["settings:image-cache"],
+            ["settings:player", "settings:image-cache"],
             "English aliases also match Croatian UI"
         );
         slint::select_bundled_translation("en").unwrap();

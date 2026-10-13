@@ -2455,3 +2455,45 @@ msgstr "Prilagodite pronalaženje i reprodukciju izvora."
 
 msgid "Selections saved automatically. Save text fields after editing."
 msgstr "Odabiri se spremaju automatski. Spremite tekstualna polja nakon uređivanja."
+
+msgid "Screenshots"
+msgstr "Snimke zaslona"
+
+msgid "Screenshot format"
+msgstr "Format snimke zaslona"
+
+msgid "Screenshot folder"
+msgstr "Mapa snimki zaslona"
+
+msgid "PNG and lossless WebP preserve every pixel. JPEG and lossy WebP use the quality setting."
+msgstr "PNG i WebP bez gubitaka čuvaju svaki piksel. JPEG i WebP s gubicima koriste postavku kvalitete."
+
+msgid "PNG (lossless)"
+msgstr "PNG (bez gubitaka)"
+
+msgid "WebP (lossless)"
+msgstr "WebP (bez gubitaka)"
+
+msgid "WebP (lossy)"
+msgstr "WebP (s gubicima)"
+
+msgid "Save in Pictures/Nova or group captures by show."
+msgstr "Spremite u Pictures/Nova ili grupirajte snimke po naslovu."
+
+msgid "Show folders"
+msgstr "Mape po naslovima"
+
+msgid "JPEG quality"
+msgstr "JPEG kvaliteta"
+
+msgid "WebP quality"
+msgstr "WebP kvaliteta"
+
+msgid "Higher values retain more detail and create larger files."
+msgstr "Veće vrijednosti čuvaju više detalja i stvaraju veće datoteke."
+
+msgid "Nova"
+msgstr "Nova"
+
+msgid "JPEG"
+msgstr "JPEG"

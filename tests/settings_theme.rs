@@ -93,7 +93,16 @@ fn theme_search_toggle_resize_and_android_back() {
     let initial_mask_y = mask.absolute_position().y;
     app.set_settings_navigation_scroll(-108.0);
     settle(&app);
-    assert!((initial_mask_y - mask.absolute_position().y - 108.0).abs() < 1.0);
+    let compact = ElementHandle::find_by_element_id(&app, "SettingsPage::sticky_landing_header")
+        .next()
+        .expect("overview compact title appears after the hero collapses");
+    assert!(initial_mask_y > mask.absolute_position().y);
+    assert!(
+        (mask.absolute_position().y - compact.absolute_position().y - compact.size().height - 8.0)
+            .abs()
+            < 1.0,
+        "search/shortcuts canvas pins below the compact title and its opaque seam"
+    );
     assert!((mask.size().height - 124.0).abs() < 1.0);
     // Theme presets are keyboard-reachable and feed the mounted theme
     // immediately. Zero must produce square corners and no card gaps.

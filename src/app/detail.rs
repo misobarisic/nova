@@ -2528,11 +2528,17 @@ impl Bridge {
             cache_hit,
             ..
         } = context;
-        let (was_empty, addons, loading, searching, filter) = {
+        let (was_empty, searching) = {
             let mut state = self.shared.lock().unwrap();
             if !stream_response_is_current(&state, &request_id, generation) {
                 return;
             }
+            refresh_stream_owner_order(&mut state);
+            let selected_label = state
+                .stream_filter
+                .checked_sub(1)
+                .and_then(|i| state.stream_addons.get(i))
+                .cloned();
             let was_empty = state.stream_all.is_empty();
             if complete {
                 state.stream_pending.retain(|owner| owner != &owner_url);
@@ -2555,35 +2561,24 @@ impl Bridge {
                 // was the active filter.
                 if let Some(pos) = state.stream_addons.iter().position(|a| a == &addon) {
                     state.stream_addons.remove(pos);
-                    let selected = state.stream_filter.checked_sub(1).unwrap_or(usize::MAX);
-                    if selected == pos || state.stream_filter > state.stream_addons.len() {
-                        state.stream_filter = 0;
-                    }
+                    state.stream_filter = selected_label
+                        .as_ref()
+                        .and_then(|selected| {
+                            state
+                                .stream_addons
+                                .iter()
+                                .position(|label| label == selected)
+                        })
+                        .map_or(0, |index| index + 1);
                 }
             }
-            let addons: Vec<SharedString> =
-                state.stream_addons.iter().map(SharedString::from).collect();
-            let loading: Vec<bool> = state
-                .stream_addons
-                .iter()
-                .map(|label| {
-                    state
-                        .stream_pending
-                        .iter()
-                        .any(|owner| state.stream_owner_labels.get(owner).unwrap_or(owner) == label)
-                })
-                .collect();
             let searching = !state.stream_pending.is_empty();
-            let filter = state.stream_filter;
-            (was_empty, addons, loading, searching, filter)
+            (was_empty, searching)
         };
 
         self.apply_stream_filter();
         if let Some(app) = self.app() {
-            app.set_stream_addons(Rc::new(VecModel::from(addons)).into());
-            app.set_stream_loading(Rc::new(VecModel::from(loading)).into());
             app.set_streams_searching(searching);
-            app.set_stream_filter(filter as i32);
             // Same-entry reopen: restore the saved stream focus once the
             // first results land (never fights the user's own navigation).
             if was_empty {
@@ -2611,7 +2606,8 @@ impl Bridge {
     /// first, then the filtered addon rows, plus the status hint.
     fn compute_stream_view(&self) -> (Vec<StreamUi>, Vec<StreamRow>, String) {
         let (filtered, filter, addon_count, total, pending_count, addon_label, request_id) = {
-            let state = self.shared.lock().unwrap();
+            let mut state = self.shared.lock().unwrap();
+            refresh_stream_owner_order(&mut state);
             let request_id = state
                 .modal_item
                 .as_ref()
@@ -2770,6 +2766,31 @@ impl Bridge {
             None
         };
         let (displayed, stream_rows, hint) = self.compute_stream_view();
+        // Reorder pills alongside All's rows, preserving the selected addon
+        // by identity. Avoid rebuilding unchanged models on progress ticks.
+        let (addons, loading, filter) = {
+            let state = self.shared.lock().unwrap();
+            let addons: Vec<SharedString> =
+                state.stream_addons.iter().map(SharedString::from).collect();
+            let loading: Vec<bool> = state
+                .stream_addons
+                .iter()
+                .map(|label| {
+                    state
+                        .stream_pending
+                        .iter()
+                        .any(|owner| state.stream_owner_labels.get(owner).unwrap_or(owner) == label)
+                })
+                .collect();
+            (addons, loading, state.stream_filter)
+        };
+        if !app.get_stream_addons().iter().eq(addons.iter().cloned()) {
+            app.set_stream_addons(Rc::new(VecModel::from(addons)).into());
+        }
+        if !app.get_stream_loading().iter().eq(loading.iter().copied()) {
+            app.set_stream_loading(Rc::new(VecModel::from(loading)).into());
+        }
+        app.set_stream_filter(filter as i32);
         let focused_index = focused_id
             .as_ref()
             .and_then(|id| displayed.iter().position(|row| &row.id == id))
@@ -3682,6 +3703,39 @@ fn sort_streams_by_owner(rows: &mut [StreamUi], owner_order: &[String]) {
     });
 }
 
+fn refresh_stream_owner_order(state: &mut Shared) {
+    let selected = state
+        .stream_filter
+        .checked_sub(1)
+        .and_then(|i| state.stream_addons.get(i))
+        .cloned();
+    let installed: HashMap<String, usize> = state
+        .installed
+        .iter()
+        .enumerate()
+        .map(|(index, addon)| (addon.url.clone(), index))
+        .collect();
+    state
+        .stream_owner_order
+        .sort_by_key(|owner| installed.get(owner).copied().unwrap_or(usize::MAX));
+    state.stream_addons.sort_by_key(|label| {
+        state
+            .stream_owner_order
+            .iter()
+            .position(|owner| state.stream_owner_labels.get(owner) == Some(label))
+            .unwrap_or(usize::MAX)
+    });
+    state.stream_filter = selected
+        .as_ref()
+        .and_then(|selected| {
+            state
+                .stream_addons
+                .iter()
+                .position(|label| label == selected)
+        })
+        .map_or(0, |index| index + 1);
+}
+
 /// Full publications replace one transport's rows; labels are presentation,
 /// so two addons with the same label must not erase each other's results.
 fn replace_stream_snapshot(rows: &mut Vec<StreamUi>, owner: &str, snapshot: Vec<StreamUi>) {
@@ -3938,6 +3992,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn live_owner_order_preserves_the_selected_addon_pill() {
+        let installed = |url: &str, label: &str| Installed {
+            url: url.into(),
+            label: label.into(),
+            enabled: true,
+            configure_ok: None,
+            manifest: serde_json::from_value(serde_json::json!({
+                "id": url, "name": label, "version": "1.0.0",
+                "resources": ["stream"], "types": ["movie"], "catalogs": []
+            }))
+            .unwrap(),
+            available: true,
+            generation: 0,
+        };
+        let mut state = Shared {
+            installed: vec![installed("b", "Beta"), installed("a", "Alpha")],
+            stream_owner_order: vec!["a".into(), "b".into()],
+            stream_owner_labels: HashMap::from([
+                ("a".into(), "Alpha".into()),
+                ("b".into(), "Beta".into()),
+            ]),
+            stream_addons: vec!["Alpha".into(), "Beta".into()],
+            stream_filter: 1,
+            ..Default::default()
+        };
+        refresh_stream_owner_order(&mut state);
+        assert_eq!(state.stream_owner_order, ["b", "a"]);
+        assert_eq!(state.stream_addons, ["Beta", "Alpha"]);
+        assert_eq!(state.stream_filter, 2, "Alpha stays selected after moving");
+        state.installed.swap(0, 1);
+        refresh_stream_owner_order(&mut state);
+        assert_eq!(state.stream_addons, ["Alpha", "Beta"]);
+        assert_eq!(state.stream_filter, 1);
+    }
+
+    #[test]
     #[cfg(feature = "desktop")]
     fn stream_selector_returns_to_its_origin_and_movies_keep_a_watch_action() {
         // Storage and Slint are process-global; isolate this navigation test
@@ -4033,6 +4123,17 @@ mod tests {
                 ("owner-b".into(), "Same label".into()),
             ]);
         }
+        let mut early = context.clone();
+        early.owner_url = "owner-b".into();
+        early.cache_hit = true;
+        bridge.stream_addon_updated(early, vec![owned("owner-b", "other")], true);
+        assert_eq!(
+            app.get_streams().row_count(),
+            1,
+            "a cache hit displays before the slower first addon answers"
+        );
+        assert_eq!(app.get_streams().row_data(0).unwrap().id, "other");
+        assert!(app.get_streams_searching());
         bridge.stream_addon_updated(
             context.clone(),
             vec![owned("owner-a", "a"), owned("owner-a", "b")],
@@ -4111,6 +4212,30 @@ mod tests {
             "selecting an addon preserves its original owner order"
         );
         bridge.shared.lock().unwrap().stream_filter = 0;
+        // An installed-order change immediately affects the retained request,
+        // without refetching or discarding the focused stream identity.
+        let installed = |url: &str| {
+            Installed {
+            url: url.into(), label: "Same label".into(), enabled: true, configure_ok: None,
+            manifest: serde_json::from_value(serde_json::json!({ "id": url, "name": "Same label", "version": "1.0.0", "resources": ["stream"], "types": ["movie"], "catalogs": [] })).unwrap(),
+            available: true, generation: 0,
+        }
+        };
+        bridge.shared.lock().unwrap().installed = vec![installed("owner-b"), installed("owner-a")];
+        app.set_detail_kb_s(0);
+        bridge.apply_stream_filter();
+        assert_eq!(
+            app.get_streams()
+                .iter()
+                .map(|row| row.id.to_string())
+                .collect::<Vec<_>>(),
+            ["other", "a", "new", "b"]
+        );
+        assert_eq!(app.get_detail_kb_s(), 1);
+        bridge.shared.lock().unwrap().installed.swap(0, 1);
+        bridge.apply_stream_filter();
+        assert_eq!(app.get_streams().row_data(0).unwrap().id, "a");
+        bridge.shared.lock().unwrap().installed.clear();
         cached_context.cache_hit = false;
         bridge.stream_addon_updated(cached_context, vec![owned("owner-b", "other")], true);
         app.set_detail_kb_s(2);

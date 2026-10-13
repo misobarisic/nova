@@ -33,6 +33,10 @@ list from 700 to 1199 pixels, and a shaded artwork/context column from 1200 pixe
 when the usable height is at least 600 pixels. Short landscape windows use the
 compact layout with a single-row title/context header and visible stream feedback.
 Resizing keeps the selected addon, page, stream focus and downloads.
+All groups streams by the current installed-addon order as each cached or live
+snapshot arrives; it displays available results while other addons are pending.
+Local and synced addon reordering updates an already-open selector and its pills
+immediately, retaining the chosen addon and focused stream by identity.
 Portrait and desktop keep addon filters in the header while results scroll
 independently. Short touch landscape scrolls the context and cards together,
 while addon filters pin at the safe top. An opaque full-width theme canvas
@@ -76,12 +80,30 @@ without Slint controls. It is disabled while loading or capturing. Capture
 and file writes use a worker, with a session guard and a 20-second capture
 deadline. Android HW+ renders video and subtitles into a temporary GPU target
 at the video’s display dimensions, then reads back RGBA pixels on the existing
-render thread. PNG encoding stays on the worker; the decoder, pause state and
+render thread. Image encoding stays on the worker; the decoder, pause state and
 playback position are unchanged. Other decoder modes use mpv’s screenshot
 command. Desktop saves to Pictures/Nova (the configured Pictures folder on
 Linux and Windows); Android API 29+ publishes to Gallery's Pictures/Nova,
 while API 26–28 uses app-scoped Pictures/Nova. Temporary captures are removed
-afterward. Screenshots are local files and never enter device sync. A brief
+afterward. Settings → Player → Screenshots chooses PNG (lossless, the default), JPEG,
+WebP lossless or WebP lossy. JPEG and lossy WebP have independent 1–100 quality
+sliders (85 by default); lossless modes have no quality slider. These preferences
+sync as independent general settings and support device overrides. Capture
+composition and source display dimensions are unchanged. GPU readback encodes
+the chosen format directly; mpv captures to a lossless PNG staging file before
+worker conversion, so subtitle rendering remains unchanged.
+
+The folder choice defaults to Pictures/Nova and can group shots under a show
+subfolder. Names contain a shortened show title, full season/episode numbers
+when available, the capture-request playhead position in milliseconds, and a
+capture-time/counter suffix to avoid collisions. Season/episode padding is a
+minimum (S100E1234 stays intact). Filename parts replace punctuation/whitespace
+with underscores, avoid Windows device names and path separators, and limit the
+show title to 40 UTF-8 bytes without splitting characters. A conservative
+240-byte/UTF-16-unit destination bound rejects unusually long Pictures roots;
+Android Gallery uses the matching MIME type, extension and relative path.
+
+Screenshots are local files and never enter device sync. A brief
 notice reports the saved location or a sanitized error.
 
 Outside player menus, Left/Right seek by ten seconds, Up/Down change volume

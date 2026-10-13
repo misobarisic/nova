@@ -30,7 +30,7 @@ mod android_recovery;
 mod mpv_load;
 
 mod screenshot;
-pub use screenshot::{ScreenshotError, ScreenshotSaved};
+pub use screenshot::{ScreenshotContext, ScreenshotError, ScreenshotSaved};
 #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
 mod gpu_screenshot;
 

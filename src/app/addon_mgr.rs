@@ -765,6 +765,11 @@ impl Bridge {
         app.set_type_names(Rc::new(VecModel::from(type_names)).into());
         app.set_catalog_names(Rc::new(VecModel::from(catalog_names)).into());
         self.apply_addon_rows();
+        // Local or synced addon ordering also applies to an already-open
+        // Detail stream request, including snapshots still arriving.
+        if self.shared.lock().unwrap().modal_item.is_some() {
+            self.apply_stream_filter();
+        }
         // Map chosen_addon to the combo index over the *enabled* addons only:
         // "All addons" = 0, others = position in the enabled list + 1.
         let addon_combo_idx = if chosen_addon == usize::MAX {

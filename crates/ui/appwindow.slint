@@ -315,6 +315,10 @@ export component AppWindow inherits Window {
         playback_speed <=> root.playback_speed;
         android_auto_continue <=> root.android_auto_continue;
         prefetch_next_episode_streams <=> root.prefetch_next_episode_streams;
+        screenshot_format_index <=> root.screenshot_format_index;
+        screenshot_jpeg_quality <=> root.screenshot_jpeg_quality;
+        screenshot_webp_quality <=> root.screenshot_webp_quality;
+        screenshot_show_folder <=> root.screenshot_show_folder;
         episode_start_index <=> root.episode_start_index;
         true_black <=> root.true_black;
         card_corner_radius <=> root.card_corner_radius;
@@ -905,6 +909,10 @@ export component AppWindow inherits Window {
     in property <[string]> subtitle_language_names;
     in-out property <bool> android_auto_continue: false;
     in-out property <bool> prefetch_next_episode_streams: true;
+    in-out property <int> screenshot_format_index: 0;
+    in-out property <float> screenshot_jpeg_quality: 85;
+    in-out property <float> screenshot_webp_quality: 85;
+    in-out property <bool> screenshot_show_folder: false;
     in-out property <int> episode_start_index: 1;
     in-out property <bool> resume_prompt_visible: false;
     // Monotonic signal used to route Android system Back through the active

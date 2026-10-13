@@ -5,7 +5,8 @@ import { KbMark } from "../ui/kbnav.slint";
 
 import { SpeedControl } from "../ui/speedcontrol.slint";
 
-import { Segmented, SectionHeader, SettingsRow, SettingsCard } from "../ui/settings-controls.slint";
+import { Segmented, SectionHeader, SettingsRow, SettingsCard, NumericSetting } from "../ui/settings-controls.slint";
+import { Dropdown } from "../ui/dropdown.slint";
 
 import { PlaybackLanguagePicker } from "../ui/playback-language-picker.slint";
 
@@ -304,6 +305,79 @@ export component SettingsPlayerModule inherits Window {
                             SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 1;
                             SettingsBridge.prefetch_next_episode_streams = i == 1;
                             SettingsContent.schedule_setting("prefetch_next_episode_streams");
+                        }
+                    }
+                }
+            }
+            if SettingsBridge.player_backend_index == 0: VerticalLayout {
+                spacing: 16px;
+                SectionHeader { label: @tr("Screenshots"); }
+                SettingsCard {
+                    SettingsRow {
+                        setting-key: "screenshot_format";
+                        row-title: @tr("Screenshot format");
+                        row-desc: @tr("PNG and lossless WebP preserve every pixel. JPEG and lossy WebP use the quality setting.");
+                        screenshot_format := Dropdown {
+                            width: Math.min(252px, Math.max(0px, SettingsContent.slot_width - 32px));
+                            model: [@tr("PNG (lossless)"), @tr("JPEG"), @tr("WebP (lossless)"), @tr("WebP (lossy)")];
+                            current-index <=> SettingsBridge.screenshot_format_index;
+                            roomy: true;
+                            border-color: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 2 ? Theme.current.focus_ring : Theme.current.control_border;
+                            selected(_) => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 2;
+                                SettingsContent.schedule_setting("screenshot_format");
+                            }
+                        }
+                    }
+                    SettingsRow {
+                        setting-key: "screenshot_show_folder";
+                        row-title: @tr("Screenshot folder");
+                        row-desc: @tr("Save in Pictures/Nova or group captures by show.");
+                        Segmented {
+                            labels: [@tr("Nova"), @tr("Show folders")];
+                            current_index: SettingsBridge.screenshot_show_folder ? 1 : 0;
+                            focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 3;
+                            picked(i) => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 3;
+                                SettingsBridge.screenshot_show_folder = i == 1;
+                                SettingsContent.schedule_setting("screenshot_show_folder");
+                            }
+                        }
+                    }
+                    if SettingsBridge.screenshot_format_index == 1: SettingsRow {
+                        setting-key: "screenshot_jpeg_quality";
+                        row-title: @tr("JPEG quality");
+                        row-desc: @tr("Higher values retain more detail and create larger files.");
+                        jpeg_quality := NumericSetting {
+                            value <=> SettingsBridge.screenshot_jpeg_quality;
+                            minimum: 1; maximum: 100; step: 1; suffix: "%";
+                            focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 4;
+                            changed(_) => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 4;
+                                SettingsContent.schedule_setting("screenshot_jpeg_quality");
+                            }
+                        }
+                    }
+                    if SettingsBridge.screenshot_format_index == 3: SettingsRow {
+                        setting-key: "screenshot_webp_quality";
+                        row-title: @tr("WebP quality");
+                        row-desc: @tr("Higher values retain more detail and create larger files.");
+                        webp_quality := NumericSetting {
+                            value <=> SettingsBridge.screenshot_webp_quality;
+                            minimum: 1; maximum: 100; step: 1; suffix: "%";
+                            focused: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_speed_row() + 4;
+                            changed(_) => {
+                                SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                                SettingsBridge.kb_zone = 9;
+                                SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 4;
+                                SettingsContent.schedule_setting("screenshot_webp_quality");
+                            }
                         }
                     }
                 }

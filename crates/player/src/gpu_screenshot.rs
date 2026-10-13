@@ -2,8 +2,6 @@
 //! Encoding and publication stay on the screenshot worker, outside the GL context.
 use crate::{ScreenshotError, gl_state, mpv_opengl_fbo, mpv_render_param};
 use glow::HasContext;
-use std::fs::File;
-use std::io::BufWriter;
 use std::path::Path;
 
 pub(super) struct Frame {
@@ -13,18 +11,13 @@ pub(super) struct Frame {
 }
 
 impl Frame {
-    pub(super) fn write_png(&self, path: &Path) -> Result<(), ScreenshotError> {
-        let file = File::create(path).map_err(|_| ScreenshotError::SaveFailed)?;
-        let mut encoder = png::Encoder::new(BufWriter::new(file), self.width, self.height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder
-            .write_header()
-            .map_err(|_| ScreenshotError::SaveFailed)?;
-        writer
-            .write_image_data(&self.pixels)
-            .map_err(|_| ScreenshotError::SaveFailed)?;
-        writer.finish().map_err(|_| ScreenshotError::SaveFailed)
+    pub(super) fn write_image(
+        &self,
+        path: &Path,
+        format: nova_config::ScreenshotFormat,
+        quality: u8,
+    ) -> Result<(), ScreenshotError> {
+        crate::screenshot::write_image(path, self.width, self.height, &self.pixels, format, quality)
     }
 }
 
@@ -294,6 +287,7 @@ pub(super) unsafe fn capture(
 mod tests {
     use super::*;
     use crate::gl_state::tests::HeadlessGl;
+    use std::fs::File;
     use std::time::{Duration, Instant};
 
     struct RenderContext(*mut crate::mpv_render_context);
@@ -413,7 +407,9 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(20));
             };
             let image = directory.join("frame.png");
-            subtitled.write_png(&image).unwrap();
+            subtitled
+                .write_image(&image, nova_config::ScreenshotFormat::Png, 85)
+                .unwrap();
             let mut reader =
                 png::Decoder::new(std::io::BufReader::new(File::open(&image).unwrap()))
                     .read_info()

@@ -211,6 +211,10 @@ impl Bridge {
             app.set_player_backend_index(if settings.player_external { 1 } else { 0 });
             app.set_desktop_external_app_index(settings.desktop_external_app.index());
             app.set_playback_speed(settings.playback_speed);
+            app.set_screenshot_format_index(settings.screenshot_format.index());
+            app.set_screenshot_jpeg_quality(settings.screenshot_jpeg_quality.clamp(1, 100) as f32);
+            app.set_screenshot_webp_quality(settings.screenshot_webp_quality.clamp(1, 100) as f32);
+            app.set_screenshot_show_folder(settings.screenshot_show_folder);
             app.set_default_audio_language(settings.default_audio_language.clone().into());
             app.set_default_subtitle_language(settings.default_subtitle_language.clone().into());
             self.filter_playback_languages("", false);
@@ -418,6 +422,14 @@ impl Bridge {
                     app.get_desktop_external_app_index(),
                 ),
                 playback_speed: nova_config::round_playback_speed(app.get_playback_speed()),
+                screenshot_format: nova_config::ScreenshotFormat::from_index(
+                    app.get_screenshot_format_index(),
+                ),
+                screenshot_jpeg_quality: (app.get_screenshot_jpeg_quality().round() as i32)
+                    .clamp(1, 100) as u8,
+                screenshot_webp_quality: (app.get_screenshot_webp_quality().round() as i32)
+                    .clamp(1, 100) as u8,
+                screenshot_show_folder: app.get_screenshot_show_folder(),
                 default_audio_language: app.get_default_audio_language().to_string(),
                 default_subtitle_language: app.get_default_subtitle_language().to_string(),
                 android_auto_continue: app.get_android_auto_continue(),
@@ -1498,6 +1510,47 @@ mod tests {
         assert_eq!(hidden.get("remote"), Some(&3));
         assert_eq!(hidden.get("local"), Some(&2));
         bridge.assert_desired_addon_regression();
+
+        app.set_screenshot_format_index(3);
+        app.set_screenshot_jpeg_quality(67.0);
+        app.set_screenshot_webp_quality(92.0);
+        app.set_screenshot_show_folder(true);
+        app.invoke_settings_edited("screenshot_format".into());
+        bridge.persist_settings();
+        let saved = read_settings();
+        assert_eq!(
+            saved.screenshot_format,
+            nova_config::ScreenshotFormat::WebpLossy
+        );
+        assert_eq!(saved.screenshot_jpeg_quality, 67);
+        assert_eq!(saved.screenshot_webp_quality, 92);
+        assert!(saved.screenshot_show_folder);
+        for (field, value) in [
+            ("screenshot_format", "\"webp_lossy\""),
+            ("screenshot_jpeg_quality", "67"),
+            ("screenshot_webp_quality", "92"),
+            ("screenshot_show_folder", "true"),
+        ] {
+            assert_eq!(
+                owner
+                    .lock()
+                    .unwrap()
+                    .record(DOMAIN_SETTINGS, field)
+                    .unwrap()
+                    .value
+                    .as_deref(),
+                Some(value)
+            );
+        }
+        app.set_screenshot_format_index(0);
+        app.set_screenshot_jpeg_quality(10.0);
+        app.set_screenshot_webp_quality(20.0);
+        app.set_screenshot_show_folder(false);
+        bridge.settings_to_ui();
+        assert_eq!(app.get_screenshot_format_index(), 3);
+        assert_eq!(app.get_screenshot_jpeg_quality(), 67.0);
+        assert_eq!(app.get_screenshot_webp_quality(), 92.0);
+        assert!(app.get_screenshot_show_folder());
 
         // Unsupported enum values affect only their field, and remain raw on
         // disk when an unrelated supported setting is changed.

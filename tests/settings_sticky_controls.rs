@@ -246,6 +246,81 @@ fn submenu_navigation_and_installed_filters_pin_without_pinning_forms() {
         app.set_settings_selected_id(0);
         app.set_settings_detail_open(true);
     }
+    for width in [390, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 600));
+        app.set_settings_detail_open(false);
+        app.set_settings_navigation_scroll(0.0);
+        settle(&app);
+        assert!(
+            ElementHandle::find_by_element_id(&app, "SettingsPage::sticky_landing_header")
+                .next()
+                .is_none()
+        );
+        app.set_settings_navigation_scroll(-90.0);
+        settle(&app);
+        assert!(
+            app.get_settings_navigation_scroll() < -68.0,
+            "{width}: overview scroll is {}",
+            app.get_settings_navigation_scroll()
+        );
+        let opacity =
+            ElementHandle::find_by_element_id(&app, "SettingsPage::sticky_landing_header")
+                .next()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{width}: overview header missing at partial scroll {}, detail {}",
+                        app.get_settings_navigation_scroll(),
+                        app.get_settings_detail_open()
+                    )
+                })
+                .computed_opacity();
+        assert!(
+            opacity > 0.0 && opacity < 1.0,
+            "overview title fades in during collapse"
+        );
+        app.set_settings_navigation_scroll(-150.0);
+        settle(&app);
+        let header = ElementHandle::find_by_element_id(&app, "SettingsPage::sticky_landing_header")
+            .next()
+            .unwrap_or_else(|| {
+                panic!(
+                    "{width}: overview header missing at full scroll {}, detail {}",
+                    app.get_settings_navigation_scroll(),
+                    app.get_settings_detail_open()
+                )
+            });
+        assert_eq!(header.computed_opacity(), 1.0);
+        assert!((header.absolute_position().y - 28.0).abs() < 0.5);
+        let search = item(&app, "SettingsPage::settings_search");
+        assert!(
+            search.absolute_position().y
+                >= header.absolute_position().y + header.size().height + 8.0
+        );
+        let y = search.absolute_position().y;
+        app.set_settings_navigation_scroll(-300.0);
+        settle(&app);
+        assert!(
+            (item(&app, "SettingsPage::settings_search")
+                .absolute_position()
+                .y
+                - y)
+                .abs()
+                < 0.5
+        );
+        let back = header
+            .query_descendants()
+            .match_type_name("SettingsBackButton")
+            .find_first()
+            .unwrap();
+        back.mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        assert!(
+            !app.get_show_settings(),
+            "overview Back returns to More on either layout"
+        );
+        app.set_show_home(false);
+        app.set_show_settings(true);
+    }
 }
 
 #[test]
@@ -267,12 +342,24 @@ fn render_sticky_settings_previews() {
     let timer = slint::Timer::default();
     let weak = app.as_weak();
     let step = Rc::new(Cell::new(0));
+    let scroll_attempts = Rc::new(Cell::new(0));
     timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(700),
         move || {
             let app = weak.upgrade().unwrap();
             let n = step.get();
+            if n >= 5 && app.get_settings_navigation_scroll() > -108.0 {
+                assert!(scroll_attempts.get() < 2, "overview wheel did not scroll at preview {n}");
+                scroll_attempts.set(scroll_attempts.get() + 1);
+                let landing = item(&app, "SettingsPage::landing_layer");
+                app.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                    position: slint::LogicalPosition::new(landing.absolute_position().x + 30.0, landing.absolute_position().y + landing.size().height - 70.0),
+                    delta_x: 0.0, delta_y: -200.0,
+                });
+                return;
+            }
+            scroll_attempts.set(0);
             if n == 0 {
                 app.set_settings_scroll_y(-1000.0);
             } else {
@@ -282,11 +369,12 @@ fn render_sticky_settings_previews() {
                     .iter()
                     .flat_map(|p| [p.r, p.g, p.b, p.a])
                     .collect::<Vec<_>>();
-                if (1..=4).contains(&n) {
+                if (1..=8).contains(&n) {
                     // The header and installed filters are one opaque stack.
                     // A fade here exposed avatar/title fragments above the
                     // filters; only the bottom of the combined stack fades.
-                    let header = item(&app, "SettingsPage::sticky_sub_header");
+                    let id = if n <= 4 { "SettingsPage::sticky_sub_header" } else { "SettingsPage::sticky_landing_header" };
+                    let header = ElementHandle::find_by_element_id(&app, id).next().unwrap_or_else(|| panic!("preview {n}: {id} missing; navigation scroll {}, show settings {}, home {}, two pane {}, detail {}", app.get_settings_navigation_scroll(), app.get_show_settings(), app.get_show_home(), app.get_settings_two_pane(), app.get_settings_detail_open()));
                     let p = header.absolute_position();
                     let s = header.size();
                     let scale = app.window().scale_factor();
@@ -310,7 +398,7 @@ fn render_sticky_settings_previews() {
                     dir.join(format!(
                         "sticky-settings-{}-{}-{}.png",
                         app.window().size().width,
-                        if n == 3 || n == 4 {
+                        if n == 3 || n == 4 || n == 7 || n == 8 {
                             "black"
                         } else {
                             "standard"
@@ -332,11 +420,16 @@ fn render_sticky_settings_previews() {
                     3 => app.window().set_size(slint::PhysicalSize::new(1280, 900)),
                     4 => {
                         nova_ui::apply_theme(&app, false);
-                        app.window().set_size(slint::PhysicalSize::new(390, 900));
+                        app.window().set_size(slint::PhysicalSize::new(390, 600));
                         app.set_settings_detail_open(false);
-                        app.set_settings_navigation_scroll(-150.0);
                     }
-                    5 => app.window().set_size(slint::PhysicalSize::new(1280, 900)),
+                    5 => app.window().set_size(slint::PhysicalSize::new(1280, 600)),
+                    6 => {
+                        nova_ui::apply_theme(&app, true);
+                        app.window().set_size(slint::PhysicalSize::new(390, 600));
+                        app.set_settings_detail_open(false);
+                    }
+                    7 => app.window().set_size(slint::PhysicalSize::new(1280, 600)),
                     _ => slint::quit_event_loop().unwrap(),
                 }
             }

@@ -32,6 +32,57 @@ fn default_playback_speed() -> f32 {
     1.0
 }
 
+fn default_screenshot_quality() -> u8 {
+    85
+}
+
+/// Screenshot encoding is independent of artwork cache compression.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenshotFormat {
+    #[default]
+    Png,
+    Jpeg,
+    WebpLossless,
+    WebpLossy,
+}
+
+impl ScreenshotFormat {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Jpeg,
+            2 => Self::WebpLossless,
+            3 => Self::WebpLossy,
+            _ => Self::Png,
+        }
+    }
+
+    pub fn index(self) -> i32 {
+        match self {
+            Self::Png => 0,
+            Self::Jpeg => 1,
+            Self::WebpLossless => 2,
+            Self::WebpLossy => 3,
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+            Self::WebpLossless | Self::WebpLossy => "webp",
+        }
+    }
+
+    pub fn mime_type(self) -> &'static str {
+        match self {
+            Self::Png => "image/png",
+            Self::Jpeg => "image/jpeg",
+            Self::WebpLossless | Self::WebpLossy => "image/webp",
+        }
+    }
+}
+
 /// Default episode behavior preserves the existing resume-history behavior.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum EpisodeStartBehavior {
@@ -462,6 +513,16 @@ cache_settings_type! {
     pub default_subtitle_language: String,
     #[serde(default = "default_playback_speed")]
     pub playback_speed: f32,
+    /// Synced screenshot encoding; old settings retain lossless PNG.
+    #[serde(default)]
+    pub screenshot_format: ScreenshotFormat,
+    #[serde(default = "default_screenshot_quality")]
+    pub screenshot_jpeg_quality: u8,
+    #[serde(default = "default_screenshot_quality")]
+    pub screenshot_webp_quality: u8,
+    /// Save under Pictures/Nova/<show> instead of Pictures/Nova.
+    #[serde(default)]
+    pub screenshot_show_folder: bool,
     /// How to start episodes that have resumable watch history. Local-only.
     #[serde(default)]
     pub episode_start_behavior: EpisodeStartBehavior,
@@ -605,6 +666,10 @@ impl Default for CacheSettings {
             player_external: false,
             desktop_external_app: DesktopExternalApp::SystemDefault,
             playback_speed: 1.0,
+            screenshot_format: ScreenshotFormat::Png,
+            screenshot_jpeg_quality: default_screenshot_quality(),
+            screenshot_webp_quality: default_screenshot_quality(),
+            screenshot_show_folder: false,
             default_audio_language: String::new(),
             default_subtitle_language: String::new(),
             episode_start_behavior: EpisodeStartBehavior::Resume,
@@ -1191,6 +1256,30 @@ mod tests {
             let restored: CacheSettings =
                 serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
             assert_eq!(restored.home_episode_artwork, episode_artwork);
+        }
+    }
+
+    #[test]
+    fn screenshot_defaults_migrate_and_preserve_format_quality_and_folders() {
+        let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
+        let mut settings: CacheSettings = serde_json::from_str(older).unwrap();
+        assert_eq!(settings.screenshot_format, ScreenshotFormat::Png);
+        assert_eq!(settings.screenshot_jpeg_quality, 85);
+        assert_eq!(settings.screenshot_webp_quality, 85);
+        assert!(!settings.screenshot_show_folder);
+        assert_eq!(
+            settings.screenshot_format,
+            CacheSettings::default().screenshot_format
+        );
+        for index in 0..4 {
+            settings.screenshot_format = ScreenshotFormat::from_index(index);
+            settings.screenshot_jpeg_quality = 67;
+            settings.screenshot_webp_quality = 92;
+            settings.screenshot_show_folder = true;
+            let restored: CacheSettings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored, settings);
+            assert_eq!(restored.screenshot_format.index(), index);
         }
     }
 }

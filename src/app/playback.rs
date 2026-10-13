@@ -6,6 +6,7 @@ struct PlaybackContext {
     title: String,
     episode_label: String,
     osd_episode_title: String,
+    episode_number: String,
     use_modal_poster: bool,
     media_type: String,
     media_id: String,
@@ -76,12 +77,26 @@ impl Bridge {
             return;
         }
         let session = self.player.screenshot_session();
+        // These captions belong to active playback, even while Detail changes.
+        let context = nova_player::ScreenshotContext {
+            show_name: app.get_player_show_title().to_string(),
+            episode_number: self
+                .shared
+                .lock()
+                .unwrap()
+                .playback_intent
+                .as_ref()
+                .map(|intent| intent.context.episode_number.clone())
+                .unwrap_or_default(),
+        };
         app.invoke_osd_mouse_moved();
         app.set_screenshot_busy(true);
         app.set_screenshot_notice(SharedString::default());
         let bridge = self.clone();
         std::thread::spawn(move || {
-            let result = bridge.player.capture_screenshot(session);
+            let result = bridge
+                .player
+                .capture_screenshot_with_context(session, context);
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(app) = bridge.app() else { return };
                 if !app.get_player_open() || bridge.player.screenshot_session() != session {
@@ -111,7 +126,7 @@ impl Bridge {
     pub(super) fn begin_playback_request(&self) -> crate::torrent::PlaybackRequest {
         self.persist_outgoing_playback();
         self.finish_playback_request();
-        let (episode_label, osd_episode_title) = self
+        let (episode_label, osd_episode_title, episode_number) = self
             .app()
             .map(|app| {
                 (
@@ -120,6 +135,7 @@ impl Bridge {
                         app.get_stream_episode_number().as_str(),
                         app.get_stream_episode_title().as_str(),
                     ),
+                    app.get_stream_episode_number().to_string(),
                 )
             })
             .unwrap_or_default();
@@ -146,6 +162,7 @@ impl Bridge {
                     title: modal.name.clone(),
                     episode_label,
                     osd_episode_title,
+                    episode_number,
                     use_modal_poster: true,
                     media_type: modal.type_.clone(),
                     media_id: modal.id.clone(),
@@ -568,6 +585,7 @@ impl Bridge {
                     .as_ref()
                     .map(stream_episode_context_label)
                     .unwrap_or_default(),
+                episode_number: episode.as_ref().map(episode_se_label).unwrap_or_default(),
                 osd_episode_title: episode
                     .as_ref()
                     .map(|video| {

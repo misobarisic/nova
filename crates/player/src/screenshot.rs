@@ -9,11 +9,152 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::Player;
+use nova_config::ScreenshotFormat;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScreenshotSaved {
     /// A filesystem path on desktop/older Android, or Pictures/Nova/name on Gallery Android.
     pub display_path: String,
+}
+
+/// Captured from the active playback request, never from the browsing modal.
+#[derive(Clone, Debug, Default)]
+pub struct ScreenshotContext {
+    pub show_name: String,
+    pub episode_number: String,
+}
+
+struct CaptureName {
+    show: String,
+    episode: String,
+    frame_time: String,
+    format: ScreenshotFormat,
+    show_folder: bool,
+}
+
+// Keep portable components short even for multibyte titles. Reject an
+// unusually long Pictures root rather than creating an invalid destination.
+const MAX_DESTINATION_UNITS: usize = 240;
+
+fn safe_component(value: &str, max_bytes: usize) -> String {
+    let mut result = String::new();
+    for ch in value.chars() {
+        let ch = if ch.is_alphanumeric() || matches!(ch, '-' | '_') {
+            ch
+        } else {
+            '_'
+        };
+        if ch == '_' && (result.is_empty() || result.ends_with('_')) {
+            continue;
+        }
+        if result.len() + ch.len_utf8() > max_bytes {
+            break;
+        }
+        result.push(ch);
+    }
+    let result = result.trim_matches('_').to_owned();
+    let upper = result.to_ascii_uppercase();
+    let device = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|prefix| {
+            upper.strip_prefix(prefix).is_some_and(|suffix| {
+                matches!(
+                    suffix,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
+        });
+    if result.is_empty() {
+        "Video".into()
+    } else if device {
+        format!("_{result}")
+    } else {
+        result
+    }
+}
+
+impl CaptureName {
+    fn new(
+        context: &ScreenshotContext,
+        seconds: f64,
+        format: ScreenshotFormat,
+        show_folder: bool,
+    ) -> Self {
+        let number = context.episode_number.replace(' ', "").to_ascii_uppercase();
+        // Padding is a minimum, never a two-digit cap (S100E1234 stays intact).
+        let episode = number
+            .strip_prefix('S')
+            .and_then(|number| number.split_once('E'))
+            .and_then(|(season, episode)| {
+                Some((season.parse::<u32>().ok()?, episode.parse::<u32>().ok()?))
+            })
+            .map(|(season, episode)| format!("S{season:02}E{episode:02}"))
+            .unwrap_or_else(|| {
+                if context.episode_number.trim().is_empty() {
+                    String::new()
+                } else {
+                    safe_component(&context.episode_number, 24)
+                }
+            });
+        let millis = if seconds.is_finite() && seconds >= 0.0 {
+            (seconds * 1000.0).floor() as u64
+        } else {
+            0
+        };
+        Self {
+            show: safe_component(&context.show_name, 40),
+            episode,
+            frame_time: format!(
+                "{:02}h{:02}m{:02}s{:03}ms",
+                millis / 3_600_000,
+                (millis / 60_000) % 60,
+                (millis / 1000) % 60,
+                millis % 1000
+            ),
+            format,
+            show_folder,
+        }
+    }
+
+    fn filename(&self) -> String {
+        let episode = if self.episode.is_empty() {
+            String::new()
+        } else {
+            format!("_{}", self.episode)
+        };
+        format!(
+            "{}{episode}_{}_{}.{}",
+            self.show,
+            self.frame_time,
+            unique_id(),
+            self.format.extension()
+        )
+    }
+
+    fn directory(&self, base: &Path) -> PathBuf {
+        if self.show_folder {
+            base.join(&self.show)
+        } else {
+            base.to_owned()
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    fn relative_path(&self) -> String {
+        if self.show_folder {
+            format!("Pictures/Nova/{}/", self.show)
+        } else {
+            "Pictures/Nova/".into()
+        }
+    }
+}
+
+fn validate_destination(path: &Path) -> Result<(), ScreenshotError> {
+    let text = path.to_string_lossy();
+    if text.len() > MAX_DESTINATION_UNITS || text.encode_utf16().count() > MAX_DESTINATION_UNITS {
+        Err(ScreenshotError::SaveFailed)
+    } else {
+        Ok(())
+    }
 }
 
 /// Deliberately excludes raw mpv/JNI errors: they can contain authenticated URLs.
@@ -49,23 +190,23 @@ fn check_session(expected: u64, current: u64, started: bool) -> Result<(), Scree
 }
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-fn filename() -> String {
+fn unique_id() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    format!(
-        "nova-{nanos}-{}-{}.png",
-        std::process::id(),
-        SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    )
+    format!("{nanos:x}-{:x}", SEQUENCE.fetch_add(1, Ordering::Relaxed))
+}
+
+fn filename(format: ScreenshotFormat) -> String {
+    format!("nova-{}.{}", unique_id(), format.extension())
 }
 
 struct Temporary(PathBuf);
 impl Temporary {
     fn new(base: &Path) -> Result<Self, ScreenshotError> {
         for _ in 0..32 {
-            let directory = base.join(filename());
+            let directory = base.join(filename(ScreenshotFormat::Png));
             let builder = {
                 #[cfg(unix)]
                 {
@@ -168,12 +309,31 @@ impl Player {
         &self,
         expected_session: u64,
     ) -> Result<ScreenshotSaved, ScreenshotError> {
+        self.capture_screenshot_with_context(expected_session, ScreenshotContext::default())
+    }
+
+    pub fn capture_screenshot_with_context(
+        &self,
+        expected_session: u64,
+        context: ScreenshotContext,
+    ) -> Result<ScreenshotSaved, ScreenshotError> {
         if self.screenshot_session() != expected_session {
             return Err(ScreenshotError::StaleSession);
         }
+        // One snapshot owns the encoding even if settings change during capture.
+        let settings = nova_config::active_cache_settings();
+        let format = settings.screenshot_format;
+        let quality = match format {
+            ScreenshotFormat::Jpeg => settings.screenshot_jpeg_quality,
+            _ => settings.screenshot_webp_quality,
+        }
+        .clamp(1, 100);
         let temporary = Temporary::new(&temporary_base()?)?;
+        // mpv's existing composition path captures lossless pixels first;
+        // only the requested lossy/WebP output is re-encoded on this worker.
         let image = temporary.0.join("frame.png");
-        let job = {
+        let output = temporary.0.join(format!("saved.{}", format.extension()));
+        let (job, position_seconds) = {
             // Rendering consumes pending before taking mpv; retain that lock order.
             let pending = self
                 .state
@@ -199,41 +359,52 @@ impl Player {
             }
             // A separate event queue avoids stealing playback events. Dispatch is serialized
             // with replacement/close, but image encoding and disk IO never hold the mpv lock.
-            #[cfg(target_os = "android")]
-            if mpv
-                .get_property::<String>("hwdec-current")
-                .unwrap_or_default()
-                == crate::HWDEC_PREFERRED
-            {
-                let (width, height) = crate::gpu_screenshot::dimensions(
-                    mpv.get_property("video-out-params/dw").unwrap_or(0),
-                    mpv.get_property("video-out-params/dh").unwrap_or(0),
-                    mpv.get_property("video-out-params/rotate").unwrap_or(0),
-                )?;
-                let (request, capture) =
-                    crate::gpu_screenshot::Request::new(expected_session, width, height);
-                let mut queued = self
-                    .state
-                    .gpu_screenshot
-                    .lock()
-                    .map_err(|_| ScreenshotError::Unavailable)?;
-                if queued.as_ref().is_some_and(|request| !request.cancelled()) {
-                    return Err(ScreenshotError::Unavailable);
+            let position_seconds = mpv.get_property::<f64>("time-pos").unwrap_or(0.0);
+            let job = {
+                #[cfg(target_os = "android")]
+                if mpv
+                    .get_property::<String>("hwdec-current")
+                    .unwrap_or_default()
+                    == crate::HWDEC_PREFERRED
+                {
+                    let (width, height) = crate::gpu_screenshot::dimensions(
+                        mpv.get_property("video-out-params/dw").unwrap_or(0),
+                        mpv.get_property("video-out-params/dh").unwrap_or(0),
+                        mpv.get_property("video-out-params/rotate").unwrap_or(0),
+                    )?;
+                    let (request, capture) =
+                        crate::gpu_screenshot::Request::new(expected_session, width, height);
+                    let mut queued = self
+                        .state
+                        .gpu_screenshot
+                        .lock()
+                        .map_err(|_| ScreenshotError::Unavailable)?;
+                    if queued.as_ref().is_some_and(|request| !request.cancelled()) {
+                        return Err(ScreenshotError::Unavailable);
+                    }
+                    *queued = Some(request);
+                    CaptureJob::Gpu(capture)
+                } else {
+                    CaptureJob::Mpv(CaptureClient::enqueue(mpv, &image)?)
                 }
-                *queued = Some(request);
-                CaptureJob::Gpu(capture)
-            } else {
+                #[cfg(not(target_os = "android"))]
                 CaptureJob::Mpv(CaptureClient::enqueue(mpv, &image)?)
-            }
-            #[cfg(not(target_os = "android"))]
-            CaptureJob::Mpv(CaptureClient::enqueue(mpv, &image)?)
+            };
+            (job, position_seconds)
         };
+        let naming = CaptureName::new(
+            &context,
+            position_seconds,
+            format,
+            settings.screenshot_show_folder,
+        );
         match job {
             CaptureJob::Mpv(client) => {
                 let result = client.wait(|| self.screenshot_session() != expected_session);
                 // Finish cancellation before a staging directory can be removed.
                 drop(client);
                 result?;
+                transcode_png(&image, &output, format, quality)?;
             }
             #[cfg(target_os = "android")]
             CaptureJob::Gpu(capture) => {
@@ -249,15 +420,100 @@ impl Player {
                 if self.screenshot_session() != expected_session {
                     return Err(ScreenshotError::StaleSession);
                 }
-                frame.write_png(&image)?;
+                frame.write_image(&output, format, quality)?;
             }
         }
         if self.screenshot_session() != expected_session {
             return Err(ScreenshotError::StaleSession);
         }
-        verify_image(&image)?;
-        publish(&image)
+        verify_image(&output)?;
+        publish(&output, &naming)
     }
+}
+
+fn transcode_png(
+    source: &Path,
+    output: &Path,
+    format: ScreenshotFormat,
+    quality: u8,
+) -> Result<(), ScreenshotError> {
+    if format == ScreenshotFormat::Png {
+        fs::rename(source, output).map_err(|_| ScreenshotError::SaveFailed)?;
+        return Ok(());
+    }
+    let reader = image::ImageReader::open(source).map_err(|_| ScreenshotError::SaveFailed)?;
+    let (width, height) = reader
+        .into_dimensions()
+        .map_err(|_| ScreenshotError::SaveFailed)?;
+    validate_pixels(width, height)?;
+    let pixels = image::open(source)
+        .map_err(|_| ScreenshotError::SaveFailed)?
+        .into_rgba8();
+    write_image(output, width, height, pixels.as_raw(), format, quality)
+}
+
+fn validate_pixels(width: u32, height: u32) -> Result<(), ScreenshotError> {
+    if width == 0
+        || height == 0
+        || width > 8192
+        || height > 8192
+        || u64::from(width) * u64::from(height) > 33_554_432
+    {
+        return Err(ScreenshotError::SaveFailed);
+    }
+    Ok(())
+}
+
+pub(super) fn write_image(
+    path: &Path,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    format: ScreenshotFormat,
+    quality: u8,
+) -> Result<(), ScreenshotError> {
+    validate_pixels(width, height)?;
+    if pixels.len() != width as usize * height as usize * 4 {
+        return Err(ScreenshotError::SaveFailed);
+    }
+    let file = File::create(path).map_err(|_| ScreenshotError::SaveFailed)?;
+    let mut output = std::io::BufWriter::new(file);
+    let quality = quality.clamp(1, 100);
+    match format {
+        ScreenshotFormat::Png => {
+            let mut encoder = png::Encoder::new(output, width, height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder
+                .write_header()
+                .map_err(|_| ScreenshotError::SaveFailed)?;
+            writer
+                .write_image_data(pixels)
+                .map_err(|_| ScreenshotError::SaveFailed)?;
+            writer.finish().map_err(|_| ScreenshotError::SaveFailed)?;
+        }
+        ScreenshotFormat::Jpeg => {
+            let rgb: Vec<u8> = pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|pixel| pixel[..3].iter().copied())
+                .collect();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, quality)
+                .encode(&rgb, width, height, image::ExtendedColorType::Rgb8)
+                .map_err(|_| ScreenshotError::SaveFailed)?;
+            std::io::Write::flush(&mut output).map_err(|_| ScreenshotError::SaveFailed)?;
+        }
+        ScreenshotFormat::WebpLossless | ScreenshotFormat::WebpLossy => {
+            let encoded = webp::Encoder::from_rgba(pixels, width, height)
+                .encode_simple(format == ScreenshotFormat::WebpLossless, quality as f32)
+                .map_err(|_| ScreenshotError::SaveFailed)?;
+            std::io::Write::write_all(&mut output, &encoded)
+                .map_err(|_| ScreenshotError::SaveFailed)?;
+            std::io::Write::flush(&mut output).map_err(|_| ScreenshotError::SaveFailed)?;
+        }
+    }
+    Ok(())
 }
 
 fn verify_image(path: &Path) -> Result<(), ScreenshotError> {
@@ -269,10 +525,17 @@ fn verify_image(path: &Path) -> Result<(), ScreenshotError> {
     }
 }
 
-fn publish_file(image: &Path, directory: &Path) -> Result<ScreenshotSaved, ScreenshotError> {
-    fs::create_dir_all(directory).map_err(|_| ScreenshotError::SaveFailed)?;
+fn publish_file(
+    image: &Path,
+    base: &Path,
+    naming: &CaptureName,
+) -> Result<ScreenshotSaved, ScreenshotError> {
+    let directory = naming.directory(base);
+    validate_destination(&directory.join(naming.filename()))?;
+    fs::create_dir_all(&directory).map_err(|_| ScreenshotError::SaveFailed)?;
     for _ in 0..32 {
-        let destination = directory.join(filename());
+        let destination = directory.join(naming.filename());
+        validate_destination(&destination)?;
         let mut output = match OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -305,8 +568,8 @@ fn temporary_base() -> Result<PathBuf, ScreenshotError> {
     Ok(std::env::temp_dir())
 }
 #[cfg(not(target_os = "android"))]
-fn publish(image: &Path) -> Result<ScreenshotSaved, ScreenshotError> {
-    publish_file(image, &pictures_directory()?.join("Nova"))
+fn publish(image: &Path, naming: &CaptureName) -> Result<ScreenshotSaved, ScreenshotError> {
+    publish_file(image, &pictures_directory()?.join("Nova"), naming)
 }
 
 #[cfg(not(any(target_os = "android", target_os = "windows")))]
@@ -403,8 +666,8 @@ fn temporary_base() -> Result<PathBuf, ScreenshotError> {
     android::cache_directory()
 }
 #[cfg(target_os = "android")]
-fn publish(image: &Path) -> Result<ScreenshotSaved, ScreenshotError> {
-    android::publish(image)
+fn publish(image: &Path, naming: &CaptureName) -> Result<ScreenshotSaved, ScreenshotError> {
+    android::publish(image, naming)
 }
 
 #[cfg(target_os = "android")]
@@ -445,7 +708,10 @@ mod android {
         })
     }
 
-    pub(super) fn publish(image: &Path) -> Result<ScreenshotSaved, ScreenshotError> {
+    pub(super) fn publish(
+        image: &Path,
+        naming: &CaptureName,
+    ) -> Result<ScreenshotSaved, ScreenshotError> {
         vm()?.attach_current_thread(|env| {
             let raw: jni::sys::jobject = crate::external::android_activity_ptr().cast();
             if raw.is_null() {
@@ -462,15 +728,17 @@ mod android {
                     return Err(ScreenshotError::SaveFailed);
                 }
                 let path = PathBuf::from(directory.path(env)?.to_string()).join("Nova");
-                return publish_file(image, &path);
+                return publish_file(image, &path, naming);
             }
             let resolver = activity.resolver(env)?;
             let values = ScreenshotValues::new(env)?;
-            let name = filename();
+            let name = naming.filename();
+            let relative_path = naming.relative_path();
+            validate_destination(&Path::new(&relative_path).join(&name))?;
             for (key, value) in [
                 ("_display_name", name.as_str()),
-                ("mime_type", "image/png"),
-                ("relative_path", "Pictures/Nova/"),
+                ("mime_type", naming.format.mime_type()),
+                ("relative_path", relative_path.as_str()),
                 ("is_pending", "1"),
             ] {
                 let key = JString::from_str(env, key)?;
@@ -537,7 +805,7 @@ mod android {
                 return Err(err);
             }
             Ok(ScreenshotSaved {
-                display_path: format!("Pictures/Nova/{name}"),
+                display_path: format!("{relative_path}{name}"),
             })
         })
     }
@@ -630,6 +898,24 @@ mod tests {
         assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 18);
         assert!(mpv.get_property::<bool>("pause").unwrap());
         assert!((mpv.get_property::<f64>("time-pos").unwrap() - position).abs() < 0.05);
+        for format in [
+            ScreenshotFormat::Png,
+            ScreenshotFormat::Jpeg,
+            ScreenshotFormat::WebpLossless,
+            ScreenshotFormat::WebpLossy,
+        ] {
+            let source = temporary.0.join("stage.png");
+            fs::write(&source, &png).unwrap();
+            let output = temporary.0.join(filename(format));
+            transcode_png(&source, &output, format, 85).unwrap();
+            assert_eq!(
+                image::open(&output).unwrap().into_rgba8().dimensions(),
+                (32, 18)
+            );
+            if format == ScreenshotFormat::Png {
+                assert_eq!(fs::read(output).unwrap(), png);
+            }
+        }
     }
 
     #[test]
@@ -650,8 +936,8 @@ mod tests {
     }
     #[test]
     fn filenames_are_short_ascii_and_unique() {
-        let a = filename();
-        let b = filename();
+        let a = filename(ScreenshotFormat::Png);
+        let b = filename(ScreenshotFormat::Png);
         assert_ne!(a, b);
         assert!(a.len() < 100);
         assert!(
@@ -660,6 +946,183 @@ mod tests {
         );
         assert!(a.ends_with(".png"));
     }
+    fn fixture_pixels() -> (u32, u32, Vec<u8>) {
+        let (width, height) = (96, 64);
+        let pixels = (0..height)
+            .flat_map(|y| {
+                (0..width).flat_map(move |x| {
+                    [
+                        ((x * 3 + y * 7) % 256) as u8,
+                        ((x * 11 + y * 5) % 256) as u8,
+                        ((x * 2 + y * 13) % 256) as u8,
+                        255,
+                    ]
+                })
+            })
+            .collect();
+        (width, height, pixels)
+    }
+
+    #[test]
+    fn encoders_preserve_dimensions_lossless_pixels_and_apply_lossy_quality() {
+        let temp = Temporary::new(&std::env::temp_dir()).unwrap();
+        let (width, height, pixels) = fixture_pixels();
+        for format in [ScreenshotFormat::Png, ScreenshotFormat::WebpLossless] {
+            let path = temp.0.join(filename(format));
+            write_image(&path, width, height, &pixels, format, 85).unwrap();
+            let decoded = image::open(path).unwrap().into_rgba8();
+            assert_eq!(decoded.dimensions(), (width, height));
+            assert_eq!(decoded.as_raw(), &pixels);
+        }
+        for format in [ScreenshotFormat::Jpeg, ScreenshotFormat::WebpLossy] {
+            let mut errors = Vec::new();
+            let mut encoded = Vec::new();
+            for quality in [20, 95] {
+                let path = temp.0.join(filename(format));
+                write_image(&path, width, height, &pixels, format, quality).unwrap();
+                encoded.push(fs::read(&path).unwrap());
+                let decoded = image::open(path).unwrap().into_rgba8();
+                assert_eq!(decoded.dimensions(), (width, height));
+                errors.push(
+                    decoded
+                        .as_raw()
+                        .iter()
+                        .zip(&pixels)
+                        .map(|(a, b)| {
+                            let difference = i64::from(*a) - i64::from(*b);
+                            difference * difference
+                        })
+                        .sum::<i64>(),
+                );
+            }
+            assert_ne!(
+                encoded[0], encoded[1],
+                "quality must reach {format:?}'s encoder"
+            );
+            assert!(
+                errors[1] < errors[0],
+                "higher quality must retain more fixture detail: {format:?}"
+            );
+        }
+        assert!(
+            write_image(
+                &temp.0.join("bad.png"),
+                width,
+                height,
+                &[0; 4],
+                ScreenshotFormat::Png,
+                85
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn naming_is_portable_bounded_and_preserves_large_episode_numbers() {
+        for title in [
+            "../CON",
+            "CON",
+            "aux",
+            "LPT9",
+            "COM¹",
+            "../\\<>:\"|?*\n\0",
+            ".",
+            "",
+        ] {
+            let safe = safe_component(title, 40);
+            assert!(!safe.is_empty());
+            assert!(safe.len() <= 40);
+            assert!(
+                !safe
+                    .chars()
+                    .any(|c| c.is_control() || "<>:\"/\\|?*. ".contains(c))
+            );
+            assert!(!["CON", "AUX", "LPT9", "COM¹"].contains(&safe.to_ascii_uppercase().as_str()));
+        }
+        let context = ScreenshotContext {
+            show_name: "The Apothecary Diaries".into(),
+            episode_number: "S100 E1234".into(),
+        };
+        let name = CaptureName::new(&context, 754.567, ScreenshotFormat::Jpeg, true);
+        assert!(
+            name.filename()
+                .starts_with("The_Apothecary_Diaries_S100E1234_00h12m34s567ms_")
+        );
+        assert!(name.filename().ends_with(".jpg"));
+        assert_eq!(
+            name.directory(Path::new("Pictures/Nova")),
+            Path::new("Pictures/Nova/The_Apothecary_Diaries")
+        );
+        let context = ScreenshotContext {
+            show_name: "長い番組名".repeat(100),
+            episode_number: "S4294967295E4294967295".into(),
+        };
+        let name = CaptureName::new(&context, f64::NAN, ScreenshotFormat::WebpLossless, false);
+        assert!(name.show.len() <= 40);
+        assert!(!name.show.contains('\u{fffd}'));
+        assert!(name.filename().len() < 160);
+        assert!(
+            name.filename()
+                .contains("S4294967295E4294967295_00h00m00s000ms")
+        );
+        assert_eq!(
+            name.directory(Path::new("Pictures/Nova")),
+            Path::new("Pictures/Nova")
+        );
+    }
+
+    #[test]
+    fn publication_uses_selected_extension_and_show_folder_without_overwriting() {
+        let temp = Temporary::new(&std::env::temp_dir()).unwrap();
+        let (width, height, pixels) = fixture_pixels();
+        let context = ScreenshotContext {
+            show_name: "My Show/Name".into(),
+            episode_number: "S3E2".into(),
+        };
+        let base = temp.0.join("Pictures/Nova");
+        for format in [
+            ScreenshotFormat::Png,
+            ScreenshotFormat::Jpeg,
+            ScreenshotFormat::WebpLossless,
+            ScreenshotFormat::WebpLossy,
+        ] {
+            let source = temp.0.join(filename(format));
+            write_image(&source, width, height, &pixels, format, 85).unwrap();
+            for show_folder in [false, true] {
+                let name = CaptureName::new(&context, 0.5, format, show_folder);
+                let first = publish_file(&source, &base, &name).unwrap();
+                let second = publish_file(&source, &base, &name).unwrap();
+                assert_ne!(first.display_path, second.display_path);
+                let path = Path::new(&first.display_path);
+                assert_eq!(path.parent().unwrap(), name.directory(&base));
+                assert_eq!(path.extension().unwrap(), format.extension());
+                assert!(
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("My_Show_Name_S03E02_00h00m00s500ms_")
+                );
+                assert_eq!(
+                    image::open(path).unwrap().into_rgba8().dimensions(),
+                    (width, height)
+                );
+                assert_eq!(fs::read(path).unwrap(), fs::read(&source).unwrap());
+            }
+        }
+        let source = temp.0.join("existing.png");
+        fs::write(&source, b"test-image").unwrap();
+        let overlong = temp.0.join("a".repeat(240));
+        let name = CaptureName::new(&context, 0.0, ScreenshotFormat::Png, true);
+        assert_eq!(
+            publish_file(&source, &overlong, &name),
+            Err(ScreenshotError::SaveFailed)
+        );
+        assert!(
+            !overlong.exists(),
+            "reject the path before creating its folders"
+        );
+    }
+
     #[test]
     fn publish_preserves_existing_files_and_rejects_empty_images() {
         let temporary = Temporary::new(&std::env::temp_dir()).unwrap();
@@ -668,8 +1131,14 @@ mod tests {
         assert_eq!(verify_image(&image), Err(ScreenshotError::SaveFailed));
         fs::write(&image, b"test-image").unwrap();
         let output = temporary.0.join("Pictures");
-        let first = publish_file(&image, &output).unwrap();
-        let second = publish_file(&image, &output).unwrap();
+        let naming = CaptureName::new(
+            &ScreenshotContext::default(),
+            0.0,
+            ScreenshotFormat::Png,
+            false,
+        );
+        let first = publish_file(&image, &output, &naming).unwrap();
+        let second = publish_file(&image, &output, &naming).unwrap();
         assert_ne!(first.display_path, second.display_path);
         assert_eq!(fs::read(first.display_path).unwrap(), b"test-image");
         assert_eq!(fs::read(second.display_path).unwrap(), b"test-image");
