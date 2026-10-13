@@ -33,7 +33,10 @@ list from 700 to 1199 pixels, and a shaded artwork/context column from 1200 pixe
 when the usable height is at least 600 pixels. Short landscape windows use the
 compact layout with a single-row title/context header and visible stream feedback.
 Resizing keeps the selected addon, page, stream focus and downloads.
-The addon filters stay in the header while results scroll independently.
+Portrait and desktop keep addon filters in the header while results scroll
+independently. Short touch landscape scrolls the context and cards together,
+while addon filters pin at the safe top. An opaque full-width theme canvas
+covers the pinned filters and the area above them, including safe-area insets.
 Artwork starts at the top and fades into the canvas. True-black cards use a thin
 gray outline for separation, with the stronger purple ring for keyboard focus.
 Stream rows offer playback and an actions button; desktop keeps native menus and touch
@@ -58,17 +61,24 @@ wrapped-row and addon-gesture tests.
 
 ## Player header, screenshots and keyboard controls
 
-The OSD header shows `S1E1: Episode title` beside Exit, with the show's title
-logo below it and its name as fallback. Movies show their title without an
+The OSD header shows `S1E1: Episode title` beside Exit, with the show's
+name rendered as text below it. Movies show their title without an
 episode line. The header fades with the controls; the bottom strip retains
-playback controls and timing without repeating the title. Artwork belongs to
-the playback request, so browsing or a late logo load cannot replace it with
-another show's logo.
+playback controls and timing without repeating the title. The displayed title belongs to
+the playback request, so browsing cannot replace it with another show's title.
+Playback no longer fetches or carries title logos. Visible controls dim the entire playing video uniformly;
+loading artwork uses the same dim layer, with loading/error text drawn above it. Brightness/seek/speed feedback stays at the
+safe top center rather than shifting with header or screenshot-notice height.
+Title captions briefly yield that lane while feedback is visible.
 
 The top-right screenshot button saves the video frame with subtitles and
 without Slint controls. It is disabled while loading or capturing. Capture
-and file writes run on a worker, with a session guard and a 20-second capture
-deadline. Desktop saves to Pictures/Nova (the configured Pictures folder on
+and file writes use a worker, with a session guard and a 20-second capture
+deadline. Android HW+ renders video and subtitles into a temporary GPU target
+at the video’s display dimensions, then reads back RGBA pixels on the existing
+render thread. PNG encoding stays on the worker; the decoder, pause state and
+playback position are unchanged. Other decoder modes use mpv’s screenshot
+command. Desktop saves to Pictures/Nova (the configured Pictures folder on
 Linux and Windows); Android API 29+ publishes to Gallery's Pictures/Nova,
 while API 26–28 uses app-scoped Pictures/Nova. Temporary captures are removed
 afterward. Screenshots are local files and never enter device sync. A brief
@@ -83,7 +93,7 @@ including natural end-of-stream, leaves fullscreen before returning to the
 catalog.
 
 Implementation: `crates/ui/player.slint`, `src/app/{playback,posters,run}.rs`
-and `crates/player/src/screenshot.rs`. Header/keyboard regressions live in
+and `crates/player/src/{screenshot,gpu_screenshot}.rs`. Header/keyboard regressions live in
 `tests/{player_osd_header,player_shortcuts}.rs`.
 
 ## Android system gestures
@@ -129,11 +139,13 @@ Press-and-hold and swipe gestures cancel pending taps when recognized. Small
 finger movement within the tap threshold does not reveal controls early.
 
 A 500 ms hold temporarily previews 2× speed and shows only the speed readout,
-without waking the OSD. Releasing restores the effective title/default playback speed and leaves
-OSD visibility unchanged.
+without waking the OSD. Once recognized, the hold owns finger motion until release
+or cancellation; moving across the video or controls cannot wake the OSD or start
+a brightness/volume swipe. Releasing restores the effective title/default playback
+speed and leaves OSD visibility unchanged.
 
 Implementation and headless input coverage: `crates/ui/player.slint` and
-`tests/{player_gestures,player_double_tap}.rs`.
+`tests/{player_gestures,player_double_tap,player_hold_motion}.rs`.
 
 ## Playback defaults and title preferences
 

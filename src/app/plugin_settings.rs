@@ -149,6 +149,42 @@ impl Bridge {
                             .map(str::to_owned)
                             .unwrap_or_else(|| value.to_string())
                             .into(),
+                        // Presentation summaries use declared option labels, never secret values.
+                        summary: if field.kind == "choice" {
+                            field
+                                .options
+                                .iter()
+                                .find(|option| option.value == *value)
+                                .map(|option| text::tr(&option.label).to_owned())
+                                .unwrap_or_default()
+                        } else if field.kind == "ordered-choices" || field.kind == "sort-order" {
+                            value
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|selected| {
+                                    let selected = if field.kind == "sort-order" {
+                                        &selected["key"]
+                                    } else {
+                                        selected
+                                    };
+                                    field
+                                        .options
+                                        .iter()
+                                        .find(|option| option.value == *selected)
+                                        .map(|option| text::tr(&option.label))
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        } else if field.kind == "integer" {
+                            value
+                                .as_i64()
+                                .map(|value| value.to_string())
+                                .unwrap_or_default()
+                        } else {
+                            String::new()
+                        }
+                        .into(),
                         checked: value.as_bool().unwrap_or(false),
                         selected: field
                             .options
@@ -273,6 +309,12 @@ impl Bridge {
                         picker.selected = -1;
                         rows.push(picker);
                     }
+                }
+                if schema.iter().any(|field| field.collection.is_none()) {
+                    rows.push(nova_ui::PluginSettingRow {
+                        kind: "preferences-header".into(),
+                        ..Default::default()
+                    });
                 }
                 for field in schema.iter().filter(|field| field.collection.is_none()) {
                     if field.kind == "ordered-choices" {

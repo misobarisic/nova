@@ -3,7 +3,8 @@ import { Theme, NavMetrics, NavState, SettingsStyle } from "@NovaUiShared";
 import { ScrollView } from "scrollview.slint";
 import { BottomNav } from "bottomnav.slint";
 import { SideNav } from "sidenav.slint";
-import { SettingsHeader, SettingsLink, SettingsCard } from "settings-controls.slint";
+import { PageHeader } from "page-header.slint";
+import { SettingsLink, SettingsCard } from "settings-controls.slint";
 
 // A root page, like Settings landing, rather than a sheet over another page.
 export component MorePage inherits Rectangle {
@@ -114,7 +115,7 @@ export component MorePage inherits Rectangle {
             content-width: self.visible-width;
             VerticalLayout {
                 width: 100%; spacing: 12px;
-                SettingsHeader { title: @tr("More"); overview: true; show-back: true; back => { if (root.active) { root.home_picked(); } } }
+                PageHeader { title: @tr("More"); narrow: root.narrow; show-back: root.narrow; back => { if (root.active) { root.home_picked(); } } }
                 if root.narrow: SettingsCard { SettingsLink { interactive: root.active; destination-id: "more:calendar"; icon-kind: 16; title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 0; picked => { root.calendar_picked(); } } }
                 if root.narrow: SettingsCard { SettingsLink { interactive: root.active; destination-id: "more:downloads"; icon-kind: 17; title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 1; picked => { root.downloads_picked(); } } }
                 SettingsCard { SettingsLink {

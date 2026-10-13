@@ -3,6 +3,40 @@
 These are planned improvements; they are not implemented by this document
 update.
 
+## Android screenshot subtitle backgrounds in HW and SW
+
+Status: deferred at the user's request on 2026-10-13; current capture behavior
+remains unchanged.
+
+The user confirmed that HW+ screenshots work on the S25 FE, but HW and SW
+captures add opaque black rectangles behind subtitles. The supplied comparison
+shows outlined text over the video in HW+ and white text on solid black panels
+in the other two modes. Reproduce with the same video, subtitle track and
+position before attributing the difference to a particular rendering bug.
+
+`crates/player/src/screenshot.rs` routes Android HW+ through the private GPU
+target in `gpu_screenshot.rs`; HW and SW still use mpv's asynchronous
+`screenshot-to-file` command with the `subtitles` flag. The different subtitle
+composition paths are the first place to investigate. Consider using the
+existing GPU capture path for all Android decoder modes, preserving the
+selected decoder, subtitle preferences, pause state and playback position.
+Do not enable mpv's advanced render control without satisfying its threading
+contract.
+
+Validation should compare HW+, HW and SW on the device, with outlined text
+subtitles over a bright or colored video background. Extend the real-mpv/EGL
+regression in `gpu_screenshot.rs` to check transparent gaps inside subtitle
+glyph bounds; its current black background can hide an opaque black panel.
+Retain coverage for native display dimensions, rotation, paused capture,
+GL-state restoration, timeout/cancellation and stale playback sessions. Verify
+that screenshots exclude Nova's OSD and preserve intentionally configured
+subtitle backgrounds as well as outlines and transparency.
+
+Acceptance: HW and SW screenshots match the displayed subtitle styling without
+unrequested black panels, and HW+ capture continues to work. Any implementation
+needs an ARM64 release build and device verification. Current builds retain the
+separate HW+ GPU and HW/SW mpv capture paths until this follow-on is implemented.
+
 ## Stream cache persistence and scheduled cleanup
 
 Implemented for Supernova: validated stream lists, discovery and normalized

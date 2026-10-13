@@ -75,11 +75,9 @@ export component Dropdown inherits Rectangle {
             overflow: elide;
         }
 
-        if !root.prominent: Text {
-            text: "▾";
-            color: Theme.current.text_muted;
-            font-size: 12px;
-            vertical-alignment: center;
+        if !root.prominent: Rectangle {
+            width: 12px; height: 100%;
+            IcChevronDown { width: 12px; height: 12px; y: (parent.height - self.height) / 2; fill: Theme.current.text_muted; }
         }
         if root.prominent: Rectangle {
             width: 18px; height: 100%;

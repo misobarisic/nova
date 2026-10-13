@@ -91,7 +91,11 @@ fn completed_episode_actions_keep_job_identity_across_layouts() {
     app.on_downloads_page_group_toggled(move |id| recorded.borrow_mut().push(id));
     let filters = Rc::new(RefCell::new(Vec::new()));
     let recorded = filters.clone();
-    app.on_downloads_page_filter_changed(move |filter| recorded.borrow_mut().push(filter));
+    let weak = app.as_weak();
+    app.on_downloads_page_filter_changed(move |filter| {
+        recorded.borrow_mut().push(filter);
+        weak.upgrade().unwrap().set_downloads_page_filter(filter);
+    });
     let sorts = Rc::new(RefCell::new(Vec::new()));
     let recorded = sorts.clone();
     app.on_downloads_page_sort_changed(move |recent| recorded.borrow_mut().push(recent));
@@ -121,9 +125,45 @@ fn completed_episode_actions_keep_job_identity_across_layouts() {
                 assert!(p.x + element.size().width <= width as f32 + 1.0);
             }
         }
-        for label in ["All 1", "Unwatched 0", "In progress 1", "Watched 0"] {
-            click(&app, label);
+        for (index, label) in ["All 1", "Unwatched 0", "In progress 1", "Watched 0"]
+            .into_iter()
+            .enumerate()
+        {
+            // The horizontal rail reveals a selected chip, including filters
+            // restored by the backend or carried across a phone rotation.
+            app.set_downloads_page_filter(index as i32);
+            // The compiled page bridge publishes selected changes on the UI
+            // tick; wait for its reveal callback before measuring the pill.
+            for _ in 0..2 {
+                i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(50));
+            }
+            let chip = ElementHandle::find_by_accessible_label(&app, label)
+                .next()
+                .unwrap();
+            let p = chip.absolute_position();
+            assert_eq!(chip.size().height, 40.0, "shared Library pill height");
+            let rail = ElementHandle::find_by_element_id(&app, "DownloadsPage::filter_rail")
+                .next()
+                .unwrap();
+            let rail_left = rail.absolute_position().x;
+            assert!(
+                p.x >= rail_left && p.x + chip.size().width <= rail_left + rail.size().width + 1.0,
+                "{label} at width {width}: {p:?}, {:?}",
+                chip.size()
+            );
+            click_element(&app, &chip);
         }
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&app, "Back").count(),
+            usize::from(width < 700),
+            "sidebar destinations omit the header Back arrow"
+        );
+        key(&app, slint::platform::Key::Return.into());
+        assert_eq!(
+            filters.borrow().last(),
+            Some(&3),
+            "focused pill activates with Return"
+        );
         if width < 700 {
             let before_back = *backs.borrow();
             click(&app, "Back");
@@ -181,10 +221,24 @@ fn completed_episode_actions_keep_job_identity_across_layouts() {
         reopen_downloads(&app);
         click(&app, "Remove download");
         click(&app, "Collapse series");
+        let groups = app.get_downloads_page_groups();
+        let mut group = groups.row_data(0).unwrap();
+        group.collapsed = true;
+        groups.set_row_data(0, group.clone());
+        let chevron = ElementHandle::find_by_element_type_name(&app, "IcChevronDown")
+            .next()
+            .unwrap();
+        assert_eq!(
+            chevron.size().width,
+            24.0,
+            "collapse control uses a vector icon"
+        );
+        group.collapsed = false;
+        groups.set_row_data(0, group);
     }
     assert_eq!(
         filters.borrow().as_slice(),
-        &[0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3]
+        &[0, 1, 2, 3, 3, 0, 1, 2, 3, 3, 0, 1, 2, 3, 3]
     );
     assert_eq!(sorts.borrow().as_slice(), &[false, false, false]);
     assert!(!queries.borrow().is_empty());

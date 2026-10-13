@@ -3,7 +3,7 @@ import { Theme, NavMetrics, CalendarDay, CalendarRelease } from "@NovaUiShared";
 import { ScrollView } from "scrollview.slint";
 import { SearchField } from "searchfield.slint";
 import { SideNav } from "sidenav.slint";
-import { SettingsBackButton } from "settings-controls.slint";
+import { PageHeader } from "page-header.slint";
 
 
 component PlannerButton inherits Rectangle {
@@ -156,16 +156,16 @@ export component CalendarPage inherits Rectangle {
     init => { root.last_back = root.system_back_request; self.focus(); }
     capture-key-pressed(e) => { if (e.text == Key.Escape || e.text == Key.Back) { if (!e.repeat) { root.back(); } accept } else { reject } }
     VerticalLayout {
-        padding-left: (root.narrow ? 14px : 20px + (root.external_navigation ? 0px : NavMetrics.rail-width)) + root.safe-left;
-        padding-right: 14px + root.safe-right; padding-top: 14px + root.safe-top; spacing: 12px;
+        padding-left: 18px + (root.narrow || root.external_navigation ? 0px : NavMetrics.width-for(root.nav-viewport-width)) + root.safe-left;
+        padding-right: 18px + root.safe-right; padding-top: 18px + root.safe-top; spacing: 12px;
         // Wide windows keep the planner chrome to two rows, leaving room
         // for all six calendar weeks at ordinary desktop window heights.
         HorizontalLayout {
-            height: 54px; spacing: 12px;
-            SettingsBackButton { clicked => { root.back(); } }
-            VerticalLayout { spacing: 2px;
-                Text { vertical-stretch: 0; min-width: 0; text: @tr("Calendar"); color: Theme.current.text_bright; font-size: 25px; font-weight: 700; }
-                Text { vertical-stretch: 0; min-width: 0; text: @tr("{n} episode release" | "{n} episode releases" % root.count); color: Theme.current.text_muted; font-size: 12px; }
+            vertical-stretch: 0; spacing: 12px;
+            calendar_header := PageHeader {
+                title: @tr("Calendar"); narrow: root.narrow;
+                subtitle: @tr("{n} episode release" | "{n} episode releases" % root.count);
+                back => { root.back(); }
             }
             if !root.narrow: SearchField {
                 width: root.wide_header ? 240px : 220px;

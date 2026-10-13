@@ -70,6 +70,49 @@ fn search_expands_and_fades_then_closes_with_motion_settings_respected() {
         .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: "x".into() });
     tick(&app, 20);
     assert_eq!(app.get_library_query(), "x");
+    // A restored search is visible and retains its query, but the page owns
+    // focus so returning from Details does not summon the Android keyboard.
+    app.set_is_android(true);
+    app.set_touch_menus(true);
+    for width in [390, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 900));
+        tick(&app, 100);
+        app.set_modal_visible(true);
+        tick(&app, 400);
+        app.set_modal_visible(false);
+        tick(&app, 400);
+        assert!(app.get_library_search_open());
+        for event in [
+            slint::platform::WindowEvent::KeyPressed { text: "y".into() },
+            slint::platform::WindowEvent::KeyReleased { text: "y".into() },
+        ] {
+            app.window().dispatch_event(event);
+        }
+        tick(&app, 100);
+        assert_eq!(
+            app.get_library_query(),
+            "x",
+            "Detail return leaves editor unfocused"
+        );
+        element(&app, "library_search_line")
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        for event in [
+            slint::platform::WindowEvent::KeyPressed { text: "z".into() },
+            slint::platform::WindowEvent::KeyReleased { text: "z".into() },
+        ] {
+            app.window().dispatch_event(event);
+        }
+        tick(&app, 20);
+        assert_ne!(
+            app.get_library_query(),
+            "x",
+            "explicitly tapping Search enables editing again"
+        );
+        app.set_library_query("x".into());
+    }
+    app.window().set_size(slint::PhysicalSize::new(390, 844));
+    tick(&app, 100);
+    let panel = element(&app, "library_search_reveal");
     toggle(&app);
     let mut shrank = false;
     for _ in 0..35 {

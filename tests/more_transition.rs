@@ -20,6 +20,28 @@ fn button(app: &nova::AppWindow, label: &str) -> ElementHandle {
     found.unwrap_or_else(|| panic!("missing button {label}"))
 }
 
+// Sidebar destinations hide header Back; Settings/About remain subpages.
+// Keep transition coverage on the reachable pointer or keyboard return path.
+fn back(app: &nova::AppWindow) {
+    if ElementHandle::find_by_accessible_label(app, "Back")
+        .any(|e| e.accessible_role() == Some(AccessibleRole::Button))
+    {
+        tap(app, button(app, "Back"));
+    } else {
+        assert!(app.window().size().width >= 700);
+        for event in [
+            WindowEvent::KeyPressed {
+                text: slint::platform::Key::Back.into(),
+            },
+            WindowEvent::KeyReleased {
+                text: slint::platform::Key::Back.into(),
+            },
+        ] {
+            app.window().dispatch_event(event);
+        }
+    }
+}
+
 // Calendar is a More link on phones; wide layouts expose it in the rail.
 // Enter through the reachable narrow link before checking retained transitions
 // and stationary chrome at the caller's original desktop size.
@@ -204,7 +226,7 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
                 assert!(slide && fade);
             }
             // Return to More, then press system Back during the next entry.
-            tap(&app, button(&app, "Back"));
+            back(&app);
             if enabled && transitions {
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(280));
             }
@@ -294,7 +316,7 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
             let settled = page(&app, component);
             assert!(settled.absolute_position().x.abs() < 0.1);
             assert!(settled.computed_opacity() > 0.99);
-            tap(&app, button(&app, "Back"));
+            back(&app);
             if enabled && transitions {
                 i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(110));
                 let outgoing = page(&app, component);
@@ -314,7 +336,7 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
                 let mut previous_alpha = incoming.computed_opacity();
                 assert!((outgoing.computed_opacity() + previous_alpha - 1.0).abs() < 0.01);
                 // A second Back must not restart the return timer.
-                tap(&app, button(&app, "Back"));
+                back(&app);
                 for _ in 0..8 {
                     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
                     let outgoing = page(&app, component);
@@ -376,7 +398,7 @@ fn more_return_cancels_for_destination_navigation() {
         let _ = page(&app, "CalendarPage").absolute_position();
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(10));
     }
-    tap(&app, button(&app, "Back"));
+    back(&app);
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(80));
     assert!(!app.get_more_open());
     let library = ElementHandle::find_by_element_type_name(&app, "SideItem")
@@ -475,7 +497,7 @@ fn canonical_direct_routes_and_modal_interruptions() {
                 );
             }
         }
-        tap(&app, button(&app, "Back"));
+        back(&app);
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(64));
         // Exercise exactly the global callback production mouse and keyboard use.
         app.global::<nova::NavState>().invoke_downloads_picked();

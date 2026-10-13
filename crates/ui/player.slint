@@ -5,7 +5,6 @@ import { ScrollView } from "scrollview.slint";
 import { IcPlay, IcPause, IcVolumeUp, IcVolumeOff, IcReplay10, IcForward10, IcCaptions, IcMusic, IcFullscreen, IcFullscreenExit, IcClose, IcChevronRight, IcChevronLeft, IcCheck, IcSettingsGear, IcCamera } from "icons.slint";
 
 import { SpeedControl } from "speedcontrol.slint";
-import { TitleArtwork } from "title-artwork.slint";
 
 
 // Rounded player control with the same purple selected surface as menus.
@@ -613,7 +612,6 @@ export component PlayerOverlay {
     in-out property <string> player_title: "";
     in property <string> player_episode_title;
     in property <string> player_show_title;
-    in property <image> player_show_logo;
     in property <bool> screenshot_busy;
     in property <string> screenshot_notice;
     callback take_screenshot();
@@ -656,8 +654,6 @@ export component PlayerOverlay {
         root.osd_mouse_moved();
         return false;
     }
-    // Black alpha-ramp for the bottom scrim (generated in Rust; see app.rs).
-    in-out property <image> scrim_image;
     // Episode (or show) poster shown behind the loading status until the
     // first video frame arrives.
     in-out property <image> player_poster;
@@ -970,7 +966,7 @@ export component PlayerOverlay {
             || root.osd_mouse_pos_y != root.osd_last_wake_y) {
             root.osd_last_wake_x = root.osd_mouse_pos_x;
             root.osd_last_wake_y = root.osd_mouse_pos_y;
-            root.osd_mouse_moved();
+            if (!root.hold_active) { root.osd_mouse_moved(); }
         }
     }
     changed osd_mouse_pos_x => { root.osd_note_pos(); }
@@ -1270,27 +1266,6 @@ export component PlayerOverlay {
             image-fit: cover;
         }
 
-        // Center status while loading / on error (opaque bg still up).
-        if !root.playback_started && root.player_status != "": VerticalLayout {
-            width: 100%;
-            height: 100%;
-            alignment: center;
-
-            HorizontalLayout {
-                width: 100%;
-                alignment: center;
-
-                Text {
-                    text: root.player_status;
-                    color: Theme.current.text_bright;
-                    font-size: 18px;
-                    horizontal-alignment: center;
-                    wrap: word-wrap;
-                    width: 80%;
-                }
-            }
-        }
-
         // Video gesture surface. Android singles toggle the OSD; desktop
         // singles toggle playback and show controls. Side taps wait 280 ms:
         // - double-tap the outer thirds to seek ∓10 s (any platform):
@@ -1346,7 +1321,7 @@ export component PlayerOverlay {
                         || self.mouse-y != player_backdrop.last_wake_y) {
                         player_backdrop.last_wake_x = self.mouse-x;
                         player_backdrop.last_wake_y = self.mouse-y;
-                        if (!self.pressed || player_backdrop.dragged) {
+                        if (!root.hold_active && (!self.pressed || player_backdrop.dragged)) {
                             root.osd_mouse_moved();
                         }
                     }
@@ -1370,6 +1345,10 @@ export component PlayerOverlay {
                 }
             }
             moved => {
+                // Once 2× owns the press, finger travel cannot turn it into
+                // an OSD wake or a brightness/volume swipe. Up/cancel restores
+                // the effective rate through the existing release path.
+                if (root.hold_active) { return; }
                 if (Math.abs(self.mouse-x - self.pressed-x)
                     + Math.abs(self.mouse-y - self.pressed-y) > 12px) {
                     player_backdrop.dragged = true;
@@ -1423,23 +1402,31 @@ export component PlayerOverlay {
         // A plain element — taps pass through to the backdrop below.
         // Stay mounted so clearing the flag can animate out; actions and the
         // transient playback rate still change immediately, not after a fade.
-        // Mirror the existing alpha ramp so the title remains readable on
-        // bright video without a hard rectangular panel behind the artwork.
-        Rectangle {
-            width: 100%; height: Math.min(190px, root.height / 2);
-            opacity: root.controls_active ? 1 : 0;
+        // Dim the entire video or loading artwork behind the controls. Anchor to the viewport,
+        // not to the bottom control lane or the title's measured height.
+        osd_scrim := Rectangle {
+            x: 0px; y: 0px;
+            width: 100%; height: 100%;
+            background: Theme.current.scrim_player;
+            opacity: root.controls_active ? 0.35 : 0;
             animate opacity { duration: Anim.player_fade; }
-            Image {
-                width: 100%; height: 100%; source: root.scrim_image;
-                image-fit: fill;
-                transform-rotation: 180deg;
+        }
+        // Loading/error text paints above the shared dim layer so it stays
+        // as readable as the controls over paused video.
+        if !root.playback_started && root.player_status != "": loading_status := VerticalLayout {
+            width: 100%; height: 100%; alignment: center;
+            HorizontalLayout {
+                width: 100%; alignment: center;
+                Text {
+                    text: root.player_status; color: Theme.current.text_bright;
+                    font-size: 18px; horizontal-alignment: center;
+                    wrap: word-wrap; width: 80%;
+                }
             }
         }
         flash_pill := Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (root.flash_show ? 16px : 10px) + root.safe-top
-                + (root.controls_active && root.screenshot_notice != "" ? Math.max(40px, player_header.height) + screenshot_message.height + 20px
-                    : (root.controls_active && (root.player_show_title != "" || root.player_episode_title != "") ? player_header.height + 12px : 0px));
+            x: root.safe-left + (root.width - root.safe-left - root.safe-right - self.width) / 2;
+            y: (root.flash_show ? 16px : 10px) + root.safe-top;
             width: flash_lbl.preferred-width + 28px;
             height: 36px;
             border-radius: 18px;
@@ -1453,15 +1440,20 @@ export component PlayerOverlay {
                 font-size: 15px;
                 font-weight: 700;
                 color: Theme.current.text_bright;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
+                x: 0px; y: 0px;
+                width: 100%; height: 100%;
+                horizontal-alignment: center;
+                vertical-alignment: center;
             }
         }
 
         player_header := VerticalLayout {
+            // Gestures briefly own the caption lane; keep the feedback at
+            // its stable top position without overlapping a long title.
+            visible: !root.flash_show;
             x: root.safe-left + 68px; y: root.safe-top + 16px;
             width: Math.max(0px, root.width - root.safe-left - root.safe-right - 140px);
-            height: episode_heading.height + title_art.height + 6px;
+            height: episode_heading.height + show_heading.height + 6px;
             spacing: 6px;
             opacity: root.controls_active ? 1 : 0;
             animate opacity { duration: Anim.player_fade; }
@@ -1472,11 +1464,12 @@ export component PlayerOverlay {
                 font-weight: 600; color: Theme.current.text_bright;
                 overflow: elide; max-lines: 1;
             }
-            title_art := TitleArtwork {
-                title: root.player_show_title; logo: root.player_show_logo;
-                width: Math.min(parent.width, root.narrow ? 260px : 400px);
-                logo-height: Math.min(root.narrow ? 48px : 64px, root.height / 7);
-                font-size: root.narrow ? 20px : 26px; max-lines: 1;
+            show_heading := Text {
+                text: root.player_show_title;
+                width: 100%; height: self.preferred-height;
+                font-size: root.narrow ? 20px : 26px;
+                font-weight: 800; color: Theme.current.text_bright;
+                overflow: elide; max-lines: 1;
             }
         }
         screenshot_button := Rectangle {
@@ -1655,26 +1648,12 @@ export component PlayerOverlay {
         }
 
         // ---- Bottom OSD -------------------------------------------------
-        // A soft scrim: fully transparent at the top, easing into a dark
-        // base at the bottom. The ramp is tall and gradual (several stops,
-        // starting at zero alpha) so no hard edge is visible over bright
-        // video. Controls (seekbar + row, 68px) are pinned to its bottom.
+        // The video dim layer lives above; this element only owns the bottom
+        // controls and their hover/touch area.
         osd := Rectangle {
             width: 100%;
-            height: 220px;
+            height: 96px;
             y: parent.height - self.height;
-            // femtovg's gradient fills render as flat fills in this
-            // environment, so the scrim is a runtime-generated 220×220
-            // alpha-ramp image. Repeated columns preserve the ease curve
-            // without stretching a thin texture across the screen. Its pixels
-            // are already black: avoid the redundant colorization/offscreen
-            // pass when compositing this fade over the video.
-            Image {
-                width: 100%;
-                height: 100%;
-                source: root.scrim_image;
-                image-fit: fill;
-            }
             // Visible when the wake timer says so, and always while loading or a
             // popup is open — the auto-hide countdown applies whether playing
             // or paused (with a longer grace while paused). Hover alone does
@@ -1683,8 +1662,8 @@ export component PlayerOverlay {
                 || root.open_popup != 0) ? 1.0 : 0.0;
             animate opacity { duration: Anim.player_fade; }
 
-            // Hover zone covers only the bottom of the scrim (bar + head
-            // room). The upper, almost-transparent part stays click-through
+            // Hover zone covers only the controls and some headroom.
+            // The upper part of the video stays click-through
             // so click-to-pause still works there. Tapping an empty part of
             // the bar (not a button or the seekbar) dismisses the OSD, same as
             // tapping the video — primarily a touch convenience.

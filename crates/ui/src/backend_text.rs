@@ -147,6 +147,7 @@ pub fn tr(english: &str) -> &str {
         "Size" => "Veličina",
         "Season pack" => "Paket sezone",
         "Reported seeders" => "Prijavljeni seederi",
+        "Number of seeds" => "Broj seedera",
         "Minimum seeders" => "Najmanji broj seedera",
         "Playback mode" => "Način reprodukcije",
         "Any" => "Bilo koja",

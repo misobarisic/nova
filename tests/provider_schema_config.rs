@@ -69,6 +69,10 @@ fn schema_only_configuration_saves_and_confirms_global_removal() {
         app.set_plugin_setting_rows(
             Rc::new(VecModel::from(vec![
                 nova::PluginSettingRow {
+                    kind: "preferences-header".into(),
+                    ..Default::default()
+                },
+                nova::PluginSettingRow {
                     key: "source.enabled".into(),
                     label: "Enable source".into(),
                     kind: "boolean".into(),
@@ -117,8 +121,24 @@ fn schema_only_configuration_saves_and_confirms_global_removal() {
             ElementHandle::find_by_accessible_label(&app, "Metadata")
                 .all(|e| e.accessible_role() != Some(AccessibleRole::Checkbox))
         );
+        click(
+            &app,
+            ElementHandle::find_by_accessible_label(&app, "Enable source")
+                .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
+                .unwrap(),
+        );
         click(&app, toggle(&app, "Enable source"));
         assert_eq!(changed.borrow().last().unwrap().1, "source.enabled");
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Account token")
+                .all(|item| item.accessible_role() != Some(AccessibleRole::TextInput))
+        );
+        click(
+            &app,
+            ElementHandle::find_by_accessible_label(&app, "Account token")
+                .find(|item| item.accessible_role() == Some(AccessibleRole::Button))
+                .unwrap(),
+        );
         click(&app, label(&app, "Save"));
         assert_eq!(
             changed.borrow().last().unwrap().1,
@@ -154,8 +174,15 @@ fn schema_only_configuration_saves_and_confirms_global_removal() {
         app.window()
             .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.clone() });
         app.window()
-            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key });
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key.clone() });
         settle();
+        if app.get_addon_config_open() {
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.clone() });
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key });
+            settle();
+        }
         assert!(!app.get_addon_config_open());
         assert!(app.get_show_settings());
     }
@@ -172,7 +199,7 @@ fn schema_only_configuration_saves_and_confirms_global_removal() {
         let app = weak.upgrade().unwrap();
         let schema = nova_providers::provider_settings_schema("nova-provider://supernova").unwrap();
         assert!(schema.iter().any(|field| field.key == "sources.knaben"));
-        let rows = schema
+        let mut rows = schema
             .into_iter()
             .map(|field| nova::PluginSettingRow {
                 key: field.key.into(),
@@ -210,6 +237,13 @@ fn schema_only_configuration_saves_and_confirms_global_removal() {
                 ..Default::default()
             })
             .collect::<Vec<_>>();
+        rows.insert(
+            0,
+            nova::PluginSettingRow {
+                kind: "preferences-header".into(),
+                ..Default::default()
+            },
+        );
         app.set_addon_config_url(url);
         app.set_addon_config_capabilities(false);
         app.set_plugin_setting_rows(Rc::new(VecModel::from(rows)).into());
@@ -249,8 +283,10 @@ fn schema_only_configuration_saves_and_confirms_global_removal() {
                     .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
                 settle();
             };
-            // The sheet owns focus initially: Return activates its first field.
+            // The sheet owns focus: Return opens the link, then activates its field.
             let before = changed.borrow().len();
+            keypress(slint::platform::Key::Return);
+            assert_eq!(changed.borrow().len(), before);
             keypress(slint::platform::Key::Return);
             assert_eq!(changed.borrow().len(), before + 1);
             // Text and reorder rows have multiple keyboard actions. Walk until
@@ -297,6 +333,11 @@ fn schema_only_configuration_saves_and_confirms_global_removal() {
             assert!(pos.x >= 0.0 && pos.x + size.width <= width as f32);
             assert!(pos.y >= 0.0 && pos.y + size.height <= 1000.0);
             click(&app, confirm);
+            keypress(slint::platform::Key::Escape);
+            assert!(
+                app.get_addon_config_open(),
+                "Back first closes the preference editor"
+            );
             keypress(slint::platform::Key::Escape);
             assert!(!app.get_addon_config_open());
         }

@@ -3,8 +3,9 @@
 //! The Addons subpage lists each addon with its install URL as the row
 //! description. A long, unbreakable URL used to give the row a minimum width
 //! larger than a phone viewport, which widened the whole settings content
-//! layer and let the page pan sideways. Asserts nothing extends past the
-//! window edge on the Addons subpage at phone and desktop widths.
+//! layer and let the page pan sideways. The capability pills deliberately pan
+//! inside their bounded horizontal rail; all other descendants and the page's
+//! own scroll content must stay within the viewport.
 
 #[path = "support/destinations.rs"]
 mod destinations;
@@ -25,7 +26,51 @@ fn after(ms: u64, body: impl FnOnce() + 'static) {
 /// edge runs past the window.
 fn max_right_edge(app: &nova::AppWindow) -> f32 {
     use i_slint_backend_testing::{ElementHandle, ElementQuery};
+    use std::collections::HashSet;
     let width = app.window().size().width as f32;
+    let rail = ElementHandle::find_by_element_id(app, "SettingsAddonsModule::capability_rail")
+        .next()
+        .expect("bounded capability rail");
+    let rail_position = rail.absolute_position();
+    assert!(
+        rail_position.x >= 0.0 && rail_position.x + rail.size().width <= width + 1.0,
+        "the horizontal rail's viewport must fit the window"
+    );
+    let viewport = ElementHandle::find_by_element_id(app, "SettingsPage::set_scroll")
+        .next()
+        .expect("Settings document viewport");
+    let content = ElementHandle::find_by_element_id(app, "SettingsPage::sub_content")
+        .next()
+        .expect("Settings document content");
+    assert!(
+        content.size().width <= viewport.size().width + 1.0,
+        "the Settings document must not widen to fit horizontal pill content"
+    );
+
+    // The testing API has no public handle identity/equality operation. Match
+    // exact debug names, types and geometry collected only from this rail's
+    // descendants; other chip instances or page controls remain checked.
+    let key = |element: &ElementHandle| {
+        let p = element.absolute_position();
+        let s = element.size();
+        (
+            element.id().map(|s| s.to_string()),
+            element.type_name().map(|s| s.to_string()),
+            [
+                p.x.to_bits(),
+                p.y.to_bits(),
+                s.width.to_bits(),
+                s.height.to_bits(),
+            ],
+        )
+    };
+    let clipped_descendants = rail
+        .query_descendants()
+        .match_predicate(|_| true)
+        .find_all()
+        .iter()
+        .map(&key)
+        .collect::<HashSet<_>>();
     ElementQuery::from_root(app)
         .match_predicate(|_: &ElementHandle| true)
         .find_all()
@@ -33,6 +78,9 @@ fn max_right_edge(app: &nova::AppWindow) -> f32 {
         .filter_map(|e| {
             let sz = e.size();
             let p = e.absolute_position();
+            if clipped_descendants.contains(&key(&e)) {
+                return None;
+            }
             (p.x >= 0.0 && p.x < width && sz.width > 0.0).then_some(p.x + sz.width)
         })
         .fold(0.0f32, f32::max)

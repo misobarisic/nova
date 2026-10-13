@@ -473,10 +473,16 @@ fn render_stream_selector_previews() {
     app.set_streams(Rc::new(VecModel::from(rows)).into());
     app.set_detail_kb_s(1);
     app.set_kb_active(true);
+    // Keep the original three previews and compare identical short desktop
+    // and Android windows, including sticky filters after context scrolls away.
     let sizes = [
-        ("phone", 390, 844),
-        ("compact", 1000, 800),
-        ("artwork", 1440, 900),
+        ("phone", 390, 844, false, false),
+        ("compact", 1000, 800, false, false),
+        ("artwork", 1440, 900, false, false),
+        ("desktop-short", 1280, 576, false, false),
+        ("android-landscape", 1280, 576, true, false),
+        ("android-landscape-scrolled", 1280, 576, true, true),
+        ("android-portrait", 390, 844, true, false),
     ];
     app.window()
         .set_size(slint::PhysicalSize::new(sizes[0].1, sizes[0].2));
@@ -491,6 +497,17 @@ fn render_stream_selector_previews() {
             let app = weak.upgrade().unwrap();
             let i = index.get();
             let snapshot = app.window().take_snapshot().unwrap();
+            if sizes[i].4 {
+                let canvas = app.global::<nova::Theme>().get_current().artwork_canvas;
+                for (x, y) in [(8, 8), (snapshot.width() / 2, 8), (snapshot.width() - 8, 8)] {
+                    let pixel = snapshot.as_slice()[(y * snapshot.width() + x) as usize];
+                    assert_eq!(
+                        (pixel.r, pixel.g, pixel.b, pixel.a),
+                        (canvas.red(), canvas.green(), canvas.blue(), 255),
+                        "the pinned backdrop must cover the entire top with the theme canvas"
+                    );
+                }
+            }
             let bytes: Vec<u8> = snapshot
                 .as_slice()
                 .iter()
@@ -508,8 +525,26 @@ fn render_stream_selector_previews() {
             if i + 1 == sizes.len() {
                 slint::quit_event_loop().unwrap();
             } else {
+                let next = sizes[i + 1];
+                app.set_is_android(next.3);
+                app.set_touch_menus(next.3);
+                if i + 1 >= 3 {
+                    app.set_kb_active(false);
+                }
                 app.window()
-                    .set_size(slint::PhysicalSize::new(sizes[i + 1].1, sizes[i + 1].2));
+                    .set_size(slint::PhysicalSize::new(next.1, next.2));
+                if next.4 {
+                    i_slint_core::window::WindowInner::from_pub(app.window())
+                        .set_window_item_safe_area(i_slint_core::lengths::LogicalEdges::new(
+                            16.0, 12.0, 8.0, 10.0,
+                        ));
+                    app.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                            position: slint::LogicalPosition::new(600.0, 350.0),
+                            delta_x: 0.0,
+                            delta_y: -300.0,
+                        });
+                }
             }
         },
     );

@@ -31,6 +31,8 @@ mod mpv_load;
 
 mod screenshot;
 pub use screenshot::{ScreenshotError, ScreenshotSaved};
+#[cfg(any(target_os = "android", all(test, target_os = "linux")))]
+mod gpu_screenshot;
 
 mod track_preferences;
 use libmpv2::Mpv;
@@ -441,6 +443,7 @@ pub const MPV_RENDER_PARAM_API_TYPE: c_int = 1;
 pub const MPV_RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
 pub const MPV_RENDER_PARAM_OPENGL_FBO: c_int = 3;
 pub const MPV_RENDER_PARAM_FLIP_Y: c_int = 4;
+pub const MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME: c_int = 12;
 pub const MPV_RENDER_PARAM_INVALID: c_int = 0;
 
 unsafe extern "C" {
@@ -766,6 +769,8 @@ struct State {
     mpv: Mutex<Option<Mpv>>,
     /// Invalidates queued captures when a stream is replaced or closed.
     screenshot_session: AtomicU64,
+    #[cfg(target_os = "android")]
+    gpu_screenshot: Mutex<Option<gpu_screenshot::Request>>,
     /// Set when mpv could not be initialized / the renderer is not OpenGL.
     mpv_error: Mutex<Option<String>>,
     underlay: Mutex<Option<MpvGlUnderlay>>,
@@ -1024,6 +1029,8 @@ impl Player {
             }),
             mpv: Mutex::new(mpv.ok()),
             screenshot_session: AtomicU64::new(0),
+            #[cfg(target_os = "android")]
+            gpu_screenshot: Mutex::new(None),
             mpv_error: Mutex::new(mpv_error),
             underlay: Mutex::new(None),
             pending: Mutex::new(None),
@@ -1378,10 +1385,27 @@ impl Player {
                             #[cfg(any(target_os = "android", target_os = "windows"))]
                             let _guard = gl_state::Guard::new(&underlay.gl);
 
+                            // Capture through the same renderer, before Slint paints its
+                            // controls. HW+ frames cannot be downloaded by mpv's software
+                            // screenshot fallback. Never change the decoder for a capture.
+                            #[cfg(target_os = "android")]
+                            if let Some(request) = notifier_state.gpu_screenshot.lock().unwrap().take() {
+                                request.complete(
+                                    notifier_state.screenshot_session.load(Ordering::SeqCst),
+                                    notifier_state.started.load(Ordering::SeqCst),
+                                    &underlay.gl,
+                                    underlay.render_ctx,
+                                );
+                            }
+                            // Also restores mpv's window dimensions after a capture.
                             mpv_render_context_render(underlay.render_ctx, params.as_mut_ptr());
                         }
                     }
                     RenderingState::RenderingTeardown => {
+                        // A queued capture belongs to this surface. Wake the worker
+                        // with Unavailable instead of retaining it across recovery.
+                        #[cfg(target_os = "android")]
+                        notifier_state.gpu_screenshot.lock().unwrap().take();
                         #[cfg(target_os = "android")]
                         {
                             // Capture before free disables the VO and may make
@@ -2111,7 +2135,6 @@ impl Player {
             app.set_player_open(false);
             app.set_screenshot_busy(false);
             app.set_screenshot_notice(slint::SharedString::default());
-            app.set_player_show_logo(slint::Image::default());
             app.set_player_show_title(slint::SharedString::default());
             app.set_player_episode_title(slint::SharedString::default());
             app.set_playback_started(false);
@@ -2778,9 +2801,6 @@ mod tests {
         app.set_screenshot_notice("Screenshot saved".into());
         app.set_player_show_title("Show".into());
         app.set_player_episode_title("Episode".into());
-        app.set_player_show_logo(slint::Image::from_rgba8(slint::SharedPixelBuffer::new(
-            2, 2,
-        )));
         player.state.started.store(true, Ordering::SeqCst);
         player.close();
         assert!(!app.get_player_open());
@@ -2790,8 +2810,6 @@ mod tests {
         assert!(app.get_screenshot_notice().is_empty());
         assert!(app.get_player_show_title().is_empty());
         assert!(app.get_player_episode_title().is_empty());
-        assert_eq!(app.get_player_show_logo().size().width, 0);
-        assert_eq!(app.get_player_show_logo().size().height, 0);
         assert_ne!(session, player.screenshot_session());
         assert_eq!(
             player.capture_screenshot(session),

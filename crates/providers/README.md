@@ -55,8 +55,9 @@ Each availability operation proves and formats each returned candidate once,
 reusing both successful and rejected proofs across progressive batch snapshots. The display remains
 capped at 50 rows.
 
-Sort order offers cached status, resolution, size, season packs, reported
-peers, preferred audio language, subtitle language and video codec, with movable priority and independent high/low direction. Unknown values
+Sort order offers cached status, resolution, size, season packs, Number of seeds
+(reported seed counts), preferred audio language, subtitle language and video
+codec, with movable priority and independent high/low direction. Unknown values
 stay last; stable IDs break ties. Combined TorBox/P2P snapshots sort before the
 50-row cap. Preferred quality still biases the bounded candidate inspection
 pool; the explicit sort order controls the final visible list. `sort.order` is

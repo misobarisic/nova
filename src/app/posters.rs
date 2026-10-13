@@ -1304,38 +1304,6 @@ impl Bridge {
         });
     }
 
-    /// Playback owns its captured title identity even when Detail changes underneath it.
-    pub(super) fn load_player_title_logo(
-        &self,
-        request: crate::torrent::PlaybackRequest,
-        url: String,
-    ) {
-        let Some(app) = self.app() else { return };
-        let cached = transparent_title_logo(decoded_cache_get(&image_cache_key(
-            &url,
-            ImageUse::Fixed(None),
-        )));
-        app.set_player_show_logo(cached.map(Image::from_rgba8).unwrap_or_default());
-        if url.is_empty() || app.get_player_show_logo().size().width > 0 {
-            return;
-        }
-        let bridge = self.clone();
-        let revision = image_settings_revision();
-        net::fetch_image(url, ImageUse::Fixed(None), move |pixels| {
-            let pixels = transparent_title_logo(pixels);
-            let _ = slint::invoke_from_event_loop(move || {
-                let Some(app) = bridge.app() else { return };
-                let valid = app.get_player_open()
-                    && request.is_current()
-                    && image_settings_revision() == revision
-                    && bridge.playback_request_is_current(&request);
-                if valid {
-                    app.set_player_show_logo(pixels.map(Image::from_rgba8).unwrap_or_default());
-                }
-            });
-        });
-    }
-
     fn detail_image_request(&self, id: &str) -> Option<Arc<()>> {
         self.shared
             .lock()

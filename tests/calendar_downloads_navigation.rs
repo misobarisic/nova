@@ -98,12 +98,24 @@ fn stage(app: slint::Weak<nova::AppWindow>, step: usize, failures: Rc<RefCell<Ve
                     app.get_show_downloads(),
                     "desktop Downloads callback must route"
                 );
+                assert_eq!(
+                    ElementHandle::find_by_accessible_label(&app, "Back").count(),
+                    0,
+                    "desktop Downloads has no header Back"
+                );
+                tap(&app, visible(&app, "Calendar"));
+                assert_eq!(
+                    ElementHandle::find_by_accessible_label(&app, "Back").count(),
+                    0,
+                    "desktop Calendar has no header Back"
+                );
             } else if step == 1 {
                 tap(&app, visible(&app, "Calendar"));
                 assert!(
                     app.get_show_calendar() && !app.get_more_open(),
                     "More Calendar must route"
                 );
+                visible(&app, "Back");
                 tap(&app, visible(&app, "Month"));
                 key(&app, Key::Escape.into());
                 assert!(
@@ -138,6 +150,16 @@ fn stage(app: slint::Weak<nova::AppWindow>, step: usize, failures: Rc<RefCell<Ve
                 route(&app, false);
                 app.set_calendar_search("".into());
             } else {
+                if step == 4 {
+                    // Let destination publication restore keyboard focus after
+                    // routing before exercising Back without a header button.
+                    key(&app, Key::Escape.into());
+                    assert!(
+                        app.get_show_home() && !app.get_show_calendar(),
+                        "desktop Calendar keyboard Back still routes Home"
+                    );
+                    route(&app, false);
+                }
                 if step == 10 || step == 11 {
                     agenda_navigation(&app);
                 }
@@ -145,6 +167,9 @@ fn stage(app: slint::Weak<nova::AppWindow>, step: usize, failures: Rc<RefCell<Ve
                 for element in ElementQuery::from_root(&app)
                     .match_predicate(|e: &ElementHandle| {
                         e.accessible_role() == Some(AccessibleRole::Button)
+                            // Natural-width filter chips are clipped by their
+                            // horizontal rail; partial neighbours are expected.
+                            && e.type_name().as_deref() != Some("LibraryFilterChip")
                     })
                     .find_all()
                 {

@@ -2446,3 +2446,12 @@ msgstr "Snimi zaslon"
 #: ../ui-settings-addons/addons-module.slint
 msgid "Install addon ZIP…"
 msgstr "Instaliraj ZIP dodatka…"
+
+msgid "Stream preferences"
+msgstr "Postavke izvora reprodukcije"
+
+msgid "Customize how streams are found and played."
+msgstr "Prilagodite pronalaženje i reprodukciju izvora."
+
+msgid "Selections saved automatically. Save text fields after editing."
+msgstr "Odabiri se spremaju automatski. Spremite tekstualna polja nakon uređivanja."

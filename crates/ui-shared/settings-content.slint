@@ -20,6 +20,12 @@ export global SettingsContent {
     in-out property <length> slot_height;
     in-out property <length> shell_width;
     in-out property <length> detail_width;
+    // Transient shell geometry lets a compiled submenu pin its own controls.
+    in-out property <length> detail_sticky_top;
+    in-out property <length> detail_header_height;
+    in-out property <length> detail_pinned_controls_height;
+    in-out property <length> detail_cover_left;
+    in-out property <length> detail_cover_right;
     in-out property <length> content_min_height;
     in-out property <length> content_preferred_height;
     in-out property <bool> dl_revealed: true;
@@ -67,6 +73,11 @@ export global SettingsContent {
     callback focus_shell();
 
     public function reset_state() {
+        SettingsContent.detail_sticky_top = 0px;
+        SettingsContent.detail_header_height = 0px;
+        SettingsContent.detail_pinned_controls_height = 0px;
+        SettingsContent.detail_cover_left = 0px;
+        SettingsContent.detail_cover_right = 0px;
         SettingsContent.dl_revealed = true;
         SettingsContent.input_focused = false;
         SettingsContent.kb_ac = 0;

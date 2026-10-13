@@ -114,7 +114,9 @@ fn fixture(source: bool, account: bool) -> Vec<nova::PluginSettingRow> {
         result.push(source_picker);
     }
     result.push(url);
-    result.push(row("", "Debrid", "collection-header", "Debrid", ""));
+    let mut debrid = row("", "Debrid", "collection-header", "Debrid", "");
+    debrid.selected = 1;
+    result.push(debrid);
     result.push(account_row);
     if !account {
         result.push(account_picker);
@@ -135,7 +137,11 @@ fn full_configuration() -> Vec<nova::PluginSettingRow> {
         source.checked = true;
         rows.insert(index + 1, source);
     }
+    let mut preferences = row("", "", "preferences-header", "", "");
+    preferences.selected = 2;
+    rows.push(preferences);
     let mut sort = row("sort.order", "Sort order", "sort-header", "", "");
+    sort.summary = "Cached availability, Resolution".into();
     sort.labels = Rc::new(VecModel::from(vec![
         SharedString::from("Cached availability"),
         SharedString::from("Resolution"),
@@ -165,18 +171,23 @@ fn full_configuration() -> Vec<nova::PluginSettingRow> {
     for name in ["Preferred quality", "Playback mode"] {
         let mut choice = row(name, name, "choice", "", "");
         choice.selected = 0;
+        choice.summary = "Selected value".into();
         choice.options = Rc::new(VecModel::from(vec![SharedString::from("value")])).into();
         choice.labels = Rc::new(VecModel::from(vec![SharedString::from("Selected value")])).into();
         rows.push(choice);
     }
     let mut minimum = row("seeders.minimum", "Minimum seeders", "integer", "", "");
     minimum.value = "0".into();
+    minimum.summary = "0".into();
     rows.push(minimum);
     rows
 }
 
 #[test]
 fn predefined_collections_support_keyboard_edit_save_and_explicit_removal() {
+    if std::env::var_os("NOVA_ADDON_CONFIG_PREVIEW_DIR").is_some() {
+        return;
+    }
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = nova::AppWindow::new().unwrap();
     app.global::<nova::Anim>().set_enabled(false);
@@ -300,7 +311,35 @@ fn predefined_collections_support_keyboard_edit_save_and_explicit_removal() {
         app.set_plugin_setting_rows(Rc::new(VecModel::from(full_configuration())).into());
         app.set_addon_config_open(true);
         settle();
-        let header_x = label(&app, "Sources").absolute_position().x;
+        let sources = label(&app, "Sources");
+        let sources_position = sources.absolute_position();
+        if width >= 1000 {
+            let preferences_position = label(&app, "Stream preferences").absolute_position();
+            assert!(
+                preferences_position.x > sources_position.x + 200.0,
+                "desktop preferences must sit in the right column"
+            );
+            assert!(
+                (preferences_position.y - sources_position.y).abs() < 32.0,
+                "desktop columns must begin on the same row: sources={sources_position:?}, preferences={preferences_position:?}"
+            );
+        }
+        for caption in ["Sources", "Stream preferences", "Edit TorBox"] {
+            for item in ElementHandle::find_by_accessible_label(&app, caption) {
+                let p = item.absolute_position();
+                assert!(
+                    p.x >= 0.0 && p.x + item.size().width <= width as f32,
+                    "{width}: {caption} must fit the panel"
+                );
+            }
+        }
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Up")
+                .next()
+                .is_none(),
+            "priority editors stay closed until requested"
+        );
+        let header_x = sources_position.x;
         let source_text = ElementHandle::find_by_accessible_label(&app, "Nyaa")
             .find(|item| item.accessible_role() == Some(AccessibleRole::Text))
             .unwrap();
@@ -334,4 +373,104 @@ fn predefined_collections_support_keyboard_edit_save_and_explicit_removal() {
         );
         key(&app, slint::platform::Key::Escape);
     }
+    // Center within the safe rectangle, rather than the whole window: phone
+    // cutouts and unequal system bars must protect both the panel and header.
+    for width in [390, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 1000));
+        i_slint_core::window::WindowInner::from_pub(app.window()).set_window_item_safe_area(
+            i_slint_core::lengths::LogicalEdges::new(62.0, 14.0, 30.0, 6.0),
+        );
+        app.set_addon_config_label("Safe-area addon".into());
+        app.set_addon_config_open(true);
+        settle();
+        let panel = ElementHandle::find_by_element_id(&app, "SettingsPage::addon_config_panel")
+            .next()
+            .expect("configuration panel");
+        let p = panel.absolute_position();
+        let size = panel.size();
+        assert!(
+            p.x >= 30.0 && p.x + size.width <= width as f32 - 6.0,
+            "{width}: panel must stay within horizontal safe area: {p:?} {size:?}"
+        );
+        assert!(
+            p.y >= 62.0 && p.y + size.height <= 986.0,
+            "{width}: panel must stay within vertical safe area: {p:?} {size:?}"
+        );
+        for caption in ["Safe-area addon", "Back", "Close"] {
+            let item = ElementHandle::find_by_accessible_label(&app, caption)
+                .find(|item| {
+                    let p = item.absolute_position();
+                    p.x >= panel.absolute_position().x && p.y >= panel.absolute_position().y
+                })
+                .expect(caption);
+            let p = item.absolute_position();
+            assert!(p.x >= 30.0 && p.x + item.size().width <= width as f32 - 6.0);
+            assert!(p.y >= 62.0 && p.y + item.size().height <= 986.0);
+        }
+        click(
+            &app,
+            ElementHandle::find_by_accessible_label(&app, "Close")
+                .find(|item| {
+                    item.accessible_role() == Some(AccessibleRole::Button)
+                        && item.absolute_position().y < 200.0
+                })
+                .expect("header Close"),
+        );
+        assert!(!app.get_addon_config_open());
+    }
+    i_slint_core::window::WindowInner::from_pub(app.window())
+        .set_window_item_safe_area(i_slint_core::lengths::LogicalEdges::default());
+}
+
+// Opt-in rendering runs on the actual display backend (for example Xvfb with
+// SLINT_BACKEND=winit-software), keeping ordinary geometry tests deterministic.
+#[test]
+fn render_configuration_reference_previews() {
+    let Some(dir) = std::env::var_os("NOVA_ADDON_CONFIG_PREVIEW_DIR") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_addon_config_capabilities(false);
+    app.set_addon_config_label("Example addon".into());
+    app.set_plugin_setting_rows(Rc::new(VecModel::from(full_configuration())).into());
+    app.set_addon_config_open(true);
+    app.window().set_size(slint::PhysicalSize::new(390, 1100));
+    app.show().unwrap();
+    let timer = slint::Timer::default();
+    let weak = app.as_weak();
+    let step = Rc::new(RefCell::new(0));
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(700),
+        move || {
+            let app = weak.upgrade().unwrap();
+            let snapshot = app.window().take_snapshot().unwrap();
+            let pixels = snapshot
+                .as_slice()
+                .iter()
+                .flat_map(|p| [p.r, p.g, p.b, p.a])
+                .collect::<Vec<_>>();
+            let width = app.window().size().width;
+            image::save_buffer(
+                dir.join(format!("addon-config-{width}.png")),
+                &pixels,
+                snapshot.width(),
+                snapshot.height(),
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+            if *step.borrow() == 0 {
+                *step.borrow_mut() = 1;
+                app.window().set_size(slint::PhysicalSize::new(1280, 1000));
+            } else {
+                slint::quit_event_loop().unwrap();
+            }
+        },
+    );
+    slint::run_event_loop().unwrap();
 }

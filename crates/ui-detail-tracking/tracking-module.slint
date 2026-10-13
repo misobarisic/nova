@@ -71,6 +71,8 @@ export component DetailTrackingModule inherits Window {
                     busy: DetailBridge.tracking_busy;
                     can_confirm: DetailBridge.tracking_can_confirm;
                     safe-bottom: DetailBridge.safe-bottom;
+                    scroll-viewport-top: tracking_scroll.absolute-position.y;
+                    scroll-viewport-width: tracking_scroll.width;
                     search(a0,a1) => { DetailBridge.tracking_search(a0,a1); }
                     pick(a0) => { DetailBridge.tracking_pick(a0); }
                     preview(a0,a1,a2) => { DetailBridge.tracking_preview(a0,a1,a2); }

@@ -4,7 +4,7 @@ import { SettingSyncModal } from "settings-sync-modal.slint";
 
 import { ScrollView } from "scrollview.slint";
 import { Dropdown } from "dropdown.slint";
-import { IcSettingsGear } from "icons.slint";
+import { IcSettingsGear, IcExtension, IcDownload, IcChevronRight, IcChevronDown, IcCheck, IcClose, IcChevronLeft, IcTag, IcSync } from "icons.slint";
 import { SearchField } from "searchfield.slint";
 
 import { SideNav } from "sidenav.slint";
@@ -51,7 +51,7 @@ export component SettingsPage {
     in-out property <[HomeCatalogRow]> home_row_catalog_rows: [];
     in-out property <bool> home_continue_enabled: true;
     in-out property <bool> home_upcoming_enabled: true;
-    in-out property <bool> home_episode_artwork: true;
+    in-out property <bool> home_episode_artwork: false;
     in-out property <[string]> home_catalog_candidate_names: [];
     in-out property <int> home_catalog_candidate_index: -1;
     in-out property <[string]> home_catalog_genre_names: [];
@@ -211,6 +211,9 @@ export component SettingsPage {
     callback plugin_settings_clear(string);
     callback plugin_cache_clear(string);
     in-out property <bool> addon_config_open: false;
+    private property <string> addon_preference_editor: "";
+    private property <string> addon_collection_editor: "";
+    private property <int> addon_text_editor: -1;
     in-out property <string> addon_config_url;
     in-out property <string> addon_config_label;
     in-out property <bool> addon_config_capabilities: true;
@@ -405,7 +408,7 @@ export component SettingsPage {
         SliderGesture.active = false; SliderGesture.hovered = false;
         if (root.two_pane) { root.sub_open = true; }
     }
-    changed sel => { SliderGesture.active = false; SliderGesture.hovered = false; }
+    changed sel => { SliderGesture.active = false; SliderGesture.hovered = false; SettingsContent.detail_pinned_controls_height = 0px; }
     changed sub_open => { SliderGesture.active = false; SliderGesture.hovered = false; }
     property <int> focus_request: SettingsStyle.focus-request;
     property <bool> native_keyboard_mode: SettingsStyle.keyboard-mode;
@@ -417,9 +420,7 @@ export component SettingsPage {
                 if (top < 0px) { land_scroll.content-y -= top; }
                 else if (top + SettingsStyle.focus-height > land_scroll.visible-height) { land_scroll.content-y -= top + SettingsStyle.focus-height - land_scroll.visible-height; }
             } else {
-                let top = SettingsStyle.focus-y - set_scroll.absolute-position.y;
-                if (top < 0px) { set_scroll.content-y -= top; }
-                else if (top + SettingsStyle.focus-height > set_scroll.height) { set_scroll.content-y -= top + SettingsStyle.focus-height - set_scroll.height; }
+                root.reveal_detail_control(SettingsStyle.focus-y, SettingsStyle.focus-height);
             }
         }
     }
@@ -662,14 +663,30 @@ export component SettingsPage {
 
     function close_addon_config() {
         root.plugin_clear_confirm = false;
+        root.addon_preference_editor = "";
+        root.addon_collection_editor = "";
+        root.addon_text_editor = -1;
         root.addon_config_open = false;
         nav_scope.focus();
     }
     function save_addon_config() {
         root.addon_capabilities_changed(root.addon_config_url, root.addon_config_streams, root.addon_config_metadata);
     }
+    function submenu_back() {
+        // A pointer Back belongs to the visible submenu even when keyboard
+        // focus last rested on the desktop overview alongside it.
+        if root.two_pane && root.kb_zone == 8 { root.kb_zone = root.page_first_zone(); }
+        root.system_back();
+    }
     function system_back() {
-        if root.addon_config_open { root.close_addon_config(); return; }
+        if root.addon_config_open {
+            if root.plugin_clear_confirm { root.plugin_clear_confirm = false; }
+            else if root.addon_text_editor >= 0 { root.addon_text_editor = -1; }
+            else if root.addon_collection_editor != "" { root.addon_collection_editor = ""; }
+            else if root.addon_preference_editor != "" { root.addon_preference_editor = ""; }
+            else { root.close_addon_config(); }
+            return;
+        }
         if SettingsSync.open { SettingsSync.open = false; nav_scope.focus(); return; }
         if (root.home_catalog_add_open) {
             root.home_catalog_add_open = false;
@@ -810,8 +827,12 @@ export component SettingsPage {
     }
 
     public function reveal_detail_control(y: length, h: length) {
+        let covered_bottom = SettingsContent.detail_sticky_top + SettingsContent.detail_header_height + SettingsContent.detail_pinned_controls_height;
+        // Pinned controls suppress their own reveal requests. Ordinary rows
+        // still reveal clear of the cover even when currently hidden under it.
         let top = y - set_scroll.absolute-position.y;
-        if (top < 0px) { set_scroll.content-y -= top; }
+        let cover = Math.max(0px, covered_bottom - set_scroll.absolute-position.y);
+        if (top < cover) { set_scroll.content-y -= top - cover; }
         else if (top + h > set_scroll.height) { set_scroll.content-y -= top + h - set_scroll.height; }
     }
     function navigation_top_inset() -> length {
@@ -1732,6 +1753,13 @@ export component SettingsPage {
                             height: 124px;
                             clip: true;
                             background: Theme.current.artwork_canvas;
+                            TouchArea { width: 100%; height: 100%; clicked => {} }
+                        }
+                        landing_controls_fade := Rectangle {
+                            y: landing_controls_canvas.y + landing_controls_canvas.height;
+                            width: 100%; height: 8px;
+                            background: @linear-gradient(180deg, Theme.current.artwork_canvas, transparent);
+                            TouchArea { width: 100%; height: 100%; clicked => {} }
                         }
 
                         Rectangle {
@@ -1847,9 +1875,9 @@ export component SettingsPage {
                                 width: 100%;
                                 sub_header := SettingsHeader {
                                     title: root.land_title(root.sel);
-                                    back_focused: root.phone_layout && root.kb_zone == 0 && root.kb_active;
+                                    back_focused: root.phone_layout && root.kb_zone == 0 && root.kb_active && !sticky_sub_header.pinned;
                                     introduction: root.land_desc(root.sel);
-                                    back => { root.system_back(); }
+                                    back => { root.submenu_back(); }
                                 }
 
                                 if root.sel == 12: SettingsSectionHost {
@@ -1920,9 +1948,53 @@ export component SettingsPage {
                             }
                         }
                     }
+
                 }
             }
         }
+
+                    // Keep the original large heading in the document; only
+                    // its compact navigation takes over after it leaves view.
+                    sticky_sub_header := Rectangle {
+                        property <length> shell_top: root.absolute-position.y + root.safe-top;
+                        property <bool> pinned: root.sub_open && root.scroll_y <= -sub_header.height;
+                        property <length> cover_height: self.pinned ? 68px : 0px;
+                        changed shell_top => { SettingsContent.detail_sticky_top = self.shell_top; }
+                        changed cover_height => { SettingsContent.detail_header_height = self.cover_height; }
+                        property <length> cover_left: root.two_pane ? 0px : 18px + root.safe-left;
+                        property <length> cover_right: 18px + root.safe-right;
+                        changed cover_left => { SettingsContent.detail_cover_left = self.cover_left; }
+                        changed cover_right => { SettingsContent.detail_cover_right = self.cover_right; }
+                        init => { SettingsContent.detail_sticky_top = self.shell_top; SettingsContent.detail_header_height = self.cover_height; SettingsContent.detail_cover_left = root.two_pane ? 0px : 18px + root.safe-left; SettingsContent.detail_cover_right = 18px + root.safe-right; }
+                        visible: self.pinned;
+                        x: sub_layer.absolute-position.x - root.absolute-position.x - self.cover_left;
+                        y: root.safe-top;
+                        width: root.detail_width + self.cover_left + self.cover_right;
+                        opacity: sub_layer.opacity;
+                        height: 60px;
+                        Rectangle {
+                            y: -root.safe-top; width: 100%; height: parent.height + root.safe-top;
+                            background: Theme.current.artwork_canvas;
+                            TouchArea { width: 100%; height: 100%; clicked => {} }
+                        }
+                        HorizontalLayout {
+                            padding-left: root.two_pane ? 16px : 18px + root.safe-left;
+                            padding-right: 18px + root.safe-right;
+                            padding-top: 8px; padding-bottom: 8px; spacing: 12px;
+                            SettingsBackButton { reveal-on-focus: false; focused: root.phone_layout && root.kb_zone == 0 && root.kb_active; clicked => { root.submenu_back(); } }
+                            Text { text: root.land_title(root.sel); font-size: 20px; font-weight: 700; color: Theme.current.text_bright; vertical-alignment: center; overflow: elide; }
+                        }
+                        // Stacked sticky controls form one opaque header. The
+                        // transition belongs below the last row, so cards must
+                        // not show through the seam above Installed sources.
+                        Rectangle {
+                            y: parent.height; width: 100%; height: 8px;
+                            background: SettingsContent.detail_pinned_controls_height > 0px
+                                ? Theme.current.artwork_canvas
+                                : @linear-gradient(180deg, Theme.current.artwork_canvas, transparent);
+                            TouchArea { width: 100%; height: 100%; clicked => {} }
+                        }
+                    }
 
         // Settings uses header Back throughout narrow layouts. The wide
         // rail stays visible on every subpage. Declared after the page column
@@ -2076,12 +2148,12 @@ export component SettingsPage {
     if root.addon_config_open: Rectangle {
         background: Theme.current.scrim_settings;
         TouchArea { clicked => { root.close_addon_config(); } }
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: root.phone_layout ? parent.height - self.height - root.safe-bottom : (parent.height - self.height) / 2;
-            width: Math.min(480px, parent.width - root.safe-left - root.safe-right - 24px);
-            height: Math.min(root.plugin_setting_rows.length > 0 ? 650px : 370px, parent.height - root.safe-top - root.safe-bottom - 24px);
-            background: Theme.current.card;
+        addon_config_panel := Rectangle {
+            x: root.safe-left + (parent.width - root.safe-left - root.safe-right - self.width) / 2;
+            y: root.safe-top + (parent.height - root.safe-top - root.safe-bottom - self.height) / 2;
+            width: Math.min(1080px, parent.width - root.safe-left - root.safe-right - (root.phone_layout ? 0px : 48px));
+            height: root.phone_layout ? parent.height - root.safe-top - root.safe-bottom : Math.min(root.plugin_setting_rows.length > 0 ? 840px : 370px, parent.height - root.safe-top - root.safe-bottom - 32px);
+            background: Theme.current.canvas;
             border-width: 1px;
             border-color: Theme.current.dialog_border;
             border-radius: 16px;
@@ -2091,11 +2163,23 @@ export component SettingsPage {
                 property <int> action: 0;
                 property <int> picker_choice: 0;
                 property <int> scan_direction: 1;
-                property <int> editing: -1;
+                property <int> editing <=> root.addon_text_editor;
                 property <int> save_version: 0;
                 // Store the declared controller key, so identically named items
                 // in different collections cannot open one another's editors.
-                property <string> collection_editing: "";
+                property <string> collection_editing <=> root.addon_collection_editor;
+                property <string> preference_editing <=> root.addon_preference_editor;
+                function preference_link(index: int) -> bool {
+                    let row = root.plugin_setting_rows[index];
+                    return row.collection == "" && row.kind != "preferences-header" && row.kind != "sort-criterion" && row.kind != "priority-criterion" && row.kind != "priority-picker";
+                }
+                function open_preference(index: int) {
+                    let key = root.plugin_setting_rows[index].key;
+                    self.preference_editing = self.preference_editing == key ? "" : key;
+                    self.selected = index;
+                    self.action = 0;
+                    self.focus();
+                }
                 property <bool> confirm_visible: root.plugin_clear_confirm;
                 changed confirm_visible => { if self.confirm_visible { config_scroll.content-y = Math.min(0px, config_scroll.visible-height - config_scroll.content-height); } }
                 public function reveal(y: length,h: length) {
@@ -2105,9 +2189,9 @@ export component SettingsPage {
                 function available(index: int) -> bool {
                     if index >= root.plugin_setting_rows.length { return index == root.plugin_setting_rows.length + 2 || root.plugin_setting_rows.length > 0; }
                     let row = root.plugin_setting_rows[index];
-                    if row.kind == "collection-header" || row.kind == "sort-header" || row.kind == "priority-header" { return false; }
+                    if row.kind == "collection-header" || row.kind == "preferences-header" { return false; }
                     if row.kind == "collection-picker" { return true; }
-                    if row.collection == "" { return true; }
+                    if row.collection == "" { return self.preference_link(index) || self.preference_editing == row.key; }
                     if row.item_role == "member" || row.item_role == "enabled" { return row.configured; }
                     return row.item_controller == self.collection_editing && self.collection_editing != "";
                 }
@@ -2118,6 +2202,7 @@ export component SettingsPage {
                 function actions(index: int) -> int {
                     if index >= root.plugin_setting_rows.length { return 1; }
                     let row = root.plugin_setting_rows[index];
+                    if self.preference_link(index) && self.preference_editing != row.key { return 1; }
                     if row.kind == "boolean" && row.collection != "" && (row.item_role == "member" || row.item_role == "enabled") { return row.has_editor ? (self.collection_editing == row.key ? 3 : 2) : 1; }
                     if row.kind == "sort-criterion" || row.kind == "priority-criterion" { return 3; }
                     if row.kind == "string" || row.kind == "secret" || row.kind == "integer" { return 2; }
@@ -2147,6 +2232,7 @@ export component SettingsPage {
                         if root.plugin_clear_confirm { root.plugin_clear_confirm = false; }
                         else if self.editing >= 0 { self.editing = -1; self.focus(); }
                         else if self.collection_editing != "" { self.collection_editing = ""; self.selected = self.next(-1, 1); self.action = 0; }
+                        else if self.preference_editing != "" { self.preference_editing = ""; self.selected = self.next(-1, 1); self.action = 0; }
                         else { root.close_addon_config(); } accept
                     } else if !root.addon_config_capabilities {
                         if self.editing >= 0 && e.text != Key.Tab && e.text != Key.UpArrow && e.text != Key.DownArrow { reject }
@@ -2167,7 +2253,9 @@ export component SettingsPage {
                             if !self.available(self.selected) { self.selected = self.next(self.selected, 1); self.action = 0; }
                             if self.selected < root.plugin_setting_rows.length {
                                 let row = root.plugin_setting_rows[self.selected];
-                                if (row.kind == "collection-picker" || row.kind == "priority-picker") && row.options.length > 0 {
+                                if self.preference_link(self.selected) && self.preference_editing != row.key { self.open_preference(self.selected); }
+                                else if row.kind == "sort-header" || row.kind == "priority-header" { self.open_preference(self.selected); }
+                                else if (row.kind == "collection-picker" || row.kind == "priority-picker") && row.options.length > 0 {
                                     if e.text == Key.LeftArrow || e.text == Key.RightArrow { self.picker_choice = Math.mod(self.picker_choice + (e.text == Key.LeftArrow ? row.options.length - 1 : 1), row.options.length); }
                                     else {
                                         let choice = row.options[Math.mod(self.picker_choice, row.options.length)];
@@ -2213,9 +2301,25 @@ export component SettingsPage {
                     content-width: self.visible-width;
                     mouse-drag-pan-enabled: true;
                     VerticalLayout {
-                        padding: 20px; spacing: 12px;
-                        Text { text: @tr("Addon configuration"); color: Theme.current.text_bright; font-size: 19px; font-weight: 700; }
-                        Text { text: root.addon_config_label; color: Theme.current.text_settings; font-size: 14px; }
+                        padding: root.phone_layout ? 16px : 24px; spacing: 18px;
+                        HorizontalLayout {
+                            spacing: 12px;
+                            PillButton {
+                                label: ""; width: 44px; roomy: true; accessible-label: @tr("Back");
+                                IcChevronLeft { x: 10px; y: 10px; width: 24px; height: 24px; fill: Theme.current.text_settings; }
+                                clicked => { root.system_back(); }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 4px;
+                                Text { text: root.addon_config_label; color: Theme.current.text_bright; font-size: 22px; font-weight: 700; wrap: word-wrap; }
+                                Text { text: @tr("Addon configuration"); color: Theme.current.text_settings; font-size: 14px; }
+                            }
+                            PillButton {
+                                label: ""; width: 44px; roomy: true; accessible-label: @tr("Close");
+                                IcClose { x: 12px; y: 12px; width: 20px; height: 20px; fill: Theme.current.text_settings; }
+                                clicked => { root.close_addon_config(); }
+                            }
+                        }
                         if root.addon_config_capabilities: SettingsCard {
                             VerticalLayout {
                                 spacing: 0px;
@@ -2223,6 +2327,7 @@ export component SettingsPage {
                                     row-title: @tr("Streams");
                                     row-desc: @tr("Provide playable streams, including for other metadata sources.");
                                     ToggleSwitch {
+                                        active-thumb-color: Theme.current.on_accent;
                                         name: @tr("Streams"); checked <=> root.addon_config_streams;
                                         focused: SettingsStyle.keyboard-mode && config_focus.selected == 0;
                                         toggled => { config_focus.focus(); config_focus.selected = 0; root.save_addon_config(); }
@@ -2232,6 +2337,7 @@ export component SettingsPage {
                                     row-title: @tr("Metadata");
                                     row-desc: @tr("Provide metadata, catalogs and search results.");
                                     ToggleSwitch {
+                                        active-thumb-color: Theme.current.on_accent;
                                         name: @tr("Metadata"); checked <=> root.addon_config_metadata;
                                         focused: SettingsStyle.keyboard-mode && config_focus.selected == 1;
                                         toggled => { config_focus.focus(); config_focus.selected = 1; root.save_addon_config(); }
@@ -2243,17 +2349,38 @@ export component SettingsPage {
                             text: @tr("This addon provides no content while both options are off.");
                             color: Theme.current.text_settings; font-size: 13px; wrap: word-wrap;
                         }
-                        // A collection owns one outlined card; item identity remains on leaf rows.
-                        for group[group_index] in root.plugin_setting_rows: config_group := SettingsCard {
-                            visible: group.kind == "collection-header" || (group.collection == "" && group.kind != "sort-criterion" && group.kind != "priority-criterion" && group.kind != "priority-picker");
-                            height: self.visible ? group_content.preferred-height : 0px;
+                        // Switch columns from the actual panel width, not the device class.
+                        // Item identity and persisted fields stay on the leaf rows.
+                        GridLayout {
+                        spacing: 18px;
+                        for column in [0, 1]: VerticalLayout {
+                            col: config_scroll.visible-width >= 760px && root.plugin_setting_rows.length > 0 && root.plugin_setting_rows[0].kind == "collection-header" ? column : 0;
+                            row: config_scroll.visible-width >= 760px && root.plugin_setting_rows.length > 0 && root.plugin_setting_rows[0].kind == "collection-header" ? 0 : column;
+                            alignment: start;
+                            spacing: 0px;
+                        for group[group_index] in root.plugin_setting_rows: config_group := Rectangle {
+                            visible: column == 0 ? group.kind == "collection-header" : group.kind == "preferences-header";
+                            height: self.visible ? group_content.preferred-height + 18px : 0px;
+                            vertical-stretch: 0;
+                            SettingsCard {
+                            width: 100%;
+                            height: group_content.preferred-height;
                             group_content := VerticalLayout {
-                                padding: 12px; spacing: 0px;
+                                padding: 16px; spacing: 0px;
+                                if group.kind == "preferences-header": HorizontalLayout {
+                                    spacing: 12px;
+                                    IcSettingsGear { width: 24px; height: 24px; fill: Theme.current.text_settings; }
+                                    VerticalLayout {
+                                        spacing: 4px;
+                                        Text { text: @tr("Stream preferences"); color: Theme.current.text_bright; font-size: 17px; font-weight: 700; }
+                                        Text { text: @tr("Customize how streams are found and played."); color: Theme.current.text_settings; font-size: 12px; wrap: word-wrap; }
+                                    }
+                                }
                                 for field[index] in root.plugin_setting_rows: config_row := VerticalLayout {
                                     property <bool> kb_current: self.visible && SettingsStyle.keyboard-mode && config_focus.selected == index;
                                     changed kb_current => { if self.kb_current { config_focus.reveal(self.absolute-position.y - config_scroll.absolute-position.y, self.height); } }
-                                    visible: config_group.visible && (group.kind == "collection-header" ? field.collection == group.collection : group.kind == "sort-header" || group.kind == "priority-header" ? field.key == group.key : index == group_index)
-                                        && (field.kind == "collection-header" || field.kind == "sort-header" || field.kind == "priority-header" || config_focus.available(index));
+                                    visible: config_group.visible && (group.kind == "collection-header" ? field.collection == group.collection : group.kind == "preferences-header" ? field.collection == "" && field.kind != "preferences-header" : index == group_index)
+                                        && (field.kind == "collection-header" || config_focus.available(index));
                                     // Invisible model rows still contribute layout constraints.
                                     // Collapse them so one group's unrelated fields cannot hide
                                     // the following sections beyond an inflated scroll extent.
@@ -2262,12 +2389,35 @@ export component SettingsPage {
                                     padding-top: self.visible ? 8px : 0px;
                                     padding-bottom: self.visible ? 8px : 0px;
                                     spacing: self.visible ? 6px : 0px;
-                                    if field.kind == "sort-header": VerticalLayout {
+                                    if config_focus.preference_link(index): Rectangle { height: 1px; background: Theme.current.control_border; }
+                                    if config_focus.preference_link(index): Rectangle {
+                                        height: preference_caption.preferred-height;
+                                        border-width: config_row.kb_current ? 1px : 0px;
+                                        border-color: Theme.current.focus_ring;
+                                        preference_caption := HorizontalLayout {
+                                            padding-top: 12px; padding-bottom: 12px; spacing: 12px;
+                                            Rectangle {
+                                                width: 24px; min-height: 24px;
+                                                if field.kind == "sort-header": IcSync { y: (parent.height - self.height) / 2; width: 24px; height: 24px; fill: Theme.current.text_settings; }
+                                                if field.kind == "priority-header": IcTag { y: (parent.height - self.height) / 2; width: 24px; height: 24px; fill: Theme.current.text_settings; }
+                                                if field.kind != "sort-header" && field.kind != "priority-header": IcSettingsGear { y: (parent.height - self.height) / 2; width: 24px; height: 24px; fill: Theme.current.text_settings; }
+                                            }
+                                            VerticalLayout {
+                                                horizontal-stretch: 1; spacing: 4px;
+                                                Text { text: field.label; color: Theme.current.text_bright; font-size: 14px; wrap: word-wrap; }
+                                                if field.summary != "": Text { text: field.summary; color: Theme.current.text_settings; font-size: 12px; wrap: word-wrap; }
+                                            }
+                                            if config_focus.preference_editing != field.key: IcChevronRight { width: 20px; height: 20px; fill: Theme.current.text_settings; }
+                                            if config_focus.preference_editing == field.key: IcChevronDown { width: 20px; height: 20px; fill: Theme.current.text_settings; }
+                                        }
+                                        TouchArea { accessible-role: button; accessible-label: field.label; clicked => { config_focus.open_preference(index); } }
+                                    }
+                                    if field.kind == "sort-header" && config_focus.preference_editing == field.key: VerticalLayout {
                                         spacing: 4px;
                                         Text { text: field.label; color: Theme.current.text_bright; font-size: 16px; font-weight: 700; }
                                         Text { text: @tr("Higher priority first. Unknown values last."); color: Theme.current.text_settings; font-size: 12px; wrap: word-wrap; }
                                     }
-                                    if field.kind == "priority-header": VerticalLayout {
+                                    if field.kind == "priority-header" && config_focus.preference_editing == field.key: VerticalLayout {
                                         spacing: 4px;
                                         Text { text: field.label; color: Theme.current.text_bright; font-size: 16px; font-weight: 700; }
                                         Text { text: @tr("First choice ranks highest. Unlabelled releases stay last."); color: Theme.current.text_settings; font-size: 12px; wrap: word-wrap; }
@@ -2298,7 +2448,11 @@ export component SettingsPage {
                                         }
                                         Rectangle { horizontal-stretch: 1; }
                                     }
-                                    if field.kind == "collection-header": Text { text: field.collection_label; color: Theme.current.text_bright; font-size: 16px; font-weight: 700; }
+                                    if field.kind == "collection-header": HorizontalLayout {
+                                        spacing: 12px;
+                                        IcExtension { width: 24px; height: 24px; fill: Theme.current.text_settings; }
+                                        Text { text: field.collection_label; color: Theme.current.text_bright; font-size: 17px; font-weight: 700; wrap: word-wrap; }
+                                    }
                                     if field.kind == "collection-picker" || field.kind == "priority-picker": Dropdown {
                                         border-color: self.kb_current ? Theme.current.focus_ring : Theme.current.control_border;
                                         property <bool> kb_current: SettingsStyle.keyboard-mode && config_focus.selected == index;
@@ -2319,16 +2473,16 @@ export component SettingsPage {
                                     if field.kind == "boolean" && field.collection != "" && (field.item_role == "member" || field.item_role == "enabled") && field.configured: VerticalLayout {
                                         spacing: 8px;
                                         HorizontalLayout {
-                                            spacing: 8px;
+                                            spacing: 12px;
+                                            Rectangle {
+                                                width: 24px; min-height: 24px;
+                                                if field.item_role == "member": IcDownload { y: (parent.height - self.height) / 2; width: 24px; height: 24px; fill: Theme.current.text_settings; }
+                                                if field.item_role == "enabled": IcExtension { y: (parent.height - self.height) / 2; width: 24px; height: 24px; fill: Theme.current.text_settings; }
+                                            }
                                             VerticalLayout {
-                                                horizontal-stretch: 1; spacing: 3px;
+                                                horizontal-stretch: 1; spacing: 3px; alignment: center;
                                                 Text { text: field.label; color: Theme.current.text_bright; font-size: 14px; wrap: word-wrap; }
                                                 if field.item_role == "enabled": Text { text: @tr("Configured"); color: Theme.current.text_settings; font-size: 12px; }
-                                            }
-                                            ToggleSwitch {
-                                                name: field.label; checked: field.checked;
-                                                focused: SettingsStyle.keyboard-mode && config_focus.selected == index && config_focus.action == 0;
-                                                toggled => { root.plugin_setting_changed(root.addon_config_url, field.key, self.checked ? "true" : "false"); }
                                             }
                                             if field.has_editor: PillButton {
                                                 label: ""; width: 44px; roomy: true;
@@ -2336,6 +2490,12 @@ export component SettingsPage {
                                                 focused: SettingsStyle.keyboard-mode && config_focus.selected == index && config_focus.action == 1;
                                                 IcSettingsGear { x: 12px; y: 12px; width: 20px; height: 20px; fill: Theme.current.text_settings; }
                                                 clicked => { config_focus.collection_editing = config_focus.collection_editing == field.key ? "" : field.key; }
+                                            }
+                                            ToggleSwitch {
+                                        active-thumb-color: Theme.current.on_accent;
+                                                name: field.label; checked: field.checked;
+                                                focused: SettingsStyle.keyboard-mode && config_focus.selected == index && config_focus.action == 0;
+                                                toggled => { root.plugin_setting_changed(root.addon_config_url, field.key, self.checked ? "true" : "false"); }
                                             }
                                         }
                                         if config_focus.collection_editing == field.key: HorizontalLayout {
@@ -2382,18 +2542,19 @@ export component SettingsPage {
                                             clicked => { root.plugin_setting_changed(root.addon_config_url, field.key, collection_input.full-text); }
                                         }
                                     }
-                                    if field.collection == "" && field.kind != "collection-header" && field.kind != "collection-picker" && field.kind != "sort-header" && field.kind != "sort-criterion" && field.kind != "priority-header" && field.kind != "priority-criterion" && field.kind != "priority-picker": Text { text: field.label; color: SettingsStyle.keyboard-mode && config_focus.selected == index ? Theme.current.focus_ring : Theme.current.text_settings; font-size: 14px; wrap: word-wrap; }
-                                    if field.collection == "" && field.kind == "boolean": ToggleSwitch {
+                                    if field.collection == "" && config_focus.preference_editing == field.key && field.kind != "collection-header" && field.kind != "collection-picker" && field.kind != "sort-header" && field.kind != "sort-criterion" && field.kind != "priority-header" && field.kind != "priority-criterion" && field.kind != "priority-picker": Text { text: field.label; color: SettingsStyle.keyboard-mode && config_focus.selected == index ? Theme.current.focus_ring : Theme.current.text_settings; font-size: 14px; wrap: word-wrap; }
+                                    if field.collection == "" && config_focus.preference_editing == field.key && field.kind == "boolean": ToggleSwitch {
+                                        active-thumb-color: Theme.current.on_accent;
                                         name: field.label; checked: field.checked;
                                         focused: SettingsStyle.keyboard-mode && config_focus.selected == index;
                                         toggled => { root.plugin_setting_changed(root.addon_config_url, field.key, self.checked ? "true" : "false"); }
                                     }
-                                    if field.collection == "" && field.kind == "choice": Dropdown {
+                                    if field.collection == "" && config_focus.preference_editing == field.key && field.kind == "choice": Dropdown {
                                         border-color: SettingsStyle.keyboard-mode && config_focus.selected == index ? Theme.current.focus_ring : Theme.current.control_border;
                                         model: field.options; labels: field.labels; current-index: field.selected; roomy: true;
                                         selected(value) => { root.plugin_setting_changed(root.addon_config_url, field.key, value); }
                                     }
-                                    if field.collection == "" && (field.kind == "string" || field.kind == "secret" || field.kind == "integer"): HorizontalLayout {
+                                    if field.collection == "" && config_focus.preference_editing == field.key && (field.kind == "string" || field.kind == "secret" || field.kind == "integer"): HorizontalLayout {
                                         spacing: 8px;
                                         plugin_input := SearchField {
                                             property <int> save_version: config_focus.save_version;
@@ -2414,13 +2575,23 @@ export component SettingsPage {
                                 }
                             }
                         }
+                        }
+                        if column == 1 && root.plugin_setting_rows.length > 0: SettingsCard {
+                            HorizontalLayout {
+                                padding: 14px; spacing: 10px;
+                                IcCheck { width: 20px; height: 20px; fill: Theme.current.focus_ring; }
+                                Text { text: @tr("Selections saved automatically. Save text fields after editing."); color: Theme.current.text_settings; font-size: 12px; wrap: word-wrap; }
+                            }
+                        }
+                        }
+                        }
                         if root.plugin_settings_notice != "": Text { text: root.plugin_settings_notice; color: Theme.current.text_settings; wrap: word-wrap; }
                         if root.plugin_setting_rows.length > 0: VerticalLayout {
                             property <bool> kb_current: SettingsStyle.keyboard-mode && config_focus.selected >= root.plugin_setting_rows.length;
                             changed kb_current => { if self.kb_current { config_focus.reveal(self.absolute-position.y - config_scroll.absolute-position.y,self.height); } }
                             spacing: 8px;
                             PillButton { width: 100%; wrap_label: true; label: @tr("Clear plugin cache"); roomy: true; focused: SettingsStyle.keyboard-mode && config_focus.selected == root.plugin_setting_rows.length; clicked => { config_focus.editing = -1; config_focus.selected = root.plugin_setting_rows.length; config_focus.focus(); root.plugin_cache_clear(root.addon_config_url); } }
-                            PillButton { width: 100%; wrap_label: true; label: @tr("Remove configuration everywhere"); roomy: true; focused: SettingsStyle.keyboard-mode && config_focus.selected == root.plugin_setting_rows.length + 1; clicked => { config_focus.editing = -1; config_focus.selected = root.plugin_setting_rows.length + 1; config_focus.focus(); root.plugin_clear_confirm = true; } }
+                            PillButton { width: 100%; wrap_label: true; label: @tr("Remove configuration everywhere"); roomy: true; destructive: true; focused: SettingsStyle.keyboard-mode && config_focus.selected == root.plugin_setting_rows.length + 1; clicked => { config_focus.editing = -1; config_focus.selected = root.plugin_setting_rows.length + 1; config_focus.focus(); root.plugin_clear_confirm = true; } }
                         }
                         if root.plugin_clear_confirm: VerticalLayout {
                             spacing: 8px;
@@ -2428,7 +2599,7 @@ export component SettingsPage {
                             VerticalLayout {
                                 spacing: 8px;
                                 PillButton { width: 100%; wrap_label: true; label: @tr("Cancel"); roomy: true; clicked => { config_focus.editing = -1; config_focus.focus(); root.plugin_clear_confirm = false; } }
-                                PillButton { width: 100%; wrap_label: true; label: @tr("Remove configuration"); roomy: true; clicked => { config_focus.editing = -1; config_focus.focus(); root.plugin_clear_confirm = false; root.plugin_settings_clear(root.addon_config_url); } }
+                                PillButton { width: 100%; wrap_label: true; label: @tr("Remove configuration"); roomy: true; destructive: true; clicked => { config_focus.editing = -1; config_focus.focus(); root.plugin_clear_confirm = false; root.plugin_settings_clear(root.addon_config_url); } }
                             }
                         }
                         PillButton {

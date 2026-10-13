@@ -2628,15 +2628,10 @@ impl Bridge {
                 .filter(|s| filter == 0 || selected.as_deref().is_some_and(|a| a == s.addon))
                 .cloned()
                 .collect();
-            // Cached snapshots lead All without changing provider ranking or
-            // the installed order within either cache-origin group.
+            // Cache hits and faster replies must not outrank the user's addon
+            // order. Keep each owner's own ranking while grouping its rows.
             if !state.stream_owner_order.is_empty() {
-                sort_streams_by_owner(
-                    &mut filtered,
-                    &state.stream_owner_order,
-                    &state.stream_cached_owners,
-                    filter == 0,
-                );
+                sort_streams_by_owner(&mut filtered, &state.stream_owner_order);
             } else if filter == 0 {
                 sort_streams_by_addon(&mut filtered, &state.stream_addons);
             }
@@ -3678,20 +3673,12 @@ fn sort_streams_by_addon(rows: &mut [StreamUi], addon_order: &[String]) {
     });
 }
 
-fn sort_streams_by_owner(
-    rows: &mut [StreamUi],
-    owner_order: &[String],
-    cached_owners: &HashSet<String>,
-    prioritize_cached: bool,
-) {
+fn sort_streams_by_owner(rows: &mut [StreamUi], owner_order: &[String]) {
     rows.sort_by_key(|row| {
-        (
-            prioritize_cached && !cached_owners.contains(&row.owner_url),
-            owner_order
-                .iter()
-                .position(|owner| owner == &row.owner_url)
-                .unwrap_or(usize::MAX),
-        )
+        owner_order
+            .iter()
+            .position(|owner| owner == &row.owner_url)
+            .unwrap_or(usize::MAX)
     });
 }
 
@@ -4105,13 +4092,13 @@ mod tests {
                 .iter()
                 .map(|row| row.id.to_string())
                 .collect::<Vec<_>>(),
-            ["other", "a", "new", "b"],
-            "cached owners lead All independently of matching addon labels"
+            ["a", "new", "b", "other"],
+            "cached owners retain configured order even with matching addon labels"
         );
         assert_eq!(
             app.get_detail_kb_s(),
-            1,
-            "cache promotion preserves focused identity"
+            0,
+            "cache hits preserve focused identity without promoting an owner"
         );
         bridge.shared.lock().unwrap().stream_filter = 1;
         bridge.apply_stream_filter();

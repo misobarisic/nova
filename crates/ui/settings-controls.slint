@@ -90,6 +90,7 @@ export component PillButton inherits Rectangle {
 // buttons so both share the same vertical center in a row.
 export component ToggleSwitch inherits Rectangle {
     in-out property <bool> checked: false;
+    in property <color> active-thumb-color: Theme.current.toggle_knob_active;
     // 6-button nav highlight.
     in property <bool> enabled: true;
     in property <bool> focused: false;
@@ -122,7 +123,7 @@ export component ToggleSwitch inherits Rectangle {
             width: 18px;
             height: 18px;
             border-radius: 9px;
-            background: checked ? Theme.current.toggle_knob_active : Theme.current.toggle_knob;
+            background: checked ? root.active-thumb-color : Theme.current.toggle_knob;
             animate x { duration: Anim.hover_fast; }
         }
     }
@@ -916,6 +917,7 @@ export component NumericSetting inherits Rectangle {
 // The same 44px chevron target is used on pages opened from Settings and More.
 export component SettingsBackButton inherits Rectangle {
     in property <bool> focused: false;
+    in property <bool> reveal-on-focus: true;
     callback clicked();
     width: 44px;
     height: 44px;
@@ -939,7 +941,7 @@ export component SettingsBackButton inherits Rectangle {
     }
     property <bool> focus_visible: SettingsStyle.keyboard-mode && (root.focused || back_focus.has-focus);
     changed focus_visible => {
-        if (self.focus_visible) {
+        if (self.focus_visible && root.reveal-on-focus) {
             SettingsStyle.focus-y = root.absolute-position.y;
             SettingsStyle.focus-height = root.height;
             SettingsStyle.navigation-focus = false;

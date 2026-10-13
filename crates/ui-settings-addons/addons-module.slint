@@ -1,10 +1,12 @@
 import { SettingsBridge, SettingsContent, Theme, SettingsStyle } from "@NovaUiShared";
 
+import { LibraryFilterChip } from "../ui/filter-chip.slint";
+
 import { SearchField } from "../ui/searchfield.slint";
 
 import { KbMark } from "../ui/kbnav.slint";
 
-import { PillButton, AddonRowCard, Segmented, SectionHeader, SettingsCard } from "../ui/settings-controls.slint";
+import { PillButton, AddonRowCard, SectionHeader, SettingsCard } from "../ui/settings-controls.slint";
 
 // The shell owns scrolling and transitions. Report intrinsic layout sizes
 // only while this section is selected, so outgoing instances cannot resize it.
@@ -294,31 +296,9 @@ export component SettingsAddonsModule inherits Window {
                         }
                     }
                 }
-                SectionHeader { label: @tr("Installed sources"); }
-                SearchField {
-                    placeholder-text: @tr("Search installed addons…");
-                    text <=> SettingsBridge.addon_search_text;
-                    search-icon: true;
-                    focus_changed(focused) => { SettingsContent.input_focused = focused; }
-                    edited(t) => { SettingsBridge.addon_search_text = t; SettingsBridge.addon_filter_changed(); }
-                }
-                if !SettingsContent.narrow: Segmented {
-                    labels: [@tr("All"), @tr("Searchable catalogs"), @tr("Metadata"), @tr("Streams")];
-                    current_index: SettingsBridge.addon_capability_filter;
-                    picked(index) => { SettingsContent.focus_shell(); SettingsBridge.addon_capability_filter = index; SettingsBridge.addon_filter_changed(); }
-                }
-                if SettingsContent.narrow: VerticalLayout {
-                    spacing: 8px;
-                    Segmented {
-                        labels: [@tr("All"), @tr("Searchable catalogs")];
-                        current_index: SettingsBridge.addon_capability_filter < 2 ? SettingsBridge.addon_capability_filter : -1;
-                        picked(index) => { SettingsContent.focus_shell(); SettingsBridge.addon_capability_filter = index; SettingsBridge.addon_filter_changed(); }
-                    }
-                    Segmented {
-                        labels: [@tr("Metadata"), @tr("Streams")];
-                        current_index: SettingsBridge.addon_capability_filter >= 2 ? SettingsBridge.addon_capability_filter - 2 : -1;
-                        picked(index) => { SettingsContent.focus_shell(); SettingsBridge.addon_capability_filter = index + 2; SettingsBridge.addon_filter_changed(); }
-                    }
+                installed_controls_origin := Rectangle {
+                    height: installed_controls_layout.preferred-height;
+                    vertical-stretch: 0;
                 }
                 Rectangle {
                     background: Theme.current.card;
@@ -388,4 +368,95 @@ export component SettingsAddonsModule inherits Window {
 
         }
     }
+    // One control subtree retains its IME/focus state while its placeholder
+    // continues to reserve the original section height in the document.
+    installed_controls := Rectangle {
+        property <length> target_top: SettingsContent.detail_sticky_top + SettingsContent.detail_header_height;
+        property <bool> pinned: installed_controls_origin.absolute-position.y <= self.target_top;
+        property <length> pinned_height: self.pinned ? self.height + 8px : 0px;
+        changed pinned_height => { if SettingsBridge.sel == 0 { SettingsContent.detail_pinned_controls_height = self.pinned_height; } }
+        init => { if SettingsBridge.sel == 0 { SettingsContent.detail_pinned_controls_height = self.pinned_height; } }
+        x: 0px;
+        y: installed_controls_origin.y + Math.max(0px, self.target_top - installed_controls_origin.absolute-position.y);
+        width: 100%;
+        height: installed_controls_layout.preferred-height;
+        if self.pinned: Rectangle {
+            x: -SettingsContent.detail_cover_left;
+            width: parent.width + SettingsContent.detail_cover_left + SettingsContent.detail_cover_right;
+            height: parent.height;
+            background: Theme.current.artwork_canvas;
+            TouchArea { width: 100%; height: 100%; clicked => {} }
+        }
+        installed_controls_layout := VerticalLayout {
+            spacing: 18px;
+                SectionHeader { label: @tr("Installed sources"); }
+                installed_addon_search := SearchField {
+                    placeholder-text: @tr("Search installed addons…");
+                    text <=> SettingsBridge.addon_search_text;
+                    search-icon: true;
+                    focus_changed(focused) => { SettingsContent.input_focused = focused; }
+                    edited(t) => { SettingsBridge.addon_search_text = t; SettingsBridge.addon_filter_changed(); }
+                }
+                capability_rail := Flickable {
+                    height: 40px;
+                    vertical-stretch: 0;
+                    content-width: capability_chips.preferred-width;
+                    content-height: self.height;
+                    interactive: true;
+                    mouse-drag-pan-enabled: true;
+                    property <int> focused_index: -1;
+                    property <length> selected_left: 0px;
+                    property <length> selected_width: 0px;
+                    function reveal(left: length, w: length) {
+                        self.selected_left = left; self.selected_width = w;
+                        let min_x = Math.min(0px, self.width - self.content-width);
+                        self.content-x = Math.max(min_x, Math.min(0px, self.content-x));
+                        if left < -self.content-x { self.content-x = -left; }
+                        else if left + w > -self.content-x + self.width { self.content-x = Math.max(min_x, self.width - left - w); }
+                    }
+                    function pick(index: int) {
+                        SettingsBridge.addon_capability_filter = index;
+                        SettingsBridge.addon_filter_changed();
+                    }
+                    changed width => { self.reveal(self.selected_left, self.selected_width); }
+                    changed content-width => { self.reveal(self.selected_left, self.selected_width); }
+                    capability_chips := HorizontalLayout {
+                        x: 0px; y: 0px;
+                        width: self.preferred-width;
+                        height: 40px;
+                        spacing: 8px;
+                        alignment: start;
+                        for caption[i] in [@tr("All"), @tr("Searchable catalogs"), @tr("Metadata"), @tr("Streams")]: LibraryFilterChip {
+                            label: caption;
+                            selected: SettingsBridge.addon_capability_filter == i;
+                            touch_feedback: SettingsBridge.is_android;
+                            keyboard-focusable: true;
+                            arrow-navigation: true;
+                            focus-when-selected: capability_rail.focused_index >= 0 && SettingsStyle.keyboard-mode;
+                            picked => { capability_rail.pick(i); }
+                            navigate(direction) => {
+                                SettingsStyle.keyboard-mode = true;
+                                capability_rail.pick(Math.mod(i + direction + 4, 4));
+                            }
+                            focus_changed(focused) => {
+                                if focused {
+                                    capability_rail.focused_index = i;
+                                    if SettingsStyle.keyboard-mode && !installed_controls.pinned { SettingsContent.reveal_detail_control(capability_rail.absolute-position.y, capability_rail.height); }
+                                } else if capability_rail.focused_index == i { capability_rail.focused_index = -1; }
+                            }
+                            reveal(left, w) => { capability_rail.reveal(left, w); }
+                        }
+                    }
+                }
+
+        }
+        if self.pinned: Rectangle {
+            x: -SettingsContent.detail_cover_left; y: parent.height;
+            width: parent.width + SettingsContent.detail_cover_left + SettingsContent.detail_cover_right;
+            height: 8px;
+            background: @linear-gradient(180deg, Theme.current.artwork_canvas, transparent);
+            TouchArea { width: 100%; height: 100%; clicked => {} }
+        }
+    }
+
 }

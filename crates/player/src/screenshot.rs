@@ -1,4 +1,7 @@
 //! Frame screenshots use mpv's subtitle composition, never the shared Slint framebuffer.
+//! Direct Android MediaCodec frames use a private GPU target on the render thread.
+#[cfg(target_os = "android")]
+use slint::ComponentHandle;
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -149,6 +152,12 @@ impl CaptureClient {
     }
 }
 
+enum CaptureJob {
+    Mpv(CaptureClient),
+    #[cfg(target_os = "android")]
+    Gpu(crate::gpu_screenshot::Pending),
+}
+
 impl Player {
     /// Capture on a worker with the token read on the UI thread when the button was pressed.
     pub fn screenshot_session(&self) -> u64 {
@@ -164,7 +173,7 @@ impl Player {
         }
         let temporary = Temporary::new(&temporary_base()?)?;
         let image = temporary.0.join("frame.png");
-        let client = {
+        let job = {
             // Rendering consumes pending before taking mpv; retain that lock order.
             let pending = self
                 .state
@@ -190,13 +199,59 @@ impl Player {
             }
             // A separate event queue avoids stealing playback events. Dispatch is serialized
             // with replacement/close, but image encoding and disk IO never hold the mpv lock.
-            CaptureClient::enqueue(mpv, &image)?
+            #[cfg(target_os = "android")]
+            if mpv
+                .get_property::<String>("hwdec-current")
+                .unwrap_or_default()
+                == crate::HWDEC_PREFERRED
+            {
+                let (width, height) = crate::gpu_screenshot::dimensions(
+                    mpv.get_property("video-out-params/dw").unwrap_or(0),
+                    mpv.get_property("video-out-params/dh").unwrap_or(0),
+                    mpv.get_property("video-out-params/rotate").unwrap_or(0),
+                )?;
+                let (request, capture) =
+                    crate::gpu_screenshot::Request::new(expected_session, width, height);
+                let mut queued = self
+                    .state
+                    .gpu_screenshot
+                    .lock()
+                    .map_err(|_| ScreenshotError::Unavailable)?;
+                if queued.as_ref().is_some_and(|request| !request.cancelled()) {
+                    return Err(ScreenshotError::Unavailable);
+                }
+                *queued = Some(request);
+                CaptureJob::Gpu(capture)
+            } else {
+                CaptureJob::Mpv(CaptureClient::enqueue(mpv, &image)?)
+            }
+            #[cfg(not(target_os = "android"))]
+            CaptureJob::Mpv(CaptureClient::enqueue(mpv, &image)?)
         };
-        let result = client.wait(|| self.screenshot_session() != expected_session);
-        // Destroy before removing the staging directory, including on timeout: cancellation
-        // and client destruction must finish before an encoder can recreate a partial file.
-        drop(client);
-        result?;
+        match job {
+            CaptureJob::Mpv(client) => {
+                let result = client.wait(|| self.screenshot_session() != expected_session);
+                // Finish cancellation before a staging directory can be removed.
+                drop(client);
+                result?;
+            }
+            #[cfg(target_os = "android")]
+            CaptureJob::Gpu(capture) => {
+                // Paused playback has no new video update to wake the renderer.
+                let app = self.state.app.clone();
+                slint::invoke_from_event_loop(move || {
+                    if let Some(app) = app.upgrade() {
+                        app.window().request_redraw();
+                    }
+                })
+                .map_err(|_| ScreenshotError::Unavailable)?;
+                let frame = capture.wait(|| self.screenshot_session() != expected_session)?;
+                if self.screenshot_session() != expected_session {
+                    return Err(ScreenshotError::StaleSession);
+                }
+                frame.write_png(&image)?;
+            }
+        }
         if self.screenshot_session() != expected_session {
             return Err(ScreenshotError::StaleSession);
         }

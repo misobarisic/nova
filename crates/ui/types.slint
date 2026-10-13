@@ -302,7 +302,7 @@ export struct SettingsDestination { id: int, stable-id: string, group: int, titl
 
 // Declarative provider fields; values never become part of addon URLs.
 export struct PluginSettingRow {
-    key: string, label: string, kind: string, value: string, checked: bool,
+    key: string, label: string, kind: string, value: string, summary: string, checked: bool,
     options: [string], labels: [string], selected: int,
     collection: string, collection-label: string, collection-add-label: string,
     item: string, item-role: string, item-controller: string, configured: bool, has-editor: bool,

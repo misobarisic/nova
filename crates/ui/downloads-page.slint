@@ -1,21 +1,35 @@
-import { Theme, NavMetrics, DownloadEpisode, DownloadGroup } from "@NovaUiShared";
+import { Theme, ControlInput, NavMetrics, DownloadEpisode, DownloadGroup } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 import { SearchField } from "searchfield.slint";
 import { SideNav } from "sidenav.slint";
-import { SettingsBackButton } from "settings-controls.slint";
+import { LibraryFilterChip } from "filter-chip.slint";
+import { IcChevronDown, IcChevronUp } from "icons.slint";
+import { PageHeader } from "page-header.slint";
 
 
 
 component DownloadButton inherits Rectangle {
     in property <string> label;
     in property <bool> selected: false;
+    in property <bool> chevron: false;
+    in property <bool> expanded: false;
     callback picked();
     width: Math.max(44px, label-text.preferred-width + 20px); height: 44px;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     background: root.selected ? Theme.current.accent : (touch.has-hover ? Theme.current.control_hover : Theme.current.control);
     accessible-role: button; accessible-label: root.label;
-    label-text := Text { text: root.label; color: root.selected ? Theme.current.on_accent : Theme.current.text_bright; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+    label-text := Text { visible: !root.chevron; text: root.label; color: root.selected ? Theme.current.on_accent : Theme.current.text_bright; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+    if root.chevron && !root.expanded: IcChevronDown {
+        width: 24px; height: 24px;
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        fill: Theme.current.text_bright;
+    }
+    if root.chevron && root.expanded: IcChevronUp {
+        width: 24px; height: 24px;
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        fill: Theme.current.text_bright;
+    }
     border-width: key-focus.has-focus ? 2px : 0px; border-color: Theme.current.focus_ring;
     key-focus := FocusScope { key-pressed(e) => { if (e.text == Key.Return || e.text == " ") { if (!e.repeat) { root.picked(); } accept } else { reject } } }
     touch := TouchArea { mouse-cursor: pointer; clicked => { key-focus.focus(); root.picked(); } }
@@ -73,7 +87,7 @@ component DownloadSeriesCard inherits Rectangle {
                     Text { vertical-stretch: 0; text: root.group.title; color: Theme.current.text_bright; font-size: 17px; font-weight: 700; overflow: elide; }
                     Text { vertical-stretch: 0; text: root.group.subtitle; color: Theme.current.text_secondary; font-size: 12px; overflow: elide; }
                 }
-                DownloadButton { width: 44px; label: root.group.collapsed ? "⌄" : "⌃"; accessible-label: root.group.collapsed ? @tr("Expand series") : @tr("Collapse series"); picked => { root.toggled(root.group.id); } }
+                DownloadButton { width: 44px; chevron: true; expanded: !root.group.collapsed; accessible-label: root.group.collapsed ? @tr("Expand series") : @tr("Collapse series"); picked => { root.toggled(root.group.id); } }
             }
         }
         if !root.group.collapsed: VerticalLayout { spacing: 0px;
@@ -103,13 +117,27 @@ export component DownloadsPage inherits Rectangle {
     // Derive layout widths directly from the hosting viewport. Using a
     // repeated row's parent.width here would feed its intrinsic width back
     // into ScrollView's minimum width calculation.
-    private property <length> available-width: (root.external_navigation ? root.width : root.nav-viewport-width)
-        - root.safe-left - (root.narrow || root.external_navigation ? 0px : NavMetrics.width-for(root.nav-viewport-width))
-        - (root.narrow ? 24px : 48px) - root.safe-right;
+    private property <length> content_x: root.narrow || root.external_navigation ? 0px : NavMetrics.width-for(root.nav-viewport-width);
+    private property <length> available-width: root.width - root.content_x - root.safe-left - root.safe-right - 36px;
+    private property <bool> scrolling_landscape: ControlInput.touch-feedback
+        && root.width - root.safe-left - root.safe-right > root.height - root.safe-top - root.safe-bottom
+        && root.height - root.safe-top - root.safe-bottom < 600px;
+    changed scrolling_landscape => { groups-scroll.content-y = 0px; }
     private property <bool> two-columns: root.available-width > 850px;
     private property <int> columns: root.two-columns ? 2 : 1;
     private property <int> last-back;
     private property <[string]> filter-labels: [@tr("All"), @tr("Unwatched"), @tr("In progress"), @tr("Watched")];
+    private property <length> selected_filter_left;
+    private property <length> selected_filter_width;
+    function reveal_filter(left: length, w: length) {
+        root.selected_filter_left = left; root.selected_filter_width = w;
+        let min_x = Math.min(0px, filter_rail.width - filter_rail.content-width);
+        filter_rail.content-x = Math.max(min_x, Math.min(0px, filter_rail.content-x));
+        if (left < -filter_rail.content-x) { filter_rail.content-x = -left; }
+        else if (left + w > -filter_rail.content-x + filter_rail.width) {
+            filter_rail.content-x = Math.max(min_x, filter_rail.width - left - w);
+        }
+    }
     in property <bool> artwork-active: true;
     callback artwork-visible(string, bool);
     callback artwork-active-changed(bool);
@@ -124,56 +152,98 @@ export component DownloadsPage inherits Rectangle {
         viewport-width: root.nav-viewport-width; active: 5; safe-top: root.safe-top; safe-left: root.safe-left; safe-bottom: root.safe-bottom; kb_active <=> root.kb_active;
         home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } more_picked => { root.more_picked(); }
     }
-    content := VerticalLayout {
-        x: root.narrow || root.external_navigation ? 0px : NavMetrics.width-for(root.nav-viewport-width) + root.safe-left;
-        width: root.width - self.x; height: 100%;
-        padding-top: root.safe-top; spacing: 0px;
-        // Keep the phone's Back route reachable while the downloads scroll.
-        if root.narrow: HorizontalLayout {
-            height: 56px; vertical-stretch: 0; spacing: 12px;
-            padding-top: 12px; padding-left: 12px + root.safe-left; padding-right: 12px + root.safe-right;
-            SettingsBackButton { clicked => { root.back(); } }
-            Text { min-width: 0; text: @tr("Downloads"); color: Theme.current.text_bright; font-size: 28px; font-weight: 700; vertical-alignment: center; overflow: elide; }
+    // Portrait and desktop retain a pinned heading. Touch landscape expands
+    // this same viewport so the measured heading slot scrolls with the cards.
+    groups-scroll := ScrollView {
+        x: root.content_x;
+        y: root.scrolling_landscape ? 0px : 18px + root.safe-top + download_header.height;
+        width: root.width - self.x; height: root.height - self.y;
+        content-width: self.visible-width; mouse-drag-pan-enabled: true;
+        groups_body := VerticalLayout {
+            width: 100%; alignment: start;
+            padding: 18px; padding-left: 18px + root.safe-left;
+            padding-right: 18px + root.safe-right;
+            padding-bottom: 18px + root.safe-bottom;
+            spacing: 14px;
+            Rectangle {
+                visible: root.scrolling_landscape;
+                height: root.scrolling_landscape ? download_header.height + root.safe-top : 0px;
+                vertical-stretch: 0;
+            }
+            Text { vertical-stretch: 0; text: @tr("On this device"); color: Theme.current.text_muted; font-size: 12px; }
+            controls_slot := Rectangle { height: download_controls.preferred-height; vertical-stretch: 0; }
+            DownloadButton { label: root.sort_recent ? @tr("Newest first") : @tr("Series & episode"); picked => { root.sort_changed(!root.sort_recent); } }
+            if root.groups.length == 0: Text { vertical-stretch: 0;
+                text: root.counts[0] == 0 ? @tr("Your completed downloads will appear here.") : @tr("No downloads match your search or filter.");
+                color: Theme.current.text_muted; wrap: word-wrap; font-size: 15px;
+            }
+            for row in Math.ceil(root.groups.length / root.columns): HorizontalLayout { spacing: 12px; vertical-stretch: 0;
+                DownloadSeriesCard { artwork-active: root.artwork-active; viewport-top: groups-scroll.absolute-position.y; viewport-height: groups-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * root.columns]; narrow: root.narrow; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } }
+                if root.two-columns && row * 2 + 1 < root.groups.length: DownloadSeriesCard { artwork-active: root.artwork-active; viewport-top: groups-scroll.absolute-position.y; viewport-height: groups-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * 2 + 1]; narrow: false; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } }
+                if root.two-columns && row * 2 + 1 >= root.groups.length: Rectangle { width: (root.available-width - 12px) / 2; }
+            }
+            if root.transfers.length > 0: Text { vertical-stretch: 0; text: @tr("Transfers"); color: Theme.current.text_bright; font-size: 20px; font-weight: 600; }
+            for transfer in root.transfers: DownloadEpisodeRow { episode: transfer; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } }
         }
-        groups-scroll := ScrollView { vertical-stretch: 1; content-width: self.visible-width; mouse-drag-pan-enabled: true;
-            VerticalLayout { alignment: start; padding: root.narrow ? 12px : 24px; padding-left: (root.narrow ? 12px + root.safe-left : 24px); padding-right: (root.narrow ? 12px : 24px) + root.safe-right; spacing: 14px;
-                if !root.narrow: Text { vertical-stretch: 0; text: @tr("Downloads"); color: Theme.current.text_bright; font-size: 28px; font-weight: 700; }
-                Text { vertical-stretch: 0; text: root.summary; color: Theme.current.text_secondary; font-size: 12px; wrap: word-wrap; }
-                Text { vertical-stretch: 0; text: @tr("On this device"); color: Theme.current.text_muted; font-size: 12px; }
-                SearchField { text <=> root.query; placeholder-text: @tr("Search downloaded episodes"); search-icon: true; roomy: true; edited(value) => { root.query_changed(value); } }
-                // Keep every filter visible on phones instead of placing a
-                // partially clipped chip at the edge of a horizontal viewport.
-                if root.narrow: VerticalLayout { alignment: start; vertical-stretch: 0; spacing: 5px;
-                    for row in 2: HorizontalLayout { spacing: 5px; height: 44px;
-                        for column in 2: DownloadButton {
-                            width: (root.available-width - 5px) / 2;
-                            label: root.filter-labels[row * 2 + column] + " " + root.counts[row * 2 + column];
-                            selected: root.filter == row * 2 + column;
-                            picked => { root.filter_changed(row * 2 + column); }
+    }
+    download_header := PageHeader {
+        x: root.content_x + 18px + root.safe-left;
+        y: 18px + root.safe-top + (root.scrolling_landscape ? groups-scroll.content-y : 0px);
+        width: root.available-width;
+        title: @tr("Downloads"); subtitle: root.summary; narrow: root.narrow;
+        back => { root.back(); }
+    }
+    // Independent controls preserve native text focus and horizontal chip
+    // gestures during rotation. The full-width canvas also shields the safe
+    // top and gutters from cards and their actions once the panel sticks.
+    controls_clip := Rectangle {
+        x: root.content_x; y: groups-scroll.y;
+        width: groups-scroll.width; height: groups-scroll.height; clip: true;
+        sticky_controls := Rectangle {
+            x: 0px;
+            y: root.scrolling_landscape
+                ? Math.max(0px, controls_slot.absolute-position.y - controls_clip.absolute-position.y - root.safe-top)
+                : controls_slot.absolute-position.y - controls_clip.absolute-position.y;
+            width: controls_clip.width;
+            height: download_controls.preferred-height + (root.scrolling_landscape ? root.safe-top : 0px);
+            background: root.scrolling_landscape ? Theme.current.artwork_canvas : transparent;
+            if root.scrolling_landscape: TouchArea { width: 100%; height: 100%; }
+            download_controls := VerticalLayout {
+                x: 18px + root.safe-left; y: root.scrolling_landscape ? root.safe-top : 0px;
+                width: root.available-width; height: self.preferred-height; min-width: 0px;
+                spacing: 14px;
+                download_search := SearchField {
+                    height: 44px; vertical-stretch: 0;
+                    text <=> root.query; placeholder-text: @tr("Search downloaded episodes");
+                    search-icon: true; roomy: true;
+                    edited(value) => { root.query_changed(value); }
+                }
+                filter_rail := Flickable {
+                    height: 44px; vertical-stretch: 0; min-width: 0px;
+                    content-width: filter_chips.preferred-width;
+                    content-height: self.height;
+                    changed width => { root.reveal_filter(root.selected_filter_left, root.selected_filter_width); }
+                    changed content-width => { root.reveal_filter(root.selected_filter_left, root.selected_filter_width); }
+                    filter_chips := HorizontalLayout {
+                        x: 0px; y: 0px; width: self.preferred-width;
+                        spacing: 8px; alignment: start;
+                        for label[index] in root.filter-labels: LibraryFilterChip {
+                            label: label + " " + root.counts[index]; selected: root.filter == index;
+                            touch_feedback: ControlInput.touch-feedback;
+                            keyboard-focusable: true;
+                            picked => { root.filter_changed(index); }
+                            reveal(left, w) => { root.reveal_filter(left, w); }
                         }
                     }
                 }
-                if !root.narrow: HorizontalLayout { spacing: 5px; alignment: start; height: 44px;
-                    for label[index] in root.filter-labels: DownloadButton {
-                        label: label + " " + root.counts[index]; selected: root.filter == index;
-                        picked => { root.filter_changed(index); }
-                    }
-                }
-                DownloadButton { label: root.sort_recent ? @tr("Newest first") : @tr("Series & episode"); picked => { root.sort_changed(!root.sort_recent); } }
-                if root.groups.length == 0: Text { vertical-stretch: 0;
-                    text: root.counts[0] == 0 ? @tr("Your completed downloads will appear here.") : @tr("No downloads match your search or filter.");
-                    color: Theme.current.text_muted; wrap: word-wrap; font-size: 15px;
-                }
-                for row in Math.ceil(root.groups.length / root.columns): HorizontalLayout { spacing: 12px; vertical-stretch: 0;
-                    DownloadSeriesCard { artwork-active: root.artwork-active; viewport-top: groups-scroll.absolute-position.y; viewport-height: groups-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * root.columns]; narrow: root.narrow; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } }
-                    if root.two-columns && row * 2 + 1 < root.groups.length: DownloadSeriesCard { artwork-active: root.artwork-active; viewport-top: groups-scroll.absolute-position.y; viewport-height: groups-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * 2 + 1]; narrow: false; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } }
-                    if root.two-columns && row * 2 + 1 >= root.groups.length: Rectangle { width: (root.available-width - 12px) / 2; }
-                }
-                if root.transfers.length > 0: Text { vertical-stretch: 0; text: @tr("Transfers"); color: Theme.current.text_bright; font-size: 20px; font-weight: 600; }
-                for transfer in root.transfers: DownloadEpisodeRow { episode: transfer; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } }
             }
         }
-
+        controls_fade := Rectangle {
+            visible: root.scrolling_landscape && sticky_controls.y <= 0px;
+            x: 0px; y: sticky_controls.y + sticky_controls.height;
+            width: controls_clip.width; height: 8px;
+            background: @linear-gradient(180deg, Theme.current.artwork_canvas, transparent);
+        }
     }
     }
     if !root.active: TouchArea {

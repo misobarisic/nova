@@ -133,6 +133,11 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     switch(&app, 0);
     settle(&app);
     open_more(&app);
+    assert_eq!(
+        ElementHandle::find_by_accessible_label(&app, "Back").count(),
+        1,
+        "phone More retains its header Back arrow"
+    );
     // A held Android Back cannot dismiss More and then background Home.
     for _ in 0..2 {
         app.window()
@@ -220,6 +225,11 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     );
     assert_no_bar(&app);
     assert_eq!(
+        ElementHandle::find_by_accessible_label(&app, "Back").count(),
+        0,
+        "desktop More is a sidebar destination without a header Back arrow"
+    );
+    assert_eq!(
         ElementHandle::find_by_element_type_name(&app, "SettingsLink").count(),
         2,
         "wide More contains only Settings and About; shortcuts live in the rail"
@@ -246,6 +256,11 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     );
     click(&app, button(&app, "Settings"));
     assert!(app.get_show_settings() && !app.get_more_open());
+    assert_eq!(
+        ElementHandle::find_by_accessible_label(&app, "Back").count(),
+        1,
+        "Settings remains a desktop submenu of More"
+    );
     key(&app, slint::platform::Key::Back);
     assert!(
         app.get_more_open(),
@@ -253,6 +268,11 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     );
     click(&app, button(&app, "About"));
     assert!(app.get_show_about() && !app.get_more_open());
+    assert_eq!(
+        ElementHandle::find_by_accessible_label(&app, "Back").count(),
+        1,
+        "About remains a desktop submenu of More"
+    );
     key(&app, slint::platform::Key::Back);
     assert!(app.get_more_open(), "About Back returns to desktop More");
     assert_eq!(

@@ -11,43 +11,12 @@ import { IcMoreHoriz, IcSearch, IcClose } from "icons.slint";
 
 import { SearchField } from "searchfield.slint";
 
-export component LibraryFilterChip inherits Rectangle {
-    in property <string> label;
-    in property <bool> selected;
-    in property <bool> touch_feedback: false;
-    callback picked();
-    callback reveal(length, length);
-    changed selected => { if (root.selected) { root.reveal(root.x, root.width); } }
-    changed x => { if (root.selected) { root.reveal(root.x, root.width); } }
-    changed width => { if (root.selected) { root.reveal(root.x, root.width); } }
-    height: 40px;
-    width: chip_text.preferred-width + 28px;
-    border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
-    border-width: 1px;
-    border-color: root.selected ? Theme.current.accent : Theme.current.border_strong;
-    // Android keeps the touch pointer over the last tapped item after Up.
-    // Pressed clears on release/cancel; desktop still has real hover.
-    background: root.selected ? Theme.current.primary_button : ((root.touch_feedback ? chip_touch.pressed : chip_touch.has-hover) ? Theme.current.control_hover : Theme.current.hero_control);
-    accessible-role: button;
-    accessible-label: root.label;
-    chip_text := Text {
-        text: root.label;
-        color: root.selected ? Theme.current.on_accent : Theme.current.text_secondary;
-        font-size: 13px;
-        font-weight: root.selected ? 600 : 400;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-    chip_touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.picked(); }
-    }
-}
-
+import { LibraryFilterChip } from "filter-chip.slint";
+export { LibraryFilterChip }
 
 export component LibraryPage {
     // Called after publication only while AppWindow retains baseline focus.
-    public function focus_shell() { nav_scope.focus(); }
+    public function focus_shell() { search_focus_t.stop(); nav_scope.focus(); }
 
     // Custom components placed in a Window are sized by their preferred size;
     // make this page fill the window (its parent).
@@ -73,8 +42,7 @@ export component LibraryPage {
     in-out property <bool> search_open: false;
     callback view_changed();
     changed search_open => {
-        if (root.search_open) { search_focus_t.start(); }
-        else { search_focus_t.stop(); }
+        if (!root.search_open) { search_focus_t.stop(); }
     }
     search_focus_t := Timer {
         interval: 80ms;
@@ -874,7 +842,6 @@ export component LibraryPage {
                                     placeholder-text: @tr("Search library");
                                     search-icon: true;
                                     roomy: true;
-                                    init => { if (root.search_open) { search_focus_t.start(); } }
                                     edited(_) => { root.view_changed(); }
                                 }
                             }
@@ -989,7 +956,10 @@ export component LibraryPage {
                                             mouse-cursor: pointer;
                                             clicked => {
                                                 root.search_open = !root.search_open;
-                                                if (!root.search_open) {
+                                                // Restoring search on Detail return keeps the keyboard closed.
+                                                // Only an explicit open requests editor focus.
+                                                if (root.search_open) { search_focus_t.start(); }
+                                                else {
                                                     root.query = "";
                                                     root.view_changed();
                                                     nav_scope.focus();

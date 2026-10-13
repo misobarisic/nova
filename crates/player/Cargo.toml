@@ -24,6 +24,7 @@ glow = "0.17"
 
 [dev-dependencies]
 i-slint-backend-testing = { workspace = true }
+png = "0.18"
 # Exercise the shared-context guard with a real headless OpenGL context.
 glow = "0.17"
 
@@ -31,6 +32,7 @@ glow = "0.17"
 libloading = "0.8"
 
 [target.'cfg(target_os = "android")'.dependencies]
+png = "0.18"
 # GL state guard around mpv's render callback (same version Slint uses).
 glow = "0.17"
 # JNI for the external-player fallback.

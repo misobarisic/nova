@@ -1,6 +1,6 @@
-//! Player header uses bounded title artwork and screenshot taps respect OSD state.
+//! Player header uses text titles and screenshot taps respect OSD state.
 use i_slint_backend_testing::{ElementHandle, ElementQuery};
-use slint::{ComponentHandle, Image, LogicalPosition, Rgba8Pixel, SharedPixelBuffer};
+use slint::{ComponentHandle, LogicalPosition};
 use std::{cell::Cell, rc::Rc, time::Duration};
 
 fn settle(app: &nova::AppWindow) {
@@ -39,7 +39,7 @@ fn click(app: &nova::AppWindow, element: &ElementHandle) {
 }
 
 #[test]
-fn title_artwork_fits_and_screenshot_is_guarded() {
+fn text_titles_fit_and_screenshot_is_guarded() {
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = nova::AppWindow::new().unwrap();
     app.global::<nova::Anim>().set_enabled(false);
@@ -48,8 +48,6 @@ fn title_artwork_fits_and_screenshot_is_guarded() {
     app.set_player_episode_title("S1E1: A long episode title".into());
     app.set_player_show_title("The show's title".into());
     app.set_player_title("Removed bottom title".into());
-    let logo = Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::new(600, 120));
-    app.set_player_show_logo(logo.clone());
     app.window().show().unwrap();
     let captures = Rc::new(Cell::new(0));
     let recorded = captures.clone();
@@ -63,22 +61,53 @@ fn title_artwork_fits_and_screenshot_is_guarded() {
         for android in [true, false] {
             app.set_is_android(android);
             settle(&app);
+            let scrim = element(&app, "PlayerOverlay::osd_scrim");
+            assert_eq!(scrim.absolute_position(), LogicalPosition::new(0.0, 0.0));
+            assert!((scrim.size().width - width as f32).abs() < 0.5);
+            assert!((scrim.size().height - height as f32).abs() < 0.5);
+            app.set_playback_started(false);
+            app.set_osd_visible(false);
+            app.set_player_status("Connecting…".into());
+            settle(&app);
+            let loading_opacity = element(&app, "PlayerOverlay::osd_scrim").computed_opacity();
+            assert!(
+                (loading_opacity - 0.35).abs() < 0.001,
+                "loading artwork uses the shared dim layer"
+            );
+            app.set_playback_started(true);
+            app.set_is_paused(true);
+            app.set_osd_visible(true);
+            settle(&app);
+            assert_eq!(
+                element(&app, "PlayerOverlay::osd_scrim").computed_opacity(),
+                loading_opacity
+            );
+            app.set_is_paused(false);
+            app.set_osd_visible(false);
+            settle(&app);
+            assert_eq!(
+                element(&app, "PlayerOverlay::osd_scrim").computed_opacity(),
+                0.0
+            );
+            app.set_playback_started(false);
+            app.set_osd_visible(true);
+            app.set_player_status("".into());
+            settle(&app);
             let heading = element(&app, "PlayerOverlay::episode_heading");
             let camera = element(&app, "PlayerOverlay::screenshot_button");
-            let artwork = element(&app, "TitleArtwork::title_logo");
+            let show_title = element(&app, "PlayerOverlay::show_heading");
             assert!(heading.absolute_position().x >= 68.0);
             assert!(
                 heading.absolute_position().x + heading.size().width
                     <= camera.absolute_position().x - 7.5
             );
             assert!(
-                artwork.absolute_position().y
+                show_title.absolute_position().y
                     >= heading.absolute_position().y + heading.size().height
             );
-            assert!(artwork.size().height <= 64.1);
-            assert!((artwork.size().width / artwork.size().height - 5.0).abs() < 0.1);
+            assert!(show_title.size().height > 0.0 && show_title.size().height < 40.0);
             assert!(
-                artwork.absolute_position().x + artwork.size().width
+                show_title.absolute_position().x + show_title.size().width
                     <= camera.absolute_position().x
             );
             assert!(
@@ -86,22 +115,26 @@ fn title_artwork_fits_and_screenshot_is_guarded() {
                     .next()
                     .is_none()
             );
-            app.set_player_show_logo(Image::default());
-            settle(&app);
-            assert!(
-                ElementHandle::find_by_element_id(&app, "TitleArtwork::title_logo")
-                    .next()
-                    .is_none()
+            assert_eq!(
+                ElementHandle::find_by_element_type_name(&app, "TitleArtwork").count(),
+                0,
+                "the player uses text regardless of title artwork availability"
             );
-            assert!(element(&app, "TitleArtwork::title_text").size().height > 0.0);
-            app.set_player_show_logo(logo.clone());
         }
     }
 
-    // Screenshot notices and hold feedback must occupy separate rows, including
-    // standalone playback without a title header.
+    // Feedback stays at the viewport's safe top, independent of header size
+    // and screenshot notices. Exercise asymmetric landscape cutout insets.
     app.set_playback_started(true);
     app.set_duration(600.0);
+    app.set_is_android(true);
+    let brightness_steps = Rc::new(Cell::new(0));
+    let recorded = brightness_steps.clone();
+    let weak = app.as_weak();
+    app.on_android_brightness_step(move |_| {
+        recorded.set(recorded.get() + 1);
+        weak.upgrade().unwrap().set_player_brightness(0.6);
+    });
     let previews = Rc::new(Cell::new(0));
     let recorded = previews.clone();
     app.on_playback_speed_preview(move |speed| {
@@ -112,9 +145,12 @@ fn title_artwork_fits_and_screenshot_is_guarded() {
     for (width, height) in [(320, 568), (800, 360)] {
         app.window()
             .set_size(slint::PhysicalSize::new(width, height));
+        let bridge = app.global::<nova::PlayerOsdBridge>();
+        bridge.set_safe_top(20.0);
+        bridge.set_safe_left(36.0);
+        bridge.set_safe_right(4.0);
         for title in ["The show's title", ""] {
             app.set_player_show_title(title.into());
-            app.set_player_show_logo(Image::default());
             app.set_player_episode_title(
                 if title.is_empty() {
                     ""
@@ -125,7 +161,7 @@ fn title_artwork_fits_and_screenshot_is_guarded() {
             );
             app.set_screenshot_notice("Screenshot saved: Pictures/Nova/a-long-filename.png".into());
             settle(&app);
-            let position = LogicalPosition::new(width as f32 / 2.0, height as f32 / 2.0);
+            let position = LogicalPosition::new(width as f32 / 2.0, height as f32 / 3.0);
             let before = previews.get();
             app.window()
                 .dispatch_event(slint::platform::WindowEvent::PointerPressed {
@@ -138,9 +174,16 @@ fn title_artwork_fits_and_screenshot_is_guarded() {
             assert_eq!(previews.get(), before + 1, "hold must show live feedback");
             let notice = element(&app, "PlayerOverlay::screenshot_message");
             let feedback = element(&app, "PlayerOverlay::flash_pill");
+            assert!((feedback.absolute_position().y - 36.0).abs() < 0.5);
             assert!(
-                feedback.absolute_position().y
-                    >= notice.absolute_position().y + notice.size().height + 8.0,
+                (feedback.absolute_position().x + feedback.size().width / 2.0
+                    - (width as f32 / 2.0 + 16.0))
+                    .abs()
+                    < 0.5
+            );
+            assert!(
+                notice.absolute_position().y
+                    >= feedback.absolute_position().y + feedback.size().height + 8.0,
                 "screenshot status must not collide with playback feedback: viewport={width}x{height}, title={title:?}, visible={}, notice={:?}/{:?}, feedback={:?}/{:?}",
                 app.get_osd_visible(),
                 notice.absolute_position(),
@@ -153,8 +196,35 @@ fn title_artwork_fits_and_screenshot_is_guarded() {
                     position,
                     button: slint::platform::PointerEventButton::Left,
                 });
+            let before = brightness_steps.get();
+            let start = LogicalPosition::new(width as f32 / 4.0, height as f32 / 3.0);
+            let end = LogicalPosition::new(start.x, start.y + 48.0);
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                    position: start,
+                    button: slint::platform::PointerEventButton::Left,
+                });
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: end });
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                    position: end,
+                    button: slint::platform::PointerEventButton::Left,
+                });
+            settle(&app);
+            assert_eq!(brightness_steps.get(), before + 1);
+            let brightness = element(&app, "PlayerOverlay::flash_pill");
+            assert!((brightness.absolute_position().y - 36.0).abs() < 0.5);
+            assert!(
+                ElementHandle::find_by_accessible_label(&app, "60%")
+                    .next()
+                    .is_some()
+            );
         }
     }
+    app.global::<nova::PlayerOsdBridge>().set_safe_top(0.0);
+    app.global::<nova::PlayerOsdBridge>().set_safe_left(0.0);
+    app.global::<nova::PlayerOsdBridge>().set_safe_right(0.0);
     app.set_screenshot_notice("".into());
     app.set_playback_started(false);
     app.set_is_android(false);
@@ -173,4 +243,77 @@ fn title_artwork_fits_and_screenshot_is_guarded() {
     assert_eq!(captures.get(), 0);
     click(&app, &element(&app, "PlayerOverlay::screenshot_button"));
     assert_eq!(captures.get(), 1, "visible screenshot button captures once");
+}
+
+#[test]
+#[ignore = "requires a display; SLINT_BACKEND=winit SLINT_RENDERER=femtovg"]
+fn render_loading_dimmer_keeps_status_bright() {
+    let app = nova::AppWindow::new().unwrap();
+    nova_ui::initialize_fonts(app.window());
+    nova_ui::apply_theme(&app, false);
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_player_open(true);
+    app.set_playback_started(false);
+    app.set_osd_visible(false);
+    app.set_player_status("Loading fixture".into());
+    let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(2, 2);
+    pixels
+        .make_mut_slice()
+        .fill(slint::Rgba8Pixel::new(120, 180, 240, 255));
+    app.set_player_poster(slint::Image::from_rgba8(pixels));
+    app.window().set_size(slint::PhysicalSize::new(800, 360));
+    app.show().unwrap();
+    let weak = app.as_weak();
+    let phase = Rc::new(Cell::new(0));
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(600),
+        move || {
+            let app = weak.upgrade().unwrap();
+            let snapshot = app.window().take_snapshot().unwrap();
+            let width = snapshot.width() as usize;
+            let height = snapshot.height() as usize;
+            let pixel = snapshot.as_slice()[height * 2 / 5 * width + width / 20];
+            assert!(
+                pixel.r < 100 && pixel.g < 150 && pixel.b < 200,
+                "loading artwork must be dimmed: {pixel:?}"
+            );
+            let bright_status_pixels = (height * 2 / 5..height * 3 / 5)
+                .flat_map(|y| (width / 4..width * 3 / 4).map(move |x| (x, y)))
+                .filter(|&(x, y)| {
+                    let pixel = snapshot.as_slice()[y * width + x];
+                    pixel.r > 240 && pixel.g > 240 && pixel.b > 240
+                })
+                .count();
+            assert!(
+                bright_status_pixels > 10,
+                "the status must paint above the dim layer"
+            );
+            if let Some(dir) = std::env::var_os("NOVA_PLAYER_LOADING_PREVIEW_DIR") {
+                let dir = std::path::PathBuf::from(dir);
+                std::fs::create_dir_all(&dir).unwrap();
+                image::save_buffer(
+                    dir.join(if phase.get() == 0 {
+                        "loading-standard.png"
+                    } else {
+                        "loading-black.png"
+                    }),
+                    snapshot.as_bytes(),
+                    snapshot.width(),
+                    snapshot.height(),
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
+            if phase.get() == 0 {
+                phase.set(1);
+                nova_ui::apply_theme(&app, true);
+            } else {
+                slint::quit_event_loop().unwrap();
+            }
+        },
+    );
+    slint::run_event_loop().unwrap();
 }

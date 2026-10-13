@@ -38,12 +38,18 @@ fn generic_sort_rows_have_keyboard_actions_and_fit_phone_and_desktop() {
         slint::select_bundled_translation(language).unwrap();
         for width in [320, 1280] {
             app.window().set_size(slint::PhysicalSize::new(width, 1000));
-            let mut rows = vec![nova::PluginSettingRow {
-                key: "sort.order".into(),
-                kind: "sort-header".into(),
-                label: "Sort order".into(),
-                ..Default::default()
-            }];
+            let mut rows = vec![
+                nova::PluginSettingRow {
+                    kind: "preferences-header".into(),
+                    ..Default::default()
+                },
+                nova::PluginSettingRow {
+                    key: "sort.order".into(),
+                    kind: "sort-header".into(),
+                    label: "Sort order".into(),
+                    ..Default::default()
+                },
+            ];
             for (index, label) in ["Cached availability", "Resolution", "Reported seeders"]
                 .into_iter()
                 .enumerate()
@@ -73,6 +79,7 @@ fn generic_sort_rows_have_keyboard_actions_and_fit_phone_and_desktop() {
             app.set_plugin_setting_rows(Rc::new(VecModel::from(rows)).into());
             app.set_addon_config_open(true);
             settle();
+            key(&app, slint::platform::Key::Return);
             for caption in [up, down, direction] {
                 for item in
                     i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app, caption)
@@ -86,7 +93,8 @@ fn generic_sort_rows_have_keyboard_actions_and_fit_phone_and_desktop() {
                 }
             }
             let before = captured.borrow().len();
-            // Initial focus skips the header; Up is a bounded no-op at the top.
+            // Enter the first criterion; Up is bounded at the top.
+            key(&app, slint::platform::Key::DownArrow);
             key(&app, slint::platform::Key::Return);
             assert_eq!(captured.borrow().len(), before);
             key(&app, slint::platform::Key::Tab);
@@ -108,16 +116,24 @@ fn generic_sort_rows_have_keyboard_actions_and_fit_phone_and_desktop() {
                 &("sort.order".into(), "up-action".into())
             );
             key(&app, slint::platform::Key::Escape);
+            assert!(app.get_addon_config_open());
+            key(&app, slint::platform::Key::Escape);
             assert!(!app.get_addon_config_open());
 
             // Ordered preferences reuse the same compact card and navigation,
             // with removal instead of a sort-direction action.
-            let mut rows = vec![nova::PluginSettingRow {
-                key: "codec.prefs".into(),
-                kind: "priority-header".into(),
-                label: "Preferred video codecs".into(),
-                ..Default::default()
-            }];
+            let mut rows = vec![
+                nova::PluginSettingRow {
+                    kind: "preferences-header".into(),
+                    ..Default::default()
+                },
+                nova::PluginSettingRow {
+                    key: "codec.prefs".into(),
+                    kind: "priority-header".into(),
+                    label: "Preferred video codecs".into(),
+                    ..Default::default()
+                },
+            ];
             for (index, caption) in ["AVC / H.264", "HEVC / H.265"].into_iter().enumerate() {
                 rows.push(nova::PluginSettingRow {
                     key: "codec.prefs".into(),
@@ -149,6 +165,8 @@ fn generic_sort_rows_have_keyboard_actions_and_fit_phone_and_desktop() {
             app.set_plugin_setting_rows(Rc::new(VecModel::from(rows)).into());
             app.set_addon_config_open(true);
             settle();
+            key(&app, slint::platform::Key::Return);
+            key(&app, slint::platform::Key::DownArrow);
             key(&app, slint::platform::Key::Tab);
             key(&app, slint::platform::Key::Return);
             assert_eq!(
@@ -168,7 +186,14 @@ fn generic_sort_rows_have_keyboard_actions_and_fit_phone_and_desktop() {
                 captured.borrow().last().unwrap(),
                 &("codec.prefs".into(), "add-choice".into())
             );
-            key(&app, slint::platform::Key::Escape);
+            app.set_system_back_request(app.get_system_back_request() + 1);
+            settle();
+            assert!(
+                app.get_addon_config_open(),
+                "system Back closes the nested preference first"
+            );
+            app.set_system_back_request(app.get_system_back_request() + 1);
+            settle();
             assert!(!app.get_addon_config_open());
         }
     }

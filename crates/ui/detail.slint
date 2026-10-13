@@ -912,6 +912,9 @@ export component DetailPage {
             }
 
             det_scroll := Flickable {
+                property <length> viewport_top: self.absolute-position.y;
+                init => { DetailContent.episodes_viewport_top = self.viewport_top; }
+                changed viewport_top => { DetailContent.episodes_viewport_top = self.viewport_top; }
                 width: 100%;
                 min-height: 0px;
                 vertical-stretch: 1;

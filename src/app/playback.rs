@@ -6,7 +6,6 @@ struct PlaybackContext {
     title: String,
     episode_label: String,
     osd_episode_title: String,
-    logo_url: String,
     use_modal_poster: bool,
     media_type: String,
     media_id: String,
@@ -147,7 +146,6 @@ impl Bridge {
                     title: modal.name.clone(),
                     episode_label,
                     osd_episode_title,
-                    logo_url: modal.logo_url.clone(),
                     use_modal_poster: true,
                     media_type: modal.type_.clone(),
                     media_id: modal.id.clone(),
@@ -578,7 +576,6 @@ impl Bridge {
                         player_episode_header(&number, if title == number { "" } else { &title })
                     })
                     .unwrap_or_default(),
-                logo_url: String::new(),
                 use_modal_poster: false,
                 media_type: job.media_type.clone(),
                 media_id: job.media_id.clone(),
@@ -852,7 +849,6 @@ impl Bridge {
             app.set_screenshot_busy(false);
             app.set_screenshot_notice(SharedString::default());
         }
-        self.load_player_title_logo(request.clone(), context.logo_url.clone());
         let ep = (!context.episode_label.is_empty()).then_some(context.episode_label);
         let display_title = match ep {
             Some(ep) => format!("{title} · {ep}"),

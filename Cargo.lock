@@ -5350,6 +5350,7 @@ dependencies = [
  "libmpv2-sys",
  "nova-config",
  "nova-ui",
+ "png",
  "serde_json",
  "slint",
  "zbus",

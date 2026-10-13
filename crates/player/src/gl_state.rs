@@ -405,7 +405,7 @@ pub unsafe fn restore(gl: &glow::Context, s: &Saved) {
 }
 
 #[cfg(all(test, target_os = "linux"))]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::ffi::{CStr, c_void};
 
@@ -421,11 +421,14 @@ mod tests {
     type Terminate = unsafe extern "C" fn(Handle) -> u32;
     type GetProc = unsafe extern "C" fn(*const std::ffi::c_char) -> *const c_void;
 
-    struct HeadlessGl {
+    pub(crate) struct HeadlessGl {
         egl: libloading::Library,
         display: Handle,
         surface: Handle,
         context: Handle,
+        // Surfaceless contexts share an EGLDisplay. One test's eglTerminate
+        // must not invalidate another test's live mpv/GL context.
+        _serial: std::sync::MutexGuard<'static, ()>,
     }
 
     impl HeadlessGl {
@@ -433,12 +436,14 @@ mod tests {
             *self.egl.get::<T>(name.to_bytes_with_nul()).unwrap()
         }
 
-        unsafe fn new() -> Self {
+        pub(crate) unsafe fn new() -> Self {
+            static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
             let mut result = Self {
                 egl: libloading::Library::new("libEGL.so.1").unwrap(),
                 display: std::ptr::null_mut(),
                 surface: std::ptr::null_mut(),
                 context: std::ptr::null_mut(),
+                _serial: SERIAL.lock().unwrap_or_else(|error| error.into_inner()),
             };
             // Mesa's surfaceless EGL platform needs no X server or GPU.
             result.display = result.function::<GetDisplay>(c"eglGetPlatformDisplay")(
@@ -497,9 +502,13 @@ mod tests {
             result
         }
 
-        unsafe fn gl(&self) -> glow::Context {
+        pub(crate) unsafe fn gl(&self) -> glow::Context {
             let get_proc = self.function::<GetProc>(c"eglGetProcAddress");
             glow::Context::from_loader_function_cstr(|name| get_proc(name.as_ptr()))
+        }
+
+        pub(crate) unsafe fn get_proc(&self, name: &CStr) -> *const c_void {
+            unsafe { self.function::<GetProc>(c"eglGetProcAddress")(name.as_ptr()) }
         }
     }
 

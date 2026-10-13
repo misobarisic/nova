@@ -18,6 +18,7 @@ export component DetailEpisodesModule inherits Window {
     function publish_size() {
         if root.generation == DetailContent.episodes_generation && DetailBridge.detail_tab == 3 { DetailContent.episodes_height = root.measured_height; }
     }
+    private property <bool> compact_search: DetailBridge.viewport_width > DetailBridge.viewport_height && DetailBridge.viewport_height < 500px;
     property <int> ep_cols: DetailBridge.narrow ? 1 : Math.min(4, Math.max(2, Math.floor((root.episode_content_w + root.card-gap) / (320px + root.card-gap))));
     // Equal-width episode cards: grid columns start at each cell's
     // preferred width (full unwrapped text even when wrapped — see Text
@@ -49,11 +50,10 @@ export component DetailEpisodesModule inherits Window {
         spacing: 10px;
         alignment: start;
 
-        // `if` keeps big episode grids uninstantiated when
-        // hidden; keyboard edit-mode focuses the
-        // filter via edit_watcher below (page scope
-        // cannot see ids inside `if`).
-        if DetailBridge.modal_episodes: VerticalLayout {
+        // Keep toolbar anchors and focus timers addressable across the body
+        // and overlay. The shell mounts this leaf only for the Episodes tab.
+        VerticalLayout {
+            visible: DetailBridge.modal_episodes;
             width: 100%;
             spacing: 8px;
             alignment: start;
@@ -326,93 +326,11 @@ export component DetailEpisodesModule inherits Window {
 
             property <int> restore_request: DetailContent.episode_focus_request;
             changed restore_request => { if !DetailBridge.tracking_open && !DetailBridge.stream_selector_open && DetailContent.episode_search_open { filter_line.focus(); } }
-            episode_toolbar := Rectangle {
-                width: 100%;
-                height: DetailContent.episode_search_open ? 120px : 64px;
+            // Keep the natural toolbar extent in the scrolling body. The single
+            // live input is painted last, above cards, and clamps at viewport top.
+            episode_toolbar_slot := Rectangle {
+                height: DetailContent.episode_search_open && !root.compact_search ? 120px : 64px;
                 animate height { duration: Anim.transition_slide; easing: ease-out; }
-                border-radius: 16px;
-                background: Theme.current.episode_toolbar;
-                border-width: 1px;
-                border-color: DetailContent.filter_focused ? Theme.current.focus_soft : Theme.current.border_medium;
-                // The field stays instantiated for keyboard focus requests.
-                // Explicit row positions keep the header stable as it expands.
-                clip: true;
-
-                HorizontalLayout {
-                    x: 10px; y: 10px;
-                    width: parent.width - 20px;
-                    height: 44px;
-                    spacing: 8px;
-                    Rectangle {
-                        width: 44px; height: 44px;
-                        horizontal-stretch: 0;
-                        border-radius: 12px;
-                        background: DetailContent.episode_search_open ? Theme.current.search_active_wash : (episode_search_toggle.has-hover ? Theme.current.episode_search_hover : Theme.current.episode_search);
-                        border-width: 1px;
-                        border-color: DetailBridge.kb_active && DetailBridge.kb_zone == 3 && DetailBridge.kb_ci == 1 ? Theme.current.accent_vivid : (DetailContent.episode_search_open || DetailBridge.episode_filter != "" ? Theme.current.focus_soft : Theme.current.border_medium);
-                        if !DetailContent.episode_search_open: IcSearch {
-                            x: 12px; y: 12px;
-                            width: 20px; height: 20px;
-                            fill: DetailBridge.episode_filter != "" ? Theme.current.text_search_match : Theme.current.icon_episode_search;
-                        }
-                        if DetailContent.episode_search_open: IcClose {
-                            x: 12px; y: 12px;
-                            width: 20px; height: 20px;
-                            fill: Theme.current.text_search_match;
-                        }
-                        episode_search_toggle := TouchArea {
-                            accessible-role: button;
-                            accessible-label: DetailContent.episode_search_open ? @tr("Hide episode search") : @tr("Search episodes");
-                            mouse-cursor: pointer;
-                            clicked => {
-                                DetailBridge.kb_active = false;
-                                DetailContent.episode_search_open = !DetailContent.episode_search_open;
-                                if (DetailContent.episode_search_open) {
-                                    episode_search_focus.start();
-                                } else {
-                                    episode_search_focus.stop();
-                                    DetailContent.kb_edit = false;
-                                    DetailContent.focus_shell();
-                                }
-                            }
-                        }
-                    }
-                    episode_result_count := Text {
-                        text: DetailBridge.episode_filter != "" ? @tr("Found: {}", DetailBridge.episode_total) : @tr("{} in this season", DetailBridge.episode_total);
-                        color: Theme.current.text_episode_counter;
-                        font-size: 12px;
-                        min-width: 0px;
-                        horizontal-stretch: 1;
-                        overflow: elide;
-                        vertical-alignment: center;
-                    }
-                    if DetailBridge.episode_page_count > 1: episode_top_pager := EpisodePager {
-                        episode-style: true;
-                        page: DetailBridge.episode_page;
-                        count: DetailBridge.episode_page_count;
-                        picked(p) => { DetailBridge.episode_page_picked(p); }
-                    }
-                }
-                filter_line := SearchField {
-                    x: 10px; y: 62px;
-                    width: parent.width - 20px;
-                    height: 48px;
-                    visible: DetailContent.episode_search_open;
-                    enabled: DetailContent.episode_search_open;
-                    prominent: true;
-                    search-icon: true;
-                    min-width: 0px;
-                    text <=> DetailBridge.episode_filter;
-                    placeholder-text: @tr("Search episodes…");
-                    background: Theme.current.episode_empty_panel;
-                    focus_changed(focused) => { if !DetailBridge.tracking_open { DetailContent.filter_focused = focused; } }
-                    edited(t) => { DetailBridge.episode_filter_changed(t); }
-                    accepted(t) => {
-                        DetailBridge.episode_filter_changed(t);
-                        DetailContent.kb_edit = false;
-                        DetailContent.focus_shell();
-                    }
-                }
             }
 
             if DetailBridge.episode_rows.length == 0 && DetailBridge.episode_filter != "": episode_empty := Rectangle {
@@ -767,7 +685,7 @@ export component DetailEpisodesModule inherits Window {
                     count: DetailBridge.episode_page_count;
                     picked(p) => {
                         DetailBridge.episode_page_picked(p);
-                        DetailContent.scroll_list_to_top(episode_toolbar.absolute-position.y);
+                        DetailContent.scroll_list_to_top(episode_toolbar_slot.absolute-position.y);
                     }
                 }
             }
@@ -775,4 +693,116 @@ export component DetailEpisodesModule inherits Window {
 
 
     }
+    episode_toolbar := Rectangle {
+        visible: DetailBridge.modal_episodes;
+        x: 0px;
+        y: Math.max(episode_toolbar_slot.absolute-position.y, DetailContent.episodes_viewport_top) - root.absolute-position.y;
+        width: 100%;
+        height: DetailContent.episode_search_open && !root.compact_search ? 120px : 64px;
+        animate height { duration: Anim.transition_slide; easing: ease-out; }
+        border-radius: 16px;
+        background: Theme.current.episode_toolbar;
+        border-width: 1px;
+        border-color: DetailContent.filter_focused ? Theme.current.focus_soft : Theme.current.border_medium;
+        Rectangle {
+            x: -root.absolute-position.x;
+            width: DetailContent.shell_width;
+            height: parent.height;
+            background: Theme.current.artwork_canvas;
+            TouchArea { clicked => {} }
+        }
+        Rectangle {
+            x: -root.absolute-position.x;
+            y: parent.height;
+            width: DetailContent.shell_width; height: 8px;
+            background: @linear-gradient(180deg, Theme.current.artwork_canvas 0%, transparent 100%);
+        }
+        Rectangle {
+            width: 100%; height: 100%; border-radius: 16px;
+            background: Theme.current.episode_toolbar;
+            border-width: 1px;
+            border-color: DetailContent.filter_focused ? Theme.current.focus_soft : Theme.current.border_medium;
+        }
+        // The field stays instantiated for keyboard focus requests.
+        // Explicit row positions keep the header stable as it expands.
+        clip: false;
+
+        HorizontalLayout {
+            x: 10px; y: 10px;
+            width: parent.width - 20px;
+            height: 44px;
+            spacing: 8px;
+            Rectangle {
+                width: 44px; height: 44px;
+                horizontal-stretch: 0;
+                border-radius: 12px;
+                background: DetailContent.episode_search_open ? Theme.current.search_active_wash : (episode_search_toggle.has-hover ? Theme.current.episode_search_hover : Theme.current.episode_search);
+                border-width: 1px;
+                border-color: DetailBridge.kb_active && DetailBridge.kb_zone == 3 && DetailBridge.kb_ci == 1 ? Theme.current.accent_vivid : (DetailContent.episode_search_open || DetailBridge.episode_filter != "" ? Theme.current.focus_soft : Theme.current.border_medium);
+                if !DetailContent.episode_search_open: IcSearch {
+                    x: 12px; y: 12px;
+                    width: 20px; height: 20px;
+                    fill: DetailBridge.episode_filter != "" ? Theme.current.text_search_match : Theme.current.icon_episode_search;
+                }
+                if DetailContent.episode_search_open: IcClose {
+                    x: 12px; y: 12px;
+                    width: 20px; height: 20px;
+                    fill: Theme.current.text_search_match;
+                }
+                episode_search_toggle := TouchArea {
+                    accessible-role: button;
+                    accessible-label: DetailContent.episode_search_open ? @tr("Hide episode search") : @tr("Search episodes");
+                    mouse-cursor: pointer;
+                    clicked => {
+                        DetailBridge.kb_active = false;
+                        DetailContent.episode_search_open = !DetailContent.episode_search_open;
+                        if (DetailContent.episode_search_open) {
+                            episode_search_focus.start();
+                        } else {
+                            episode_search_focus.stop();
+                            DetailContent.kb_edit = false;
+                            DetailContent.focus_shell();
+                        }
+                    }
+                }
+            }
+            episode_result_count := Text {
+                visible: !DetailContent.episode_search_open || !root.compact_search;
+                text: DetailBridge.episode_filter != "" ? @tr("Found: {}", DetailBridge.episode_total) : @tr("{} in this season", DetailBridge.episode_total);
+                color: Theme.current.text_episode_counter;
+                font-size: 12px;
+                min-width: 0px;
+                horizontal-stretch: 1;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+            if DetailBridge.episode_page_count > 1 && (!DetailContent.episode_search_open || !root.compact_search): episode_top_pager := EpisodePager {
+                episode-style: true;
+                page: DetailBridge.episode_page;
+                count: DetailBridge.episode_page_count;
+                picked(p) => { DetailBridge.episode_page_picked(p); }
+            }
+        }
+        filter_line := SearchField {
+            x: root.compact_search ? 64px : 10px; y: root.compact_search ? 8px : 62px;
+            width: parent.width - (root.compact_search ? 74px : 20px);
+            height: 48px;
+            visible: DetailContent.episode_search_open;
+            enabled: DetailContent.episode_search_open;
+            prominent: true;
+            search-icon: true;
+            min-width: 0px;
+            text <=> DetailBridge.episode_filter;
+            placeholder-text: @tr("Search episodes…");
+            background: Theme.current.episode_empty_panel;
+            focus_changed(focused) => { if !DetailBridge.tracking_open { DetailContent.filter_focused = focused; } }
+            edited(t) => { DetailBridge.episode_filter_changed(t); }
+            accepted(t) => {
+                DetailBridge.episode_filter_changed(t);
+                DetailContent.kb_edit = false;
+                DetailContent.focus_shell();
+            }
+        }
+    }
+
 }

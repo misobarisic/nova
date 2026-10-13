@@ -131,6 +131,22 @@ fn installed_addon_filters_and_actions_survive_layout_changes() {
             app.get_settings_detail_open(),
             "Addons detail must remain open"
         );
+        // Natural-width capability pills stay in one horizontal rail. Scroll
+        // that rail to reach Streams rather than changing the document offset.
+        let rail = ElementHandle::find_by_element_id(&app, "SettingsAddonsModule::capability_rail")
+            .next()
+            .unwrap();
+        let rail_position = rail.absolute_position();
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(
+                    rail_position.x + rail.size().width / 2.0,
+                    rail_position.y + 20.0,
+                ),
+                delta_x: -300.0,
+                delta_y: 0.0,
+            });
+        settle().await;
         let streams = ElementHandle::find_by_accessible_label(&app, "Streams")
             .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button))
             .expect("phone streams capability filter");

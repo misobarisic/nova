@@ -25,6 +25,9 @@ export component TrackingPanel inherits Rectangle {
     in property <bool> busy;
     in property <bool> can_confirm;
     in property <length> safe-bottom;
+    in property <length> scroll-viewport-top;
+    in property <length> scroll-viewport-width;
+    private property <length> manual_search_origin;
     property <string> edit_first;
     property <string> edit_last;
     property <string> edit_start;
@@ -322,11 +325,11 @@ export component TrackingPanel inherits Rectangle {
                         enabled: !root.busy;
                         clicked => { root.manual_search = !root.manual_search; }
                     }
-                    if root.manual_search: SettingsInput {
-                        text <=> root.query_text;
-                        placeholder-text: @tr("Title, ID, or official anime URL");
-                        accessible-label: @tr("Tracker search");
-                        vertical-stretch: 0;
+                    if root.manual_search: Rectangle {
+                        height: 44px; vertical-stretch: 0;
+                        property <length> origin: self.absolute-position.y;
+                        init => { root.manual_search_origin = self.origin; }
+                        changed origin => { root.manual_search_origin = self.origin; }
                     }
                     if !root.setup_review && root.candidate_title == "": TrackingButton {
                         text: root.links.length > 0 ? @tr("Add missing releases") : @tr("Reload suggestions");
@@ -334,11 +337,6 @@ export component TrackingPanel inherits Rectangle {
                         icon: 2;
                         enabled: !root.busy;
                         clicked => { root.query_text = ""; root.search(root.selected_service, ""); }
-                    }
-                    if root.manual_search: TrackingButton {
-                        text: @tr("Search tracker");
-                        enabled: !root.busy;
-                        clicked => { root.search(root.selected_service, root.query_text); }
                     }
                     if root.manual_search || (!root.has_setup && root.candidate_title == ""): VerticalLayout {
                         spacing: 12px;
@@ -413,6 +411,36 @@ export component TrackingPanel inherits Rectangle {
                         }
                     }
                     content_end := Rectangle { height: 12px; vertical-stretch: 0; }
+                }
+            }
+        }
+        // Keep one live search input while its section passes under the header.
+        if root.manual_search: manual_search_bar := Rectangle {
+            x: 0px;
+            y: Math.max(root.manual_search_origin, root.scroll-viewport-top) - root.absolute-position.y;
+            width: root.width; height: 44px;
+            Rectangle {
+                x: -root.absolute-position.x;
+                width: root.scroll-viewport-width; height: parent.height;
+                background: Theme.current.artwork_canvas;
+                TouchArea { clicked => {} }
+            }
+            Rectangle {
+                x: -root.absolute-position.x; y: parent.height;
+                width: root.scroll-viewport-width; height: 8px;
+                background: @linear-gradient(180deg, Theme.current.artwork_canvas 0%, transparent 100%);
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                SettingsInput {
+                    text <=> root.query_text;
+                    placeholder-text: @tr("Title, ID, or official anime URL");
+                    accessible-label: @tr("Tracker search");
+                    min-width: 0px;
+                }
+                TrackingButton {
+                    text: @tr("Search tracker"); enabled: !root.busy;
+                    clicked => { root.search(root.selected_service, root.query_text); }
                 }
             }
         }

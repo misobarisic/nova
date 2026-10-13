@@ -432,8 +432,8 @@ cache_settings_type! {
     pub home_upcoming_enabled: bool,
     /// Prefer episode thumbnails over series posters in Home's Continue
     /// Watching and Upcoming rows. Synced with other general settings and
-    /// defaults to the existing episode-art behavior.
-    #[serde(default = "default_true")]
+    /// defaults to series posters when no preference has been saved.
+    #[serde(default)]
     pub home_episode_artwork: bool,
     /// Minimum grid columns for My Library (same scheme).
     #[serde(default = "default_min_cols")]
@@ -599,7 +599,7 @@ impl Default for CacheSettings {
             home_rows: None,
             home_continue_enabled: true,
             home_upcoming_enabled: true,
-            home_episode_artwork: true,
+            home_episode_artwork: false,
             library_min_cols: 2,
             android_hwdec: AndroidHwdec::HwPlus,
             player_external: false,
@@ -1178,6 +1178,20 @@ mod tests {
                 "genre": "Action"
             })
         );
+    }
+
+    #[test]
+    fn home_artwork_defaults_to_posters_and_preserves_saved_episode_preference() {
+        assert!(!CacheSettings::default().home_episode_artwork);
+        let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
+        let mut settings: CacheSettings = serde_json::from_str(older).unwrap();
+        assert!(!settings.home_episode_artwork);
+        for episode_artwork in [true, false] {
+            settings.home_episode_artwork = episode_artwork;
+            let restored: CacheSettings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored.home_episode_artwork, episode_artwork);
+        }
     }
 }
 
