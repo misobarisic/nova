@@ -726,11 +726,9 @@ impl Bridge {
             state.streams.clear();
         }
 
-        // Prefetched header fills gaps for entries saved before the
-        // header-text fix (or saved from a thin catalog preview): the
-        // merged values below paint on the first frame, and are written
-        // back so restarts stay instant without another meta fetch.
-        self.fill_modal_gaps_from_header_cache(&e.id);
+        // Prefer resolved detail text to an older saved preview, with the
+        // entry supplying fields the header cache has not resolved yet.
+        self.restore_modal_header_from_cache(&e.id);
         let (paint_background, paint_description, paint_genres, paint_year) = {
             let state = self.shared.lock().unwrap();
             match state.modal_item.as_ref() {
@@ -757,7 +755,6 @@ impl Bridge {
         app.set_selected_year(SharedString::from(&paint_year));
         app.set_selected_index(-1);
         self.clear_streams();
-        app.set_modal_visible(true);
         app.set_modal_episodes(false);
         app.set_detail_deep_stream(false);
         apply_stream_episode_context(&app, None);
@@ -834,7 +831,7 @@ impl Bridge {
         // into the filtered view, which persists via the filter property.
         app.set_library_kb_zone(2);
         app.set_library_kb_idx(index as i32);
-        // Same-entry reopen restores tab/filter/focus (else resets).
+        // Same-entry reopen restores content choices before mounting.
         self.restore_detail_snapshot(&e.id);
 
         if e.type_ == "movie" {
@@ -844,6 +841,7 @@ impl Bridge {
         } else {
             self.prepare_episodes(e.id, e.type_);
         }
+        app.set_modal_visible(true);
     }
 
     pub(super) fn show_library_page(&self) {

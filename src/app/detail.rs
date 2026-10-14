@@ -114,11 +114,10 @@ impl Bridge {
             state.streams.clear();
         }
 
-        // Prefetched header fills catalog gaps (some catalogs omit
-        // description/genres): modal gaps first, then paint from the modal
-        // so cached text shows on the first frame. The meta fetch still
-        // upgrades anything still missing when it answers.
-        self.fill_modal_gaps_from_header_cache(&preview.id);
+        // The last resolved detail text takes precedence over a thinner
+        // catalog preview, so reentry does not replay the same corrections.
+        // Missing cached fields still fall back to the preview.
+        self.restore_modal_header_from_cache(&preview.id);
         let (paint_description, paint_genres, paint_year, is_movie) = {
             let state = self.shared.lock().unwrap();
             match state.modal_item.as_ref() {
@@ -147,16 +146,14 @@ impl Bridge {
         self.clear_streams();
         // Reset any leftover episode-picker state from a previous item.
         app.set_modal_episodes(false);
-        app.set_detail_watch_label(text::tr("Start").into());
         app.set_detail_deep_stream(false);
         apply_stream_episode_context(&app, None);
         app.set_season_names(Rc::new(VecModel::<SharedString>::from(vec![])).into());
         app.set_season_combo_idx(-1);
         app.set_season_cards(Rc::new(VecModel::<SeasonCard>::from(vec![])).into());
         app.set_episode_rows(Rc::new(VecModel::<EpisodeRow>::from(vec![])).into());
-        // Detail header (banner layout): description/genres from the catalog
-        // preview (or prefetched header cache when the preview omits them);
-        // the meta fetch upgrades anything still missing when it answers.
+        // Paint the resolved header before mounting; fresh metadata can
+        // still fill gaps or publish real upstream changes in the background.
         app.set_selected_description(SharedString::from(&paint_description));
         app.set_selected_genre_list(
             Rc::new(VecModel::from(
@@ -219,7 +216,6 @@ impl Bridge {
         // Configure the incoming shell before it can render. Metadata must
         // not swap Overview for Episodes after the entrance has begun.
         self.restore_detail_snapshot(&item_id);
-        app.set_modal_visible(true);
 
         if modal_type == "movie" {
             self.cancel_watch_now();
@@ -236,6 +232,9 @@ impl Bridge {
             // streams once an episode is picked.
             self.prepare_episodes(item_id, modal_type);
         }
+        // Cached episodes and the primary action must also be ready before
+        // constructing the incoming shell (including featured shortcuts).
+        app.set_modal_visible(true);
     }
 
     /// Movies also recheck metadata behind cached content; stream discovery
@@ -569,6 +568,7 @@ impl Bridge {
             modal.episodes_loading = true;
             modal.open_token.clone()
         };
+        self.refresh_watch_action();
         // Fast path: if this item's episode list was fetched before, show the
         // cached version instantly while the background refresh below runs.
         let had_cache = if let Some(cached) = read_episodes_cache_for(&modal_type, &id)
@@ -667,27 +667,16 @@ impl Bridge {
         run(bridge, modal_type, id, refresh, open_token, meta_urls, None);
     }
 
-    /// Fill empty `ModalItem` header slots (background/description/genres/
-    /// year) from the prefetched header cache. Returns true when anything
-    /// was filled. Callers repaint text from the modal afterwards; the
-    /// backdrop fast path picks up a filled URL via its normal read.
-    pub(super) fn fill_modal_gaps_from_header_cache(&self, id: &str) -> bool {
+    /// Restore the last resolved detail text over catalog/library snapshots.
+    /// Cached artwork fills missing URLs; empty cache fields never erase
+    /// usable preview data. Callers paint the result before mounting.
+    pub(super) fn restore_modal_header_from_cache(&self, id: &str) -> bool {
         let cached = {
             let state = self.shared.lock().unwrap();
             let m = match state.modal_item.as_ref() {
                 Some(m) if m.id == id => m,
                 _ => return false,
             };
-            if !m.poster_url.is_empty()
-                && !m.background_url.is_empty()
-                && !m.logo_url.is_empty()
-                && !m.description.is_empty()
-                && !m.genres.is_empty()
-                && !m.year.is_empty()
-                && !m.season_backdrops.is_empty()
-            {
-                return false;
-            }
             read_meta_header_for(&m.type_, &m.id)
         };
         let Some(cached) = cached else {
@@ -719,15 +708,15 @@ impl Bridge {
             m.logo_url = cached.logo_url.clone();
             touched = true;
         }
-        if m.description.is_empty() && !cached.description.is_empty() {
+        if !cached.description.is_empty() && m.description != cached.description {
             m.description = cached.description.clone();
             touched = true;
         }
-        if m.genres.is_empty() && !cached.genres.is_empty() {
+        if !cached.genres.is_empty() && m.genres != cached.genres {
             m.genres.clone_from(&cached.genres);
             touched = true;
         }
-        if m.year.is_empty() && !cached.year.is_empty() {
+        if !cached.year.is_empty() && m.year != cached.year {
             m.year.clone_from(&cached.year);
             touched = true;
         }
@@ -853,12 +842,18 @@ impl Bridge {
                 && m.id == id
             {
                 app.set_selected_description(SharedString::from(m.description.clone()));
-                app.set_selected_genre_list(
-                    Rc::new(VecModel::from(
-                        m.genres.iter().map(SharedString::from).collect::<Vec<_>>(),
-                    ))
-                    .into(),
-                );
+                // A routine identical refresh must not recreate the pills.
+                let shown = app.get_selected_genre_list();
+                if shown.row_count() != m.genres.len()
+                    || shown.iter().zip(&m.genres).any(|(a, b)| a.as_str() != b)
+                {
+                    app.set_selected_genre_list(
+                        Rc::new(VecModel::from(
+                            m.genres.iter().map(SharedString::from).collect::<Vec<_>>(),
+                        ))
+                        .into(),
+                    );
+                }
                 if !m.year.is_empty() {
                     app.set_selected_year(SharedString::from(m.year.clone()));
                 }
@@ -2278,8 +2273,6 @@ impl Bridge {
                 watch_action_label(&modal.id, None, &state.progress)
             } else if watch_now_episode(&modal.id, &modal.videos, &state.progress).is_some() {
                 watch_action_label(&modal.id, Some(&modal.videos), &state.progress)
-            } else if modal.episodes_loading {
-                text::tr("Start").into()
             } else {
                 text::tr("Choose an episode").into()
             }
@@ -2661,6 +2654,10 @@ impl Bridge {
         let Some(app) = self.app() else {
             return;
         };
+        // Touch/pointer browsing has no selected keyboard row. Following the
+        // stored cursor would skip higher-priority results as they arrive and
+        // move to the old row's new page, despite correctly sorted All rows.
+        let preserve_focus = preserve_focus && app.get_kb_active();
         let previous_focus = app.get_detail_kb_s().max(0) as usize;
         let focused_id = if preserve_focus {
             self.shared
@@ -3899,6 +3896,205 @@ mod tests {
     use super::*;
 
     #[test]
+    fn detail_entry_uses_saved_metadata_and_resolves_its_action_before_refresh() {
+        // Opening reads persistent caches and uses Slint's global backend.
+        // Keep both isolated from other tests and the user's saved library.
+        const CHILD: &str = "NOVA_DETAIL_ENTRY_TEST_ROOT";
+        let Some(root) = std::env::var_os(CHILD) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-detail-entry-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(CHILD, &root)
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .args([
+                    "--exact",
+                    "app::detail::tests::detail_entry_uses_saved_metadata_and_resolves_its_action_before_refresh",
+                    "--nocapture",
+                ])
+                .output()
+                .unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let downloads = DownloadCoordinator::new(root.join("downloads"));
+        #[cfg(feature = "desktop")]
+        let bridge = {
+            let (hi, _) = mpsc::channel();
+            let (lo, _) = mpsc::channel();
+            Bridge::new(
+                app.as_weak(),
+                PosterTx { hi, lo },
+                Arc::new(AtomicU64::new(0)),
+                player,
+                downloads,
+            )
+        };
+        #[cfg(not(feature = "desktop"))]
+        let bridge = Bridge::new(
+            app.as_weak(),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            downloads,
+        );
+        let preview: MetaPreview = serde_json::from_value(serde_json::json!({
+            "id": "entry", "type": "series", "name": "Featured entry",
+            "releaseInfo": "2020", "genres": ["Catalog genre"],
+            "description": "Short catalog synopsis"
+        }))
+        .unwrap();
+        let mut item: MetaItem = serde_json::from_value(serde_json::json!({
+            "id": "entry", "type": "series", "name": "Featured entry",
+            "releaseInfo": "2020–2026", "genres": ["Drama", "Comedy"],
+            "description": "Full detail synopsis", "status": "Continuing",
+            "videos": [{"id":"entry:1:1", "title":"Future episode", "season":1,
+                "episode":1, "released":"2999-01-01T00:00:00Z"}]
+        }))
+        .unwrap();
+        write_meta_header_for("series", "entry", &meta_header_from_item(&item));
+        write_episodes_cache_for("series", "entry", &item.videos);
+        bridge.shared.lock().unwrap().home_showcase_displayed = Some(preview.clone());
+        let close = || {
+            app.set_modal_visible(false);
+            bridge.modal_closed();
+        };
+        // Repeated Home opens must use the last resolved header, rather than
+        // replaying a partial catalog header until another response arrives.
+        for _ in 0..3 {
+            bridge.home_showcase_picked();
+            assert!(app.get_modal_visible());
+            assert_eq!(app.get_selected_year(), "2020–2026");
+            assert_eq!(app.get_selected_description(), "Full detail synopsis");
+            assert_eq!(
+                app.get_selected_genre_list().iter().collect::<Vec<_>>(),
+                [SharedString::from("Drama"), SharedString::from("Comedy")]
+            );
+            assert_eq!(app.get_detail_watch_label(), text::tr("Choose an episode"));
+            let genres = app.get_selected_genre_list();
+            let token = bridge
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .unwrap()
+                .open_token
+                .clone();
+            bridge.apply_episode_meta("entry".into(), Some(item.clone()), true, token);
+            assert_eq!(app.get_detail_watch_label(), text::tr("Choose an episode"));
+            assert_eq!(
+                app.get_selected_genre_list(),
+                genres,
+                "an unchanged response must retain the existing genre delegates"
+            );
+            close();
+        }
+        // An available cached episode already has its precise action on entry.
+        item.videos[0].released = Some("2020-01-01T00:00:00Z".into());
+        write_episodes_cache_for("series", "entry", &item.videos);
+        bridge.home_showcase_picked();
+        assert_eq!(
+            app.get_detail_watch_label(),
+            text::watch_action("S1 E1", false)
+        );
+        close();
+        bridge.home_showcase_watch_now();
+        assert!(app.get_modal_visible());
+        assert!(app.get_stream_selector_open());
+        assert!(app.get_detail_deep_stream());
+        assert!(!app.get_episode_context().is_empty());
+        close();
+        // A first visit has no target yet, so it offers episode selection
+        // while loading, rather than advertising a speculative Start action.
+        let uncached = MetaPreview {
+            id: "uncached".into(),
+            ..preview.clone()
+        };
+        write_meta_header_for("series", "uncached", &MetaHeader::default());
+        bridge.open_preview(uncached, 0, false, None, false);
+        assert_eq!(app.get_detail_watch_label(), text::tr("Choose an episode"));
+        // Empty cached text still preserves usable catalog fields.
+        assert_eq!(app.get_selected_year(), "2020");
+        assert_eq!(app.get_selected_description(), "Short catalog synopsis");
+        let token = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .unwrap()
+            .open_token
+            .clone();
+        bridge.apply_episode_meta("uncached".into(), None, false, token);
+        assert_eq!(
+            app.get_detail_watch_label(),
+            text::tr("Start"),
+            "a proven seasonless fallback keeps direct streams"
+        );
+        close();
+        // Library entry uses the same resolved header despite a stale saved
+        // preview; direct movie actions must also clear a previous series label.
+        let entry: LibraryEntry = serde_json::from_value(serde_json::json!({
+            "id":"entry", "type_":"series", "name":"Featured entry", "year":"2020",
+            "poster_url":"", "genres":["Catalog genre"], "description":"Short synopsis",
+            "categories":[], "watch_status":"Auto"
+        }))
+        .unwrap();
+        bridge.open_library_entry(entry);
+        assert_eq!(app.get_selected_year(), "2020–2026");
+        assert_eq!(app.get_selected_description(), "Full detail synopsis");
+        assert_eq!(
+            app.get_detail_watch_label(),
+            text::watch_action("S1 E1", false)
+        );
+        // Actual metadata changes are still published and saved for reentry.
+        item.preview.genres.push("Mystery".into());
+        item.preview.description = Some("Updated full synopsis".into());
+        let token = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .unwrap()
+            .open_token
+            .clone();
+        bridge.apply_episode_meta("entry".into(), Some(item), true, token);
+        assert_eq!(app.get_selected_genre_list().row_count(), 3);
+        assert_eq!(app.get_selected_description(), "Updated full synopsis");
+        close();
+        bridge.home_showcase_picked();
+        assert_eq!(app.get_selected_genre_list().row_count(), 3);
+        assert_eq!(app.get_selected_description(), "Updated full synopsis");
+        close();
+        bridge.open_preview(
+            MetaPreview {
+                id: "movie".into(),
+                type_: "movie".into(),
+                ..preview
+            },
+            0,
+            false,
+            None,
+            false,
+        );
+        assert_eq!(app.get_detail_watch_label(), text::tr("Start"));
+    }
+
+    #[test]
     fn live_owner_order_preserves_the_selected_addon_pill() {
         let installed = |url: &str, label: &str| Installed {
             url: url.into(),
@@ -4001,6 +4197,7 @@ mod tests {
         });
         app.set_modal_visible(true);
         app.set_detail_is_movie(true);
+        app.set_kb_active(true);
         // Cumulative publications keep their pending spinner until final,
         // preserve focused identities through ranked insertion/reordering,
         // and isolate addons that happen to share a display label.
@@ -4176,6 +4373,84 @@ mod tests {
             0,
             "old generations cannot repopulate a closed search"
         );
+        // Touch users have no focused stream. A slow, high-priority addon
+        // inserting more than one page must not drag them to the old first
+        // row's new page through an invisible keyboard cursor.
+        app.set_kb_active(false);
+        let generation = {
+            let mut state = bridge.shared.lock().unwrap();
+            state.installed = vec![installed("supernova"), installed("fast")];
+            state.stream_owner_order = vec!["supernova".into(), "fast".into()];
+            state.stream_owner_labels = HashMap::from([
+                ("supernova".into(), "Supernova".into()),
+                ("fast".into(), "Fast addon".into()),
+            ]);
+            state.stream_addons = vec!["Supernova".into(), "Fast addon".into()];
+            state.stream_pending = state.stream_owner_order.clone();
+            state.stream_page = 0;
+            state.stream_generation
+        };
+        let response = |owner: &str, label: &str| StreamResponseContext {
+            request_id: "movie".into(),
+            generation,
+            addon: label.into(),
+            owner_url: owner.into(),
+            owner_generation: 0,
+            settings_generation: 0,
+            tracks_settings: false,
+            cache_hit: false,
+        };
+        let batch = |owner: &str, label: &str, count: usize| {
+            (0..count)
+                .map(|i| {
+                    let mut row = row(owner, &format!("{owner}-{i}"));
+                    row.addon = label.into();
+                    row
+                })
+                .collect()
+        };
+        bridge.stream_addon_updated(
+            response("fast", "Fast addon"),
+            batch("fast", "Fast addon", 5),
+            true,
+        );
+        assert_eq!(app.get_streams().row_data(0).unwrap().id, "fast-0");
+        bridge.stream_addon_updated(
+            response("supernova", "Supernova"),
+            batch("supernova", "Supernova", 30),
+            false,
+        );
+        assert_eq!(
+            app.get_stream_page(),
+            0,
+            "touch publication must keep the selected page"
+        );
+        assert_eq!(app.get_streams().row_data(0).unwrap().id, "supernova-0");
+        assert_eq!(app.get_stream_addons().row_data(0).unwrap(), "Supernova");
+        // An explicit page choice also remains selected through later batches.
+        bridge.stream_page_picked(1);
+        bridge.stream_addon_updated(
+            response("supernova", "Supernova"),
+            batch("supernova", "Supernova", 60),
+            true,
+        );
+        assert_eq!(app.get_stream_page(), 1);
+        assert_eq!(app.get_streams().row_data(0).unwrap().id, "supernova-25");
+        // Keyboard navigation still follows an actively selected row by ID.
+        app.set_kb_active(true);
+        app.set_detail_kb_s(25);
+        bridge.stream_addon_updated(
+            response("supernova", "Supernova"),
+            batch("supernova", "Supernova", 10),
+            true,
+        );
+        assert_eq!(app.get_stream_page(), 0);
+        assert_eq!(
+            app.get_detail_kb_s(),
+            14,
+            "removed keyboard selection clamps to the last remaining row"
+        );
+        bridge.clear_streams();
         bridge.refresh_watch_action();
         assert_eq!(app.get_detail_watch_label(), text::tr("Start"));
         bridge.watch_now();
