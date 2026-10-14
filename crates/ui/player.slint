@@ -607,6 +607,7 @@ export component PlayerOverlay {
     in-out property <bool> is_paused: true;
     in-out property <float> position: 0.0;
     in-out property <float> duration: 0.0;
+    in property <float> buffered_until: 0.0;
     in-out property <string> time_text: "00:00 / 00:00";
     in-out property <string> player_status: "";
     in-out property <string> player_title: "";
@@ -1727,7 +1728,7 @@ export component PlayerOverlay {
                         height: 100%;
 
                         // Dim track.
-                        Rectangle {
+                        unbuffered_track := Rectangle {
                             x: 0;
                             y: 8px;
                             height: 3px;
@@ -1736,8 +1737,22 @@ export component PlayerOverlay {
                             border-radius: 1.5px;
                         }
 
+                        // Estimated forward cache. Keep it within the unplayed
+                        // portion, including while the user moves the seek thumb.
+                        buffered_track := Rectangle {
+                            x: root.duration > 0 ? Math.clamp(root.position / root.duration, 0, 1) * parent.width : 0px;
+                            y: 8px;
+                            height: 3px;
+                            width: root.playback_started && root.duration > 0
+                                ? Math.max(0, Math.clamp(root.buffered_until / root.duration, 0, 1)
+                                    - Math.clamp(root.position / root.duration, 0, 1)) * parent.width
+                                : 0px;
+                            background: Theme.current.player_buffered_fill;
+                            border-radius: 1.5px;
+                        }
+
                         // Played portion (anchored to the left edge).
-                        Rectangle {
+                        played_track := Rectangle {
                             x: 0;
                             y: 8px;
                             height: 3px;

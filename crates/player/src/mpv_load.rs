@@ -144,6 +144,16 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         let position = mpv.get_property::<f64>("time-pos").unwrap();
+        let end = crate::estimated_buffered_until(
+            position,
+            10.0,
+            mpv.get_property("demuxer-cache-time").ok(),
+            mpv.get_property("demuxer-cache-duration").ok(),
+        );
+        assert!(
+            end > position as f32 && end <= 10.0,
+            "real network cache appears ahead of playback: {end}"
+        );
         std::thread::sleep(Duration::from_millis(150));
         assert!(mpv.get_property::<bool>("pause").unwrap());
         assert!((mpv.get_property::<f64>("time-pos").unwrap() - position).abs() < 0.05);

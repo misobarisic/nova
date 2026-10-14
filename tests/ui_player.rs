@@ -20,3 +20,6 @@ mod osd_touch;
 
 #[path = "player/shortcuts.rs"]
 mod shortcuts;
+
+#[path = "player/buffered_progress.rs"]
+mod buffered_progress;

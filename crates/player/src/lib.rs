@@ -511,6 +511,31 @@ pub fn format_time(seconds: f64) -> String {
     }
 }
 
+/// A visual estimate, not a promise that every packet in this span is cached.
+/// Prefer mpv's end timestamp; duration is a fallback for older demuxers.
+fn estimated_buffered_until(
+    position: f64,
+    duration: f64,
+    cache_time: Option<f64>,
+    cache_duration: Option<f64>,
+) -> f32 {
+    if !position.is_finite() || position < 0.0 || !duration.is_finite() || duration <= 0.0 {
+        return 0.0;
+    }
+    let end = cache_time
+        .filter(|end| end.is_finite() && *end >= 0.0)
+        .or_else(|| {
+            cache_duration
+                .filter(|secs| secs.is_finite() && *secs >= 0.0)
+                .map(|secs| position + secs)
+        })
+        .unwrap_or(0.0);
+    if end <= position {
+        return 0.0;
+    }
+    end.min(duration).min(f32::MAX as f64) as f32
+}
+
 /// Effective presentation rate for the Android display frame-rate hint: the
 /// container's nominal rate scaled by the playback rate (at 2× a 24 fps stream
 /// presents 48 frames/s). `None` while the container rate is still unknown.
@@ -1640,6 +1665,7 @@ impl Player {
         app.set_playback_started(false);
         app.set_position(0.0);
         app.set_duration(0.0);
+        app.set_buffered_until(0.0);
         app.set_is_paused(true);
         app.set_time_text(slint::SharedString::from("00:00 / 00:00"));
         app.set_player_status(slint::SharedString::from("Loading stream…"));
@@ -1720,6 +1746,9 @@ impl Player {
 
     /// Seek to `pos` seconds (OSD slider).
     pub fn seek(&self, pos: f32) {
+        if let Some(app) = self.state.app.upgrade() {
+            app.set_buffered_until(0.0);
+        }
         #[cfg(target_os = "android")]
         {
             self.state.recovery.lock().unwrap().seek(pos as f64);
@@ -2191,6 +2220,7 @@ impl Player {
             app.set_playback_started(false);
             app.set_position(0.0);
             app.set_duration(0.0);
+            app.set_buffered_until(0.0);
             app.set_is_paused(true);
             app.set_time_text(slint::SharedString::from("00:00 / 00:00"));
             app.set_player_status(slint::SharedString::default());
@@ -2264,6 +2294,7 @@ impl Player {
             #[cfg(target_os = "android")]
             live_paused: Option<bool>,
             dur: f64,
+            buffered_until: f32,
             paused: bool,
             vol: f64,
             muted: bool,
@@ -2288,6 +2319,10 @@ impl Player {
         #[cfg(target_os = "android")]
         let probe_hwdec = !self.state.hwdec_checked.load(Ordering::SeqCst);
 
+        // Rendering consumes the pending load before locking mpv. Snapshot
+        // ownership first so cache polling cannot invert that lock order.
+        let pending_load = self.state.pending.lock().unwrap().is_some();
+        let buffer_source = self.state.preference_source.lock().unwrap().clone();
         let snapshot = {
             let Ok(mpv) = self.state.mpv.lock() else {
                 return;
@@ -2301,6 +2336,21 @@ impl Player {
             let pos = live_pos.unwrap_or(0.0);
             let dur: f64 = mpv.get_property("duration").unwrap_or(0.0);
             let paused = live_paused.unwrap_or(false);
+            // A queued replacement must not inherit the previous file's
+            // cache. The same source ownership check guards track preferences.
+            let buffered_until = if !pending_load
+                && mpv.get_property::<String>("path").ok().as_deref()
+                    == Some(buffer_source.as_str())
+            {
+                estimated_buffered_until(
+                    pos,
+                    dur,
+                    mpv.get_property("demuxer-cache-time").ok(),
+                    mpv.get_property("demuxer-cache-duration").ok(),
+                )
+            } else {
+                0.0
+            };
 
             // While the user is scrubbing the OSD slider — or right after a
             // seek, until mpv actually applies it — the slider value diverges
@@ -2328,6 +2378,7 @@ impl Player {
                 #[cfg(target_os = "android")]
                 live_paused,
                 dur,
+                buffered_until,
                 paused,
                 // Mirror volume/mute (cheap reads; keeps UI in sync if changed
                 // via keyboard shortcuts or external controls).
@@ -2439,6 +2490,7 @@ impl Player {
             app.set_playback_started(true);
             app.set_position(snapshot.pos as f32);
             app.set_duration(snapshot.dur.max(1.0) as f32);
+            app.set_buffered_until(snapshot.buffered_until);
             app.set_is_paused(snapshot.paused);
             // OSD visibility is owned solely by the auto-hide countdown in
             // `run.rs` (Android keeps paused controls visible; desktop can
@@ -2807,6 +2859,7 @@ impl Player {
         *self.state.last_hwdec_log.lock().unwrap() = String::from("<unset>");
         *self.state.opened_at.lock().unwrap() = Instant::now();
         if let Some(app) = self.state.app.upgrade() {
+            app.set_buffered_until(0.0);
             app.window().request_redraw();
         }
         true
@@ -2838,6 +2891,41 @@ impl Player {
 mod tests {
     use super::*;
 
+    #[test]
+    fn buffer_estimate_prefers_end_time_clamps_and_handles_missing_data() {
+        assert_eq!(
+            estimated_buffered_until(30.0, 100.0, Some(55.0), Some(80.0)),
+            55.0
+        );
+        assert_eq!(
+            estimated_buffered_until(30.0, 100.0, None, Some(20.0)),
+            50.0
+        );
+        assert_eq!(
+            estimated_buffered_until(90.0, 100.0, Some(150.0), None),
+            100.0
+        );
+        assert_eq!(
+            estimated_buffered_until(30.0, 100.0, Some(20.0), Some(50.0)),
+            0.0
+        );
+        assert_eq!(estimated_buffered_until(30.0, 100.0, None, None), 0.0);
+        assert_eq!(estimated_buffered_until(30.0, 0.0, Some(55.0), None), 0.0);
+        assert_eq!(
+            estimated_buffered_until(30.0, 100.0, Some(f64::NAN), Some(20.0)),
+            50.0
+        );
+        assert_eq!(
+            estimated_buffered_until(30.0, 100.0, Some(f64::INFINITY), Some(-1.0)),
+            0.0
+        );
+        assert_eq!(
+            estimated_buffered_until(f64::NAN, 100.0, Some(55.0), None),
+            0.0
+        );
+        assert_eq!(estimated_buffered_until(-1.0, 100.0, Some(55.0), None), 0.0);
+    }
+
     #[cfg(not(target_os = "android"))]
     #[test]
     fn close_restores_catalog_fullscreen_and_invalidates_capture_session() {
@@ -2852,6 +2940,7 @@ mod tests {
         app.set_screenshot_notice("Screenshot saved".into());
         app.set_player_show_title("Show".into());
         app.set_player_episode_title("Episode".into());
+        app.set_buffered_until(100.0);
         player.state.started.store(true, Ordering::SeqCst);
         player.close();
         assert!(!app.get_player_open());
@@ -2861,6 +2950,7 @@ mod tests {
         assert!(app.get_screenshot_notice().is_empty());
         assert!(app.get_player_show_title().is_empty());
         assert!(app.get_player_episode_title().is_empty());
+        assert_eq!(app.get_buffered_until(), 0.0);
         assert_ne!(session, player.screenshot_session());
         assert_eq!(
             player.capture_screenshot(session),
@@ -2880,6 +2970,7 @@ mod tests {
         // session queueing, not rendering; no source is loaded without that notifier.
         *player.state.mpv_error.lock().unwrap() = None;
         *player.state.pending.lock().unwrap() = Some("https://example.invalid/old".into());
+        app.set_buffered_until(100.0);
         app.window().set_fullscreen(true);
         assert!(player.wait_for_source("Resolving stream…"));
         assert!(app.get_player_open());
@@ -2888,6 +2979,7 @@ mod tests {
         assert!(player.state.source_waiting.load(Ordering::SeqCst));
         assert_eq!(app.get_position(), 0.0);
         assert_eq!(app.get_duration(), 0.0);
+        assert_eq!(app.get_buffered_until(), 0.0);
         *player.state.opened_at.lock().unwrap() = Instant::now() - Duration::from_secs(35);
         player.tick();
         assert_eq!(app.get_player_status(), "Resolving stream…");
@@ -2899,6 +2991,7 @@ mod tests {
         app.set_screenshot_busy(true);
         app.set_screenshot_notice("Previous capture failed".into());
         player.state.started.store(true, Ordering::SeqCst);
+        app.set_buffered_until(100.0);
         player
             .play_with_preferences(
                 "https://example.invalid/episode",
@@ -2918,6 +3011,10 @@ mod tests {
         assert!(!app.get_screenshot_busy());
         assert!(app.get_screenshot_notice().is_empty());
         assert!(!player.state.started.load(Ordering::SeqCst));
+        assert_eq!(app.get_buffered_until(), 0.0);
+        app.set_buffered_until(100.0);
+        player.seek(50.0);
+        assert_eq!(app.get_buffered_until(), 0.0);
         assert_eq!(
             player.capture_screenshot(before),
             Err(ScreenshotError::StaleSession)

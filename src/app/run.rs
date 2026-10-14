@@ -1180,7 +1180,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // 250 ms state mirror while the player overlay is up, plus episode
+    // 250 ms position/buffer state mirror while the player overlay is up, plus episode
     // playback tracking (resume seeks + throttled progress saves + history
     // finalize on close). Both run on the UI thread.
     let _timer = slint::Timer::default();

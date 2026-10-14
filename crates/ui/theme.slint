@@ -175,6 +175,7 @@ export struct ThemePalette {
     on_watched_badge: color,
     watched_badge: color,
     player_progress_fill: color,
+    player_buffered_fill: color,
     scrim_artwork: color,
     scrim_episode_card: color,
 
@@ -373,6 +374,8 @@ export global Theme {
         on_watched_badge: #000000,
         watched_badge: #ffffff,
         player_progress_fill: #8b5cf6,
+        // Overlaid on the dim track: a small increase in white opacity.
+        player_buffered_fill: #ffffff40,
         scrim_artwork: #080f19,
         scrim_episode_card: #0b1221,
 

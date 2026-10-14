@@ -139,6 +139,19 @@ stay readable in the player, with Close returning to the selector. The existing
 which begins only after a media URL is queued. External-player preferences still
 resolve before handing off; credential-bearing streams retain in-app playback.
 
+## Buffered progress
+
+The seek bar keeps its played portion purple and shows an estimated forward
+buffer in a slightly lighter gray than the remaining track. The existing 250 ms
+mpv tick reads `demuxer-cache-time`, falling back to position plus
+`demuxer-cache-duration`; the result is clamped to the video duration. This is a
+visual estimate, not a map of guaranteed cached seek ranges or torrent pieces.
+Missing cache information and unknown duration hide the segment. Seek, source
+replacement, resolver waiting, Android decoder reload and Close clear old buffer
+state; the shared `buffered_until` property reaches the compiled OSD through
+AppWindow/PlayerOsdBindings/PlayerOsdBridge. Both themes and phone/landscape/desktop
+layouts use the same track.
+
 ## Android system gestures
 
 System Back dismisses the nearest open layer without enabling keyboard focus
