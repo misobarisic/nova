@@ -28,6 +28,13 @@ is limited to 8 MiB, cancellable and timed out; removal from the paired mesh
 revokes transfer authorization. The receiving app validates the ZIP and its
 SHA-256, ID and version before making it available. If no peer has the package,
 the desired installation remains unavailable until the archive can be obtained.
+Settings → Sync includes addon installation in its status: it shows pending
+packages, active addon downloads, outgoing ZIP transfers and retry waits instead
+of reporting completion while required code is missing. A previous valid package
+can remain active during an update; it does not count as completion of the new
+descriptor. **Sync now** retries failed addon downloads immediately without
+duplicating transfers already in progress. Validation and activation finish the
+receiving stage, and removing a desired addon clears it from the pending count.
 
 ## Build a package
 

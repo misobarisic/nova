@@ -38,6 +38,7 @@ pub use hlc::Hlc;
 pub use merge::{Record, Version};
 pub use package::{
     MAX_PACKAGE_BYTES, PACKAGE_ALPN, PackageBlobStore, configure_package_store, fetch_package,
+    outgoing_package_transfers,
 };
 pub use pair::{ALPN as PAIR_ALPN, IncomingPair, Invite, PairCallback, PairEvent, PairHandler};
 pub use protocol::ALPN;

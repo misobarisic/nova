@@ -1782,7 +1782,10 @@ impl Bridge {
                 app.set_sync_identity(SharedString::from(engine.identity()));
                 app.set_sync_peers(Rc::new(VecModel::from(peers)).into());
                 app.set_sync_invites(Rc::new(VecModel::from(invites)).into());
-                app.set_sync_status(SharedString::from(sync_status_text(&engine.status())));
+                app.set_sync_status(SharedString::from(sync_status_with_packages(
+                    &engine.status(),
+                    addon_packages::sync_status(self),
+                )));
             }
             None => {
                 app.set_sync_identity(SharedString::default());
@@ -1849,6 +1852,7 @@ impl Bridge {
     /// Settings → Sync: "Sync now".
     pub(super) fn sync_now(&self) {
         if let Some(engine) = nova_sync::engine() {
+            addon_packages::retry_pending(self);
             engine.sync_now();
         }
         self.sync_status_to_ui();
@@ -2111,6 +2115,36 @@ fn sync_status_text(status: &nova_sync::SyncStatus) -> String {
         };
     }
     text::last_synced(&format_ago(status.last_sync_secs))
+}
+
+fn sync_status_with_packages(
+    status: &nova_sync::SyncStatus,
+    packages: addon_packages::PackageSyncStatus,
+) -> String {
+    if packages.pending == 0 && packages.sending == 0 {
+        return sync_status_text(status);
+    }
+    let mut lines = Vec::new();
+    // Retain record errors and active record work. A historical success must
+    // not imply that the requested addon code has already been installed.
+    if status.syncing || status.last_error.is_some() {
+        lines.push(sync_status_text(status));
+    } else if status.peer_count == 0 {
+        lines.push(text::tr("Add a peer to start syncing").to_string());
+    }
+    if packages.pending > 0 {
+        lines.push(if packages.transferring > 0 {
+            text::syncing_addons(packages.pending)
+        } else if let Some(secs) = packages.retry_secs {
+            text::addon_sync_retry(packages.pending, secs)
+        } else {
+            text::addon_sync_waiting(packages.pending)
+        });
+    }
+    if packages.sending > 0 {
+        lines.push(text::sending_addons(packages.sending));
+    }
+    lines.join("\n")
 }
 
 /// Relative age ("5s ago", "3m ago", "2h ago") of a past unix-secs
@@ -2591,6 +2625,85 @@ mod tests {
             status.syncing = false;
             status.last_error = Some("boom".into());
             assert_eq!(sync_status_text(&status), "Last sync failed: boom");
+        });
+    }
+
+    #[test]
+    fn sync_completion_includes_addon_transfers_validation_and_retry_states() {
+        use addon_packages::PackageSyncStatus;
+        crate::app::text::with_language(Language::English, || {
+            let mut records = nova_sync::SyncStatus {
+                peer_count: 1,
+                last_sync_secs: now_secs(),
+                ..Default::default()
+            };
+            let mut packages = PackageSyncStatus {
+                pending: 1,
+                transferring: 1,
+                ..Default::default()
+            };
+            assert_eq!(
+                sync_status_with_packages(&records, packages),
+                "Syncing addons… (1 remaining)"
+            );
+            records.syncing = true;
+            assert_eq!(
+                sync_status_with_packages(&records, packages),
+                "Syncing…\nSyncing addons… (1 remaining)"
+            );
+            records.syncing = false;
+            packages.transferring = 0;
+            packages.retry_secs = Some(20);
+            assert_eq!(
+                sync_status_with_packages(&records, packages),
+                "Addon sync incomplete: 1 pending · retrying in 20s"
+            );
+            packages.retry_secs = None;
+            assert_eq!(
+                sync_status_with_packages(&records, packages),
+                "Sync incomplete: waiting for addons (1)"
+            );
+            records.last_error = Some("offline".into());
+            assert_eq!(
+                sync_status_with_packages(&records, packages),
+                "Last sync failed: offline\nSync incomplete: waiting for addons (1)"
+            );
+            records.last_error = None;
+            records.peer_count = 0;
+            assert_eq!(
+                sync_status_with_packages(&records, packages),
+                "Add a peer to start syncing\nSync incomplete: waiting for addons (1)"
+            );
+            records.peer_count = 1;
+            packages = PackageSyncStatus {
+                sending: 1,
+                ..Default::default()
+            };
+            assert_eq!(
+                sync_status_with_packages(&records, packages),
+                "Sending addons… (1)"
+            );
+            assert!(
+                sync_status_with_packages(&records, PackageSyncStatus::default())
+                    .starts_with("Last synced ")
+            );
+        });
+        crate::app::text::with_language(Language::Croatian, || {
+            let records = nova_sync::SyncStatus {
+                peer_count: 1,
+                ..Default::default()
+            };
+            assert_eq!(
+                sync_status_with_packages(
+                    &records,
+                    PackageSyncStatus {
+                        pending: 2,
+                        transferring: 1,
+                        ..Default::default()
+                    }
+                ),
+                "Sinkronizacija dodataka… (preostalo: 2)"
+            );
         });
     }
 

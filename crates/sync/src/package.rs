@@ -5,7 +5,7 @@
 //! a status byte (0 = missing, 1 = found), an 8-byte big-endian length for a
 //! found blob, its raw bytes and FIN. There are no compressed record frames.
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -19,6 +19,26 @@ pub const MAX_PACKAGE_BYTES: usize = 8 * 1024 * 1024;
 const CHUNK: usize = 64 * 1024;
 const PEER_TIMEOUT: Duration = Duration::from_secs(30);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(90);
+
+static OUTGOING: AtomicUsize = AtomicUsize::new(0);
+
+/// Transient UI accounting only; package and record wire formats are unchanged.
+pub fn outgoing_package_transfers() -> usize {
+    OUTGOING.load(Ordering::Relaxed)
+}
+
+struct ActiveSend<'a>(&'a AtomicUsize);
+impl<'a> ActiveSend<'a> {
+    fn new(counter: &'a AtomicUsize) -> Self {
+        counter.fetch_add(1, Ordering::Relaxed);
+        Self(counter)
+    }
+}
+impl Drop for ActiveSend<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
 
 /// Only registered, hash-verified addon packages should be returned. Never
 /// interpret a requested hash as an arbitrary file path.
@@ -123,6 +143,9 @@ impl PackageHandler {
                     bytes.len() <= MAX_PACKAGE_BYTES,
                     "registered package exceeds size limit"
                 );
+                // The guard also releases on timeout, peer revocation or an
+                // interrupted future, so the UI cannot retain a stuck transfer.
+                let _sending = ActiveSend::new(&OUTGOING);
                 send.write_all(&[1]).await?;
                 send.write_all(&(bytes.len() as u64).to_be_bytes()).await?;
                 for chunk in bytes.chunks(CHUNK) {
@@ -132,6 +155,9 @@ impl PackageHandler {
                     );
                     send.write_all(chunk).await?;
                 }
+                send.finish()?;
+                send.stopped().await?;
+                return Ok(());
             }
             None => send.write_all(&[0]).await?,
         }
@@ -250,6 +276,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn send_accounting_clears_when_a_transfer_future_is_dropped() {
+        let counter = AtomicUsize::new(0);
+        let mut transfer = Box::pin(async {
+            let _sending = ActiveSend::new(&counter);
+            std::future::pending::<()>().await;
+        });
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(transfer.as_mut().poll(&mut context).is_pending());
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+        drop(transfer);
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
     fn hashes_are_strict_content_identifiers() {
         assert!(validate_hash(&"a".repeat(64)).is_ok());
         for hash in [
@@ -329,6 +369,7 @@ mod tests {
             );
         }
         router.shutdown().await.unwrap();
+        assert_eq!(outgoing_package_transfers(), 0);
         a.close().await;
         b.close().await;
         outsider.close().await;

@@ -917,6 +917,40 @@ pub fn last_synced(ago: &str) -> String {
     }
 }
 
+pub fn syncing_addons(pending: usize) -> String {
+    if croatian() {
+        format!("Sinkronizacija dodataka… (preostalo: {pending})")
+    } else {
+        format!("Syncing addons… ({pending} remaining)")
+    }
+}
+
+pub fn addon_sync_waiting(pending: usize) -> String {
+    if croatian() {
+        format!("Sinkronizacija nije dovršena: dodaci na čekanju ({pending})")
+    } else {
+        format!("Sync incomplete: waiting for addons ({pending})")
+    }
+}
+
+pub fn addon_sync_retry(pending: usize, secs: u64) -> String {
+    if croatian() {
+        format!(
+            "Sinkronizacija dodataka nije dovršena: na čekanju ({pending}) · ponovni pokušaj za {secs} s"
+        )
+    } else {
+        format!("Addon sync incomplete: {pending} pending · retrying in {secs}s")
+    }
+}
+
+pub fn sending_addons(count: usize) -> String {
+    if croatian() {
+        format!("Slanje dodataka… ({count})")
+    } else {
+        format!("Sending addons… ({count})")
+    }
+}
+
 /// `"Last connected 2h ago"`.
 pub fn last_connected(ago: &str) -> String {
     if croatian() {

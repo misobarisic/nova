@@ -11,6 +11,74 @@ pub(super) const KEY: &str = "addon_packages:v1";
 pub(super) const DOMAIN: &str = "addon_packages";
 const IDS_KEY: &str = "addon_package_ids:v1";
 
+/// Local completion includes validated code, not just the synced descriptor.
+/// No extra persisted state: removals/replacements immediately change this view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct PackageSyncStatus {
+    pub pending: usize,
+    pub transferring: usize,
+    pub sending: usize,
+    pub retry_secs: Option<u64>,
+}
+
+fn package_sync_status(state: &Shared, now: std::time::Instant) -> PackageSyncStatus {
+    let mut status = PackageSyncStatus::default();
+    let mut seen = HashSet::new();
+    for addon in &state.installed {
+        let Some(id) = addon
+            .url
+            .strip_prefix("nova-provider://")
+            .map(|id| id.trim_end_matches('/'))
+        else {
+            continue;
+        };
+        if !seen.insert(id) {
+            continue;
+        }
+        let descriptor = state.package_descriptors.get(id);
+        if descriptor.is_some_and(|descriptor| {
+            state
+                .loaded_packages
+                .get(id)
+                .is_some_and(|package| descriptor.matches(package))
+        }) {
+            continue;
+        }
+        status.pending += 1;
+        let Some(descriptor) = descriptor else {
+            continue;
+        };
+        if state
+            .package_fetches
+            .get(&descriptor.sha256)
+            .is_some_and(|cancel| !cancel.load(Ordering::Relaxed))
+        {
+            status.transferring += 1;
+        } else if let Some(deadline) = state.package_retry_at.get(&descriptor.sha256) {
+            let wait = deadline.saturating_duration_since(now);
+            let secs = wait.as_secs() + u64::from(wait.subsec_nanos() != 0);
+            status.retry_secs = Some(
+                status
+                    .retry_secs
+                    .map_or(secs, |previous| previous.min(secs)),
+            );
+        }
+    }
+    status
+}
+
+pub(super) fn sync_status(bridge: &Bridge) -> PackageSyncStatus {
+    let mut status = package_sync_status(&bridge.shared.lock().unwrap(), std::time::Instant::now());
+    status.sending = nova_sync::outgoing_package_transfers();
+    status
+}
+
+pub(super) fn retry_pending(bridge: &Bridge) {
+    // An explicit Sync now bypasses addon backoff, just like record backoff.
+    // In-flight requests retain their ownership and are never duplicated.
+    bridge.shared.lock().unwrap().package_retry_at.clear();
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PackageDescriptor {
@@ -534,6 +602,7 @@ pub(super) fn reconcile(bridge: &Bridge) {
                         None,
                     );
                 }
+                bridge.sync_status_to_ui();
             });
         });
     }
@@ -726,6 +795,70 @@ impl Bridge {
 mod tests {
     use super::*;
     use nova_sync::PackageBlobStore as _;
+
+    #[test]
+    fn package_status_tracks_the_requested_code_until_activation_or_removal() {
+        let package = AddonPackage::parse(&fixture_zip("example", "1.0.0", "old")).unwrap();
+        let descriptor = PackageDescriptor::from_package(&package);
+        let installed = Installed {
+            url: package.url(),
+            label: "Example".into(),
+            enabled: false,
+            configure_ok: None,
+            manifest: package.addon_manifest().clone(),
+            available: true,
+            generation: 0,
+        };
+        let now = std::time::Instant::now();
+        let mut state = Shared {
+            installed: vec![installed.clone()],
+            package_descriptors: BTreeMap::from([("example".into(), descriptor.clone())]),
+            loaded_packages: BTreeMap::from([("example".into(), package)]),
+            ..Default::default()
+        };
+        assert_eq!(
+            package_sync_status(&state, now),
+            PackageSyncStatus::default()
+        );
+        let newer = AddonPackage::parse(&fixture_zip("example", "2.0.0", "new")).unwrap();
+        let desired = PackageDescriptor::from_package(&newer);
+        state
+            .package_descriptors
+            .insert("example".into(), desired.clone());
+        assert_eq!(
+            package_sync_status(&state, now).pending,
+            1,
+            "old active code is not completed sync"
+        );
+        state.installed.push(installed); // duplicate rows do not inflate counts
+        let cancel = Arc::new(AtomicBool::new(false));
+        state
+            .package_fetches
+            .insert(desired.sha256.clone(), cancel.clone());
+        assert_eq!(package_sync_status(&state, now).transferring, 1);
+        cancel.store(true, Ordering::Relaxed);
+        state
+            .package_retry_at
+            .insert(desired.sha256.clone(), now + Duration::from_millis(500));
+        assert_eq!(package_sync_status(&state, now).retry_secs, Some(1));
+        state.loaded_packages.insert("example".into(), newer);
+        assert_eq!(
+            package_sync_status(&state, now),
+            PackageSyncStatus::default(),
+            "validated activation finishes the stage"
+        );
+        state.package_descriptors.clear();
+        assert_eq!(
+            package_sync_status(&state, now).pending,
+            1,
+            "membership may arrive before its descriptor"
+        );
+        state.installed.clear();
+        assert_eq!(
+            package_sync_status(&state, now),
+            PackageSyncStatus::default()
+        );
+    }
     fn descriptor(version: &str, hash: char) -> PackageDescriptor {
         PackageDescriptor {
             id: "example".into(),
@@ -1071,6 +1204,7 @@ mod tests {
             assert!(bridge.shared.lock().unwrap().installed[1].available);
 
             // An already queued receipt must not revive removed membership.
+            let pending_before = sync_status(&bridge).pending;
             let future = fixture_zip("example", "3.0.0", "pending update");
             let future_package = AddonPackage::parse(&future).unwrap();
             store_archive(&future_package, &future).unwrap();
@@ -1090,7 +1224,21 @@ mod tests {
             reconcile(&bridge);
             let cancelled_receipt =
                 bridge.shared.lock().unwrap().package_fetches[future_package.sha256()].clone();
+            assert_eq!(sync_status(&bridge).pending, pending_before + 1);
+            assert_eq!(sync_status(&bridge).transferring, 1);
+            bridge.shared.lock().unwrap().package_retry_at.insert(
+                future_package.sha256().into(),
+                std::time::Instant::now() + Duration::from_secs(30),
+            );
+            retry_pending(&bridge);
+            assert!(bridge.shared.lock().unwrap().package_retry_at.is_empty());
+            assert_eq!(
+                sync_status(&bridge).transferring,
+                1,
+                "manual retry leaves the current receipt alone"
+            );
             bridge.remove_addon_at(1);
+            assert_eq!(sync_status(&bridge).pending, pending_before);
             let deadline = std::time::Instant::now() + Duration::from_secs(15);
             while Arc::strong_count(&cancelled_receipt) > 1 {
                 assert!(
