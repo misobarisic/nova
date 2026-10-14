@@ -686,12 +686,12 @@ impl Bridge {
 
         let mut state = self.shared.lock().unwrap();
 
-        // Only enabled addons feed Discover; a selection pointing at a
-        // disabled or removed addon falls back to the merged "All addons".
+        // The picker and its definitions use the same browse inventory. A
+        // removed/disabled source, or one losing its catalogs after refresh,
+        // falls back to All rather than leaving an invisible selection.
         let addon_count = state.installed.len();
-        if state.chosen_addon != usize::MAX
-            && (state.chosen_addon >= addon_count || !state.installed[state.chosen_addon].enabled)
-        {
+        let browse_idxs = discover_addon_indices(&state.installed);
+        if state.chosen_addon != usize::MAX && !browse_idxs.contains(&state.chosen_addon) {
             state.chosen_addon = usize::MAX;
         }
         let enabled_idxs: Vec<usize> = state
@@ -704,7 +704,7 @@ impl Bridge {
 
         // Rebuild type/catalog definitions from the active addon.
         state.type_defs.clear();
-        if state.chosen_addon == usize::MAX && !enabled_idxs.is_empty() {
+        if state.chosen_addon == usize::MAX && !browse_idxs.is_empty() {
             // "All addons" — merge catalogs from every enabled addon.
             state.type_defs = build_merged_type_defs(&state.installed);
         } else if state.chosen_addon < addon_count {
@@ -719,10 +719,10 @@ impl Bridge {
 
         // Collect the model contents while holding the lock.
         let mut addon_names: Vec<SharedString> = Vec::new();
-        if !enabled_idxs.is_empty() {
+        if !browse_idxs.is_empty() {
             addon_names.push(SharedString::from(text::tr("All addons")));
         }
-        for i in &enabled_idxs {
+        for i in &browse_idxs {
             addon_names.push(SharedString::from(&state.installed[*i].label));
         }
         let type_names: Vec<SharedString> = state
@@ -770,18 +770,18 @@ impl Bridge {
         if self.shared.lock().unwrap().modal_item.is_some() {
             self.apply_stream_filter();
         }
-        // Map chosen_addon to the combo index over the *enabled* addons only:
-        // "All addons" = 0, others = position in the enabled list + 1.
+        // Picker positions are over browse sources, not installed indices.
+        // "All addons" = 0, others = position in the browse list + 1.
         let addon_combo_idx = if chosen_addon == usize::MAX {
             0
         } else {
-            enabled_idxs
+            browse_idxs
                 .iter()
                 .position(|&i| i == chosen_addon)
                 .map(|p| p + 1)
                 .unwrap_or(0)
         };
-        app.set_addon_combo_idx(if !enabled_idxs.is_empty() {
+        app.set_addon_combo_idx(if !browse_idxs.is_empty() {
             addon_combo_idx as i32
         } else {
             -1
@@ -820,15 +820,20 @@ impl Bridge {
     /// change while the user is already browsing.
     pub(super) fn refresh_addon_picker_language_text(&self) {
         let Some(app) = self.app() else { return };
-        let (names, empty_hint) = {
+        let (names, empty_hint, combo_index) = {
             let state = self.shared.lock().unwrap();
             let enabled: Vec<&Installed> = state.installed.iter().filter(|a| a.enabled).collect();
+            let browse_idxs = discover_addon_indices(&state.installed);
             let mut names =
-                Vec::with_capacity(enabled.len() + if enabled.is_empty() { 0 } else { 1 });
-            if !enabled.is_empty() {
+                Vec::with_capacity(browse_idxs.len() + usize::from(!browse_idxs.is_empty()));
+            if !browse_idxs.is_empty() {
                 names.push(SharedString::from(text::tr("All addons")));
             }
-            names.extend(enabled.iter().map(|addon| SharedString::from(&addon.label)));
+            names.extend(
+                browse_idxs
+                    .iter()
+                    .map(|&index| SharedString::from(&state.installed[index].label)),
+            );
 
             let hint = if enabled.is_empty() {
                 if state.installed.is_empty() && !state.loading_addons {
@@ -844,9 +849,18 @@ impl Bridge {
             } else {
                 text::tr("No results for this selection.").to_string()
             };
-            (names, hint)
+            let combo_index = if browse_idxs.is_empty() {
+                -1
+            } else {
+                browse_idxs
+                    .iter()
+                    .position(|&index| index == state.chosen_addon)
+                    .map_or(0, |position| (position + 1) as i32)
+            };
+            (names, hint, combo_index)
         };
         app.set_addon_names(Rc::new(VecModel::from(names)).into());
+        app.set_addon_combo_idx(combo_index);
         app.set_empty_hint(SharedString::from(empty_hint));
     }
 
@@ -1200,6 +1214,15 @@ mod move_tests {
         assert_eq!(Bridge::move_item(&mut items, 7, -1), None);
         assert_eq!(items, v(&["a", "b"]));
     }
+}
+
+pub(crate) fn discover_addon_indices(installed: &[Installed]) -> Vec<usize> {
+    installed
+        .iter()
+        .enumerate()
+        .filter(|(_, addon)| addon.enabled && browsable_catalogs(&addon.manifest).next().is_some())
+        .map(|(index, _)| index)
+        .collect()
 }
 
 fn addon_matches(addon: &Installed, query: &str, filter: i32) -> bool {

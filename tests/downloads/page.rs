@@ -271,11 +271,11 @@ fn completed_episode_actions_keep_job_identity_across_layouts() {
 }
 
 #[test]
-fn group_expansion_retargets_without_squeezing_rows_or_animating_model_updates() {
+fn group_toggles_update_rows_immediately_and_keep_header_fixed() {
     if !crate::isolation::run(concat!(
         module_path!(),
         "::",
-        "group_expansion_retargets_without_squeezing_rows_or_animating_model_updates"
+        "group_toggles_update_rows_immediately_and_keep_header_fixed"
     )) {
         return;
     }
@@ -299,9 +299,6 @@ fn group_expansion_retargets_without_squeezing_rows_or_animating_model_updates()
         ..Default::default()
     }]));
     app.set_downloads_page_groups(groups.clone().into());
-    let actions = Rc::new(RefCell::new(Vec::new()));
-    let recorded = actions.clone();
-    app.on_downloads_page_action(move |id, kind| recorded.borrow_mut().push((id, kind)));
     let height = || {
         ElementHandle::find_by_element_type_name(&app, "DownloadSeriesCard")
             .next()
@@ -343,57 +340,42 @@ fn group_expansion_retargets_without_squeezing_rows_or_animating_model_updates()
     for (width, viewport_height) in [(390, 900), (820, 390), (1280, 900)] {
         app.window()
             .set_size(slint::PhysicalSize::new(width, viewport_height));
-        app.global::<nova::Anim>().set_enabled(true);
-        app.global::<nova::Anim>().set_transitions(true);
         advance(300);
         assert_eq!(height(), 250.0);
-        collapse(true);
-        advance(70);
-        assert!(
-            height() > 86.0 && height() < 250.0,
-            "collapse must be gradual"
-        );
-        for row in ElementHandle::find_by_element_type_name(&app, "DownloadEpisodeRow") {
-            assert_eq!(row.size().height, 82.0, "clipped rows keep their geometry");
+        for (master, transitions) in [(true, true), (true, false), (false, true)] {
+            app.global::<nova::Anim>().set_enabled(master);
+            app.global::<nova::Anim>().set_transitions(transitions);
+            collapse(true);
+            advance(1);
+            assert_eq!(
+                height(),
+                86.0,
+                "episode list closes immediately even with motion enabled"
+            );
+            assert_eq!(
+                ElementHandle::find_by_element_type_name(&app, "DownloadEpisodeRow").count(),
+                0,
+                "collapsed cards retain no episode rows"
+            );
+            collapse(false);
+            advance(1);
+            assert_eq!(
+                height(),
+                250.0,
+                "episode list opens immediately even with motion enabled"
+            );
+            for row in ElementHandle::find_by_element_type_name(&app, "DownloadEpisodeRow") {
+                assert_eq!(row.size().height, 82.0);
+            }
+            advance(70);
+            assert_eq!(height(), 250.0, "chevron motion must not resize the list");
         }
-        if let Some(play) = ElementHandle::find_by_accessible_label(&app, "Play").next() {
-            click_element(&app, &play);
-            assert!(actions.borrow().is_empty(), "closing rows are inert");
-        }
-        let halfway = height();
-        collapse(false);
-        advance(70);
-        assert!(
-            height() > halfway && height() < 250.0,
-            "reopening reverses the exit"
-        );
-        advance(300);
-        assert_eq!(height(), 250.0);
-        // Periodic backend progress publication must keep focus and height.
+        // Periodic backend publication keeps row geometry stable.
         let mut row = episodes.row_data(0).unwrap();
         row.progress = 0.6;
         episodes.set_row_data(0, row);
         advance(1);
         assert_eq!(height(), 250.0);
-        for (master, transitions) in [(true, false), (false, true)] {
-            app.global::<nova::Anim>().set_enabled(master);
-            app.global::<nova::Anim>().set_transitions(transitions);
-            collapse(true);
-            advance(1);
-            assert_eq!(height(), 86.0, "disabled motion collapses immediately");
-            collapse(false);
-            advance(1);
-            assert_eq!(height(), 250.0);
-        }
-        app.global::<nova::Anim>().set_enabled(true);
-        app.global::<nova::Anim>().set_transitions(true);
-        collapse(true);
-        advance(60);
-        app.global::<nova::Anim>().set_enabled(false);
-        advance(1);
-        assert_eq!(height(), 86.0, "disabling mid-exit snaps to the target");
-        collapse(false);
-        advance(1);
     }
 }
 

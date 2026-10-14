@@ -703,8 +703,8 @@ msgstr "Glavni prekidač. Isključite ga da svi prijelazi i efekti prelaska poka
 msgid "Page transitions"
 msgstr "Prijelazi stranica"
 
-msgid "Slide and fade between pages, move tab indicators and expand download groups."
-msgstr "Klizanje i postupno pojavljivanje između stranica, pomicanje oznaka kartica i proširivanje grupa preuzimanja."
+msgid "Slide and fade between pages, move tab indicators and rotate download chevrons."
+msgstr "Klizanje i postupno pojavljivanje između stranica, pomicanje oznaka kartica i okretanje strelica preuzimanja."
 
 msgid "Hover effects"
 msgstr "Efekti prelaska pokazivača"

@@ -849,15 +849,15 @@ pub fn install_failed(detail: &str) -> String {
     }
 }
 
-/// `"X provides streams but no browsable catalogs — …"`.
+/// `"X has no browsable catalogs — …"` (also covers search-only sources).
 pub fn no_browsable_catalogs(base: &str) -> String {
     if croatian() {
         format!(
-            "{base} nudi zapise, ali nema kataloga za pregledavanje — dodajte dodatak s katalozima (npr. Cinemeta) za pregled."
+            "{base} nema kataloga za pregledavanje — dodajte dodatak s katalozima (npr. Cinemeta) za pregled."
         )
     } else {
         format!(
-            "{base} provides streams but no browsable catalogs — add an addon with catalogs (e.g. Cinemeta) to browse."
+            "{base} has no browsable catalogs — add an addon with catalogs (e.g. Cinemeta) to browse."
         )
     }
 }

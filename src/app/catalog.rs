@@ -897,11 +897,10 @@ impl Bridge {
             usize::MAX
         } else {
             let state = self.shared.lock().unwrap();
-            state
-                .installed
-                .iter()
-                .position(|a| a.label == label)
-                .unwrap_or(0)
+            discover_addon_indices(&state.installed)
+                .into_iter()
+                .find(|&index| state.installed[index].label == label)
+                .unwrap_or(usize::MAX)
         };
         {
             let mut state = self.shared.lock().unwrap();
@@ -1706,21 +1705,8 @@ impl Bridge {
     /// query, pagination, or search-result models.
     pub(super) fn refresh_catalog_language_text(&self) {
         let Some(app) = self.app() else { return };
-        let (has_grid, searchable) = {
-            let state = self.shared.lock().unwrap();
-            let searchable = !build_search_targets(&state.installed).is_empty();
-            (!state.type_defs.is_empty(), searchable)
-        };
-        app.set_searchable(searchable && has_grid);
-        app.set_searchable_hint(SharedString::from(if has_grid {
-            if searchable {
-                text::tr("Search movies, shows…")
-            } else {
-                text::tr("No enabled catalogs support search.")
-            }
-        } else {
-            ""
-        }));
+        // Search-only catalogs stay usable even when the browse picker is empty.
+        self.apply_search_support_to_ui();
 
         let query = app.get_search_text();
         let search_hint = if query.trim().chars().count() >= 2 {
@@ -2441,11 +2427,23 @@ fn search_media_card(meta: &MetaPreview) -> MediaCard {
     }
 }
 
+/// Browse can supply genre/skip extras, but has no search query. Share the
+/// same eligibility rule between its source picker and catalog definitions.
+pub(crate) fn browsable_catalogs(manifest: &Manifest) -> impl Iterator<Item = &addons::Catalog> {
+    manifest.catalogs.iter().filter(move |catalog| {
+        (manifest.resources.is_empty() || manifest.accepts("catalog", &catalog.type_, &catalog.id))
+            && !catalog
+                .extra
+                .iter()
+                .any(|extra| extra.name == "search" && extra.is_required)
+    })
+}
+
 pub(crate) fn build_type_defs(manifest: &Manifest, addon_label: &str) -> Vec<TypeDef> {
     use std::collections::HashMap;
 
     let mut by_type: HashMap<String, Vec<&addons::Catalog>> = HashMap::new();
-    for cat in &manifest.catalogs {
+    for cat in browsable_catalogs(manifest) {
         by_type.entry(cat.type_.clone()).or_default().push(cat);
     }
 
@@ -2504,13 +2502,16 @@ pub(crate) fn build_type_defs(manifest: &Manifest, addon_label: &str) -> Vec<Typ
 pub(crate) fn build_merged_type_defs(installed: &[Installed]) -> Vec<TypeDef> {
     use std::collections::HashMap;
 
-    let active: Vec<&Installed> = installed.iter().filter(|a| a.enabled).collect();
+    let active: Vec<&Installed> = discover_addon_indices(installed)
+        .into_iter()
+        .map(|index| &installed[index])
+        .collect();
 
     // Collect all (type, catalog, addon_label) triples.
     type MergedCatalog = (String, String, bool, Vec<String>, String);
     let mut by_type: HashMap<String, Vec<MergedCatalog>> = HashMap::new();
     for inst in &active {
-        for cat in &inst.manifest.catalogs {
+        for cat in browsable_catalogs(&inst.manifest) {
             by_type.entry(cat.type_.clone()).or_default().push((
                 cat.id.clone(),
                 cat.name.clone(),
@@ -2929,6 +2930,194 @@ mod tests {
                 extra: Default::default(),
             },
         }
+    }
+
+    fn browse_inventory() -> Vec<Installed> {
+        let mut required_search = extra("search", &[]);
+        required_search.is_required = true;
+        let mut addons = vec![
+            installed(true, vec![]),
+            installed(
+                true,
+                vec![catalog("series", "required", vec![required_search.clone()])],
+            ),
+            installed(
+                true,
+                vec![
+                    catalog("series", "mixed-required", vec![required_search]),
+                    catalog("movie", "optional", vec![extra("search", &[])]),
+                ],
+            ),
+            installed(false, vec![catalog("series", "disabled", vec![])]),
+            installed(true, vec![catalog("movie", "browse", vec![])]),
+            installed(true, vec![catalog("series", "misdeclared", vec![])]),
+        ];
+        for (index, (addon, label)) in addons
+            .iter_mut()
+            .zip([
+                "Streams",
+                "Search only",
+                "Optional search",
+                "Disabled",
+                "Browse",
+                "Metadata",
+            ])
+            .enumerate()
+        {
+            addon.url = format!("http://127.0.0.1:1/{index}");
+            addon.label = label.into();
+        }
+        addons[0].manifest.resources = vec![addons::Resource::Plain("stream".into())];
+        addons[5].manifest.resources = vec![addons::Resource::Plain("meta".into())];
+        addons
+    }
+
+    #[test]
+    fn discover_browse_inventory_excludes_non_browsable_sources_but_preserves_search() {
+        let addons = browse_inventory();
+        assert_eq!(discover_addon_indices(&addons), [2, 4]);
+        let merged = build_merged_type_defs(&addons);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].type_, "movie");
+        assert_eq!(
+            merged[0]
+                .catalogs
+                .iter()
+                .map(|cat| cat.id.as_str())
+                .collect::<Vec<_>>(),
+            ["optional", "browse"]
+        );
+        assert!(build_type_defs(&addons[1].manifest, "Search only").is_empty());
+        assert!(build_type_defs(&addons[5].manifest, "Metadata").is_empty());
+        let single = build_type_defs(&addons[2].manifest, "Optional search");
+        assert_eq!(single.len(), 1);
+        assert_eq!(single[0].catalogs[0].id, "optional");
+        assert_eq!(
+            build_search_targets(&addons)
+                .iter()
+                .map(|target| target.catalog_id.as_str())
+                .collect::<Vec<_>>(),
+            ["required", "mixed-required", "optional"]
+        );
+        let mut genre = extra("genre", &["Drama"]);
+        genre.is_required = true;
+        assert!(
+            !build_type_defs(
+                &installed(true, vec![catalog("movie", "genre", vec![genre])]).manifest,
+                "Genres"
+            )
+            .is_empty(),
+            "a selectable required genre still permits browsing"
+        );
+    }
+
+    #[test]
+    fn discover_addon_picker_refresh_and_language_keep_browse_indices_and_search_only_sources() {
+        const CHILD: &str = "NOVA_TEST_BROWSE_PICKER_CHILD";
+        let Ok(root) = std::env::var(CHILD) else {
+            let root =
+                std::env::temp_dir().join(format!("nova-browse-picker-{}", std::process::id()));
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "app::catalog::tests::discover_addon_picker_refresh_and_language_keep_browse_indices_and_search_only_sources", "--nocapture"])
+                .env(CHILD, &root).output().unwrap();
+            let _ = std::fs::remove_dir_all(&root);
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        app.window().show().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let downloads = DownloadCoordinator::new(root.join("downloads"));
+        #[cfg(feature = "desktop")]
+        let bridge = {
+            let (hi, _) = mpsc::channel();
+            let (lo, _) = mpsc::channel();
+            Bridge::new(
+                app.as_weak(),
+                PosterTx { hi, lo },
+                Arc::new(AtomicU64::new(0)),
+                player,
+                downloads,
+            )
+        };
+        #[cfg(not(feature = "desktop"))]
+        let bridge = Bridge::new(
+            app.as_weak(),
+            Arc::new(AtomicU64::new(0)),
+            player,
+            downloads,
+        );
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.installed = browse_inventory();
+            state.chosen_addon = 2;
+            // Skip unrelated Home fetches while testing picker publication.
+            state.loading_addons = true;
+        }
+        let names = || {
+            app.get_addon_names()
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>()
+        };
+        bridge.refresh_all(false);
+        assert_eq!(names(), ["All addons", "Optional search", "Browse"]);
+        assert_eq!(
+            app.get_addon_combo_idx(),
+            1,
+            "picker index differs from installed index"
+        );
+        bridge.refresh_addon_picker_language_text();
+        assert_eq!(names(), ["All addons", "Optional search", "Browse"]);
+        assert_eq!(app.get_addon_combo_idx(), 1);
+        assert!(
+            app.get_search_addon_names()
+                .iter()
+                .any(|name| name == "Search only")
+        );
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.chosen_addon = 5;
+        }
+        bridge.refresh_all(false);
+        assert_eq!(bridge.shared.lock().unwrap().chosen_addon, usize::MAX);
+        assert_eq!(app.get_addon_combo_idx(), 0);
+        assert_eq!(app.get_catalog_names().row_count(), 2);
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.installed[2].manifest.catalogs.clear();
+            state.installed[4].enabled = false;
+            state.chosen_addon = 2;
+        }
+        bridge.refresh_all(false);
+        assert!(names().is_empty());
+        assert_eq!(app.get_addon_combo_idx(), -1);
+        assert_eq!(app.get_type_names().row_count(), 0);
+        assert!(
+            app.get_searchable(),
+            "search-only catalogs remain usable with no browse sources"
+        );
+        bridge.refresh_addon_picker_language_text();
+        bridge.refresh_catalog_language_text();
+        assert!(names().is_empty());
+        assert!(
+            app.get_searchable(),
+            "language refresh must preserve search-only support"
+        );
+        bridge.pick_addon("Search only");
+        assert_eq!(
+            bridge.shared.lock().unwrap().chosen_addon,
+            usize::MAX,
+            "stale callbacks cannot select a hidden browse source"
+        );
     }
 
     #[test]
