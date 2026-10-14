@@ -289,6 +289,22 @@ impl ChangeSchedule {
 thread_local! {
     static PLAYBACK_CHECKPOINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
+/// Capture classification when an app moves a save to its own worker thread.
+pub fn is_playback_checkpoint() -> bool {
+    PLAYBACK_CHECKPOINT.get()
+}
+
+type PersistenceBarrier = Arc<dyn Fn() -> Result<()> + Send + Sync>;
+static PERSISTENCE_BARRIER: Mutex<Option<PersistenceBarrier>> = Mutex::new(None);
+/// An app may queue local saves. Drain them before exchanging or projecting
+/// records; the callback must run before taking the record-owner lock.
+pub fn set_persistence_barrier(barrier: PersistenceBarrier) {
+    *PERSISTENCE_BARRIER.lock().unwrap() = Some(barrier);
+}
+pub(crate) fn flush_persistence() -> Result<()> {
+    let barrier = PERSISTENCE_BARRIER.lock().unwrap().clone();
+    barrier.map_or(Ok(()), |barrier| barrier())
+}
 /// Classify a periodic playback save without making manual progress edits wait.
 pub fn playback_checkpoint<T>(save: impl FnOnce() -> T) -> T {
     struct Reset(bool);
@@ -311,6 +327,13 @@ pub fn request_local_sync() {
 /// but only the live app engine (never a headless job lease) may request it.
 /// Repeated paused ticks with no new mutation neither notify nor request work.
 pub fn flush_local_sync() {
+    if let Err(error) = flush_persistence() {
+        nova_storage::report(nova_storage::Error::new(
+            nova_storage::ErrorKind::Transaction,
+            error,
+        ));
+        return;
+    }
     if let Some(engine) = engine() {
         let allowed = read_settings().enabled && !engine.stop.load(Ordering::Relaxed);
         #[cfg(target_os = "android")]

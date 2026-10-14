@@ -405,6 +405,10 @@ impl CacheImageFormat {
 
 // Keep a single field declaration for serialization and the migration decoder.
 // The remote derive constructs CacheSettings after legacy JSON has been normalized.
+const fn default_image_disk_cache_limit() -> Option<u32> {
+    Some(1024)
+}
+
 macro_rules! cache_settings_type {
     ($($fields:tt)*) => {
         #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -421,6 +425,9 @@ cache_settings_type! {
     /// a run). On by default.
     #[serde(default = "default_true")]
     pub cache_images: bool,
+    /// Synced disk artwork budget in MiB; None keeps an unlimited cache.
+    #[serde(default = "default_image_disk_cache_limit")]
+    pub image_disk_cache_limit_mb: Option<u32>,
     /// Encode processed variants lossily when enabled; otherwise resizing is lossless.
     pub enabled: bool,
     pub format: CacheImageFormat,
@@ -639,6 +646,7 @@ impl Default for CacheSettings {
     fn default() -> Self {
         Self {
             cache_images: true,
+            image_disk_cache_limit_mb: default_image_disk_cache_limit(),
             enabled: false,
             format: CacheImageFormat::Webp,
             quality: 85,
@@ -811,6 +819,11 @@ pub fn quantize_playback_speed(speed: f32) -> f32 {
 
 static CURRENT_CACHE_SETTINGS: LazyLock<Mutex<CacheSettings>> =
     LazyLock::new(|| Mutex::new(CacheSettings::default()));
+
+/// Cheap hit-path policy check without cloning the full settings snapshot.
+pub fn disk_image_cache_enabled() -> bool {
+    CURRENT_CACHE_SETTINGS.lock().unwrap().cache_images
+}
 
 /// The active image-cache settings.
 pub fn active_cache_settings() -> CacheSettings {
@@ -1305,6 +1318,16 @@ mod image_resolution_tests {
         assert_eq!(defaults.detail_backdrop_max_side, Some(960));
         assert_eq!(defaults.episode_thumbnail_max_side, Some(360));
         assert_eq!(defaults.player_episode_backdrop_max_side, None);
+        assert_eq!(defaults.image_disk_cache_limit_mb, Some(1024));
+        let unlimited: CacheSettings = serde_json::from_value(settings(
+            serde_json::json!({"image_disk_cache_limit_mb":null}),
+        ))
+        .unwrap();
+        assert_eq!(unlimited.image_disk_cache_limit_mb, None);
+        assert_eq!(
+            serde_json::to_value(&unlimited).unwrap()["image_disk_cache_limit_mb"],
+            serde_json::Value::Null
+        );
         let legacy: CacheSettings = serde_json::from_value(settings(
             serde_json::json!({"downscale":true,"lazy_reencode":true,"rewrite_existing":true}),
         ))

@@ -41,14 +41,97 @@ separate HW+ GPU and HW/SW mpv capture paths until this follow-on is implemented
 
 Implemented for Supernova: validated stream lists, discovery and normalized
 metadata now persist in the OS cache directory with TTL/LRU bounds. A worker
-prunes the disk cache at startup and every five minutes; reads enforce expiry
-immediately. See `src/app/plugin_cache.rs` and the provider guide. TorBox still
+checks a saved daily cleanup deadline every two minutes and on wake; due passes
+prune the disk cache, while reads enforce expiry immediately. Unchanged cache
+snapshots skip file writes. See `src/app/plugin_cache.rs` and the provider guide. TorBox still
 checks availability and requests a fresh link on selection.
 
 The shared next-episode prefetch cache remains in memory for five minutes.
 Ordinary remote addon stream URLs remain memory-only unless a safe refresh
 contract is introduced. Expiring playback URLs, authorization headers and API
 keys must never enter persisted stream caches.
+
+## Stored-data compression audit
+
+Status: measured on 2026-10-14. Library/history snapshots and their baselines now
+use independently encoded authoritative rows and an ordered background save
+worker; the other compression candidates below remain follow-ons. The audit
+could not open the local redb database read-only without recovery and left it
+untouched. This does not establish corruption or the sizes of its logical data.
+The provider file and new usage index were absent. DB-family results below use
+seeded, model-shaped fixtures; the artwork-index sample reconstructs 637 actual
+variant headers in memory, without saving or printing their contents.
+
+Benchmarks imported `crates/storage/src/codec.rs` into an optimized standalone
+Rust runner in default Nix: current adaptive zstd level 3, checksums and envelope,
+three warmups and 31 timed rounds, exact round-trip checks, median milliseconds.
+Hardware: AMD Ryzen 5 5500U, not CPU-pinned. Times include codec allocations and
+copies, but exclude JSON serialization, disk IO and application transactions.
+These are desktop codec timings, not Android or end-to-end checkpoint timings.
+
+| Sample | JSON bytes | Encoded bytes | Saved | Encode / decode ms |
+|---|---:|---:|---:|---:|
+| Home: 8 catalogs, 160 previews (fixture) | 192,450 | 54,654 | 71.60% | 0.771 / 0.193 |
+| Provider: 200 entries, 4,000 previews (fixture) | 4,941,415 | 602,760 | 87.80% | 11.899 / 4.826 |
+| Library: 1,000 titles (fixture) | 1,048,763 | 291,907 | 72.17% | 4.504 / 1.172 |
+| History: 10,000 episodes (fixture) | 2,158,829 | 278,799 | 87.09% | 5.233 / 2.429 |
+| Library baseline: 1,000 titles (fixture) | 1,106,801 | 298,151 | 73.06% | 4.731 / 1.352 |
+| Progress baseline: 10,000 episodes (fixture) | 2,378,829 | 288,185 | 87.89% | 5.471 / 3.294 |
+| Tracking: 200 bindings (fixture) | 895,539 | 36,203 | 95.96% | 0.965 / 0.584 |
+| Downloads: 500 jobs (fixture) | 366,043 | 74,007 | 79.78% | 1.024 / 0.293 |
+| Usage index: 637 actual headers, reconstructed | 232,998 | 25,380 | 89.11% | 0.376 / 0.135 |
+
+Fixtures used Python `random.Random(20261014)`, varied titles, independently
+generated IDs/URL paths/timestamps, 32 artwork hosts, mixed genres and distinct
+45–100-word descriptions from ordinary words plus 1,200 generated proper-name
+words. Provider pages overlap among 1,000 titles; baselines contain per-item JSON
+strings. None of these fixtures measures actual DB-family usage.
+
+Recommended implementation order:
+
+1. Add `home:catalog-rows:v1` to `src/app/io.rs::metadata_cache_key`, extending its
+   policy regression. It stores the same cache shape as Home showcase, already
+   uses `write_json`, and can migrate atomically on its next metadata write.
+2. Compress the disposable provider cache file with versioned framing, legacy
+   JSON reads and atomic replacement. Preserve its 121 MiB decoded bound or raw
+   fallback: the current storage codec caps values at 64 MiB. Whole-file encoding
+   currently occurs while the provider service mutex is held; measure request
+   latency as well as disk savings.
+3. Implemented for Library/history: generic registered collections share the
+   existing `try_write_batch` transaction with scalar bookkeeping and sync rows.
+   `state_rows_v1` stores individual title/episode/baseline payloads, retaining
+   encoded bytes for unchanged records. Logical JSON reads stay compatible;
+   descriptors fail old typed readers closed, and corrupt payloads block updates.
+   Normal app saves serialize/compress on an ordered worker, with lifecycle and
+   remote-apply flush barriers. The existing 1 KiB / 10% compression policy is
+   unchanged, so tiny progress rows stay raw. Whole-blob benchmark savings above
+   do not predict per-record savings. Additional authoritative collections remain
+   deferred; there is no sync wire or ALPN change.
+4. Normalize the usage index before adding a dependency to `nova-media`: replacing
+   its duplicated URL-bearing key with recipe fields reduced the reconstructed
+   plain JSON to 174,235 bytes (25.22% smaller). Preserve reconstruction and clean
+   shutdown markers. Consider compression after measuring larger real workloads.
+5. Defer tracking/download compression until actual sizes warrant it; their
+   recovery-critical state needs the same authoritative storage contract.
+
+The current 1 KiB threshold left all 10,000 modeled progress sync records raw:
+675–980 bytes each, including escaped progress JSON, `__nova_progress_v1`
+candidates and versions. Encoding added 100,000 envelope bytes. An isolated
+temporary-codec probe with a 256-byte threshold reduced their combined
+8,858,313 bytes to 2,927,960 (66.95%), but median batch encode/decode took
+153.431 / 26.650 ms. Ordinary saves touch dirty rows, while full-store migration
+and startup pay the batch cost. Evaluate a separate row policy rather than
+globally lowering metadata thresholds.
+
+Normal Library/history saves now run on the persistence worker; lifecycle and
+remote-projection flushes still wait for durable completion. A follow-on
+benchmark should measure whole transactions and Android frame/flush latency,
+rather than extrapolating these whole-blob codec timings to per-record saves.
+Tiny settings, counters, maintenance markers, clocks, credentials and secrets
+should remain plain by default. Compression does not reduce retained decoded
+RAM or immediately shrink existing redb allocation. All audit runners/fixtures
+were removed; the audit did not modify production data. The implemented
+authoritative row policy is described in `docs/project-structure.md`.
 
 ## Android video-restoration latency
 

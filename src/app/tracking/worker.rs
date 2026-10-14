@@ -2250,10 +2250,7 @@ impl Coordinator {
                 }
             })
             .collect::<Vec<_>>();
-        let history: HashMap<String, EpisodeProgress> = read_json_result(EPISODE_PROGRESS_KEY)
-            .ok()
-            .flatten()
-            .unwrap_or_default();
+        let history = read_progress_map();
         let links = self
             .context
             .as_ref()

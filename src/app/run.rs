@@ -130,6 +130,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .try_exists()
         .unwrap_or(true);
     storage::init_at(&app_data_dir());
+    persistence::register_collections();
     let onboarding_visible = onboarding::begin(database_existed);
     let owns_addon_setup = onboarding::owns_addon_setup();
     app.set_onboarding_visible(onboarding_visible);
@@ -944,6 +945,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.sync_seed();
     bridge.restore_sync_projection();
     bridge.settings_to_ui();
+    let image_gc_worker = cache_gc::start(&bridge);
+    let persistence_worker = persistence::start();
     bridge.shared.lock().unwrap().restoring_models = false;
     bridge.apply_library_to_ui();
     // Home landing page: derive Continue Watching, New episodes and Upcoming
@@ -1178,6 +1181,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         slint::TimerMode::Repeated,
         Duration::from_millis(250),
         move || {
+            if let Some(app) = tick_bridge.app() {
+                app.set_persistence_failed(
+                    storage::last_error().is_some() || persistence::failed(),
+                );
+            }
             let today = today_days();
             if today != episode_day {
                 episode_day = today;
@@ -1244,7 +1252,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     crate::web_log("nova: startup complete, entering event loop");
     let result = app.run();
+    bridge.persist_outgoing_playback();
     bridge.shutdown_tracking();
+    drop(persistence_worker);
+    drop(image_gc_worker);
     result?;
     Ok(())
 }

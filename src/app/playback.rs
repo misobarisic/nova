@@ -68,6 +68,7 @@ pub(crate) fn note_android_pause_checkpoint() {
         bridge.note_player_progress_from_ui();
         bridge.persist_outgoing_playback();
     }
+    persistence::flush_report();
 }
 
 impl Bridge {
@@ -658,6 +659,7 @@ impl Bridge {
 
     /// Save the last observation before another episode replaces its target.
     pub(super) fn persist_outgoing_playback(&self) {
+        persistence::flush_report();
         self.flush_playback_preferences(true);
         let map = {
             let mut state = self.shared.lock().unwrap();
@@ -1232,14 +1234,13 @@ pub(crate) fn resume_step(
 
 /// Read the whole progress map (empty when absent/corrupt).
 pub(crate) fn read_progress_map() -> HashMap<String, EpisodeProgress> {
-    read_json::<HashMap<String, EpisodeProgress>>(EPISODE_PROGRESS_KEY).unwrap_or_default()
+    persistence::pending_progress().unwrap_or_else(|| {
+        read_json::<HashMap<String, EpisodeProgress>>(EPISODE_PROGRESS_KEY).unwrap_or_default()
+    })
 }
-/// Persist the whole progress map.
+/// Queue a progress snapshot; storage writes only changed episode records.
 pub(crate) fn write_progress_map(map: &HashMap<String, EpisodeProgress>) {
-    write_json(EPISODE_PROGRESS_KEY, map);
-    if !applying() {
-        notify_progress(map);
-    }
+    persistence::write_progress(map);
 }
 /// App-wide torrent settings (mirrored in the settings page). Persisted in
 /// the same KV store as the image-cache settings, so it works on Android too.

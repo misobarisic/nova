@@ -122,6 +122,9 @@ fn sync_records(domain: &str, records: Vec<(String, String, u64)>) {
 type SnapshotDomainRecords = (&'static str, Vec<(String, String, u64)>);
 
 pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sync::Result<()> {
+    persistence::register_collections();
+    persistence::flush()
+        .map_err(|error| storage::Error::new(storage::ErrorKind::Transaction, error))?;
     if !writable_key(key) {
         return Err(storage::Error::new(
             storage::ErrorKind::Schema,
@@ -257,7 +260,7 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
     let owner = nova_sync::local_store()?;
     let dev = nova_sync::local_device()?;
     let mut store = owner.lock().unwrap();
-    let mut changed = false;
+    let mut changed = store.has_dirty_records();
     if let Some(activity) = activity_update {
         changed |= nova_sync::prepare_snapshot(
             &mut store,
@@ -386,30 +389,6 @@ pub(super) fn persist_package_state(
         Ok(())
     };
     commit().map_err(|e| e.to_string())
-}
-
-pub(crate) fn notify_library(entries: &[LibraryEntry]) {
-    let records = entries
-        .iter()
-        .filter_map(|e| {
-            serde_json::to_string(e)
-                .ok()
-                .map(|json| (e.id.clone(), json, 0))
-        })
-        .collect();
-    sync_records(DOMAIN_LIBRARY, records);
-}
-
-pub(crate) fn notify_progress(map: &HashMap<String, EpisodeProgress>) {
-    let records = map
-        .iter()
-        .filter_map(|(key, progress)| {
-            serde_json::to_string(progress)
-                .ok()
-                .map(|json| (key.clone(), json, progress.updated_at_secs))
-        })
-        .collect();
-    sync_records(DOMAIN_PROGRESS, records);
 }
 
 /// Push the Continue Watching hide map (`id -> hidden_at` unix secs). A key
@@ -988,6 +967,10 @@ impl Bridge {
 
     fn sync_apply_inner(&self, domains: Vec<String>, publish_models: bool) {
         if domains.is_empty() {
+            return;
+        }
+        if let Err(error) = persistence::flush() {
+            io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error));
             return;
         }
         // Flush a slider edit before projecting a remote snapshot; independent
@@ -2285,6 +2268,7 @@ mod tests {
     #[test]
     fn settings_fields_split_per_field_and_group_cache() {
         let settings = CacheSettings {
+            image_disk_cache_limit_mb: Some(2048),
             quality: 91,
             detail_poster_max_side: Some(720),
             detail_backdrop_max_side: None,
@@ -2311,10 +2295,30 @@ mod tests {
             .collect();
         // Independent settings sync as their own records.
         assert_eq!(fields.get("animations").map(String::as_str), Some("false"));
+        assert_eq!(fields["image_disk_cache_limit_mb"], "2048");
         // Cache settings are coupled into one whole-record blob.
         let cache: serde_json::Value =
             serde_json::from_str(fields.get("cache").expect("cache group")).unwrap();
         assert_eq!(cache["quality"], 91);
+        assert!(cache.get("image_disk_cache_limit_mb").is_none());
+        let unlimited = merge_settings_fields(
+            &settings,
+            &[("image_disk_cache_limit_mb".into(), "null".into())],
+        );
+        assert_eq!(unlimited.image_disk_cache_limit_mb, None);
+        let mut local = settings.clone();
+        local
+            .sync_overrides
+            .insert("image_disk_cache_limit_mb".into(), serde_json::json!(2048));
+        let merged = merge_settings_fields(
+            &local,
+            &[("image_disk_cache_limit_mb".into(), "4096".into())],
+        );
+        assert_eq!(merged.image_disk_cache_limit_mb, Some(2048));
+        assert_eq!(
+            merged.sync_overrides["image_disk_cache_limit_mb"],
+            serde_json::json!(4096)
+        );
         assert_eq!(cache["cache_images"], true);
         assert_eq!(cache["detail_poster_max_side"], 720);
         assert_eq!(cache["detail_backdrop_max_side"], serde_json::Value::Null);

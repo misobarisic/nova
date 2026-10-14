@@ -300,6 +300,8 @@ struct Service {
     // Process-only entries are never serialized or sent to the backend.
     memory_cache: BTreeMap<String, CacheEntry>,
     tick: u64,
+    // A digest tracks durable contents without retaining a second full cache.
+    persisted_cache: Mutex<Option<[u8; 32]>>,
 }
 fn service() -> &'static Mutex<Service> {
     static STORE: OnceLock<Mutex<Service>> = OnceLock::new();
@@ -367,8 +369,9 @@ pub fn configure_plugin_settings(
         .map(|raw| parse_settings(&raw))
         .transpose()?
         .unwrap_or_default();
-    let cache = backend
-        .load_cache()?
+    let loaded_cache = backend.load_cache()?;
+    let persisted_cache = loaded_cache.as_deref().map(cache_digest);
+    let cache = loaded_cache
         .filter(|raw| raw.len() <= CACHE_LIMIT * 6 + 1024 * 1024)
         .and_then(|raw| serde_json::from_str::<BTreeMap<String, CacheEntry>>(&raw).ok())
         .unwrap_or_default();
@@ -386,6 +389,7 @@ pub fn configure_plugin_settings(
         cache,
         memory_cache: BTreeMap::new(),
         tick,
+        persisted_cache: Mutex::new(persisted_cache),
     };
     prune_cache(&mut state, 0);
     Ok(())
@@ -729,13 +733,26 @@ fn cache_set_inner(
     }
     Ok(())
 }
+fn cache_digest(raw: &str) -> [u8; 32] {
+    aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, raw.as_bytes())
+        .as_ref()
+        .try_into()
+        .unwrap()
+}
 fn save_cache(state: &Service) -> Result<(), ProviderHostError> {
     let raw = serde_json::to_string(&state.cache).map_err(|_| error("invalid cache"))?;
+    let digest = cache_digest(&raw);
+    let mut persisted = state.persisted_cache.lock().unwrap();
+    if *persisted == Some(digest) {
+        return Ok(());
+    }
     state
         .backend
         .as_ref()
         .ok_or_else(|| error("plugin cache unavailable"))?
-        .save_cache(&raw)
+        .save_cache(&raw)?;
+    *persisted = Some(digest);
+    Ok(())
 }
 /// Maintenance hook for background GC passes. Persist even if a prior read already
 /// removed expired entries in memory: their durable rows still need collection.
@@ -882,6 +899,7 @@ mod tests {
     struct Memory {
         settings: Mutex<Option<String>>,
         cache: Mutex<Option<String>>,
+        cache_writes: std::sync::atomic::AtomicUsize,
         fail: std::sync::atomic::AtomicBool,
     }
     impl PluginSettingsBackend for Memory {
@@ -902,6 +920,8 @@ mod tests {
             if self.fail.load(std::sync::atomic::Ordering::Relaxed) {
                 return Err(error("disk full"));
             }
+            self.cache_writes
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             *self.cache.lock().unwrap() = Some(raw.into());
             Ok(())
         }
@@ -1109,6 +1129,17 @@ mod tests {
         let saved: BTreeMap<String, CacheEntry> =
             serde_json::from_str(backend.cache.lock().unwrap().as_ref().unwrap()).unwrap();
         assert!(saved.is_empty());
+        let writes = backend
+            .cache_writes
+            .load(std::sync::atomic::Ordering::Relaxed);
+        cache_gc(110).unwrap();
+        assert_eq!(
+            backend
+                .cache_writes
+                .load(std::sync::atomic::Ordering::Relaxed),
+            writes,
+            "an unchanged maintenance pass must not rewrite the cache file"
+        );
         cache_set("test", "expired", "expired", 10, 100).unwrap();
         cache_set("test", "valid", "retained", 100, 100).unwrap();
         // A stale fingerprint is collected alongside time-based expiration.

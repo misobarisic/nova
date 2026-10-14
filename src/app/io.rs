@@ -6,6 +6,10 @@ static WRITE_FAILURES: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn write_failures() -> u64 {
     WRITE_FAILURES.load(Ordering::Relaxed)
 }
+pub(super) fn record_write_failure(error: storage::Error) {
+    WRITE_FAILURES.fetch_add(1, Ordering::Relaxed);
+    storage::report(error);
+}
 pub(crate) fn block_unreadable(key: &str) {
     UNREADABLE_KEYS
         .lock()

@@ -2497,3 +2497,9 @@ msgstr "Nova"
 
 msgid "JPEG"
 msgstr "JPEG"
+
+msgid "Image disk-cache limit"
+msgstr "Ograničenje slikovne predmemorije na disku"
+
+msgid "Remove older browsing artwork first, retaining Library artwork where possible. Cleanup runs when the limit is exceeded."
+msgstr "Najprije uklonite starije slike pregledanog sadržaja, uz zadržavanje slika iz Biblioteke gdje je moguće. Čišćenje se pokreće kada se ograničenje prekorači."

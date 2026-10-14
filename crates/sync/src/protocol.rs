@@ -593,6 +593,7 @@ async fn exchange(
     handler: &Handler,
 ) -> Result<()> {
     anyhow::ensure!(handler.is_peer(remote_id), "peer authorization revoked");
+    tokio::task::spawn_blocking(crate::flush_persistence).await??;
     // Digest and the clock reading it was taken at, captured together: every
     // record in the digest has a version at or below `snapshot`, so recording
     // `snapshot` as the peer's ack later exactly means "it saw all of these".
@@ -694,6 +695,7 @@ async fn exchange(
     let (mut changed, removed_us) = if incoming.is_empty() {
         (Vec::new(), false)
     } else {
+        tokio::task::spawn_blocking(crate::flush_persistence).await??;
         let acks = handler.acks.lock().map(|a| a.clone()).unwrap_or_default();
         let mut store = handler.store();
         // Removal takes this same store lock before changing the allowlist:

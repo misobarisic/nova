@@ -5386,6 +5386,7 @@ name = "nova-storage"
 version = "0.1.0"
 dependencies = [
  "redb",
+ "serde",
  "serde_json",
  "tempfile",
  "zstd",

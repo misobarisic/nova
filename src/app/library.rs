@@ -1056,16 +1056,12 @@ pub(crate) fn remove_library_entry(entries: &mut Vec<LibraryEntry>, id: &str) ->
 }
 /// Persisted library entries (empty when absent/unreadable).
 pub(crate) fn read_persisted_library() -> Vec<LibraryEntry> {
-    read_json::<Vec<LibraryEntry>>("library").unwrap_or_default()
+    persistence::pending_library()
+        .unwrap_or_else(|| read_json::<Vec<LibraryEntry>>("library").unwrap_or_default())
 }
-/// Snapshot library entries into the KV store.
+/// Queue an ordered Library save (synchronous during startup/projection).
 pub(crate) fn write_persisted_library(entries: &[LibraryEntry]) {
-    write_json("library", entries);
-    // Mirror into the sync store (no-op when sync is off or this write is a
-    // remote apply).
-    if !applying() {
-        notify_library(entries);
-    }
+    persistence::write_library(entries);
 }
 /// Add a new category name to settings (deduplicates, preserves order).
 pub(crate) fn add_category(categories: &mut Vec<String>, name: &str) {

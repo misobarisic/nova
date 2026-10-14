@@ -18,6 +18,9 @@ use std::{
     },
 };
 
+#[path = "cache_gc.rs"]
+pub mod gc;
+
 type Pixels = SharedPixelBuffer<Rgba8Pixel>;
 pub const DISPLAY_POSTER_SIDE: u32 = 480;
 pub const EPISODE_THUMB_SIDE: u32 = 360;
@@ -163,7 +166,11 @@ pub fn decoded_cache_stats() -> (usize, usize) {
     (cache.map.len(), cache.total_bytes)
 }
 pub fn decoded_cache_get(key: &str) -> Option<Pixels> {
-    DECODED_POSTERS.lock().unwrap().touch_get(key)
+    let pixels = DECODED_POSTERS.lock().unwrap().touch_get(key);
+    if pixels.is_some() {
+        gc::touch_decoded(key);
+    }
+    pixels
 }
 pub fn decoded_cache_contains(key: &str) -> bool {
     decoded_cache_get(key).is_some()
@@ -354,21 +361,28 @@ fn recipe_disk_path(dir: &Path, url: &str, recipe: ImageRecipe) -> PathBuf {
     ))
 }
 fn read_variant(path: &Path) -> Option<DiskVariant> {
-    let data = fs::read(path).ok()?;
-    if data.get(..8)? != MAGIC {
-        return None;
+    let result = (|| {
+        let data = fs::read(path).ok()?;
+        if data.get(..8)? != MAGIC {
+            return None;
+        }
+        let length = u32::from_le_bytes(data.get(8..12)?.try_into().ok()?) as usize;
+        if length > 64 * 1024 {
+            return None;
+        }
+        let end = 12usize.checked_add(length)?;
+        let metadata: VariantMetadata = serde_json::from_slice(data.get(12..end)?).ok()?;
+        let encoded = data.get(end..)?.to_vec();
+        if metadata.version != 2 || metadata.uses.is_empty() || metadata.checksum != fnv1a(&encoded)
+        {
+            return None;
+        }
+        Some(DiskVariant { metadata, encoded })
+    })();
+    if result.is_none() {
+        gc::mark_invalid(path);
     }
-    let length = u32::from_le_bytes(data.get(8..12)?.try_into().ok()?) as usize;
-    if length > 64 * 1024 {
-        return None;
-    }
-    let end = 12usize.checked_add(length)?;
-    let metadata: VariantMetadata = serde_json::from_slice(data.get(12..end)?).ok()?;
-    let encoded = data.get(end..)?.to_vec();
-    if metadata.version != 2 || metadata.uses.is_empty() || metadata.checksum != fnv1a(&encoded) {
-        return None;
-    }
-    Some(DiskVariant { metadata, encoded })
+    result
 }
 fn variant_pixels(variant: &DiskVariant, url: &str, recipe: ImageRecipe) -> Option<Pixels> {
     if variant.metadata.url != url || variant.metadata.recipe != recipe {
@@ -417,7 +431,9 @@ fn write_variant(path: &Path, variant: &DiskVariant) -> std::io::Result<()> {
     data.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
     data.extend_from_slice(&metadata);
     data.extend_from_slice(&variant.encoded);
-    atomic_write(path, &data)
+    atomic_write(path, &data)?;
+    gc::record_variant(path, &variant.metadata, data.len() as u64);
+    Ok(())
 }
 fn variant_paths(dir: &Path) -> impl Iterator<Item = PathBuf> {
     fs::read_dir(dir)
@@ -458,7 +474,9 @@ fn retire_use_history(dir: &Path, url: &str, uses: &[ImageUse], keep: &Path) {
             continue;
         }
         if variant.metadata.uses.is_empty() {
-            let _ = fs::remove_file(path);
+            if fs::remove_file(&path).is_ok() {
+                gc::removed(&path);
+            }
         } else {
             let _ = write_variant(&path, &variant);
         }
@@ -585,6 +603,7 @@ fn register_cached_use_locked(
             retire_use_history(dir, url, &[image_use], &path);
         }
     }
+    gc::record_existing(&path, &variant.metadata);
     true
 }
 
@@ -941,6 +960,7 @@ fn load_recipe(
                         retire_use_history(dir, url, &[image_use], &path);
                     }
                 }
+                gc::record_existing(&path, &variant.metadata);
                 decoded_cache_insert(&key, pixels.clone());
                 return Some(pixels);
             }
@@ -1369,6 +1389,7 @@ pub fn clear_poster_cache_dir(dir: &Path) -> (u64, usize) {
 fn clear_cache_entries(dir: &Path) -> (u64, usize) {
     let _mutation = CACHE_MUTATION.write().unwrap();
     CACHE_GENERATION.fetch_add(1, Ordering::AcqRel);
+    gc::cleared(dir);
     decoded_cache_clear();
     let mut total = (0u64, 0);
     if let Ok(entries) = fs::read_dir(dir) {

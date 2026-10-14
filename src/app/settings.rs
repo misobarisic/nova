@@ -28,6 +28,16 @@ impl DiskUsageScan {
     }
 }
 
+const DISK_CACHE_LIMITS: [Option<u32>; 7] = [
+    None,
+    Some(256),
+    Some(512),
+    Some(1024),
+    Some(2048),
+    Some(4096),
+    Some(8192),
+];
+
 static CACHE_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub(super) fn cancel_cache_rewrite() {
@@ -177,6 +187,29 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_persistence_failed(storage::last_error().is_some());
             app.set_cache_images(settings.cache_images);
+            let mut limits = DISK_CACHE_LIMITS
+                .iter()
+                .map(|limit| match limit {
+                    None => SharedString::from(text::tr("Unlimited")),
+                    Some(mb) if *mb >= 1024 => format!("{} GiB", mb / 1024).into(),
+                    Some(mb) => format!("{mb} MiB").into(),
+                })
+                .collect::<Vec<_>>();
+            let limit_index = DISK_CACHE_LIMITS
+                .iter()
+                .position(|value| *value == settings.image_disk_cache_limit_mb)
+                .unwrap_or_else(|| {
+                    limits.push(
+                        format!(
+                            "{} MiB",
+                            settings.image_disk_cache_limit_mb.unwrap_or_default()
+                        )
+                        .into(),
+                    );
+                    limits.len() - 1
+                });
+            app.set_cache_disk_limit_names(Rc::new(VecModel::from(limits)).into());
+            app.set_cache_disk_limit_index(limit_index as i32);
             app.set_cache_enabled(settings.enabled);
             app.set_cache_format_index(match settings.format {
                 CacheImageFormat::Jpeg => 0,
@@ -389,6 +422,10 @@ impl Bridge {
             let state = self.shared.lock().unwrap();
             CacheSettings {
                 cache_images: app.get_cache_images(),
+                image_disk_cache_limit_mb: DISK_CACHE_LIMITS
+                    .get(app.get_cache_disk_limit_index().max(0) as usize)
+                    .copied()
+                    .unwrap_or(state.cache_settings.image_disk_cache_limit_mb),
                 enabled: app.get_cache_enabled(),
                 format,
                 quality,

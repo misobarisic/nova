@@ -299,6 +299,11 @@ impl Store {
     pub fn needs_save(&self) -> bool {
         !self.dirty.is_empty() || !self.extra.is_empty() || self.clock_dirty
     }
+    /// Retried app transactions must still publish their earlier mutations,
+    /// even when preparing the same snapshot no longer changes memory.
+    pub fn has_dirty_records(&self) -> bool {
+        !self.dirty.is_empty()
+    }
 
     pub fn queue_extra(&mut self, key: &str, value: Option<String>) {
         self.extra.insert(key.to_string(), value);

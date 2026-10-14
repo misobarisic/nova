@@ -34,6 +34,7 @@ pub fn commit_snapshot(
     projection: bool,
     seed: bool,
 ) -> Result<()> {
+    crate::flush_persistence()?;
     let owner = local_store()?;
     let dev = local_device()?;
     let mut store = owner.lock().unwrap_or_else(|e| e.into_inner());

@@ -1528,6 +1528,8 @@ pub(crate) fn set_active_cache_settings(settings: CacheSettings) {
     // shared through `nova-config` (read by the media/player crates).
     nova_media::cache::set_decoded_cache_budget(settings.lru_cache_mb);
     set_cache_settings(settings);
+    nova_media::cache::gc::wake();
+    plugin_cache::wake_gc_worker();
 }
 
 #[cfg(test)]

@@ -73,6 +73,7 @@ fn android_main(app: slint::android::AndroidApp) {
                 }
                 MainEvent::Resume { .. } => {
                     nova_sync::set_foreground(true);
+                    crate::app::note_cache_maintenance_resume();
                     crate::player::note_android_resume()
                 }
                 _ => {}

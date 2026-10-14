@@ -214,6 +214,7 @@ pub fn tr(english: &str) -> &str {
         "Off" => "Isključeno",
         "Automatic" => "Automatski",
         "Unlimited" => "Neograničeno",
+        "Image disk-cache limit" => "Ograničenje slikovne predmemorije na disku",
         "Not received yet" => "Još nije primljeno",
         "Every minute" => "Svake minute",
         "Every 5 minutes" => "Svakih 5 minuta",
@@ -1389,6 +1390,8 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
             .as_str()
             .map(nova_config::playback_preferences::language_label)
             .unwrap_or_else(|| value.to_string()),
+        "image_disk_cache_limit_mb" if value.is_null() => tr("Unlimited").into(),
+        "image_disk_cache_limit_mb" => format!("{number} MiB"),
         "torrent_down_limit" if value.as_f64() == Some(0.0) => tr("Unlimited").into(),
         "torrent_down_limit" => format!("{number} KB/s"),
         "home_catalog_sources" | "home_row_sources" | "home_rows" => {

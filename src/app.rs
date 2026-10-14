@@ -520,9 +520,9 @@ struct DetailSnapshot {
 // Episode playback tracking (watched + resume position + full history).
 // ---------------------------------------------------------------------------
 
-/// One episode's playback state, persisted in the KV store under
-/// `EPISODE_PROGRESS_KEY` as a `HashMap<String, EpisodeProgress>` keyed by
-/// [`progress_map_key`].
+/// One episode's playback state. `EPISODE_PROGRESS_KEY` exposes a logical
+/// `HashMap<String, EpisodeProgress>` keyed by [`progress_map_key`]; storage
+/// persists each episode independently in the authoritative collection table.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct EpisodeProgress {
     series_id: String,
@@ -727,6 +727,7 @@ mod addon_mgr;
 mod addon_packages;
 mod addon_picker;
 mod bridge;
+mod cache_gc;
 mod calendar;
 mod catalog;
 mod detail;
@@ -737,6 +738,7 @@ mod library;
 mod next_episode;
 mod onboarding;
 mod page_artwork;
+mod persistence;
 mod playback;
 mod playback_preferences;
 mod plugin_cache;
@@ -953,3 +955,10 @@ pub(crate) struct MetaHeader {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_ADDON: &str = "https://v3-cinemeta.strem.io";
+
+/// Resume only wakes maintenance workers; no storage I/O runs on the UI thread.
+#[cfg(target_os = "android")]
+pub(crate) fn note_cache_maintenance_resume() {
+    nova_media::cache::gc::wake();
+    plugin_cache::wake_gc_worker();
+}

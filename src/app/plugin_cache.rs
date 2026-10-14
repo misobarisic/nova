@@ -5,7 +5,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::{
-        Once,
+        Mutex, Once, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, SystemTime},
@@ -15,7 +15,9 @@ const LEGACY_KEY: &str = "plugin_cache:v1";
 // The service permits 20 MiB of logical values. JSON escaping can expand those
 // bytes sixfold; reject larger files before allocating an unbounded string.
 const MAX_FILE_BYTES: u64 = 121 * 1024 * 1024;
-const GC_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const GC_INTERVAL: Duration = Duration::from_secs(120);
+static GC_THREAD: OnceLock<std::thread::Thread> = OnceLock::new();
+static FILE_MUTATION: Mutex<()> = Mutex::new(());
 const TEMP_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 fn temporary_name(name: &str) -> bool {
@@ -34,13 +36,17 @@ fn temporary_name(name: &str) -> bool {
             .is_ok_and(|value| value.to_string() == sequence)
 }
 
-fn prune_temporary_files(directory: &Path, now: SystemTime) {
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
+fn prune_temporary_files(directory: &Path, now: SystemTime) -> std::io::Result<()> {
+    let _mutation = FILE_MUTATION.lock().unwrap();
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
     };
     // A crash can bypass write_file's cleanup. Leave fresh writes alone and
     // bound work if an unrelated process has populated the cache directory.
-    for entry in entries.take(4096).flatten() {
+    for entry in entries.take(4096) {
+        let entry = entry?;
         if !entry.file_name().to_str().is_some_and(temporary_name) {
             continue;
         }
@@ -54,9 +60,10 @@ fn prune_temporary_files(directory: &Path, now: SystemTime) {
                 .and_then(|modified| now.duration_since(modified).ok())
                 .is_some_and(|age| age >= TEMP_MAX_AGE)
         {
-            let _ = fs::remove_file(entry.path());
+            fs::remove_file(entry.path())?;
         }
     }
+    Ok(())
 }
 
 fn path() -> PathBuf {
@@ -83,6 +90,7 @@ fn read_file(path: &Path) -> std::io::Result<Option<String>> {
 }
 
 fn write_file(path: &Path, raw: &str) -> std::io::Result<()> {
+    let _mutation = FILE_MUTATION.lock().unwrap();
     if raw.len() as u64 > MAX_FILE_BYTES {
         return Err(std::io::Error::other("plugin cache exceeds file limit"));
     }
@@ -161,21 +169,53 @@ pub(super) fn save(raw: &str) -> Result<(), ProviderHostError> {
     write_file(&path(), raw).map_err(|error| ProviderHostError(error.to_string()))
 }
 
+pub(super) fn wake_gc_worker() {
+    if let Some(worker) = GC_THREAD.get() {
+        worker.unpark();
+    }
+}
+
 pub(super) fn start_gc_worker() {
     static START: Once = Once::new();
     START.call_once(|| {
         if let Err(error) = std::thread::Builder::new()
             .name("nova-plugin-cache-gc".into())
             .spawn(|| {
+                let _ = GC_THREAD.set(std::thread::current());
+                let directory = path().parent().unwrap().to_owned();
+                let mut previous = None;
+                let mut marker_loaded = false;
                 loop {
-                    if let Some(directory) = path().parent() {
-                        prune_temporary_files(directory, SystemTime::now());
-                    }
-                    // Expiry is enforced on reads too; this pass reclaims disk space
-                    // even when a cached title is never opened again.
-                    if let Err(error) = service::cache_gc(nova_config::now_secs()) {
+                    let result = (|| -> std::io::Result<()> {
+                        if !marker_loaded {
+                            previous =
+                                super::cache_gc::last_cleanup("cache_gc:providers:v1", &directory)?;
+                            marker_loaded = true;
+                        }
+                        let now = nova_config::now_secs();
+                        if nova_media::cache::gc::cleanup_due(previous, now) {
+                            prune_temporary_files(&directory, SystemTime::now())?;
+                            let removed = service::cache_gc(now).map_err(std::io::Error::other)?;
+                            super::cache_gc::save_cleanup(
+                                "cache_gc:providers:v1",
+                                &directory,
+                                now,
+                            )?;
+                            previous = Some(now);
+                            if removed > 0 {
+                                tracing::info!(
+                                    entries = removed,
+                                    "provider cache cleanup completed"
+                                );
+                            }
+                        }
+                        Ok(())
+                    })();
+                    if let Err(error) = result {
                         tracing::warn!(%error, "provider cache cleanup failed");
                     }
+                    // This wake only compares an in-memory timestamp. Files
+                    // and the service cache are examined once a day, not every wake.
                     std::thread::park_timeout(GC_INTERVAL);
                 }
             })
@@ -222,6 +262,27 @@ mod tests {
             return;
         };
         crate::storage::init_at(&PathBuf::from(directory).join("storage"));
+        let marker_key = "cache_gc:providers:v1";
+        let marker_directory = path().parent().unwrap().to_owned();
+        assert_eq!(
+            super::super::cache_gc::last_cleanup(marker_key, &marker_directory).unwrap(),
+            None
+        );
+        super::super::cache_gc::save_cleanup(marker_key, &marker_directory, 1234).unwrap();
+        assert_eq!(
+            super::super::cache_gc::last_cleanup(marker_key, &marker_directory).unwrap(),
+            Some(1234)
+        );
+        assert_eq!(
+            super::super::cache_gc::last_cleanup(marker_key, &marker_directory.join("moved"))
+                .unwrap(),
+            None
+        );
+        crate::storage::try_set_str(marker_key, "broken").unwrap();
+        assert_eq!(
+            super::super::cache_gc::last_cleanup(marker_key, &marker_directory).unwrap(),
+            None
+        );
         let legacy = r#"{"example/key":{"plugin":"example","key":"key","value":"cached","expires":200,"used":1}}"#;
         crate::storage::try_set_cached_str(LEGACY_KEY, legacy).unwrap();
         assert_eq!(load().unwrap().as_deref(), Some(legacy));
@@ -265,7 +326,7 @@ mod tests {
             directory.join(".cache-12-4.tmp"),
         )
         .unwrap();
-        prune_temporary_files(&directory, now);
+        prune_temporary_files(&directory, now).unwrap();
         assert!(!directory.join(".cache-12-0.tmp").exists());
         for name in [
             ".cache-12-1.tmp",

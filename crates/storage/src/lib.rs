@@ -6,6 +6,8 @@
 //! missing-vs-failed outcomes; convenience wrappers record diagnostic failures.
 
 mod codec;
+mod collections;
+pub use collections::{CollectionKind, register_collection};
 
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use std::collections::BTreeMap;
@@ -18,6 +20,9 @@ const CACHE: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata_cache
 static DB_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
 static DB: OnceLock<Result<Database, Error>> = OnceLock::new();
 static LAST_ERROR: Mutex<Option<Error>> = Mutex::new(None);
+// Collection diffs are prepared outside redb's writer transaction. Serialize
+// participating writers so a prepared deletion set cannot become stale.
+static WRITE_SERIAL: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ErrorKind {
@@ -116,10 +121,14 @@ fn read_in(txn: &redb::ReadTransaction, key: &str) -> Result<Option<(String, boo
         Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
         Err(e) => return Err(transaction(e)),
     };
-    Ok(table
+    table
         .get(key)
         .map_err(transaction)?
-        .map(|g| (g.value().to_string(), false)))
+        .map(|g| {
+            collections::read(txn, key, g.value())
+                .map(|value| (value.unwrap_or_else(|| g.value().to_owned()), false))
+        })
+        .transpose()
 }
 
 pub fn set_str(key: &str, value: &str) {
@@ -186,15 +195,23 @@ fn write_to(
     entries: &[(String, Option<String>)],
     cached: bool,
 ) -> Result<bool, Error> {
+    let _serial = WRITE_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     // Resolve repeated keys to their final atomic value before comparison.
     let entries = entries
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_deref()))
         .collect::<BTreeMap<_, _>>();
     let mut changes = Vec::new();
+    let mut collections = Vec::new();
     let mut needs_write = false;
     let read = db.begin_read().map_err(transaction)?;
     for (key, value) in entries {
+        if let Some(kind) = collections::write_policy(&read, key)? {
+            let patch = collections::prepare(&read, key, value, kind)?;
+            needs_write |= patch.changed();
+            collections.push(patch);
+            continue;
+        }
         let location = cached && value.is_some_and(|v| v.len() <= codec::MAX_BYTES);
         // Explicit removal remains possible even for a corrupt compressed row.
         let same = if value.is_none() {
@@ -275,6 +292,9 @@ fn write_to(
             }
         }
     }
+    for patch in collections {
+        changed |= collections::apply(&txn, patch)?;
+    }
     if changed {
         txn.commit().map_err(transaction)?;
     } else {
@@ -307,7 +327,9 @@ fn scan_from(db: &Database, prefix: &str) -> Result<Vec<(String, String)>, Error
                 if !key.value().starts_with(prefix) {
                     break;
                 }
-                out.insert(key.value().to_string(), value.value().to_string());
+                let value = collections::read(&txn, key.value(), value.value())?
+                    .unwrap_or_else(|| value.value().to_owned());
+                out.insert(key.value().to_string(), value);
             }
         }
         Err(redb::TableError::TableDoesNotExist(_)) => {}

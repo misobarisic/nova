@@ -38,6 +38,16 @@ export component SettingsImageCacheModule inherits Window {
                         toggled => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 0; SettingsContent.schedule_save(); } }
                 }
             }
+            SettingsCard {
+                SettingsRow {
+                    setting-key: "image_disk_cache_limit_mb";
+                    row-title: @tr("Image disk-cache limit");
+                    row-desc: @tr("Remove older browsing artwork first, retaining Library artwork where possible. Cleanup runs when the limit is exceeded.");
+                    Dropdown { width: 100%; model: SettingsBridge.cache_disk_limit_names; current-index <=> SettingsBridge.cache_disk_limit_index; roomy: true;
+                        enabled: SettingsBridge.cache_images && !SettingsBridge.cache_busy;
+                        selected(_) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 5; SettingsContent.kb_hr = 11; SettingsContent.schedule_setting("image_disk_cache_limit_mb"); } }
+                }
+            }
             SectionHeader { label: @tr("Compression"); }
             SettingsCard {
                 SettingsRow {

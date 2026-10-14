@@ -83,7 +83,9 @@ fn image_resolution_dropdowns_fit_and_capture_touch_keyboard_changes() {
         ),
     ];
     for width in [360, 1280] {
-        app.window().set_size(slint::PhysicalSize::new(width, 1400));
+        // Keep all resolution rows mounted while checking width; the Storage
+        // section now has a disk-limit row above them.
+        app.window().set_size(slint::PhysicalSize::new(width, 1800));
         app.set_settings_scroll_y(0.0);
         settle(&app);
         for (title, _, _) in rows {
@@ -129,6 +131,84 @@ fn image_resolution_dropdowns_fit_and_capture_touch_keyboard_changes() {
             ][row_index];
             assert_eq!(advanced, 5, "keyboard changes {title}");
             assert!(edited.borrow().iter().any(|seen| seen == field));
+        }
+    }
+}
+
+#[test]
+fn disk_limit_dropdown_supports_touch_keyboard_and_narrow_landscape() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "disk_limit_dropdown_supports_touch_keyboard_and_narrow_landscape"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_settings_selected_id(2);
+    app.set_settings_detail_open(true);
+    app.set_touch_menus(true);
+    app.global::<nova::Anim>().set_enabled(false);
+    app.on_settings_search_matches(|query, haystack| {
+        nova_ui::settings_search_matches(&query, &haystack)
+    });
+    let edited = Rc::new(RefCell::new(Vec::new()));
+    let capture = edited.clone();
+    app.on_settings_edited(move |field| capture.borrow_mut().push(field.to_string()));
+    app.window().show().unwrap();
+    for (width, height) in [(390, 900), (820, 400), (1280, 900)] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.set_settings_scroll_y(0.0);
+        app.set_cache_images(true);
+        settle(&app);
+        let y = dropdown(&app, "Image disk-cache limit")
+            .absolute_position()
+            .y;
+        app.set_settings_scroll_y((app.get_settings_scroll_y() - (y - 150.0)).min(0.0));
+        settle(&app);
+        let control = dropdown(&app, "Image disk-cache limit");
+        let position = control.absolute_position();
+        let size = control.size();
+        assert!(position.x >= 0.0 && position.x + size.width <= width as f32 + 0.5);
+        assert!(position.y >= 0.0 && position.y + size.height <= height as f32);
+        control.mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        ElementHandle::find_by_accessible_label(&app, "2 GiB")
+            .last()
+            .unwrap()
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        assert_eq!(app.get_cache_disk_limit_index(), 4);
+        key(&app, slint::platform::Key::RightArrow);
+        assert_eq!(app.get_cache_disk_limit_index(), 5);
+        assert!(
+            edited
+                .borrow()
+                .iter()
+                .any(|field| field == "image_disk_cache_limit_mb")
+        );
+        key(&app, slint::platform::Key::UpArrow);
+        key(&app, slint::platform::Key::RightArrow);
+        assert!(
+            !app.get_cache_images(),
+            "Up from the limit reaches disk caching"
+        );
+        if width == 820 {
+            key(&app, slint::platform::Key::DownArrow);
+            // Disk-off traversal skips Compression and Re-encode, ending on
+            // Clear. Its Down key must not scroll past the final control.
+            for _ in 0..5 {
+                key(&app, slint::platform::Key::DownArrow);
+            }
+            app.set_settings_scroll_y(-100.0);
+            settle(&app);
+            let scroll = app.get_settings_scroll_y();
+            key(&app, slint::platform::Key::DownArrow);
+            assert_eq!(app.get_settings_scroll_y(), scroll);
         }
     }
 }

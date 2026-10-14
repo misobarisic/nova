@@ -3,10 +3,10 @@ use std::{sync::atomic::AtomicUsize, time::Duration};
 
 static TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-fn serial() -> std::sync::MutexGuard<'static, ()> {
+pub(super) fn serial() -> std::sync::MutexGuard<'static, ()> {
     TEST_LOCK.lock().unwrap()
 }
-fn scratch(label: &str) -> PathBuf {
+pub(super) fn scratch(label: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
         "nova-media-{}-{label}-{}",
         std::process::id(),
@@ -16,7 +16,7 @@ fn scratch(label: &str) -> PathBuf {
     fs::create_dir_all(&path).unwrap();
     path
 }
-fn source_image(w: u32, h: u32, transparent: bool) -> Vec<u8> {
+pub(super) fn source_image(w: u32, h: u32, transparent: bool) -> Vec<u8> {
     let image = image::RgbaImage::from_fn(w, h, |x, y| {
         image::Rgba([
             ((x * 17 + y * 13) % 251) as u8,

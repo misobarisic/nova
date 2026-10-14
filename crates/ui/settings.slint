@@ -78,6 +78,8 @@ export component SettingsPage {
     in-out property <bool> cache_date_relative: true;
     in-out property <bool> cache_show_unwatched_thumbs: true;
     in-out property <float> cache_lru_mb: 128.0;
+    in-out property <int> cache_disk_limit_index: 3;
+    in-out property <[string]> cache_disk_limit_names: [@tr("Unlimited"), "256 MiB", "512 MiB", "1 GiB", "2 GiB", "4 GiB", "8 GiB"];
     in-out property <bool> cache_prefetch_metadata: false;
     in-out property <bool> discover_catalog_addon_names: true;
     in-out property <[string]> image_resolution_names: [@tr("Original"), "240 px", "360 px", "480 px", "720 px", "960 px", "1024 px", "1280 px", "1920 px", "2560 px"];
@@ -736,10 +738,11 @@ export component SettingsPage {
     // Cache rows: 0 images, 1 enable, 2 format, 3 quality, 4-7 image sizes,
     // 8 memory, 9 re-encode button, 10 clear. Sizes and memory remain available when disk
     // caching or re-encoding is off. Rows 9/10 activate on Enter
-    // (Left/Right no-op).
-    function kb_cache_n() -> int { return 11; }
+    // (Left/Right no-op). Row 11 is the disk limit, visually after row 0.
+    function kb_cache_n() -> int { return 12; }
     function kb_cache_available(r: int) -> bool {
         if (r == 8) { return true; }
+        if (r == 11) { return root.cache_images && !root.cache_busy; }
         if (r == 9 && root.cache_rewriting) { return true; }
         if (root.cache_busy) { return false; }
         if (r == 0 || r == 10) { return true; }
@@ -754,6 +757,8 @@ export component SettingsPage {
             if (r == 9 || r == 10) { return 8; }
             return 0;
         }
+        if (r == 11) { return 0; }
+        if (r == 1 && root.cache_images) { return 11; }
         if (r == 10) { return root.cache_images ? 9 : 8; }
         if (r == 9) { return 8; }
         if (r == 8) { return 7; }
@@ -767,7 +772,9 @@ export component SettingsPage {
             if (r == 8) { return root.cache_images ? 9 : 10; }
             return 10;
         }
-        if (r == 0) { return root.cache_images ? 1 : 4; }
+        if (r == 0) { return root.cache_images ? 11 : 4; }
+        if (r == 11) { return root.cache_images ? 1 : 4; }
+        if (r == 10) { return 10; }
         if (r == 1) { return root.cache_enabled ? 2 : 4; }
         if (r == 8) { return root.cache_images ? 9 : 10; }
         if (r == 9) { return 10; }
@@ -1038,7 +1045,7 @@ export component SettingsPage {
                 root.kb_nudge(-50px);
             }
         } else if (root.kb_zone == 5) {
-            if (root.kb_hr + 1 < root.kb_cache_n()) {
+            if (root.kb_hr < root.kb_cache_n() && root.kb_hr != 10) {
                 root.kb_hr = root.kb_cache_next(root.kb_hr);
                 root.kb_nudge(-50px);
             }
@@ -1175,6 +1182,9 @@ export component SettingsPage {
             else if (r == 5) { root.detail_backdrop_resolution_index = next; root.schedule_setting("detail_backdrop_max_side"); }
             else if (r == 6) { root.episode_thumbnail_resolution_index = next; root.schedule_setting("episode_thumbnail_max_side"); }
             else { root.player_episode_backdrop_resolution_index = next; root.schedule_setting("player_episode_backdrop_max_side"); }
+        } else if (r == 11) {
+            root.cache_disk_limit_index = Math.max(0, Math.min(root.cache_disk_limit_names.length - 1, root.cache_disk_limit_index + d));
+            root.schedule_setting("image_disk_cache_limit_mb");
         } else if (r == 8) {
             root.cache_lru_mb = Math.max(32, Math.min(512, root.cache_lru_mb + d * 16));
             root.schedule_save();
