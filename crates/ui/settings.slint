@@ -114,6 +114,10 @@ export component SettingsPage {
     in property <[string]> audio_language_names: [];
     in property <[string]> subtitle_language_codes: [];
     in property <[string]> subtitle_language_names: [];
+    in property <[string]> audio_language_selected_codes: [];
+    in property <[string]> audio_language_selected_names: [];
+    in property <[string]> subtitle_language_selected_codes: [];
+    in property <[string]> subtitle_language_selected_names: [];
     in-out property <int> audio_language_choice_index: -1;
     in-out property <int> subtitle_language_choice_index: -1;
     // Global default playback rate (Settings → Player). The player's OSD
@@ -245,6 +249,7 @@ export component SettingsPage {
     callback playback_speed_stepped(int);
     callback playback_language_search(string, bool);
     callback playback_language_picked(string, bool);
+    callback playback_language_edited(string, int, bool);
     // Capture edits immediately; the application owns persistence debouncing.
     callback save_settings();
     in property <bool> persistence_failed: false;
@@ -1308,14 +1313,22 @@ export component SettingsPage {
         if (subtitle) {
             root.subtitle_language_choice_index = next_index;
             let code = root.subtitle_language_codes[next_index];
-            root.playback_language_picked(code, true);
-            root.default_subtitle_language = code;
+            if code == "" || code == "off" {
+                root.playback_language_picked(code, true);
+                root.default_subtitle_language = code;
+            } else {
+                root.playback_language_edited(code, 0, true);
+            }
             root.schedule_setting("default_subtitle_language");
         } else {
             root.audio_language_choice_index = next_index;
             let code = root.audio_language_codes[next_index];
-            root.playback_language_picked(code, false);
-            root.default_audio_language = code;
+            if code == "" || code == "off" {
+                root.playback_language_picked(code, false);
+                root.default_audio_language = code;
+            } else {
+                root.playback_language_edited(code, 0, false);
+            }
             root.schedule_setting("default_audio_language");
         }
     }

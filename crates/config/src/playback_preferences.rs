@@ -125,6 +125,18 @@ fn language_rank(wanted: &str, actual: Option<&str>) -> u8 {
     }
 }
 
+/// Ordered mpv language hints. Retaining the existing string fields keeps old
+/// single-language settings and per-field sync/device overrides compatible.
+pub fn language_preferences(raw: &str) -> Vec<String> {
+    let mut languages = Vec::new();
+    for language in raw.split(',').filter_map(normalize_language) {
+        if !languages.contains(&language) {
+            languages.push(language);
+        }
+    }
+    languages
+}
+
 fn match_choice(tracks: &[SemanticTrack], audio: bool, choice: &TrackChoice) -> Option<i32> {
     let TrackChoice::Track(wanted) = choice else {
         return Some(-1);
@@ -178,27 +190,28 @@ pub fn select_track(
         // explicit subtitle preference must not silently pick another language.
         return (!audio && choice.is_some()).then_some(-1);
     }
-    let Some(language) = normalize_language(global) else {
-        return (!audio).then_some(-1);
-    };
     let preferred_kind = if audio {
         TrackKind::Normal
     } else {
         TrackKind::Full
     };
-    tracks
-        .iter()
-        .filter(|t| t.audio == audio)
-        .filter(|t| language_rank(&language, t.descriptor.language.as_deref()) > 0)
-        .max_by_key(|t| {
-            (
-                language_rank(&language, t.descriptor.language.as_deref()),
-                t.descriptor.kind.as_ref() == Some(&preferred_kind),
-                t.default,
-                std::cmp::Reverse(t.id),
-            )
+    language_preferences(global)
+        .into_iter()
+        .find_map(|language| {
+            tracks
+                .iter()
+                .filter(|t| t.audio == audio)
+                .filter(|t| language_rank(&language, t.descriptor.language.as_deref()) > 0)
+                .max_by_key(|t| {
+                    (
+                        language_rank(&language, t.descriptor.language.as_deref()),
+                        t.descriptor.kind.as_ref() == Some(&preferred_kind),
+                        t.default,
+                        std::cmp::Reverse(t.id),
+                    )
+                })
+                .map(|t| t.id)
         })
-        .map(|t| t.id)
         .or_else(|| (!audio).then_some(-1))
 }
 
@@ -262,6 +275,45 @@ mod tests {
         assert_eq!(normalize_language("pt_BR"), Some("pt-br".into()));
         assert_eq!(normalize_language("Track 1"), None);
         assert_eq!(normalize_language("und"), None);
+    }
+    #[test]
+    fn ordered_languages_fall_back_without_overriding_saved_tracks() {
+        assert_eq!(
+            language_preferences("ENG, ja, en, pt_BR,invalid"),
+            ["en", "ja", "pt-br"]
+        );
+        let tracks = vec![
+            track(1, "en", TrackKind::Full),
+            track(2, "ja", TrackKind::Full),
+            track(3, "pt", TrackKind::Full),
+            track(4, "pt-br", TrackKind::Full),
+        ];
+        assert_eq!(select_track(&tracks, false, None, "hr,ja,en"), Some(2));
+        assert_eq!(select_track(&tracks, false, None, "hr,en,ja"), Some(1));
+        assert_eq!(select_track(&tracks, false, None, "pt-br,en"), Some(4));
+        assert_eq!(select_track(&tracks[..3], false, None, "pt-br,en"), Some(3));
+        assert_eq!(select_track(&tracks, false, None, "hr,de"), Some(-1));
+        let saved = TrackChoice::Track(tracks[0].descriptor.clone());
+        assert_eq!(select_track(&tracks, false, Some(&saved), "ja,en"), Some(1));
+        assert_eq!(
+            select_track(&tracks, false, Some(&TrackChoice::Off), "ja,en"),
+            Some(-1)
+        );
+        let mut audio = tracks.clone();
+        for track in &mut audio {
+            track.audio = true;
+        }
+        assert_eq!(select_track(&audio, true, None, "hr,ja,en"), Some(2));
+        assert_eq!(select_track(&audio, true, None, "hr,de"), None);
+        let settings = crate::CacheSettings {
+            default_audio_language: "ja,en".into(),
+            default_subtitle_language: "hr,en".into(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: crate::CacheSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.default_audio_language, "ja,en");
+        assert_eq!(restored.default_subtitle_language, "hr,en");
     }
     #[test]
     fn saved_kind_language_and_missing_fallback() {

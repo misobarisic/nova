@@ -82,6 +82,10 @@ export global SettingsBridge {
     in-out property <[string]> audio_language_names: [];
     in-out property <[string]> subtitle_language_codes: [];
     in-out property <[string]> subtitle_language_names: [];
+    in-out property <[string]> audio_language_selected_codes: [];
+    in-out property <[string]> audio_language_selected_names: [];
+    in-out property <[string]> subtitle_language_selected_codes: [];
+    in-out property <[string]> subtitle_language_selected_names: [];
     in-out property <float> playback_speed: 1.0;
     in-out property <bool> android_auto_continue: false;
     in-out property <bool> prefetch_next_episode_streams: true;
@@ -162,6 +166,7 @@ export global SettingsBridge {
     callback tracking_automatic(int,bool);
     callback playback_language_search(string, bool);
     callback playback_language_picked(string, bool);
+    callback playback_language_edited(string, int, bool);
     callback addon_added(string);
     callback addon_zip_import_requested();
     callback addon_toggled(int);

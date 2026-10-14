@@ -69,8 +69,8 @@ mod tests {
         })
         .unwrap();
         let settings = nova_config::CacheSettings {
-            default_audio_language: "ja".into(),
-            default_subtitle_language: "en".into(),
+            default_audio_language: "ja,en".into(),
+            default_subtitle_language: "hr,en".into(),
             playback_speed: 1.15,
             ..Default::default()
         };
@@ -83,8 +83,8 @@ mod tests {
             },
         );
         super::super::apply_preference_options(&mpv, &prefs);
-        assert_eq!(mpv.get_property::<String>("alang").unwrap(), "ja");
-        assert_eq!(mpv.get_property::<String>("slang").unwrap(), "en");
+        assert_eq!(mpv.get_property::<String>("alang").unwrap(), "ja,en");
+        assert_eq!(mpv.get_property::<String>("slang").unwrap(), "hr,en");
         assert_eq!(mpv.get_property::<String>("sid").unwrap(), "no");
         assert_eq!(mpv.get_property::<f64>("speed").unwrap(), 1.6_f32 as f64);
         let prefs = SessionPreferences::from_settings(&settings, TitlePreferences::default());

@@ -1388,7 +1388,13 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         "default_subtitle_language" if value.as_str() == Some("off") => tr("Off").into(),
         "default_audio_language" | "default_subtitle_language" => value
             .as_str()
-            .map(nova_config::playback_preferences::language_label)
+            .map(|value| {
+                nova_config::playback_preferences::language_preferences(value)
+                    .iter()
+                    .map(|code| nova_config::playback_preferences::language_label(code))
+                    .collect::<Vec<_>>()
+                    .join(" → ")
+            })
             .unwrap_or_else(|| value.to_string()),
         "image_disk_cache_limit_mb" if value.is_null() => tr("Unlimited").into(),
         "image_disk_cache_limit_mb" => format!("{number} MiB"),
@@ -1562,6 +1568,10 @@ mod tests {
             assert_eq!(
                 setting_sync_value("default_audio_language", &serde_json::json!("en")),
                 "English (en)"
+            );
+            assert_eq!(
+                setting_sync_value("default_audio_language", &serde_json::json!("ja,en")),
+                "Japanese (ja) → English (en)"
             );
         });
         with_language(Language::Croatian, || {

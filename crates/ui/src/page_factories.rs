@@ -87,6 +87,10 @@ fn release_unmounted_payloads(app: &crate::generated::AppWindow, page: i32) {
             bridge.set_audio_language_names(Default::default());
             bridge.set_subtitle_language_codes(Default::default());
             bridge.set_subtitle_language_names(Default::default());
+            bridge.set_audio_language_selected_codes(Default::default());
+            bridge.set_audio_language_selected_names(Default::default());
+            bridge.set_subtitle_language_selected_codes(Default::default());
+            bridge.set_subtitle_language_selected_names(Default::default());
             drop(bridge.get_language_names());
             drop(bridge.get_downloads_rows());
             drop(bridge.get_sync_peers());

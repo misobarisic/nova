@@ -122,6 +122,30 @@ fn playback_defaults_reset_and_player_settings_fit() {
     ]));
     app.global::<nova::SettingsSync>()
         .set_rows(scope_rows.clone().into());
+    let audio_codes = Rc::new(VecModel::from(vec!["en".into(), "ja".into()]));
+    let audio_names = Rc::new(VecModel::from(vec![
+        "English (en)".into(),
+        "Japanese (ja)".into(),
+    ]));
+    app.set_audio_language_selected_codes(audio_codes.into());
+    app.set_audio_language_selected_names(audio_names.into());
+    app.set_subtitle_language_selected_codes(
+        Rc::new(VecModel::from(vec!["hr".into(), "en".into()])).into(),
+    );
+    app.set_subtitle_language_selected_names(
+        Rc::new(VecModel::from(vec![
+            "Croatian (hr)".into(),
+            "English (en)".into(),
+        ]))
+        .into(),
+    );
+    let language_edits = Rc::new(RefCell::new(Vec::new()));
+    let recorded = language_edits.clone();
+    app.on_playback_language_edited(move |code, action, subtitles| {
+        recorded
+            .borrow_mut()
+            .push((code.to_string(), action, subtitles))
+    });
     app.set_sync_enabled(true);
     let indexed_scope_rows = scope_rows.clone();
     app.global::<nova::SettingsSync>().on_lookup(move |key| {
@@ -271,18 +295,35 @@ fn playback_defaults_reset_and_player_settings_fit() {
                     let mut found_audio = false;
                     let mut found_subtitles = false;
                     let mut found_speed = false;
+                    let mut checked_priority_control = false;
                     let mut found_audio_scope = false;
                     let mut found_subtitle_scope = false;
                     let mut checked_audio_caption = false;
                     let mut checked_subtitle_caption = false;
-                    for scroll in [0.0, -120.0, -240.0, -360.0, -480.0, -600.0, -720.0] {
+                    for scroll in [0.0, -120.0, -240.0, -360.0, -480.0, -600.0, -720.0, -840.0, -960.0, -1080.0] {
                         app.set_settings_scroll_y(scroll);
                         settings_support::settle().await;
-                        found_audio |= has_text(&app, "Default audio language");
-                        found_subtitles |= has_text(&app, "Default subtitle language");
+                        found_audio |= has_text(&app, "Preferred audio languages");
+                        found_subtitles |= has_text(&app, "Preferred subtitle languages");
                         found_speed |= ElementHandle::find_by_element_type_name(&app, "SpeedControl")
                             .next()
                             .is_some();
+                        if !checked_priority_control {
+                            if let Some(button) = ElementHandle::find_by_accessible_label(&app, "Move down: English (en)").find(|button| {
+                                let position = button.absolute_position();
+                                position.y >= 170.0 && position.y + button.size().height <= height as f32 - 16.0
+                            }) {
+                                let before = language_edits.borrow().len();
+                                let position = button.absolute_position();
+                                let size = button.size();
+                                let position = slint::LogicalPosition::new(position.x + size.width / 2.0, position.y + size.height / 2.0);
+                                app.window().dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button: slint::platform::PointerEventButton::Left });
+                                app.window().dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button: slint::platform::PointerEventButton::Left });
+                                assert_eq!(language_edits.borrow().len(), before + 1);
+                                assert_eq!(language_edits.borrow().last(), Some(&("en".into(), 3, false)));
+                                checked_priority_control = true;
+                            }
+                        }
                         let expected_audio = if audio_status == 1 {
                             "Synced"
                         } else {
@@ -293,11 +334,11 @@ fn playback_defaults_reset_and_player_settings_fit() {
                             assert_eq!(badge.accessible_label().as_deref(), Some(expected_audio));
                             // Element queries omit clipped titles: a stacked badge
                             // can remain visible after its title scrolls offscreen.
-                            if has_text(&app, "Default audio language") {
+                            if has_text(&app, "Preferred audio languages") {
                                 checked_audio_caption = true;
                                 assert!(title_badge_do_not_overlap(
                                     &app,
-                                    "Default audio language",
+                                    "Preferred audio languages",
                                     &badge
                                 ), "audio title/badge overlap at {width}x{height}, status {audio_status}");
                             }
@@ -310,11 +351,11 @@ fn playback_defaults_reset_and_player_settings_fit() {
                         if let Some(badge) = setting_scope(&app, "default_subtitle_language") {
                             found_subtitle_scope = true;
                             assert_eq!(badge.accessible_label().as_deref(), Some(expected_subtitle));
-                            if has_text(&app, "Default subtitle language") {
+                            if has_text(&app, "Preferred subtitle languages") {
                                 checked_subtitle_caption = true;
                                 assert!(title_badge_do_not_overlap(
                                     &app,
-                                    "Default subtitle language",
+                                    "Preferred subtitle languages",
                                     &badge
                                 ), "subtitle title/badge overlap at {width}x{height}, status {subtitle_status}");
                             }
@@ -325,6 +366,7 @@ fn playback_defaults_reset_and_player_settings_fit() {
                             "Settings → Player overflows {width}x{height} with language scopes: right edge {edge:.1}"
                         );
                     }
+                    assert!(checked_priority_control, "language priority control must be usable at {width}x{height}");
                     assert!(checked_audio_caption && checked_subtitle_caption,
                         "both language captions must be checked at {width}x{height}");
                     assert!(

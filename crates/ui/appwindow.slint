@@ -913,6 +913,10 @@ export component AppWindow inherits Window {
     in property <[string]> audio_language_names;
     in property <[string]> subtitle_language_codes;
     in property <[string]> subtitle_language_names;
+    in property <[string]> audio_language_selected_codes;
+    in property <[string]> audio_language_selected_names;
+    in property <[string]> subtitle_language_selected_codes;
+    in property <[string]> subtitle_language_selected_names;
     in-out property <bool> android_auto_continue: false;
     in-out property <bool> prefetch_next_episode_streams: true;
     in-out property <int> screenshot_format_index: 0;
@@ -1275,6 +1279,7 @@ export component AppWindow inherits Window {
     callback default_playback_speed_stepped(int);
     callback playback_language_search(string, bool);
     callback playback_language_picked(string, bool);
+    callback playback_language_edited(string, int, bool);
     callback restore_playback_default(int);
     callback playback_speed_changed(float);
     callback playback_speed_stepped(int);
@@ -1559,6 +1564,7 @@ export component AppWindow inherits Window {
     public function settings_bridge_tracking_automatic(service: int, enabled: bool) { root.tracking_automatic(service,enabled); }
     public function settings_bridge_playback_language_search(query: string, subtitles: bool) { root.playback_language_search(query, subtitles); }
     public function settings_bridge_playback_language_picked(code: string, subtitles: bool) { root.playback_language_picked(code, subtitles); }
+    public function settings_bridge_playback_language_edited(code: string, action: int, subtitles: bool) { root.playback_language_edited(code, action, subtitles); }
     public function settings_bridge_addon_added(u: string) { root.addon_added(u); }
     public function settings_bridge_addon_zip_import_requested() { root.addon_zip_import_requested(); }
     public function settings_bridge_addon_toggled(i: int) { root.addon_toggled(i); }
@@ -1883,6 +1889,10 @@ export component AppWindow inherits Window {
         audio_language_names: root.audio_language_names;
         subtitle_language_codes: root.subtitle_language_codes;
         subtitle_language_names: root.subtitle_language_names;
+        audio_language_selected_codes: root.audio_language_selected_codes;
+        audio_language_selected_names: root.audio_language_selected_names;
+        subtitle_language_selected_codes: root.subtitle_language_selected_codes;
+        subtitle_language_selected_names: root.subtitle_language_selected_names;
         is_android: root.is_android;
         phone_layout: root.narrow_ui;
         safe-top: root.safe-area-insets.top;

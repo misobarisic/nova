@@ -12,6 +12,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
         on_tracking_automatic => invoke_settings_bridge_tracking_automatic(arg0, arg1),
         on_playback_language_search => invoke_settings_bridge_playback_language_search(arg0, arg1),
         on_playback_language_picked => invoke_settings_bridge_playback_language_picked(arg0, arg1),
+        on_playback_language_edited => invoke_settings_bridge_playback_language_edited(arg0, arg1, arg2),
         on_addon_added => invoke_settings_bridge_addon_added(arg0),
         on_addon_toggled => invoke_settings_bridge_addon_toggled(arg0),
         on_addon_remove => invoke_settings_bridge_addon_remove(arg0),

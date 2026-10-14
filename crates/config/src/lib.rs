@@ -512,7 +512,8 @@ cache_settings_type! {
     /// never synced.
     #[serde(default)]
     pub desktop_external_app: DesktopExternalApp,
-    /// Synced global playback defaults. Empty language means Automatic;
+    /// Synced global playback defaults: comma-separated languages in priority order.
+    /// Existing single-language values remain valid. Empty means Automatic;
     /// subtitle language "off" disables subtitles. OSD edits override per title.
     #[serde(default)]
     pub default_audio_language: String,

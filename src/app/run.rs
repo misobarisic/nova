@@ -1077,6 +1077,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         b.pick_default_playback_language(code.as_str(), subtitles)
     });
     let b = bridge.clone();
+    app.on_playback_language_edited(move |code, action, subtitles| {
+        b.edit_default_playback_language(code.as_str(), action, subtitles)
+    });
+    let b = bridge.clone();
     app.on_restore_playback_default(move |control| b.restore_playback_default(control));
 
     // Transient rate preview (press-and-hold 2×): session only, never stored.

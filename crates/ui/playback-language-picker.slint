@@ -1,7 +1,10 @@
 import { SearchField } from "searchfield.slint";
 import { Dropdown } from "dropdown.slint";
+import { Theme } from "@NovaUiShared";
+import { AddonIconButton } from "settings-controls.slint";
+import { IcChevronUp, IcChevronDown, IcClose } from "icons.slint";
 
-// Search plus a compact result picker for one built-in playback language.
+// Search plus a result picker, optionally with an ordered preference list.
 // The selected label remains visible when the backend's result list is
 // filtered and therefore no longer contains the current code.
 export component PlaybackLanguagePicker inherits Rectangle {
@@ -13,50 +16,96 @@ export component PlaybackLanguagePicker inherits Rectangle {
     in property <string> current-label: "";
     in property <[string]> codes: [];
     in property <[string]> names: [];
+    in property <bool> multiple: false;
+    in property <[string]> selected-codes: [];
+    in property <[string]> selected-names: [];
     in-out property <int> current-index: -1;
 
     callback search(string, bool);
     callback picked(string, bool);
+    callback edited(string, int, bool);
     callback accepted();
     callback focus_changed(bool);
 
     property <string> query: "";
 
     preferred-width: 360px;
-    preferred-height: 44px;
+    preferred-height: 44px + (root.multiple ? root.selected-codes.length * 52px : 0px);
     min-width: 1px;
-    height: 44px;
+    height: self.preferred-height;
 
-    HorizontalLayout {
+    VerticalLayout {
         width: 100%;
-        height: 44px;
+        height: 100%;
         spacing: 8px;
+        HorizontalLayout {
+            height: 44px;
+            spacing: 8px;
 
-        search_field := SearchField {
-            horizontal-stretch: 1;
-            min-width: 0px;
-            roomy: true;
-            search-icon: true;
-            show-pointer-focus: false;
-            keyboard-mode: root.keyboard-mode;
-            text <=> root.query;
-            placeholder-text: @tr("Search languages");
-            focus_changed(focused) => { root.focus_changed(focused); }
-            edited(text) => {
-                root.current-index = -1;
-                root.search(text, root.subtitle);
+            search_field := SearchField {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                roomy: true;
+                search-icon: true;
+                show-pointer-focus: false;
+                keyboard-mode: root.keyboard-mode;
+                text <=> root.query;
+                placeholder-text: @tr("Search languages");
+                focus_changed(focused) => { root.focus_changed(focused); }
+                edited(text) => {
+                    root.current-index = -1;
+                    root.search(text, root.subtitle);
+                }
+                accepted(text) => { root.accepted(); }
             }
-            accepted(text) => { root.accepted(); }
-        }
 
-        Dropdown {
-            width: root.dropdown-width;
-            roomy: true;
-            model: root.codes;
-            labels: root.names;
-            current-index <=> root.current-index;
-            placeholder-text: root.current-label;
-            selected(code) => { root.picked(code, root.subtitle); }
+            Dropdown {
+                width: root.dropdown-width;
+                roomy: true;
+                model: root.codes;
+                labels: root.names;
+                current-index <=> root.current-index;
+                placeholder-text: root.current-label;
+                selected(code) => {
+                    if root.multiple && code != "" && code != "off" {
+                        root.edited(code, 0, root.subtitle);
+                    } else {
+                        root.picked(code, root.subtitle);
+                    }
+                    root.query = "";
+                    root.search("", root.subtitle);
+                }
+            }
+        }
+        if root.multiple: VerticalLayout {
+            spacing: 8px;
+            for code[index] in root.selected-codes: HorizontalLayout {
+                height: 44px; spacing: 4px;
+                Text {
+                    text: (index + 1) + ". " + root.selected-names[index];
+                    color: Theme.current.text_primary;
+                    font-size: 14px;
+                    min-width: 0px; horizontal-stretch: 1;
+                    overflow: elide; vertical-alignment: center;
+                }
+                AddonIconButton {
+                    name: @tr("Move up") + ": " + root.selected-names[index];
+                    enabled: index > 0;
+                    IcChevronUp { x: 12px; y: 12px; width: 20px; height: 20px; fill: Theme.current.text_primary; }
+                    clicked => { root.edited(code, 2, root.subtitle); }
+                }
+                AddonIconButton {
+                    name: @tr("Move down") + ": " + root.selected-names[index];
+                    enabled: index + 1 < root.selected-codes.length;
+                    IcChevronDown { x: 12px; y: 12px; width: 20px; height: 20px; fill: Theme.current.text_primary; }
+                    clicked => { root.edited(code, 3, root.subtitle); }
+                }
+                AddonIconButton {
+                    name: @tr("Remove") + ": " + root.selected-names[index];
+                    IcClose { x: 12px; y: 12px; width: 20px; height: 20px; fill: Theme.current.text_primary; }
+                    clicked => { root.edited(code, 1, root.subtitle); }
+                }
+            }
         }
     }
 

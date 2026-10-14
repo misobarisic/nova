@@ -172,8 +172,8 @@ Implementation and headless input coverage: `crates/ui/player.slint` and
 
 ## Playback defaults and title preferences
 
-Settings → Player sets the built-in player's default audio language, subtitle
-language and playback speed. Language controls use the existing Settings search
+Settings → Player sets the built-in player's preferred audio and subtitle
+languages and playback speed. Language controls use the existing Settings search
 and dropdown styles, including sync badges and optional device overrides.
 Automatic keeps mpv's normal track selection; subtitles also offer Off.
 
@@ -198,6 +198,15 @@ Implementation: `src/app/playback_preferences.rs` owns persistence and OSD
 callbacks; `crates/config/src/playback_preferences.rs` matches semantic choices;
 `crates/player/src/track_preferences.rs` reads mpv metadata. Regression coverage
 includes their unit tests and `tests/settings_preferences/playback_preferences_ui.rs`.
+
+Global audio and subtitle defaults in Settings → Player accept ordered language
+lists. Add languages through search, then move or remove them with the row
+controls. Playback chooses the first available language, preferring an exact
+region match within that language. Existing per-title track choices still take
+precedence; Automatic and subtitle Off clear the list. The existing synced
+settings fields store comma-separated codes, so old single-language values and
+device overrides remain valid. Supernova already exposes separate ordered audio
+and subtitle language lists through the generic addon configuration editor.
 
 ## Next-episode banner
 

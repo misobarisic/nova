@@ -97,6 +97,10 @@ export component SettingsModule inherits Window {
         audio_language_names <=> SettingsBridge.audio_language_names;
         subtitle_language_codes <=> SettingsBridge.subtitle_language_codes;
         subtitle_language_names <=> SettingsBridge.subtitle_language_names;
+        audio_language_selected_codes <=> SettingsBridge.audio_language_selected_codes;
+        audio_language_selected_names <=> SettingsBridge.audio_language_selected_names;
+        subtitle_language_selected_codes <=> SettingsBridge.subtitle_language_selected_codes;
+        subtitle_language_selected_names <=> SettingsBridge.subtitle_language_selected_names;
         playback_speed <=> SettingsBridge.playback_speed;
         android_auto_continue <=> SettingsBridge.android_auto_continue;
         prefetch_next_episode_streams <=> SettingsBridge.prefetch_next_episode_streams;
@@ -174,6 +178,7 @@ export component SettingsModule inherits Window {
         tracking_automatic(arg0, arg1) => { SettingsBridge.tracking_automatic(arg0, arg1); }
         playback_language_search(arg0, arg1) => { SettingsBridge.playback_language_search(arg0, arg1); }
         playback_language_picked(arg0, arg1) => { SettingsBridge.playback_language_picked(arg0, arg1); }
+        playback_language_edited(arg0, arg1, arg2) => { SettingsBridge.playback_language_edited(arg0, arg1, arg2); }
         addon_added(arg0) => { SettingsBridge.addon_added(arg0); }
         addon_zip_import_requested => { SettingsBridge.addon_zip_import_requested(); }
         addon_toggled(arg0) => { SettingsBridge.addon_toggled(arg0); }

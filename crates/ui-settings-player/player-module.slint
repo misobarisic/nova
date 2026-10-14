@@ -109,15 +109,18 @@ export component SettingsPlayerModule inherits Window {
 
                 if SettingsBridge.player_backend_index == 0: SettingsRow {
                     setting-key: "default_audio_language";
-                    row-title: @tr("Default audio language");
-                    row-desc: @tr("Search for the language the built-in player should use by default.");
+                    row-title: @tr("Preferred audio languages");
+                    row-desc: @tr("Add languages in preference order. The player uses the first available language.");
 
                     HorizontalLayout {
                         width: 100%;
-                        height: 44px;
+                        height: self.preferred-height;
                         spacing: 8px;
                         KbMark { on: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_audio_language_row(); active: SettingsBridge.kb_active; }
                         PlaybackLanguagePicker {
+                            multiple: true;
+                            selected-codes: SettingsBridge.audio_language_selected_codes;
+                            selected-names: SettingsBridge.audio_language_selected_names;
                             horizontal-stretch: 1;
                             min-width: 0px;
                             subtitle: false;
@@ -133,6 +136,10 @@ export component SettingsPlayerModule inherits Window {
                                 SettingsBridge.default_audio_language = code;
                                 SettingsContent.schedule_setting("default_audio_language");
                             }
+                            edited(code, action, is_subtitle) => {
+                                SettingsBridge.playback_language_edited(code, action, is_subtitle);
+                                SettingsContent.schedule_setting("default_audio_language");
+                            }
                             focus_changed(focused) => {
                                 SettingsContent.player_language_input_focused = focused;
                                 if (focused && SettingsBridge.kb_active) { SettingsContent.reveal_detail_control(self.absolute-position.y, self.height); }
@@ -145,15 +152,18 @@ export component SettingsPlayerModule inherits Window {
                 if SettingsBridge.player_backend_index == 0: SettingsRow {
                     tinted: true;
                     setting-key: "default_subtitle_language";
-                    row-title: @tr("Default subtitle language");
-                    row-desc: @tr("Search for the subtitle language the built-in player should use by default.");
+                    row-title: @tr("Preferred subtitle languages");
+                    row-desc: @tr("Add languages in preference order. Subtitles stay off if none are available.");
 
                     HorizontalLayout {
                         width: 100%;
-                        height: 44px;
+                        height: self.preferred-height;
                         spacing: 8px;
                         KbMark { on: SettingsBridge.kb_zone == 9 && SettingsContent.kb_pr == SettingsContent.kb_player_subtitle_language_row(); active: SettingsBridge.kb_active; }
                         PlaybackLanguagePicker {
+                            multiple: true;
+                            selected-codes: SettingsBridge.subtitle_language_selected_codes;
+                            selected-names: SettingsBridge.subtitle_language_selected_names;
                             horizontal-stretch: 1;
                             min-width: 0px;
                             subtitle: true;
@@ -167,6 +177,10 @@ export component SettingsPlayerModule inherits Window {
                             picked(code, is_subtitle) => {
                                 SettingsBridge.playback_language_picked(code, is_subtitle);
                                 SettingsBridge.default_subtitle_language = code;
+                                SettingsContent.schedule_setting("default_subtitle_language");
+                            }
+                            edited(code, action, is_subtitle) => {
+                                SettingsBridge.playback_language_edited(code, action, is_subtitle);
                                 SettingsContent.schedule_setting("default_subtitle_language");
                             }
                             focus_changed(focused) => {
