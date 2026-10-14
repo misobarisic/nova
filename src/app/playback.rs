@@ -90,7 +90,9 @@ impl Bridge {
                 .map(|intent| intent.context.episode_number.clone())
                 .unwrap_or_default(),
         };
-        app.invoke_osd_mouse_moved();
+        if app.get_osd_visible() {
+            app.invoke_osd_mouse_moved();
+        }
         app.set_screenshot_busy(true);
         app.set_screenshot_notice(SharedString::default());
         let bridge = self.clone();
@@ -109,7 +111,9 @@ impl Bridge {
                     Err(error) => text::tr(&error.to_string()).to_owned(),
                 };
                 app.set_screenshot_notice(notice.clone().into());
-                app.invoke_osd_mouse_moved();
+                if app.get_osd_visible() {
+                    app.invoke_osd_mouse_moved();
+                }
                 let weak = app.as_weak();
                 slint::Timer::single_shot(Duration::from_secs(5), move || {
                     if let Some(app) = weak.upgrade()

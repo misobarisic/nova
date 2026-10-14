@@ -790,6 +790,10 @@ struct PreferenceSession {
 }
 
 struct State {
+    #[cfg(not(target_os = "android"))]
+    playback_fullscreen: AtomicBool,
+    #[cfg(not(target_os = "android"))]
+    catalog_maximized: AtomicBool,
     subtitle_position: Mutex<subtitle_position::SubtitlePosition>,
     preferences: Mutex<PreferenceSession>,
     preference_source: Mutex<String>,
@@ -1068,6 +1072,10 @@ impl Player {
             pending_subtitles: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),
             source_waiting: AtomicBool::new(false),
+            #[cfg(not(target_os = "android"))]
+            playback_fullscreen: AtomicBool::new(false),
+            #[cfg(not(target_os = "android"))]
+            catalog_maximized: AtomicBool::new(false),
             external_handoff: AtomicBool::new(false),
             allow_external: AtomicBool::new(true),
             seek_pending: AtomicBool::new(false),
@@ -1672,6 +1680,10 @@ impl Player {
         #[cfg(target_os = "android")]
         converge_screen_on(!start_paused);
 
+        #[cfg(not(target_os = "android"))]
+        if !app.get_player_open() {
+            self.restore_playback_fullscreen(&app);
+        }
         app.set_player_open(true);
         app.set_playback_started(false);
         app.set_position(0.0);
@@ -1824,7 +1836,39 @@ impl Player {
             let current = app.window().is_fullscreen();
             app.window().set_fullscreen(!current);
             app.set_is_fullscreen(!current);
+            #[cfg(not(target_os = "android"))]
+            self.state
+                .playback_fullscreen
+                .store(!current, Ordering::SeqCst);
         }
+    }
+
+    /// Device-local preference, independent of the catalog's maximized state.
+    #[cfg(not(target_os = "android"))]
+    pub fn set_playback_fullscreen_preference(&self, fullscreen: bool) {
+        self.state
+            .playback_fullscreen
+            .store(fullscreen, Ordering::SeqCst);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    pub fn playback_fullscreen_preference(&self) -> bool {
+        if let Some(app) = self.state.app.upgrade()
+            && app.get_player_open()
+        {
+            return app.window().is_fullscreen();
+        }
+        self.state.playback_fullscreen.load(Ordering::SeqCst)
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn restore_playback_fullscreen(&self, app: &AppWindow) {
+        self.state
+            .catalog_maximized
+            .store(app.window().is_maximized(), Ordering::SeqCst);
+        let fullscreen = self.state.playback_fullscreen.load(Ordering::SeqCst);
+        app.window().set_fullscreen(fullscreen);
+        app.set_is_fullscreen(fullscreen);
     }
 
     /// Select a stream-local id, returning metadata only after a valid pick.
@@ -2160,6 +2204,10 @@ impl Player {
             app.window().set_fullscreen(true);
             app.set_is_fullscreen(true);
         }
+        #[cfg(not(target_os = "android"))]
+        if !fullscreen {
+            self.restore_playback_fullscreen(&app);
+        }
         #[cfg(target_os = "android")]
         {
             let _ = set_system_bars_hidden(true);
@@ -2207,6 +2255,20 @@ impl Player {
 
     /// Stop playback and return to the catalog.
     pub fn close(&self) {
+        // Capture before leaving fullscreen. Closing an already-closed player
+        // must not replace the saved choice with the catalog's window state.
+        #[cfg(not(target_os = "android"))]
+        let catalog_maximized = self
+            .state
+            .app
+            .upgrade()
+            .filter(|app| app.get_player_open())
+            .map(|app| {
+                self.state
+                    .playback_fullscreen
+                    .store(app.window().is_fullscreen(), Ordering::SeqCst);
+                self.state.catalog_maximized.load(Ordering::SeqCst)
+            });
         self.state.source_waiting.store(false, Ordering::SeqCst);
         {
             let _mpv = self.state.mpv.lock().unwrap();
@@ -2260,6 +2322,10 @@ impl Player {
             if app.get_is_fullscreen() || app.window().is_fullscreen() {
                 app.window().set_fullscreen(false);
                 app.set_is_fullscreen(false);
+            }
+            #[cfg(not(target_os = "android"))]
+            if let Some(maximized) = catalog_maximized {
+                app.window().set_maximized(maximized);
             }
             app.window().request_redraw();
         }
@@ -2506,11 +2572,14 @@ impl Player {
         self.sync_frame_rate(&app, snapshot.container_fps);
 
         if snapshot.dur > 0.0 || snapshot.pos > 0.0 {
+            // The startup wake chooses a playing/paused timeout. Publish the
+            // live pause state first, rather than retaining loading's `true`.
+            app.set_is_paused(snapshot.paused);
             // Frames are progressing: reveal the video (transparent window
             // background) and drop the loading status.
             if !self.state.started.swap(true, Ordering::SeqCst) {
                 app.set_player_status(slint::SharedString::default());
-                // Arm the 3s OSD auto-hide countdown as playback begins, so
+                // Arm the OSD auto-hide countdown as playback begins, so
                 // the controls fade even if the mouse never moves.
                 app.invoke_osd_mouse_moved();
             }
@@ -2518,7 +2587,6 @@ impl Player {
             app.set_position(snapshot.pos as f32);
             app.set_duration(snapshot.dur.max(1.0) as f32);
             app.set_buffered_until(snapshot.buffered_until);
-            app.set_is_paused(snapshot.paused);
             // OSD visibility is owned solely by the auto-hide countdown in
             // `run.rs` (Android keeps paused controls visible; desktop can
             // fade them after 5 s): do not override that policy here.
@@ -2960,6 +3028,9 @@ mod tests {
         let app = AppWindow::new().unwrap();
         let player = Player::setup(&app);
         let session = player.screenshot_session();
+        app.window().set_maximized(true);
+        player.set_playback_fullscreen_preference(true);
+        player.restore_playback_fullscreen(&app);
         app.set_player_open(true);
         app.window().set_fullscreen(true);
         app.set_is_fullscreen(true);
@@ -2999,6 +3070,16 @@ mod tests {
         assert!(!app.get_player_open());
         assert!(!app.get_is_fullscreen());
         assert!(!app.window().is_fullscreen());
+        assert!(player.playback_fullscreen_preference());
+        assert!(
+            app.window().is_maximized(),
+            "fullscreen exit restores catalog maximization"
+        );
+        player.close();
+        assert!(
+            player.playback_fullscreen_preference(),
+            "catalog cleanup preserves the choice"
+        );
         assert!(!app.get_screenshot_busy());
         assert!(app.get_screenshot_notice().is_empty());
         assert!(app.get_player_show_title().is_empty());
@@ -3071,6 +3152,80 @@ mod tests {
         assert_eq!(
             player.capture_screenshot(before),
             Err(ScreenshotError::StaleSession)
+        );
+        player.close();
+        assert!(player.wait_for_source("Resolving stream…"));
+        assert!(
+            app.window().is_fullscreen(),
+            "reopening restores fullscreen"
+        );
+        player.toggle_fullscreen();
+        assert!(!app.window().is_fullscreen());
+        player.close();
+        assert!(!player.playback_fullscreen_preference());
+        assert!(player.wait_for_source("Resolving stream…"));
+        assert!(
+            !app.window().is_fullscreen(),
+            "a windowed choice is also remembered"
+        );
+        player.close();
+
+        // Exercise the real startup tick with a local video and null outputs.
+        // Loading's paused UI flag must be replaced before the wake callback
+        // selects its timer, and later progress ticks must not restart it.
+        let directory =
+            std::env::temp_dir().join(format!("nova-osd-startup-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(directory.clone());
+        let source = directory.join("video.y4m");
+        let mut video = b"YUV4MPEG2 W32 H18 F30:1 Ip A1:1 C420jpeg\n".to_vec();
+        for _ in 0..300 {
+            video.extend(b"FRAME\n");
+            video.extend([128u8; 32 * 18 * 3 / 2]);
+        }
+        std::fs::write(&source, video).unwrap();
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_property("config", false)?;
+            init.set_property("vo", "null")?;
+            init.set_property("ao", "null")
+        })
+        .unwrap();
+        mpv.set_property("pause", false).unwrap();
+        mpv_load::load_file_at(&mpv, source.to_str().unwrap(), 0.0).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while mpv.get_property::<f64>("duration").unwrap_or(0.0) <= 0.0 {
+            assert!(Instant::now() < deadline, "startup video did not load");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        *player.state.mpv.lock().unwrap() = Some(mpv);
+        app.set_player_open(true);
+        app.set_is_paused(true);
+        let wakes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let recorded = wakes.clone();
+        let weak = app.as_weak();
+        app.on_osd_mouse_moved(move || {
+            recorded
+                .borrow_mut()
+                .push(weak.upgrade().unwrap().get_is_paused());
+        });
+        player.tick();
+        assert!(app.get_playback_started());
+        assert_eq!(
+            &*wakes.borrow(),
+            &[false],
+            "startup chooses the playing timeout"
+        );
+        player.tick();
+        assert_eq!(
+            wakes.borrow().len(),
+            1,
+            "progress does not keep controls awake"
         );
         player.close();
     }

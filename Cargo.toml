@@ -84,6 +84,8 @@ default = ["desktop"]
 # `--no-default-features --features android`).
 desktop = [
     "slint/backend-winit",
+    # Native cursor visibility must cover hidden OSD hit targets too.
+    "slint/unstable-winit-030",
     "slint/renderer-femtovg",
 ]
 # Android's activity backend selects Slint's Skia renderer on Android.

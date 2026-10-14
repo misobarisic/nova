@@ -733,6 +733,8 @@ mod bridge;
 mod cache_gc;
 mod calendar;
 mod catalog;
+#[cfg(feature = "desktop")]
+mod desktop_window;
 mod detail;
 mod downloads;
 mod downloads_page;

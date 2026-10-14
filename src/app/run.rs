@@ -303,6 +303,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     #[cfg(not(feature = "desktop"))]
     let player = crate::player::Player::setup(&app);
+    #[cfg(feature = "desktop")]
+    let desktop_window = desktop_window::DesktopWindow::restore(&app, &player);
+    #[cfg(feature = "desktop")]
+    {
+        let memory = desktop_window.clone();
+        let weak = app.as_weak();
+        let p = player.clone();
+        app.window().on_close_requested(move || {
+            if let Some(app) = weak.upgrade() {
+                memory.flush(&app, &p);
+            }
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
     let downloads = DownloadCoordinator::new(app_data_dir().join("downloads"));
 
     #[cfg(feature = "desktop")]
@@ -1137,6 +1151,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let p = player.clone();
     app.on_toggle_fullscreen(move || p.toggle_fullscreen());
 
+    #[cfg(feature = "desktop")]
+    {
+        let weak = app.as_weak();
+        app.on_osd_opacity_changed(move |_| {
+            if let Some(app) = weak.upgrade() {
+                desktop_window::sync_cursor(&app);
+            }
+        });
+    }
+
     let p = player.clone();
     app.on_subtitle_clearance_changed(move |fraction, opacity| {
         p.set_subtitle_clearance(fraction, opacity)
@@ -1164,6 +1188,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         app.on_osd_mouse_moved(move || {
             if let Some(app) = app_weak.upgrade() {
                 app.set_osd_visible(true);
+                #[cfg(feature = "desktop")]
+                desktop_window::sync_cursor(&app);
                 // Android: the OSD is being woken, so drop the content
                 // frame-rate request now — let the panel go back to its normal
                 // maximum for the fade/controls instead of waiting for a tick.
@@ -1192,12 +1218,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _timer = slint::Timer::default();
     let tick_player = player.clone();
     let tick_bridge = bridge.clone();
+    #[cfg(feature = "desktop")]
+    let tick_window = desktop_window.clone();
     let mut episode_day = today_days();
     _timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(250),
         move || {
             if let Some(app) = tick_bridge.app() {
+                #[cfg(feature = "desktop")]
+                tick_window.tick(&app, &tick_player);
                 app.set_persistence_failed(
                     storage::last_error().is_some() || persistence::failed(),
                 );
@@ -1268,6 +1298,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     crate::web_log("nova: startup complete, entering event loop");
     let result = app.run();
+    #[cfg(feature = "desktop")]
+    desktop_window.flush(&app, &player);
     bridge.persist_outgoing_playback();
     bridge.shutdown_tracking();
     drop(persistence_worker);

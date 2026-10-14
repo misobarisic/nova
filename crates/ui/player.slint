@@ -1142,9 +1142,10 @@ export component PlayerOverlay {
         height: 100%;
 
         // Arrows seek/adjust volume, Tab navigates controls, and Escape
-        // closes the nearest popup/offer or exits fullscreen. The scope takes focus
+        // closes the nearest popup/offer, then the stream. The scope takes focus
         // on creation so it keeps receiving keys while the overlay is up.
-        // Every handled key wakes the OSD so the focus ring stays visible.
+        // Only control/menu navigation wakes the OSD. Direct playback shortcuts
+        // leave a hidden overlay hidden and do not enter focus-marker mode.
         key_scope := FocusScope {
             width: 100%;
             height: 100%;
@@ -1153,18 +1154,21 @@ export component PlayerOverlay {
                 root.last_system_back_request = root.system_back_request;
             }
             key-pressed(e) => {
-                root.osd_mouse_moved();
-                // No text entry on this screen: any keypress is keyboard use.
-                root.kb_active = true;
+                if (root.open_popup != 0 || e.text == Key.Tab || e.text == Key.Return) {
+                    root.osd_mouse_moved();
+                    root.kb_active = true;
+                }
                 if (e.text == Key.Escape) {
-                    if (root.open_popup == 4) {
-                        root.settings_back();
-                    } else if (root.open_popup != 0) {
-                        root.open_popup = 0;
-                    } else if (root.next_episode_shown) {
-                        root.next_episode_dismiss(root.next_episode_token);
-                    } else if (root.is_fullscreen) {
-                        root.toggle_fullscreen();
+                    if (!e.repeat) {
+                        if (root.open_popup == 4) {
+                            root.settings_back();
+                        } else if (root.open_popup != 0) {
+                            root.open_popup = 0;
+                        } else if (root.next_episode_shown) {
+                            root.next_episode_dismiss(root.next_episode_token);
+                        } else {
+                            root.close_player();
+                        }
                     }
                     accept
                 } else if (root.open_popup != 0) {
@@ -1236,21 +1240,33 @@ export component PlayerOverlay {
                 } else if (e.modifiers.control || e.modifiers.alt || e.modifiers.meta) {
                     reject
                 } else if (e.text == " " || e.text == "k" || e.text == "K") {
+                    root.kb_active = false;
                     if (!e.repeat) { root.toggle_pause(); }
                     accept
                 } else if (e.text == "f" || e.text == "F") {
+                    root.kb_active = false;
                     if (!e.repeat && !root.is_android) { root.toggle_fullscreen(); }
                     accept
+                } else if (e.text == "s" || e.text == "S") {
+                    root.kb_active = false;
+                    if (!e.repeat && root.playback_started && !root.screenshot_busy) {
+                        root.take_screenshot();
+                    }
+                    accept
                 } else if (e.text == Key.UpArrow) {
+                    root.kb_active = false;
                     root.shortcut_volume(1);
                     accept
                 } else if (e.text == Key.DownArrow) {
+                    root.kb_active = false;
                     root.shortcut_volume(-1);
                     accept
                 } else if (e.text == Key.LeftArrow) {
+                    root.kb_active = false;
                     root.shortcut_seek(-1);
                     accept
                 } else if (e.text == Key.RightArrow) {
+                    root.kb_active = false;
                     root.shortcut_seek(1);
                     accept
                 } else if (e.text == Key.Tab) {
@@ -1518,7 +1534,9 @@ export component PlayerOverlay {
             text: root.screenshot_notice; font-size: 12px;
             color: Theme.current.text_player_caption;
             horizontal-alignment: right; wrap: word-wrap; max-lines: 2; overflow: elide;
-            opacity: root.controls_active ? 1 : 0;
+            // Screenshot confirmation is independent of the controls: S can
+            // report its result without revealing the full OSD.
+            opacity: root.screenshot_notice != "" ? 1 : 0;
             animate opacity { duration: Anim.player_fade; }
         }
 

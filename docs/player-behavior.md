@@ -130,11 +130,26 @@ notice reports the saved location or a sanitized error.
 
 Outside player menus, Left/Right seek by ten seconds, Up/Down change volume
 (desktop five percentage points, Android one system-volume notch), Space/K
-pause or resume, and desktop F toggles fullscreen. Held pause/fullscreen keys
-toggle only once. Tab/ShiftTab move through OSD controls; Enter activates the
+pause or resume, desktop F toggles fullscreen, and S saves a screenshot.
+Screenshot keys are disabled while loading or capturing; modifier chords and
+open menus retain their existing ownership. Direct playback shortcuts preserve
+a hidden OSD; Tab/Enter and menu navigation reveal controls and focus markers.
+Screenshot confirmation appears independently without opening the controls.
+Held pause/fullscreen/screenshot
+keys act only once. Escape dismisses the nearest player menu or next-episode
+offer first, then closes the stream, including fullscreen playback.
+Tab/ShiftTab move through OSD controls; Enter activates the
 focused control. Open menus retain their arrow navigation. Closing playback,
 including natural end-of-stream, leaves fullscreen before returning to the
-catalog.
+catalog. Desktop remembers the last playback fullscreen choice locally and
+restores it when the next stream starts (including addon resolution), without
+fullscreening the catalog. The desktop window starts maximized with no saved
+geometry; later launches restore its normal logical size and maximized state.
+Playing controls hide after three seconds of inactivity on both platforms;
+startup publishes the live pause state before arming that countdown, avoiding
+loading’s five-second paused timeout. Desktop hides the pointer once controls
+finish fading out and restores it on activity or player exit; loading, menus
+and the next-episode offer keep it visible.
 
 Implementation: `crates/ui/player.slint`, `src/app/{playback,posters,run}.rs`
 and `crates/player/src/{screenshot,gpu_screenshot}.rs`. Header/keyboard regressions live in

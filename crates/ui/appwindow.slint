@@ -33,7 +33,10 @@ export component AppWindow inherits Window {
     public function player_bridge_next_episode_streams(t: string) { root.next_episode_streams(t); }
     public function player_bridge_next_episode_dismiss(t: string) { root.next_episode_dismiss(t); }
     public function player_bridge_restore_playback_default(control: int) { root.restore_playback_default(control); }
-    public function player_bridge_osd_opacity_changed(v: float) { root.osd_opacity = v; }
+    public function player_bridge_osd_opacity_changed(v: float) {
+        root.osd_opacity = v;
+        root.osd_opacity_changed(v);
+    }
     public function player_bridge_subtitle_clearance_changed(fraction: float, opacity: float) { root.subtitle_clearance_changed(fraction, opacity); }
     public function player_bridge_toggle_pause() { root.toggle_pause(); }
     public function player_bridge_seek(v: float) { root.seek(v); }
@@ -606,6 +609,7 @@ export component AppWindow inherits Window {
     changed show_library => { if (root.show_library) { root.cancel_more_subpage_back(); root.more_parent = false; root.more_subpage_entered = true; root.discover_search_focused = false; root.more_open = false; } }
     changed show_settings => { if (root.show_settings) { root.discover_search_focused = false; root.more_open = false; if (root.settings_two_pane) { root.settings_detail_open = true; } } }
     changed player_open => {
+        root.osd_opacity_changed(root.osd_opacity);
         if !root.onboarding_visible { root.preserve_back_focus(); }
         page_release_timer.start();
         if (root.player_open) { root.cancel_more_subpage_back(); root.more_subpage_entered = true; root.discover_search_focused = false; root.more_open = false; }
@@ -1301,6 +1305,7 @@ export component AppWindow inherits Window {
     // to query the live decoder state immediately.
     callback settings_opened();
     callback toggle_fullscreen();
+    callback osd_opacity_changed(float);
     callback osd_mouse_moved();
     callback tracks_popup_opened(int);
     pure callback format_time(float) -> string;
