@@ -59,8 +59,11 @@ cargo test --test ui_discover --test ui_library --test ui_player # isolated UI s
 cargo check --workspace --locked --target x86_64-pc-windows-gnu
 ```
 
-Pull requests run host and Windows-target Cargo checks, the shared OpenGL state
-guard regression on Linux, and exercise the Linux release packaging job.
+Pull requests and source/build changes pushed to `main` run Linux formatting,
+Clippy and workspace checks, the shared OpenGL state guard regression on Linux,
+and Windows GNU and ARM64 Android target checks. `check-android` uses the
+Android Nix shell with `--no-default-features --features android --lib -p nova`
+and `--target aarch64-linux-android`.
 Pushing a Git tag builds three Android APKs, a Linux
 x86_64 `.deb` and AppImage, and a Windows x86_64 ZIP, then attaches all six
 files to a GitHub Release. Android release filenames are
@@ -1274,5 +1277,5 @@ unit/documentation coverage.
 | Android glue / external player / edge-to-edge system bars | `src/lib.rs` (`android_main`), `crates/player/src/external.rs` (Android; retains edge-to-edge layout with a transparent status bar when restoring visible system bars), `crates/player/src/lib.rs::open_external` (desktop) |
 | Android QuickJS bindings / NDK headers | `flake.nix` (Android shell's `BINDGEN_EXTRA_CLANG_ARGS_*`), `crates/providers/Cargo.toml` (`bindgen` feature) |
 | Tracker browser sign-in / Android HTTPS | `crates/tracking/src/auth.rs` (MAL PKCE, AniList minimal PIN authorization URL and manual token paste), `crates/tracking/src/api.rs` (`HttpsTransport::new`, Android bundled TLS roots), `src/app/tracking/worker.rs`, `crates/ui/{tracking,tracking-panel}.slint` (account setup and title episode mapping review) |
-| Build/packaging / Windows artifact ZIP | `Cargo.toml` (`[package.metadata.android]`), `build.rs`, `flake.nix`, `Makefile`, `.github/workflows/build-release.yml`, `.github/scripts/package-windows.sh` (flat bundle ZIP; uploaded directly and preserved by the release job) |
+| CI checks / build/packaging / Windows artifact ZIP | `Cargo.toml` (`[package.metadata.android]`), `build.rs`, `flake.nix`, `Makefile`, `.github/workflows/build-release.yml` (`check-linux`, `check-windows`, ARM64-only `check-android` on PRs/main source pushes), `.github/scripts/package-windows.sh` (flat bundle ZIP; uploaded directly and preserved by the release job) |
 | Missing seasons in main series / preserved episode IDs | `crates/providers/src/metadata/coverage.rs`, `metadata.rs::{missing_seasons,apply_enrichment}`, `src/app/detail.rs::write_episode_meta_cache_for`; shared ID/alias/episode proof prevents duplicate coverage, fills partial seasons and retains saved IDs/episodes through refreshes; Detail, Home and prefetch use the existing stable episode cache. |

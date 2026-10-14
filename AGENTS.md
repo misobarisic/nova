@@ -47,7 +47,8 @@ cargo test --test ui_settings_sync -- sync_overflow:: # headless Slint UI regres
   desktop-only code is gated (`#[cfg(feature = "desktop")]`,
   `#[cfg(not(target_os = "android"))]`).
 - CI runs Rust formatting, Clippy, the default workspace `cargo check`, the
-  shared OpenGL state guard regression, and Windows GNU-target `cargo check`
+  shared OpenGL state guard regression, Windows GNU-target `cargo check`,
+  and ARM64 Android library `cargo check` in the Android Nix shell
   on pull requests and source/build changes pushed to `main` (see
   `.github/workflows/build-release.yml`). Tag pushes build
   releases. Other tests remain local; run relevant tests for behavior changes.

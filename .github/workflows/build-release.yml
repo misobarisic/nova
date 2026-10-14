@@ -90,11 +90,11 @@ jobs:
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
-          nix develop .#default --command sh -eu -c '
+          nix develop .#default --command sh -eu <<'SH'
             test -f "$NOVA_TEST_EGL_VENDOR_LIBRARY_FILENAMES"
             export __EGL_VENDOR_LIBRARY_FILENAMES="$NOVA_TEST_EGL_VENDOR_LIBRARY_FILENAMES"
             exec cargo test -p nova-player --lib --features slint/renderer-femtovg clean_draw_and_host_state_round_trip --locked
-          '
+          SH
 
   check-windows:
     name: Windows GNU target check
@@ -118,6 +118,34 @@ jobs:
         run: >-
           nix develop .#windows --command cargo check --workspace --locked
           --target x86_64-pc-windows-gnu
+
+  check-android:
+    name: Android ARM64 target check
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free unused Android SDK space
+        # The job uses the Nix SDK/NDK, not the runner's preinstalled SDK.
+        run: sudo rm -rf /usr/local/lib/android
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ github.token }}
+
+      - name: Check Android ARM64 target
+        run: >-
+          nix develop .#android --command cargo check --locked
+          --target aarch64-linux-android --no-default-features --features android
+          --lib -p nova
 
   android-build:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
