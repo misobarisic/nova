@@ -321,7 +321,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         downloads,
     );
 
-    bridge.last_stream = Arc::new(last_stream::Cache::open(
+    bridge.last_stream = Arc::new(last_stream::Cache::open_synced(
         nova_config::app_cache_dir().join("last-stream-v1.json"),
     ));
     bridge.shared.lock().unwrap().restoring_models = true;
@@ -943,6 +943,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Only unapplied records need replay; snapshots already materialized
     // by previous launches/local writes are authoritative and cheap to load.
     bridge.restore_playback_preferences_schema();
+    bridge.restore_last_stream_choice();
     if let Err(error) = plugin_settings::restore_retained_settings() {
         storage::report(storage::Error::new(storage::ErrorKind::Transaction, error));
     }

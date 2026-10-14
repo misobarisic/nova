@@ -19,6 +19,7 @@ use std::collections::BTreeSet;
 
 pub(crate) const DOMAIN_LIBRARY: &str = "library";
 pub(crate) const DOMAIN_PROGRESS: &str = "progress";
+pub(crate) const DOMAIN_LAST_STREAM: &str = last_stream::DOMAIN;
 pub(crate) const DOMAIN_PLAYBACK_PREFERENCES: &str = "playback_preferences";
 use super::playback_preferences::PREFERENCES_KEY;
 use nova_config::playback_preferences::PreferenceValue;
@@ -1004,6 +1005,17 @@ impl Bridge {
                     DOMAIN_PLAYBACK_PREFERENCES,
                     PREFERENCES_KEY,
                 ),
+                DOMAIN_LAST_STREAM => {
+                    if let Err(error) = self.project_last_stream_choice() {
+                        storage::report(storage::Error::new(storage::ErrorKind::Schema, error));
+                        continue;
+                    }
+                    if publish_models
+                        && self.app().is_some_and(|app| app.get_stream_selector_open())
+                    {
+                        self.apply_stream_filter();
+                    }
+                }
                 DOMAIN_VIEWING_ACTIVITY => self.sync_apply_viewing_activity(),
                 DOMAIN_NEW_EPISODES_HIDDEN => self.sync_apply_new_episodes_hidden(),
                 DOMAIN_ADDONS => self.sync_apply_addons(),

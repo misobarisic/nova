@@ -4557,9 +4557,35 @@ mod tests {
                 ..Default::default()
             },
         );
-        bridge
-            .last_stream
-            .remember(choice.clone(), nova_config::now_secs());
+        // A peer's selection refreshes the open selector without playing it
+        // or echoing another selection back into the record owner.
+        let owner = nova_sync::local_store().unwrap();
+        {
+            let mut store = owner.lock().unwrap();
+            store.set(
+                sync::DOMAIN_LAST_STREAM,
+                "selection",
+                Some(
+                    serde_json::json!({
+                        "version": 1, "identity": choice, "selected_at": nova_config::now_secs(),
+                    })
+                    .to_string(),
+                ),
+                0,
+                2,
+            );
+            store.save().unwrap();
+        }
+        let before = owner.lock().unwrap().digest();
+        app.set_stream_selector_open(true);
+        bridge.sync_apply(vec![sync::DOMAIN_LAST_STREAM.into()]);
+        assert_eq!(owner.lock().unwrap().digest(), before);
+        assert!(
+            app.get_streams()
+                .iter()
+                .any(|row| row.id == "fast-4" && row.last_used)
+        );
+        assert!(!app.get_player_open());
         app.set_kb_active(false);
         bridge.stream_page_picked(0);
         assert_eq!(app.get_streams().row_data(0).unwrap().id, "fast-4");
