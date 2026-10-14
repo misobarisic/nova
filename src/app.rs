@@ -219,6 +219,8 @@ pub(crate) struct PendingStream {
 #[derive(Clone)]
 struct StreamUi {
     id: String,
+    /// Cross-request source fingerprint; excludes changing presentation text.
+    choice_id: Option<String>,
     /// Transport identity, separate from the potentially shared display label.
     owner_url: String,
     display: String,
@@ -710,6 +712,7 @@ struct Bridge {
     /// In-app player overlay (same window; mpv on desktop, HTML5 video on web).
     player: crate::player::Player,
     downloads: DownloadCoordinator,
+    last_stream: Arc<last_stream::Cache>,
     /// Bounded tracker actor; unavailable stores retain their originals and
     /// require explicit recovery without blocking playback.
     tracking: tracking::StateHandle,
@@ -734,6 +737,7 @@ mod detail;
 mod downloads;
 mod downloads_page;
 mod home;
+mod last_stream;
 mod library;
 mod next_episode;
 mod onboarding;

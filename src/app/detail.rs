@@ -6,6 +6,7 @@ const STREAM_PAGE_SIZE: usize = 25;
 #[derive(Clone)]
 struct StreamResponseContext {
     request_id: String,
+    media_type: String,
     generation: u64,
     addon: String,
     owner_url: String,
@@ -397,6 +398,7 @@ impl Bridge {
         for (addon, url, owner_url, owner_generation) in stream_urls {
             let context = StreamResponseContext {
                 request_id: request_id.clone(),
+                media_type: modal_type.clone(),
                 generation,
                 addon,
                 tracks_settings: nova_providers::provider_settings_schema(&owner_url)
@@ -479,6 +481,12 @@ impl Bridge {
                         }
                         Some(StreamUi {
                             id,
+                            choice_id: Some(stream_choice_identity(
+                                &context.owner_url,
+                                &context.media_type,
+                                &context.request_id,
+                                &stream,
+                            )),
                             owner_url: context.owner_url.clone(),
                             display: stream_display(&stream),
                             card: stream_card_text(&stream),
@@ -2508,7 +2516,16 @@ impl Bridge {
     /// active per-addon filter: the pinned download rows for this request
     /// first, then the filtered addon rows, plus the status hint.
     fn compute_stream_view(&self) -> (Vec<StreamUi>, Vec<StreamRow>, String) {
-        let (filtered, filter, addon_count, total, pending_count, addon_label, request_id) = {
+        let (
+            filtered,
+            filter,
+            addon_count,
+            total,
+            pending_count,
+            addon_label,
+            request_id,
+            media_type,
+        ) = {
             let mut state = self.shared.lock().unwrap();
             refresh_stream_owner_order(&mut state);
             let request_id = state
@@ -2542,6 +2559,11 @@ impl Bridge {
                 state.stream_pending.len(),
                 selected,
                 request_id,
+                state
+                    .modal_item
+                    .as_ref()
+                    .map(|m| m.type_.clone())
+                    .unwrap_or_default(),
             )
         };
 
@@ -2588,6 +2610,15 @@ impl Bridge {
                 let path = job.artifact_path.clone().unwrap_or_default();
                 StreamUi {
                     id: format!("download:{}", job.id),
+                    choice_id: Some(stream_choice_identity(
+                        "",
+                        &media_type,
+                        &request_id,
+                        &addons::Stream {
+                            url: Some(format!("nova-download:{}", job.id)),
+                            ..Default::default()
+                        },
+                    )),
                     owner_url: String::new(),
                     display: job.display.clone(),
                     card: downloaded_stream_card(&job),
@@ -2601,9 +2632,17 @@ impl Bridge {
             })
             .collect();
         displayed.extend(filtered);
+        let last_used = self.last_stream.identity(nova_config::now_secs());
+        promote_last_stream(&mut displayed, last_used.as_deref());
+        let last_used_index = last_used.as_deref().and_then(|id| {
+            displayed
+                .iter()
+                .position(|row| row.choice_id.as_deref() == Some(id))
+        });
         let stream_rows: Vec<StreamRow> = displayed
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(index, row)| {
                 let details = row
                     .download
                     .as_ref()
@@ -2622,6 +2661,7 @@ impl Bridge {
                     details: SharedString::from(details),
                     lines,
                     is_download: row.download.is_some(),
+                    last_used: last_used_index == Some(index),
                     download_progress: row
                         .download
                         .as_ref()
@@ -2822,6 +2862,28 @@ impl Bridge {
         };
         if let Some(app) = self.app() {
             app.set_detail_kb_s(index as i32);
+        }
+
+        // A failed/unfinished download and an unsupported row are not choices
+        // the user can use. Save the original resolver identity before it is
+        // exchanged for a temporary playback URL.
+        let usable = match &stream.source {
+            StreamSource::Unsupported => false,
+            StreamSource::Downloaded { job_id, path } => {
+                path.is_file()
+                    && self
+                        .downloads
+                        .job(job_id)
+                        .is_some_and(|job| job.phase == crate::download::DownloadPhase::Completed)
+            }
+            _ => true,
+        };
+        if usable && let Some(identity) = &stream.choice_id {
+            self.last_stream
+                .remember(identity.clone(), nova_config::now_secs());
+            // Publish the badge before playback, so this refresh cannot
+            // overwrite a subsequent resolver/playback failure hint.
+            self.apply_stream_filter();
         }
 
         match stream.source.clone() {
@@ -3610,6 +3672,26 @@ fn sort_streams_by_owner(rows: &mut [StreamUi], owner_order: &[String]) {
     });
 }
 
+/// Downloads remain pinned first. Promote only the first matching remote row;
+/// all other rows retain installed-owner order and each owner's own ranking.
+fn promote_last_stream(rows: &mut Vec<StreamUi>, identity: Option<&str>) {
+    let Some(identity) = identity else { return };
+    let Some(index) = rows
+        .iter()
+        .position(|row| row.download.is_none() && row.choice_id.as_deref() == Some(identity))
+    else {
+        return;
+    };
+    let first_remote = rows
+        .iter()
+        .position(|row| row.download.is_none())
+        .unwrap_or(index);
+    if index != first_remote {
+        let row = rows.remove(index);
+        rows.insert(first_remote, row);
+    }
+}
+
 fn refresh_stream_owner_order(state: &mut Shared) {
     let selected = state
         .stream_filter
@@ -4206,6 +4288,7 @@ mod tests {
         // and isolate addons that happen to share a display label.
         let context = StreamResponseContext {
             request_id: "movie".into(),
+            media_type: "movie".into(),
             generation: 1,
             addon: "Same label".into(),
             owner_url: "owner-a".into(),
@@ -4395,6 +4478,7 @@ mod tests {
         };
         let response = |owner: &str, label: &str| StreamResponseContext {
             request_id: "movie".into(),
+            media_type: "movie".into(),
             generation,
             addon: label.into(),
             owner_url: owner.into(),
@@ -4408,6 +4492,15 @@ mod tests {
                 .map(|i| {
                     let mut row = row(owner, &format!("{owner}-{i}"));
                     row.addon = label.into();
+                    row.choice_id = Some(stream_choice_identity(
+                        owner,
+                        "movie",
+                        "movie",
+                        &addons::Stream {
+                            url: Some(format!("https://example.invalid/{owner}/{i}")),
+                            ..Default::default()
+                        },
+                    ));
                     row
                 })
                 .collect()
@@ -4453,6 +4546,69 @@ mod tests {
             14,
             "removed keyboard selection clamps to the last remaining row"
         );
+        // One last-used source overrides normal addon priority, while filters,
+        // progressive updates and keyboard identity still behave normally.
+        let choice = stream_choice_identity(
+            "fast",
+            "movie",
+            "movie",
+            &addons::Stream {
+                url: Some("https://example.invalid/fast/4".into()),
+                ..Default::default()
+            },
+        );
+        bridge
+            .last_stream
+            .remember(choice.clone(), nova_config::now_secs());
+        app.set_kb_active(false);
+        bridge.stream_page_picked(0);
+        assert_eq!(app.get_streams().row_data(0).unwrap().id, "fast-4");
+        assert!(app.get_streams().row_data(0).unwrap().last_used);
+        assert_eq!(
+            app.get_streams().iter().filter(|row| row.last_used).count(),
+            1
+        );
+        app.set_kb_active(true);
+        app.set_detail_kb_s(1); // supernova-0, not the promoted row
+        bridge.stream_addon_updated(
+            response("supernova", "Supernova"),
+            batch("supernova", "Supernova", 30),
+            true,
+        );
+        assert_eq!(app.get_detail_kb_s(), 1);
+        assert_eq!(app.get_streams().row_data(1).unwrap().id, "supernova-0");
+        bridge.stream_filter_picked(1);
+        assert!(app.get_streams().iter().all(|row| !row.last_used));
+        assert_eq!(app.get_streams().row_data(0).unwrap().id, "supernova-0");
+        bridge.stream_filter_picked(2);
+        assert_eq!(app.get_streams().row_data(0).unwrap().id, "fast-4");
+        bridge.stream_filter_picked(0);
+        bridge.stream_addon_updated(
+            response("fast", "Fast addon"),
+            batch("fast", "Fast addon", 4),
+            true,
+        );
+        assert!(
+            app.get_streams().iter().all(|row| !row.last_used),
+            "missing choices do not invent a row"
+        );
+        bridge.stream_addon_updated(
+            response("fast", "Fast addon"),
+            batch("fast", "Fast addon", 5),
+            true,
+        );
+        let (displayed, rows, _) = bridge.compute_stream_view();
+        assert_eq!(
+            displayed[0].id, "fast-4",
+            "later batches promote the returning choice"
+        );
+        assert!(rows[0].last_used);
+        bridge
+            .last_stream
+            .remember(choice, nova_config::now_secs() - 7 * 24 * 60 * 60);
+        let (displayed, rows, _) = bridge.compute_stream_view();
+        assert_eq!(displayed[0].id, "supernova-0");
+        assert!(rows.iter().all(|row| !row.last_used));
         bridge.clear_streams();
         bridge.refresh_watch_action();
         assert_eq!(app.get_detail_watch_label(), text::tr("Start"));
@@ -4668,6 +4824,7 @@ mod tests {
     fn row(addon: &str, id: &str) -> StreamUi {
         StreamUi {
             id: id.into(),
+            choice_id: None,
             owner_url: addon.into(),
             display: id.into(),
             card: StreamCardText::default(),
@@ -4722,6 +4879,24 @@ mod tests {
         // Installed order (B, then A), unknown addon (C) last, arrival order
         // within an addon preserved.
         assert_eq!(ids, vec!["b1", "a1", "a2", "c1"]);
+    }
+
+    #[test]
+    fn last_stream_promotes_one_match_after_downloads_without_reordering_the_rest() {
+        let mut download = row("", "download:one");
+        download.download = Some(DownloadJob::default());
+        let mut chosen = row("B", "b2");
+        chosen.choice_id = Some("choice".into());
+        let duplicate = chosen.clone();
+        let mut rows = vec![download, row("A", "a1"), row("B", "b1"), chosen, duplicate];
+        promote_last_stream(&mut rows, Some("choice"));
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            ["download:one", "b2", "a1", "b1", "b2"]
+        );
+        promote_last_stream(&mut rows, Some("missing"));
+        assert_eq!(rows[0].id, "download:one");
+        assert_eq!(rows[1].id, "b2");
     }
 }
 

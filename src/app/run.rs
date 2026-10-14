@@ -306,7 +306,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let downloads = DownloadCoordinator::new(app_data_dir().join("downloads"));
 
     #[cfg(feature = "desktop")]
-    let bridge = Bridge::new(
+    let mut bridge = Bridge::new(
         app.as_weak(),
         tx,
         catalog_gen.clone(),
@@ -314,13 +314,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         downloads,
     );
     #[cfg(not(feature = "desktop"))]
-    let bridge = Bridge::new(
+    let mut bridge = Bridge::new(
         app.as_weak(),
         catalog_gen.clone(),
         player.clone(),
         downloads,
     );
 
+    bridge.last_stream = Arc::new(last_stream::Cache::open(
+        nova_config::app_cache_dir().join("last-stream-v1.json"),
+    ));
     bridge.shared.lock().unwrap().restoring_models = true;
 
     bridge.initialize_tracking();

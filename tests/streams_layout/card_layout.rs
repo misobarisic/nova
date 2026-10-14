@@ -32,6 +32,7 @@ fn stream_row(id: &str, is_download: bool) -> nova::StreamRow {
         },
         lines: 2,
         is_download,
+        last_used: !is_download,
         download_progress: if is_download { 0.42 } else { 0.0 },
         download_action: if is_download { 1 } else { 0 },
         ..Default::default()
@@ -97,6 +98,20 @@ fn pills_keep_one_width_and_the_download_rail_fills_left_to_right() {
         let failures2 = failures1.clone();
         after(250, move || {
             let app = app2.upgrade().unwrap();
+            let badge = ElementHandle::find_by_element_id(&app, "StreamList::last_used_label")
+                .next()
+                .expect("last-used choice must be visibly labelled");
+            let chosen_card = ElementHandle::find_by_element_id(&app, "StreamList::row_reveal")
+                .nth(1)
+                .expect("last-used card");
+            fail(
+                &failures2,
+                badge.size().height > 0.0
+                    && badge.absolute_position().y >= chosen_card.absolute_position().y
+                    && badge.absolute_position().y + badge.size().height
+                        <= chosen_card.absolute_position().y + chosen_card.size().height,
+                "last-used label fits inside its measured card",
+            );
             let idle_width = ElementHandle::find_by_element_type_name(&app, "StreamFilterPill")
                 .next()
                 .map(|p| p.size().width)

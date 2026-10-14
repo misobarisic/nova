@@ -2509,3 +2509,6 @@ msgstr "Dodajte jezike prema redoslijedu prioriteta. Reproduktor koristi prvi do
 
 msgid "Add languages in preference order. Subtitles stay off if none are available."
 msgstr "Dodajte jezike prema redoslijedu prioriteta. Ako nijedan nije dostupan, titlovi ostaju isključeni."
+
+msgid "Last used"
+msgstr "Posljednje korišteno"

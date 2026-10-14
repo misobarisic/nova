@@ -42,6 +42,7 @@ impl Bridge {
             poster_tx,
             player,
             downloads,
+            last_stream: Arc::default(),
             tracking: Arc::new(tracking::TrackingHandle::new()),
             downloads_seen: Arc::new(AtomicU64::new(0)),
             image_usage_scan: Arc::default(),

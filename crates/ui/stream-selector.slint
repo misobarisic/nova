@@ -232,7 +232,7 @@ component StreamList {
                 y: !stream_row.reveal_motion || stream_row.item_revealed ? 0px : 12px;
                 animate opacity { duration: stream_row.reveal_motion ? Anim.transition_fade : 0ms; delay: stream_row.reveal_motion ? stream_row.item_reveal_delay : 0ms; easing: ease-out; }
                 animate y { duration: stream_row.reveal_motion ? Anim.transition_slide : 0ms; delay: stream_row.reveal_motion ? stream_row.item_reveal_delay : 0ms; easing: ease-out; }
-                background: st.is_download ? Theme.current.stream_download : (stream_row.focused ? Theme.current.selection_wash : Theme.current.stream_card);
+                background: st.is_download || st.last_used ? Theme.current.stream_download : (stream_row.focused ? Theme.current.selection_wash : Theme.current.stream_card);
                 border-radius: Theme.card_corner_radius;
                 // Black cards need an edge against the black canvas; keyboard
                 // focus retains its stronger accent ring in either theme.
@@ -267,6 +267,15 @@ component StreamList {
                             horizontal-stretch: 1;
                         }
                         Rectangle { width: 44px; horizontal-stretch: 0; }
+                    }
+
+                    if st.last_used: last_used_label := Text {
+                        text: @tr("Last used");
+                        color: Theme.current.accent;
+                        font-size: 12px;
+                        font-weight: 600;
+                        wrap: word-wrap;
+                        min-width: 0px;
                     }
 
                     card_title := Text {
@@ -369,6 +378,14 @@ component StreamList {
                                 horizontal-stretch: 1;
                             }
                             Rectangle { width: 44px; horizontal-stretch: 0; }
+                        }
+
+                        if st.last_used: Text {
+                            text: @tr("Last used");
+                            font-size: 12px;
+                            font-weight: 600;
+                            wrap: word-wrap;
+                            min-width: 0px;
                         }
 
                         Text {

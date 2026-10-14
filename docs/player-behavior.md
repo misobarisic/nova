@@ -37,6 +37,16 @@ All groups streams by the current installed-addon order as each cached or live
 snapshot arrives; it displays available results while other addons are pending.
 Local and synced addon reordering updates an already-open selector and its pills
 immediately, retaining the chosen addon and focused stream by identity.
+Nova remembers one most recently selected usable stream on this device for
+seven days. When it is returned again for the same movie/episode, it is pinned
+after downloads, tinted like a download and labelled **Last used**. Other rows
+retain addon priority; filtering never brings back a hidden addon or invents a
+missing stream. Matching uses the owner's stable provider ID or exact source
+identity (torrent infohash/file index, or URL and request headers), ignoring
+titles, descriptions, seed counts and changing subtitle URLs. URL-only addons
+whose playback URL rotates may not match; no fuzzy title matching is attempted.
+The cache contains only a fingerprint/version/selection time, is never synced,
+and expires on reads and via its background worker. Writes do not block the UI.
 Portrait and desktop keep addon filters in the header while results scroll
 independently. Short touch landscape scrolls the context and cards together,
 while addon filters pin at the safe top. An opaque full-width theme canvas

@@ -1,6 +1,22 @@
 //! Stream-row mapping and display text helpers.
 use super::*;
 
+/// Remember the source, not its changing labels, seed counts or subtitle URLs.
+/// Owner and movie/episode scope prevent an unrelated release from being pinned.
+/// URL-only addons retain exact URL/header matching: stripping tokens or fuzzy
+/// title matching could silently confuse two different files.
+pub(crate) fn stream_choice_identity(
+    owner: &str,
+    media_type: &str,
+    request: &str,
+    stream: &addons::Stream,
+) -> String {
+    let mut source = stream.clone();
+    source.subtitles.clear();
+    let scope = serde_json::to_string(&(media_type, request)).expect("stream scope serializes");
+    nova_providers::stable_stream_identity(owner, &scope, &source)
+}
+
 /// Presentation only: the original addon text stays intact for downloads and
 /// accessibility, while the card can give the release title its own style.
 #[derive(Clone, Default)]
@@ -347,5 +363,84 @@ pub(crate) fn stream_display(s: &addons::Stream) -> String {
         label
     } else {
         format!("{label}\n{detail}")
+    }
+}
+
+#[cfg(test)]
+mod choice_identity_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn changing_labels_seed_counts_and_subtitles_keep_the_same_choice() {
+        let mut stream: addons::Stream = serde_json::from_value(json!({
+            "infoHash": "ABCDEF0123456789ABCDEF0123456789ABCDEF01", "fileIdx": 3,
+            "name": "Torrent 1080p", "description": "51 seeders",
+            "subtitles": [{"id":"1", "url":"https://example.invalid/old", "lang":"en"}]
+        }))
+        .unwrap();
+        let key = stream_choice_identity("https://addon.example", "series", "tt1:3:2", &stream);
+        stream.name = Some("A renamed source".into());
+        stream.description = Some("81 seeders and a different description".into());
+        stream.extra.insert("seeders".into(), json!(81));
+        stream.info_hash = stream.info_hash.map(|hash| hash.to_ascii_lowercase());
+        stream.subtitles[0].url = "https://example.invalid/new".into();
+        assert_eq!(
+            key,
+            stream_choice_identity("https://addon.example/", "series", "tt1:3:2", &stream)
+        );
+        for (owner, kind, request) in [
+            ("https://other.example", "series", "tt1:3:2"),
+            ("https://addon.example", "series", "tt1:3:3"),
+            ("https://addon.example", "movie", "tt1:3:2"),
+        ] {
+            assert_ne!(key, stream_choice_identity(owner, kind, request, &stream));
+        }
+        stream.file_idx = Some(4);
+        assert_ne!(
+            key,
+            stream_choice_identity("https://addon.example", "series", "tt1:3:2", &stream)
+        );
+    }
+
+    #[test]
+    fn owned_provider_ids_survive_temporary_urls_but_remote_urls_are_exact() {
+        let mut stream: addons::Stream = serde_json::from_value(json!({
+            "novaProviderStreamId":"supernova:hash:3:torbox", "url":"https://cdn.example/old-token"
+        }))
+        .unwrap();
+        let key = stream_choice_identity("nova-provider://supernova", "series", "tt1:3:2", &stream);
+        stream.url = Some("https://cdn.example/new-token".into());
+        stream
+            .extra
+            .insert("novaResolver".into(), json!({"token":"refreshed"}));
+        assert_eq!(
+            key,
+            stream_choice_identity("nova-provider://supernova", "series", "tt1:3:2", &stream)
+        );
+        stream.extra.insert(
+            "novaProviderStreamId".into(),
+            json!("supernova:hash:4:torbox"),
+        );
+        assert_ne!(
+            key,
+            stream_choice_identity("nova-provider://supernova", "series", "tt1:3:2", &stream)
+        );
+        let remote = stream_choice_identity("https://remote.example", "series", "tt1:3:2", &stream);
+        stream.url = Some("https://cdn.example/different-video".into());
+        assert_ne!(
+            remote,
+            stream_choice_identity("https://remote.example", "series", "tt1:3:2", &stream),
+            "a forged native ID cannot merge unrelated remote files"
+        );
+        let remote = stream_choice_identity("https://remote.example", "series", "tt1:3:2", &stream);
+        stream.extra.insert(
+            "behaviorHints".into(),
+            json!({"proxyHeaders":{"request":{"Authorization":"another-account"}}}),
+        );
+        assert_ne!(
+            remote,
+            stream_choice_identity("https://remote.example", "series", "tt1:3:2", &stream)
+        );
     }
 }

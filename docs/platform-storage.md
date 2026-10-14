@@ -24,6 +24,7 @@ On Android, the application ID is `dev.misob.nova`. Android controls the actual 
 | `<data>/nova.redb` | Persistent database for settings, app state and local metadata. Metadata cache records use adaptive zstd level 3 compression; user state stays JSON. |
 | `<data>/downloads/` | Downloaded episodes managed by Nova's download coordinator. HTTP partial files have a `.part.resume.json` sidecar recording their URL and response validators; it is removed after completion. |
 | `<cache>/posters/` | Poster image files fetched from the network. |
+| `<cache>/last-stream-v1.json` | One device-local last-selected stream fingerprint, retained for seven days; no playback URLs or credentials. Expiry and atomic writes run in a background worker. |
 | `<cache>/torrents/` | Default torrent workspace and DHT state. If a custom torrent directory is configured, torrent data uses that directory instead. |
 | Android `<files>/fonts/` | Subtitle font extracted for mpv. |
 
