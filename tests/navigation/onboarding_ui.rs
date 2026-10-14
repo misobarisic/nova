@@ -32,6 +32,52 @@ fn settle(app: &nova::AppWindow) {
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
     }
 }
+fn assert_language_checkmark(app: &nova::AppWindow) {
+    let label = if app.get_language_index() == 0 {
+        "English"
+    } else {
+        "Hrvatski"
+    };
+    let button = (0..10)
+        .find_map(|_| {
+            let button = ElementHandle::find_by_accessible_label(app, label)
+                .filter(|element| element.accessible_role() == Some(AccessibleRole::Button))
+                .last();
+            if button.is_none() {
+                // The short landscape body scrolls below the heading and intro.
+                let size = app.window().size();
+                app.window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                        position: slint::LogicalPosition::new(
+                            size.width as f32 / 2.0,
+                            size.height as f32 / 2.0,
+                        ),
+                        delta_x: 0.0,
+                        delta_y: -80.0,
+                    });
+                settle(app);
+            }
+            button
+        })
+        .expect("selected language control must be reachable by scrolling");
+    let check = ElementHandle::find_by_element_type_name(app, "IcCheck")
+        .next()
+        .unwrap();
+    let choice = button.absolute_position();
+    let mark = check.absolute_position();
+    assert!(
+        (mark.y + check.size().height / 2.0 - choice.y - button.size().height / 2.0).abs() < 0.5,
+        "checkmark must be vertically centered with the language control"
+    );
+    assert!(
+        mark.x >= choice.x + button.size().width + 8.0,
+        "checkmark must be separated from the language control at the right"
+    );
+    assert!(
+        mark.x + check.size().width <= app.window().size().width as f32,
+        "checkmark must stay within the viewport"
+    );
+}
 fn click(app: &nova::AppWindow, label: &str) {
     ElementHandle::find_by_accessible_label(app, label)
         .last()
@@ -118,6 +164,14 @@ fn skip_language_back_and_finish_preserve_selection_and_footer() {
             .next()
             .is_none()
     );
+    for (width, height) in [(320, 568), (900, 360), (1280, 800)] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        settle(&app);
+        assert_language_checkmark(&app);
+    }
+    app.window().set_size(slint::PhysicalSize::new(320, 568));
+    settle(&app);
     let focus_before_arrow = native_focus(&app);
     for event in [
         slint::platform::WindowEvent::KeyPressed {
@@ -143,6 +197,8 @@ fn skip_language_back_and_finish_preserve_selection_and_footer() {
         "first wizard arrow: focus before={focus_before_arrow}; after={}",
         native_focus(&app)
     );
+    settle(&app);
+    assert_language_checkmark(&app);
     let request_before = app.get_system_back_request();
     for event in [
         slint::platform::WindowEvent::KeyPressed {
