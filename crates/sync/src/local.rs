@@ -81,6 +81,11 @@ pub fn prepare_snapshot(
                     store.record(domain, key).and_then(|r| r.value.as_deref()),
                     value,
                 );
+                let value = if domain == "progress" {
+                    crate::progress::local_input(value)
+                } else {
+                    value
+                };
                 changed |= store.set(domain, key, Some(value), *ts, dev);
             }
         }
@@ -108,6 +113,42 @@ pub fn preserve_unknown(old: Option<&str>, new: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alias_projection_does_not_suppress_a_same_value_rewatch() {
+        let mut store = Store::default();
+        store.queue_extra("sync:baseline:progress", Some("{}".into()));
+        let value = |watched, unwatch| {
+            serde_json::json!({
+                "watched":watched, "unwatched_at_secs":unwatch, "position_secs":0,
+                "duration_secs":100, "updated_at_secs":1, "play_count":1
+            })
+            .to_string()
+        };
+        let watched = [("canonical".into(), value(true, 0), 0)];
+        prepare_snapshot(&mut store, 1, "progress", &watched, None, false, false).unwrap();
+        let original = store.record("progress", "canonical").unwrap().clone();
+        // A newer unwatch under another alias materializes this ID as false.
+        // The underlying canonical record remains the older watched action.
+        let projected = [("canonical".into(), value(false, 1), 0)];
+        prepare_snapshot(&mut store, 1, "progress", &projected, None, true, false).unwrap();
+        assert_eq!(store.record("progress", "canonical"), Some(&original));
+        assert!(
+            prepare_snapshot(&mut store, 1, "progress", &watched, None, false, false).unwrap(),
+            "a changed materialized baseline represents a real rewatch intent"
+        );
+        assert!(
+            store
+                .record("progress", "canonical")
+                .unwrap()
+                .version
+                .newer_than(&original.version)
+        );
+        assert!(
+            !prepare_snapshot(&mut store, 1, "progress", &watched, None, false, false).unwrap(),
+            "repeating the same snapshot remains idle"
+        );
+    }
 
     #[test]
     fn snapshot_noops_and_remote_projections_do_not_request_publication() {

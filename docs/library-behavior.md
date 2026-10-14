@@ -25,6 +25,14 @@ return; new metadata alone never starts viewing. Code: `src/app/library.rs`,
 - **Resumable**: not watched, position ≥ 10 s (`RESUME_MIN_SECS`), below 90%
   (unknown duration resumes past the 10 s cold-open window).
 
+Confirmed episode aliases are reconciled within the same saved series, so a
+device using a Kitsu episode ID and one using its confirmed IMDb ID read the
+same completion/resume history. The existing action clocks decide explicit
+unwatch and rewatch order, including actions within the same second. Metadata
+arrival and startup update local views without creating new watched actions or
+rewriting the synced records. Matching season/episode numbers alone is not
+evidence; stale or ambiguous alias links are ignored.
+
 ## Entries
 
 - **Add**: detail-page bookmark. Stores id, type, name, year, poster/backdrop

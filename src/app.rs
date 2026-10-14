@@ -523,7 +523,7 @@ struct DetailSnapshot {
 /// One episode's playback state. `EPISODE_PROGRESS_KEY` exposes a logical
 /// `HashMap<String, EpisodeProgress>` keyed by [`progress_map_key`]; storage
 /// persists each episode independently in the authoritative collection table.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct EpisodeProgress {
     series_id: String,
     episode_id: String,

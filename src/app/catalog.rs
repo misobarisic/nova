@@ -724,6 +724,7 @@ impl Bridge {
                 eprintln!("prefetch: {msg}");
                 let _ = slint::invoke_from_event_loop(move || {
                     // Newly cached episode lists feed badges/checks/Home.
+                    bridge.sync_reconcile_progress_aliases();
                     bridge.refresh_library_progress_ui();
                     if nova_providers::metadata_revision() != revision
                         && bridge.app().is_some_and(|app| app.get_show_library())

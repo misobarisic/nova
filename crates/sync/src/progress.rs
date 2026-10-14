@@ -5,6 +5,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const META: &str = "__nova_progress_v1";
+
+/// Local intent comes from the changed materialized baseline. Register state
+/// belongs to the stored record; carrying it into the new payload can make a
+/// same-value rewatch look like a no-op after another alias was unwatched.
+pub(crate) fn local_input(value: String) -> String {
+    let Ok(Value::Object(mut data)) = serde_json::from_str(&value) else {
+        return value;
+    };
+    data.remove(META);
+    Value::Object(data).to_string()
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct Candidate {
     version: Version,

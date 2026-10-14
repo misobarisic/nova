@@ -1088,6 +1088,7 @@ impl Bridge {
         // Publish once after the whole batch, so every surface sees the same
         // merged state. Startup publishes its initial models after this replay.
         if publish_models && models_changed {
+            self.sync_reconcile_progress_aliases();
             if library_changed {
                 self.apply_library_to_ui();
             }
@@ -1230,6 +1231,100 @@ impl Bridge {
             self.shared.lock().unwrap().progress = merged_map.clone();
         }
         write_progress_map(&merged_map);
+    }
+
+    /// Metadata caches can retain different native IDs on different devices.
+    /// Materialize proven aliases through the same action registers used by
+    /// sync, rather than inventing another watched action or guessing by S/E.
+    pub(super) fn sync_reconcile_progress_aliases(&self) -> bool {
+        let mut identities = {
+            let state = self.shared.lock().unwrap();
+            if state.progress.is_empty() {
+                return false;
+            }
+            state
+                .entries
+                .iter()
+                .filter(|entry| entry.type_ != "movie")
+                .map(|entry| (entry.type_.clone(), entry.id.clone()))
+                .collect::<HashSet<_>>()
+        };
+        if let Some(item) = self.shared.lock().unwrap().modal_item.as_ref()
+            && item.type_ != "movie"
+        {
+            identities.insert((item.type_.clone(), item.id.clone()));
+        }
+        let groups = identities
+            .into_iter()
+            .flat_map(|(type_, series)| {
+                let videos = read_episodes_cache_for(&type_, &series).unwrap_or_default();
+                episode_progress_alias_groups(&videos)
+                    .into_iter()
+                    .map(move |(native, aliases)| (series.clone(), native, aliases))
+            })
+            .collect::<Vec<_>>();
+        if groups.is_empty() {
+            return false;
+        }
+        // A local watch/unwatch queued before metadata arrived must be visible
+        // to the resolver. Ordinary playback saves remain asynchronous.
+        if let Err(error) = persistence::flush() {
+            io::record_write_failure(storage::Error::new(storage::ErrorKind::Transaction, error));
+            return false;
+        }
+        let Ok(owner) = nova_sync::local_store() else {
+            return false;
+        };
+        let changes = {
+            let store = owner.lock().unwrap();
+            groups
+                .into_iter()
+                .filter_map(|(series, native, aliases)| {
+                    let key = progress_map_key(&series, &native);
+                    // Forgetting this native episode must not resurrect it via an
+                    // older alias which a peer still retains.
+                    if store
+                        .record(DOMAIN_PROGRESS, &key)
+                        .is_some_and(|r| r.is_deleted())
+                    {
+                        return None;
+                    }
+                    let keys = aliases
+                        .iter()
+                        .filter_map(|alias| {
+                            let key = progress_map_key(&series, alias);
+                            let raw = store.record(DOMAIN_PROGRESS, &key)?.value.as_deref()?;
+                            let p: EpisodeProgress = serde_json::from_str(raw).ok()?;
+                            (p.series_id == series && p.episode_id == *alias).then_some(key)
+                        })
+                        .collect::<Vec<_>>();
+                    let raw = store.resolved_progress(keys.iter().map(String::as_str))?;
+                    let mut progress: EpisodeProgress = serde_json::from_str(&raw).ok()?;
+                    progress.series_id = series;
+                    progress.episode_id = native;
+                    Some((key, progress))
+                })
+                .collect::<Vec<_>>()
+        };
+        let snapshot = {
+            let mut state = self.shared.lock().unwrap();
+            let mut changed = false;
+            for (key, progress) in changes {
+                if state.progress.get(&key) != Some(&progress) {
+                    state.progress.insert(key, progress);
+                    changed = true;
+                }
+            }
+            changed.then(|| state.progress.clone())
+        };
+        let Some(snapshot) = snapshot else {
+            return false;
+        };
+        // Advance the materialized baseline as a projection. A later unrelated
+        // checkpoint must not publish this view as a synthetic watched action.
+        let _guard = ApplyingGuard::new();
+        write_progress_map(&snapshot);
+        true
     }
 
     /// Apply remote Continue Watching removals. The store already resolved
@@ -1471,6 +1566,38 @@ impl Bridge {
             self.settings_to_ui();
         }
     }
+}
+
+/// Only fresh, one-to-one metadata proof may join histories. Caption/number
+/// matches and stale or multiply claimed aliases are deliberately ignored.
+fn episode_progress_alias_groups(videos: &[Video]) -> Vec<(String, Vec<String>)> {
+    let groups = videos
+        .iter()
+        .map(|video| {
+            let mut ids = confirmed_episode_stream_ids(video);
+            ids.push(video.id.clone());
+            ids.sort();
+            ids.dedup();
+            (video.id.clone(), ids)
+        })
+        .collect::<Vec<_>>();
+    let mut claims: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for (native, ids) in &groups {
+        for id in ids {
+            claims.entry(id).or_default().insert(native);
+        }
+    }
+    groups
+        .iter()
+        .filter_map(|(native, ids)| {
+            let ids = ids
+                .iter()
+                .filter(|id| claims[id.as_str()].len() == 1)
+                .cloned()
+                .collect::<Vec<_>>();
+            (ids.len() > 1 && ids.contains(native)).then(|| (native.clone(), ids))
+        })
+        .collect()
 }
 
 /// One-time backfill of [`LibraryEntry::added_at_secs`] for entries saved
@@ -2004,6 +2131,251 @@ fn activity_records(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn synced_episode_aliases_agree_on_completion_and_explicit_unwatch() {
+        const ROOT: &str = "NOVA_SYNC_ALIAS_TEST_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-sync-alias-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .args(["--exact", "app::sync::tests::synced_episode_aliases_agree_on_completion_and_explicit_unwatch", "--nocapture"])
+                .output().unwrap();
+            let _ = fs::remove_dir_all(root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        storage::init_at(&root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let series = "tt26743760";
+        let native = "kitsu:50021:2";
+        let canonical = "tt26743760:3:2";
+        let updated = now_secs();
+        let videos = |id: &str| {
+            serde_json::from_value::<Vec<Video>>(serde_json::json!([
+            {"id":id, "season":3, "episode":2, "name":"The Fire-Rat Cloak", "released":"2000-01-01",
+             "novaMetadataRevision":nova_providers::metadata_revision(), "novaStreamIds":[native, canonical]},
+            {"id":"tt26743760:3:3", "season":3, "episode":3, "released":"2999-01-01"}
+        ])).unwrap()
+        };
+        write_episodes_cache_for("series", series, &videos(native));
+        let mut source = nova_sync::Store::default();
+        for (episode, position, watched, dev) in
+            [(native, 1150.0, false, 1), (canonical, 0.0, true, 2)]
+        {
+            let p = EpisodeProgress {
+                series_id: series.into(),
+                episode_id: episode.into(),
+                position_secs: position,
+                duration_secs: 1440.0,
+                watched,
+                updated_at_secs: updated,
+                ..Default::default()
+            };
+            source.set(
+                DOMAIN_PROGRESS,
+                &progress_map_key(series, episode),
+                Some(serde_json::to_string(&p).unwrap()),
+                0,
+                dev,
+            );
+        }
+        let mut saved = entry(series, 1);
+        saved.type_ = "series".into();
+        source.set(
+            DOMAIN_LIBRARY,
+            series,
+            Some(serde_json::to_string(&saved).unwrap()),
+            0,
+            2,
+        );
+        let owner = nova_sync::local_store().unwrap();
+        {
+            let mut target = owner.lock().unwrap();
+            for (episode, _) in source.records(DOMAIN_PROGRESS) {
+                target.apply(
+                    DOMAIN_PROGRESS,
+                    &episode,
+                    source.record(DOMAIN_PROGRESS, &episode).unwrap().clone(),
+                );
+            }
+            target.apply(
+                DOMAIN_LIBRARY,
+                series,
+                source.record(DOMAIN_LIBRARY, series).unwrap().clone(),
+            );
+            target.save().unwrap();
+        }
+        let digest = owner.lock().unwrap().digest();
+        bridge.sync_apply(vec![DOMAIN_LIBRARY.into(), DOMAIN_PROGRESS.into()]);
+        assert!(
+            bridge.shared.lock().unwrap().progress[&progress_map_key(series, native)].watched,
+            "the native episode must honor completion under its confirmed canonical alias"
+        );
+        assert_eq!(app.get_home_continue().row_count(), 0);
+        assert_eq!(app.get_home_upcoming().row_count(), 1);
+        bridge.open_library_item(0);
+        assert!(app.get_episode_rows().row_data(0).unwrap().watched);
+        assert_eq!(
+            app.get_episode_rows().row_data(0).unwrap().progress,
+            0.0,
+            "manual completion at zero position keeps its checkmark without a fake playback rail"
+        );
+        assert_eq!(
+            owner.lock().unwrap().digest(),
+            digest,
+            "view reconciliation must not invent sync actions"
+        );
+        let worker = persistence::start().unwrap();
+        let native_record = owner
+            .lock()
+            .unwrap()
+            .record(DOMAIN_PROGRESS, &progress_map_key(series, native))
+            .unwrap()
+            .clone();
+        let map = {
+            let mut state = bridge.shared.lock().unwrap();
+            state.progress.insert(
+                progress_map_key("other", "other:1:1"),
+                EpisodeProgress {
+                    series_id: "other".into(),
+                    episode_id: "other:1:1".into(),
+                    position_secs: 100.0,
+                    duration_secs: 1000.0,
+                    updated_at_secs: now_secs(),
+                    ..Default::default()
+                },
+            );
+            state.progress.clone()
+        };
+        write_progress_map(&map);
+        persistence::flush().unwrap();
+        assert_eq!(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_PROGRESS, &progress_map_key(series, native))
+                .unwrap(),
+            &native_record,
+            "an unrelated save must not turn an alias view into a new watch action"
+        );
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            Bridge::set_episode_watched_locked(&mut state.progress, series, native, false);
+            let p = state
+                .progress
+                .get_mut(&progress_map_key(series, native))
+                .unwrap();
+            p.updated_at_secs = updated;
+            p.unwatched_at_secs = updated;
+        }
+        bridge.persist_and_refresh_progress();
+        bridge.sync_apply(vec![DOMAIN_PROGRESS.into()]);
+        assert!(!app.get_episode_rows().row_data(0).unwrap().watched);
+        assert_eq!(app.get_episode_rows().row_data(0).unwrap().progress, 0.0);
+        assert_eq!(app.get_home_upcoming().row_count(), 0);
+        let after_unwatch = owner.lock().unwrap().digest();
+        // Another device can display the canonical ID from a cold cache.
+        // Completion/unwatch agree in either representation, even within the
+        // same Unix second; action HLCs, not timestamp heuristics, decide.
+        let canonical_videos = videos(canonical);
+        write_episodes_cache_for("series", series, &canonical_videos);
+        bridge.show_episode_picker(series.into(), canonical_videos);
+        assert!(!app.get_episode_rows().row_data(0).unwrap().watched);
+        assert_eq!(owner.lock().unwrap().digest(), after_unwatch);
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            Bridge::set_episode_watched_locked(&mut state.progress, series, canonical, true);
+            state
+                .progress
+                .get_mut(&progress_map_key(series, canonical))
+                .unwrap()
+                .updated_at_secs = updated;
+        }
+        bridge.persist_and_refresh_progress();
+        bridge.sync_apply(vec![DOMAIN_PROGRESS.into()]);
+        assert!(app.get_episode_rows().row_data(0).unwrap().watched);
+        let after_rewatch = owner.lock().unwrap().digest();
+        let native_videos = videos(native);
+        write_episodes_cache_for("series", series, &native_videos);
+        bridge.show_episode_picker(series.into(), native_videos);
+        assert!(app.get_episode_rows().row_data(0).unwrap().watched);
+        assert_eq!(app.get_home_continue().row_count(), 0);
+        assert_eq!(app.get_home_upcoming().row_count(), 1);
+        assert_eq!(owner.lock().unwrap().digest(), after_rewatch);
+        assert!(
+            !bridge.sync_reconcile_progress_aliases(),
+            "repeated reconciliation is idle"
+        );
+        drop(worker);
+        let restored = nova_sync::Store::try_load().unwrap();
+        assert_eq!(restored.digest(), after_rewatch);
+        assert!(read_progress_map()[&progress_map_key(series, native)].watched);
+    }
+
+    #[test]
+    fn progress_aliases_reject_stale_ambiguous_and_number_only_links() {
+        let video = |id: &str, alias: Option<&str>, revision: u64| {
+            let mut v = Video {
+                id: id.into(),
+                season: Some(3),
+                episode: Some(2),
+                ..Default::default()
+            };
+            if let Some(alias) = alias {
+                v.extra
+                    .insert("novaMetadataRevision".into(), serde_json::json!(revision));
+                v.extra
+                    .insert("novaStreamIds".into(), serde_json::json!([alias]));
+            }
+            v
+        };
+        let revision = nova_providers::metadata_revision();
+        assert!(
+            episode_progress_alias_groups(&[
+                video("a", None, revision),
+                video("b", None, revision)
+            ])
+            .is_empty()
+        );
+        assert!(
+            episode_progress_alias_groups(&[video("a", Some("tt1:3:2"), revision.wrapping_add(1))])
+                .is_empty()
+        );
+        assert!(
+            episode_progress_alias_groups(&[
+                video("a", Some("tt1:3:2"), revision),
+                video("b", Some("tt1:3:2"), revision)
+            ])
+            .is_empty()
+        );
+        assert_eq!(
+            episode_progress_alias_groups(&[video("a", Some("tt1:3:2"), revision)]),
+            vec![("a".into(), vec!["a".into(), "tt1:3:2".into()])]
+        );
+    }
 
     #[test]
     fn projection_origin_is_nested_and_thread_local() {

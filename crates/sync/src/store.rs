@@ -244,6 +244,24 @@ impl Store {
     pub fn record(&self, domain: &str, key: &str) -> Option<&Record> {
         self.domains.get(domain).and_then(|m| m.get(key))
     }
+
+    /// Materialize history for proven aliases of one episode. This is a view:
+    /// candidate action clocks survive the merge, with no new record or HLC.
+    /// Tombstoned aliases do not contribute history.
+    pub fn resolved_progress<'a>(&self, keys: impl IntoIterator<Item = &'a str>) -> Option<String> {
+        let mut records = keys
+            .into_iter()
+            .filter_map(|key| self.record("progress", key))
+            .filter(|record| !record.is_deleted());
+        let mut merged = records.next()?.clone();
+        for record in records {
+            merged.value = Some(crate::progress::merge(&merged, record)?);
+            if record.version.newer_than(&merged.version) {
+                merged.version = record.version;
+            }
+        }
+        merged.value
+    }
     pub fn set_device(&mut self, device: u64) {
         self.device = Some(device);
     }
@@ -708,6 +726,43 @@ mod tests {
         assert_eq!(value["watched"], false);
         assert_eq!(value["position_secs"], 12);
         assert_eq!(value["play_count"], 3);
+    }
+
+    #[test]
+    fn alias_progress_views_keep_action_order_without_mutating_records() {
+        let mut store = Store::default();
+        let value = |watched, unwatch, position| {
+            serde_json::json!({
+                "watched":watched, "unwatched_at_secs":unwatch, "position_secs":position,
+                "duration_secs":100, "updated_at_secs":1, "play_count":1
+            })
+            .to_string()
+        };
+        store.set("progress", "native", Some(value(false, 0, 80)), 0, DEV_A);
+        store.set("progress", "canonical", Some(value(true, 0, 80)), 0, DEV_B);
+        let decode =
+            |raw: Option<String>| serde_json::from_str::<serde_json::Value>(&raw.unwrap()).unwrap();
+        let before = store.snapshot();
+        let forward = store.resolved_progress(["native", "canonical"]);
+        assert_eq!(forward, store.resolved_progress(["canonical", "native"]));
+        assert_eq!(decode(forward)["watched"], true);
+        assert_eq!(store.snapshot(), before);
+        store.set("progress", "native", Some(value(false, 1, 0)), 0, DEV_A);
+        assert_eq!(
+            decode(store.resolved_progress(["native", "canonical"]))["watched"],
+            false
+        );
+        store.set("progress", "canonical", Some(value(true, 0, 80)), 0, DEV_B);
+        assert_eq!(
+            decode(store.resolved_progress(["native", "canonical"]))["watched"],
+            true
+        );
+        store.set("progress", "canonical", None, 0, DEV_B);
+        assert_eq!(
+            decode(store.resolved_progress(["native", "canonical"]))["watched"],
+            false
+        );
+        assert!(store.resolved_progress(["missing", "canonical"]).is_none());
     }
 
     #[test]

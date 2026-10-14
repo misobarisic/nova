@@ -1689,6 +1689,9 @@ impl Bridge {
                 .collect::<Vec<_>>();
             (names, idx)
         };
+        if self.sync_reconcile_progress_aliases() {
+            self.refresh_library_progress_ui();
+        }
         if let Some(app) = self.app() {
             app.set_modal_episodes(true);
             app.set_detail_deep_stream(false);

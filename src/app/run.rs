@@ -946,6 +946,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.seed_playback_default_settings();
     bridge.sync_seed();
     bridge.restore_sync_projection();
+    bridge.sync_reconcile_progress_aliases();
     bridge.settings_to_ui();
     let image_gc_worker = cache_gc::start(&bridge);
     let persistence_worker = persistence::start();
