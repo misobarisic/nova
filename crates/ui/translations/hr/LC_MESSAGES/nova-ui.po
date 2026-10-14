@@ -1691,8 +1691,8 @@ msgstr "Streamovi"
 msgid "No installed addons match these filters."
 msgstr "Nijedan instalirani dodatak ne odgovara ovim filtrima."
 
-msgid "Your saved anime, continue watching, and downloads."
-msgstr "Vaš spremljeni anime, nastavak gledanja i preuzimanja."
+msgid "Your saved titles, continue watching, and downloads."
+msgstr "Vaši spremljeni naslovi, nastavak gledanja i preuzimanja."
 
 msgid "Search library"
 msgstr "Pretraži biblioteku"
