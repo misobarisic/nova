@@ -4,6 +4,7 @@ import { Theme, Anim, SettingsStyle } from "@NovaUiShared";
 import { ScrollView } from "scrollview.slint";
 import { SearchField } from "searchfield.slint";
 import { PillButton, Segmented } from "settings-controls.slint";
+import { IcCheck } from "icons.slint";
 import { PlaybackLanguagePicker } from "playback-language-picker.slint";
 
 component LanguageCard inherits Rectangle {
@@ -16,7 +17,7 @@ component LanguageCard inherits Rectangle {
     background: Theme.current.settings_control;
     HorizontalLayout { padding: 10px;
         PillButton { label: root.label; horizontal-stretch: 1; primary: root.selected; clicked => { root.clicked(); } }
-        if root.selected: Text { text: "✓"; color: Theme.current.accent; vertical-alignment: center; }
+        if root.selected: IcCheck { width: 20px; height: 20px; fill: Theme.current.accent; }
     }
 }
 

@@ -106,6 +106,18 @@ fn skip_language_back_and_finish_preserve_selection_and_footer() {
     let initial_language = app.get_language_index();
     app.set_onboarding_step(1);
     settle(&app);
+    let checkmarks: Vec<_> = ElementHandle::find_by_element_type_name(&app, "IcCheck").collect();
+    assert_eq!(
+        checkmarks.len(),
+        1,
+        "the selected language uses a vector checkmark"
+    );
+    assert_eq!(checkmarks[0].size(), slint::LogicalSize::new(20.0, 20.0));
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, "✓")
+            .next()
+            .is_none()
+    );
     let focus_before_arrow = native_focus(&app);
     for event in [
         slint::platform::WindowEvent::KeyPressed {
