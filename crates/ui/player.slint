@@ -691,6 +691,7 @@ export component PlayerOverlay {
     callback osd_mouse_moved();
     // Live OSD scrim opacity (0 = fully hidden), for display frame-rate matching.
     callback osd_opacity_changed(float);
+    callback subtitle_clearance_changed(float, float);
     callback tracks_popup_opened(int);
     pure callback format_time(float) -> string;
     pure callback format_volume(float) -> string;
@@ -978,7 +979,17 @@ export component PlayerOverlay {
     // content rate only once the OSD has fully faded out, not when the logical
     // `osd_visible` flag flips.
     private property <float> osd_current_opacity: osd.opacity;
-    changed osd_current_opacity => { root.osd_opacity_changed(osd_current_opacity); }
+    changed osd_current_opacity => {
+        root.osd_opacity_changed(osd_current_opacity);
+        root.subtitle_clearance_changed(root.subtitle_clearance_fraction, osd_current_opacity);
+    }
+    // Use the real control zone with a small gap. Ratios cancel display density;
+    // opacity follows its existing animation and reduced-motion preference.
+    private property <float> subtitle_clearance_fraction: root.height > 0px
+        ? Math.clamp((osd.height + 8px) / root.height, 0, 0.5) : 0;
+    changed subtitle_clearance_fraction => {
+        root.subtitle_clearance_changed(subtitle_clearance_fraction, osd_current_opacity);
+    }
 
     // Re-arm the OSD wake whenever a popup opens or closes: while browsing
     // a popup the pointer sits over the card, which is above the video

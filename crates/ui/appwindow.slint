@@ -34,6 +34,7 @@ export component AppWindow inherits Window {
     public function player_bridge_next_episode_dismiss(t: string) { root.next_episode_dismiss(t); }
     public function player_bridge_restore_playback_default(control: int) { root.restore_playback_default(control); }
     public function player_bridge_osd_opacity_changed(v: float) { root.osd_opacity = v; }
+    public function player_bridge_subtitle_clearance_changed(fraction: float, opacity: float) { root.subtitle_clearance_changed(fraction, opacity); }
     public function player_bridge_toggle_pause() { root.toggle_pause(); }
     public function player_bridge_seek(v: float) { root.seek(v); }
     public function player_bridge_close_player() { root.close_player(); }
@@ -1264,6 +1265,7 @@ export component AppWindow inherits Window {
     in-out property <float> osd_opacity: 0.0;
     in-out property <image> player_poster;
 
+    callback subtitle_clearance_changed(float, float);
     callback toggle_pause();
     callback seek(float);
     callback close_player();

@@ -299,6 +299,90 @@ mod tests {
         }
     }
 
+    unsafe fn check_subtitle_clearance(
+        mpv: &libmpv2::Mpv,
+        gl: &glow::Context,
+        ctx: *mut crate::mpv_render_context,
+        directory: &std::path::Path,
+    ) {
+        let subtitles = directory.join("positioned.ass");
+        std::fs::write(&subtitles, concat!(
+            "[Script Info]\nScriptType: v4.00+\nPlayResX: 192\nPlayResY: 128\n",
+            "[V4+ Styles]\n",
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n",
+            "Style: Default,DejaVu Sans,12,&H0000FF00,&H0000FF00,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,2,4,4,4,1\n",
+            "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
+            "Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,Dialogue\n",
+            "Dialogue: 1,0:00:00.00,0:00:02.00,Default,,0,0,0,,{\\an7\\pos(55,22)\\c&H0000FF&}Sign\n",
+        )).unwrap();
+        mpv.command("sub-add", &[subtitles.to_str().unwrap(), "select"])
+            .unwrap();
+        mpv.set_property("sub-pos", 100.0_f64).unwrap();
+        let style = mpv.get_property::<String>("sub-ass-override").unwrap();
+        fn points(frame: &Frame, red: bool) -> Vec<(usize, usize)> {
+            frame
+                .pixels
+                .chunks_exact(4)
+                .enumerate()
+                .filter_map(|(index, pixel)| {
+                    let matches = if red {
+                        pixel[0] > 150 && pixel[1] < 80 && pixel[2] < 80
+                    } else {
+                        pixel[1] > 150 && pixel[0] < 80 && pixel[2] < 80
+                    };
+                    matches.then_some((index % frame.width as usize, index / frame.width as usize))
+                })
+                .collect()
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let normal = loop {
+            let frame = unsafe { capture(gl, ctx, 192, 128).unwrap() };
+            if !points(&frame, true).is_empty() && !points(&frame, false).is_empty() {
+                break frame;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "ASS dialogue/sign fixture never rendered"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let normal_bottom = points(&normal, false).iter().map(|p| p.1).max().unwrap();
+        let mut lift = crate::subtitle_position::SubtitlePosition::default();
+        lift.set_clearance(0.3, 1.0);
+        lift.apply(mpv).unwrap();
+        let raised = unsafe { capture(gl, ctx, 192, 128).unwrap() };
+        let raised_bottom = points(&raised, false).iter().map(|p| p.1).max().unwrap();
+        assert!(
+            raised_bottom < 90,
+            "dialogue must clear the bottom control zone: {raised_bottom}"
+        );
+        assert!(normal_bottom > raised_bottom + 25);
+        assert_eq!(
+            points(&normal, true),
+            points(&raised, true),
+            "positioned signs must not move"
+        );
+        lift.set_clearance(0.3, 0.0);
+        lift.apply(mpv).unwrap();
+        let restored = unsafe { capture(gl, ctx, 192, 128).unwrap() };
+        assert_eq!(
+            restored.pixels, normal.pixels,
+            "closing the OSD restores the original placement"
+        );
+        assert_eq!(
+            mpv.get_property::<String>("sub-ass-override").unwrap(),
+            style
+        );
+        // Native ASS already fits above controls when a portrait letterbox is large.
+        let plain_portrait = unsafe { capture(gl, ctx, 192, 400).unwrap() };
+        lift.set_clearance(0.25, 1.0);
+        lift.apply(mpv).unwrap();
+        assert_eq!(mpv.get_property::<f64>("sub-pos").unwrap(), 100.0);
+        let portrait = unsafe { capture(gl, ctx, 192, 400).unwrap() };
+        assert_eq!(portrait.pixels, plain_portrait.pixels);
+        lift.restore(mpv);
+    }
+
     #[test]
     fn dimensions_preserve_rotation_and_reject_unbounded_allocations() {
         assert_eq!(dimensions(1920, 1080, 0), Ok((1920, 1080)));
@@ -451,6 +535,7 @@ mod tests {
             request.complete(1, true, &gl, std::ptr::null_mut());
             gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
             gl.delete_buffer(buffer);
+            check_subtitle_clearance(&mpv, &gl, ctx, &directory);
             std::fs::remove_dir_all(directory).unwrap();
         }
     }

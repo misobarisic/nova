@@ -51,6 +51,7 @@ export component PlayerOsdModule inherits Window {
         next_episode_dismiss(t) => { PlayerOsdBridge.next_episode_dismiss(t); }
         restore_playback_default(control) => { PlayerOsdBridge.restore_playback_default(control); }
         osd_opacity_changed(v) => { PlayerOsdBridge.osd_opacity_changed(v); }
+        subtitle_clearance_changed(fraction, opacity) => { PlayerOsdBridge.subtitle_clearance_changed(fraction, opacity); }
         toggle_pause() => { PlayerOsdBridge.toggle_pause(); }
         seek(v) => { PlayerOsdBridge.seek(v); }
         close_player() => { PlayerOsdBridge.close_player(); }

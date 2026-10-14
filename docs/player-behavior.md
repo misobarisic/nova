@@ -58,6 +58,12 @@ while addon filters pin at the safe top. An opaque full-width theme canvas
 covers the pinned filters and the area above them, including safe-area insets.
 Artwork starts at the top and fades into the canvas. True-black cards use a thin
 gray outline for separation, with the stronger purple ring for keyboard focus.
+Ordinary bottom subtitles rise above the bottom OSD with an 8-pixel logical gap
+and follow its existing fade, including reduced-motion behavior. A higher user
+position remains unchanged; hiding controls or closing playback restores the base
+position. Native ASS dialogue already clear of the controls in letterboxed video
+stays put, and mpv/libass retain authored positions and styling for signs/effects.
+Nova changes only the transient `sub-pos` value and never forces ASS style overrides.
 Stream rows offer playback and an actions button; desktop keeps native menus and touch
 keeps hold-to-open sheets. Empty/loading states use the existing stream hints.
 

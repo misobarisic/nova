@@ -10,6 +10,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_next_episode_dismiss => invoke_player_bridge_next_episode_dismiss(arg0),
             on_restore_playback_default => invoke_player_bridge_restore_playback_default(arg0),
             on_osd_opacity_changed => invoke_player_bridge_osd_opacity_changed(arg0),
+            on_subtitle_clearance_changed => invoke_player_bridge_subtitle_clearance_changed(arg0, arg1),
             on_toggle_pause => invoke_player_bridge_toggle_pause(),
             on_seek => invoke_player_bridge_seek(arg0),
             on_close_player => invoke_player_bridge_close_player(),

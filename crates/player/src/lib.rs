@@ -34,6 +34,7 @@ pub use screenshot::{ScreenshotContext, ScreenshotError, ScreenshotSaved};
 #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
 mod gpu_screenshot;
 
+mod subtitle_position;
 mod track_preferences;
 use libmpv2::Mpv;
 use nova_config::playback_preferences::{
@@ -789,6 +790,7 @@ struct PreferenceSession {
 }
 
 struct State {
+    subtitle_position: Mutex<subtitle_position::SubtitlePosition>,
     preferences: Mutex<PreferenceSession>,
     preference_source: Mutex<String>,
     mpv: Mutex<Option<Mpv>>,
@@ -1044,6 +1046,7 @@ impl Player {
         };
 
         let state = Arc::new(State {
+            subtitle_position: Mutex::new(subtitle_position::SubtitlePosition::default()),
             preference_source: Mutex::new(String::new()),
             preferences: Mutex::new(PreferenceSession {
                 preferences: SessionPreferences::from_settings(
@@ -1374,6 +1377,14 @@ impl Player {
                         let size = app.window().size();
                         let w = size.width.max(1) as i32;
                         let h = size.height.max(1) as i32;
+
+                        // Apply live layout/fade clearance before rendering, so
+                        // paused subtitles also move with the Slint controls.
+                        if let Ok(mpv) = notifier_state.mpv.lock()
+                            && let Some(mpv) = mpv.as_ref()
+                        {
+                            let _ = notifier_state.subtitle_position.lock().unwrap().apply(mpv);
+                        }
 
                         // The default framebuffer (FBO 0) is presented with a
                         // bottom-left origin on both desktop GL and Android's
@@ -2179,6 +2190,21 @@ impl Player {
         converge_screen_on(false);
     }
 
+    /// UI thread: reserve the OSD's current logical height independently of
+    /// pixel density. Actual subtitle updates stay beside mpv rendering.
+    pub fn set_subtitle_clearance(&self, fraction: f32, opacity: f32) {
+        self.state
+            .subtitle_position
+            .lock()
+            .unwrap()
+            .set_clearance(fraction, opacity);
+        // The final fade callback can arrive after BeforeRendering. A paused
+        // video needs one more frame to restore its exact base position.
+        if let Some(app) = self.state.app.upgrade() {
+            app.window().request_redraw();
+        }
+    }
+
     /// Stop playback and return to the catalog.
     pub fn close(&self) {
         self.state.source_waiting.store(false, Ordering::SeqCst);
@@ -2191,6 +2217,7 @@ impl Player {
         if let Ok(mpv) = self.state.mpv.lock()
             && let Some(mpv) = mpv.as_ref()
         {
+            self.state.subtitle_position.lock().unwrap().restore(mpv);
             let _ = mpv.command("stop", &[]);
         }
         *self.state.pending.lock().unwrap() = None;
@@ -2942,7 +2969,33 @@ mod tests {
         app.set_player_episode_title("Episode".into());
         app.set_buffered_until(100.0);
         player.state.started.store(true, Ordering::SeqCst);
+        player.set_subtitle_clearance(0.25, 1.0);
+        {
+            let guard = player.state.mpv.lock().unwrap();
+            let mpv = guard.as_ref().unwrap();
+            mpv.set_property("sub-pos", 95.0_f64).unwrap();
+            player
+                .state
+                .subtitle_position
+                .lock()
+                .unwrap()
+                .apply(mpv)
+                .unwrap();
+            assert_eq!(mpv.get_property::<f64>("sub-pos").unwrap(), 75.0);
+        }
         player.close();
+        assert_eq!(
+            player
+                .state
+                .mpv
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .get_property::<f64>("sub-pos")
+                .unwrap(),
+            95.0
+        );
         assert!(!app.get_player_open());
         assert!(!app.get_is_fullscreen());
         assert!(!app.window().is_fullscreen());

@@ -1137,6 +1137,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let p = player.clone();
     app.on_toggle_fullscreen(move || p.toggle_fullscreen());
 
+    let p = player.clone();
+    app.on_subtitle_clearance_changed(move |fraction, opacity| {
+        p.set_subtitle_clearance(fraction, opacity)
+    });
+
     // Hover previews: the timestamp under the cursor (seekbar) and the
     // volume percentage (volume slider). Formatting lives in Rust because
     // Slint has no int→string conversion for bindings.
