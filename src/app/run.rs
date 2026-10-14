@@ -603,6 +603,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Library callbacks.
     let b = bridge.clone();
+    // The backend emits save feedback only after accepting the addition;
+    // duplicate warnings may delay or cancel this request.
     app.on_add_to_library(move || b.toggle_current_in_library());
     let b = bridge.clone();
     app.on_library_duplicate_action(move |index| b.library_duplicate_action(index));

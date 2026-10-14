@@ -34,6 +34,42 @@ component TopIconButton inherits Rectangle {
     }
 }
 
+// Consume an explicit local-save receipt, rather than animating every saved
+// state change (opening a saved title and remote projections must stay quiet).
+component LibrarySaveFeedback inherits Rectangle {
+    in property <int> request: 0;
+    in property <bool> saved: false;
+    width: 0px; height: 0px;
+    private property <bool> initialized: false;
+    private property <int> last_request: 0;
+    private property <bool> feedback: false;
+    private property <bool> entered: true;
+    private property <bool> motion_enabled: Anim.enabled && Anim.hover;
+    private property <float> progress: root.entered ? 1.0 : 0.0;
+    out property <float> mix: !root.saved ? 0.0 : root.feedback && root.motion_enabled ? root.progress : 1.0;
+    out property <float> pulse: root.saved && root.feedback && root.motion_enabled ? 4 * root.progress * (1 - root.progress) : 0.0;
+    animate progress { duration: root.entered ? Anim.hover_fast + Anim.hover_lift : 0ms; easing: ease-out; }
+    init => { root.last_request = root.request; root.initialized = true; }
+    changed request => {
+        if (!root.initialized || root.last_request == root.request) { return; }
+        root.last_request = root.request;
+        go.stop();
+        root.feedback = root.saved && root.motion_enabled;
+        root.entered = !root.feedback;
+        if (root.feedback) { go.start(); }
+    }
+    changed saved => {
+        if (!root.saved) { go.stop(); root.feedback = false; root.entered = true; }
+    }
+    changed motion_enabled => {
+        if (!root.motion_enabled) { go.stop(); root.feedback = false; root.entered = true; }
+    }
+    go := Timer {
+        interval: 16ms; running: false;
+        triggered => { self.stop(); root.entered = true; }
+    }
+}
+
 // Both the cinematic detail view and compact Tracking view use the same
 // tabs. Numeric IDs stay stable for episode callbacks and saved snapshots.
 component DetailTabs inherits Rectangle {
@@ -160,6 +196,7 @@ export component DetailPage {
     in-out property <int> detail_tab: 0;
     in-out property <string> episode_filter: "";
     in-out property <bool> in_library: false;
+    in property <int> library_save_request: 0;
     in property <bool> library_watched: false;
     in property <int> library_activity_action: 0;
     private property <bool> hero_library_focused: false;
@@ -1082,17 +1119,30 @@ export component DetailPage {
                                         border-color: root.kb_active && root.kb_zone == 2 && root.hero_library_focused ? Theme.current.accent_vivid : Theme.current.border_overlay;
                                         accessible-role: button;
                                         accessible-label: root.in_library ? @tr("Remove from library") : @tr("Add to library");
-                                        if !root.in_library: IcAdd {
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                            width: 26px; height: 26px;
-                                            fill: Theme.current.text_hero_icon;
+                                        library_feedback := LibrarySaveFeedback {
+                                            request: root.library_save_request;
+                                            saved: root.in_library;
                                         }
-                                        if root.in_library: IcBookmark {
+                                        library_save_glow := Rectangle {
+                                            width: 100%; height: 100%;
+                                            border-radius: self.width / 2;
+                                            background: Theme.current.accent_vivid;
+                                            opacity: library_feedback.pulse * 0.22;
+                                        }
+                                        library_add_icon := IcAdd {
                                             x: (parent.width - self.width) / 2;
                                             y: (parent.height - self.height) / 2;
-                                            width: 26px; height: 26px;
+                                            width: 26px - library_feedback.mix * 6px; height: self.width;
+                                            fill: Theme.current.text_hero_icon;
+                                            opacity: 1 - library_feedback.mix;
+                                        }
+                                        library_saved_icon := IcBookmark {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            width: 26px + library_feedback.pulse * 7px - (1 - library_feedback.mix) * 8px;
+                                            height: self.width;
                                             fill: Theme.current.accent_vivid;
+                                            opacity: library_feedback.mix;
                                         }
                                         library_hero := TouchArea {
                                             mouse-cursor: pointer;

@@ -224,6 +224,7 @@ export component AppWindow inherits Window {
         detail_tab <=> root.detail_tab;
         episode_filter <=> root.episode_filter;
         in_library <=> root.in_library;
+        library_save_request <=> root.detail_library_save_request;
         category_rows <=> root.category_rows;
         selected_category_count <=> root.selected_category_count;
         streams <=> root.streams;
@@ -635,6 +636,7 @@ export component AppWindow inherits Window {
     in-out property <bool> show_library: false;
     in-out property <bool> show_home: true;
     in-out property <bool> in_library: false;
+    in-out property <int> detail_library_save_request: 0;
     in-out property <bool> detail_library_watched: false;
     in-out property <int> detail_library_activity_action: 0;
     in-out property <string> library_empty_hint: @tr("Your library is empty — open any movie, series or anime and press \"+ Add to library\".");

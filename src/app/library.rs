@@ -463,7 +463,11 @@ impl Bridge {
             }
         }
         if let Some(app) = self.app() {
-            app.set_in_library(!currently_in);
+            if currently_in {
+                app.set_in_library(false);
+            } else {
+                confirm_detail_library_add(&app);
+            }
         }
         self.persist_library();
         self.apply_library_to_ui();
@@ -642,7 +646,7 @@ impl Bridge {
         upsert_library(&mut state.entries, replacement);
         drop(state);
         app.set_library_duplicates_open(false);
-        app.set_in_library(true);
+        confirm_detail_library_add(&app);
         self.persist_library();
         self.persist_and_refresh_progress();
         self.apply_library_to_ui();
@@ -1035,6 +1039,13 @@ impl Bridge {
         }
         self.sync_library_category_index();
     }
+}
+
+/// Feedback follows accepted local additions, including duplicate moves.
+/// Loading existing state or applying a peer's records emits no receipt.
+fn confirm_detail_library_add(app: &AppWindow) {
+    app.set_in_library(true);
+    app.set_detail_library_save_request(app.get_detail_library_save_request().wrapping_add(1));
 }
 
 /// Add/overwrite an entry in place, keeping entries unique by `id` and

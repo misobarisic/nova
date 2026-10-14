@@ -223,3 +223,163 @@ fn detail_library_controls_follow_saved_state_and_dispatch_actions() {
         "movies retain keyboard access to saving"
     );
 }
+
+#[test]
+fn local_library_saves_pop_in_place_and_do_not_replay_on_open_or_sync() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "local_library_saves_pop_in_place_and_do_not_replay_on_open_or_sync"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_show_home(false);
+    app.set_modal_visible(true);
+    app.set_selected_title("Save feedback".into());
+    app.set_detail_is_movie(true);
+    app.set_touch_menus(true);
+    // A new page consumes the existing receipt without replaying it.
+    app.set_in_library(true);
+    app.set_detail_library_save_request(5);
+    app.show().unwrap();
+    let icon = || element(&app, "DetailPage::library_saved_icon");
+    let advance = |ms| {
+        for _ in 0..ms {
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+            // Closing Detail deliberately unmounts its icon; render only the
+            // currently mounted page while checking receipt replay on reopen.
+            if let Some(icon) =
+                ElementHandle::find_by_element_id(&app, "DetailPage::library_saved_icon").next()
+            {
+                let _ = icon.size();
+            }
+        }
+    };
+    let weak = app.as_weak();
+    let adds = Rc::new(RefCell::new(0));
+    let recorded = adds.clone();
+    app.on_add_to_library(move || {
+        let app = weak.upgrade().unwrap();
+        if app.get_in_library() {
+            app.set_in_library(false);
+        } else {
+            app.set_in_library(true);
+            app.set_detail_library_save_request(app.get_detail_library_save_request() + 1);
+            *recorded.borrow_mut() += 1;
+        }
+    });
+    for width in [390, 820, 1280] {
+        app.window().set_size(slint::PhysicalSize::new(width, 1400));
+        app.global::<nova::Anim>().set_enabled(true);
+        app.global::<nova::Anim>().set_hover(true);
+        advance(350);
+        assert_eq!(icon().size().width, 26.0, "opening a saved title is idle");
+        app.set_in_library(false);
+        advance(1);
+        app.set_in_library(true);
+        advance(60);
+        assert_eq!(
+            icon().size().width,
+            26.0,
+            "projection without a local receipt is idle"
+        );
+        app.set_in_library(false);
+        advance(1);
+        let button = element(&app, "DetailPage::library_state_button");
+        let button_origin = button.absolute_position();
+        let button_size = button.size();
+        let watch_origin = element(&app, "DetailPage::watch_action_button").absolute_position();
+        // Sample the animation instead of the click helper, which settles it.
+        let area = element(&app, "DetailPage::library_hero");
+        let p = area.absolute_position();
+        let s = area.size();
+        let position = LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0);
+        for event in [
+            slint::platform::WindowEvent::PointerPressed {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            },
+            slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            },
+        ] {
+            app.window().dispatch_event(event);
+        }
+        advance(1);
+        assert!(app.get_in_library());
+        assert!(
+            icon().size().width < 26.0,
+            "bookmark starts small during the crossfade"
+        );
+        let mut peak = 0.0_f32;
+        for _ in 0..300 {
+            advance(1);
+            peak = peak.max(icon().size().width);
+            assert_eq!(button.absolute_position(), button_origin);
+            assert_eq!(button.size(), button_size);
+            assert_eq!(
+                element(&app, "DetailPage::watch_action_button").absolute_position(),
+                watch_origin
+            );
+            let center_x = icon().absolute_position().x + icon().size().width / 2.0;
+            assert!((center_x - button_origin.x - button_size.width / 2.0).abs() < 0.5);
+        }
+        assert!(
+            peak > 28.0 && peak < 31.0,
+            "bookmark should pop gently: {peak}"
+        );
+        assert!((icon().size().width - 26.0).abs() < 0.1);
+        // Removal interrupts the pulse immediately; a rapid re-add restarts it.
+        app.set_in_library(false);
+        app.invoke_add_to_library();
+        advance(110);
+        assert!(
+            icon().size().width > 26.0,
+            "rapid add should be in its pop at width {width}: {}",
+            icon().size().width
+        );
+        app.invoke_add_to_library();
+        advance(1);
+        assert_eq!(
+            element(&app, "DetailPage::library_add_icon").size().width,
+            26.0
+        );
+        app.invoke_add_to_library();
+        advance(1);
+        assert!(icon().size().width < 26.0);
+        app.global::<nova::Anim>().set_hover(false);
+        advance(1);
+        assert_eq!(
+            icon().size().width,
+            26.0,
+            "disabling motion settles an active save"
+        );
+        for (master, hover) in [(false, true), (true, false)] {
+            app.global::<nova::Anim>().set_enabled(master);
+            app.global::<nova::Anim>().set_hover(hover);
+            app.set_in_library(false);
+            app.invoke_add_to_library();
+            advance(1);
+            assert_eq!(
+                icon().size().width,
+                26.0,
+                "motion-off saves snap to the bookmark"
+            );
+        }
+        app.global::<nova::Anim>().set_enabled(true);
+        app.global::<nova::Anim>().set_hover(true);
+        app.set_modal_visible(false);
+        advance(50);
+        app.set_modal_visible(true);
+        advance(70);
+        assert_eq!(
+            icon().size().width,
+            26.0,
+            "returning to Detail must not replay the receipt"
+        );
+    }
+    assert_eq!(*adds.borrow(), 15);
+}

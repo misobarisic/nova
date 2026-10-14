@@ -43,8 +43,9 @@ return; new metadata alone never starts viewing. Code: `src/app/library.rs`,
 - **Storage**: JSON `library` key in redb, synced per entry (`library`
   domain). Missing/corrupt reads as empty.
 - **Opening** an entry shows the detail modal; reopening the same entry
-  restores its tab/season/focus snapshot. Entering the page always prefetches
-  episode metadata (not gated by the Discover prefetch toggle).
+  restores its tab/season/filter choices, starting at the top without
+  restoring keyboard focus or scroll position. Entering the page always
+  prefetches episode metadata (not gated by the Discover prefetch toggle).
 
 ## Automatic buckets (the filter bar)
 
