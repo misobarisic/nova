@@ -253,6 +253,104 @@ fn text_titles_fit_and_screenshot_is_guarded() {
 }
 
 #[test]
+fn gesture_titles_fade_without_unmounting_or_revealing_hidden_controls() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "gesture_titles_fade_without_unmounting_or_revealing_hidden_controls"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_show_home(false);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_duration(600.0);
+    app.set_is_android(true);
+    app.set_player_episode_title("S3E2: The Fire-Rat Cloak".into());
+    app.set_player_show_title("The Apothecary Diaries".into());
+    app.on_android_brightness_step(|_| {});
+    let weak = app.as_weak();
+    app.on_osd_mouse_moved(move || weak.upgrade().unwrap().set_osd_visible(true));
+    app.show().unwrap();
+    for (width, height) in [(390, 844), (800, 360)] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.set_osd_visible(true);
+        settle(&app);
+        let episode = element(&app, "PlayerOverlay::episode_heading");
+        let title = element(&app, "PlayerOverlay::show_heading");
+        let geometry = (episode.absolute_position(), title.absolute_position());
+        assert_eq!(title.computed_opacity(), 1.0);
+        let start = LogicalPosition::new(width as f32 / 4.0, height as f32 / 3.0);
+        let end = LogicalPosition::new(start.x, start.y + 48.0);
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                position: start,
+                button: slint::platform::PointerEventButton::Left,
+            });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: end });
+        // Read the new target before advancing the animation clock.
+        let _ = element(&app, "PlayerOverlay::show_heading").computed_opacity();
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+        let fading = element(&app, "PlayerOverlay::show_heading").computed_opacity();
+        assert!(
+            fading > 0.0 && fading < 1.0,
+            "gesture captions fade out: {fading}"
+        );
+        assert_eq!(episode.computed_opacity(), fading);
+        assert_eq!(
+            (episode.absolute_position(), title.absolute_position()),
+            geometry
+        );
+        settle(&app);
+        assert_eq!(title.computed_opacity(), 0.0);
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                position: end,
+                button: slint::platform::PointerEventButton::Left,
+            });
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(800));
+        slint::platform::update_timers_and_animations();
+        let _ = title.computed_opacity();
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+        let returning = title.computed_opacity();
+        assert!(
+            returning > 0.0 && returning < 1.0,
+            "gesture captions fade back: {returning}"
+        );
+        settle(&app);
+        assert_eq!(title.computed_opacity(), 1.0);
+        assert_eq!(
+            (episode.absolute_position(), title.absolute_position()),
+            geometry
+        );
+
+        // Feedback ending while the OSD is hidden must not resurrect captions.
+        app.set_osd_visible(false);
+        settle(&app);
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                position: start,
+                button: slint::platform::PointerEventButton::Left,
+            });
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(600));
+        slint::platform::update_timers_and_animations();
+        settle(&app);
+        assert_eq!(title.computed_opacity(), 0.0);
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                position: start,
+                button: slint::platform::PointerEventButton::Left,
+            });
+        settle(&app);
+        assert_eq!(title.computed_opacity(), 0.0);
+    }
+}
+
+#[test]
 #[ignore = "requires a display; SLINT_BACKEND=winit SLINT_RENDERER=femtovg"]
 fn render_loading_dimmer_keeps_status_bright() {
     if !crate::isolation::run(concat!(

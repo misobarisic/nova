@@ -1449,13 +1449,13 @@ export component PlayerOverlay {
 
         player_header := VerticalLayout {
             // Gestures briefly own the caption lane; keep the feedback at
-            // its stable top position without overlapping a long title.
-            visible: !root.flash_show;
+            // its stable top position. Keep the header mounted so titles can
+            // fade out and back in without changing their measured geometry.
             x: root.safe-left + 68px; y: root.safe-top + 16px;
             width: Math.max(0px, root.width - root.safe-left - root.safe-right - 140px);
             height: episode_heading.height + show_heading.height + 6px;
             spacing: 6px;
-            opacity: root.controls_active ? 1 : 0;
+            opacity: root.controls_active && !root.flash_show ? 1 : 0;
             animate opacity { duration: Anim.player_fade; }
             episode_heading := Text {
                 text: root.player_episode_title;

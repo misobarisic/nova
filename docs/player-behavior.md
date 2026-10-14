@@ -73,7 +73,8 @@ the playback request, so browsing cannot replace it with another show's title.
 Playback no longer fetches or carries title logos. Visible controls dim the entire playing video uniformly;
 loading artwork uses the same dim layer, with loading/error text drawn above it. Brightness/seek/speed feedback stays at the
 safe top center rather than shifting with header or screenshot-notice height.
-Title captions briefly yield that lane while feedback is visible.
+Title captions fade out while feedback is visible and fade back in afterwards,
+without moving or being unmounted. The existing player animation setting controls these fades.
 
 The top-right screenshot button saves the video frame with subtitles and
 without Slint controls. It is disabled while loading or capturing. Capture
