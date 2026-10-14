@@ -784,6 +784,8 @@ struct State {
     pending_subtitles: Mutex<Vec<String>>,
     /// Playback of the current session actually produced frames.
     started: AtomicBool,
+    /// The overlay is waiting for an addon URL (or showing its error), not mpv.
+    source_waiting: AtomicBool,
     /// A successful external handoff closes the overlay but keeps the source alive.
     external_handoff: AtomicBool,
     /// Sensitive resolved URLs must never leave through OS arguments/intents.
@@ -1037,6 +1039,7 @@ impl Player {
             pending_headers: Mutex::new(Vec::new()),
             pending_subtitles: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),
+            source_waiting: AtomicBool::new(false),
             external_handoff: AtomicBool::new(false),
             allow_external: AtomicBool::new(true),
             seek_pending: AtomicBool::new(false),
@@ -1335,7 +1338,7 @@ impl Player {
 
                         // Draw the video only while the player overlay is up (the
                         // catalog view paints over it anyway otherwise).
-                        if !app.get_player_open() {
+                        if !app.get_player_open() || notifier_state.source_waiting.load(Ordering::SeqCst) {
                             return;
                         }
                         // `Window::size()` is already in physical pixels, so
@@ -1556,6 +1559,7 @@ impl Player {
             return Err("player window gone".into());
         };
 
+        self.state.source_waiting.store(false, Ordering::SeqCst);
         *self.state.pending.lock().unwrap() = Some(url.to_string());
         *self.state.pending_headers.lock().unwrap() = headers.to_vec();
         let mut subtitle_bytes = 0usize;
@@ -1686,6 +1690,9 @@ impl Player {
 
     /// Toggle play/pause (overlay Play button or click on the video).
     pub fn toggle(&self) {
+        if self.state.source_waiting.load(Ordering::SeqCst) {
+            return;
+        }
         let Ok(mpv) = self.state.mpv.lock() else {
             return;
         };
@@ -2100,8 +2107,52 @@ impl Player {
         self.state.external_handoff.swap(false, Ordering::SeqCst)
     }
 
+    /// Open the normal loading overlay before an addon has supplied a URL.
+    /// No loadfile is queued and the decoder's timeout starts only in `play`.
+    pub fn wait_for_source(&self, status: &str) -> bool {
+        let Some(app) = self.state.app.upgrade() else {
+            return false;
+        };
+        let fullscreen = app.get_is_fullscreen() || app.window().is_fullscreen();
+        self.close();
+        self.state.source_waiting.store(true, Ordering::SeqCst);
+        if fullscreen {
+            app.window().set_fullscreen(true);
+            app.set_is_fullscreen(true);
+        }
+        #[cfg(target_os = "android")]
+        {
+            let _ = set_system_bars_hidden(true);
+            converge_screen_on(ANDROID_FOREGROUND.load(Ordering::SeqCst));
+        }
+        #[cfg(target_os = "linux")]
+        converge_idle_inhibit(true);
+        app.set_player_status(nova_ui::backend_text::tr(status).into());
+        app.set_osd_visible(true);
+        app.set_player_open(true);
+        app.window().request_redraw();
+        true
+    }
+
+    /// Keep a resolver error readable until Close without probing an old mpv file.
+    pub fn source_failed(&self, status: &str) {
+        if !self.state.source_waiting.load(Ordering::SeqCst) {
+            return;
+        }
+        if let Some(app) = self.state.app.upgrade() {
+            app.set_player_status(nova_ui::backend_text::tr(status).into());
+            app.set_osd_visible(true);
+            app.window().request_redraw();
+        }
+        #[cfg(target_os = "linux")]
+        converge_idle_inhibit(false);
+        #[cfg(target_os = "android")]
+        converge_screen_on(false);
+    }
+
     /// Stop playback and return to the catalog.
     pub fn close(&self) {
+        self.state.source_waiting.store(false, Ordering::SeqCst);
         {
             let _mpv = self.state.mpv.lock().unwrap();
             self.state.screenshot_session.fetch_add(1, Ordering::SeqCst);
@@ -2199,7 +2250,7 @@ impl Player {
         #[cfg(target_os = "android")]
         let _ = reassert_system_bars();
 
-        if !app.get_player_open() {
+        if !app.get_player_open() || self.state.source_waiting.load(Ordering::SeqCst) {
             return;
         }
 
@@ -2828,6 +2879,22 @@ mod tests {
         // The headless backend cannot install an OpenGL notifier. This test exercises
         // session queueing, not rendering; no source is loaded without that notifier.
         *player.state.mpv_error.lock().unwrap() = None;
+        *player.state.pending.lock().unwrap() = Some("https://example.invalid/old".into());
+        app.window().set_fullscreen(true);
+        assert!(player.wait_for_source("Resolving stream…"));
+        assert!(app.get_player_open());
+        assert!(app.window().is_fullscreen());
+        assert!(player.state.pending.lock().unwrap().is_none());
+        assert!(player.state.source_waiting.load(Ordering::SeqCst));
+        assert_eq!(app.get_position(), 0.0);
+        assert_eq!(app.get_duration(), 0.0);
+        *player.state.opened_at.lock().unwrap() = Instant::now() - Duration::from_secs(35);
+        player.tick();
+        assert_eq!(app.get_player_status(), "Resolving stream…");
+        player.source_failed("Could not resolve this stream.");
+        player.tick();
+        assert_eq!(app.get_player_status(), "Could not resolve this stream.");
+        assert!(!player.take_external_handoff());
         let before = player.screenshot_session();
         app.set_screenshot_busy(true);
         app.set_screenshot_notice("Previous capture failed".into());
@@ -2846,6 +2913,7 @@ mod tests {
                 },
             )
             .unwrap();
+        assert!(!player.state.source_waiting.load(Ordering::SeqCst));
         assert_ne!(before, player.screenshot_session());
         assert!(!app.get_screenshot_busy());
         assert!(app.get_screenshot_notice().is_empty());

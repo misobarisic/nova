@@ -119,6 +119,16 @@ Implementation: `crates/ui/player.slint`, `src/app/{playback,posters,run}.rs`
 and `crates/player/src/{screenshot,gpu_screenshot}.rs`. Header/keyboard regressions live in
 `tests/player/{osd_header,shortcuts}.rs`.
 
+Deferred addon streams open the built-in player immediately with “Resolving
+stream…”, the selected show's header and the normal dimmed loading artwork.
+Once the addon returns a URL, the status becomes “Loading stream…” and normal
+playback/resume selection continues. Close or navigation cancels the request;
+late results cannot reopen playback or replace a newer choice. Resolver errors
+stay readable in the player, with Close returning to the selector. The existing
+30-second resolver deadline is separate from the decoder's startup timeout,
+which begins only after a media URL is queued. External-player preferences still
+resolve before handing off; credential-bearing streams retain in-app playback.
+
 ## Android system gestures
 
 System Back dismisses the nearest open layer without enabling keyboard focus
