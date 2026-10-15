@@ -65,6 +65,14 @@ fn pills_keep_one_width_and_the_download_rail_fills_left_to_right() {
         Rc::new(VecModel::from(vec![
             stream_row("download:job-1", true),
             stream_row("stream-1", false),
+            nova::StreamRow {
+                id: s("recommended-stream"),
+                text: s("Recommended release"),
+                title: s("Recommended release"),
+                recommended: true,
+                last_used: false,
+                ..stream_row("recommended-stream", false)
+            },
         ]))
         .into(),
     );
@@ -111,6 +119,25 @@ fn pills_keep_one_width_and_the_download_rail_fills_left_to_right() {
                     && badge.absolute_position().y + badge.size().height
                         <= chosen_card.absolute_position().y + chosen_card.size().height,
                 "last-used label fits inside its measured card",
+            );
+            fail(
+                &failures2,
+                ElementHandle::find_by_accessible_label(&app, "Recommended release — Recommended")
+                    .next()
+                    .is_some(),
+                "recommended stream exposes its translated recommendation label",
+            );
+            fail(
+                &failures2,
+                ElementHandle::find_by_element_id(&app, "StreamList::last_used_label").count() == 2,
+                "last-used and recommended streams both have a visible caption",
+            );
+            fail(
+                &failures2,
+                ElementHandle::find_by_accessible_label(&app, "Recommended release ★")
+                    .next()
+                    .is_some(),
+                "recommended stream title ends with a visible star",
             );
             let idle_width = ElementHandle::find_by_element_type_name(&app, "StreamFilterPill")
                 .next()

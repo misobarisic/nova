@@ -14,6 +14,29 @@ const SELECTION: &str = "selection";
 
 const TTL: u64 = 7 * 24 * 60 * 60;
 const MAX_BYTES: u64 = 512;
+const SERIES_MAX_BYTES: u64 = 128 * 1024;
+const SERIES_TTL: u64 = 90 * 24 * 60 * 60;
+const SERIES_LIMIT: usize = 128;
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+struct SeriesChoice {
+    preference: super::streams::StreamPreference,
+    selected_at: u64,
+}
+
+type SeriesChoices = std::collections::BTreeMap<String, SeriesChoice>;
+
+fn prune_series(choices: &mut SeriesChoices, now: u64) {
+    choices.retain(|_, choice| now >= choice.selected_at && now - choice.selected_at < SERIES_TTL);
+    while choices.len() > SERIES_LIMIT {
+        let oldest = choices
+            .iter()
+            .min_by_key(|(_, choice)| choice.selected_at)
+            .map(|(key, _)| key.clone())
+            .unwrap();
+        choices.remove(&oldest);
+    }
+}
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct Record {
@@ -37,6 +60,7 @@ impl Record {
 #[derive(Default)]
 pub(super) struct Cache {
     record: Arc<Mutex<Option<Record>>>,
+    series: Arc<Mutex<SeriesChoices>>,
     wake: Option<mpsc::Sender<()>>,
     worker: Option<JoinHandle<()>>,
     synced: bool,
@@ -59,13 +83,28 @@ impl Cache {
         let record = read(&path).filter(|record| record.valid(now));
         let record = Arc::new(Mutex::new(record));
         let state = record.clone();
+        let series_path = path.with_file_name("series-stream-v1.json");
+        let mut series_choices: SeriesChoices = fs::File::open(&series_path)
+            .ok()
+            .and_then(|file| {
+                let mut raw = Vec::new();
+                file.take(SERIES_MAX_BYTES + 1).read_to_end(&mut raw).ok()?;
+                (raw.len() as u64 <= SERIES_MAX_BYTES)
+                    .then(|| serde_json::from_slice(&raw).ok())
+                    .flatten()
+            })
+            .unwrap_or_default();
+        prune_series(&mut series_choices, now);
+        let series = Arc::new(Mutex::new(series_choices));
+        let series_state = series.clone();
         let (wake, receiver) = mpsc::channel();
         match std::thread::Builder::new()
             .name("nova-last-stream".into())
-            .spawn(move || persist_loop(path, state, receiver, synced))
+            .spawn(move || persist_loop(path, state, series_path, series_state, receiver, synced))
         {
             Ok(worker) => Self {
                 record,
+                series,
                 wake: Some(wake),
                 worker: Some(worker),
                 synced,
@@ -74,12 +113,44 @@ impl Cache {
                 tracing::warn!(%error, "could not start stream choice cache");
                 Self {
                     record,
+                    series,
                     wake: None,
                     worker: None,
                     synced,
                 }
             }
         }
+    }
+
+    pub(super) fn remember_series(
+        &self,
+        series_id: &str,
+        preference: super::streams::StreamPreference,
+        now: u64,
+    ) {
+        let mut series = self.series.lock().unwrap();
+        series.insert(
+            super::streams::preference_hash("series", series_id),
+            SeriesChoice {
+                preference,
+                selected_at: now,
+            },
+        );
+        prune_series(&mut series, now);
+        drop(series);
+        self.notify();
+    }
+
+    pub(super) fn series_preference(
+        &self,
+        series_id: &str,
+        now: u64,
+    ) -> Option<super::streams::StreamPreference> {
+        let mut series = self.series.lock().unwrap();
+        prune_series(&mut series, now);
+        series
+            .get(&super::streams::preference_hash("series", series_id))
+            .map(|choice| choice.preference.clone())
     }
 
     pub(super) fn remember(&self, identity: String, now: u64) {
@@ -164,7 +235,7 @@ fn read(path: &Path) -> Option<Record> {
         .flatten()
 }
 
-fn persist(path: &Path, record: Option<&Record>) -> io::Result<()> {
+fn persist<T: Serialize>(path: &Path, record: Option<&T>) -> io::Result<()> {
     let Some(record) = record else {
         return match fs::remove_file(path) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -208,10 +279,13 @@ fn snapshot(state: &Mutex<Option<Record>>) -> Option<Record> {
 fn persist_loop(
     path: PathBuf,
     state: Arc<Mutex<Option<Record>>>,
+    series_path: PathBuf,
+    series: Arc<Mutex<SeriesChoices>>,
     receiver: mpsc::Receiver<()>,
     synced: bool,
 ) {
     let mut saved = None;
+    let mut saved_series = None;
     let mut first = true;
     loop {
         // Coalesce pending selections. Cache filesystem work happens here,
@@ -222,6 +296,17 @@ fn persist_loop(
                 nova_storage::ErrorKind::Transaction,
                 error,
             ));
+        }
+        let current_series = {
+            let mut choices = series.lock().unwrap();
+            prune_series(&mut choices, nova_config::now_secs());
+            choices.clone()
+        };
+        if saved_series.as_ref() != Some(&current_series) {
+            match persist(&series_path, Some(&current_series)) {
+                Ok(()) => saved_series = Some(current_series),
+                Err(error) => tracing::warn!(%error, "could not persist series stream preferences"),
+            }
         }
         let current = snapshot(&state);
         if first || current != saved {
@@ -248,6 +333,9 @@ fn persist_loop(
             // before an orderly shutdown; process crashes simply lose a hint.
             if let Err(error) = persist(&path, snapshot(&state).as_ref()) {
                 tracing::warn!(%error, "could not flush stream choice cache");
+            }
+            if let Err(error) = persist(&series_path, Some(&*series.lock().unwrap())) {
+                tracing::warn!(%error, "could not flush series stream preferences");
             }
             return;
         }
@@ -390,6 +478,41 @@ mod tests {
             identity: identity(c),
             selected_at,
         }
+    }
+
+    #[test]
+    fn series_preferences_survive_restart_stay_show_scoped_and_expire() {
+        let directory = std::env::temp_dir().join(format!(
+            "nova-series-stream-{}-{}",
+            std::process::id(),
+            nova_config::now_ms()
+        ));
+        let path = directory.join("last-stream-v1.json");
+        let now = nova_config::now_secs();
+        let preference = super::super::streams::StreamPreference::default();
+        {
+            let cache = Cache::open(path.clone());
+            cache.remember_series("show-a", preference.clone(), now);
+            assert!(cache.series_preference("show-a", now).is_some());
+            assert!(cache.series_preference("show-b", now).is_none());
+            cache.remember_series("show-b", preference, now);
+            assert_eq!(cache.series.lock().unwrap().len(), 2);
+        }
+        let cache = Cache::open(path);
+        assert!(cache.series_preference("show-a", now).is_some());
+        assert!(cache.series_preference("show-b", now).is_some());
+        assert!(
+            cache
+                .series_preference("show-a", now + SERIES_TTL)
+                .is_none()
+        );
+        assert!(
+            !fs::read_to_string(directory.join("series-stream-v1.json"))
+                .unwrap()
+                .contains("show-a")
+        );
+        drop(cache);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

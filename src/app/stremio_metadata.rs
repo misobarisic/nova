@@ -326,6 +326,25 @@ fn fetch_metadata(
     Err(PendingReason::MetadataUnavailable)
 }
 
+/// Keep the account's canonical coordination row virtual when existing native
+/// sources already prove its identity. This does not merge/delete saved titles,
+/// and a partial-season binding still retains its own IDs and episode coverage.
+pub(super) fn represented_by_native(
+    remote: &LibraryItem,
+    locals: &[LocalTitle],
+    descriptors: &[Value],
+) -> bool {
+    remote.media_type() != "movie"
+        && !locals
+            .iter()
+            .any(|local| local.id == remote.id() && local.media_type == remote.media_type())
+        && locals.iter().any(|local| {
+            outbound_identity(local, descriptors).is_ok_and(|(media_type, id)| {
+                id == remote.id() && media_type == remote.media_type()
+            })
+        })
+}
+
 fn local_match<'a>(
     media_type: &str,
     id: &str,
@@ -467,6 +486,54 @@ mod tests {
             json!(nova_providers::metadata_revision()),
         );
         video
+    }
+
+    #[test]
+    fn canonical_import_reuses_proven_sources_but_keeps_existing_canonical_and_movies() {
+        let remote = LibraryItem::new("tt100", "Same title", "series", 1);
+        let native = LocalTitle {
+            media_type: "anime".into(),
+            id: "native-season".into(),
+            videos: vec![episode("native-episode", &["tt100:2:1"])],
+        };
+        assert!(represented_by_native(
+            &remote,
+            std::slice::from_ref(&native),
+            &descriptors()
+        ));
+        let canonical = LocalTitle {
+            media_type: "series".into(),
+            id: "tt100".into(),
+            videos: vec![],
+        };
+        assert!(!represented_by_native(
+            &remote,
+            &[native.clone(), canonical],
+            &descriptors()
+        ));
+        let conflicting = LocalTitle {
+            videos: vec![episode("native", &["tt100:1:1", "tt200:1:1"])],
+            ..native.clone()
+        };
+        assert!(!represented_by_native(
+            &remote,
+            &[conflicting],
+            &descriptors()
+        ));
+        let unverified = LocalTitle {
+            videos: vec![episode("native", &[])],
+            ..native
+        };
+        assert!(!represented_by_native(
+            &remote,
+            &[unverified],
+            &descriptors()
+        ));
+        assert!(!represented_by_native(
+            &LibraryItem::new("tt100", "Same title", "movie", 1),
+            &[],
+            &descriptors()
+        ));
     }
 
     #[test]

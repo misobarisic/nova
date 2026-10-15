@@ -2540,6 +2540,7 @@ impl Bridge {
             addon_label,
             request_id,
             media_type,
+            series_id,
         ) = {
             let mut state = self.shared.lock().unwrap();
             refresh_stream_owner_order(&mut state);
@@ -2579,6 +2580,10 @@ impl Bridge {
                     .as_ref()
                     .map(|m| m.type_.clone())
                     .unwrap_or_default(),
+                state
+                    .modal_item
+                    .as_ref()
+                    .and_then(|m| stream_series_scope(&m.type_, &m.id)),
             )
         };
 
@@ -2648,7 +2653,32 @@ impl Bridge {
             .collect();
         displayed.extend(filtered);
         let last_used = self.last_stream.identity(nova_config::now_secs());
-        promote_last_stream(&mut displayed, last_used.as_deref());
+        let has_exact = last_used.as_deref().is_some_and(|id| {
+            displayed
+                .iter()
+                .any(|row| row.choice_id.as_deref() == Some(id))
+        });
+        let recommended_id = if has_exact {
+            None
+        } else {
+            series_id
+                .as_deref()
+                .and_then(|id| {
+                    self.last_stream
+                        .series_preference(id, nova_config::now_secs())
+                })
+                .and_then(|preference| {
+                    recommended_stream(&displayed, last_used.as_deref(), &preference)
+                })
+                .and_then(|index| displayed[index].choice_id.clone())
+        };
+        promote_last_stream(
+            &mut displayed,
+            last_used
+                .as_deref()
+                .filter(|_| has_exact)
+                .or(recommended_id.as_deref()),
+        );
         let last_used_index = last_used.as_deref().and_then(|id| {
             displayed
                 .iter()
@@ -2677,6 +2707,9 @@ impl Bridge {
                     lines,
                     is_download: row.download.is_some(),
                     last_used: last_used_index == Some(index),
+                    recommended: recommended_id
+                        .as_deref()
+                        .is_some_and(|id| row.choice_id.as_deref() == Some(id)),
                     download_progress: row
                         .download
                         .as_ref()
@@ -2918,6 +2951,22 @@ impl Bridge {
         if usable && let Some(identity) = &stream.choice_id {
             self.last_stream
                 .remember(identity.clone(), nova_config::now_secs());
+            if stream.download.is_none() {
+                let series_id = self
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .modal_item
+                    .as_ref()
+                    .and_then(|item| stream_series_scope(&item.type_, &item.id));
+                if let Some(series_id) = series_id {
+                    self.last_stream.remember_series(
+                        &series_id,
+                        StreamPreference::from_row(&stream),
+                        nova_config::now_secs(),
+                    );
+                }
+            }
             // Publish the badge before playback, so this refresh cannot
             // overwrite a subsequent resolver/playback failure hint.
             self.apply_stream_filter();
@@ -4797,6 +4846,110 @@ mod tests {
         assert!(!app.get_stream_selector_open());
         assert_eq!(app.get_detail_kb_ep(), 6);
 
+        // Selection wiring remembers each show independently, then publishes
+        // a recommendation for the next episode through the normal row model.
+        let series_release = |id: &str, title: &str| {
+            let mut stream = row("series-addon", id);
+            stream.choice_id = Some(stream_choice_identity(
+                "series-addon",
+                "anime",
+                id,
+                &addons::Stream {
+                    info_hash: Some("a".repeat(40)),
+                    ..Default::default()
+                },
+            ));
+            stream.card.title = title.into();
+            // The fixture has no installed resolver: the ordinary selection
+            // is remembered before resolution fails without network work.
+            stream.source = StreamSource::Resolver {
+                provider_url: "nova-provider://missing-test-provider".into(),
+                token: String::new(),
+                settings_generation: 0,
+                addon_generation: 0,
+            };
+            stream
+        };
+        let previous = series_release("previous", "Show.S02E01.1080p.WEB-DL.H264-GROUP");
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            let modal = state.modal_item.as_mut().unwrap();
+            modal.type_ = "anime".into();
+            modal.request_id = "series:2:1".into();
+            state.stream_all = vec![previous.clone()];
+            state.stream_addons = vec!["series-addon".into()];
+            state.stream_filter = 0;
+        }
+        bridge.apply_stream_filter();
+        bridge.stream_picked(0);
+        assert!(
+            bridge
+                .last_stream
+                .series_preference(
+                    &stream_series_scope("anime", "series").unwrap(),
+                    nova_config::now_secs()
+                )
+                .is_some()
+        );
+        assert!(app.get_streams().row_data(0).unwrap().last_used);
+        bridge.episode_picked(1);
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.stream_all = vec![
+                series_release("other", "Show.S02E02.720p.HDTV.H265-OTHER"),
+                series_release("next", "Show.S02E02.1080p.WEB-DL.H264-GROUP"),
+            ];
+        }
+        bridge.apply_stream_filter();
+        let recommended = app.get_streams().row_data(0).unwrap();
+        assert_eq!(recommended.id, "next");
+        assert!(recommended.recommended);
+        assert!(!recommended.last_used);
+        assert!(
+            !app.get_player_open(),
+            "recommendation never starts playback"
+        );
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_mut()
+            .unwrap()
+            .type_ = "series".into();
+        bridge.apply_stream_filter();
+        assert!(
+            app.get_streams().iter().all(|row| !row.recommended),
+            "same bare ID in another native type must not inherit anime preferences"
+        );
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            let modal = state.modal_item.as_mut().unwrap();
+            modal.type_ = "anime".into();
+            modal.id = "unrelated-series".into();
+        }
+        bridge.apply_stream_filter();
+        assert!(app.get_streams().iter().all(|row| !row.recommended));
+        assert_eq!(app.get_streams().row_data(0).unwrap().id, "other");
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.modal_item.as_mut().unwrap().id = "series".into();
+            state.stream_all.push(previous);
+        }
+        bridge.apply_stream_filter();
+        assert_eq!(app.get_streams().row_data(0).unwrap().id, "previous");
+        assert!(app.get_streams().row_data(0).unwrap().last_used);
+        assert!(app.get_streams().iter().all(|row| !row.recommended));
+
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_mut()
+            .unwrap()
+            .type_ = "series".into();
+
         // Reopening remembers content choices, never a prior navigation
         // position. Late metadata also respects a tab picked while loading.
         app.set_detail_tab(0);
@@ -4893,6 +5046,66 @@ mod tests {
             addon: addon.into(),
             download: None,
         }
+    }
+
+    #[test]
+    fn series_stream_recommendation_matches_release_family_and_preserves_exact_choice() {
+        let release = |owner: &str, id: &str, title: &str| {
+            let mut candidate = row(owner, id);
+            candidate.choice_id = Some(id.into());
+            candidate.source = StreamSource::Url(format!("https://example.invalid/{id}"));
+            candidate.card.title = title.into();
+            candidate
+        };
+        let previous = release("addon", "old", "Show.S01E01.1080p.WEB-DL.H264-GROUP");
+        let preference = StreamPreference::from_row(&previous);
+        let mut candidates = vec![
+            release("addon", "other", "Show.S01E02.720p.HDTV.H265-OTHER"),
+            release("addon", "family", "Show.S01E02.720p.WEB-DL.H264-GROUP"),
+            release("addon", "closest", "Show.S01E02.1080p.WEB-DL.H264-GROUP"),
+        ];
+        assert_eq!(
+            recommended_stream(&candidates, Some("old"), &preference),
+            Some(2)
+        );
+        assert_eq!(
+            recommended_stream(&candidates, Some("other"), &preference),
+            None,
+            "an exact episode selection always takes precedence"
+        );
+        candidates[2].owner_url = "unrelated-addon".into();
+        assert_eq!(recommended_stream(&candidates, None, &preference), Some(1));
+        assert_eq!(
+            recommended_stream(&candidates[..1], None, &preference),
+            None
+        );
+        let technical = release("addon", "technical", "Show.S01E02.1080p.WEB-DL.H264");
+        assert_eq!(
+            recommended_stream(&[technical], None, &preference),
+            Some(0),
+            "a missing group can still match three technical facts"
+        );
+        let numbered = release("addon", "anime", "Show - 08");
+        let numbered_preference = StreamPreference::from_row(&numbered);
+        assert_eq!(
+            recommended_stream(&[numbered], None, &numbered_preference),
+            None,
+            "an episode number cannot masquerade as a release group"
+        );
+        let webdl = release("addon", "plain", "Show WEB-DL");
+        let webdl_preference = StreamPreference::from_row(&webdl);
+        assert_eq!(
+            recommended_stream(&[webdl], None, &webdl_preference),
+            None,
+            "a source suffix alone cannot masquerade as a release group"
+        );
+        let mut binge = release("addon", "binge", "Episode title");
+        binge.card.binge_group = Some("family-hash".into());
+        let binge_preference = StreamPreference::from_row(&binge);
+        assert_eq!(
+            recommended_stream(&[binge], None, &binge_preference),
+            Some(0)
+        );
     }
 
     #[test]

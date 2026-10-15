@@ -1746,6 +1746,7 @@ impl Bridge {
         let today = today_days();
         let mut new_episodes: Vec<(i64, ContinueEntry)> = Vec::new();
         let mut list: Vec<ContinueEntry> = Vec::new();
+        let mut episode_identities = HashMap::new();
         for identity in identities {
             // Process each cache independently so a large metadata response
             // never overlaps the next series' Video allocation.
@@ -1806,6 +1807,10 @@ impl Bridge {
             {
                 continue;
             }
+            episode_identities.insert(
+                (entry.type_.clone(), entry.id.clone(), episode_id.clone()),
+                home_episode_identity(&entry.type_, &episode_id, episode_slice),
+            );
             let card = ContinueEntry {
                 series_id: entry.id.clone(),
                 type_: entry.type_.clone(),
@@ -1833,8 +1838,13 @@ impl Bridge {
         }
         new_episodes
             .sort_by_key(|(newest, entry)| (std::cmp::Reverse(*newest), entry.series_id.clone()));
-        new_episodes.truncate(CONTINUE_MAX);
         list.sort_by_key(|c| std::cmp::Reverse(c.updated_at_secs));
+        // Preserve every stored source/history record. Only duplicate cards for
+        // the same proven episode collapse, with the latest playback first.
+        let mut seen = HashSet::new();
+        list.retain(|card| retain_home_episode(card, &episode_identities, &mut seen));
+        new_episodes.retain(|(_, card)| retain_home_episode(card, &episode_identities, &mut seen));
+        new_episodes.truncate(CONTINUE_MAX);
         list.truncate(CONTINUE_MAX);
         let new_episodes = new_episodes.into_iter().map(|(_, entry)| entry).collect();
         let stale_map = {
@@ -2763,6 +2773,63 @@ fn home_card_image(url: &str, fallback: &str) -> (Image, bool) {
     .unwrap_or_else(|| (Image::default(), false))
 }
 
+// Canonical episode IDs and current metadata aliases prove individual episodes,
+// never an entire franchise. Movies deliberately have no cross-source collapse.
+fn home_episode_identity(media_type: &str, id: &str, episodes: &[Video]) -> Vec<String> {
+    if media_type == "movie" {
+        return Vec::new();
+    }
+    let mut aliases = episodes
+        .iter()
+        .find(|video| video.id == id)
+        .map(confirmed_episode_stream_ids)
+        .unwrap_or_default();
+    aliases.push(id.to_owned());
+    aliases
+        .into_iter()
+        .filter(|alias| {
+            let Some((parent, episode)) = alias.rsplit_once(':') else {
+                return false;
+            };
+            if episode.parse::<u32>().is_err() {
+                return false;
+            }
+            if let Some((title, season)) = parent.rsplit_once(':')
+                && season.parse::<u32>().is_ok()
+                && matches!(
+                    nova_providers::ExternalId::parse(title),
+                    Some(nova_providers::ExternalId::Imdb(_))
+                )
+            {
+                return true;
+            }
+            parent
+                .strip_prefix("kitsu:")
+                .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+        })
+        .collect()
+}
+
+type HomeEpisodeIdentities = HashMap<(String, String, String), Vec<String>>;
+
+fn retain_home_episode(
+    card: &ContinueEntry,
+    identities: &HomeEpisodeIdentities,
+    seen: &mut HashSet<String>,
+) -> bool {
+    let Some(aliases) = identities.get(&(
+        card.type_.clone(),
+        card.series_id.clone(),
+        card.episode_id.clone(),
+    )) else {
+        return true;
+    };
+    let duplicate = aliases.iter().any(|alias| seen.contains(alias));
+    // A suppressed source may bridge another confirmed catalog namespace.
+    seen.extend(aliases.iter().cloned());
+    !duplicate
+}
+
 fn continue_remaining(record: Option<&EpisodeProgress>) -> String {
     let Some(record) = record else {
         return String::new();
@@ -3069,6 +3136,89 @@ fn new_episode_ids(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn continue_cards_collapse_only_current_confirmed_episode_aliases() {
+        let native: Video = serde_json::from_value(serde_json::json!({
+            "id": "native-episode",
+            "novaStreamIds": ["tt100:2:1"],
+            "novaMetadataRevision": nova_providers::metadata_revision()
+        }))
+        .unwrap();
+        let card = |series: &str, episode: &str| ContinueEntry {
+            series_id: series.into(),
+            type_: "series".into(),
+            episode_id: episode.into(),
+            updated_at_secs: 1,
+        };
+        let native_card = card("native", "native-episode");
+        let canonical = card("tt100", "tt100:2:1");
+        let sequel = card("tt200", "tt200:2:1");
+        let next_episode = card("tt100", "tt100:2:2");
+        let cards = [&native_card, &canonical, &sequel, &next_episode];
+        let identities = cards
+            .iter()
+            .map(|card| {
+                (
+                    (
+                        card.type_.clone(),
+                        card.series_id.clone(),
+                        card.episode_id.clone(),
+                    ),
+                    home_episode_identity(
+                        &card.type_,
+                        &card.episode_id,
+                        std::slice::from_ref(&native),
+                    ),
+                )
+            })
+            .collect();
+        let mut seen = HashSet::new();
+        assert!(retain_home_episode(&native_card, &identities, &mut seen));
+        assert!(!retain_home_episode(&canonical, &identities, &mut seen));
+        assert!(retain_home_episode(&sequel, &identities, &mut seen));
+        assert!(retain_home_episode(&next_episode, &identities, &mut seen));
+        let bridge = card("bridge", "bridge-episode");
+        let kitsu = card("kitsu:42", "kitsu:42:1");
+        let chain: HomeEpisodeIdentities = [
+            (
+                (
+                    canonical.type_.clone(),
+                    canonical.series_id.clone(),
+                    canonical.episode_id.clone(),
+                ),
+                vec!["tt100:2:1".into()],
+            ),
+            (
+                (
+                    bridge.type_.clone(),
+                    bridge.series_id.clone(),
+                    bridge.episode_id.clone(),
+                ),
+                vec!["tt100:2:1".into(), "kitsu:42:1".into()],
+            ),
+            (
+                (
+                    kitsu.type_.clone(),
+                    kitsu.series_id.clone(),
+                    kitsu.episode_id.clone(),
+                ),
+                vec!["kitsu:42:1".into()],
+            ),
+        ]
+        .into();
+        let mut seen = HashSet::new();
+        assert!(retain_home_episode(&canonical, &chain, &mut seen));
+        assert!(!retain_home_episode(&bridge, &chain, &mut seen));
+        assert!(!retain_home_episode(&kitsu, &chain, &mut seen));
+        assert!(home_episode_identity("movie", "tt100", &[]).is_empty());
+        let mut stale = native;
+        stale.extra.insert(
+            "novaMetadataRevision".into(),
+            serde_json::json!(nova_providers::metadata_revision().wrapping_add(1)),
+        );
+        assert!(home_episode_identity("series", "native-episode", &[stale]).is_empty());
+    }
 
     #[test]
     fn upcoming_selects_only_the_nearest_episode_of_a_caught_up_series() {

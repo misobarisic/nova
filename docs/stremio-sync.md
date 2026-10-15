@@ -52,6 +52,13 @@ card and multiple source seasons can therefore share Stremio's title without
 discarding each other's mappings or baselines. Each binding maps only proven
 episodes and owns its initial history union. Membership remains a shared
 title-level action, while watched episodes retain independent field clocks.
+When confirmed native sources already represent an imported series, the account's
+canonical row coordinates the merge without creating another saved title or
+copying history to a second identity. An explicitly existing canonical title is
+retained. Continue Watching and New episodes also collapse existing duplicate
+cards only when their selected episode shares a current confirmed catalog ID;
+all saved entries and history remain intact, and different episodes/seasons or
+movies are never combined by title text.
 
 Series watched bitfields require the complete ordered metadata video list.
 `stremio_metadata.rs` fetches metadata only from descriptors already installed

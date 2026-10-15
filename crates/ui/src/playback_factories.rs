@@ -66,6 +66,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_setting_edited => invoke_onboarding_bridge_setting_edited(arg0),
             on_language_search => invoke_onboarding_bridge_language_search(arg0, arg1),
             on_language_picked => invoke_onboarding_bridge_language_picked(arg0, arg1),
+            on_language_edited => invoke_onboarding_bridge_language_edited(arg0, arg1, arg2),
             on_finished => invoke_onboarding_bridge_finished(),
             on_background_requested => invoke_onboarding_bridge_background_requested(),
         );

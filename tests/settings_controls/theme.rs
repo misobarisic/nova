@@ -66,6 +66,10 @@ fn theme_search_toggle_resize_and_android_back() {
         .unwrap();
     let p = toggle.absolute_position();
     assert!(p.x >= 0.0 && p.x + toggle.size().width <= 390.0);
+    let lime = ElementHandle::find_by_accessible_label(&app, "Lime")
+        .last()
+        .expect("the accent picker precedes True black");
+    assert!(lime.absolute_position().y + lime.size().height <= p.y);
     toggle.mock_single_click(slint::platform::PointerEventButton::Left);
     settle(&app);
     assert!(app.get_true_black());
@@ -160,10 +164,10 @@ fn theme_search_toggle_resize_and_android_back() {
         let p = reset.absolute_position();
         assert!(p.x >= 0.0 && p.x + reset.size().width <= width as f32);
     }
-    // The accent row follows alignment; keyboard selection changes the mounted
-    // palette, and the reset restores Purple alongside the rest of Theme.
-    for _ in 0..5 {
-        key(&app, slint::platform::Key::DownArrow.into());
+    // Accent is the first keyboard row, above True black. Moving back from
+    // spacing selects it and reveals the selected swatch below the sticky header.
+    for _ in 0..4 {
+        key(&app, slint::platform::Key::UpArrow.into());
     }
     key(&app, slint::platform::Key::RightArrow.into());
     assert_eq!(app.get_accent_color(), 1);
@@ -171,7 +175,14 @@ fn theme_search_toggle_resize_and_android_back() {
         app.global::<nova::Theme>().get_current().accent,
         slint::Color::from_rgb_u8(255, 139, 53)
     );
-    key(&app, slint::platform::Key::DownArrow.into());
+    let orange = ElementHandle::find_by_accessible_label(&app, "Orange")
+        .last()
+        .expect("keyboard selection reveals the accent row");
+    assert_eq!(orange.accessible_checked(), Some(true));
+    assert!(orange.absolute_position().y >= 0.0);
+    for _ in 0..9 {
+        key(&app, slint::platform::Key::DownArrow.into());
+    }
     key(&app, slint::platform::Key::Return.into());
     assert!(!app.get_true_black());
     assert!(!app.global::<nova::Theme>().get_true_black());
@@ -228,9 +239,11 @@ fn theme_search_toggle_resize_and_android_back() {
                 .unwrap_or_else(|| panic!("{label} must be reachable at {width}px"));
             let p = choice.absolute_position();
             assert!(p.x >= 0.0 && p.x + choice.size().width <= width as f32);
+            assert!(choice.size().width >= 44.0 && choice.size().height >= 44.0);
             choice.mock_single_click(slint::platform::PointerEventButton::Left);
             settle(&app);
             assert_eq!(app.get_accent_color(), index);
+            assert_eq!(choice.accessible_checked(), Some(true));
         }
     }
     app.set_system_back_request(app.get_system_back_request() + 1);

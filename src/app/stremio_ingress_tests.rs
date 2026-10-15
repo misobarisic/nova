@@ -1368,336 +1368,363 @@ fn same_parent_remote_history_uses_confirmed_native_episode_ids_without_replacin
 /// account row, while retaining separate native progress and acknowledgements.
 #[test]
 fn worker_retains_independent_source_bindings_for_one_remote_title() {
-    isolated_with_clock(
+    exercise_native_bindings(
         concat!(
             module_path!(),
             "::worker_retains_independent_source_bindings_for_one_remote_title"
         ),
         true,
-        |fixture| {
-            use std::io::{Read, Write};
-            let metadata = serde_json::json!({"meta":{
-                "id":"tt100", "type":"series", "name":"Canonical title", "videos":[
-                    {"id":"tt100:1:1","season":1,"episode":1},
-                    {"id":"tt100:1:2","season":1,"episode":2},
-                    {"id":"tt100:2:1","season":2,"episode":1},
-                    {"id":"tt100:2:2","season":2,"episode":2}
-                ]
-            }});
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            let address = listener.local_addr().unwrap();
-            listener.set_nonblocking(true).unwrap();
-            let stop = Arc::new(AtomicBool::new(false));
-            let stop_http = stop.clone();
-            let requests = Arc::new(AtomicU64::new(0));
-            let http_requests = requests.clone();
-            let body = serde_json::to_vec(&metadata).unwrap();
-            let http = std::thread::spawn(move || {
-                while !stop_http.load(Ordering::Acquire) {
-                    let (mut stream, _) = match listener.accept() {
-                        Ok(connection) => connection,
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            std::thread::sleep(Duration::from_millis(5));
-                            continue;
-                        }
-                        Err(error) => panic!("metadata accept: {error}"),
-                    };
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(2)))
-                        .unwrap();
-                    let mut request = Vec::new();
-                    let mut buffer = [0; 2048];
-                    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                        let count = stream.read(&mut buffer).unwrap();
-                        assert!(count > 0);
-                        request.extend_from_slice(&buffer[..count]);
+    );
+}
+
+#[test]
+fn worker_reuses_existing_native_titles_without_importing_a_canonical_duplicate() {
+    exercise_native_bindings(
+        concat!(
+            module_path!(),
+            "::worker_reuses_existing_native_titles_without_importing_a_canonical_duplicate"
+        ),
+        false,
+    );
+}
+
+fn exercise_native_bindings(test_name: &'static str, include_canonical: bool) {
+    isolated_with_clock(test_name, true, |fixture| {
+        use std::io::{Read, Write};
+        let metadata = serde_json::json!({"meta":{
+            "id":"tt100", "type":"series", "name":"Canonical title", "videos":[
+                {"id":"tt100:1:1","season":1,"episode":1},
+                {"id":"tt100:1:2","season":1,"episode":2},
+                {"id":"tt100:2:1","season":2,"episode":1},
+                {"id":"tt100:2:2","season":2,"episode":2}
+            ]
+        }});
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_http = stop.clone();
+        let requests = Arc::new(AtomicU64::new(0));
+        let http_requests = requests.clone();
+        let body = serde_json::to_vec(&metadata).unwrap();
+        let http = std::thread::spawn(move || {
+            while !stop_http.load(Ordering::Acquire) {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(connection) => connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
                     }
-                    let request = String::from_utf8(request).unwrap();
-                    assert!(request.starts_with("GET /meta/series/tt100.json "));
-                    assert!(!request.contains("test-token"));
-                    http_requests.fetch_add(1, Ordering::AcqRel);
-                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
-                    stream.write_all(&body).unwrap();
+                    Err(error) => panic!("metadata accept: {error}"),
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 2048];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let count = stream.read(&mut buffer).unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&buffer[..count]);
                 }
-            });
-            let descriptors = vec![serde_json::json!({
-                "transportUrl":format!("http://{address}/manifest.json"),
-                "manifest":{"id":"fixture","name":"Fixture","version":"1.0.0",
-                    "types":["series"],"resources":["meta"],"idPrefixes":["tt"]}
-            })];
-            let canonical: MetaItem = serde_json::from_value(metadata["meta"].clone()).unwrap();
-            write_episodes_cache_for("series", "tt100", &canonical.videos);
-            let remote_videos: Vec<_> = canonical
-                .videos
-                .iter()
-                .map(|video| nova_stremio::Video {
-                    id: video.id.clone(),
-                    season: video.season,
-                    episode: video.episode,
+                let request = String::from_utf8(request).unwrap();
+                assert!(request.starts_with("GET /meta/series/tt100.json "));
+                assert!(!request.contains("test-token"));
+                http_requests.fetch_add(1, Ordering::AcqRel);
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                stream.write_all(&body).unwrap();
+            }
+        });
+        let descriptors = vec![serde_json::json!({
+            "transportUrl":format!("http://{address}/manifest.json"),
+            "manifest":{"id":"fixture","name":"Fixture","version":"1.0.0",
+                "types":["series"],"resources":["meta"],"idPrefixes":["tt"]}
+        })];
+        let canonical: MetaItem = serde_json::from_value(metadata["meta"].clone()).unwrap();
+        write_episodes_cache_for("series", "tt100", &canonical.videos);
+        let remote_videos: Vec<_> = canonical
+            .videos
+            .iter()
+            .map(|video| nova_stremio::Video {
+                id: video.id.clone(),
+                season: video.season,
+                episode: video.episode,
+                ..Default::default()
+            })
+            .collect();
+        let mut remote_item = LibraryItem::new("tt100", "Canonical title", "series", 5_000);
+        remote_item.0.insert(
+            "unknownAccountField".into(),
+            serde_json::json!({"keep":[1,2,3]}),
+        );
+        remote_item
+            .apply_projection(
+                &Projection {
+                    saved: true,
+                    watched: remote_videos
+                        .iter()
+                        .enumerate()
+                        .map(|(index, video)| (video.id.clone(), index % 2 == 0))
+                        .collect(),
                     ..Default::default()
-                })
-                .collect();
-            let mut remote_item = LibraryItem::new("tt100", "Canonical title", "series", 5_000);
-            remote_item.0.insert(
-                "unknownAccountField".into(),
-                serde_json::json!({"keep":[1,2,3]}),
-            );
-            remote_item
-                .apply_projection(
-                    &Projection {
-                        saved: true,
-                        watched: remote_videos
-                            .iter()
-                            .enumerate()
-                            .map(|(index, video)| (video.id.clone(), index % 2 == 0))
-                            .collect(),
-                        ..Default::default()
-                    },
-                    &remote_videos,
-                    5_000,
-                )
-                .unwrap();
-            struct Account {
-                item: Mutex<LibraryItem>,
-                descriptors: Vec<serde_json::Value>,
-                writes: AtomicU64,
-            }
-            struct MockAccount(Arc<Account>);
-            impl nova_stremio::Transport for MockAccount {
-                fn send(
-                    &self,
-                    request: nova_stremio::Request,
-                ) -> Result<nova_stremio::Response, ApiError> {
-                    let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
-                    assert_eq!(body["authKey"], "test-token");
-                    let mut item = self.0.item.lock().unwrap();
-                    let result = match request.url.rsplit('/').next().unwrap() {
-                        "getUser" => {
-                            serde_json::json!({"_id":"test-account","email":"test@example.invalid"})
-                        }
-                        "addonCollectionGet" => serde_json::json!({"addons":self.0.descriptors}),
-                        "datastoreMeta" => serde_json::json!([[item.id(), item.modified_ms()]]),
-                        "datastoreGet" => serde_json::json!([*item]),
-                        "datastorePut" => {
-                            let changes: Vec<LibraryItem> =
-                                serde_json::from_value(body["changes"].clone()).unwrap();
-                            assert_eq!(changes.len(), 1);
-                            assert_eq!(changes[0].id(), "tt100");
-                            *item = changes.into_iter().next().unwrap();
-                            self.0.writes.fetch_add(1, Ordering::AcqRel);
-                            serde_json::json!({"success":true})
-                        }
-                        endpoint => panic!("unexpected account endpoint {endpoint}"),
-                    };
-                    Ok(nova_stremio::Response {
-                        status: 200,
-                        retry_after: None,
-                        body: serde_json::to_vec(&serde_json::json!({"result":result}))
-                            .unwrap()
-                            .into(),
-                    })
-                }
-            }
-            let mut entries = Vec::new();
-            let mut progress = HashMap::new();
-            let mut caches = Vec::new();
-            for (id, media_type, season) in [
-                ("tt100", "series", 0),
-                ("native-season-a", "anime", 1),
-                ("native-season-b", "anime", 2),
-            ] {
-                entries.push(LibraryEntry {
-                    id: id.into(),
-                    type_: media_type.into(),
-                    name: id.into(),
-                    year: String::new(),
-                    poster_url: String::new(),
-                    background_url: String::new(),
-                    genres: Vec::new(),
-                    description: String::new(),
-                    categories: Vec::new(),
-                    watch_status: WatchStatus::Auto,
-                    added_at_secs: 2,
-                });
-                if season == 0 {
-                    continue;
-                }
-                let mut native = Vec::new();
-                for episode in 1..=2 {
-                    let native_id = format!("{id}-episode-{episode}");
-                    let remote_id = format!("tt100:{season}:{episode}");
-                    native.push(Video {
-                        id: native_id.clone(),
-                        season: Some(season),
-                        episode: Some(episode),
-                        extra: [
-                            ("novaStreamIds".into(), serde_json::json!([remote_id])),
-                            (
-                                "novaMetadataRevision".into(),
-                                serde_json::json!(nova_providers::metadata_revision()),
-                            ),
-                        ]
+                },
+                &remote_videos,
+                5_000,
+            )
+            .unwrap();
+        struct Account {
+            item: Mutex<LibraryItem>,
+            descriptors: Vec<serde_json::Value>,
+            writes: AtomicU64,
+        }
+        struct MockAccount(Arc<Account>);
+        impl nova_stremio::Transport for MockAccount {
+            fn send(
+                &self,
+                request: nova_stremio::Request,
+            ) -> Result<nova_stremio::Response, ApiError> {
+                let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+                assert_eq!(body["authKey"], "test-token");
+                let mut item = self.0.item.lock().unwrap();
+                let result = match request.url.rsplit('/').next().unwrap() {
+                    "getUser" => {
+                        serde_json::json!({"_id":"test-account","email":"test@example.invalid"})
+                    }
+                    "addonCollectionGet" => serde_json::json!({"addons":self.0.descriptors}),
+                    "datastoreMeta" => serde_json::json!([[item.id(), item.modified_ms()]]),
+                    "datastoreGet" => serde_json::json!([*item]),
+                    "datastorePut" => {
+                        let changes: Vec<LibraryItem> =
+                            serde_json::from_value(body["changes"].clone()).unwrap();
+                        assert_eq!(changes.len(), 1);
+                        assert_eq!(changes[0].id(), "tt100");
+                        *item = changes.into_iter().next().unwrap();
+                        self.0.writes.fetch_add(1, Ordering::AcqRel);
+                        serde_json::json!({"success":true})
+                    }
+                    endpoint => panic!("unexpected account endpoint {endpoint}"),
+                };
+                Ok(nova_stremio::Response {
+                    status: 200,
+                    retry_after: None,
+                    body: serde_json::to_vec(&serde_json::json!({"result":result}))
+                        .unwrap()
                         .into(),
-                        ..Default::default()
-                    });
-                    if episode == 2 {
-                        progress.insert(
-                            progress_map_key(id, &native_id),
-                            EpisodeProgress {
-                                series_id: id.into(),
-                                episode_id: native_id,
-                                watched: true,
-                                updated_at_secs: 2,
-                                ..Default::default()
-                            },
-                        );
-                    }
-                }
-                // Equal season/episode numbers alone cannot create coverage.
+                })
+            }
+        }
+        let mut entries = Vec::new();
+        let mut progress = HashMap::new();
+        let mut caches = Vec::new();
+        for (id, media_type, season) in [
+            ("tt100", "series", 0),
+            ("native-season-a", "anime", 1),
+            ("native-season-b", "anime", 2),
+        ] {
+            if season == 0 && !include_canonical {
+                continue;
+            }
+            entries.push(LibraryEntry {
+                id: id.into(),
+                type_: media_type.into(),
+                name: id.into(),
+                year: String::new(),
+                poster_url: String::new(),
+                background_url: String::new(),
+                genres: Vec::new(),
+                description: String::new(),
+                categories: Vec::new(),
+                watch_status: WatchStatus::Auto,
+                added_at_secs: 2,
+            });
+            if season == 0 {
+                continue;
+            }
+            let mut native = Vec::new();
+            for episode in 1..=2 {
+                let native_id = format!("{id}-episode-{episode}");
+                let remote_id = format!("tt100:{season}:{episode}");
                 native.push(Video {
-                    id: format!("{id}-unconfirmed"),
+                    id: native_id.clone(),
                     season: Some(season),
-                    episode: Some(1),
+                    episode: Some(episode),
+                    extra: [
+                        ("novaStreamIds".into(), serde_json::json!([remote_id])),
+                        (
+                            "novaMetadataRevision".into(),
+                            serde_json::json!(nova_providers::metadata_revision()),
+                        ),
+                    ]
+                    .into(),
                     ..Default::default()
                 });
-                write_episodes_cache_for(media_type, id, &native);
-                let key = episodes_key(media_type, id);
-                caches.push((key.clone(), storage::get_str(&key).unwrap()));
-            }
-            {
-                let mut state = fixture.bridge.shared.lock().unwrap();
-                state.entries = entries.clone();
-                state.progress = progress.clone();
-            }
-            write_persisted_library(&entries);
-            write_progress_map(&progress);
-            let account = Arc::new(Account {
-                item: Mutex::new(remote_item),
-                descriptors,
-                writes: AtomicU64::new(0),
-            });
-            let persistence_worker = persistence::start().unwrap();
-            let bridge = fixture.bridge.clone();
-            let connection = fixture.connection;
-            let remote = account.clone();
-            let task = std::thread::spawn(move || {
-                let result = (|| {
-                    let mut worker =
-                        Worker::new(bridge.clone(), Client::new(MockAccount(remote.clone())));
-                    worker.connection = Some(connection.clone());
-                    worker.verified = true;
-                    for _ in 0..6 {
-                        worker.force = true;
-                        worker.tick()?;
-                    }
-                    assert_eq!(worker.titles.len(), 3);
-                    assert!(
-                        worker.pending.is_empty(),
-                        "all source bindings must resolve"
-                    );
-                    let before = worker.titles.clone();
-                    assert_eq!(
-                        before
-                            .values()
-                            .filter(|title| title.binding.is_none())
-                            .count(),
-                        1
-                    );
-                    for title in before.values() {
-                        assert!(title.progress_merged && !title.pending);
-                        assert!(title.desired.watched.values().all(|field| field.value));
-                        assert_eq!(
-                            title.mapping.episode_ids.len(),
-                            if title.binding.is_none() { 4 } else { 2 }
-                        );
-                        if let Some(binding) = &title.binding {
-                            assert_eq!(binding.media_type, "anime");
-                            assert_eq!(binding.id, title.mapping.id);
-                            assert!(
-                                title
-                                    .mapping
-                                    .episode_ids
-                                    .values()
-                                    .all(|id| id.starts_with(&binding.id))
-                            );
-                        }
-                    }
-                    persistence::flush().map_err(|_| ApiError::Rejected)?;
-                    let restored = load_titles(&connection.account_id).unwrap();
-                    assert_eq!(restored.len(), 3);
-                    for (slot, title) in &restored {
-                        let previous = &before[slot];
-                        assert_eq!(title.local, previous.local);
-                        assert_eq!(title.remote, previous.remote);
-                        assert_eq!(title.desired, previous.desired);
-                        assert_eq!(title.mapping.episode_ids, previous.mapping.episode_ids);
-                        assert_eq!(title_slot(title), *slot);
-                    }
-                    // Run the restored actor too: renewing metadata must resolve
-                    // each binding against its own source, not all aliases at once.
-                    let mut restarted = Worker::new(bridge, Client::new(MockAccount(remote)));
-                    restarted.connection = Some(connection);
-                    restarted.force = true;
-                    restarted.tick()?;
-                    assert_eq!(restarted.titles.len(), 3);
-                    assert!(restarted.pending.is_empty());
-                    Ok::<_, ApiError>(())
-                })();
-                slint::invoke_from_event_loop(|| slint::quit_event_loop().unwrap()).unwrap();
-                result
-            });
-            let watchdog = slint::Timer::default();
-            watchdog.start(
-                slint::TimerMode::SingleShot,
-                Duration::from_secs(45),
-                || slint::quit_event_loop().unwrap(),
-            );
-            slint::run_event_loop().unwrap();
-            watchdog.stop();
-            let result = task.join();
-            stop.store(true, Ordering::Release);
-            http.join().unwrap();
-            assert_eq!(result.unwrap(), Ok(()));
-            assert!(requests.load(Ordering::Acquire) > 0);
-            assert!(account.writes.load(Ordering::Acquire) > 0);
-            let progress = read_progress_map();
-            for (id, season) in [("native-season-a", 1), ("native-season-b", 2)] {
-                for episode in 1..=2 {
-                    assert!(
-                        progress[&progress_map_key(id, &format!("{id}-episode-{episode}"))].watched
-                    );
-                    assert!(
-                        !progress.contains_key(&progress_map_key(
-                            id,
-                            &format!("tt100:{season}:{episode}")
-                        ))
+                if episode == 2 {
+                    progress.insert(
+                        progress_map_key(id, &native_id),
+                        EpisodeProgress {
+                            series_id: id.into(),
+                            episode_id: native_id,
+                            watched: true,
+                            updated_at_secs: 2,
+                            ..Default::default()
+                        },
                     );
                 }
+            }
+            // Equal season/episode numbers alone cannot create coverage.
+            native.push(Video {
+                id: format!("{id}-unconfirmed"),
+                season: Some(season),
+                episode: Some(1),
+                ..Default::default()
+            });
+            write_episodes_cache_for(media_type, id, &native);
+            let key = episodes_key(media_type, id);
+            caches.push((key.clone(), storage::get_str(&key).unwrap()));
+        }
+        {
+            let mut state = fixture.bridge.shared.lock().unwrap();
+            state.entries = entries.clone();
+            state.progress = progress.clone();
+        }
+        write_persisted_library(&entries);
+        write_progress_map(&progress);
+        let account = Arc::new(Account {
+            item: Mutex::new(remote_item),
+            descriptors,
+            writes: AtomicU64::new(0),
+        });
+        let persistence_worker = persistence::start().unwrap();
+        let bridge = fixture.bridge.clone();
+        let connection = fixture.connection;
+        let remote = account.clone();
+        let task = std::thread::spawn(move || {
+            let result = (|| {
+                let mut worker =
+                    Worker::new(bridge.clone(), Client::new(MockAccount(remote.clone())));
+                worker.connection = Some(connection.clone());
+                worker.verified = true;
+                for _ in 0..6 {
+                    worker.force = true;
+                    worker.tick()?;
+                }
+                assert_eq!(worker.titles.len(), 3);
                 assert!(
-                    !progress.contains_key(&progress_map_key(id, &format!("{id}-unconfirmed")))
+                    worker.pending.is_empty(),
+                    "all source bindings must resolve"
+                );
+                let before = worker.titles.clone();
+                assert_eq!(
+                    before
+                        .values()
+                        .filter(|title| title.binding.is_none())
+                        .count(),
+                    1
+                );
+                for title in before.values() {
+                    assert!(title.progress_merged && !title.pending);
+                    assert!(title.desired.watched.values().all(|field| field.value));
+                    assert_eq!(
+                        title.mapping.episode_ids.len(),
+                        if title.binding.is_none() { 4 } else { 2 }
+                    );
+                    if let Some(binding) = &title.binding {
+                        assert_eq!(binding.media_type, "anime");
+                        assert_eq!(binding.id, title.mapping.id);
+                        assert!(
+                            title
+                                .mapping
+                                .episode_ids
+                                .values()
+                                .all(|id| id.starts_with(&binding.id))
+                        );
+                    }
+                }
+                persistence::flush().map_err(|_| ApiError::Rejected)?;
+                let restored = load_titles(&connection.account_id).unwrap();
+                assert_eq!(restored.len(), 3);
+                for (slot, title) in &restored {
+                    let previous = &before[slot];
+                    assert_eq!(title.local, previous.local);
+                    assert_eq!(title.remote, previous.remote);
+                    assert_eq!(title.desired, previous.desired);
+                    assert_eq!(title.mapping.episode_ids, previous.mapping.episode_ids);
+                    assert_eq!(title_slot(title), *slot);
+                }
+                // Run the restored actor too: renewing metadata must resolve
+                // each binding against its own source, not all aliases at once.
+                let mut restarted = Worker::new(bridge, Client::new(MockAccount(remote)));
+                restarted.connection = Some(connection);
+                restarted.force = true;
+                restarted.tick()?;
+                assert_eq!(restarted.titles.len(), 3);
+                assert!(restarted.pending.is_empty());
+                Ok::<_, ApiError>(())
+            })();
+            slint::invoke_from_event_loop(|| slint::quit_event_loop().unwrap()).unwrap();
+            result
+        });
+        let watchdog = slint::Timer::default();
+        watchdog.start(
+            slint::TimerMode::SingleShot,
+            Duration::from_secs(45),
+            || slint::quit_event_loop().unwrap(),
+        );
+        slint::run_event_loop().unwrap();
+        watchdog.stop();
+        let result = task.join();
+        stop.store(true, Ordering::Release);
+        http.join().unwrap();
+        assert_eq!(result.unwrap(), Ok(()));
+        assert!(requests.load(Ordering::Acquire) > 0);
+        assert!(account.writes.load(Ordering::Acquire) > 0);
+        let progress = read_progress_map();
+        for (id, season) in [("native-season-a", 1), ("native-season-b", 2)] {
+            for episode in 1..=2 {
+                assert!(
+                    progress[&progress_map_key(id, &format!("{id}-episode-{episode}"))].watched
+                );
+                assert!(
+                    !progress
+                        .contains_key(&progress_map_key(id, &format!("tt100:{season}:{episode}")))
                 );
             }
-            for video in &remote_videos {
-                assert!(progress[&progress_map_key("tt100", &video.id)].watched);
+            assert!(!progress.contains_key(&progress_map_key(id, &format!("{id}-unconfirmed"))));
+        }
+        for video in &remote_videos {
+            let canonical = progress.get(&progress_map_key("tt100", &video.id));
+            if include_canonical {
+                assert!(canonical.unwrap().watched);
+            } else {
+                assert!(
+                    canonical.is_none(),
+                    "native history must not be cloned into a new identity"
+                );
             }
-            for (key, cached) in caches {
-                assert_eq!(storage::get_str(&key).unwrap(), cached);
-            }
-            let item = account.item.lock().unwrap();
-            assert!(
-                item.projection(&remote_videos)
-                    .unwrap()
-                    .watched
-                    .values()
-                    .all(|watched| *watched)
-            );
-            assert_eq!(
-                item.0["unknownAccountField"],
-                serde_json::json!({"keep":[1,2,3]})
-            );
-            drop(persistence_worker);
-        },
-    );
+        }
+        let entries = fixture.bridge.shared.lock().unwrap().entries.clone();
+        assert_eq!(entries.len(), if include_canonical { 3 } else { 2 });
+        assert_eq!(
+            entries.iter().any(|entry| entry.id == "tt100"),
+            include_canonical
+        );
+        for (key, cached) in caches {
+            assert_eq!(storage::get_str(&key).unwrap(), cached);
+        }
+        let item = account.item.lock().unwrap();
+        assert!(
+            item.projection(&remote_videos)
+                .unwrap()
+                .watched
+                .values()
+                .all(|watched| *watched)
+        );
+        assert_eq!(
+            item.0["unknownAccountField"],
+            serde_json::json!({"keep":[1,2,3]})
+        );
+        drop(persistence_worker);
+    });
 }
 
 #[test]

@@ -17,6 +17,155 @@ pub(crate) fn stream_choice_identity(
     nova_providers::stable_stream_identity(owner, &scope, &source)
 }
 
+/// Native episodic types (including anime) share the show's preference, while
+/// movies and missing identities have no next-episode recommendation scope.
+/// Qualify by type so two provider namespaces cannot alias the same bare ID.
+pub(super) fn stream_series_scope(media_type: &str, id: &str) -> Option<String> {
+    (!media_type.trim().is_empty() && media_type != "movie" && !id.trim().is_empty())
+        .then(|| serde_json::to_string(&(media_type, id)).expect("show scope serializes"))
+}
+
+/// Only bounded hashes and recognized release facts are cached; never URLs,
+/// credentials, arbitrary addon descriptions or episode-specific file names.
+#[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(super) struct StreamPreference {
+    owner: String,
+    binge: Option<String>,
+    group: Option<String>,
+    resolution: Option<String>,
+    codec: Option<String>,
+    source: Option<String>,
+}
+
+pub(super) fn preference_hash(kind: &str, value: &str) -> String {
+    stream_choice_identity(
+        "preference",
+        kind,
+        "",
+        &addons::Stream {
+            url: Some(value.to_owned()),
+            ..Default::default()
+        },
+    )
+}
+
+impl StreamPreference {
+    pub(super) fn from_row(row: &StreamUi) -> Self {
+        let title = row.card.title.to_ascii_lowercase();
+        let normalized = format!("{} {}", row.card.metadata, title)
+            .to_ascii_lowercase()
+            .replace("h.264", "h264")
+            .replace("h.265", "h265")
+            .replace("web-dl", "webdl")
+            .replace("blu-ray", "bluray");
+        let tokens: Vec<_> = normalized
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|token| !token.is_empty())
+            .collect();
+        let fact = |alternatives: &[(&str, &[&str])]| {
+            let mut matches = alternatives
+                .iter()
+                .filter(|(_, aliases)| aliases.iter().any(|alias| tokens.contains(alias)));
+            let value = matches.next().map(|(canonical, _)| (*canonical).to_owned());
+            if matches.next().is_some() {
+                None
+            } else {
+                value
+            }
+        };
+        // A final -GROUP or leading [GROUP] is release evidence, unlike words
+        // from the show's title. Avoid harvesting metadata/seed-count lines.
+        let group = title
+            .strip_prefix('[')
+            .and_then(|s| s.split_once(']').map(|(g, _)| g))
+            .or_else(|| {
+                title
+                    .rsplit_once('-')
+                    .map(|(_, g)| g.trim().trim_end_matches(".mkv").trim_end_matches(".mp4"))
+            })
+            .filter(|g| {
+                (2..=32).contains(&g.len())
+                    && g.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    && g.chars().any(|c| c.is_ascii_alphabetic())
+                    && ![
+                        "dl", "rip", "webdl", "webrip", "bluray", "hdtv", "1080p", "720p", "2160p",
+                        "hevc", "avc", "h264", "h265", "x264", "x265", "av1",
+                    ]
+                    .contains(g)
+            })
+            .map(|g| preference_hash("group", g));
+        Self {
+            owner: preference_hash("owner", row.owner_url.trim_end_matches('/')),
+            binge: row.card.binge_group.clone(),
+            group,
+            resolution: fact(&[
+                ("2160", &["2160p", "4k"]),
+                ("1080", &["1080p"]),
+                ("720", &["720p"]),
+                ("480", &["480p"]),
+            ]),
+            codec: fact(&[
+                ("hevc", &["hevc", "h265", "x265"]),
+                ("avc", &["avc", "h264", "x264"]),
+                ("av1", &["av1"]),
+            ]),
+            source: fact(&[
+                ("webdl", &["webdl"]),
+                ("webrip", &["webrip"]),
+                ("bluray", &["bluray", "bdrip"]),
+                ("hdtv", &["hdtv"]),
+            ]),
+        }
+    }
+
+    fn score(&self, candidate: &Self) -> Option<u32> {
+        if self.owner != candidate.owner {
+            return None;
+        }
+        let same = |a: &Option<String>, b: &Option<String>| a.is_some() && a == b;
+        let binge = same(&self.binge, &candidate.binge);
+        let group = same(&self.group, &candidate.group);
+        let resolution = same(&self.resolution, &candidate.resolution);
+        let codec = same(&self.codec, &candidate.codec);
+        let source = same(&self.source, &candidate.source);
+        // Quality alone would recommend almost any row. Require a release
+        // family, or agreement on all three independent technical facts.
+        (binge || group || (resolution && codec && source)).then_some(
+            u32::from(binge) * 32
+                + u32::from(group) * 16
+                + u32::from(resolution) * 4
+                + u32::from(codec) * 2
+                + u32::from(source) * 2,
+        )
+    }
+}
+
+pub(super) fn recommended_stream(
+    rows: &[StreamUi],
+    exact: Option<&str>,
+    preference: &StreamPreference,
+) -> Option<usize> {
+    if exact.is_some_and(|id| rows.iter().any(|row| row.choice_id.as_deref() == Some(id))) {
+        return None;
+    }
+    // Keep the addon's ranking on equal evidence, including cumulative batches.
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| {
+            row.download.is_none() && !matches!(row.source, StreamSource::Unsupported)
+        })
+        .filter_map(|(index, row)| {
+            preference
+                .score(&StreamPreference::from_row(row))
+                .map(|score| (index, score))
+        })
+        .fold(None, |best, next| match best {
+            Some((_, score)) if score >= next.1 => best,
+            _ => Some(next),
+        })
+        .map(|(index, _)| index)
+}
+
 /// Presentation only: the original addon text stays intact for downloads and
 /// accessibility, while the card can give the release title its own style.
 #[derive(Clone, Default)]
@@ -25,6 +174,7 @@ pub(crate) struct StreamCardText {
     pub metadata: String,
     pub description: String,
     pub size: String,
+    pub binge_group: Option<String>,
 }
 
 pub(crate) fn stream_card_text(stream: &addons::Stream) -> StreamCardText {
@@ -34,6 +184,13 @@ pub(crate) fn stream_card_text(stream: &addons::Stream) -> StreamCardText {
     let mut card = split_stream_card(&label, detail);
     // Stremio addons may expose the selected video's byte size in hints.
     // Read this before falling back to human-readable torrent metadata.
+    card.binge_group = stream
+        .extra
+        .get("behaviorHints")
+        .and_then(|hints| hints.get("bingeGroup"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty() && value.len() <= 512)
+        .map(|value| preference_hash("binge", value));
     card.size = stream
         .extra
         .get("behaviorHints")
@@ -62,6 +219,7 @@ fn split_stream_card(label: &str, detail: &str) -> StreamCardText {
         metadata: label.to_owned(),
         description: description.to_owned(),
         size: String::new(),
+        binge_group: None,
     }
 }
 
@@ -370,6 +528,17 @@ pub(crate) fn stream_display(s: &addons::Stream) -> String {
 mod choice_identity_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn recommendation_scopes_cover_native_episodic_types_without_aliasing() {
+        let anime = stream_series_scope("anime", "show").unwrap();
+        let series = stream_series_scope("series", "show").unwrap();
+        assert_ne!(anime, series);
+        assert_ne!(anime, stream_series_scope("anime", "other").unwrap());
+        assert!(stream_series_scope("movie", "show").is_none());
+        assert!(stream_series_scope("anime", "  ").is_none());
+        assert!(stream_series_scope("", "show").is_none());
+    }
 
     #[test]
     fn changing_labels_seed_counts_and_subtitles_keep_the_same_choice() {

@@ -233,7 +233,7 @@ component StreamList {
                 y: !stream_row.reveal_motion || stream_row.item_revealed ? 0px : 12px;
                 animate opacity { duration: stream_row.reveal_motion ? Anim.transition_fade : 0ms; delay: stream_row.reveal_motion ? stream_row.item_reveal_delay : 0ms; easing: ease-out; }
                 animate y { duration: stream_row.reveal_motion ? Anim.transition_slide : 0ms; delay: stream_row.reveal_motion ? stream_row.item_reveal_delay : 0ms; easing: ease-out; }
-                background: st.is_download || st.last_used ? Theme.current.stream_download : (stream_row.focused ? Theme.current.selection_wash : Theme.current.stream_card);
+                background: st.is_download || st.last_used || st.recommended ? Theme.current.stream_download : (stream_row.focused ? Theme.current.selection_wash : Theme.current.stream_card);
                 border-radius: Theme.card_corner_radius;
                 // Black cards need an edge against the black canvas; keyboard
                 // focus retains its stronger accent ring in either theme.
@@ -270,8 +270,8 @@ component StreamList {
                         Rectangle { width: 44px; horizontal-stretch: 0; }
                     }
 
-                    if st.last_used: last_used_label := Text {
-                        text: @tr("Last used");
+                    if st.last_used || st.recommended: last_used_label := Text {
+                        text: st.last_used ? @tr("Last used") : @tr("Recommended");
                         color: Theme.current.accent;
                         font-size: 12px;
                         font-weight: 600;
@@ -280,7 +280,7 @@ component StreamList {
                     }
 
                     card_title := Text {
-                        text: st.title != "" ? st.title : st.text;
+                        text: (st.title != "" ? st.title : st.text) + (st.recommended ? " ★" : "");
                         color: Theme.current.text_secondary;
                         font-size: 14px;
                         font-weight: 400;
@@ -381,8 +381,8 @@ component StreamList {
                             Rectangle { width: 44px; horizontal-stretch: 0; }
                         }
 
-                        if st.last_used: Text {
-                            text: @tr("Last used");
+                        if st.last_used || st.recommended: Text {
+                            text: st.last_used ? @tr("Last used") : @tr("Recommended");
                             font-size: 12px;
                             font-weight: 600;
                             wrap: word-wrap;
@@ -390,7 +390,7 @@ component StreamList {
                         }
 
                         Text {
-                            text: st.title != "" ? st.title : st.text;
+                            text: (st.title != "" ? st.title : st.text) + (st.recommended ? " ★" : "");
                             font-size: 14px;
                             font-weight: 400;
                             wrap: word-wrap;
@@ -436,7 +436,7 @@ component StreamList {
                     width: 100%;
                     height: 100%;
                     accessible-role: button;
-                    accessible-label: st.text;
+                    accessible-label: st.text + (st.recommended ? " — " + @tr("Recommended") : "");
                     mouse-cursor: pointer;
                     clicked => {
                         if (touch_st.lp_suppress) {

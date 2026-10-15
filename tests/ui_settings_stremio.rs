@@ -4,3 +4,6 @@ mod isolation;
 
 #[path = "ui_settings_stremio/flow.rs"]
 mod flow;
+
+#[path = "ui_settings_stremio/motion.rs"]
+mod motion;

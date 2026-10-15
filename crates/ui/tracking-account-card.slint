@@ -1,4 +1,4 @@
-import { Theme } from "@NovaUiShared";
+import { Theme, Anim } from "@NovaUiShared";
 import { ControlTouchArea } from "control-input.slint";
 import { IcChevronDown, IcChevronUp } from "icons.slint";
 
@@ -12,6 +12,13 @@ export component TrackingAccountCard inherits Rectangle {
     in property <color> brand_dark: #172b55;
     in-out property <bool> expanded: false;
     callback toggled();
+
+    // Animate the disclosure, not the measured content height: status updates,
+    // wrapped text and pending mappings must still resize an open card directly.
+    private property <float> reveal: root.expanded ? 1.0 : 0.0;
+    animate reveal { duration: Anim.transition_slide; easing: ease-out; }
+    private property <float> progress: Anim.enabled && Anim.transitions
+        ? root.reveal : (root.expanded ? 1.0 : 0.0);
 
     min-width: 0px;
     vertical-stretch: 0;
@@ -69,13 +76,15 @@ export component TrackingAccountCard inherits Rectangle {
                     wrap: word-wrap; min-width: 0px; vertical-stretch: 0;
                 }
             }
-            if root.expanded: IcChevronUp {
+            IcChevronUp {
                 x: parent.width - 40px; y: (parent.height - self.height) / 2;
                 width: 24px; height: 24px; fill: #ffffffe6;
+                opacity: root.progress;
             }
-            if !root.expanded: IcChevronDown {
+            IcChevronDown {
                 x: parent.width - 40px; y: (parent.height - self.height) / 2;
                 width: 24px; height: 24px; fill: #ffffffe6;
+                opacity: 1.0 - root.progress;
             }
             header_focus := FocusScope {
                 key-pressed(event) => {
@@ -89,20 +98,31 @@ export component TrackingAccountCard inherits Rectangle {
                 clicked => { header_focus.focus(); root.toggle(); }
             }
         }
-        // Slint forbids @children under an `if`. Collapse this persistent
-        // content slot explicitly so hidden controls contribute no height.
+        // Slint forbids @children under an `if`. Retain this clipped slot until
+        // closing finishes, with content laid out at its full intrinsic height.
         body := Rectangle {
-            visible: root.expanded;
+            visible: root.expanded || root.progress > 0;
             background: Theme.current.card;
-            height: root.expanded ? body_layout.preferred-height : 0px;
+            height: root.progress * body_layout.preferred-height;
+            opacity: root.progress;
             min-width: 0px; vertical-stretch: 0;
             clip: true;
-            body_layout := VerticalLayout {
-                alignment: start;
-                spacing: 12px;
-                padding: 16px;
-                @children
+            FocusScope {
+                width: 100%; height: 100%;
+                capture-key-pressed(event) => {
+                    if !root.expanded { header_focus.focus(); accept } else { reject }
+                }
+                capture-key-released(event) => { if !root.expanded { accept } else { reject } }
+                body_layout := VerticalLayout {
+                    width: 100%; height: self.preferred-height;
+                    alignment: start;
+                    spacing: 12px;
+                    padding: 16px;
+                    @children
+                }
             }
+            // Outgoing controls remain painted, but cannot trigger an action.
+            if !root.expanded: TouchArea { width: 100%; height: 100%; }
         }
     }
 }

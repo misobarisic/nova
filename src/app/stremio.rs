@@ -1247,7 +1247,16 @@ impl<T: nova_stremio::Transport> Worker<T> {
             self.set_phase("Saving merged library on this device…");
             save_title(connection, &mut title)?;
             self.check_current(connection, generation)?;
-            title.desired = self.apply_local(connection, &title, progress_available, generation)?;
+            // The canonical account row coordinates source bindings; it must
+            // not create a second library/history identity beside those sources.
+            // Existing canonical entries remain independent, including ones the
+            // user deliberately saved alongside a season-specific release.
+            if title.binding.is_some()
+                || !stremio_metadata::represented_by_native(&title.item, &locals, &self.descriptors)
+            {
+                title.desired =
+                    self.apply_local(connection, &title, progress_available, generation)?;
+            }
             let projection = title.desired.projection();
             title.pending = if progress_available {
                 projection != remote_projection

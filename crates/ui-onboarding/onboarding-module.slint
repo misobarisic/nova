@@ -21,6 +21,10 @@ export component OnboardingModule inherits Window {
         audio_names <=> OnboardingBridge.audio_names;
         subtitle_codes <=> OnboardingBridge.subtitle_codes;
         subtitle_names <=> OnboardingBridge.subtitle_names;
+        audio_selected_codes <=> OnboardingBridge.audio_selected_codes;
+        audio_selected_names <=> OnboardingBridge.audio_selected_names;
+        subtitle_selected_codes <=> OnboardingBridge.subtitle_selected_codes;
+        subtitle_selected_names <=> OnboardingBridge.subtitle_selected_names;
         audio_index <=> OnboardingBridge.audio_index;
         subtitle_index <=> OnboardingBridge.subtitle_index;
         safe_top <=> OnboardingBridge.safe_top;
@@ -33,6 +37,7 @@ export component OnboardingModule inherits Window {
         setting_edited(field) => { OnboardingBridge.setting_edited(field); }
         language_search(query, subtitle) => { OnboardingBridge.language_search(query, subtitle); }
         language_picked(code, subtitle) => { OnboardingBridge.language_picked(code, subtitle); }
+        language_edited(code, action, subtitle) => { OnboardingBridge.language_edited(code, action, subtitle); }
         finished() => { OnboardingBridge.finished(); }
         background_requested() => { OnboardingBridge.background_requested(); }
     }

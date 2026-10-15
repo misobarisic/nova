@@ -203,7 +203,12 @@ mod tests {
         assert!(owns_addon_setup());
         storage::try_set_str(
             "settings",
-            &serde_json::to_string(&CacheSettings::default()).unwrap(),
+            &serde_json::to_string(&CacheSettings {
+                default_audio_language: "en,ja".into(),
+                default_subtitle_language: "hr,en".into(),
+                ..Default::default()
+            })
+            .unwrap(),
         )
         .unwrap();
         assert!(begin(true));
@@ -215,5 +220,9 @@ mod tests {
         assert_eq!(storage::try_get_str(PENDING_KEY).unwrap(), None);
         assert!(!begin(true));
         assert!(owns_addon_setup());
+        let saved: CacheSettings =
+            serde_json::from_str(&storage::try_get_str("settings").unwrap().unwrap()).unwrap();
+        assert_eq!(saved.default_audio_language, "en,ja");
+        assert_eq!(saved.default_subtitle_language, "hr,en");
     }
 }

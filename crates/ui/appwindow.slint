@@ -228,6 +228,7 @@ export component AppWindow inherits Window {
     public function onboarding_bridge_setting_edited(field: string) { root.settings_edited(field); }
     public function onboarding_bridge_language_search(query: string, subtitle: bool) { root.playback_language_search(query, subtitle); }
     public function onboarding_bridge_language_picked(code: string, subtitle: bool) { root.playback_language_picked(code, subtitle); }
+    public function onboarding_bridge_language_edited(code: string, action: int, subtitle: bool) { root.playback_language_edited(code, action, subtitle); }
     public function onboarding_bridge_finished() { root.onboarding_finished(); }
     public function onboarding_bridge_background_requested() { root.exit_to_background(); }
     PlayerOsdBindings {
@@ -2345,6 +2346,10 @@ export component AppWindow inherits Window {
         busy: root.onboarding_busy;
         addon_ready: root.onboarding_addon_ready;
         error: root.onboarding_error;
+        audio_selected_codes: root.audio_language_selected_codes;
+        audio_selected_names: root.audio_language_selected_names;
+        subtitle_selected_codes: root.subtitle_language_selected_codes;
+        subtitle_selected_names: root.subtitle_language_selected_names;
         audio_label: root.audio_language_label;
         subtitle_label: root.subtitle_language_label;
         audio_codes: root.audio_language_codes;

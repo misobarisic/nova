@@ -19,6 +19,10 @@ export global OnboardingBridge {
     in-out property <[string]> audio_names;
     in-out property <[string]> subtitle_codes;
     in-out property <[string]> subtitle_names;
+    in-out property <[string]> audio_selected_codes;
+    in-out property <[string]> audio_selected_names;
+    in-out property <[string]> subtitle_selected_codes;
+    in-out property <[string]> subtitle_selected_names;
     in-out property <int> audio_index;
     in-out property <int> subtitle_index;
     in-out property <length> safe_top;
@@ -31,6 +35,7 @@ export global OnboardingBridge {
     callback setting_edited(string);
     callback language_search(string, bool);
     callback language_picked(string, bool);
+    callback language_edited(string, int, bool);
     callback finished();
     callback background_requested();
 }

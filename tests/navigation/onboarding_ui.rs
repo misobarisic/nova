@@ -1,7 +1,11 @@
 //! First-run navigation owns input and keeps its footer reachable on phones.
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
-use slint::ComponentHandle;
-use std::{cell::Cell, rc::Rc, time::Duration};
+use slint::{ComponentHandle, VecModel};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::Duration,
+};
 
 fn native_focus(app: &nova::AppWindow) -> String {
     let focused = i_slint_core::window::WindowInner::from_pub(app.window())
@@ -84,6 +88,35 @@ fn click(app: &nova::AppWindow, label: &str) {
         .unwrap()
         .mock_single_click(slint::platform::PointerEventButton::Left);
     settle(app);
+}
+fn scroll_body(app: &nova::AppWindow, delta_y: f32) {
+    let size = app.window().size();
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(
+                size.width as f32 / 2.0,
+                size.height as f32 / 2.0,
+            ),
+            delta_x: 0.0,
+            delta_y,
+        });
+    settle(app);
+}
+fn reveal_label(app: &nova::AppWindow, label: &str) -> ElementHandle {
+    scroll_body(app, 2000.0);
+    (0..40)
+        .find_map(|_| {
+            let element = ElementHandle::find_by_accessible_label(app, label).find(|element| {
+                let pos = element.absolute_position();
+                pos.y >= 24.0
+                    && pos.y + element.size().height < app.window().size().height as f32 - 100.0
+            });
+            if element.is_none() {
+                scroll_body(app, -40.0);
+            }
+            element
+        })
+        .unwrap_or_else(|| panic!("reachable onboarding control: {label}"))
 }
 fn back(app: &nova::AppWindow) {
     let text: slint::SharedString = slint::platform::Key::Back.into();
@@ -278,33 +311,22 @@ fn skip_language_back_and_finish_preserve_selection_and_footer() {
         assert!(position.x >= 0.0 && position.x + size.width <= width as f32);
         assert!(position.y >= 0.0 && position.y + size.height <= height as f32);
         assert!(size.height >= 44.0);
-        // The short landscape body scrolls independently of the fixed footer.
-        // Reveal both rows before inspecting their horizontal bounds.
-        let pickers = (0..10)
-            .find_map(|_| {
-                let pickers =
-                    ElementHandle::find_by_element_type_name(&app, "PlaybackLanguagePicker")
-                        .collect::<Vec<_>>();
-                if pickers.len() == 2 {
-                    Some(pickers)
-                } else {
-                    app.window()
-                        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
-                            position: slint::LogicalPosition::new(
-                                width as f32 / 2.0,
-                                height as f32 / 2.0,
-                            ),
-                            delta_x: 0.0,
-                            delta_y: -80.0,
-                        });
-                    settle(&app);
-                    None
-                }
-            })
-            .unwrap_or_else(|| {
-                panic!("both playback pickers must be reachable at {width}x{height}")
-            });
-        for picker in pickers {
+        // Preference lists may exceed one viewport. Each picker must remain
+        // reachable independently while the footer stays fixed.
+        for id in [
+            "Onboarding::audio_language_picker",
+            "Onboarding::subtitle_language_picker",
+        ] {
+            scroll_body(&app, 2000.0);
+            let picker = (0..30)
+                .find_map(|_| {
+                    let picker = ElementHandle::find_by_element_id(&app, id).next();
+                    if picker.is_none() {
+                        scroll_body(&app, -60.0);
+                    }
+                    picker
+                })
+                .unwrap_or_else(|| panic!("{id} reachable at {width}x{height}"));
             let position = picker.absolute_position();
             assert!(position.x >= 0.0 && position.x + picker.size().width <= width as f32);
         }
@@ -352,4 +374,116 @@ fn skip_language_back_and_finish_preserve_selection_and_footer() {
         }
     }
     let _ = slint::select_bundled_translation("en");
+}
+
+#[test]
+fn ordered_playback_languages_share_settings_edits_and_exclusive_modes() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "ordered_playback_languages_share_settings_edits_and_exclusive_modes"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_touch_menus(true);
+    app.set_onboarding_visible(true);
+    app.set_onboarding_step(2);
+    app.window().set_size(slint::PhysicalSize::new(320, 568));
+    app.window().show().unwrap();
+    let strings = |values: &[&str]| {
+        Rc::new(VecModel::from(
+            values
+                .iter()
+                .map(|s| (*s).into())
+                .collect::<Vec<slint::SharedString>>(),
+        ))
+        .into()
+    };
+    app.set_audio_language_codes(strings(&["", "en", "ja"]));
+    app.set_audio_language_names(strings(&["Automatic", "English (en)", "Japanese (ja)"]));
+    app.set_subtitle_language_codes(strings(&["", "off", "hr", "en"]));
+    app.set_subtitle_language_names(strings(&[
+        "Automatic",
+        "Off",
+        "Croatian (hr)",
+        "English (en)",
+    ]));
+    app.set_audio_language_label("Add audio".into());
+    app.set_subtitle_language_label("Add subtitles".into());
+    app.set_audio_language_selected_codes(strings(&["en", "ja"]));
+    app.set_audio_language_selected_names(strings(&["English (en)", "Japanese (ja)"]));
+    app.set_subtitle_language_selected_codes(strings(&["hr", "en"]));
+    app.set_subtitle_language_selected_names(strings(&["Croatian (hr)", "English (en)"]));
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let recorded = edits.clone();
+    app.on_playback_language_edited(move |code, action, subtitle| {
+        recorded
+            .borrow_mut()
+            .push((code.to_string(), action, subtitle))
+    });
+    let picked = Rc::new(RefCell::new(Vec::new()));
+    let recorded = picked.clone();
+    app.on_playback_language_picked(move |code, subtitle| {
+        recorded.borrow_mut().push((code.to_string(), subtitle))
+    });
+    let saved = Rc::new(RefCell::new(Vec::new()));
+    let recorded = saved.clone();
+    app.on_settings_edited(move |key| recorded.borrow_mut().push(key.to_string()));
+    settle(&app);
+    for (label, expected) in [
+        ("Move down: English (en)", ("en", 3, false)),
+        ("Move up: Japanese (ja)", ("ja", 2, false)),
+        ("Remove: Japanese (ja)", ("ja", 1, false)),
+        ("Move down: Croatian (hr)", ("hr", 3, true)),
+        ("Remove: Croatian (hr)", ("hr", 1, true)),
+    ] {
+        reveal_label(&app, label).mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        assert_eq!(
+            edits.borrow().last(),
+            Some(&(expected.0.to_string(), expected.1, expected.2))
+        );
+        assert_eq!(
+            saved.borrow().last().map(String::as_str),
+            Some(if expected.2 {
+                "default_subtitle_language"
+            } else {
+                "default_audio_language"
+            })
+        );
+    }
+    for (picker_label, choice, expected, subtitle) in [
+        ("Add audio", "Japanese (ja)", "ja", false),
+        ("Add audio", "Automatic", "", false),
+        ("Add subtitles", "English (en)", "en", true),
+        ("Add subtitles", "Off", "off", true),
+        ("Add subtitles", "Automatic", "", true),
+    ] {
+        reveal_label(&app, picker_label)
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        settle(&app);
+        click(&app, choice);
+        if expected.is_empty() || expected == "off" {
+            assert_eq!(
+                picked.borrow().last(),
+                Some(&(expected.to_string(), subtitle))
+            );
+        } else {
+            assert_eq!(
+                edits.borrow().last(),
+                Some(&(expected.to_string(), 0, subtitle))
+            );
+        }
+        // Backend publication restores the add label after each selection.
+        app.set_audio_language_choice_index(-1);
+        app.set_subtitle_language_choice_index(-1);
+        settle(&app);
+    }
+    let footer = ElementHandle::find_by_accessible_label(&app, "Start using Nova")
+        .last()
+        .unwrap();
+    assert!(footer.size().height >= 44.0);
 }

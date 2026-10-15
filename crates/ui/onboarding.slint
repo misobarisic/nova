@@ -61,6 +61,10 @@ export component Onboarding inherits Rectangle {
     in property <[string]> audio_names;
     in property <[string]> subtitle_codes;
     in property <[string]> subtitle_names;
+    in property <[string]> audio_selected_codes;
+    in property <[string]> audio_selected_names;
+    in property <[string]> subtitle_selected_codes;
+    in property <[string]> subtitle_selected_names;
     in-out property <int> audio_index: -1;
     in-out property <int> subtitle_index: -1;
     in property <length> safe_top: 0px;
@@ -72,6 +76,7 @@ export component Onboarding inherits Rectangle {
     callback setting_edited(string);
     callback language_search(string, bool);
     callback language_picked(string, bool);
+    callback language_edited(string, int, bool);
     callback finished();
     callback background_requested();
     public function back() {
@@ -183,21 +188,31 @@ export component Onboarding inherits Rectangle {
                     }
                     if root.step == 2: VerticalLayout {
                         spacing: 12px;
-                        Text { text: @tr("Audio language"); color: Theme.current.text_primary; }
-                        PlaybackLanguagePicker {
+                        Text { text: @tr("Preferred audio languages"); color: Theme.current.text_primary; }
+                        Text { text: @tr("Add languages in preference order. The player uses the first available language."); wrap: word-wrap; color: Theme.current.text_secondary; }
+                        audio_language_picker := PlaybackLanguagePicker {
                             dropdown-width: Math.min(180px, Math.max(100px, (panel.width - (root.narrow ? 40px : 80px)) / 2));
+                            multiple: true;
+                            selected-codes: root.audio_selected_codes;
+                            selected-names: root.audio_selected_names;
                             current-label: root.audio_label; codes: root.audio_codes; names: root.audio_names; current-index <=> root.audio_index;
                             keyboard-mode: SettingsStyle.keyboard-mode;
                             search(query, subtitle) => { root.language_search(query, subtitle); }
                             picked(code, subtitle) => { root.language_picked(code, subtitle); root.setting_edited("default_audio_language"); }
+                            edited(code, action, subtitle) => { root.language_edited(code, action, subtitle); root.setting_edited("default_audio_language"); }
                         }
-                        Text { text: @tr("Subtitles"); color: Theme.current.text_primary; }
-                        PlaybackLanguagePicker {
+                        Text { text: @tr("Preferred subtitle languages"); color: Theme.current.text_primary; }
+                        Text { text: @tr("Add languages in preference order. Subtitles stay off if none are available."); wrap: word-wrap; color: Theme.current.text_secondary; }
+                        subtitle_language_picker := PlaybackLanguagePicker {
                             dropdown-width: Math.min(180px, Math.max(100px, (panel.width - (root.narrow ? 40px : 80px)) / 2));
+                            multiple: true;
+                            selected-codes: root.subtitle_selected_codes;
+                            selected-names: root.subtitle_selected_names;
                             subtitle: true; current-label: root.subtitle_label; codes: root.subtitle_codes; names: root.subtitle_names; current-index <=> root.subtitle_index;
                             keyboard-mode: SettingsStyle.keyboard-mode;
                             search(query, subtitle) => { root.language_search(query, subtitle); }
                             picked(code, subtitle) => { root.language_picked(code, subtitle); root.setting_edited("default_subtitle_language"); }
+                            edited(code, action, subtitle) => { root.language_edited(code, action, subtitle); root.setting_edited("default_subtitle_language"); }
                         }
                         Text { text: @tr("Appearance"); color: Theme.current.text_primary; }
                         Segmented { labels: [@tr("Dark"), @tr("True black")]; current_index: root.true_black ? 1 : 0;
