@@ -2901,6 +2901,35 @@ mod tests {
     }
 
     #[test]
+    fn accent_color_syncs_and_respects_device_override() {
+        use nova_config::AccentColor;
+        let mut local = CacheSettings {
+            accent_color: AccentColor::Orange,
+            ..Default::default()
+        };
+        assert!(setting_can_override("accent_color"));
+        let remote = [("accent_color".into(), "\"teal\"".into())];
+        assert_eq!(
+            merge_settings_fields(&local, &remote).accent_color,
+            AccentColor::Teal
+        );
+        local
+            .sync_overrides
+            .insert("accent_color".into(), serde_json::json!("purple"));
+        let merged = merge_settings_fields(&local, &remote);
+        assert_eq!(merged.accent_color, AccentColor::Orange);
+        assert_eq!(
+            merged.sync_overrides["accent_color"],
+            serde_json::json!("teal")
+        );
+        let published: HashMap<_, _> = settings_fields(&merged)
+            .into_iter()
+            .map(|(key, value, _)| (key, value))
+            .collect();
+        assert_eq!(published["accent_color"], "\"teal\"");
+    }
+
+    #[test]
     fn overrides_mask_publication_and_follow_shared_values_without_changing_local() {
         let mut local = CacheSettings {
             quality: 95,

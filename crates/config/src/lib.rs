@@ -120,6 +120,49 @@ impl BackdropSize {
     }
 }
 
+/// Main UI accent preset; neutral surfaces and semantic/service colors stay independent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccentColor {
+    #[default]
+    Purple,
+    Orange,
+    Blue,
+    Teal,
+    Rose,
+    Cyan,
+    Amber,
+    Lime,
+}
+
+impl AccentColor {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Orange,
+            2 => Self::Blue,
+            3 => Self::Teal,
+            4 => Self::Rose,
+            5 => Self::Cyan,
+            6 => Self::Amber,
+            7 => Self::Lime,
+            _ => Self::Purple,
+        }
+    }
+
+    pub fn index(self) -> i32 {
+        match self {
+            Self::Purple => 0,
+            Self::Orange => 1,
+            Self::Blue => 2,
+            Self::Teal => 3,
+            Self::Rose => 4,
+            Self::Cyan => 5,
+            Self::Amber => 6,
+            Self::Lime => 7,
+        }
+    }
+}
+
 /// Horizontal title logo/text alignment on narrow Home and Detail layouts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -575,6 +618,9 @@ cache_settings_type! {
     /// Pure black backgrounds (Settings → Theme), synced unless overridden.
     #[serde(default)]
     pub true_black: bool,
+    /// Main interface accent (Settings → Theme), synced unless overridden.
+    #[serde(default)]
+    pub accent_color: AccentColor,
     /// Corner radius in logical pixels for shared buttons and controls.
     /// Synced unless overridden; individual controls cap it at half their size.
     #[serde(default = "default_button_corner_radius")]
@@ -704,6 +750,7 @@ impl Default for CacheSettings {
             anim_nav_slide: true,
             language: Language::English,
             true_black: false,
+            accent_color: AccentColor::default(),
             button_corner_radius: default_button_corner_radius(),
             card_corner_radius: default_card_corner_radius(),
             card_spacing: default_card_spacing(),
@@ -1263,6 +1310,24 @@ mod tests {
         let restored: CacheSettings =
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(restored.button_corner_radius, 24);
+    }
+
+    #[test]
+    fn accent_color_migrates_and_round_trips_presets() {
+        let mut legacy = serde_json::to_value(CacheSettings::default()).unwrap();
+        legacy.as_object_mut().unwrap().remove("accent_color");
+        let settings: CacheSettings = serde_json::from_value(legacy).unwrap();
+        assert_eq!(settings.accent_color, AccentColor::Purple);
+        assert_eq!(AccentColor::from_index(-1), AccentColor::Purple);
+        assert_eq!(AccentColor::from_index(8), AccentColor::Purple);
+        for index in 0..8 {
+            let mut settings = settings.clone();
+            settings.accent_color = AccentColor::from_index(index);
+            assert_eq!(settings.accent_color.index(), index);
+            let encoded = serde_json::to_string(&settings).unwrap();
+            let restored: CacheSettings = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(restored.accent_color, settings.accent_color);
+        }
     }
 
     #[test]

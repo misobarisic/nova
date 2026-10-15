@@ -3001,3 +3001,33 @@ msgstr "Računi"
 
 msgid "Not connected"
 msgstr "Nije povezano"
+
+msgid "Accent color"
+msgstr "Boja naglaska"
+
+msgid "Choose the main color for buttons, selections and highlights."
+msgstr "Odaberite glavnu boju gumba, odabira i istaknutih elemenata."
+
+msgid "Purple"
+msgstr "Ljubičasta"
+
+msgid "Orange"
+msgstr "Narančasta"
+
+msgid "Blue"
+msgstr "Plava"
+
+msgid "Teal"
+msgstr "Tirkizna"
+
+msgid "Rose"
+msgstr "Ružičasta"
+
+msgid "Cyan"
+msgstr "Cijan"
+
+msgid "Amber"
+msgstr "Jantarna"
+
+msgid "Lime"
+msgstr "Limeta"

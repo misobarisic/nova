@@ -160,13 +160,22 @@ fn theme_search_toggle_resize_and_android_back() {
         let p = reset.absolute_position();
         assert!(p.x >= 0.0 && p.x + reset.size().width <= width as f32);
     }
-    // Hero title alignment follows the two backdrop rows before Reset.
+    // The accent row follows alignment; keyboard selection changes the mounted
+    // palette, and the reset restores Purple alongside the rest of Theme.
     for _ in 0..5 {
         key(&app, slint::platform::Key::DownArrow.into());
     }
+    key(&app, slint::platform::Key::RightArrow.into());
+    assert_eq!(app.get_accent_color(), 1);
+    assert_eq!(
+        app.global::<nova::Theme>().get_current().accent,
+        slint::Color::from_rgb_u8(255, 139, 53)
+    );
+    key(&app, slint::platform::Key::DownArrow.into());
     key(&app, slint::platform::Key::Return.into());
     assert!(!app.get_true_black());
     assert!(!app.global::<nova::Theme>().get_true_black());
+    assert_eq!(app.get_accent_color(), 0);
     assert_eq!(app.get_card_corner_radius(), 10.0);
     assert_eq!(app.get_button_corner_radius(), 8.0);
     assert_eq!(app.get_card_spacing(), 8.0);
@@ -177,7 +186,7 @@ fn theme_search_toggle_resize_and_android_back() {
     assert_eq!(app.global::<nova::Theme>().get_hero_title_alignment(), 1);
     assert!(!app.get_animations());
     assert_eq!(
-        &edits.borrow()[edits.borrow().len() - 8..],
+        &edits.borrow()[edits.borrow().len() - 9..],
         [
             "true_black",
             "card_corner_radius",
@@ -186,12 +195,44 @@ fn theme_search_toggle_resize_and_android_back() {
             "status_bar_gradient",
             "home_backdrop_size",
             "detail_backdrop_size",
-            "hero_title_alignment"
+            "hero_title_alignment",
+            "accent_color"
         ]
     );
 
-    app.window().set_size(slint::PhysicalSize::new(390, 844));
-    settle(&app);
+    for width in [320, 390] {
+        app.window().set_size(slint::PhysicalSize::new(width, 844));
+        app.set_settings_scroll_y(0.0);
+        settle(&app);
+        for (label, index) in [
+            ("Purple", 0),
+            ("Orange", 1),
+            ("Blue", 2),
+            ("Teal", 3),
+            ("Rose", 4),
+            ("Cyan", 5),
+            ("Amber", 6),
+            ("Lime", 7),
+        ] {
+            // Resizing from two rows to four increases the section height.
+            // Reveal clipped native controls just as a touch scroll would.
+            let choice = (0..30)
+                .find_map(|_| {
+                    let choice = ElementHandle::find_by_accessible_label(&app, label).last();
+                    if choice.is_none() {
+                        app.set_settings_scroll_y(app.get_settings_scroll_y() - 100.0);
+                        settle(&app);
+                    }
+                    choice
+                })
+                .unwrap_or_else(|| panic!("{label} must be reachable at {width}px"));
+            let p = choice.absolute_position();
+            assert!(p.x >= 0.0 && p.x + choice.size().width <= width as f32);
+            choice.mock_single_click(slint::platform::PointerEventButton::Left);
+            settle(&app);
+            assert_eq!(app.get_accent_color(), index);
+        }
+    }
     app.set_system_back_request(app.get_system_back_request() + 1);
     settle(&app);
     assert!(!app.get_settings_detail_open());

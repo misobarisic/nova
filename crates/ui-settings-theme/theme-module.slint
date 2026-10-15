@@ -2,6 +2,21 @@ import { SettingsBridge, SettingsContent, SettingsStyle } from "@NovaUiShared";
 
 import { PillButton, ToggleSwitch, Segmented, SectionHeader, SettingsRow, NumericSetting, SettingsCard } from "../ui/settings-controls.slint";
 
+// Each visual row maps to one shared setting and one keyboard navigation row.
+component AccentChoices inherits Segmented {
+    in property <int> first-index: 0;
+    current_index: SettingsBridge.accent_color >= root.first-index
+        && SettingsBridge.accent_color < root.first-index + root.labels.length
+        ? SettingsBridge.accent_color - root.first-index : -1;
+    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 8 && SettingsBridge.kb_active;
+    picked(i) => {
+        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+        SettingsBridge.kb_zone = 17; SettingsContent.kb_theme = 8;
+        SettingsBridge.accent_color = i + root.first-index;
+        SettingsContent.schedule_setting("accent_color");
+    }
+}
+
 // The shell owns scrolling and transitions. Report intrinsic layout sizes
 // only while this section is selected, so outgoing instances cannot resize it.
 export component SettingsThemeModule inherits Window {
@@ -183,15 +198,32 @@ export component SettingsThemeModule inherits Window {
                     }
                 }
             } }
+            SettingsCard { SettingsRow {
+                setting-key: "accent_color";
+                row-title: @tr("Accent color");
+                row-desc: @tr("Choose the main color for buttons, selections and highlights.");
+                if !SettingsContent.narrow: VerticalLayout {
+                    spacing: 8px;
+                    AccentChoices { labels: [@tr("Purple"), @tr("Orange"), @tr("Blue"), @tr("Teal")]; }
+                    AccentChoices { first-index: 4; labels: [@tr("Rose"), @tr("Cyan"), @tr("Amber"), @tr("Lime")]; }
+                }
+                if SettingsContent.narrow: VerticalLayout {
+                    spacing: 8px;
+                    AccentChoices { labels: [@tr("Purple"), @tr("Orange")]; }
+                    AccentChoices { first-index: 2; labels: [@tr("Blue"), @tr("Teal")]; }
+                    AccentChoices { first-index: 4; labels: [@tr("Rose"), @tr("Cyan")]; }
+                    AccentChoices { first-index: 6; labels: [@tr("Amber"), @tr("Lime")]; }
+                }
+            } }
             HorizontalLayout {
                 alignment: start;
                 PillButton {
                     label: @tr("Restore theme defaults");
-                    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 8 && SettingsBridge.kb_active;
+                    focused: SettingsBridge.kb_zone == 17 && SettingsContent.kb_theme == 9 && SettingsBridge.kb_active;
                     clicked => {
                         SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
                         SettingsBridge.kb_zone = 17;
-                        SettingsContent.kb_theme = 8;
+                        SettingsContent.kb_theme = 9;
                         SettingsContent.restore_theme_defaults();
                     }
                 }

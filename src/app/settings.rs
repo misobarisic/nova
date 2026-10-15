@@ -264,6 +264,7 @@ impl Bridge {
                 EpisodeStartBehavior::Ask => 2,
             });
             app.set_true_black(settings.true_black);
+            app.set_accent_color(settings.accent_color.index());
             app.set_button_corner_radius(settings.button_corner_radius.min(24) as f32);
             app.set_card_corner_radius(settings.card_corner_radius.min(24) as f32);
             app.set_card_spacing(settings.card_spacing.min(32) as f32);
@@ -485,6 +486,7 @@ impl Bridge {
                 },
                 sync_overrides: state.cache_settings.sync_overrides.clone(),
                 true_black: app.get_true_black(),
+                accent_color: nova_config::AccentColor::from_index(app.get_accent_color()),
                 button_corner_radius: app.get_button_corner_radius().round().clamp(0.0, 24.0)
                     as u32,
                 card_corner_radius: app.get_card_corner_radius().round().clamp(0.0, 24.0) as u32,
@@ -1317,6 +1319,31 @@ mod tests {
         app.set_true_black(false);
         bridge.settings_to_ui();
         assert!(app.get_true_black(), "stored theme is restored on reload");
+        app.set_accent_color(1);
+        app.invoke_settings_edited("accent_color".into());
+        assert_eq!(
+            app.global::<crate::Theme>().get_current().accent,
+            slint::Color::from_rgb_u8(255, 139, 53)
+        );
+        assert!(app.global::<crate::Theme>().get_true_black());
+        bridge.persist_settings();
+        assert_eq!(
+            read_settings().accent_color,
+            nova_config::AccentColor::Orange
+        );
+        assert_eq!(
+            owner
+                .lock()
+                .unwrap()
+                .record(DOMAIN_SETTINGS, "accent_color")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("\"orange\"")
+        );
+        app.set_accent_color(0);
+        bridge.settings_to_ui();
+        assert_eq!(app.get_accent_color(), 1);
         app.set_card_corner_radius(0.0);
         app.invoke_settings_edited("card_corner_radius".into());
         app.set_button_corner_radius(24.0);

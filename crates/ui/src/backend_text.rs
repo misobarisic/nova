@@ -85,6 +85,14 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Purple" => "Ljubičasta",
+        "Orange" => "Narančasta",
+        "Blue" => "Plava",
+        "Teal" => "Tirkizna",
+        "Rose" => "Ružičasta",
+        "Cyan" => "Cijan",
+        "Amber" => "Jantarna",
+        "Lime" => "Limeta",
         "Stremio" => "Stremio",
         "Sync library and watch progress with Stremio" => {
             "Sinkronizirajte zbirku i napredak gledanja sa Stremiom"
@@ -1539,6 +1547,16 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
         .map(|n| n.to_string())
         .unwrap_or_else(|| value.to_string());
     match field {
+        "accent_color" => match value.as_str() {
+            Some("orange") => tr("Orange").into(),
+            Some("blue") => tr("Blue").into(),
+            Some("teal") => tr("Teal").into(),
+            Some("rose") => tr("Rose").into(),
+            Some("cyan") => tr("Cyan").into(),
+            Some("amber") => tr("Amber").into(),
+            Some("lime") => tr("Lime").into(),
+            _ => tr("Purple").into(),
+        },
         "hero_title_alignment" => match value.as_str() {
             Some("left") => tr("Left").into(),
             Some("right") => tr("Right").into(),

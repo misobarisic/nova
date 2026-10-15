@@ -507,6 +507,7 @@ export component AppWindow inherits Window {
         screenshot_show_folder <=> root.screenshot_show_folder;
         episode_start_index <=> root.episode_start_index;
         true_black <=> root.true_black;
+        accent_color <=> root.accent_color;
         card_corner_radius <=> root.card_corner_radius;
         button_corner_radius <=> root.button_corner_radius;
         card_spacing <=> root.card_spacing;
@@ -1159,6 +1160,7 @@ export component AppWindow inherits Window {
     // --- Settings (animations) ----------------------------------------
     // Master + per-category animation switches (Settings → Look and feel).
     in-out property <bool> true_black: false;
+    in-out property <int> accent_color: 0;
     in-out property <float> card_corner_radius: 10;
     in-out property <float> button_corner_radius: 8;
     in-out property <float> card_spacing: 8;

@@ -135,6 +135,7 @@ export component SettingsPage {
     in-out property <int> episode_start_index: 1;
     // Look and feel (Settings → Look and feel): master + per-category switches.
     in-out property <bool> true_black: false;
+    in-out property <int> accent_color: 0;
     in-out property <float> card_corner_radius: 10;
     property <int> radius_preset_index: root.card_corner_radius == 0 ? 0 : root.card_corner_radius == 4 ? 1 : root.card_corner_radius == 10 ? 2 : root.card_corner_radius == 16 ? 3 : root.card_corner_radius == 24 ? 4 : -1;
     in-out property <float> button_corner_radius: 8;
@@ -326,6 +327,7 @@ export component SettingsPage {
         // Apply all controls before autosaving so each sync choice sees the
         // complete reset, including when a field has a device-local override.
         root.true_black = false;
+        root.accent_color = 0;
         root.card_corner_radius = 10;
         root.button_corner_radius = 8;
         root.card_spacing = 8;
@@ -341,6 +343,7 @@ export component SettingsPage {
         root.schedule_setting("home_backdrop_size");
         root.schedule_setting("detail_backdrop_size");
         root.schedule_setting("hero_title_alignment");
+        root.schedule_setting("accent_color");
     }
     function kb_theme_step(direction: int) {
         if (root.kb_theme == 0) {
@@ -374,6 +377,9 @@ export component SettingsPage {
         } else if (root.kb_theme == 7) {
             root.hero_title_alignment = Math.max(0, Math.min(2, root.hero_title_alignment + direction));
             root.schedule_setting("hero_title_alignment");
+        } else if (root.kb_theme == 8) {
+            root.accent_color = Math.max(0, Math.min(7, root.accent_color + direction));
+            root.schedule_setting("accent_color");
         }
     }
 
@@ -496,7 +502,7 @@ export component SettingsPage {
     property <int> kb_pr <=> SettingsContent.kb_pr; // player rows (see kb_player_n)
     property <bool> player_language_input_focused <=> SettingsContent.player_language_input_focused;
     property <int> kb_anr <=> SettingsContent.kb_anr; // look-and-feel rows 0..4
-    property <int> kb_theme <=> SettingsContent.kb_theme; // true black, radius, spacing, status fade, Home/Detail size, title alignment, reset
+    property <int> kb_theme <=> SettingsContent.kb_theme; // true black, radius, spacing, status fade, Home/Detail size, title alignment, accent, reset
     property <int> kb_dl <=> SettingsContent.kb_dl; // downloads rows 0 delete-after-watched, 1 episodes
     property <int> kb_dlr <=> SettingsContent.kb_dlr; // downloaded-episodes list row
     property <int> kb_edit <=> SettingsContent.kb_edit;
@@ -1014,7 +1020,7 @@ export component SettingsPage {
 
     function kb_down() {
         if (root.kb_zone == 17) {
-            root.kb_theme = Math.min(8, root.kb_theme + 1);
+            root.kb_theme = Math.min(9, root.kb_theme + 1);
         } else if (root.kb_zone == 16) {
             if (root.kb_home + 1 < root.kb_home_n()) {
                 root.kb_home += 1;
@@ -1567,7 +1573,7 @@ export component SettingsPage {
         } else if (root.kb_zone == 10) {
             root.kb_anim_flip(root.kb_anr);
         } else if (root.kb_zone == 17) {
-            if (root.kb_theme == 8) { root.restore_theme_defaults(); }
+            if (root.kb_theme == 9) { root.restore_theme_defaults(); }
             else if (root.kb_theme == 0) { root.kb_theme_step(1); }
         } else if (root.kb_zone == 16) {
             root.kb_home_activate();

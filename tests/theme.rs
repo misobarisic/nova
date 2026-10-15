@@ -189,4 +189,60 @@ fn existing_theme_defaults_and_live_palette_replacement_reach_shared_controls() 
     nova_ui::apply_theme(&app, false);
     assert_eq!(app.global::<nova::Theme>().get_current(), app_theme);
     assert!(!app.global::<nova::Theme>().get_true_black());
+
+    // Presets reach real mounted controls without touching semantic colors or
+    // surface mode. Their bright action fills need dark foreground ink.
+    let contrast = |a: Color, b: Color| {
+        let luminance = |c: Color| {
+            let linear = |v: u8| {
+                let v = f64::from(v) / 255.0;
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(c.red()) + 0.7152 * linear(c.green()) + 0.0722 * linear(c.blue())
+        };
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    };
+    for index in 1..8 {
+        app.set_accent_color(index);
+        for black_mode in [false, true] {
+            nova_ui::apply_theme(&app, black_mode);
+            let palette = app.global::<nova::Theme>().get_current();
+            assert_ne!(palette.accent, original.accent);
+            assert_eq!(palette.text_error, original.text_error);
+            assert_eq!(palette.text_destructive, original.text_destructive);
+            assert_eq!(palette.scope_local_fill, original.scope_local_fill);
+            assert_eq!(palette.watched_badge, original.watched_badge);
+            assert_eq!(
+                palette.canvas,
+                if black_mode { black } else { original.canvas }
+            );
+            assert!(contrast(palette.on_accent, palette.accent) >= 4.5);
+            assert!(contrast(palette.on_accent, palette.accent_pressed) >= 4.5);
+            assert!(contrast(palette.text_selected, palette.selection_fill) >= 4.5);
+            assert!(contrast(palette.text_bright, palette.episode_number_badge) >= 4.5);
+            for brush in [&palette.primary_button, &palette.primary_button_hover] {
+                let Brush::LinearGradient(gradient) = brush else {
+                    panic!("preset keeps action gradients")
+                };
+                for stop in gradient.stops() {
+                    assert!(contrast(palette.on_accent, stop.color) >= 4.5);
+                }
+            }
+            theme.set_current(palette.clone());
+            assert_eq!(harness.get_button_fill(), Brush::from(palette.accent));
+            assert_eq!(harness.get_nav_fill(), Brush::from(palette.nav_rail));
+            assert_eq!(
+                (harness.get_button_height(), harness.get_input_height()),
+                heights
+            );
+        }
+    }
+    app.set_accent_color(0);
+    nova_ui::apply_theme(&app, false);
+    assert_eq!(app.global::<nova::Theme>().get_current(), original);
 }
