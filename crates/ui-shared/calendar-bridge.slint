@@ -17,6 +17,9 @@ export global CalendarBridge {
     in-out property <string> title;
     in-out property <string> day_title;
     in-out property <int> count;
+    in-out property <bool> has-earlier;
+    in-out property <bool> has-later;
+    in-out property <int> agenda-revision;
     in-out property <string> search;
     in-out property <int> view;
     in-out property <bool> all;
@@ -30,6 +33,7 @@ export global CalendarBridge {
     callback artwork-active-changed(bool);
     callback refreshed();
     callback step(int);
+    callback agenda-more(int);
     callback today();
     callback day_picked(int);
     callback release_picked(string);

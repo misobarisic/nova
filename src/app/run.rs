@@ -693,7 +693,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_library_status_action(move |i, s| b.library_status_action(i as usize, s));
 
     let b = bridge.clone();
-    app.on_calendar_changed(move || b.apply_calendar_to_ui());
+    app.on_calendar_changed(move || b.calendar_reset());
+    let b = bridge.clone();
+    app.on_calendar_agenda_more(move |d| b.calendar_agenda_more(d));
     let b = bridge.clone();
     app.on_calendar_artwork_visible(move |key, retained| {
         b.calendar_artwork_visible(key.as_str(), retained)

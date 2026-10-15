@@ -15,6 +15,9 @@ export component CalendarHost inherits Rectangle {
     in-out property <string> title <=> CalendarBridge.title;
     in-out property <string> day_title <=> CalendarBridge.day_title;
     in-out property <int> count <=> CalendarBridge.count;
+    in-out property <bool> has-earlier <=> CalendarBridge.has-earlier;
+    in-out property <bool> has-later <=> CalendarBridge.has-later;
+    in-out property <int> agenda-revision <=> CalendarBridge.agenda-revision;
     in-out property <length> safe-top <=> CalendarBridge.safe-top;
     in-out property <length> safe-left <=> CalendarBridge.safe-left;
     in-out property <length> safe-right <=> CalendarBridge.safe-right;

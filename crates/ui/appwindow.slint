@@ -825,6 +825,12 @@ export component AppWindow inherits Window {
     in-out property <int> calendar_selected;
     in-out property <int> calendar_view;
     in-out property <bool> calendar_all: true;
+    in-out property <int> calendar_agenda_before;
+    in-out property <int> calendar_agenda_after: 60;
+    in-out property <int> calendar_agenda_revision;
+    in-out property <bool> calendar_has_earlier;
+    in-out property <bool> calendar_has_later;
+    callback calendar_agenda_more(int);
     callback calendar_picked();
     callback calendar_changed();
     callback calendar_step(int);
@@ -1695,6 +1701,7 @@ export component AppWindow inherits Window {
     public function calendar_bridge_artwork_visible(key: string, retained: bool) { root.calendar_artwork_visible(key, retained); }
     public function calendar_bridge_artwork_active_changed(active: bool) { root.calendar_artwork_active_changed(active); }
     public function calendar_bridge_refreshed() { root.calendar_changed(); }
+    public function calendar_bridge_agenda_more(d: int) { root.calendar_agenda_more(d); }
     public function calendar_bridge_step(d: int) { root.calendar_step(d); }
     public function calendar_bridge_today() { root.calendar_today(); }
     public function calendar_bridge_day_picked(d: int) { root.calendar_pick(d); }
@@ -2148,6 +2155,7 @@ export component AppWindow inherits Window {
         active: !root.more_return_pending;
         cells: root.calendar_cells; week_cells: root.calendar_week; rows: root.calendar_rows; later: root.calendar_later;
         title: root.calendar_title; day_title: root.calendar_day_title; count: root.calendar_count;
+        has-earlier: root.calendar_has_earlier; has-later: root.calendar_has_later; agenda-revision: root.calendar_agenda_revision;
         safe-top: root.safe-area-insets.top; safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px; safe-right: root.safe-area-insets.right; safe-bottom: root.safe-area-insets.bottom;
         system_back_request: root.page_back_request;
 

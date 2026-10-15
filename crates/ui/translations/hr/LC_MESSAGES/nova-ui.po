@@ -2875,3 +2875,12 @@ msgstr "Promijenite što ćete gledati"
 #: party.slint
 msgid "Waiting for the host"
 msgstr "Čekanje domaćina"
+
+msgid "Earlier releases"
+msgstr "Ranije epizode"
+
+msgid "Load more releases"
+msgstr "Učitaj više epizoda"
+
+msgid "No upcoming releases"
+msgstr "Nema nadolazećih epizoda"

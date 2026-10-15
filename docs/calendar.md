@@ -14,17 +14,23 @@ Unlike Home's glance row, the planner does not cap the number of series.
 All releases is the default and includes every valid dated episode in the cached
 library metadata, including previous releases. Unknown or invalid release dates
 never become invented calendar dates. Search filters series names. The header
-counts releases in the displayed month, week, or Agenda period.
+counts releases in the displayed month or week, or the entire filtered schedule
+in Agenda (including dates not loaded yet).
 
-Month uses a Monday-first, fixed 42-day grid. Today has an outline and the
-selected day has a purple highlight. Desktop shows that day's episodes and
+Month uses a Monday-first, fixed 42-day grid with seven equal-width columns
+aligned across every week and the weekday headings. The Week strip uses the
+same equal division; date digits, release counts, preview text and selection
+borders do not change cell sizes. Today has an outline and the selected day
+has a purple highlight. Desktop shows that day's episodes and
 subsequent releases beside the grid; narrow layouts show cards below it.
-Week shows seven days and grouped release cards. Agenda initially starts today
-and groups a rolling month of releases chronologically: the start is included
-and the same day next month is excluded. Previous and Next move that start by
-one month, retaining the day number where possible and clamping to the month's
-last day (January 31 becomes February 28, or 29 in a leap year). Today restores
-today in every view. Month and Week also support browsing previous releases.
+Week shows seven days and grouped release cards. Agenda is a continuous dated
+list, without month boundaries or Previous/Next month buttons. It initially
+starts at the selected day (today on first entry); scrolling near the bottom
+loads another 60 releases, crossing empty months and years. Earlier releases
+adds the previous 60 while preserving the visible card's position; scroll up
+to read them. Today resets to the current date, and search/scope/view changes
+reset the loaded window. These transient limits are not persisted. Artwork
+remains viewport-driven. Month and Week retain their Previous/Next controls.
 Next episode retains Home's future-only, caught-up semantics.
 
 Each release carries its media type, series ID, and

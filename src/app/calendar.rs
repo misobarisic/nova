@@ -43,9 +43,7 @@ impl Bridge {
             app.set_calendar_selected(day as i32);
             app.set_calendar_first(month_first(day) as i32);
         } else if app.get_calendar_view() == 2 {
-            let day = shift_month(selected, delta);
-            app.set_calendar_selected(day as i32);
-            app.set_calendar_first(month_first(day) as i32);
+            return;
         } else {
             let (year, month, _) = civil_from_days(i64::from(app.get_calendar_first()));
             let shifted = i64::from(month) - 1 + i64::from(delta);
@@ -64,6 +62,37 @@ impl Bridge {
         if let Some(app) = self.app() {
             app.set_calendar_first(month_first(today_days()) as i32);
             app.set_calendar_selected(today_days() as i32);
+        }
+        self.calendar_reset();
+    }
+
+    /// Search, scope and view changes start a new bounded agenda window.
+    pub(super) fn calendar_reset(&self) {
+        if let Some(app) = self.app() {
+            app.set_calendar_agenda_before(0);
+            app.set_calendar_agenda_after(AGENDA_BATCH as i32);
+            app.set_calendar_agenda_revision(app.get_calendar_agenda_revision().wrapping_add(1));
+        }
+        self.apply_calendar_to_ui();
+    }
+
+    pub(super) fn calendar_agenda_more(&self, direction: i32) {
+        let Some(app) = self.app() else { return };
+        if !app.get_show_calendar() || app.get_calendar_view() != 2 {
+            return;
+        }
+        if direction < 0 && app.get_calendar_has_earlier() {
+            app.set_calendar_agenda_before(
+                app.get_calendar_agenda_before()
+                    .saturating_add(AGENDA_BATCH as i32),
+            );
+        } else if direction > 0 && app.get_calendar_has_later() {
+            app.set_calendar_agenda_after(
+                app.get_calendar_agenda_after()
+                    .saturating_add(AGENDA_BATCH as i32),
+            );
+        } else {
+            return;
         }
         self.apply_calendar_to_ui();
     }
@@ -270,16 +299,28 @@ impl Bridge {
                 })
                 .collect::<Vec<_>>()
         };
-        let visible = schedule
-            .iter()
-            .filter(|item| {
-                if app.get_calendar_view() == 0 {
-                    item.air_days == day
-                } else {
-                    in_period(item.air_days, period)
-                }
-            })
-            .collect();
+        let agenda = agenda_window(
+            &schedule,
+            day,
+            app.get_calendar_agenda_before().max(0) as usize,
+            app.get_calendar_agenda_after().max(1) as usize,
+        );
+        app.set_calendar_has_earlier(agenda.start > 0);
+        app.set_calendar_has_later(agenda.end < schedule.len());
+        let visible = if app.get_calendar_view() == 2 {
+            schedule[agenda].iter().collect()
+        } else {
+            schedule
+                .iter()
+                .filter(|item| {
+                    if app.get_calendar_view() == 0 {
+                        item.air_days == day
+                    } else {
+                        in_period(item.air_days, period)
+                    }
+                })
+                .collect()
+        };
         let visible_rows = rows(visible, "r");
         let later_rows = rows(
             schedule
@@ -311,7 +352,7 @@ impl Bridge {
                     civil_from_days(week_start + 6),
                 )
             } else if app.get_calendar_view() == 2 {
-                text::calendar_week_title(civil_from_days(period.0), civil_from_days(period.1 - 1))
+                text::tr("Agenda").into()
             } else {
                 text::cal_month_title(month, year)
             }
@@ -321,11 +362,25 @@ impl Bridge {
         app.set_calendar_count(
             schedule
                 .iter()
-                .filter(|item| in_period(item.air_days, period))
+                .filter(|item| app.get_calendar_view() == 2 || in_period(item.air_days, period))
                 .count() as i32,
         );
         self.schedule_page_artwork(super::page_artwork::Page::Calendar);
     }
+}
+
+const AGENDA_BATCH: usize = 60;
+
+/// Page by release count, not calendar months: sparse schedules cross empty
+/// months immediately, and dense dates cannot cause an unbounded first render.
+fn agenda_window(
+    schedule: &[UpcomingEntry],
+    selected: i64,
+    before: usize,
+    after: usize,
+) -> std::ops::Range<usize> {
+    let anchor = schedule.partition_point(|item| item.air_days < selected);
+    anchor.saturating_sub(before)..anchor.saturating_add(after).min(schedule.len())
 }
 
 fn calendar_date(day: i64) -> String {
@@ -357,7 +412,7 @@ fn calendar_period(first: i64, selected: i64, view: i32) -> (i64, i64) {
             let monday = selected - i64::from(weekday_monday0(selected));
             (monday, monday + 7)
         }
-        _ => (selected, shift_month(selected, 1)),
+        _ => (i64::MIN, i64::MAX),
     }
 }
 fn in_period(day: i64, period: (i64, i64)) -> bool {
@@ -430,16 +485,69 @@ mod tests {
         assert_eq!(month, (date(2026, 10, 1), date(2026, 11, 1)));
         let week = calendar_period(date(2026, 10, 1), selected, 1);
         assert_eq!(week, (date(2026, 10, 5), date(2026, 10, 12)));
-        let agenda = calendar_period(date(2026, 10, 1), selected, 2);
-        assert_eq!(agenda, (selected, date(2026, 11, 11)));
-        for period in [month, week, agenda] {
+        for period in [month, week] {
             assert!(!in_period(period.0 - 1, period));
             assert!(in_period(period.0, period));
             assert!(in_period(period.1 - 1, period));
             assert!(!in_period(period.1, period));
         }
-        let previous = calendar_period(date(2026, 9, 1), shift_month(selected, -1), 2);
-        assert!(in_period(date(2026, 9, 12), previous));
-        assert!(!in_period(selected, previous));
+    }
+    #[test]
+    fn agenda_spans_months_and_years_in_bounded_nonduplicated_batches() {
+        let selected = date(2026, 10, 15);
+        let schedule = (0..200)
+            .map(|index| UpcomingEntry {
+                air_days: selected + (index - 80) * 40,
+                episode_id: index.to_string(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let initial = agenda_window(&schedule, selected, 0, AGENDA_BATCH);
+        assert_eq!(initial, 80..140);
+        assert!(schedule[initial.end - 1].air_days > date(2027, 12, 31));
+        let appended = agenda_window(&schedule, selected, 0, AGENDA_BATCH * 2);
+        assert_eq!(appended, 80..200);
+        let prepended = agenda_window(&schedule, selected, AGENDA_BATCH, AGENDA_BATCH * 2);
+        assert_eq!(prepended, 20..200);
+        assert_eq!(
+            schedule[prepended.clone()]
+                .iter()
+                .map(|item| &item.episode_id)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            prepended.len()
+        );
+        assert_eq!(
+            agenda_window(&schedule, selected, usize::MAX, usize::MAX),
+            0..200
+        );
+        assert_eq!(agenda_window(&[], selected, 60, 60), 0..0);
+        assert_eq!(agenda_window(&schedule, date(9999, 1, 1), 0, 60), 200..200);
+        assert_eq!(agenda_window(&schedule, date(9999, 1, 1), 60, 60), 140..200);
+    }
+
+    #[test]
+    fn agenda_handles_dense_days_and_schedule_changes_without_index_state() {
+        let selected = date(2026, 10, 15);
+        let mut schedule = (0..130)
+            .map(|index| UpcomingEntry {
+                air_days: selected,
+                episode_id: index.to_string(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(agenda_window(&schedule, selected, 0, 60), 0..60);
+        assert_eq!(agenda_window(&schedule, selected, 0, 120), 0..120);
+        // Recompute the date anchor when metadata changes or a filter removes rows.
+        schedule.insert(
+            0,
+            UpcomingEntry {
+                air_days: selected - 30,
+                ..Default::default()
+            },
+        );
+        assert_eq!(agenda_window(&schedule, selected, 0, 60), 1..61);
+        schedule.truncate(5);
+        assert_eq!(agenda_window(&schedule, selected, 60, 120), 0..5);
     }
 }

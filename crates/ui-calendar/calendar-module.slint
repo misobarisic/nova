@@ -19,6 +19,9 @@ export component CalendarModule inherits Window {
         title <=> CalendarBridge.title;
         day_title <=> CalendarBridge.day_title;
         count <=> CalendarBridge.count;
+        has-earlier <=> CalendarBridge.has-earlier;
+        has-later <=> CalendarBridge.has-later;
+        agenda-revision <=> CalendarBridge.agenda-revision;
         search <=> CalendarBridge.search;
         view <=> CalendarBridge.view;
         all <=> CalendarBridge.all;
@@ -31,6 +34,7 @@ export component CalendarModule inherits Window {
         artwork-visible(arg0, arg1) => { CalendarBridge.artwork-visible(arg0, arg1); }
         artwork-active-changed(arg0) => { CalendarBridge.artwork-active-changed(arg0); }
         refreshed() => { CalendarBridge.refreshed(); }
+        agenda-more(arg0) => { CalendarBridge.agenda-more(arg0); }
         step(arg0) => { CalendarBridge.step(arg0); }
         today() => { CalendarBridge.today(); }
         day_picked(arg0) => { CalendarBridge.day_picked(arg0); }

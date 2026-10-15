@@ -253,6 +253,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_artwork_active_changed => invoke_calendar_bridge_artwork_active_changed(arg0),
             on_refreshed => invoke_calendar_bridge_refreshed(),
             on_step => invoke_calendar_bridge_step(arg0),
+            on_agenda_more => invoke_calendar_bridge_agenda_more(arg0),
             on_today => invoke_calendar_bridge_today(),
             on_day_picked => invoke_calendar_bridge_day_picked(arg0),
             on_release_picked => invoke_calendar_bridge_release_picked(arg0),

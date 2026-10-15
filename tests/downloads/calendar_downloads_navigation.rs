@@ -1,7 +1,7 @@
 //! New destinations must remain visible in the desktop rail and phone More.
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::{
-    ComponentHandle,
+    ComponentHandle, Model,
     platform::{Key, WindowEvent},
 };
 use std::{cell::RefCell, rc::Rc, time::Duration};
@@ -61,19 +61,13 @@ fn route(app: &nova::AppWindow, downloads: bool) {
 
 fn agenda_navigation(app: &nova::AppWindow) {
     assert_eq!(app.get_calendar_view(), 2);
-    let before = app.get_calendar_first();
-    tap(app, visible(app, "Previous period"));
-    assert_eq!(
-        app.get_calendar_first(),
-        before - 1,
-        "Agenda previous must dispatch -1"
-    );
-    tap(app, visible(app, "Next period"));
-    assert_eq!(
-        app.get_calendar_first(),
-        before,
-        "Agenda next must dispatch +1"
-    );
+    for label in ["Previous period", "Next period"] {
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(app, label).count(),
+            0,
+            "Agenda scrolls across dates instead of paging months"
+        );
+    }
     let today_calls = app.get_calendar_selected();
     tap(app, visible(app, "Today"));
     assert_eq!(
@@ -411,4 +405,220 @@ fn calendar_and_downloads_destinations_fit_desktop_and_phone() {
     stage(app.as_weak(), 0, failures.clone());
     slint::run_event_loop().unwrap();
     assert!(failures.borrow().is_empty(), "{:?}", failures.borrow());
+}
+
+#[test]
+fn calendar_columns_stay_equal_with_mixed_dates_counts_and_previews() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::calendar_columns_stay_equal_with_mixed_dates_counts_and_previews"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    route(&app, false);
+    app.set_calendar_title("October 2026".into());
+    app.set_calendar_count(39);
+    let cells = (0..42)
+        .map(|i| nova::CalendarDay {
+            cell: nova::CalCell {
+                epoch: 100 + i,
+                day: (27 + i) % 31 + 1,
+                count: [0, 1, 12, 999, 0, 4, 0][i as usize % 7],
+                selected: i == 15,
+                today: i == 12,
+                in_month: (3..34).contains(&i),
+            },
+            preview: if i % 5 == 0 {
+                "A very long series title that must not widen this date".into()
+            } else {
+                "".into()
+            },
+            weekday: format!("Weekday {}", i % 7).into(),
+        })
+        .collect::<Vec<_>>();
+    app.set_calendar_week(Rc::new(slint::VecModel::from(cells[7..14].to_vec())).into());
+    app.set_calendar_cells(Rc::new(slint::VecModel::from(cells)).into());
+    let picked = Rc::new(RefCell::new(Vec::new()));
+    let recorded = picked.clone();
+    app.on_calendar_pick(move |day| recorded.borrow_mut().push(day));
+    app.window().show().unwrap();
+
+    for (width, height) in [(390, 1000), (616, 1000), (800, 900), (1280, 900)] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        for language in ["en", "hr"] {
+            slint::select_bundled_translation(language).unwrap();
+            for view in [0, 1] {
+                app.set_calendar_view(view);
+                for _ in 0..3 {
+                    for day in ElementHandle::find_by_element_type_name(&app, "PlannerDay") {
+                        let _ = (day.absolute_position(), day.size());
+                    }
+                    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+                }
+                let mut days = ElementHandle::find_by_element_type_name(&app, "PlannerDay")
+                    .collect::<Vec<_>>();
+                days.sort_by(|a, b| {
+                    a.absolute_position()
+                        .y
+                        .total_cmp(&b.absolute_position().y)
+                        .then_with(|| a.absolute_position().x.total_cmp(&b.absolute_position().x))
+                });
+                assert_eq!(days.len(), if view == 0 { 42 } else { 7 });
+                let first = days[0].size();
+                for (index, day) in days.iter().enumerate() {
+                    let size = day.size();
+                    assert!(
+                        (size.width - first.width).abs() < 0.6
+                            && (size.height - first.height).abs() < 0.6,
+                        "{width}px {language} view {view}: day {index} is {size:?}, first is {first:?}"
+                    );
+                    assert!(
+                        (day.absolute_position().x - days[index % 7].absolute_position().x).abs()
+                            < 0.6,
+                        "calendar columns must line up across weeks"
+                    );
+                }
+                if view == 0 {
+                    let mut headings =
+                        ElementHandle::find_by_element_id(&app, "CalendarPage::weekday_heading")
+                            .collect::<Vec<_>>();
+                    headings.sort_by(|a, b| {
+                        a.absolute_position().x.total_cmp(&b.absolute_position().x)
+                    });
+                    assert_eq!(headings.len(), 7);
+                    for (heading, day) in headings.iter().zip(&days[..7]) {
+                        let heading_center =
+                            heading.absolute_position().x + heading.size().width / 2.0;
+                        let day_center = day.absolute_position().x + day.size().width / 2.0;
+                        assert!(
+                            (heading_center - day_center).abs() < 0.6,
+                            "weekday headings must align with date columns"
+                        );
+                    }
+                }
+                // Equalizing the columns must retain pointer and keyboard picks.
+                let expected = if view == 0 { 100 } else { 107 };
+                tap(&app, days.remove(0));
+                assert_eq!(picked.borrow().last(), Some(&expected));
+                key(&app, Key::Return.into());
+                let observed = picked.borrow();
+                assert_eq!(&observed[observed.len() - 2..], &[expected, expected]);
+            }
+        }
+    }
+}
+
+#[test]
+fn agenda_loads_across_dates_preserves_prepend_position_and_resets_on_today() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::agenda_loads_across_dates_preserves_prepend_position_and_resets_on_today"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    fn publish(app: &nova::AppWindow, start: usize, end: usize) {
+        app.set_calendar_rows(
+            Rc::new(slint::VecModel::from(
+                (start..end)
+                    .map(|index| nova::CalendarRelease {
+                        key: index.to_string().into(),
+                        title: format!("Release {index}").into(),
+                        subtitle: "Episode".into(),
+                        // Deliberately cross years, with some shared dates.
+                        group: if index % 2 == 0 {
+                            format!("January {}", 2026 + index / 12).into()
+                        } else {
+                            "".into()
+                        },
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>(),
+            ))
+            .into(),
+        );
+        app.set_calendar_has_earlier(start > 0);
+        app.set_calendar_has_later(end < 180);
+    }
+    fn settle(app: &nova::AppWindow) {
+        for _ in 0..4 {
+            for card in ElementHandle::find_by_element_type_name(app, "ReleaseCard") {
+                let _ = (card.absolute_position(), card.size());
+            }
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(160));
+        }
+    }
+    for width in [390, 1280] {
+        let app = nova::AppWindow::new().unwrap();
+        app.global::<nova::Anim>().set_enabled(false);
+        app.set_calendar_view(2);
+        route(&app, false);
+        publish(&app, 60, 120);
+        let bounds = Rc::new(RefCell::new((60usize, 120usize)));
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let recorded = calls.clone();
+        let window = bounds.clone();
+        let weak = app.as_weak();
+        app.on_calendar_agenda_more(move |direction| {
+            recorded.borrow_mut().push(direction);
+            let mut window = window.borrow_mut();
+            if direction < 0 {
+                window.0 = window.0.saturating_sub(60);
+            } else {
+                window.1 = (window.1 + 60).min(180);
+            }
+            publish(&weak.upgrade().unwrap(), window.0, window.1);
+        });
+        let weak = app.as_weak();
+        app.on_calendar_today(move || {
+            let app = weak.upgrade().unwrap();
+            publish(&app, 60, 120);
+            app.set_calendar_agenda_revision(app.get_calendar_agenda_revision() + 1);
+        });
+        app.window().set_size(slint::PhysicalSize::new(width, 1000));
+        app.window().show().unwrap();
+        settle(&app);
+        assert!(
+            calls.borrow().is_empty(),
+            "do not eagerly load the entire schedule"
+        );
+        let initial_y = visible(&app, "Release 60 Episode").absolute_position().y;
+        tap(&app, visible(&app, "Earlier releases"));
+        settle(&app);
+        let retained_y = visible(&app, "Release 60 Episode").absolute_position().y;
+        assert!(
+            (initial_y - retained_y).abs() < 1.0,
+            "prepending must retain the visible release: {initial_y} -> {retained_y}"
+        );
+        assert_eq!(&*calls.borrow(), &[-1]);
+        assert_eq!(app.get_calendar_rows().row_count(), 120);
+        // Scroll continuously to the end; more releases must load without a
+        // period change or pressing a month-navigation button.
+        app.window().dispatch_event(WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(width as f32 / 2.0, 800.0),
+            delta_x: 0.0,
+            delta_y: -25000.0,
+        });
+        settle(&app);
+        assert_eq!(&*calls.borrow(), &[-1, 1]);
+        assert_eq!(app.get_calendar_rows().row_count(), 180);
+        // Appending should retain the old last row rather than jumping down.
+        visible(&app, "Release 119 Episode");
+        tap(&app, visible(&app, "Today"));
+        settle(&app);
+        assert_eq!(app.get_calendar_rows().row_count(), 60);
+        visible(&app, "Release 60 Episode");
+        visible(&app, "Earlier releases");
+        // Keyboard activation still follows the row's stable release key.
+        let selected = Rc::new(RefCell::new(String::new()));
+        let recorded = selected.clone();
+        app.on_calendar_release_picked(move |key| *recorded.borrow_mut() = key.to_string());
+        tap(&app, visible(&app, "Release 60 Episode"));
+        key(&app, Key::Return.into());
+        assert_eq!(&*selected.borrow(), "60");
+    }
 }
