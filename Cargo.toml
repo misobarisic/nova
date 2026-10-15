@@ -252,10 +252,10 @@ foreground_service_type = "dataSync"
 name = ".NovaSyncJobService"
 permission = "android.permission.BIND_JOB_SERVICE"
 
-# The dev, release, and dev-release profiles use the same public debug key
+# The dev, release, dev-release, and cd-release profiles use the same public debug key
 # so APKs stay update-compatible across build profiles. Do not publish with it:
-# configure a private release keystore through CARGO_APK_RELEASE_KEYSTORE and
-# CARGO_APK_RELEASE_KEYSTORE_PASSWORD before any store release.
+# configure a private keystore with CARGO_APK_<PROFILE>_KEYSTORE and its
+# _PASSWORD variable before any store release (CD_RELEASE for cd-release).
 [package.metadata.android.signing.dev]
 path = "android/keystore/debug.keystore"
 keystore_password = "android"
@@ -265,6 +265,10 @@ path = "android/keystore/debug.keystore"
 keystore_password = "android"
 
 [package.metadata.android.signing.dev-release]
+path = "android/keystore/debug.keystore"
+keystore_password = "android"
+
+[package.metadata.android.signing.cd-release]
 path = "android/keystore/debug.keystore"
 keystore_password = "android"
 
@@ -339,3 +343,10 @@ strip = "symbols"
 #panic = "abort"
 #incremental = false
 #incremental = false # Set to false for the absolute best performance
+
+# Tagged distribution builds favor final runtime optimization over build time.
+[profile.cd-release]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+incremental = false

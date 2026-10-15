@@ -11,7 +11,8 @@ dist="dist"
 rm -rf "$bundle"
 mkdir -p "$bundle" "$dist"
 
-cp target/x86_64-pc-windows-gnu/release/nova.exe "$bundle/nova.exe"
+profile="${NOVA_RELEASE_PROFILE:-release}"
+cp "target/x86_64-pc-windows-gnu/$profile/nova.exe" "$bundle/nova.exe"
 cp LICENSE "$bundle/LICENSE"
 cp vendor/windows-libs/SOURCES "$bundle/THIRD-PARTY-SOURCES.txt"
 

@@ -10,6 +10,7 @@ on:
       - "rust-toolchain.toml"
       - ".github/scripts/package-android.py"
       - ".github/scripts/package-linux.sh"
+      - ".github/scripts/package-windows.sh"
       - ".github/scripts/nova.desktop"
       - ".cargo/**"
       - "Cargo.toml"
@@ -34,6 +35,7 @@ on:
       - "rust-toolchain.toml"
       - ".github/scripts/package-android.py"
       - ".github/scripts/package-linux.sh"
+      - ".github/scripts/package-windows.sh"
       - ".github/scripts/nova.desktop"
       - ".cargo/**"
       - "Cargo.toml"
@@ -52,6 +54,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  NOVA_RELEASE_PROFILE: cd-release
 
 # Cancel stale pull-request and main-branch runs when newer commits arrive.
 concurrency:
@@ -176,7 +181,7 @@ jobs:
           github_access_token: ${{ github.token }}
 
       - name: Build universal APK once
-        run: nix develop .#android --command make android-build-release-universal
+        run: nix develop .#android --command make android-build-release-universal RELEASE_PROFILE="$NOVA_RELEASE_PROFILE"
 
       - name: Derive, align, sign, and verify all three APKs
         run: nix develop .#android --command python3 .github/scripts/package-android.py
@@ -224,7 +229,7 @@ jobs:
         run: cargo install cargo-about --locked --version 0.9.1 --features cli
 
       - name: Build Nova release binary
-        run: cargo build --locked --release --bin nova
+        run: cargo build --locked --profile "$NOVA_RELEASE_PROFILE" --bin nova
 
       - name: Package Debian and AppImage artifacts
         run: bash .github/scripts/package-linux.sh
@@ -262,7 +267,7 @@ jobs:
 
       - name: Build Windows executable
         run: >-
-          nix develop .#windows --command cargo build --locked --release
+          nix develop .#windows --command cargo build --locked --profile "$NOVA_RELEASE_PROFILE"
           --target x86_64-pc-windows-gnu --bin nova
 
       - name: Stage Windows release bundle

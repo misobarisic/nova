@@ -87,15 +87,16 @@ def verify_payload(source, result, abis):
                 raise RuntimeError(f"Packaging changed compression: {name}")
 
 
-def signing_key(manifest):
-    # Match cargo-apk2's release-profile precedence: environment, then TOML.
-    if "CARGO_APK_RELEASE_KEYSTORE" in os.environ:
-        password = os.environ.get("CARGO_APK_RELEASE_KEYSTORE_PASSWORD")
+def signing_key(manifest, profile="release"):
+    # Match cargo-apk2's selected-profile precedence: environment, then TOML.
+    keystore_env = f"CARGO_APK_{profile.upper().replace('-', '_')}_KEYSTORE"
+    if keystore_env in os.environ:
+        password = os.environ.get(f"{keystore_env}_PASSWORD")
         if password is None:
             raise RuntimeError("Release keystore environment override needs its password")
-        return Path(os.environ["CARGO_APK_RELEASE_KEYSTORE"]), password
+        return Path(os.environ[keystore_env]), password
     with manifest.open("rb") as handle:
-        signing = tomllib.load(handle)["package"]["metadata"]["android"]["signing"]["release"]
+        signing = tomllib.load(handle)["package"]["metadata"]["android"]["signing"][profile]
     return manifest.parent / signing["path"], signing["keystore_password"]
 
 
@@ -122,13 +123,13 @@ def signer_certificates(apksigner, apk):
 
 
 def main():
-    sources = list(Path("target").rglob("nova.apk"))
-    if len(sources) != 1:
-        raise RuntimeError(f"Expected one built nova.apk, found {len(sources)}")
-    source = sources[0]
+    profile = os.environ.get("NOVA_RELEASE_PROFILE", "release")
+    source = Path(os.environ.get("CARGO_TARGET_DIR", "target")) / profile / "apk" / "nova.apk"
+    if not source.is_file():
+        raise RuntimeError(f"Missing built APK for profile {profile}: {source}")
     tools = Path(os.environ["ANDROID_HOME"]) / "build-tools" / "35.0.0"
     zipalign, apksigner = tools / "zipalign", tools / "apksigner"
-    keystore, password = signing_key(Path("Cargo.toml"))
+    keystore, password = signing_key(Path("Cargo.toml"), profile)
     if not keystore.is_file():
         raise RuntimeError("Configured Android release keystore does not exist")
     env = dict(os.environ, NOVA_APK_KEYSTORE_PASSWORD=password)

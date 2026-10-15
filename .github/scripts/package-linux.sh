@@ -4,9 +4,10 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
-binary="target/release/nova"
+profile="${NOVA_RELEASE_PROFILE:-release}"
+binary="target/$profile/nova"
 if [[ ! -x "$binary" ]]; then
-  echo "Missing release binary: $binary (run cargo build --release --bin nova first)" >&2
+  echo "Missing release binary: $binary (run cargo build --profile $profile --bin nova first)" >&2
   exit 1
 fi
 

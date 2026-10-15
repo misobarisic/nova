@@ -29,6 +29,7 @@ nix develop .#windows    # MinGW cross-build tools + pinned libmpv
 # Build / check
 cargo check              # whole workspace (desktop default features)
 cargo build              # desktop binary: target/debug/nova
+cargo build --profile cd-release # tagged distribution profile: target/cd-release/nova
 cargo run                # run desktop app
 cargo dev                # retained live-preview alias; currently compiled UI with a warning
 
@@ -39,6 +40,8 @@ make linux-run-release
 make android-build
 make android-build-release
 make android-build-release-universal
+# Tagged CI uses fat LTO; local Make release targets accept the same profile:
+make android-build-release-universal RELEASE_PROFILE=cd-release
 make android-run
 make android-run-release
 # For an emulator: append ANDROID_TARGET=x86_64-linux-android
@@ -64,7 +67,8 @@ Clippy and workspace checks, the shared OpenGL state guard regression on Linux,
 and Windows GNU and ARM64 Android target checks. `check-android` uses the
 Android Nix shell with `--no-default-features --features android --lib -p nova`
 and `--target aarch64-linux-android`.
-Pushing a Git tag builds three Android APKs, a Linux
+Pushing a Git tag selects the `cd-release` Cargo profile through the workflow's
+`NOVA_RELEASE_PROFILE`, building three Android APKs, a Linux
 x86_64 `.deb` and AppImage, and a Windows x86_64 ZIP, then attaches all six
 files to a GitHub Release. Android release filenames are
 `nova-arm64-v8a-<tag>.apk`, `nova-x86_64-<tag>.apk`, and `nova-<tag>.apk`;
@@ -83,10 +87,18 @@ not required.
 The Android workflow invokes cargo-apk2 once to build both architectures into
 a universal APK. `.github/scripts/package-android.py` derives the two
 architecture-specific APKs from that output, aligns and signs all three with
-the same release key cargo-apk2 uses (environment override, then Cargo metadata),
+the same selected-profile key cargo-apk2 uses (environment override, then Cargo metadata),
 and checks signatures, signing certificates, exact ABI sets, native libraries,
 and unchanged payload bytes/compression. All three APKs share one Actions
 artifact for the release job to collect.
+Packagers read the selected profile directory explicitly: `target/cd-release`
+for Linux and the universal APK, and `target/x86_64-pc-windows-gnu/cd-release`
+for Windows. Outside CI, `NOVA_RELEASE_PROFILE` defaults to `release` in these
+scripts, and Make's `RELEASE_PROFILE` also defaults to `release`. Android signing
+for `cd-release` uses `CARGO_APK_CD_RELEASE_KEYSTORE` and
+`CARGO_APK_CD_RELEASE_KEYSTORE_PASSWORD` when set, otherwise the matching Cargo
+metadata entry; the tracked key retains update compatibility for authorized
+personal builds, while store releases require a private key override.
 
 Cargo aliases live in `.cargo/config.toml`. Android linkers come from the
 `.#android` dev shell env vars (see `.cargo/config.toml` comments); that shell
@@ -99,6 +111,10 @@ The workspace's `dev` profile disables debug information and strips symbols;
 the default `test` profile inherits these settings. Incremental compilation
 remains enabled. This reduces linked executable size while making development
 and test backtraces less detailed. Release and `dev-release` also strip symbols.
+The `cd-release` profile inherits `release` (optimization level 3 and stripped
+symbols), enables fat LTO, uses one codegen unit and disables incremental
+compilation. Tagged Android/Linux/Windows builds use it; ordinary local release
+builds retain their current compilation settings.
 
 The 27 generated UI leaf libraries and the type-only `nova-playback-api` library declare `[lib] test = false` to skip empty
 unit-test harnesses during default workspace test selection. Their normal
@@ -1364,7 +1380,7 @@ unit/documentation coverage.
 | Offline mutations / projection replay / progress convergence / cross-ID episode history | `crates/sync/src/{local,store,progress}.rs` (`Store::resolved_progress`, read-only action-register merge; `progress::local_input` keeps same-value rewatch intent distinct from preserved register metadata), `src/app/{io,sync}.rs` (`sync_reconcile_progress_aliases`, projection-only snapshot/baseline updates); `run.rs`, `detail.rs`, `catalog.rs`, `posters.rs` trigger alias reconciliation after startup/sync/metadata. `sync.rs::tests` covers native/canonical cache variants, Details/Home completion, same-second unwatch/rewatch, quiet unrelated saves, reload and rejected stale/ambiguous links; `crates/sync/tests/{local_mutations,store_persistence}.rs` |
 | Sync invite QR / Android camera scan | `src/app/qr.rs`, `src/app/android_qr.rs`, `android/java/dev/misob/nova/QrScanActivity.java`, `crates/ui-settings-sync/sync-module.slint`, `src/app/run.rs` |
 | Android background execution (downloads/sign-in FGS + periodic sync) | `src/app/android_bg.rs`, `android/java/dev/misob/nova/{NovaBackgroundService,NovaAuthService,NovaSyncJobService}.java`, `nova_sync::SyncEngine::setup`, `DownloadCoordinator::has_active_work` |
-| Cargo profiles / symbol stripping | Root `Cargo.toml` (`dev`, inherited `test`, `dev-release`, `release`); `.cargo/config.toml` aliases and `flake.nix` toolchains |
+| Cargo profiles / symbol stripping / fat-LTO tagged builds | Root `Cargo.toml` (`dev`, inherited `test`, `dev-release`, `release`, `cd-release`); `Makefile` (`RELEASE_PROFILE`), `.github/workflows/build-release.yml` and `.github/scripts/package-{android,linux,windows}.*` (`NOVA_RELEASE_PROFILE`); `.cargo/config.toml` aliases and `flake.nix` toolchains |
 | Consolidated UI tests / per-case subprocess isolation | `tests/ui_*.rs`, matching case folders under `tests/`, shared `tests/support/isolation.rs`; suite boundaries, filtering, measurements and generated-leaf harness selection in §8 Testing |
 | App paths / shared settings | `crates/config/src/lib.rs` (absolute XDG roots with HOME/temp fallback) |
 | Persistence backend / metadata compression / equivalent writes | `crates/storage/src/{lib,codec}.rs`, `src/app/io.rs` (`metadata_cache_key`) |

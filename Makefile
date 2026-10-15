@@ -8,6 +8,8 @@
 # `nix develop .#android` for Android. Override the target for an emulator,
 # e.g. `make android-run ANDROID_TARGET=x86_64-linux-android`.
 ANDROID_TARGET ?= aarch64-linux-android
+# Local release builds stay quick; tagged CI selects cd-release explicitly.
+RELEASE_PROFILE ?= release
 ANDROID_ARGS = --target $(ANDROID_TARGET) --no-default-features --features android --lib -p nova
 
 # cargo-apk2 (not cargo-apk) compiles the Java foreground service and
@@ -18,23 +20,23 @@ android-build:
 	cargo apk2 build $(ANDROID_ARGS)
 
 android-build-release:
-	cargo apk2 build $(ANDROID_ARGS) --release
+	cargo apk2 build $(ANDROID_ARGS) --profile $(RELEASE_PROFILE)
 
 # Release packaging starts from one universal APK, then derives ABI-specific APKs.
 android-build-release-universal:
-	cargo apk2 build --no-default-features --features android --lib -p nova --release
+	cargo apk2 build --no-default-features --features android --lib -p nova --profile $(RELEASE_PROFILE)
 
 android-run:
 	cargo apk2 run $(ANDROID_ARGS)
 
 android-run-release:
-	cargo apk2 run $(ANDROID_ARGS) --release
+	cargo apk2 run $(ANDROID_ARGS) --profile $(RELEASE_PROFILE)
 
 linux-build:
 	cargo build
 
 linux-build-release:
-	cargo build --release
+	cargo build --profile $(RELEASE_PROFILE)
 
 linux-run:
 	cargo run
@@ -44,4 +46,4 @@ linux-run-preview:
 	cargo dev
 
 linux-run-release:
-	cargo run --release
+	cargo run --profile $(RELEASE_PROFILE)
