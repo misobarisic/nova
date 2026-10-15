@@ -5273,6 +5273,7 @@ dependencies = [
  "nova-config",
  "nova-download",
  "nova-media",
+ "nova-playback-api",
  "nova-player",
  "nova-providers",
  "nova-storage",
@@ -5338,6 +5339,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nova-playback-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "nova-player"
 version = "0.1.0"
 dependencies = [
@@ -5400,6 +5408,7 @@ dependencies = [
  "blake3",
  "iroh",
  "nova-config",
+ "nova-playback-api",
  "nova-storage",
  "postcard",
  "serde",

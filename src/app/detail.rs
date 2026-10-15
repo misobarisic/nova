@@ -305,6 +305,14 @@ impl Bridge {
     /// `<item>:<season>:<episode>` id of a picked episode) from every
     /// installed addon that provides streams for the modal item's type.
     pub(super) fn start_stream_search(&self, request_id: String) {
+        if self.remote_output_selected() {
+            if let Some(modal) = self.shared.lock().unwrap().modal_item.as_mut() {
+                modal.request_id = request_id.clone();
+            }
+            if self.remote_reload_streams() {
+                return;
+            }
+        }
         let changed = self
             .shared
             .lock()
@@ -313,7 +321,7 @@ impl Bridge {
             .as_ref()
             .is_some_and(|modal| modal.request_id != request_id);
         if changed {
-            self.cancel_pending_playback();
+            self.cancel_pending_for_navigation();
         }
         let modal_type = {
             let state = self.shared.lock().unwrap();
@@ -2329,7 +2337,8 @@ impl Bridge {
     /// Back preserves the origin of selection: manual episodes return to
     /// their list, movies to Overview, and Home shortcuts to the root page.
     pub(super) fn stream_selector_back(&self) {
-        self.cancel_pending_playback();
+        self.remote_disconnect();
+        self.cancel_pending_for_navigation();
         let Some(app) = self.app() else {
             return;
         };
@@ -2694,6 +2703,9 @@ impl Bridge {
     }
 
     fn apply_stream_filter_with_focus(&self, preserve_focus: bool) {
+        if self.remote_output_selected() {
+            return;
+        }
         let Some(app) = self.app() else {
             return;
         };
@@ -2794,6 +2806,9 @@ impl Bridge {
 
     /// Move the visible stream list to an absolute (zero-based) page.
     pub(super) fn stream_page_picked(&self, page: usize) {
+        if self.remote_pick_page(page) {
+            return;
+        }
         {
             let mut state = self.shared.lock().unwrap();
             state.stream_page = page;
@@ -2803,6 +2818,9 @@ impl Bridge {
 
     /// A filter pill was tapped (0 = All, else 1-based addon index).
     pub(super) fn stream_filter_picked(&self, index: usize) {
+        if self.remote_pick_filter(index) {
+            return;
+        }
         {
             let mut state = self.shared.lock().unwrap();
             if index <= state.stream_addons.len() {
@@ -2821,7 +2839,8 @@ impl Bridge {
 
     /// Clear the stream list and its addon-filter state (state + UI).
     pub(super) fn clear_streams(&self) {
-        self.cancel_pending_playback();
+        self.remote_disconnect();
+        self.cancel_pending_for_navigation();
         {
             let mut state = self.shared.lock().unwrap();
             state.stream_generation = state.stream_generation.wrapping_add(1);
@@ -2852,6 +2871,9 @@ impl Bridge {
     }
 
     pub(super) fn stream_picked(&self, index: usize) {
+        if self.remote_stream_selected(index) {
+            return;
+        }
         let stream = {
             let state = self.shared.lock().unwrap();
             state.streams.get(index).cloned()
@@ -2860,6 +2882,15 @@ impl Bridge {
             Some(s) => s,
             None => return,
         };
+        if !self
+            .shared
+            .lock()
+            .unwrap()
+            .remote_playback
+            .can_play_locally()
+        {
+            return;
+        }
         if let Some(app) = self.app() {
             app.set_detail_kb_s(index as i32);
         }
@@ -3057,23 +3088,21 @@ pub(super) fn stream_search_urls_for(
     let Some(modal) = state.modal_item.as_ref() else {
         return vec![];
     };
-    let lookup = state
-        .modal_item
-        .as_ref()
-        .and_then(|modal| source_stream_lookup(modal, request_id));
-    let stream_ids = state
-        .modal_item
-        .as_ref()
-        .map(|modal| episode_stream_ids(modal, request_id))
-        .unwrap_or_default();
-    state
-        .installed
+    stream_search_urls_for_context(&state.installed, modal, request_id)
+}
+
+/// Independent lookup context: remote searches never replace the visible Detail.
+pub(super) fn stream_search_urls_for_context(
+    installed: &[Installed],
+    modal: &ModalItem,
+    request_id: &str,
+) -> Vec<(String, String, String, u64)> {
+    let lookup = source_stream_lookup(modal, request_id);
+    let stream_ids = episode_stream_ids(modal, request_id);
+    installed
         .iter()
         .filter_map(|a| {
-            let video = state
-                .modal_item
-                .as_ref()
-                .and_then(|modal| modal.videos.iter().find(|v| v.id == request_id));
+            let video = modal.videos.iter().find(|v| v.id == request_id);
             let owner = video
                 .and_then(|v| v.extra.get("novaSourceUrl"))
                 .and_then(serde_json::Value::as_str);

@@ -15,6 +15,7 @@ license.workspace = true
 # app's control while the transport stays generic.
 
 [dependencies]
+nova-playback-api = { path = "../playback-api" }
 nova-config = { path = "../config" }
 nova-storage = { path = "../storage" }
 anyhow = "1"

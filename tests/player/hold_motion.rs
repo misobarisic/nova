@@ -54,11 +54,18 @@ fn held_speed_ignores_motion_and_restores_without_waking_controls() {
     let previews = Rc::new(RefCell::new(Vec::new()));
     let values = previews.clone();
     app.on_playback_speed_preview(move |speed| values.borrow_mut().push(speed));
+    let values = previews.clone();
+    let weak = app.as_weak();
+    app.on_playback_speed_preview_end(move || {
+        values
+            .borrow_mut()
+            .push(weak.upgrade().unwrap().get_effective_playback_speed());
+    });
     let actions = Rc::new(Cell::new(0));
     let counter = actions.clone();
     app.on_toggle_pause(move || counter.set(counter.get() + 1));
     let counter = actions.clone();
-    app.on_seek(move |_| counter.set(counter.get() + 1));
+    app.on_seek_relative(move |_| counter.set(counter.get() + 1));
     let counter = actions.clone();
     app.on_android_brightness_step(move |_| counter.set(counter.get() + 1));
     let counter = actions.clone();

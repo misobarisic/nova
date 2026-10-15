@@ -1,4 +1,4 @@
-//! More-page routing and Settings/About chrome across the phone breakpoint.
+//! More-page routing and Settings/About/Devices chrome across the phone breakpoint.
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::{ComponentHandle, LogicalPosition};
 use std::{cell::Cell, rc::Rc, time::Duration};
@@ -160,6 +160,24 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     assert_eq!(backgrounds.get(), 0);
 
     open_more(&app);
+    click(&app, button(&app, "Devices"));
+    assert!(app.get_remote_devices_open());
+    assert!(
+        ElementHandle::find_by_element_type_name(&app, "RemoteDevicesPage")
+            .next()
+            .is_some()
+    );
+    assert_no_bar(&app);
+    // A control owns native focus, so Back must still reach window capture.
+    click(&app, button(&app, "Refresh"));
+    key(&app, slint::platform::Key::Back);
+    assert!(!app.get_remote_devices_open());
+    assert!(app.get_more_open(), "Devices Back returns to More");
+    assert_eq!(backgrounds.get(), 0);
+    key(&app, slint::platform::Key::Back);
+    assert!(app.get_show_home());
+
+    open_more(&app);
     click(&app, button(&app, "Settings"));
     assert!(app.get_show_settings());
     assert_no_bar(&app);
@@ -238,8 +256,8 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     );
     assert_eq!(
         ElementHandle::find_by_element_type_name(&app, "SettingsLink").count(),
-        2,
-        "wide More contains only Settings and About; shortcuts live in the rail"
+        3,
+        "wide More contains Settings, About and Devices; shortcuts live in the rail"
     );
     let calendar_y = button(&app, "Calendar").absolute_position().y;
     let downloads_y = button(&app, "Downloads").absolute_position().y;
@@ -248,6 +266,7 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     let about_y = button(&app, "About").absolute_position().y;
     assert!(calendar_y < downloads_y && downloads_y < more_y);
     assert!(settings_y < about_y);
+    assert!(about_y < button(&app, "Devices").absolute_position().y);
     click(&app, button(&app, "Settings"));
     assert!(app.get_show_settings());
     assert!(!app.get_more_open());
@@ -287,4 +306,10 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
         6,
         "wide More retains the six-item rail"
     );
+    click(&app, button(&app, "Devices"));
+    assert!(app.get_remote_devices_open());
+    key(&app, slint::platform::Key::Back);
+    assert!(!app.get_remote_devices_open());
+    assert!(app.get_more_open(), "desktop Devices Back returns to More");
+    assert_eq!(backgrounds.get(), 0);
 }

@@ -99,7 +99,7 @@ fn hidden_osd_taps_wake_without_activating_controls() {
         let closes = closes.clone();
         move || *closes.borrow_mut() += 1
     });
-    app.on_seek({
+    app.on_seek_relative({
         let seeks = seeks.clone();
         move |_| *seeks.borrow_mut() += 1
     });

@@ -1685,6 +1685,7 @@ impl Bridge {
     }
 
     fn attach_sync(&self, engine: Arc<nova_sync::SyncEngine>) {
+        self.attach_playback_service(&engine);
         // Remote changes arrive on the tokio runtime thread; marshal
         // them onto the UI thread before touching app state.
         let b = self.clone();
@@ -1711,6 +1712,7 @@ impl Bridge {
 
     /// Stop the sync engine and drop its endpoint.
     pub(super) fn stop_sync(&self) {
+        self.remote_disconnect();
         {
             let mut state = self.shared.lock().unwrap();
             for cancel in state.package_fetches.values() {
@@ -1726,6 +1728,11 @@ impl Bridge {
         #[cfg(target_os = "android")]
         crate::app::android_bg::set_periodic_sync(false);
         nova_sync::uninstall();
+        if let Some(app) = self.app() {
+            app.set_remote_has_playing_devices(false);
+            app.set_remote_has_ready_devices(false);
+            app.set_remote_devices(Default::default());
+        }
         self.sync_status_to_ui();
     }
 }

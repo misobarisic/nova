@@ -239,6 +239,7 @@ impl Bridge {
             );
             app.set_home_upcoming_enabled(settings.home_row_enabled(&HomeRowSource::Upcoming));
             app.set_home_episode_artwork(settings.home_episode_artwork);
+            app.set_home_devices_enabled(settings.home_devices_enabled);
             app.set_library_min_cols(settings.library_min_cols as i32);
             app.set_android_hwdec_index(settings.android_hwdec.index());
             app.set_player_backend_index(if settings.player_external { 1 } else { 0 });
@@ -450,6 +451,7 @@ impl Bridge {
                 home_continue_enabled: app.get_home_continue_enabled(),
                 home_upcoming_enabled: app.get_home_upcoming_enabled(),
                 home_episode_artwork: app.get_home_episode_artwork(),
+                home_devices_enabled: app.get_home_devices_enabled(),
                 discover_min_cols: app.get_discover_min_cols().clamp(2, 6) as u32,
                 discover_catalog_addon_names: app.get_discover_catalog_addon_names(),
                 library_min_cols: app.get_library_min_cols().clamp(2, 6) as u32,
@@ -1027,7 +1029,8 @@ impl Bridge {
     }
 
     pub(super) fn modal_closed(&self) {
-        self.cancel_pending_playback();
+        self.remote_disconnect();
+        self.cancel_pending_for_navigation();
         if self.app().is_some_and(|app| app.get_tracking_open()) {
             self.tracking_close();
         }

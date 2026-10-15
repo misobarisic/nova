@@ -493,6 +493,9 @@ cache_settings_type! {
     /// defaults to series posters when no preference has been saved.
     #[serde(default)]
     pub home_episode_artwork: bool,
+    /// Show paired-device playback on Home; synced with general settings.
+    #[serde(default = "default_true")]
+    pub home_devices_enabled: bool,
     /// Minimum grid columns for My Library (same scheme).
     #[serde(default = "default_min_cols")]
     pub library_min_cols: u32,
@@ -670,6 +673,7 @@ impl Default for CacheSettings {
             home_continue_enabled: true,
             home_upcoming_enabled: true,
             home_episode_artwork: false,
+            home_devices_enabled: true,
             library_min_cols: 2,
             android_hwdec: AndroidHwdec::HwPlus,
             player_external: false,
@@ -1257,6 +1261,20 @@ mod tests {
                 "genre": "Action"
             })
         );
+    }
+
+    #[test]
+    fn home_devices_defaults_visible_and_preserves_saved_preference() {
+        assert!(CacheSettings::default().home_devices_enabled);
+        let older = r#"{"enabled":false,"format":"webp","quality":85,"downscale":true}"#;
+        let mut settings: CacheSettings = serde_json::from_str(older).unwrap();
+        assert!(settings.home_devices_enabled);
+        for visible in [false, true] {
+            settings.home_devices_enabled = visible;
+            let restored: CacheSettings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored.home_devices_enabled, visible);
+        }
     }
 
     #[test]

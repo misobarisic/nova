@@ -1,4 +1,5 @@
-import { Theme, ContinueRow, UpcomingRow, HomeCatalogSection, HomeCatalogCard, CalCell, SheetItem, NavMetrics, NavState, Anim } from "@NovaUiShared";
+import { RemotePlayingSection } from "remote-controls.slint";
+import { SettingsBridge, RemoteBridge, Theme, ContinueRow, UpcomingRow, HomeCatalogSection, HomeCatalogCard, CalCell, SheetItem, NavMetrics, NavState, Anim } from "@NovaUiShared";
 
 import { TitleArtwork } from "title-artwork.slint";
 import { ScrollView } from "scrollview.slint";
@@ -2066,6 +2067,7 @@ export component HomePage {
                             }
 
                             landing_rows := VerticalLayout {
+                                if SettingsBridge.home_devices_enabled && RemoteBridge.has_playing_devices: RemotePlayingSection { }
                                 width: 100%; spacing: 24px;
                                 padding-left: 18px + (root.narrow ? root.safe-left : 0px);
                                 padding-right: 18px + root.safe-right;

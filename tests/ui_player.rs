@@ -26,3 +26,6 @@ mod buffered_progress;
 
 #[path = "player/subtitle_lift.rs"]
 mod subtitle_lift;
+
+#[path = "player/remote_controls.rs"]
+mod remote_controls;

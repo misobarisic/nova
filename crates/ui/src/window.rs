@@ -11,6 +11,7 @@ impl AppWindow {
         crate::page_factories::install(&app);
         crate::collection_factories::install(&app);
         crate::playback_factories::install(&app);
+        crate::remote_bridge::install(&app);
         Ok(Self(app))
     }
 }
@@ -70,6 +71,7 @@ macro_rules! forward_globals {
     };
 }
 forward_globals!(
+    RemoteBridge,
     Theme,
     Anim,
     NavState,

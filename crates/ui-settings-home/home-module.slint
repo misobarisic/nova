@@ -124,6 +124,21 @@ export component SettingsHomeModule inherits Window {
                     }
                 }
             } }
+            SettingsCard { SettingsRow {
+                setting-key: "home_devices_enabled";
+                row-title: @tr("Playing on your devices");
+                row-desc: @tr("Show paired-device playback controls on Home.");
+                ToggleSwitch {
+                    name: @tr("Playing on your devices");
+                    checked <=> SettingsBridge.home_devices_enabled;
+                    focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == SettingsBridge.home_row_catalog_rows.length * 4 + 2 && SettingsBridge.kb_active;
+                    toggled => {
+                        SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
+                        SettingsBridge.kb_zone = 16; SettingsContent.kb_home = SettingsBridge.home_row_catalog_rows.length * 4 + 2;
+                        SettingsContent.schedule_setting("home_devices_enabled");
+                    }
+                }
+            } }
 
             SectionHeader {
                 icon-kind: 4;
@@ -175,11 +190,11 @@ export component SettingsHomeModule inherits Window {
                             label: @tr("Remove");
                             destructive: true;
                             roomy: true;
-                            focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == SettingsBridge.home_row_catalog_rows.length * 4 + i + 2 && SettingsBridge.kb_active;
+                            focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == SettingsBridge.home_row_catalog_rows.length * 4 + i + 3 && SettingsBridge.kb_active;
                             clicked => {
                                 SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
                                 SettingsBridge.kb_zone = 16;
-                                SettingsContent.kb_home = SettingsBridge.home_row_catalog_rows.length * 4 + i + 2;
+                                SettingsContent.kb_home = SettingsBridge.home_row_catalog_rows.length * 4 + i + 3;
                                 SettingsBridge.home_catalog_removed(i);
                             }
                         }
@@ -191,11 +206,11 @@ export component SettingsHomeModule inherits Window {
                 label: @tr("Add catalog");
                 primary: true;
                 roomy: true;
-                focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == SettingsBridge.home_row_catalog_rows.length * 4 + SettingsBridge.home_catalog_rows.length + 2 && SettingsBridge.kb_active;
+                focused: SettingsBridge.kb_zone == 16 && SettingsContent.kb_home == SettingsBridge.home_row_catalog_rows.length * 4 + SettingsBridge.home_catalog_rows.length + 3 && SettingsBridge.kb_active;
                 clicked => {
                     SettingsBridge.kb_active = SettingsStyle.keyboard-mode;
                     SettingsBridge.kb_zone = 16;
-                    SettingsContent.kb_home = SettingsBridge.home_row_catalog_rows.length * 4 + SettingsBridge.home_catalog_rows.length + 2;
+                    SettingsContent.kb_home = SettingsBridge.home_row_catalog_rows.length * 4 + SettingsBridge.home_catalog_rows.length + 3;
                     SettingsBridge.home_catalog_add_requested();
                 }
             }

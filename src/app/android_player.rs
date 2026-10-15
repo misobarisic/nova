@@ -27,9 +27,6 @@ static FX_CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
 /// window never leaks into the catalog.
 static SESSION_BRIGHTNESS: Mutex<Option<f32>> = Mutex::new(None);
 
-/// Brightness travel per swipe notch (40px of vertical drag).
-const BRIGHTNESS_PER_NOTCH: f32 = 0.05;
-
 /// The stashed activity raw pointer, or `None` before `android_main`.
 fn activity_ptr() -> Option<*mut std::ffi::c_void> {
     let act = crate::player::android_activity_ptr();
@@ -56,19 +53,56 @@ pub(crate) fn player_volume_step(dir: i32) {
     });
 }
 
-/// Step the session brightness (`steps` notches). Returns the new level for
-/// the Slint readout. The first touch reads the live window value (a system
-/// default of `-1` starts from 0.5); the player close resets to the default.
-pub(crate) fn player_brightness_step(steps: i32) -> f32 {
-    if steps == 0 {
-        return SESSION_BRIGHTNESS.lock().unwrap().unwrap_or(0.5);
-    }
-    let mut slot = SESSION_BRIGHTNESS.lock().unwrap();
-    let base = slot.unwrap_or_else(read_brightness);
-    let next = (base + steps as f32 * BRIGHTNESS_PER_NOTCH).clamp(0.05, 1.0);
-    *slot = Some(next);
+/// Read the session value, including the first live-window fallback.
+pub(crate) fn player_brightness() -> f32 {
+    SESSION_BRIGHTNESS
+        .lock()
+        .unwrap()
+        .unwrap_or_else(read_brightness)
+}
+
+pub(crate) fn player_brightness_set(level: f32) -> f32 {
+    let next = level.clamp(0.05, 1.0);
+    *SESSION_BRIGHTNESS.lock().unwrap() = Some(next);
     set_brightness(next);
     next
+}
+
+pub(crate) fn player_brightness_delta(delta: f32) -> f32 {
+    player_brightness_set(player_brightness() + delta)
+}
+
+/// Normalize Android's device-specific music-stream notches to 0–100.
+pub(crate) fn player_volume() -> f32 {
+    super::android_bg::with_app_context(|env, raw| {
+        let context = unsafe { JObject::from_raw(raw) };
+        let class = super::android_bg::app_class(env, &context, FX_CLASS, &FX_CLASS_REF)?;
+        env.call_static_method(
+            &class,
+            "getVolume",
+            "(Landroid/content/Context;)F",
+            &[JValue::Object(&context)],
+        )?
+        .f()
+    })
+    .unwrap_or(100.0)
+}
+
+pub(crate) fn player_volume_set(volume: f32) {
+    let _ = super::android_bg::with_app_context(|env, raw| {
+        let context = unsafe { JObject::from_raw(raw) };
+        let class = super::android_bg::app_class(env, &context, FX_CLASS, &FX_CLASS_REF)?;
+        env.call_static_method(
+            &class,
+            "setVolume",
+            "(Landroid/content/Context;F)V",
+            &[
+                JValue::Object(&context),
+                JValue::Float(volume.clamp(0.0, 100.0)),
+            ],
+        )?;
+        Ok(())
+    });
 }
 
 /// Forget the session brightness and hand the window back to the system

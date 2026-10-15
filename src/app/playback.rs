@@ -33,19 +33,21 @@ pub(super) struct PlaybackIntent {
     token: crate::torrent::PlaybackRequest,
     modal_token: Option<Arc<()>>,
     request_id: String,
-    pending: bool,
-    in_app: bool,
+    pub(super) pending: bool,
+    pub(super) in_app: bool,
     // Credential-bearing resolver links stay inside the in-app player, including
     // a delayed resume prompt. Never pass them through OS process arguments.
     private_playback: bool,
     context: PlaybackContext,
+    detached: bool,
 }
 
 impl PlaybackIntent {
     fn accepts(&self, token: &crate::torrent::PlaybackRequest, modal: Option<&ModalItem>) -> bool {
         self.token.same_request(token)
             && token.is_current()
-            && (!self.pending
+            && (self.detached
+                || !self.pending
                 || match (&self.modal_token, modal) {
                     (Some(original), Some(modal)) => {
                         Arc::ptr_eq(original, &modal.open_token)
@@ -64,6 +66,7 @@ impl PlaybackIntent {
 pub(crate) fn note_android_pause_checkpoint() {
     let bridge = super::bridge::with_global_bridge(Clone::clone);
     if let Some(bridge) = bridge {
+        bridge.remote_suspend();
         bridge.cancel_pending_playback();
         bridge.note_player_progress_from_ui();
         bridge.persist_outgoing_playback();
@@ -94,18 +97,36 @@ impl Bridge {
             app.invoke_osd_mouse_moved();
         }
         app.set_screenshot_busy(true);
+        {
+            let mut state = self.shared.lock().unwrap();
+            state.remote_playback.screenshot_saved = false;
+            state.remote_playback.screenshot_failed = false;
+        }
         app.set_screenshot_notice(SharedString::default());
         let bridge = self.clone();
         std::thread::spawn(move || {
             let result = bridge
                 .player
                 .capture_screenshot_with_context(session, context);
+            let succeeded = result.is_ok();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(app) = bridge.app() else { return };
                 if !app.get_player_open() || bridge.player.screenshot_session() != session {
                     return;
                 }
                 app.set_screenshot_busy(false);
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .remote_playback
+                    .screenshot_saved = succeeded;
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .remote_playback
+                    .screenshot_failed = !succeeded;
                 let notice = match result {
                     Ok(saved) => text::screenshot_saved(&saved.display_path),
                     Err(error) => text::tr(&error.to_string()).to_owned(),
@@ -122,6 +143,18 @@ impl Bridge {
                         && app.get_screenshot_notice().as_str() == notice
                     {
                         app.set_screenshot_notice(SharedString::default());
+                        bridge
+                            .shared
+                            .lock()
+                            .unwrap()
+                            .remote_playback
+                            .screenshot_saved = false;
+                        bridge
+                            .shared
+                            .lock()
+                            .unwrap()
+                            .remote_playback
+                            .screenshot_failed = false;
                     }
                 });
             });
@@ -129,6 +162,17 @@ impl Bridge {
     }
 
     pub(super) fn begin_playback_request(&self) -> crate::torrent::PlaybackRequest {
+        if !self
+            .shared
+            .lock()
+            .unwrap()
+            .remote_playback
+            .can_play_locally()
+        {
+            let rejected = crate::torrent::PlaybackRequest::default();
+            rejected.cancel();
+            return rejected;
+        }
         self.persist_outgoing_playback();
         self.finish_playback_request();
         let (episode_label, osd_episode_title, episode_number) = self
@@ -146,6 +190,12 @@ impl Bridge {
             .unwrap_or_default();
         let token = crate::torrent::PlaybackRequest::default();
         let mut state = self.shared.lock().unwrap();
+        let remote_context = state.remote_playback.start_context.take();
+        state.remote_playback.begin();
+        if let Some(media) = &remote_context {
+            state.remote_playback.receiver_videos =
+                read_episodes_cache_for(&media.media_type, &media.title_id).unwrap_or_default();
+        }
         state.playback_intent = Some(PlaybackIntent {
             token: token.clone(),
             modal_token: state
@@ -160,23 +210,48 @@ impl Bridge {
             pending: true,
             in_app: false,
             private_playback: false,
-            context: state
-                .modal_item
-                .as_ref()
-                .map(|modal| PlaybackContext {
-                    title: modal.name.clone(),
-                    episode_label,
-                    osd_episode_title,
-                    episode_number,
-                    use_modal_poster: true,
-                    media_type: modal.type_.clone(),
-                    media_id: modal.id.clone(),
-                    request_id: modal.request_id.clone(),
-                    is_episode: !modal.seasons.is_empty(),
-                    is_movie: modal.type_ == "movie",
+            detached: remote_context.is_some(),
+            context: remote_context
+                .map(|media| PlaybackContext {
+                    title: media.title,
+                    episode_label: media.episode.clone(),
+                    osd_episode_title: media.episode,
+                    episode_number: state
+                        .remote_playback
+                        .receiver_videos
+                        .iter()
+                        .find(|video| video.id == media.episode_id)
+                        .map(episode_se_label)
+                        .unwrap_or_default(),
+                    media_type: media.media_type.clone(),
+                    media_id: media.title_id,
+                    request_id: media.episode_id,
+                    is_episode: media.media_type != "movie",
+                    is_movie: media.media_type == "movie",
+                    ..Default::default()
                 })
-                .unwrap_or_default(),
+                .unwrap_or_else(|| {
+                    state
+                        .modal_item
+                        .as_ref()
+                        .map(|modal| PlaybackContext {
+                            title: modal.name.clone(),
+                            episode_label,
+                            osd_episode_title,
+                            episode_number,
+                            use_modal_poster: true,
+                            media_type: modal.type_.clone(),
+                            media_id: modal.id.clone(),
+                            request_id: modal.request_id.clone(),
+                            is_episode: !modal.seasons.is_empty(),
+                            is_movie: modal.type_ == "movie",
+                        })
+                        .unwrap_or_default()
+                }),
         });
+        let context = state.playback_intent.as_ref().unwrap().context.clone();
+        drop(state);
+        self.publish_player_context(&context);
         token
     }
 
@@ -192,6 +267,7 @@ impl Bridge {
     }
 
     pub(super) fn finish_playback_request(&self) {
+        self.playback_closed();
         {
             let mut state = self.shared.lock().unwrap();
             if let Some(intent) = state.playback_intent.take() {
@@ -206,6 +282,13 @@ impl Bridge {
         }
         if let Some(engine) = crate::torrent::engine() {
             engine.on_playback_stopped(&active_torrent_settings());
+        }
+    }
+
+    /// Host browsing must not cancel a receiver-owned loading request.
+    pub(super) fn cancel_pending_for_navigation(&self) {
+        if !self.remote_receiver_playback() {
+            self.cancel_pending_playback();
         }
     }
 
@@ -227,6 +310,9 @@ impl Bridge {
     }
 
     fn mark_playback_opened(&self, in_app: bool) {
+        if !in_app {
+            self.playback_closed();
+        }
         if let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut() {
             intent.pending = false;
             intent.in_app = in_app;
@@ -268,43 +354,14 @@ impl Bridge {
         self.player.set_speed(speed);
     }
 
-    /// Main thread: Android brightness swipe notch(es). Steps the session
-    /// brightness and mirrors the level for the Slint readout; desktop never
-    /// fires this (the Slint side gates swipes on `is_android`).
-    pub(super) fn android_brightness_step(&self, _steps: i32) {
-        #[cfg(target_os = "android")]
-        {
-            let level = android_player::player_brightness_step(_steps);
-            if let Some(app) = self.app() {
-                app.set_player_brightness(level);
-            }
-        }
-    }
-
-    /// Main thread: Android volume swipe notch (`±1`). Steps the music
-    /// stream; the system volume panel is the readout.
+    /// Android volume gesture changes the receiver music-stream level.
+    #[cfg(target_os = "android")]
     pub(super) fn android_volume_step(&self, _dir: i32) {
         #[cfg(target_os = "android")]
         android_player::player_volume_step(_dir);
     }
 
-    /// Main thread: ± one step of the playback rate (± buttons / arrow keys).
-    /// The step is taken on top of the current value and re-quantized onto the
-    /// 0.05 grid, so the rate always lands on an exact multiple — even when
-    /// the slider left a free value like 1.234 behind.
-    pub(super) fn nudge_playback_speed(&self, d: i32) {
-        let current = self
-            .app()
-            .map(|a| a.get_effective_playback_speed())
-            .unwrap_or(1.0);
-        let next = nova_config::quantize_playback_speed(
-            current + d as f32 * nova_config::PLAYBACK_SPEED_STEP,
-        );
-        self.apply_playback_speed(next);
-    }
-
-    /// Remember `speed` in the in-memory settings and the runtime mirror the
-    /// media/player crates read. No disk write: the caller persists.
+    /// Update the default mirror; the caller persists the setting.
     fn store_playback_speed(&self, speed: f32) {
         let settings = {
             let mut state = self.shared.lock().unwrap();
@@ -317,9 +374,7 @@ impl Bridge {
         }
     }
 
-    /// Persist the progress map, then repaint episode rows, season cards
-    /// (watched check) and library badges. Uses the light `apply_*` path
-    /// (no thumbnail re-queue) like the playback tracker does.
+    /// Persist active progress and refresh the dependent library rows.
     pub(super) fn persist_and_refresh_progress(&self) {
         let map = self.shared.lock().unwrap().progress.clone();
         write_progress_map(&map);
@@ -347,6 +402,15 @@ impl Bridge {
     /// Resolve a torrent stream row to a playable loopback URL and open it in
     /// the player. Progress is surfaced in the detail modal's stream hint.
     pub(super) fn play_torrent(&self, display: &str, info_hash: String, file_idx: Option<u32>) {
+        if !self
+            .shared
+            .lock()
+            .unwrap()
+            .remote_playback
+            .can_play_locally()
+        {
+            return;
+        }
         let settings = active_torrent_settings();
         if !settings.enabled {
             self.set_stream_hint(Some(StreamHint::Fixed(
@@ -366,6 +430,12 @@ impl Bridge {
         // no-cache torrent's data is deleted and caching mode stops seeding
         // the previous one.
         let request = self.begin_playback_request();
+        if !request.is_current() {
+            return;
+        }
+        if self.remote_receiver_playback() {
+            self.open_provider_loading(&request);
+        }
         // The whole row text carries the release name (Torrentio puts it on a
         // later line, not the first), which helps pick the right file inside
         // the torrent.
@@ -405,11 +475,13 @@ impl Bridge {
         match result {
             Ok(ready) => {
                 self.set_stream_hint(Some(StreamHint::Playing(ready.display_name)));
-                if nova_config::active_cache_settings().player_external {
+                if self.external_playback_allowed() {
                     // User choice (Settings → Player): external player,
                     // always. Not tracked: there is no close event.
                     self.mark_playback_opened(false);
-                    let _ = crate::player::open_external(&ready.url);
+                    if !self.remote_receiver_playback() {
+                        let _ = crate::player::open_external(&ready.url);
+                    }
                 } else if self.open_player_for_request(
                     request.clone(),
                     ready.url.clone(),
@@ -428,10 +500,16 @@ impl Bridge {
                     // Built-in failed: external app as a fallback.
                     // Not tracked: there is no close event.
                     self.mark_playback_opened(false);
-                    let _ = crate::player::open_external(&ready.url);
+                    if !self.remote_receiver_playback() {
+                        let _ = crate::player::open_external(&ready.url);
+                    }
+                    self.finish_playback_request();
                 }
             }
-            Err(e) => self.set_stream_hint(Some(StreamHint::P2pUnavailable(e.to_string()))),
+            Err(e) => {
+                self.finish_playback_request();
+                self.set_stream_hint(Some(StreamHint::P2pUnavailable(e.to_string())));
+            }
         }
     }
 
@@ -440,6 +518,19 @@ impl Bridge {
     /// the window can't be initialized), so callers can fall back to an
     /// external player (ACTION_VIEW on Android, xdg-open elsewhere). Only ever
     /// runs on the main/UI thread.
+    pub(super) fn remote_receiver_playback(&self) -> bool {
+        self.shared
+            .lock()
+            .unwrap()
+            .playback_intent
+            .as_ref()
+            .is_some_and(|i| i.detached)
+    }
+
+    fn external_playback_allowed(&self) -> bool {
+        nova_config::active_cache_settings().player_external && !self.remote_receiver_playback()
+    }
+
     pub(super) fn open_player(&self, url: String) -> bool {
         self.open_player_with_options(url, Vec::new(), Vec::new())
     }
@@ -455,6 +546,9 @@ impl Bridge {
         addon_generation: u64,
     ) {
         let request = self.begin_playback_request();
+        if !request.is_current() {
+            return;
+        }
         let bridge = self.clone();
         let check_bridge = self.clone();
         let check_request = request.clone();
@@ -483,7 +577,7 @@ impl Bridge {
             return;
         }
         self.set_stream_hint(None);
-        if nova_config::active_cache_settings().player_external {
+        if self.external_playback_allowed() {
             self.set_stream_hint(Some(StreamHint::Fixed("Resolving stream…")));
         } else {
             self.open_provider_loading(&request);
@@ -525,20 +619,21 @@ impl Bridge {
         {
             app.set_player_status(text::tr("Loading stream…").into());
         }
-        let private_playback = result.as_ref().is_ok_and(|stream| {
-            stream
-                .extra
-                .get("novaSensitivePlayback")
-                .and_then(serde_json::Value::as_bool)
-                == Some(true)
-        });
+        let private_playback = self.remote_receiver_playback()
+            || result.as_ref().is_ok_and(|stream| {
+                stream
+                    .extra
+                    .get("novaSensitivePlayback")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+            });
         if let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut() {
             intent.private_playback = private_playback;
         }
         match result.map(|stream| stream_source(&stream)) {
             Ok(StreamSource::Url(url)) => {
                 self.set_stream_hint(None);
-                if !private_playback && nova_config::active_cache_settings().player_external {
+                if !private_playback && self.external_playback_allowed() {
                     self.player.close();
                     self.mark_playback_opened(false);
                     let _ = crate::player::open_external(&url);
@@ -548,7 +643,7 @@ impl Bridge {
                     Vec::new(),
                     Vec::new(),
                 ) {
-                    if private_playback {
+                    if private_playback || self.remote_receiver_playback() {
                         self.provider_resolution_failed(
                             &request,
                             "This stream requires the in-app player, which is unavailable.".into(),
@@ -556,7 +651,9 @@ impl Bridge {
                     } else {
                         self.player.close();
                         self.mark_playback_opened(false);
-                        let _ = crate::player::open_external(&url);
+                        if !self.remote_receiver_playback() {
+                            let _ = crate::player::open_external(&url);
+                        }
                     }
                 }
             }
@@ -590,10 +687,22 @@ impl Bridge {
         subtitles: Vec<String>,
     ) -> bool {
         let request = self.begin_playback_request();
+        if !request.is_current() {
+            return false;
+        }
         self.open_requested_stream(request, url, headers, subtitles)
     }
 
     pub(super) fn play_download(&self, id: &str) {
+        if !self
+            .shared
+            .lock()
+            .unwrap()
+            .remote_playback
+            .can_play_locally()
+        {
+            return;
+        }
         let Some(job) = self
             .downloads
             .job(id)
@@ -605,6 +714,9 @@ impl Bridge {
             return;
         };
         let request = self.begin_playback_request();
+        if !request.is_current() {
+            return;
+        }
         let episode = read_episodes_cache_for(&job.media_type, &job.media_id)
             .and_then(|videos| videos.into_iter().find(|v| v.id == job.request_id));
         if let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut() {
@@ -667,7 +779,9 @@ impl Bridge {
                             subtitles,
                         ) {
                             bridge.mark_playback_opened(false);
-                            let _ = crate::player::open_external(&url);
+                            if !bridge.remote_receiver_playback() {
+                                let _ = crate::player::open_external(&url);
+                            }
                         }
                     } else {
                         callback_request.cancel();
@@ -681,7 +795,11 @@ impl Bridge {
             });
             true
         } else {
-            self.open_player_for_request(request, url, headers, subtitles)
+            let opened = self.open_player_for_request(request, url, headers, subtitles);
+            if !opened && self.remote_receiver_playback() {
+                self.finish_playback_request();
+            }
+            opened
         }
     }
 
@@ -769,7 +887,7 @@ impl Bridge {
         self.publish_player_context(&context);
     }
 
-    fn provider_resolution_failed(
+    pub(super) fn provider_resolution_failed(
         &self,
         request: &crate::torrent::PlaybackRequest,
         message: String,
@@ -777,9 +895,25 @@ impl Bridge {
         if !self.playback_request_is_current(request) {
             return;
         }
-        self.finish_playback_request();
+        let receiver_owned = {
+            let mut state = self.shared.lock().unwrap();
+            state.playback_intent.as_mut().is_some_and(|intent| {
+                if !intent.detached {
+                    return false;
+                }
+                // Revoke worker authority while preserving the visible failed
+                // session so its controller can inspect it and explicitly Stop.
+                intent.token.cancel();
+                intent.pending = false;
+                intent.in_app = true;
+                true
+            })
+        };
+        if !receiver_owned {
+            self.finish_playback_request();
+            self.set_stream_hint(Some(StreamHint::ResolverFailure(message.clone())));
+        }
         self.player.source_failed(&message);
-        self.set_stream_hint(Some(StreamHint::ResolverFailure(message)));
     }
 
     fn open_player_for_request(
@@ -948,13 +1082,14 @@ impl Bridge {
 
         self.publish_player_context(&context);
         let preferences = self.prepare_playback_preferences();
-        let allow_external = !self
-            .shared
-            .lock()
-            .unwrap()
-            .playback_intent
-            .as_ref()
-            .is_some_and(|intent| intent.private_playback);
+        let allow_external = !self.remote_receiver_playback()
+            && !self
+                .shared
+                .lock()
+                .unwrap()
+                .playback_intent
+                .as_ref()
+                .is_some_and(|intent| intent.private_playback);
         match self.player.play_with_preferences_and_policy(
             &url,
             start_at,
@@ -1892,6 +2027,7 @@ mod preference_tests {
                 pending: false,
                 in_app: true,
                 private_playback: false,
+                detached: false,
                 context: PlaybackContext {
                     media_type: "series".into(),
                     media_id: "title".into(),

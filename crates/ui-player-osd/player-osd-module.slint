@@ -54,9 +54,11 @@ export component PlayerOsdModule inherits Window {
         subtitle_clearance_changed(fraction, opacity) => { PlayerOsdBridge.subtitle_clearance_changed(fraction, opacity); }
         toggle_pause() => { PlayerOsdBridge.toggle_pause(); }
         seek(v) => { PlayerOsdBridge.seek(v); }
+        seek_relative(v) => { PlayerOsdBridge.seek_relative(v); }
         close_player() => { PlayerOsdBridge.close_player(); }
         take_screenshot() => { PlayerOsdBridge.take_screenshot(); }
         set_volume(v) => { PlayerOsdBridge.set_volume(v); }
+        volume_step(v) => { PlayerOsdBridge.volume_step(v); }
         toggle_mute() => { PlayerOsdBridge.toggle_mute(); }
         pick_audio_track(i) => { PlayerOsdBridge.pick_audio_track(i); }
         pick_sub_track(i) => { PlayerOsdBridge.pick_sub_track(i); }
@@ -64,6 +66,7 @@ export component PlayerOsdModule inherits Window {
         playback_speed_changed(v) => { PlayerOsdBridge.playback_speed_changed(v); }
         playback_speed_stepped(d) => { PlayerOsdBridge.playback_speed_stepped(d); }
         playback_speed_preview(v) => { PlayerOsdBridge.playback_speed_preview(v); }
+        playback_speed_preview_end() => { PlayerOsdBridge.playback_speed_preview_end(); }
         android_brightness_step(d) => { PlayerOsdBridge.android_brightness_step(d); }
         android_volume_step(d) => { PlayerOsdBridge.android_volume_step(d); }
         settings_opened() => { PlayerOsdBridge.settings_opened(); }

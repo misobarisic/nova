@@ -16,6 +16,8 @@ use std::sync::{Mutex, OnceLock};
 
 const KV: TableDefinition<&str, &str> = TableDefinition::new("kv");
 const CACHE: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata_cache_v1");
+// Device-local counters are separate from exportable KV/collection records.
+const LOCAL_SEQUENCES: TableDefinition<&str, u64> = TableDefinition::new("local_sequences_v1");
 
 static DB_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
 static DB: OnceLock<Result<Database, Error>> = OnceLock::new();
@@ -168,6 +170,38 @@ pub fn try_write_batch(entries: &[(String, Option<String>)]) -> Result<(), Error
     write_to(database()?, entries, false)?;
     clear_transaction_error();
     Ok(())
+}
+
+/// Durably reserve a device-local monotonic ID. `initial` applies only to a
+/// missing counter; subsequent allocations do not depend on clocks or callers'
+/// seeds. Failure never returns an ID, so callers must not fall back to one.
+pub fn try_allocate_local_sequence(name: &str, initial: u64) -> Result<u64, Error> {
+    let id = allocate_local_sequence(database()?, name, initial)?;
+    clear_transaction_error();
+    Ok(id)
+}
+
+fn allocate_local_sequence(db: &Database, name: &str, initial: u64) -> Result<u64, Error> {
+    // Read and increment under redb's exclusive writer, not a separate read
+    // snapshot: concurrent engine startups must never share a boot epoch.
+    let txn = db.begin_write().map_err(transaction)?;
+    let next = {
+        let mut table = txn.open_table(LOCAL_SEQUENCES).map_err(transaction)?;
+        let previous = table.get(name).map_err(transaction)?.map(|v| v.value());
+        let next = match previous {
+            Some(0) => return Err(Error::new(ErrorKind::Schema, "invalid zero local sequence")),
+            Some(previous) => previous
+                .checked_add(1)
+                .ok_or_else(|| Error::new(ErrorKind::Schema, "local sequence exhausted"))?,
+            None if initial > 0 => initial,
+            None => return Err(Error::new(ErrorKind::Schema, "invalid zero sequence seed")),
+        };
+        table.insert(name, next).map_err(transaction)?;
+        next
+    };
+    // A failed commit may have consumed the number, but must never publish it.
+    txn.commit().map_err(transaction)?;
+    Ok(next)
 }
 
 fn clear_transaction_error() {
@@ -354,6 +388,109 @@ fn scan_from(db: &Database, prefix: &str) -> Result<Vec<(String, String)>, Error
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_sequences_survive_restart_and_ignore_lower_clock_seeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sequences.redb");
+        let initial = 1 << 63;
+        let db = Database::create(&path).unwrap();
+        assert_eq!(
+            allocate_local_sequence(&db, "playback", initial).unwrap(),
+            initial
+        );
+        drop(db);
+        let db = Database::open(&path).unwrap();
+        assert_eq!(
+            allocate_local_sequence(&db, "playback", 1).unwrap(),
+            initial + 1
+        );
+        assert_eq!(
+            allocate_local_sequence(&db, "playback", u64::MAX).unwrap(),
+            initial + 2
+        );
+        assert!(
+            scan_from(&db, "").unwrap().is_empty(),
+            "local counters never enter KV exports"
+        );
+    }
+
+    #[test]
+    fn concurrent_local_sequence_allocations_are_unique_and_durable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sequences.redb");
+        let db = std::sync::Arc::new(Database::create(&path).unwrap());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let workers = (0..8)
+            .map(|_| {
+                let db = db.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    allocate_local_sequence(&db, "playback", 100).unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut ids = workers
+            .into_iter()
+            .map(|w| w.join().unwrap())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, (100..108).collect::<Vec<_>>());
+        drop(db);
+        let db = Database::open(&path).unwrap();
+        assert_eq!(allocate_local_sequence(&db, "playback", 1).unwrap(), 108);
+    }
+
+    #[test]
+    fn invalid_or_exhausted_local_sequences_fail_without_replacing_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::create(dir.path().join("sequences.redb")).unwrap();
+        assert!(allocate_local_sequence(&db, "missing", 0).is_err());
+        let txn = db.begin_write().unwrap();
+        {
+            let mut table = txn.open_table(LOCAL_SEQUENCES).unwrap();
+            table.insert("invalid", 0).unwrap();
+            table.insert("exhausted", u64::MAX).unwrap();
+        }
+        txn.commit().unwrap();
+        for name in ["invalid", "exhausted"] {
+            assert_eq!(
+                allocate_local_sequence(&db, name, 100).unwrap_err().kind,
+                ErrorKind::Schema
+            );
+        }
+        let txn = db.begin_read().unwrap();
+        let table = txn.open_table(LOCAL_SEQUENCES).unwrap();
+        assert!(table.get("missing").unwrap().is_none());
+        assert_eq!(table.get("invalid").unwrap().unwrap().value(), 0);
+        assert_eq!(table.get("exhausted").unwrap().unwrap().value(), u64::MAX);
+    }
+
+    #[test]
+    fn incompatible_local_sequence_schema_is_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::create(dir.path().join("sequences.redb")).unwrap();
+        let wrong: TableDefinition<&str, &str> = TableDefinition::new("local_sequences_v1");
+        let txn = db.begin_write().unwrap();
+        txn.open_table(wrong)
+            .unwrap()
+            .insert("playback", "unreadable")
+            .unwrap();
+        txn.commit().unwrap();
+        assert!(allocate_local_sequence(&db, "playback", 100).is_err());
+        assert_eq!(
+            db.begin_read()
+                .unwrap()
+                .open_table(wrong)
+                .unwrap()
+                .get("playback")
+                .unwrap()
+                .unwrap()
+                .value(),
+            "unreadable"
+        );
+    }
 
     fn write(db: &Database, key: &str, value: &str, cached: bool) -> bool {
         write_to(db, &[(key.into(), Some(value.into()))], cached).unwrap()

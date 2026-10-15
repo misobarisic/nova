@@ -70,11 +70,13 @@ impl Bridge {
                 if playing.session == 0 || playing.next_episode_dismissed {
                     return None;
                 }
-                let modal = state
+                let videos = state
                     .modal_item
                     .as_ref()
-                    .filter(|m| m.id == playing.series_id)?;
-                successor(&modal.videos, &playing.episode_id, today_days()).cloned()
+                    .filter(|m| m.id == playing.series_id)
+                    .map(|m| &m.videos)
+                    .unwrap_or(&state.remote_playback.receiver_videos);
+                successor(videos, &playing.episode_id, today_days()).cloned()
             });
             next.and_then(|next| {
                 let playing = state.playback.as_mut()?;

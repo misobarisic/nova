@@ -2512,3 +2512,145 @@ msgstr "Dodajte jezike prema redoslijedu prioriteta. Ako nijedan nije dostupan, 
 
 msgid "Last used"
 msgstr "Posljednje korišteno"
+
+#: remote-controls.slint
+msgid "Controls"
+msgstr "Kontrole"
+
+#: remote-controls.slint
+msgid "Devices"
+msgstr "Uređaji"
+
+#: remote-controls.slint
+msgid "Control playback on your paired devices"
+msgstr "Upravljajte reprodukcijom na uparenim uređajima"
+
+#: remote-controls.slint
+msgid "Exit fullscreen on device"
+msgstr "Izađite iz cijelog zaslona na uređaju"
+
+#: remote-controls.slint
+msgid "Fullscreen on device"
+msgstr "Cijeli zaslon na uređaju"
+
+#: remote-controls.slint
+msgid "Screenshot on device"
+msgstr "Snimka zaslona na uređaju"
+
+#: remote-controls.slint
+msgid "Back disconnects the controls. Playback continues on your device."
+msgstr "Povratak prekida vezu s kontrolama. Reprodukcija se nastavlja na vašem uređaju."
+
+#: remote-controls.slint
+msgid "Pair a device in Settings → Sync to control its playback."
+msgstr "Uparite uređaj u Postavke → Sinkronizacija za upravljanje reprodukcijom."
+
+#: remote-controls.slint
+msgid "Playing on your devices"
+msgstr "Reprodukcija na vašim uređajima"
+
+#: remote-controls.slint
+msgid "Play on"
+msgstr "Reproducirajte na"
+
+#: remote-controls.slint
+msgid "Replace playback on device?"
+msgstr "Zamijeniti reprodukciju na uređaju?"
+
+#: remote-controls.slint
+msgid "Replace playback"
+msgstr "Zamijenite reprodukciju"
+
+#: remote-controls.slint
+msgid "−10 s"
+msgstr "−10 s"
+
+#: remote-controls.slint
+msgid "+10 s"
+msgstr "+10 s"
+
+#: remote-controls.slint
+msgid "Unmute"
+msgstr "Uključite zvuk"
+
+#: remote-controls.slint
+msgid "Hold for 2× speed"
+msgstr "Držite za brzinu 2×"
+
+#: src/backend_text.rs
+msgid "Open Nova on the playing device to connect."
+msgstr "Otvorite Novu na uređaju za reprodukciju kako biste se povezali."
+
+#: src/backend_text.rs
+msgid "This device is no longer paired."
+msgstr "Ovaj uređaj više nije uparen."
+
+#: src/backend_text.rs
+msgid "Playback changed. Refresh the controls and try again."
+msgstr "Reprodukcija se promijenila. Osvježite kontrole i pokušajte ponovno."
+
+#: src/backend_text.rs
+msgid "Leave remote control before starting playback on this device."
+msgstr "Izađite iz daljinskog upravljanja prije pokretanja reprodukcije na ovom uređaju."
+
+#: src/backend_text.rs
+msgid "This selection expired. Reload streams."
+msgstr "Odabir je istekao. Ponovno učitajte zapise."
+
+#: src/backend_text.rs
+msgid "This control is unavailable on the playing device."
+msgstr "Ova kontrola nije dostupna na uređaju za reprodukciju."
+
+#: src/backend_text.rs
+msgid "Could not contact the playing device. Try again."
+msgstr "Nije moguće povezati se s uređajem za reprodukciju. Pokušajte ponovno."
+
+#: src/backend_text.rs
+msgid "Loading streams from the playing device…"
+msgstr "Učitavanje zapisa s uređaja za reprodukciju…"
+
+#: src/backend_text.rs
+msgid "Capturing screenshot…"
+msgstr "Snimanje zaslona…"
+
+#: src/backend_text.rs
+msgid "Screenshot saved on the playing device"
+msgstr "Snimka zaslona spremljena je na uređaju za reprodukciju"
+
+#: src/backend_text.rs
+msgid "Loading stream…"
+msgstr "Učitavanje zapisa…"
+
+#: src/backend_text.rs
+msgid "Playing"
+msgstr "Reprodukcija"
+
+#: src/backend_text.rs
+msgid "Paused"
+msgstr "Pauzirano"
+
+#: src/backend_text.rs
+msgid "Playback failed"
+msgstr "Reprodukcija nije uspjela"
+
+#: src/backend_text.rs
+msgid "No active playback"
+msgstr "Nema aktivne reprodukcije"
+
+#: src/backend_text.rs
+msgid "Choose streams for the next episode?"
+msgstr "Odabrati zapise za sljedeću epizodu?"
+
+#: src/backend_text.rs
+msgid "Available"
+msgstr "Dostupno"
+
+#: src/backend_text.rs
+msgid "Open Nova to connect"
+msgstr "Otvorite Novu za povezivanje"
+
+msgid "Screenshot failed on the playing device"
+msgstr "Snimanje zaslona nije uspjelo na uređaju za reprodukciju"
+
+msgid "Show paired-device playback controls on Home."
+msgstr "Prikaži kontrole reprodukcije uparenih uređaja na početnoj stranici."

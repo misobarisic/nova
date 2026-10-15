@@ -68,11 +68,13 @@ fn android_main(app: slint::android::AndroidApp) {
             match main {
                 MainEvent::Pause => {
                     nova_sync::set_foreground(false);
+                    crate::app::remote_playback::playback_foreground(false);
                     crate::player::note_android_pause();
                     crate::app::note_android_pause_checkpoint();
                 }
                 MainEvent::Resume { .. } => {
                     nova_sync::set_foreground(true);
+                    crate::app::remote_playback::playback_foreground(true);
                     crate::app::note_cache_maintenance_resume();
                     crate::player::note_android_resume()
                 }

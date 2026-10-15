@@ -74,6 +74,16 @@ fn double_tap_seeks_without_revealing_controls_even_between_taps() {
         let seeks = seeks.clone();
         app.on_seek(move |pos| seeks.borrow_mut().push(pos));
     }
+    {
+        let seeks = seeks.clone();
+        let weak = app.as_weak();
+        app.on_seek_relative(move |delta| {
+            let app = weak.upgrade().unwrap();
+            let position = (app.get_position() + delta).clamp(0.0, app.get_duration());
+            app.set_position(position);
+            seeks.borrow_mut().push(position);
+        });
+    }
     advance(500);
 
     for android in [true, false] {

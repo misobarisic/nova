@@ -85,8 +85,27 @@ fn backdrop_double_tap_hold_and_swipe() {
         app.on_seek(move |pos| seeks.borrow_mut().push(pos));
     }
     {
+        let seeks = seeks.clone();
+        let weak = app.as_weak();
+        app.on_seek_relative(move |delta| {
+            let app = weak.upgrade().unwrap();
+            let position = (app.get_position() + delta).clamp(0.0, app.get_duration());
+            app.set_position(position);
+            seeks.borrow_mut().push(position);
+        });
+    }
+    {
         let previews = previews.clone();
         app.on_playback_speed_preview(move |v| previews.borrow_mut().push(v));
+    }
+    {
+        let previews = previews.clone();
+        let weak = app.as_weak();
+        app.on_playback_speed_preview_end(move || {
+            previews
+                .borrow_mut()
+                .push(weak.upgrade().unwrap().get_effective_playback_speed());
+        });
     }
     {
         let toggles = toggles.clone();

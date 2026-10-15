@@ -1,0 +1,55 @@
+import { RemoteOfferRow, RemoteDeviceRow, TrackRow } from "../ui/types.slint";
+
+// Receiver snapshots only; this bridge never holds a video surface or source URL.
+export global RemoteBridge {
+    // UI-owned lease identity survives page teardown so release uses the original session.
+    in-out property <string> speed_preview_token;
+    in-out property <[RemoteDeviceRow]> devices;
+    // Published with discovery snapshots; an idle peer does not create a Home section.
+    in-out property <bool> has_playing_devices;
+    // Available receivers gate the compact stream-output picker.
+    in-out property <bool> has_ready_devices;
+    in-out property <[RemoteOfferRow]> offers;
+    in-out property <bool> controls_open;
+    in-out property <bool> devices_open;
+    in-out property <string> target_id;
+    in-out property <string> target_name;
+    in-out property <bool> connected;
+    in-out property <bool> loading;
+    in-out property <string> error;
+    in-out property <string> title;
+    in-out property <string> episode;
+    in-out property <string> phase;
+    in-out property <string> time_text;
+    in-out property <string> session;
+    in-out property <string> prompt;
+    in-out property <bool> resume_prompt;
+    in-out property <string> prompt_token;
+    in-out property <string> replacement_title;
+    in-out property <string> replacement_token;
+    in-out property <float> position;
+    in-out property <float> duration;
+    in-out property <float> volume;
+    in-out property <float> speed;
+    in-out property <bool> paused;
+    in-out property <bool> muted;
+    in-out property <bool> fullscreen;
+    in-out property <bool> can_pause;
+    in-out property <bool> can_mute;
+    in-out property <bool> can_stop;
+    in-out property <bool> can_seek;
+    in-out property <bool> can_volume;
+    in-out property <bool> can_speed;
+    in-out property <bool> can_tracks;
+    in-out property <bool> can_screenshot;
+    in-out property <bool> can_fullscreen;
+    in-out property <[TrackRow]> audio_tracks;
+    in-out property <[TrackRow]> sub_tracks;
+    callback action(string, float, string);
+    callback device_refresh();
+    callback device_open(string);
+    callback device_selected(string);
+    callback device_close();
+    callback stream_picked(int);
+    callback replacement_confirmed(string, bool);
+}

@@ -17,3 +17,6 @@ mod showcase_swipe;
 
 #[path = "home_motion/hero_title_logo.rs"]
 mod hero_title_logo;
+
+#[path = "home_motion/remote_devices.rs"]
+mod remote_devices;

@@ -52,6 +52,7 @@ export component SettingsPage {
     in-out property <bool> home_continue_enabled: true;
     in-out property <bool> home_upcoming_enabled: true;
     in-out property <bool> home_episode_artwork: false;
+    in-out property <bool> home_devices_enabled: true;
     in-out property <[string]> home_catalog_candidate_names: [];
     in-out property <int> home_catalog_candidate_index: -1;
     in-out property <[string]> home_catalog_genre_names: [];
@@ -791,8 +792,8 @@ export component SettingsPage {
     // on Enter (Left/Right no-op); row 1 opens text edit mode.
     function kb_torrent_n() -> int { return root.torrent_enabled ? 6 : 1; }
 
-    // Four actions per Home catalog, followed by add, artwork, and featured.
-    function kb_home_n() -> int { return root.home_row_catalog_rows.length * 4 + root.home_catalog_rows.length + 3; }
+    // Four actions per Home catalog, followed by add, artwork, devices, and featured.
+    function kb_home_n() -> int { return root.home_row_catalog_rows.length * 4 + root.home_catalog_rows.length + 4; }
 
     function kb_home_activate() {
         let rows_end = root.home_row_catalog_rows.length * 4;
@@ -807,8 +808,11 @@ export component SettingsPage {
         } else if (root.kb_home == rows_end + 1) {
             root.home_episode_artwork = !root.home_episode_artwork;
             root.schedule_setting("home_episode_artwork");
-        } else if (root.kb_home < rows_end + root.home_catalog_rows.length + 2) {
-            root.home_catalog_removed(root.kb_home - rows_end - 2);
+        } else if (root.kb_home == rows_end + 2) {
+            root.home_devices_enabled = !root.home_devices_enabled;
+            root.schedule_setting("home_devices_enabled");
+        } else if (root.kb_home < rows_end + root.home_catalog_rows.length + 3) {
+            root.home_catalog_removed(root.kb_home - rows_end - 3);
         } else {
             root.home_catalog_add_requested();
         }

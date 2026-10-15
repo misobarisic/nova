@@ -42,9 +42,25 @@ fn playback_shortcuts_and_popup_navigation_are_independent() {
     let seeks = Rc::new(RefCell::new(Vec::new()));
     let recorded = seeks.clone();
     app.on_seek(move |position| recorded.borrow_mut().push(position));
+    let recorded = seeks.clone();
+    let weak = app.as_weak();
+    app.on_seek_relative(move |delta| {
+        let app = weak.upgrade().unwrap();
+        let position = (app.get_position() + delta).clamp(0.0, app.get_duration());
+        app.set_position(position);
+        recorded.borrow_mut().push(position);
+    });
     let volumes = Rc::new(RefCell::new(Vec::new()));
     let recorded = volumes.clone();
     app.on_set_volume(move |volume| recorded.borrow_mut().push(volume));
+    let recorded = volumes.clone();
+    let weak = app.as_weak();
+    app.on_volume_step(move |delta| {
+        let app = weak.upgrade().unwrap();
+        let volume = (app.get_volume() + delta).clamp(0.0, 100.0);
+        app.set_volume(volume);
+        recorded.borrow_mut().push(volume);
+    });
     let system_steps = Rc::new(RefCell::new(Vec::new()));
     let recorded = system_steps.clone();
     app.on_android_volume_step(move |step| recorded.borrow_mut().push(step));

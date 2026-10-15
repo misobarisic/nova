@@ -34,6 +34,26 @@ public final class PlayerFx {
                 AudioManager.FLAG_SHOW_UI);
     }
 
+    /** Receiver volume expressed as a percentage of the device's music range. */
+    public static float getVolume(Context context) {
+        AudioManager audio = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+        if (audio == null) {
+            return 100.0f;
+        }
+        int max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+        return max <= 0 ? 0.0f : 100.0f * audio.getStreamVolume(AudioManager.STREAM_MUSIC) / max;
+    }
+
+    /** Map an absolute controller value to this receiver's native volume notches. */
+    public static void setVolume(Context context, float percentage) {
+        AudioManager audio = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+        if (audio != null) {
+            int max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            int value = Math.round(Math.max(0.0f, Math.min(100.0f, percentage)) * max / 100.0f);
+            audio.setStreamVolume(AudioManager.STREAM_MUSIC, value, AudioManager.FLAG_SHOW_UI);
+        }
+    }
+
     /**
      * Live window brightness (0..1), or -1 while the window follows the
      * system default. A plain field read on a params copy. Takes the

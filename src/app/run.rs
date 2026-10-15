@@ -27,7 +27,8 @@ fn note_nav_switch(bridge: &Bridge, next: i32) {
         return;
     };
     let from = current_nav(&app);
-    bridge.cancel_pending_playback();
+    bridge.remote_disconnect();
+    bridge.cancel_pending_for_navigation();
     app.set_show_calendar(false);
     app.set_show_downloads(false);
     if from != next {
@@ -334,6 +335,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         player.clone(),
         downloads,
     );
+
+    bridge.wire_remote_playback();
 
     bridge.last_stream = Arc::new(last_stream::Cache::open_synced(
         nova_config::app_cache_dir().join("last-stream-v1.json"),
@@ -1018,66 +1021,66 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
 
-    // In-app player overlay callbacks (same window).
-    let p = player.clone();
+    // Local and remote commands share the receiver's behavior and cleanup.
+    use nova_playback_api::PlaybackAction;
     let b = bridge.clone();
     app.on_toggle_pause(move || {
-        let was_paused = b.app().is_some_and(|app| app.get_is_paused());
-        p.toggle();
-        if was_paused {
-            b.refresh_next_episode_prompt();
-        } else {
-            // mpv publishes the new pause state asynchronously. Revoke the
-            // speculative lease now instead of rearming from the old UI value.
-            let mut state = b.shared.lock().unwrap();
-            state.stream_prefetch_live_session = None;
-            if let Some(playing) = state.playback.as_mut() {
-                playing.next_episode_prefetched = None;
-            }
-        }
+        let _ = b.dispatch_playback_action(PlaybackAction::TogglePause);
     });
-
-    let p = player.clone();
-    app.on_seek(move |pos| p.seek(pos));
-
-    let p = player.clone();
+    let b = bridge.clone();
+    app.on_seek(move |position| {
+        let _ = b.dispatch_playback_action(PlaybackAction::SeekAbsolute(position as f64));
+    });
+    let b = bridge.clone();
+    app.on_seek_relative(move |delta| {
+        let _ = b.dispatch_playback_action(PlaybackAction::SeekRelative(delta as f64));
+    });
     let b = bridge.clone();
     app.on_close_player(move || {
-        p.close();
-        // A swipe-dimmed window must not leak into the catalog.
-        #[cfg(target_os = "android")]
-        crate::app::android_player::player_brightness_reset();
-        b.finish_playback_request();
-        b.refresh_torrent_disk_usage();
-        b.clear_next_episode_prompt();
-        // Finalize before a next-episode selection installs a new target.
-        b.note_player_progress_from_ui();
-        b.restore_detail_after_playback();
+        let _ = b.dispatch_playback_action(PlaybackAction::Stop);
     });
-
     let b = bridge.clone();
-    app.on_next_episode_streams(move |token| b.choose_next_episode_streams(token.as_str()));
+    app.on_next_episode_streams(move |token| {
+        let _ = b.dispatch_playback_action(PlaybackAction::NextEpisode {
+            token: token.to_string(),
+        });
+    });
     let b = bridge.clone();
-    app.on_next_episode_dismiss(move |token| b.dismiss_next_episode(token.as_str()));
-
+    app.on_next_episode_dismiss(move |token| {
+        let _ = b.dispatch_playback_action(PlaybackAction::DismissNextEpisode {
+            token: token.to_string(),
+        });
+    });
     let b = bridge.clone();
-    app.on_resume_choice(move |resume| b.resume_prompt_choice(resume));
-
+    app.on_resume_choice(move |resume| {
+        let _ = b.dispatch_playback_action(PlaybackAction::Resume(resume));
+    });
     let b = bridge.clone();
-    app.on_resume_cancel(move || b.cancel_resume_prompt());
-
+    app.on_resume_cancel(move || {
+        let _ = b.dispatch_playback_action(PlaybackAction::CancelResume);
+    });
     let b = bridge.clone();
-    app.on_take_screenshot(move || b.take_player_screenshot());
-
-    let p = player.clone();
-    app.on_set_volume(move |v| p.set_volume(v));
-
-    let p = player.clone();
-    app.on_toggle_mute(move || p.toggle_mute());
+    app.on_take_screenshot(move || {
+        let _ = b.dispatch_playback_action(PlaybackAction::Screenshot);
+    });
+    let b = bridge.clone();
+    app.on_set_volume(move |volume| {
+        let _ = b.dispatch_playback_action(PlaybackAction::SetVolume(volume as f64));
+    });
+    let b = bridge.clone();
+    app.on_volume_step(move |delta| {
+        let _ = b.dispatch_playback_action(PlaybackAction::VolumeStep(delta as f64));
+    });
+    let b = bridge.clone();
+    app.on_toggle_mute(move || {
+        let _ = b.dispatch_playback_action(PlaybackAction::ToggleMute);
+    });
 
     // Settings edits defaults; OSD edits only the active title's override.
     let b = bridge.clone();
-    app.on_playback_speed_changed(move |speed| b.apply_playback_speed(speed));
+    app.on_playback_speed_changed(move |speed| {
+        let _ = b.dispatch_playback_action(PlaybackAction::SetSpeed(speed as f64));
+    });
     let b = bridge.clone();
     app.on_default_playback_speed_stepped(move |d| {
         let speed = nova_config::active_cache_settings().playback_speed;
@@ -1099,41 +1102,56 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         b.edit_default_playback_language(code.as_str(), action, subtitles)
     });
     let b = bridge.clone();
-    app.on_restore_playback_default(move |control| b.restore_playback_default(control));
+    app.on_restore_playback_default(move |control| {
+        let action = match control {
+            0 => PlaybackAction::ResetAudioTrack,
+            1 => PlaybackAction::ResetSubtitleTrack,
+            2 => PlaybackAction::ResetSpeed,
+            _ => return,
+        };
+        let _ = b.dispatch_playback_action(action);
+    });
 
     // Transient rate preview (press-and-hold 2×): session only, never stored.
     let b = bridge.clone();
-    app.on_playback_speed_preview(move |speed| b.preview_playback_speed(speed));
+    app.on_playback_speed_preview(move |_speed| {
+        let _ = b.dispatch_playback_action(PlaybackAction::BeginSpeedPreview);
+    });
+    let b = bridge.clone();
+    app.on_playback_speed_preview_end(move || {
+        let _ = b.dispatch_playback_action(PlaybackAction::EndSpeedPreview);
+    });
 
     // Android swipe gestures (brightness/volume); elsewhere these callbacks
     // never fire (the Slint side gates swipes on `is_android`).
     let b = bridge.clone();
-    app.on_android_brightness_step(move |steps| b.android_brightness_step(steps));
-
-    let b = bridge.clone();
-    app.on_android_volume_step(move |dir| b.android_volume_step(dir));
-
-    let b = bridge.clone();
-    app.on_playback_speed_stepped(move |d| {
-        b.nudge_playback_speed(d);
+    app.on_android_brightness_step(move |steps| {
+        let _ = b.dispatch_playback_action(PlaybackAction::BrightnessStep(steps as f64 * 0.05));
     });
 
     let b = bridge.clone();
-    app.on_pick_audio_track(move |idx| b.pick_playback_track(true, idx));
-    let b = bridge.clone();
-    app.on_pick_sub_track(move |idx| b.pick_playback_track(false, idx));
+    app.on_android_volume_step(move |dir| {
+        let _ = b.dispatch_playback_action(PlaybackAction::SystemVolumeStep(dir));
+    });
 
-    // Android runtime decoder picker (settings modal → decoder submenu). A
-    // no-op where the gear/modal is hidden.
-    #[cfg(target_os = "android")]
-    {
-        let p = player.clone();
-        app.on_pick_decoder(move |idx| p.pick_decoder(idx));
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        app.on_pick_decoder(|_idx| {});
-    }
+    let b = bridge.clone();
+    app.on_playback_speed_stepped(move |d| {
+        let _ = b.dispatch_playback_action(PlaybackAction::SpeedStep(d));
+    });
+
+    let b = bridge.clone();
+    app.on_pick_audio_track(move |idx| {
+        let _ = b.dispatch_playback_action(PlaybackAction::SelectAudioTrack(idx));
+    });
+    let b = bridge.clone();
+    app.on_pick_sub_track(move |idx| {
+        let _ = b.dispatch_playback_action(PlaybackAction::SelectSubtitleTrack(idx));
+    });
+
+    let b = bridge.clone();
+    app.on_pick_decoder(move |idx| {
+        let _ = b.dispatch_playback_action(PlaybackAction::SetDecoder(idx));
+    });
 
     // Android: the settings modal opened — query mpv's live decoder state right
     // away so the submenu shows what is actually running, without waiting for
@@ -1148,8 +1166,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         app.on_settings_opened(|| {});
     }
 
-    let p = player.clone();
-    app.on_toggle_fullscreen(move || p.toggle_fullscreen());
+    let b = bridge.clone();
+    app.on_toggle_fullscreen(move || {
+        let _ = b.dispatch_playback_action(PlaybackAction::ToggleFullscreen);
+    });
 
     #[cfg(feature = "desktop")]
     {
@@ -1237,7 +1257,21 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 episode_day = today;
                 tick_bridge.refresh_library_progress_ui();
             }
+            let was_open = tick_bridge.app().is_some_and(|app| app.get_player_open());
             tick_player.tick();
+            if was_open
+                && tick_bridge.app().is_some_and(|app| !app.get_player_open())
+                && tick_bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .playback_intent
+                    .as_ref()
+                    .is_some_and(|intent| intent.in_app)
+            {
+                tick_bridge.complete_playback_close();
+            }
+            tick_bridge.remote_tick();
             tick_bridge.flush_playback_preferences(false);
             tick_bridge.note_player_progress_from_ui();
             tick_bridge.note_torrent_progress_from_ui();
@@ -1281,15 +1315,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // after startup (useful for quick manual/headless checks of the player).
     // Native only.
     if let Ok(url) = std::env::var("NOVA_AUTOPLAY_URL") {
-        let autoplay_player = player.clone();
+        let autoplay_bridge = bridge.clone();
         let autoplay_timer = slint::Timer::default();
         autoplay_timer.start(
             slint::TimerMode::SingleShot,
             Duration::from_millis(1500),
             move || {
                 eprintln!("[autoplay] opening {url}");
-                if let Err(e) = autoplay_player.play(&url, 0.0) {
-                    eprintln!("[autoplay] error: {e}");
+                if !autoplay_bridge.open_player(url.clone()) {
+                    eprintln!("[autoplay] playback unavailable");
                 }
             },
         );

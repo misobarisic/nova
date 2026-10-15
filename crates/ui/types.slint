@@ -309,3 +309,11 @@ export struct PluginSettingRow {
     collection: string, collection-label: string, collection-add-label: string,
     item: string, item-role: string, item-controller: string, configured: bool, has-editor: bool,
 }
+
+export struct RemoteDeviceRow {
+    id: string, name: string, status: string, playing_title: string,
+    ready: bool, has_session: bool,
+}
+
+// Receiver-owned opaque offer identity; never a playback URL or file path.
+export struct RemoteOfferRow { id: string, title: string, description: string }

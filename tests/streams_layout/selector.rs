@@ -564,3 +564,179 @@ fn render_stream_selector_previews() {
     );
     slint::run_event_loop().unwrap();
 }
+
+#[test]
+fn paired_output_picker_keeps_short_results_and_routes_receiver_selection() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "paired_output_picker_keeps_short_results_and_routes_receiver_selection"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_modal_visible(true);
+    app.set_detail_is_movie(true);
+    app.set_selected_title("Arrival".into());
+    app.set_episode_context("Season 1 · Episode 12".into());
+    app.set_stream_selector_open(true);
+    app.set_stream_total(2);
+    app.set_stream_page_count(1);
+    app.set_streams(Rc::new(VecModel::from(vec![row(0), row(1)])).into());
+    app.set_streams_hint("Choose a receiver-owned stream.".into());
+    app.set_stream_addons(
+        Rc::new(VecModel::from(vec![
+            SharedString::from("Torrentio"),
+            SharedString::from("MediaFusion"),
+        ]))
+        .into(),
+    );
+    app.set_remote_devices(
+        Rc::new(VecModel::from(vec![
+            nova::RemoteDeviceRow {
+                id: "paired-phone".into(),
+                name: "Phone".into(),
+                ready: false,
+                ..Default::default()
+            },
+            nova::RemoteDeviceRow {
+                id: "paired-receiver".into(),
+                name: "Living room".into(),
+                ready: true,
+                ..Default::default()
+            },
+        ]))
+        .into(),
+    );
+    app.set_remote_has_ready_devices(true);
+    app.window().set_size(slint::PhysicalSize::new(1920, 960));
+    app.window().show().unwrap();
+    idle();
+    // Output choice occupies the existing heading at every size. Removing all
+    // available receivers restores the original results geometry exactly.
+    for (width, height) in [
+        (320, 360),
+        (390, 844),
+        (700, 360),
+        (900, 360),
+        (1000, 800),
+        (1440, 900),
+        (1920, 1440),
+    ] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        idle();
+        let heading = element(&app, "StreamSelector::stream_heading");
+        let picker = element(&app, "StreamSelector::output_picker");
+        let results = element(&app, "StreamSelector::result_scroll");
+        let original_y = results.absolute_position().y;
+        let original_height = results.size().height;
+        assert!(picker.absolute_position().y >= heading.absolute_position().y);
+        assert!(
+            picker.absolute_position().y + picker.size().height
+                <= heading.absolute_position().y + heading.size().height + 1.0
+        );
+        assert!(picker.absolute_position().x + picker.size().width <= width as f32);
+        assert!(original_height >= 70.0);
+        app.set_remote_has_ready_devices(false);
+        idle();
+        assert!(
+            ElementHandle::find_by_element_id(&app, "StreamSelector::output_picker")
+                .next()
+                .is_none()
+        );
+        let restored = element(&app, "StreamSelector::result_scroll");
+        assert!((restored.absolute_position().y - original_y).abs() <= 1.0);
+        assert!((restored.size().height - original_height).abs() <= 1.0);
+        app.set_remote_has_ready_devices(true);
+        idle();
+    }
+    let selected = Rc::new(RefCell::new(Vec::new()));
+    let recorded = selected.clone();
+    let weak = app.as_weak();
+    app.on_remote_device_selected(move |id| {
+        recorded.borrow_mut().push(id.clone());
+        weak.upgrade().unwrap().set_remote_target_id(id);
+    });
+    let button = |label: &str| {
+        ElementHandle::find_by_accessible_label(&app, label)
+            .find(|item| {
+                item.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)
+            })
+            .unwrap_or_else(|| panic!("missing button {label}"))
+    };
+    let tap = |item: ElementHandle| {
+        item.mock_single_click(slint::platform::PointerEventButton::Left);
+        idle();
+    };
+    tap(button("Play on"));
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, "Phone")
+            .next()
+            .is_none()
+    );
+    let local = button("This device");
+    let receiver = button("Living room");
+    let gap = receiver.absolute_position().y - local.absolute_position().y - local.size().height;
+    assert!(
+        (gap - 8.0).abs() <= 1.0,
+        "offline peers left blank output-menu gaps: {gap}"
+    );
+    tap(receiver);
+    assert_eq!(
+        selected.borrow().as_slice(),
+        &[SharedString::from("paired-receiver")]
+    );
+    let remote_picks = Rc::new(RefCell::new(Vec::new()));
+    let recorded = remote_picks.clone();
+    app.on_remote_stream_picked(move |index| recorded.borrow_mut().push(index));
+    app.on_stream_picked(|_| panic!("receiver output invoked local playback"));
+    tap(button(row(0).text.as_str()));
+    assert_eq!(remote_picks.borrow().as_slice(), &[0]);
+    // A vanished selected receiver still leaves a route back to local playback.
+    app.set_remote_devices(Default::default());
+    app.set_remote_has_ready_devices(false);
+    idle();
+    tap(button("Play on"));
+    tap(button("This device"));
+    assert_eq!(
+        selected.borrow().as_slice(),
+        &[
+            SharedString::from("paired-receiver"),
+            SharedString::default()
+        ]
+    );
+
+    app.set_remote_has_ready_devices(true);
+    // The compact header remains part of the scrolling context on Android;
+    // addon filters must still pin when that context scrolls out of view.
+    app.set_is_android(true);
+    app.set_touch_menus(true);
+    app.set_stream_total(25);
+    app.set_streams(Rc::new(VecModel::from((0..25).map(row).collect::<Vec<_>>())).into());
+    app.window().set_size(slint::PhysicalSize::new(1280, 576));
+    idle();
+    assert!(element(&app, "StreamSelector::output_picker").size().height <= 32.0);
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(600.0, 350.0),
+            delta_x: 0.0,
+            delta_y: -500.0,
+        });
+    idle();
+    assert!(
+        element(&app, "StreamSelector::sticky_filters")
+            .absolute_position()
+            .y
+            .abs()
+            <= 1.0
+    );
+    assert!(
+        element(&app, "StreamSelector::sticky_backdrop")
+            .size()
+            .height
+            >= 40.0
+    );
+}

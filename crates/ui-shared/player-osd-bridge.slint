@@ -52,9 +52,11 @@ export global PlayerOsdBridge {
     callback subtitle_clearance_changed(float, float);
     callback toggle_pause();
     callback seek(float);
+    callback seek_relative(float);
     callback close_player();
     callback take_screenshot();
     callback set_volume(float);
+    callback volume_step(float);
     callback toggle_mute();
     callback pick_audio_track(int);
     callback pick_sub_track(int);
@@ -62,6 +64,7 @@ export global PlayerOsdBridge {
     callback playback_speed_changed(float);
     callback playback_speed_stepped(int);
     callback playback_speed_preview(float);
+    callback playback_speed_preview_end();
     callback android_brightness_step(int);
     callback android_volume_step(int);
     callback settings_opened();

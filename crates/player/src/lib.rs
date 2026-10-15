@@ -499,6 +499,52 @@ impl MpvGlUnderlay {
     }
 }
 
+fn bounded_seek(position: f64, delta: f64, duration: f64) -> f64 {
+    let next = (position + delta).max(0.0);
+    if duration > 0.0 {
+        next.min(duration)
+    } else {
+        next
+    }
+}
+
+// During a reload, mpv may expose no playhead or the previous file's state.
+// The receiver's queued start owns the seek until that load begins reporting.
+fn receiver_seek_state(
+    live_position: Option<f64>,
+    live_duration: Option<f64>,
+    fallback: (f64, f64),
+    queued_position: Option<f64>,
+) -> (f64, f64) {
+    (
+        queued_position.or(live_position).unwrap_or(fallback.0),
+        live_duration
+            .filter(|duration| *duration > 0.0)
+            .unwrap_or(fallback.1),
+    )
+}
+
+#[cfg(test)]
+mod relative_seek_tests {
+    #[test]
+    fn bounds_relative_seek_and_preserves_live_stream_seeking() {
+        assert_eq!(super::bounded_seek(3.0, -10.0, 100.0), 0.0);
+        assert_eq!(super::bounded_seek(95.0, 10.0, 100.0), 100.0);
+        assert_eq!(super::bounded_seek(95.0, 10.0, 0.0), 105.0);
+    }
+
+    #[test]
+    fn relative_seek_preserves_receiver_position_during_reload() {
+        let last_observed = (300.0, 600.0);
+        let missing = super::receiver_seek_state(None, None, last_observed, None);
+        assert_eq!(super::bounded_seek(missing.0, 10.0, missing.1), 310.0);
+        let loading = super::receiver_seek_state(Some(0.0), Some(0.0), last_observed, Some(320.0));
+        assert_eq!(super::bounded_seek(loading.0, -10.0, loading.1), 310.0);
+        let loaded = super::receiver_seek_state(Some(325.0), Some(601.0), last_observed, None);
+        assert_eq!(super::bounded_seek(loaded.0, 10.0, loaded.1), 335.0);
+    }
+}
+
 pub fn format_time(seconds: f64) -> String {
     let total_seconds = seconds.max(0.0) as u64;
     let hours = total_seconds / 3600;
@@ -1739,6 +1785,21 @@ impl Player {
 
     /// Toggle play/pause (overlay Play button or click on the video).
     pub fn toggle(&self) {
+        self.set_paused(!self.is_paused());
+    }
+
+    /// Query the receiver rather than a delayed UI mirror when toggling remotely.
+    pub fn is_paused(&self) -> bool {
+        self.state
+            .mpv
+            .lock()
+            .ok()
+            .and_then(|mpv| mpv.as_ref().and_then(|mpv| mpv.get_property("pause").ok()))
+            .unwrap_or(true)
+    }
+
+    /// Apply an explicit pause state using the same platform side effects as Play.
+    pub fn set_paused(&self, new_paused: bool) {
         if self.state.source_waiting.load(Ordering::SeqCst) {
             return;
         }
@@ -1748,8 +1809,6 @@ impl Player {
         let Some(mpv) = mpv.as_ref() else {
             return;
         };
-        let paused: bool = mpv.get_property("pause").unwrap_or(false);
-        let new_paused = !paused;
         let _ = mpv.set_property("pause", new_paused);
         #[cfg(target_os = "android")]
         if self.state.pending.lock().unwrap().is_some() {
@@ -1771,6 +1830,7 @@ impl Player {
     pub fn seek(&self, pos: f32) {
         if let Some(app) = self.state.app.upgrade() {
             app.set_buffered_until(0.0);
+            app.set_position(pos.max(0.0));
         }
         #[cfg(target_os = "android")]
         {
@@ -1788,6 +1848,68 @@ impl Player {
         if let Some(mpv) = mpv.as_ref() {
             let _ = mpv.set_property("time-pos", pos as f64);
         }
+    }
+
+    /// Relative commands resolve against the receiver's latest playhead.
+    pub fn seek_relative(&self, delta: f64) {
+        let app = self.state.app.upgrade();
+        let fallback = app
+            .as_ref()
+            .map(|app| (app.get_position() as f64, app.get_duration() as f64))
+            .unwrap_or_default();
+        #[cfg(target_os = "android")]
+        let queued_position = {
+            let pending = self.state.pending.lock().unwrap().is_some();
+            let queued = pending
+                .then(|| *self.state.pending_start.lock().unwrap())
+                .flatten();
+            // The render thread consumes `pending` before fresh properties are
+            // available. The existing UI mirror survives surface/decoder reloads.
+            queued.or_else(|| {
+                (!self.state.started.load(Ordering::SeqCst)
+                    && app.as_ref().is_some_and(|app| app.get_playback_started()))
+                .then_some(fallback.0)
+            })
+        };
+        #[cfg(not(target_os = "android"))]
+        let queued_position = None;
+        let (position, duration) = self
+            .state
+            .mpv
+            .lock()
+            .ok()
+            .and_then(|mpv| {
+                mpv.as_ref().map(|mpv| {
+                    (
+                        mpv.get_property::<f64>("time-pos").ok(),
+                        mpv.get_property::<f64>("duration").ok(),
+                    )
+                })
+            })
+            .unwrap_or_default();
+        let (position, duration) =
+            receiver_seek_state(position, duration, fallback, queued_position);
+        self.seek(bounded_seek(position, delta, duration).min(f32::MAX as f64) as f32);
+    }
+
+    /// Read live volume before applying a relative adjustment.
+    pub fn step_volume(&self, delta: f64) {
+        let volume = self
+            .state
+            .mpv
+            .lock()
+            .ok()
+            .and_then(|mpv| {
+                mpv.as_ref()
+                    .and_then(|mpv| mpv.get_property::<f64>("volume").ok())
+            })
+            .unwrap_or_else(|| {
+                self.state
+                    .app
+                    .upgrade()
+                    .map_or(100.0, |app| app.get_volume() as f64)
+            });
+        self.set_volume((volume + delta).clamp(0.0, 100.0) as f32);
     }
 
     /// Set volume (0–100).
@@ -1830,16 +1952,32 @@ impl Player {
         }
     }
 
+    pub fn set_muted(&self, muted: bool) {
+        if let Ok(mpv) = self.state.mpv.lock()
+            && let Some(mpv) = mpv.as_ref()
+        {
+            let _ = mpv.set_property("mute", muted);
+        }
+        if let Some(app) = self.state.app.upgrade() {
+            app.set_muted(muted);
+        }
+    }
+
     /// Toggle window fullscreen.
     pub fn toggle_fullscreen(&self) {
         if let Some(app) = self.state.app.upgrade() {
-            let current = app.window().is_fullscreen();
-            app.window().set_fullscreen(!current);
-            app.set_is_fullscreen(!current);
+            self.set_fullscreen(!app.window().is_fullscreen());
+        }
+    }
+
+    pub fn set_fullscreen(&self, fullscreen: bool) {
+        if let Some(app) = self.state.app.upgrade() {
+            app.window().set_fullscreen(fullscreen);
+            app.set_is_fullscreen(fullscreen);
             #[cfg(not(target_os = "android"))]
             self.state
                 .playback_fullscreen
-                .store(!current, Ordering::SeqCst);
+                .store(fullscreen, Ordering::SeqCst);
         }
     }
 
@@ -1957,6 +2095,22 @@ impl Player {
         }
         self.resolve_preferred_tracks();
         self.refresh_tracks();
+    }
+
+    /// The selected mpv track ID belongs only to the currently loaded stream.
+    pub fn selected_track_id(&self, audio: bool) -> i32 {
+        self.state
+            .mpv
+            .lock()
+            .ok()
+            .and_then(|mpv| {
+                mpv.as_ref().and_then(|mpv| {
+                    mpv.get_property::<i64>(if audio { "aid" } else { "sid" })
+                        .ok()
+                })
+            })
+            .and_then(|id| i32::try_from(id).ok())
+            .unwrap_or(-1)
     }
 
     pub fn effective_playback_speed(&self) -> f32 {
@@ -2222,11 +2376,17 @@ impl Player {
         true
     }
 
+    /// Resolver and decoder startup failures remain actionable until Close.
+    pub fn playback_failed(&self) -> bool {
+        self.state.reported.load(Ordering::SeqCst) && !self.state.started.load(Ordering::SeqCst)
+    }
+
     /// Keep a resolver error readable until Close without probing an old mpv file.
     pub fn source_failed(&self, status: &str) {
         if !self.state.source_waiting.load(Ordering::SeqCst) {
             return;
         }
+        self.state.reported.store(true, Ordering::SeqCst);
         if let Some(app) = self.state.app.upgrade() {
             app.set_player_status(nova_ui::backend_text::tr(status).into());
             app.set_osd_visible(true);
@@ -2645,7 +2805,13 @@ impl Player {
 
         // Natural end of the stream: stop and return to the catalog.
         if self.state.started.load(Ordering::SeqCst) && snapshot.eof && !snapshot.paused {
-            self.close();
+            // The app checkpoints this terminal playhead before close resets
+            // its mirror, and performs the same cleanup as the Exit control.
+            app.invoke_close_player();
+            if app.get_player_open() {
+                // Native-only embedders may not install an app coordinator.
+                self.close();
+            }
         }
     }
 
@@ -3117,10 +3283,14 @@ mod tests {
         *player.state.opened_at.lock().unwrap() = Instant::now() - Duration::from_secs(35);
         player.tick();
         assert_eq!(app.get_player_status(), "Resolving stream…");
+        assert!(!player.playback_failed());
         player.source_failed("Could not resolve this stream.");
+        assert!(player.playback_failed());
         player.tick();
         assert_eq!(app.get_player_status(), "Could not resolve this stream.");
         assert!(!player.take_external_handoff());
+        player.close();
+        assert!(!player.playback_failed(), "Close clears the failed session");
         let before = player.screenshot_session();
         app.set_screenshot_busy(true);
         app.set_screenshot_notice("Previous capture failed".into());
@@ -3140,6 +3310,10 @@ mod tests {
                 },
             )
             .unwrap();
+        assert!(
+            !player.playback_failed(),
+            "Replacement clears the old failure"
+        );
         assert!(!player.state.source_waiting.load(Ordering::SeqCst));
         assert_ne!(before, player.screenshot_session());
         assert!(!app.get_screenshot_busy());

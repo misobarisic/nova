@@ -28,6 +28,7 @@ mod local;
 mod merge;
 mod package;
 mod pair;
+mod playback;
 mod progress;
 mod protocol;
 mod store;
@@ -41,6 +42,7 @@ pub use package::{
     outgoing_package_transfers,
 };
 pub use pair::{ALPN as PAIR_ALPN, IncomingPair, Invite, PairCallback, PairEvent, PairHandler};
+pub use playback::{ALPN as PLAYBACK_ALPN, PreparedPlaybackRequest};
 pub use protocol::ALPN;
 pub use store::{AckFloor, Store};
 pub use ticket::{decode_ticket, encode_ticket};
@@ -226,6 +228,7 @@ pub struct SyncEngine {
     router: Mutex<Option<Router>>,
     handler: Arc<Handler>,
     pair: Arc<PairHandler>,
+    playback: Arc<playback::PlaybackService>,
     store: Arc<Mutex<Store>>,
     peers: Arc<Mutex<Vec<String>>>,
     status: Arc<Mutex<SyncStatus>>,
@@ -594,10 +597,12 @@ impl SyncEngine {
 
         let stop = Arc::new(AtomicBool::new(false));
         let package_handler = Arc::new(package::PackageHandler::new(peers.clone(), stop.clone()));
+        let playback = Arc::new(playback::PlaybackService::new(peers.clone(), stop.clone())?);
         let router = rt.block_on(async {
             Router::builder(endpoint.clone())
                 .accept(ALPN, handler.clone())
                 .accept(PACKAGE_ALPN, package_handler)
+                .accept(PLAYBACK_ALPN, playback.clone())
                 .accept(pair::ALPN, pair_handler.clone())
                 .accept(
                     protocol::REMOVE_ALPN,
@@ -655,6 +660,7 @@ impl SyncEngine {
             router: Mutex::new(Some(router)),
             handler,
             pair: pair_handler,
+            playback,
             store,
             peers,
             status,
@@ -700,6 +706,7 @@ impl SyncEngine {
     /// Remove a peer. The tombstone replicates, so it disappears mesh-wide.
     pub fn remove_peer(&self, id: &str) {
         peers_remove(&self.store, &self.peers, id, self.device);
+        self.playback.revoke(id);
         if let Some(conn) = self
             .conns
             .lock()
@@ -961,6 +968,65 @@ impl SyncEngine {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .domains()
+    }
+
+    /// Register the live app adapter; leave unset in a headless sync owner.
+    pub fn set_playback_handler(&self, handler: Option<nova_playback_api::PlaybackHandler>) {
+        self.playback.set_handler(handler);
+    }
+
+    /// Detach a controller on the UI thread without waiting for network I/O.
+    /// The next request opens a fresh connection with its own preview lease.
+    pub fn disconnect_playback(&self, peer: &str) {
+        if let Ok(peer) = EndpointId::from_str(peer.trim()) {
+            self.playback.retire(&peer.to_string());
+        }
+    }
+
+    /// Capture a controller's connection lease on the UI thread before
+    /// scheduling its worker. This performs no network I/O.
+    pub fn prepare_playback_request(
+        &self,
+        peer: &str,
+        request: nova_playback_api::Request,
+    ) -> Result<PreparedPlaybackRequest> {
+        anyhow::ensure!(read_settings().enabled, "sync is disabled");
+        anyhow::ensure!(!self.stop.load(Ordering::Acquire), "sync engine stopped");
+        let peer = EndpointId::from_str(peer.trim()).context("invalid playback peer")?;
+        self.playback.prepare(peer, request)
+    }
+
+    /// Execute a captured controller lease from a blocking worker. A detached
+    /// controller cannot acquire a fresh connection through an old UI request.
+    pub fn request_prepared_playback(
+        &self,
+        request: PreparedPlaybackRequest,
+    ) -> Result<nova_playback_api::Response> {
+        anyhow::ensure!(read_settings().enabled, "sync is disabled");
+        anyhow::ensure!(!self.stop.load(Ordering::Acquire), "sync engine stopped");
+        let wait = request.timeout() + Duration::from_secs(5);
+        let service = self.playback.clone();
+        let endpoint = self.endpoint.clone();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let task = self.rt.spawn(async move {
+            let _ = tx.send(service.execute(&endpoint, request).await);
+        });
+        let response = rx.recv_timeout(wait);
+        if response.is_err() {
+            task.abort();
+        }
+        response.context("playback worker timed out")?
+    }
+
+    /// Request ephemeral playback state or control from a paired receiver.
+    /// Call from a blocking worker; UI controllers should prepare their lease
+    /// before dispatching a worker. Discovery may use this convenience method.
+    pub fn request_playback(
+        &self,
+        peer: &str,
+        request: nova_playback_api::Request,
+    ) -> Result<nova_playback_api::Response> {
+        self.request_prepared_playback(self.prepare_playback_request(peer, request)?)
     }
 
     /// Fetch registered package bytes on the engine runtime. Call from a

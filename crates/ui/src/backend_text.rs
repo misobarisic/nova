@@ -557,6 +557,42 @@ pub fn tr(english: &str) -> &str {
         "Camera scanning is available on Android only." => {
             "Skeniranje kamerom dostupno je samo na Androidu."
         }
+        // ---- Remote playback ------------------------------------------
+        "Open Nova on the playing device to connect." => {
+            "Otvorite Novu na uređaju za reprodukciju kako biste se povezali."
+        }
+        "This device is no longer paired." => "Ovaj uređaj više nije uparen.",
+        "Playback changed. Refresh the controls and try again." => {
+            "Reprodukcija se promijenila. Osvježite kontrole i pokušajte ponovno."
+        }
+        "Leave remote control before starting playback on this device." => {
+            "Izađite iz daljinskog upravljanja prije pokretanja reprodukcije na ovom uređaju."
+        }
+        "This selection expired. Reload streams." => "Odabir je istekao. Ponovno učitajte zapise.",
+        "This control is unavailable on the playing device." => {
+            "Ova kontrola nije dostupna na uređaju za reprodukciju."
+        }
+        "Could not contact the playing device. Try again." => {
+            "Nije moguće povezati se s uređajem za reprodukciju. Pokušajte ponovno."
+        }
+        "Loading streams from the playing device…" => {
+            "Učitavanje zapisa s uređaja za reprodukciju…"
+        }
+        "Screenshot failed on the playing device" => {
+            "Snimanje zaslona nije uspjelo na uređaju za reprodukciju"
+        }
+        "Capturing screenshot…" => "Snimanje zaslona…",
+        "Screenshot saved on the playing device" => {
+            "Snimka zaslona spremljena je na uređaju za reprodukciju"
+        }
+        "Loading stream…" => "Učitavanje zapisa…",
+        "Playing" => "Reprodukcija",
+        "Playback failed" => "Reprodukcija nije uspjela",
+        "No active playback" => "Nema aktivne reprodukcije",
+        "Resume playback?" => "Nastaviti reprodukciju?",
+        "Choose streams for the next episode?" => "Odabrati zapise za sljedeću epizodu?",
+        "Available" => "Dostupno",
+        "Open Nova to connect" => "Otvorite Novu za povezivanje",
         // ---- Detail / streams ------------------------------------------
         "No installed addon provides streams for this type." => {
             "Nijedan instalirani dodatak ne nudi zapise za ovu vrstu."

@@ -26,7 +26,7 @@ pub(crate) const OPEN_SOURCE_LICENSE_CATALOG: &str =
     include_str!(concat!(env!("OUT_DIR"), "/nova_license_catalog.txt"));
 
 pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
-    const WORKSPACE_CRATES: [&str; 12] = [
+    const WORKSPACE_CRATES: [&str; 13] = [
         "nova",
         "addons",
         "nova-providers",
@@ -37,6 +37,7 @@ pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
         "nova-torrent",
         "nova-media",
         "nova-player",
+        "nova-playback-api",
         "nova-sync",
         "nova-tracking",
     ];
@@ -265,6 +266,7 @@ struct HomeCatalogGroup {
 
 #[derive(Default)]
 struct Shared {
+    remote_playback: remote_playback::State,
     stream_prefetch: stream_prefetch::Cache,
     stream_prefetch_live_session: Option<u64>,
     installed: Vec<Installed>,
@@ -746,10 +748,12 @@ mod onboarding;
 mod page_artwork;
 mod persistence;
 mod playback;
+mod playback_actions;
 mod playback_preferences;
 mod plugin_cache;
 mod plugin_settings;
 mod posters;
+pub(crate) mod remote_playback;
 mod run;
 mod settings;
 mod settings_sync;

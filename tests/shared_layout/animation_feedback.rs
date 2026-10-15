@@ -162,6 +162,11 @@ fn sheet_and_player_feedback_respect_animation_switches() {
     app.set_playback_started(true);
     app.set_duration(600.0);
     app.set_position(100.0);
+    let weak = app.as_weak();
+    app.on_seek_relative(move |delta| {
+        let app = weak.upgrade().unwrap();
+        app.set_position((app.get_position() + delta).clamp(0.0, app.get_duration()));
+    });
     idle(&app, 300);
     let flash_y = || {
         ElementHandle::find_by_element_id(&app, "PlayerOverlay::flash_pill")

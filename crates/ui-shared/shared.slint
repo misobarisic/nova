@@ -1,4 +1,4 @@
-export { PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadEpisode, DownloadGroup, SettingsDestination } from "../ui/types.slint";
+export { RemoteOfferRow, RemoteDeviceRow, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadEpisode, DownloadGroup, SettingsDestination } from "../ui/types.slint";
 export { Theme, ThemePalette } from "../ui/theme.slint";
 export { Anim } from "../ui/anim.slint";
 export { NavMetrics, NavState, SettingsStyle, SettingsDestinations, SettingsSync, ControlInput, SliderGesture, PlaybackSpeed } from "globals.slint";
@@ -18,3 +18,5 @@ export { DetailContent } from "detail-content.slint";
 
 // This root is not mounted; the library owns only shared contracts and globals.
 export component SharedRoot inherits Window { background: transparent; width: 1px; height: 1px; }
+
+export { RemoteBridge } from "remote-bridge.slint";

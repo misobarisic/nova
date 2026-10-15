@@ -661,8 +661,10 @@ export component PlayerOverlay {
 
     callback toggle_pause();
     callback seek(float);
+    callback seek_relative(float);
     callback close_player();
     callback set_volume(float);
+    callback volume_step(float);
     callback toggle_mute();
     callback pick_audio_track(int);
     callback pick_sub_track(int);
@@ -676,6 +678,7 @@ export component PlayerOverlay {
     // running session, never stored or persisted — the release restores the
     // stored rate through this same callback.
     callback playback_speed_preview(float);
+    callback playback_speed_preview_end();
     // Android swipe gestures: brightness notches (±1 per 40px, the backend
     // scales to ±0.05 and mirrors the level into `player_brightness`) and
     // system-volume notches (the system panel is the readout).
@@ -804,13 +807,12 @@ export component PlayerOverlay {
     function shortcut_seek(d: int) {
         // Unknown/live duration cannot provide a valid upper seek bound.
         if (!root.playback_started || root.duration <= 0) { return; }
-        root.position = Math.max(0, Math.min(root.duration, root.position + d * 10));
-        root.seek(root.position);
+        root.seek_relative(d * 10);
     }
 
     function shortcut_volume(d: int) {
         if (root.is_android) { root.android_volume_step(d); }
-        else { root.set_volume(Math.max(0, Math.min(100, root.volume + d * 5))); }
+        else { root.volume_step(d * 5); }
     }
 
     function kb_activate() {
@@ -827,11 +829,9 @@ export component PlayerOverlay {
         } else if (root.kb_idx == 2 && !root.is_android) {
             root.toggle_mute();
         } else if (root.kb_idx == 3) {
-            root.position = Math.max(0, root.position - 10);
-            root.seek(root.position);
+            root.seek_relative(-10);
         } else if (root.kb_idx == 4) {
-            root.position = Math.min(root.duration, root.position + 10);
-            root.seek(root.position);
+            root.seek_relative(10);
         } else if (root.kb_idx == 5) {
             if (root.open_popup == 2) {
                 root.open_popup = 0;
@@ -1087,7 +1087,7 @@ export component PlayerOverlay {
         if (root.hold_active) {
             root.hold_active = false;
             root.flash_show = false;
-            root.playback_speed_preview(root.playback_speed);
+            root.playback_speed_preview_end();
             tap_timer.stop();
             root.tap_side = -2;
             return;
@@ -1115,8 +1115,7 @@ export component PlayerOverlay {
             tap_timer.stop();
             player_backdrop.double_tap_pending = false;
             root.tap_side = -2;
-            root.position = Math.max(0.0, Math.min(root.duration, root.position + side * 10.0));
-            root.seek(root.position);
+            root.seek_relative(side * 10.0);
             root.show_flash(side < 0 ? "-10 s" : "+10 s");
             return;
         }
@@ -1360,7 +1359,7 @@ export component PlayerOverlay {
                         if (root.hold_active) {
                             root.hold_active = false;
                             root.flash_show = false;
-                            root.playback_speed_preview(root.playback_speed);
+                            root.playback_speed_preview_end();
                         }
                         root.swipe_kind = 0;
                         tap_timer.stop();
@@ -1608,8 +1607,7 @@ export component PlayerOverlay {
                     if (!root.guard_osd_control()) { return; }
                     root.kb_active = false;
                     root.kb_idx = 3;
-                    root.position = Math.max(0, root.position - 10);
-                    root.seek(root.position);
+                    root.seek_relative(-10);
                     root.osd_mouse_moved();
                 }
                 IcReplay10 {
@@ -1663,8 +1661,7 @@ export component PlayerOverlay {
                     if (!root.guard_osd_control()) { return; }
                     root.kb_active = false;
                     root.kb_idx = 4;
-                    root.position = Math.min(root.duration, root.position + 10);
-                    root.seek(root.position);
+                    root.seek_relative(10);
                     root.osd_mouse_moved();
                 }
                 IcForward10 {
@@ -2062,8 +2059,7 @@ export component PlayerOverlay {
                             if (!root.guard_osd_control()) { return; }
                             root.kb_active = false;
                             root.kb_idx = 3;
-                            root.position = Math.max(0, root.position - 10);
-                            root.seek(root.position);
+                            root.seek_relative(-10);
                             root.osd_mouse_moved();
                         }
                         IcReplay10 {
@@ -2081,8 +2077,7 @@ export component PlayerOverlay {
                             if (!root.guard_osd_control()) { return; }
                             root.kb_active = false;
                             root.kb_idx = 4;
-                            root.position = Math.min(root.duration, root.position + 10);
-                            root.seek(root.position);
+                            root.seek_relative(10);
                             root.osd_mouse_moved();
                         }
                         IcForward10 {

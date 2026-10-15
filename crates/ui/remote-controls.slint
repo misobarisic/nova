@@ -1,0 +1,326 @@
+import { RemoteBridge, Theme, SettingsStyle } from "@NovaUiShared";
+import { PillButton } from "settings-controls.slint";
+import { PageHeader } from "page-header.slint";
+import { ScrollView } from "scrollview.slint";
+import { Slider } from "std-widgets.slint";
+
+// A preview belongs to the session at press time. Every release path uses that
+// captured identity, so reconnecting or replacing playback cannot reset a new session.
+component RemoteSpeedHold inherits Rectangle {
+    in property <bool> enabled;
+    height: 44px;
+    border-radius: Theme.button_corner_radius;
+    background: RemoteBridge.speed_preview_token != "" ? Theme.current.accent : Theme.current.settings_control;
+    accessible-role: button;
+    accessible-label: @tr("Hold for 2× speed");
+    accessible-enabled: root.enabled;
+    function begin() {
+        if root.enabled && RemoteBridge.speed_preview_token == "" {
+            RemoteBridge.speed_preview_token = RemoteBridge.session;
+            RemoteBridge.action("speed_preview", 2, RemoteBridge.speed_preview_token);
+        }
+    }
+    function release() {
+        if RemoteBridge.speed_preview_token != "" {
+            let token = RemoteBridge.speed_preview_token;
+            RemoteBridge.speed_preview_token = "";
+            RemoteBridge.action("speed_preview_end", 0, token);
+        }
+    }
+    changed enabled => { if !root.enabled { root.release(); } }
+    private property <string> session: RemoteBridge.session;
+    changed session => { root.release(); }
+    Text { width: 100%; height: 100%; text: @tr("Hold for 2× speed"); color: Theme.current.text_primary; horizontal-alignment: center; vertical-alignment: center; }
+    hold_focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => { if e.text == " " || e.text == Key.Return { if !e.repeat { root.begin(); } accept } else { reject } }
+        key-released(e) => { if e.text == " " || e.text == Key.Return { root.release(); accept } else { reject } }
+        changed has-focus => { if !self.has-focus { root.release(); } }
+    }
+    touch := TouchArea {
+        enabled: root.enabled; width: 100%; height: 100%;
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down && e.button == PointerEventButton.left { root.begin(); }
+            else if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel { root.release(); }
+        }
+        changed pressed => { if !self.pressed { root.release(); } }
+    }
+    forward-focus: hold_focus;
+    opacity: root.enabled ? 1 : 0.45;
+}
+
+// This surface receives metadata and controls only. It has no player overlay,
+// video image, decoder, URL or local playback state.
+export component RemoteControlsPage inherits Rectangle {
+    in property <length> safe-top;
+    in property <length> safe-bottom;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    private property <bool> ready: RemoteBridge.connected && RemoteBridge.session != "" && !RemoteBridge.loading && RemoteBridge.error == "" && RemoteBridge.replacement_token == "";
+    background: Theme.current.artwork_canvas;
+    function action(name: string, value: float) { if root.ready { RemoteBridge.action(name, value, RemoteBridge.session); } }
+    focus := FocusScope {
+        enabled: RemoteBridge.replacement_token == ""; width: 100%; height: 100%; init => { self.focus(); }
+        key-pressed(e) => {
+            if e.text == Key.Escape || e.text == Key.Backspace || e.text == Key.Back { if !e.repeat { RemoteBridge.device_close(); } accept }
+            else if root.ready && RemoteBridge.can_pause && (e.text == " " || e.text == "k") { if !e.repeat { root.action("pause", 0); } accept }
+            else if root.ready && RemoteBridge.can_seek && e.text == Key.LeftArrow { root.action("seek_relative", -10); accept }
+            else if root.ready && RemoteBridge.can_seek && e.text == Key.RightArrow { root.action("seek_relative", 10); accept }
+            else if root.ready && RemoteBridge.can_volume && e.text == Key.UpArrow { root.action("volume_relative", 5); accept }
+            else if root.ready && RemoteBridge.can_volume && e.text == Key.DownArrow { root.action("volume_relative", -5); accept }
+            else if root.ready && RemoteBridge.can_fullscreen && e.text == "f" { if !e.repeat { root.action("fullscreen", 0); } accept }
+            else if root.ready && RemoteBridge.can_screenshot && e.text == "s" { if !e.repeat { root.action("screenshot", 0); } accept }
+            else { reject }
+        }
+    }
+    ScrollView {
+        x: root.safe-left + 18px; y: root.safe-top + 18px;
+        width: Math.max(0px, root.width - root.safe-left - root.safe-right - 36px);
+        height: Math.max(0px, root.height - root.safe-top - root.safe-bottom - 36px);
+        content-width: self.visible-width;
+        VerticalLayout {
+            width: 100%; spacing: 16px; alignment: start;
+            HorizontalLayout {
+                spacing: 8px;
+                controls_header := PageHeader {
+                    min-width: 0px; horizontal-stretch: 1;
+                    title: @tr("Controls"); subtitle: RemoteBridge.target_name;
+                    narrow: root.width < 700px; show-back: true;
+                    back => { RemoteBridge.device_close(); }
+                }
+                stop_button := PillButton {
+                    label: @tr("Stop"); compact: true; destructive: true;
+                    horizontal-stretch: 0; vertical-stretch: 0;
+                    enabled: root.ready && RemoteBridge.can_stop;
+                    clicked => { root.action("stop", 0); }
+                }
+            }
+            Text { text: RemoteBridge.title; color: Theme.current.text_bright; font-size: 24px; font-weight: 700; wrap: word-wrap; }
+            if RemoteBridge.episode != "": Text { text: RemoteBridge.episode; color: Theme.current.text_primary; wrap: word-wrap; }
+            Text { text: RemoteBridge.error != "" ? RemoteBridge.error : RemoteBridge.loading ? @tr("Connecting…") : !RemoteBridge.connected ? @tr("Disconnected") : RemoteBridge.phase; color: Theme.current.text_muted; wrap: word-wrap; }
+            Text { text: RemoteBridge.time_text; color: Theme.current.text_primary; }
+            timeline := Slider { enabled: root.ready && RemoteBridge.can_seek && RemoteBridge.duration > 0; minimum: 0; maximum: Math.max(1, RemoteBridge.duration); value: RemoteBridge.position; changed(v) => { root.action("seek", v); } }
+            HorizontalLayout { alignment: start; spacing: 8px;
+                PillButton { label: @tr("−10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { root.action("seek_relative", -10); } }
+                PillButton { label: RemoteBridge.paused ? @tr("Play") : @tr("Pause"); primary: true; enabled: root.ready && RemoteBridge.can_pause; clicked => { root.action("pause", 0); } }
+                PillButton { label: @tr("+10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { root.action("seek_relative", 10); } }
+            }
+            volume_label := Text { text: @tr("Volume"); color: Theme.current.text_primary; }
+            Slider { enabled: root.ready && RemoteBridge.can_volume; minimum: 0; maximum: 100; value: RemoteBridge.volume; changed(v) => { root.action("volume", v); } }
+            HorizontalLayout { alignment: start; spacing: 8px;
+                PillButton { label: RemoteBridge.muted ? @tr("Unmute") : @tr("Mute"); enabled: root.ready && RemoteBridge.can_mute; clicked => { root.action("mute", 0); } }
+            }
+            Text { text: @tr("Playback speed"); color: Theme.current.text_primary; }
+            Slider { enabled: root.ready && RemoteBridge.can_speed; minimum: 0.5; maximum: 2; value: RemoteBridge.speed; changed(v) => { root.action("speed", v); } }
+            Text { text: "" + RemoteBridge.speed + "×"; color: Theme.current.text_muted; }
+            PillButton { label: @tr("Use global default"); enabled: root.ready && RemoteBridge.can_speed; clicked => { root.action("reset_speed", 0); } }
+            RemoteSpeedHold { enabled: root.ready && RemoteBridge.can_speed; }
+            PillButton { label: RemoteBridge.fullscreen ? @tr("Exit fullscreen on device") : @tr("Fullscreen on device"); enabled: root.ready && RemoteBridge.can_fullscreen; clicked => { root.action("fullscreen", 0); } }
+            PillButton { label: @tr("Screenshot on device"); enabled: root.ready && RemoteBridge.can_screenshot; clicked => { root.action("screenshot", 0); } }
+            if RemoteBridge.can_tracks: Text { text: @tr("Audio tracks"); color: Theme.current.text_primary; }
+            if RemoteBridge.can_tracks: PillButton { label: @tr("Use global default"); enabled: root.ready; clicked => { root.action("reset_audio", 0); } }
+            for track in RemoteBridge.audio_tracks: PillButton { primary: track.selected; label: track.title + (track.lang != "" ? " · " + track.lang : ""); wrap_label: true; enabled: root.ready && RemoteBridge.can_tracks; clicked => { root.action("audio", track.index); } }
+            if RemoteBridge.can_tracks: Text { text: @tr("Subtitles"); color: Theme.current.text_primary; }
+            if RemoteBridge.can_tracks: PillButton { label: @tr("Use global default"); enabled: root.ready; clicked => { root.action("reset_subtitle", 0); } }
+            if RemoteBridge.can_tracks: PillButton { label: @tr("Off"); enabled: root.ready; clicked => { root.action("subtitle", -1); } }
+            for track in RemoteBridge.sub_tracks: PillButton { primary: track.selected; label: track.title + (track.lang != "" ? " · " + track.lang : ""); wrap_label: true; enabled: root.ready && RemoteBridge.can_tracks; clicked => { root.action("subtitle", track.index); } }
+            if RemoteBridge.prompt != "": VerticalLayout { spacing: 8px;
+                Text { text: RemoteBridge.prompt; wrap: word-wrap; color: Theme.current.text_primary; }
+                PillButton { label: RemoteBridge.resume_prompt ? @tr("Resume") : @tr("Continue"); enabled: root.ready; clicked => { RemoteBridge.action("prompt_accept", 0, RemoteBridge.prompt_token); } }
+                if RemoteBridge.resume_prompt: PillButton { label: @tr("Start over"); enabled: root.ready; clicked => { RemoteBridge.action("prompt_reject", 0, RemoteBridge.prompt_token); } }
+                PillButton { label: @tr("Cancel"); enabled: root.ready; clicked => { RemoteBridge.action(RemoteBridge.resume_prompt ? "prompt_cancel" : "prompt_reject", 0, RemoteBridge.prompt_token); } }
+            }
+            if RemoteBridge.offers.length > 0: Text { text: @tr("Choose a stream"); color: Theme.current.text_bright; font-size: 20px; font-weight: 700; }
+            for offer[index] in RemoteBridge.offers: VerticalLayout { spacing: 4px;
+                PillButton { label: offer.title; wrap_label: true; enabled: root.ready; clicked => { RemoteBridge.stream_picked(index); } }
+                if offer.description != "": Text { text: offer.description; color: Theme.current.text_muted; wrap: word-wrap; }
+            }
+            Text { text: @tr("Back disconnects the controls. Playback continues on your device."); color: Theme.current.text_muted; wrap: word-wrap; }
+        }
+    }
+}
+
+export component RemoteDevicesPage inherits Rectangle {
+    in property <length> safe-top; in property <length> safe-bottom;
+    in property <length> safe-left; in property <length> safe-right;
+    background: Theme.current.artwork_canvas;
+    FocusScope { width: 100%; height: 100%; init => { self.focus(); }
+        key-pressed(e) => { if e.text == Key.Escape || e.text == Key.Backspace || e.text == Key.Back { if !e.repeat { RemoteBridge.devices_open = false; } accept } else { reject } }
+    }
+    ScrollView {
+        x: root.safe-left + 18px; y: root.safe-top + 18px;
+        width: Math.max(0px, root.width - root.safe-left - root.safe-right - 36px);
+        height: Math.max(0px, root.height - root.safe-top - root.safe-bottom - 36px);
+        content-width: self.visible-width;
+        VerticalLayout {
+            width: 100%; spacing: 16px; alignment: start;
+            HorizontalLayout {
+                spacing: 8px; vertical-stretch: 0;
+                PageHeader {
+                    min-width: 0px; horizontal-stretch: 1;
+                    title: @tr("Devices"); narrow: root.width < 700px; show-back: true;
+                    back => { RemoteBridge.devices_open = false; }
+                }
+                PillButton {
+                    label: @tr("Refresh"); compact: true;
+                    horizontal-stretch: 0; vertical-stretch: 0;
+                    clicked => { RemoteBridge.device_refresh(); }
+                }
+            }
+            if RemoteBridge.devices.length == 0: Text {
+                text: @tr("Pair a device in Settings → Sync to control its playback.");
+                color: Theme.current.text_muted; wrap: word-wrap;
+                min-width: 0px; vertical-stretch: 0;
+            }
+            for device in RemoteBridge.devices: device_card := Rectangle {
+                min-width: 0px; vertical-stretch: 0;
+                // Explicit content height prevents spare viewport height stretching each row.
+                height: card_content.preferred-height;
+                background: Theme.current.card;
+                border-radius: Theme.card_corner_radius;
+                border-width: 1px; border-color: Theme.current.border_soft;
+                card_content := VerticalLayout {
+                    padding: 16px; spacing: 6px;
+                    device_name := Text {
+                        text: device.name; color: Theme.current.text_bright;
+                        font-weight: 700; wrap: word-wrap; min-width: 0px;
+                    }
+                    device_status := Text {
+                        text: device.status; color: Theme.current.text_muted;
+                        wrap: word-wrap; min-width: 0px;
+                    }
+                    if device.has_session && device.playing_title != "": Text {
+                        text: device.playing_title; color: Theme.current.text_primary;
+                        wrap: word-wrap; min-width: 0px;
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        device_controls := PillButton {
+                            label: @tr("Controls"); compact: true;
+                            horizontal-stretch: 0; vertical-stretch: 0;
+                            enabled: device.has_session && device.ready;
+                            clicked => { RemoteBridge.device_open(device.id); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component RemotePlayingSection inherits VerticalLayout {
+    min-width: 0px;
+    spacing: 8px;
+    // Keep the rail's intrinsic width out of the Home page's layout minimum.
+    Text { text: @tr("Playing on your devices"); min-width: 0px; overflow: elide; color: Theme.current.text_bright; font-size: 20px; font-weight: 700; }
+    device_rail := Flickable {
+        min-width: 0px;
+        height: 44px;
+        vertical-stretch: 0;
+        interactive: true;
+        content-height: 44px;
+        content-width: device_choices.preferred-width;
+        device_choices := HorizontalLayout {
+            spacing: 0px;
+            PillButton {
+                label: @tr("Devices");
+                changed keyboard_focused => { if self.keyboard_focused { device_rail.content-x = 0px; } }
+                clicked => { RemoteBridge.devices_open = true; RemoteBridge.device_refresh(); }
+            }
+            // Only real receiver sessions appear here, independently of controller state.
+            for device in RemoteBridge.devices: HorizontalLayout {
+                spacing: 0px;
+                padding-left: device.has_session ? 8px : 0px;
+                if device.has_session: PillButton {
+                    label: device.name + " · " + device.playing_title;
+                    changed keyboard_focused => {
+                        if self.keyboard_focused {
+                            let left = self.absolute-position.x - device_rail.absolute-position.x;
+                            if left < 0px { device_rail.content-x -= left; }
+                            else if left + self.width > device_rail.width {
+                                device_rail.content-x -= Math.min(left, left + self.width - device_rail.width);
+                            }
+                        }
+                    }
+                    clicked => { RemoteBridge.device_open(device.id); }
+                }
+            }
+        }
+    }
+}
+
+// Output choice shares the stream heading; its popup never consumes result height.
+export component RemoteTargetMenu inherits Rectangle {
+    in property <length> popup-height: 180px;
+    height: 32px;
+    width: 80px; horizontal-stretch: 0;
+    PillButton {
+        width: 100%; height: 32px;
+        compact: true; label: @tr("Play on"); primary: RemoteBridge.target_id != "";
+        clicked => { target_popup.show(); }
+    }
+    target_popup := PopupWindow {
+        width: 240px; height: Math.max(60px, Math.min(root.popup-height, 220px));
+        x: root.width - self.width; y: root.height;
+        close-policy: close-on-click-outside;
+        forward-focus: popup_focus;
+        popup_focus := FocusScope {
+            width: 100%; height: 100%; init => { self.focus(); }
+            capture-key-pressed(e) => {
+                if e.text == Key.Back || e.text == Key.Escape { if !e.repeat { target_popup.close(); } accept } else { reject }
+            }
+            capture-key-released(e) => { if e.text == Key.Back || e.text == Key.Escape { accept } else { reject } }
+            Rectangle {
+                width: 100%; height: 100%; background: Theme.current.popup;
+                border-radius: 8px; border-width: 1px; border-color: Theme.current.control_border;
+                ScrollView { width: 100%; height: 100%; content-width: self.visible-width; mouse-drag-pan-enabled: true;
+                    VerticalLayout { width: 100%; padding: 8px; spacing: 0px; alignment: start;
+                        PillButton { label: @tr("This device"); primary: RemoteBridge.target_id == ""; clicked => { target_popup.close(); RemoteBridge.device_selected(""); } }
+                        for device in RemoteBridge.devices: VerticalLayout {
+                            spacing: 0px; vertical-stretch: 0;
+                            // Offline wrappers reserve no inter-item gap.
+                            padding-top: device.ready ? 8px : 0px;
+                            if device.ready: PillButton {
+                                label: device.name; wrap_label: true; primary: RemoteBridge.target_id == device.id;
+                                clicked => { let id = device.id; target_popup.close(); RemoteBridge.device_selected(id); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component RemoteReplacementDialog inherits Rectangle {
+    in property <length> safe-top; in property <length> safe-bottom;
+    in property <length> safe-left; in property <length> safe-right;
+    private property <bool> cancel_selected: false;
+    background: Theme.current.artwork_canvas;
+    TouchArea { width: 100%; height: 100%; }
+    dialog_focus := FocusScope {
+        width: 100%; height: 100%; init => { self.focus(); }
+        // Keep keyboard navigation inside this confirmation even when a pill
+        // owns native focus; underlying stream selection must remain covered.
+        capture-key-pressed(e) => {
+            if e.text == Key.Tab { root.cancel_selected = !root.cancel_selected; SettingsStyle.keyboard-mode = true; self.focus(); accept }
+            else { reject }
+        }
+        key-pressed(e) => {
+            if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
+                if !e.repeat { RemoteBridge.replacement_confirmed(RemoteBridge.replacement_token, false); } accept
+            } else if e.text == Key.Return || e.text == " " {
+                if !e.repeat { RemoteBridge.replacement_confirmed(RemoteBridge.replacement_token, !root.cancel_selected); } accept
+            } else { reject }
+        }
+        VerticalLayout {
+            x: 18px + root.safe-left;
+            y: Math.max(18px + root.safe-top, (root.height - self.preferred-height - root.safe-bottom + root.safe-top) / 2);
+            width: Math.max(0px, root.width - root.safe-left - root.safe-right - 36px); spacing: 16px;
+            Text { text: @tr("Replace playback on device?"); font-size: 24px; font-weight: 700; color: Theme.current.text_bright; wrap: word-wrap; }
+            Text { text: RemoteBridge.replacement_title; color: Theme.current.text_primary; wrap: word-wrap; }
+            PillButton { label: @tr("Replace playback"); primary: true; focused: SettingsStyle.keyboard-mode && !root.cancel_selected; clicked => { RemoteBridge.replacement_confirmed(RemoteBridge.replacement_token, true); } }
+            PillButton { label: @tr("Cancel"); focused: SettingsStyle.keyboard-mode && root.cancel_selected; clicked => { RemoteBridge.replacement_confirmed(RemoteBridge.replacement_token, false); } }
+        }
+    }
+}
