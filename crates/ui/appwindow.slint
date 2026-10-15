@@ -1,4 +1,5 @@
 import { CompletionRatingPrompt } from "completion-rating.slint";
+import { PlatformIcon } from "platform-icon.slint";
 import { PlaybackEnded } from "playback-ended.slint";
 import { PartyPage, PartyPlayerBadge } from "party.slint";
 import { RemoteControlsPage, RemoteDevicesPage, RemoteReplacementDialog } from "remote-controls.slint";
@@ -737,7 +738,7 @@ export component AppWindow inherits Window {
     callback tracking_assign(int,string);
     callback tracking_edit(string,string,int,string,bool,string,bool,string);
     callback tracking_action(string,int);
-    icon: @image-url("../../assets/logo.png");
+    icon: PlatformIcon.image;
     preferred-width: 1100px;
     preferred-height: 750px;
     min-width: 360px;
@@ -1088,7 +1089,7 @@ export component AppWindow inherits Window {
         if (Anim.enabled && Anim.transitions) { more_return_tick.start(); }
         else { root.finish_more_subpage_back(); }
     }
-    in-out property <string> license_catalog: "";
+    in-out property <[string]> license_text_chunks: [];
     in-out property <[LicenseSource]> license_sources: [];
     // Image-cache re-encode settings are desktop-only (the web build relies
     // on the browser HTTP cache and has no app-level image cache).
@@ -2197,7 +2198,7 @@ export component AppWindow inherits Window {
         safe-right: root.safe-area-insets.right;
         safe-bottom: root.safe-area-insets.bottom;
         system_back_request: root.page_back_request;
-        license_catalog: root.license_catalog;
+        license_text_chunks: root.license_text_chunks;
         license_sources: root.license_sources;
     }
 

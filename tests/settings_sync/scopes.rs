@@ -564,3 +564,103 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
         "display state leaves the stored scope policy unchanged"
     );
 }
+
+#[test]
+fn comparison_modal_keeps_long_folder_values_inside_the_panel() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::comparison_modal_keeps_long_folder_values_inside_the_panel"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_touch_menus(true);
+    app.set_sync_enabled(true);
+    app.set_settings_selected_id(7);
+    app.set_settings_detail_open(true);
+    app.global::<nova::Anim>().set_enabled(false);
+    let local = format!("/storage/emulated/0/Download/{}", "a".repeat(100));
+    let shared = format!("/home/nova/Videos/{}", "b".repeat(100));
+    let sync = app.global::<nova::SettingsSync>();
+    sync.set_rows(
+        Rc::new(VecModel::from(vec![nova::SettingSyncInfo {
+            key: "torrent_dir".into(),
+            status: 2,
+            can_override: true,
+            local_value: local.clone().into(),
+            shared_value: shared.clone().into(),
+            has_shared: true,
+            shared_supported: true,
+        }]))
+        .into(),
+    );
+    sync.on_lookup(|_| 0);
+    app.show().unwrap();
+    settle(&app);
+    for locale in ["en", "hr"] {
+        slint::select_bundled_translation(locale).unwrap();
+        for (width, height) in [(320, 800), (360, 800), (390, 844), (720, 360), (1280, 900)] {
+            app.window()
+                .set_size(slint::PhysicalSize::new(width, height));
+            sync.invoke_show("torrent_dir".into(), "Download folder".into());
+            settle(&app);
+            let panel = ElementHandle::find_by_element_id(&app, "SettingSyncModal::panel")
+                .next()
+                .expect("comparison panel");
+            let p = panel.absolute_position();
+            let size = panel.size();
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                    position: slint::LogicalPosition::new(
+                        p.x + size.width / 2.0,
+                        p.y + size.height / 2.0,
+                    ),
+                    delta_x: 0.0,
+                    delta_y: 10000.0,
+                });
+            settle(&app);
+            let left = panel.absolute_position().x;
+            let right = left + panel.size().width;
+            for value in [&local, &shared] {
+                let mut visible = None;
+                for _ in 0..30 {
+                    if let Some(text) = ElementHandle::find_by_accessible_label(&app, value).next()
+                    {
+                        visible = Some(text);
+                        break;
+                    }
+                    let p = panel.absolute_position();
+                    let size = panel.size();
+                    app.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                            position: slint::LogicalPosition::new(
+                                p.x + size.width / 2.0,
+                                p.y + size.height / 2.0,
+                            ),
+                            delta_x: 0.0,
+                            delta_y: -48.0,
+                        });
+                    settle(&app);
+                }
+                let text = visible.unwrap_or_else(|| panic!(
+                    "{locale} comparison at {width}x{height}: cannot reveal {value}; modal open {}; panel {:?} {:?}; labels {:?}",
+                    sync.get_open(), panel.absolute_position(), panel.size(),
+                    panel.query_descendants().match_predicate(|_| true).find_all().iter()
+                        .filter_map(|element| element.accessible_label()).collect::<Vec<_>>()
+                ));
+                let p = text.absolute_position();
+                assert!(
+                    p.x >= left && p.x + text.size().width <= right + 0.5,
+                    "{locale} comparison at {width}x{height}: value {:?} {:?} exceeds panel {left}..{right}",
+                    p,
+                    text.size()
+                );
+            }
+            sync.set_open(false);
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
+}

@@ -47,6 +47,52 @@ fn sheet_count(app: &nova::AppWindow) -> usize {
 }
 
 #[test]
+fn long_action_sheet_titles_stay_inside_the_panel() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "long_action_sheet_titles_stay_inside_the_panel"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_touch_menus(true);
+    app.set_modal_visible(true);
+    app.set_stream_selector_open(true);
+    let title = "A very long release name with provider details, resolution, language and edition information";
+    app.set_stream_action_title(title.into());
+    app.set_stream_action_items(
+        Rc::new(VecModel::from(vec![nova::SheetItem {
+            label: "Download".into(),
+            enabled: true,
+        }]))
+        .into(),
+    );
+    app.set_stream_action_open(true);
+    app.show().unwrap();
+    for (width, height) in [(320, 700), (390, 800), (740, 360), (1280, 800)] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        idle(&app, 40);
+        let panel = panel(&app);
+        let heading = panel
+            .query_descendants()
+            .match_type_name("Text")
+            .match_predicate(|text| text.accessible_label().as_deref() == Some(title))
+            .find_first()
+            .expect("action sheet heading");
+        assert!(
+            heading.absolute_position().x >= panel.absolute_position().x
+                && heading.absolute_position().x + heading.size().width
+                    <= panel.absolute_position().x + panel.size().width + 0.5,
+            "{width}x{height}: release heading must remain inside its sheet"
+        );
+    }
+}
+
+#[test]
 fn sheet_and_player_feedback_respect_animation_switches() {
     if !crate::isolation::run(concat!(
         module_path!(),

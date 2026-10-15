@@ -125,6 +125,8 @@ nova-stremio = { path = "crates/stremio" }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 unicode-normalization = "0.1"
+# The license catalog uses the same zstd implementation as local storage.
+zstd = { version = "0.13", default-features = false }
 
 # QR encoding for the sync invite ticket (Settings → Sync). Disable default
 # features so we don't pull the `image` crate: we read the module matrix via
@@ -154,6 +156,9 @@ ndk-context = "0.1"
 # `image` crate; we decode the camera's luma plane through the greyscale
 # constructor. Pure Rust, so it cross-compiles to the NDK targets.
 rqrr = { version = "0.11", default-features = false }
+
+[build-dependencies]
+zstd = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }

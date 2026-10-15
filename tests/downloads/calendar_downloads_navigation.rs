@@ -446,7 +446,15 @@ fn calendar_columns_stay_equal_with_mixed_dates_counts_and_previews() {
     app.on_calendar_pick(move |day| recorded.borrow_mut().push(day));
     app.window().show().unwrap();
 
-    for (width, height) in [(390, 1000), (616, 1000), (800, 900), (1280, 900)] {
+    for (width, height) in [
+        (320, 1000),
+        (360, 1000),
+        (390, 1000),
+        (616, 1000),
+        (700, 900),
+        (800, 900),
+        (1280, 900),
+    ] {
         app.window()
             .set_size(slint::PhysicalSize::new(width, height));
         for language in ["en", "hr"] {
@@ -471,6 +479,13 @@ fn calendar_columns_stay_equal_with_mixed_dates_counts_and_previews() {
                 let first = days[0].size();
                 for (index, day) in days.iter().enumerate() {
                     let size = day.size();
+                    // Desktop cells show a two-digit date plus release counts
+                    // with 8px padding on each side; equal columns alone can
+                    // still allocate too little room for that text.
+                    assert!(
+                        size.width >= if width < 700 { 36.0 } else { 60.0 },
+                        "{width}px {language} view {view}: date/count lane too cramped: {size:?}"
+                    );
                     assert!(
                         (size.width - first.width).abs() < 0.6
                             && (size.height - first.height).abs() < 0.6,

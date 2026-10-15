@@ -100,7 +100,7 @@ fn release_unmounted_payloads(app: &crate::generated::AppWindow, page: i32) {
         7 => {
             let bridge = app.global::<AboutBridge>();
             bridge.set_license_sources(Default::default());
-            bridge.set_license_catalog(Default::default());
+            bridge.set_license_text_chunks(Default::default());
         }
         8 => {
             let bridge = app.global::<DownloadsBridge>();

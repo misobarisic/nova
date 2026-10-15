@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
@@ -128,10 +129,63 @@ fn generate_license_catalog() {
     catalog.push_str(include_str!("assets/fonts/NotoColorEmoji-LICENSE.txt"));
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set by Cargo"));
-    fs::write(out_dir.join("nova_license_catalog.txt"), catalog)
-        .expect("write generated license catalog");
-    fs::write(out_dir.join("nova_license_sources.tsv"), sources)
-        .expect("write generated license source links");
+    let catalog_path = out_dir.join("nova_license_catalog.txt");
+    let compressed_path = out_dir.join("nova_license_catalog.zst");
+    let recipe_path = out_dir.join("nova_license_catalog.recipe");
+    const COMPRESSION_LEVEL: i32 = 22;
+    let recipe = format!("zstd:{COMPRESSION_LEVEL};checksum:true;size:true;v1\n");
+    let cached = compressed_path.is_file()
+        && fs::read(&catalog_path).is_ok_and(|old| old.as_slice() == catalog.as_bytes())
+        && fs::read(&recipe_path).is_ok_and(|old| old.as_slice() == recipe.as_bytes());
+    // The catalog rarely changes: spend a fraction of a second at build time
+    // to minimize the embedded payload. Pledging its size also records it in
+    // the frame, and the runtime uses the same exact size for its decode buffer.
+    // Reuse the frame on unrelated build-script reruns. Comparing the original
+    // bytes avoids cache hashes, and the recipe invalidates intentional codec
+    // setting changes even when the legal text itself stays identical.
+    if !cached {
+        let mut encoder = zstd::stream::Encoder::new(Vec::new(), COMPRESSION_LEVEL)
+            .expect("create license catalog compressor");
+        encoder
+            .include_checksum(true)
+            .expect("checksum license catalog");
+        encoder
+            .set_pledged_src_size(Some(catalog.len() as u64))
+            .expect("record license catalog size");
+        encoder
+            .write_all(catalog.as_bytes())
+            .expect("compress license catalog");
+        let compressed = encoder
+            .finish()
+            .expect("finish license catalog compression");
+        write_if_changed(&compressed_path, &compressed).expect("write compressed license catalog");
+        write_if_changed(&recipe_path, recipe.as_bytes())
+            .expect("write license compression recipe");
+    }
+    write_if_changed(
+        &out_dir.join("nova_license_catalog_size.rs"),
+        format!(
+            "pub(crate) const OPEN_SOURCE_LICENSE_CATALOG_SIZE: usize = {};\n",
+            catalog.len()
+        )
+        .as_bytes(),
+    )
+    .expect("write license catalog size");
+    // Retain the readable build artifact for inspection and exact round-trip
+    // tests; the production binary embeds only the compressed file.
+    write_if_changed(&catalog_path, catalog.as_bytes()).expect("write generated license catalog");
+    write_if_changed(
+        &out_dir.join("nova_license_sources.tsv"),
+        sources.as_bytes(),
+    )
+    .expect("write generated license source links");
+}
+
+fn write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if fs::read(path).is_ok_and(|old| old.as_slice() == bytes) {
+        return Ok(());
+    }
+    fs::write(path, bytes)
 }
 
 fn render_cargo_about(manifest_dir: &PathBuf, template: &str, target: &str) -> String {

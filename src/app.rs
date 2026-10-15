@@ -22,8 +22,9 @@ use crate::{
     SheetItem, StreamRow, SyncInvite, SyncPeer, UpcomingRow,
 };
 
-pub(crate) const OPEN_SOURCE_LICENSE_CATALOG: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/nova_license_catalog.txt"));
+pub(crate) const OPEN_SOURCE_LICENSE_CATALOG_ZSTD: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/nova_license_catalog.zst"));
+include!(concat!(env!("OUT_DIR"), "/nova_license_catalog_size.rs"));
 
 pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
     const WORKSPACE_CRATES: [&str; 14] = [

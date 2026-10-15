@@ -149,3 +149,87 @@ fn artwork_cards_contain_text_and_only_show_recorded_playback() {
         }
     }
 }
+
+#[test]
+fn long_date_and_runtime_labels_share_the_episode_footer() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "long_date_and_runtime_labels_share_the_episode_footer"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_modal_visible(true);
+    app.set_modal_episodes(true);
+    app.set_detail_tab(3);
+    app.set_selected_title("An unusually long series title for the episode picker".into());
+    app.set_season_names(Rc::new(VecModel::from(vec!["Season 1".into()])).into());
+    app.set_season_combo_idx(0);
+    app.window().show().unwrap();
+    for (language, date, runtime) in [
+        (
+            "en",
+            "Wednesday, September 30, 2026",
+            "1 hour and 24 minutes",
+        ),
+        ("hr", "srijeda, 30. rujna 2026.", "1 sat i 24 minute"),
+    ] {
+        slint::select_bundled_translation(language).unwrap();
+        app.set_episode_rows(
+            Rc::new(VecModel::from(vec![nova::EpisodeRow {
+                text: "An episode with a long title that deliberately wraps over two lines".into(),
+                ep_no: "S1 E12".into(),
+                date: date.into(),
+                runtime: runtime.into(),
+                ..Default::default()
+            }]))
+            .into(),
+        );
+        for (width, height) in [
+            (320, 2000),
+            (360, 2000),
+            (390, 2000),
+            (780, 360),
+            (1280, 1000),
+        ] {
+            app.window()
+                .set_size(slint::PhysicalSize::new(width, height));
+            // A renderer normally evaluates these bindings before timers run.
+            // Query the geometry before each tick for the headless backend.
+            for _ in 0..8 {
+                let _ = elements(&app, "episode_content")
+                    .iter()
+                    .map(|e| e.size())
+                    .collect::<Vec<_>>();
+                i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+            }
+            // The short viewport can clip the card completely under the header;
+            // its mounted geometry is covered at the same width above.
+            let Some(content) = elements(&app, "episode_content").into_iter().next() else {
+                assert!(height == 360, "episode footer must be visible at {width}px");
+                continue;
+            };
+            let date = elements(&app, "episode_date").remove(0);
+            let runtime = elements(&app, "episode_runtime").remove(0);
+            let left = content.absolute_position().x;
+            let right = left + content.size().width;
+            for text in [&date, &runtime] {
+                assert!(text.size().width > 0.0);
+                assert!(text.absolute_position().x >= left - 0.5);
+                assert!(
+                    text.absolute_position().x + text.size().width <= right + 0.5,
+                    "{language} {width}x{height}: metadata must fit inside the content column"
+                );
+            }
+            assert!(
+                date.absolute_position().x + date.size().width + 12.0
+                    <= runtime.absolute_position().x + 0.5,
+                "{language} {width}x{height}: date and runtime must retain their gap"
+            );
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
+}

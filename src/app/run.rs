@@ -117,7 +117,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = AppWindow::new()?;
     nova_ui::initialize_fonts(app.window());
-    app.set_license_catalog(OPEN_SOURCE_LICENSE_CATALOG.into());
+    about::prepare_license_text(&app);
     app.set_license_sources(
         Rc::new(VecModel::<LicenseSource>::from(
             open_source_license_sources(),

@@ -1812,7 +1812,9 @@ export component SettingsPage {
                             x: 0px;
                             y: 108px + root.landing_header_shift + root.landing_pinned_offset;
                             width: 100%;
-                            height: 124px;
+                            // Fade within the 12px gap below the shortcuts,
+                            // leaving the first group heading fully clear.
+                            height: 112px;
                             clip: true;
                             background: Theme.current.artwork_canvas;
                             TouchArea { width: 100%; height: 100%; clicked => {} }

@@ -8,6 +8,27 @@ fn main() {
     // i-slint-backend-testing). It only bloats debug builds; release
     // builds stay lean unless SLINT_EMIT_DEBUG_INFO is set explicitly.
     let debug_info = inspection_metadata();
+    // Select the asset before Slint embeds resources. A runtime conditional
+    // would put both PNGs in every binary and lose the desktop size saving.
+    let out_dir = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    let manifest_dir = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let icon_name = if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        "logo.png"
+    } else {
+        "logo-desktop.png"
+    };
+    let icon_path = manifest_dir.join("../../assets").join(icon_name);
+    println!("cargo:rerun-if-changed={}", icon_path.display());
+    let icon_module = out_dir.join("platform-icon.slint");
+    let icon_binding = format!(
+        "export global PlatformIcon {{ out property <image> image: @image-url({:?}); }}\n",
+        icon_path.to_string_lossy()
+    );
+    // Imported Slint files are watched inputs; leave an unchanged generated
+    // module untouched so it cannot repeatedly invalidate its own build.
+    if !std::fs::read(&icon_module).is_ok_and(|old| old.as_slice() == icon_binding.as_bytes()) {
+        std::fs::write(icon_module, icon_binding).expect("write platform window icon binding");
+    }
 
     // The page factory bridges shares native compiled-library globals.
     // Interpreter globals/weak handles have a different representation, so
@@ -37,6 +58,7 @@ fn main() {
     slint_build::compile_with_config(
         "appwindow.slint",
         slint_build::CompilerConfiguration::new()
+            .with_include_paths(vec![out_dir])
             // Imported fonts must ship in the executable/APK, rather than
             // depend on absolute paths into the build machine's checkout.
             .embed_resources(slint_build::EmbedResourcesKind::EmbedFiles)

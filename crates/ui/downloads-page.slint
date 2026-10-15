@@ -14,12 +14,13 @@ component DownloadButton inherits Rectangle {
     in property <bool> selected: false;
     in property <bool> chevron: false;
     in property <bool> expanded: false;
+    in property <bool> wrap-label: false;
     callback picked();
     width: Math.max(44px, label-text.preferred-width + 20px); height: 44px;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     background: root.selected ? Theme.current.accent : (touch.has-hover ? Theme.current.control_hover : Theme.current.control);
     accessible-role: button; accessible-label: root.label;
-    label-text := Text { visible: !root.chevron; text: root.label; color: root.selected ? Theme.current.on_accent : Theme.current.text_bright; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+    label-text := Text { width: 100%; height: 100%; wrap: root.wrap-label ? word-wrap : no-wrap; visible: !root.chevron; text: root.label; color: root.selected ? Theme.current.on_accent : Theme.current.text_bright; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
     if root.chevron: IcChevronDown {
         width: 24px; height: 24px;
         x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
@@ -35,25 +36,42 @@ component DownloadEpisodeRow inherits Rectangle {
     in property <DownloadEpisode> episode;
     in property <bool> narrow;
     callback action(string, int);
-    height: 82px; background: Theme.current.artwork_canvas;
-    HorizontalLayout {
-        padding: 8px; spacing: 8px;
-        Rectangle { width: root.narrow ? 49px : 62px; height: 30px; border-radius: 5px; background: Theme.current.control;
-            Text { text: root.episode.badge; color: Theme.current.text_secondary; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+    // Compact cards give titles and transfer details their own line. A side
+    // action used to leave only a few characters and overflow its fixed width.
+    private property <bool> stacked: root.width < 480px;
+    height: root.stacked ? 118px : 82px;
+    background: Theme.current.artwork_canvas;
+    episode_text := VerticalLayout {
+        x: root.stacked ? 8px : episode_badge.x + episode_badge.width + 8px;
+        y: 8px;
+        width: Math.max(0px, root.stacked ? root.width - 16px : episode_action.x - self.x - 8px);
+        height: root.stacked ? 50px : root.height - 16px;
+        min-width: 0px; spacing: 3px; alignment: center;
+        Text { vertical-stretch: 0; min-width: 0px; text: root.episode.title; color: Theme.current.text_primary; font-size: 13px; font-weight: 600; overflow: elide; }
+        Text { vertical-stretch: 0; min-width: 0px; text: root.episode.details; color: Theme.current.text_muted; font-size: 11px; overflow: elide; }
+        if root.episode.state == 1: Rectangle { height: 4px; background: Theme.current.slider_track; border-radius: 2px;
+            Rectangle { x: 0px; width: parent.width * root.episode.progress; height: 100%; background: Theme.current.accent; border-radius: 2px; }
         }
-        VerticalLayout {
-            spacing: 3px;
-            Text { text: root.episode.title; color: Theme.current.text_primary; font-size: 13px; font-weight: 600; overflow: elide; }
-            Text { text: root.episode.details; color: Theme.current.text_muted; font-size: 11px; overflow: elide; }
-            if root.episode.state == 1: Rectangle { height: 4px; background: Theme.current.slider_track; border-radius: 2px;
-                Rectangle { x: 0px; width: parent.width * root.episode.progress; height: 100%; background: Theme.current.accent; border-radius: 2px; }
-            }
-            if root.episode.action_kind == 4 && root.episode.state != 1: Text {
-                text: root.episode.state == 2 ? @tr("Watched") : @tr("Unwatched"); color: root.episode.state == 2 ? Theme.current.accent : Theme.current.text_muted; font-size: 11px;
-            }
+        if root.episode.action_kind == 4 && root.episode.state != 1: Text {
+            vertical-stretch: 0; min-width: 0px;
+            text: root.episode.state == 2 ? @tr("Watched") : @tr("Unwatched"); color: root.episode.state == 2 ? Theme.current.accent : Theme.current.text_muted; font-size: 11px;
         }
-        DownloadButton { width: root.narrow ? 58px : 80px; label: root.episode.action_label; picked => { root.action(root.episode.id, 0); } }
-        DownloadButton { width: 44px; label: "×"; accessible-label: @tr("Remove download"); picked => { root.action(root.episode.id, 1); } }
+    }
+    episode_badge := Rectangle {
+        x: 8px; y: root.stacked ? 66px : (root.height - self.height) / 2;
+        width: root.narrow ? 49px : 62px; height: 30px; border-radius: 5px; background: Theme.current.control;
+        Text { text: root.episode.badge; color: Theme.current.text_secondary; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+    }
+    episode_action := DownloadButton {
+        x: root.stacked ? episode_badge.x + episode_badge.width + 8px : root.width - self.width - 60px;
+        y: root.stacked ? 62px : (root.height - self.height) / 2;
+        width: root.stacked ? Math.max(44px, root.width - episode_badge.x - episode_badge.width - 68px) : Math.max(100px, Math.min(160px, root.width * 0.3));
+        label: root.episode.action_label; wrap-label: true;
+        picked => { root.action(root.episode.id, 0); }
+    }
+    DownloadButton {
+        x: root.width - 52px; y: episode_action.y;
+        width: 44px; label: "×"; accessible-label: @tr("Remove download"); picked => { root.action(root.episode.id, 1); }
     }
 }
 component DownloadSeriesCard inherits Rectangle {
@@ -75,7 +93,7 @@ component DownloadSeriesCard inherits Rectangle {
     border-radius: 10px; border-width: 1px; border-color: Theme.current.border_strong;
     background: Theme.current.artwork_canvas; clip: true;
     // Only the chevron animates; rows and card height switch immediately.
-    height: 86px + (root.group.collapsed ? 0px : root.group.episodes.length * 82px);
+    height: 86px + (root.group.collapsed ? 0px : root.group.episodes.length * (root.width < 480px ? 118px : 82px));
     // Without an explicit anchor Slint centers this fixed-height child in
     // the expanded card, moving the artwork and clipping the toggle in rows.
     Rectangle { x: 0px; y: 0px; width: 100%; height: 86px; background: Theme.current.control;
@@ -90,7 +108,7 @@ component DownloadSeriesCard inherits Rectangle {
         }
     }
     if !root.group.collapsed: VerticalLayout {
-        y: 86px; width: 100%; height: root.group.episodes.length * 82px; spacing: 0px;
+        y: 86px; width: 100%; height: root.group.episodes.length * (root.width < 480px ? 118px : 82px); spacing: 0px;
         for episode in root.group.episodes: DownloadEpisodeRow { episode: episode; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } }
     }
 }

@@ -65,9 +65,11 @@ export component SettingSyncModal inherits Rectangle {
                 SettingSyncBadge { max-width: Math.min(self.preferred-width, content.width); setting_key: SettingsSync.selected_key; setting_title: SettingsSync.selected_title; }
                 Rectangle { height: 1px; background: Theme.current.border_subtle; }
                 Text { text: @tr("Value on this device"); font-size: 13px; color: Theme.current.text_settings; }
-                Text { text: root.info.local_value; font-size: 16px; color: Theme.current.text_bright; wrap: word-wrap; }
+                // Folder values can contain an unbroken filename: keep the
+                // scroll document constrained to the comparison panel.
+                Text { text: root.info.local_value; font-size: 16px; color: Theme.current.text_bright; wrap: word-wrap; min-width: 0px; }
                 if root.info.status != 0: Text { text: @tr("Synced value"); font-size: 13px; color: Theme.current.text_settings; }
-                if root.info.status != 0: Text { text: root.info.shared_value; font-size: 16px; color: Theme.current.scope_synced_text; wrap: word-wrap; }
+                if root.info.status != 0: Text { text: root.info.shared_value; font-size: 16px; color: Theme.current.scope_synced_text; wrap: word-wrap; min-width: 0px; }
                 Text {
                     text: root.info.status == 0 ? @tr("This setting is saved only on this device. Changes won’t affect your other devices.") : root.info.status == 2 ? @tr("This device uses a separate value. Changes here won’t affect your other devices.") : !root.info.can_override ? @tr("This setting always syncs. Changes apply to your paired devices.") : @tr("Changes sync to your paired devices. Choose a separate value to keep future changes on this device.");
                     font-size: 14px; color: Theme.current.text_settings; wrap: word-wrap;

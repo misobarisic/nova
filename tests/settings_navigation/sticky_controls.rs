@@ -39,6 +39,44 @@ fn setup(app: &nova::AppWindow) {
 }
 
 #[test]
+fn landing_heading_clears_the_controls_fade() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "landing_heading_clears_the_controls_fade"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.show().unwrap();
+    for (width, height) in [(390, 900), (740, 390), (1280, 900)] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.set_settings_navigation_scroll(0.0);
+        settle(&app);
+        let fade = item(&app, "SettingsPage::landing_controls_fade");
+        let shortcut = ElementHandle::find_by_accessible_label(&app, "Experience")
+            .find(|control| control.accessible_role() == Some(AccessibleRole::Button))
+            .expect("Experience shortcut");
+        assert!(
+            fade.absolute_position().y >= shortcut.absolute_position().y + shortcut.size().height,
+            "{width}x{height}: fade must start below the shortcut buttons"
+        );
+        let heading = ElementHandle::find_by_element_type_name(&app, "Text")
+            .find(|text| text.accessible_label().as_deref() == Some("Experience"))
+            .expect("first settings group heading");
+        assert!(
+            heading.absolute_position().y >= fade.absolute_position().y + fade.size().height,
+            "{width}x{height}: first group heading must start below the pinned-control fade"
+        );
+    }
+}
+
+#[test]
 fn submenu_navigation_and_installed_filters_pin_without_pinning_forms() {
     if !crate::isolation::run(concat!(
         module_path!(),

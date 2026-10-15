@@ -21,8 +21,9 @@ Month uses a Monday-first, fixed 42-day grid with seven equal-width columns
 aligned across every week and the weekday headings. The Week strip uses the
 same equal division; date digits, release counts, preview text and selection
 borders do not change cell sizes. Today has an outline and the selected day
-has a purple highlight. Desktop shows that day's episodes and
-subsequent releases beside the grid; narrow layouts show cards below it.
+has an accent highlight. Layouts at least 1000 logical pixels wide show that
+day's episodes and subsequent releases beside the grid; smaller layouts show
+cards below it so all seven date columns remain readable.
 Week shows seven days and grouped release cards. Timeline is a continuous dated
 list, without month boundaries or Previous/Next month buttons. It initially
 starts at the selected day (today on first entry); scrolling near the bottom

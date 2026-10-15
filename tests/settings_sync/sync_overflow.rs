@@ -158,3 +158,45 @@ fn settings_sync_subpage_has_no_horizontal_overflow() {
         failures.join("\n  ")
     );
 }
+
+/// Incoming pairing is a separate conditional card: its spaced match code
+/// must not impose a desktop-sized minimum width on the phone document.
+#[test]
+fn incoming_pairing_code_fits_phone_widths_in_both_languages() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::incoming_pairing_code_fits_phone_widths_in_both_languages"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_show_home(false);
+    app.set_show_settings(true);
+    app.set_touch_menus(true);
+    app.set_sync_enabled(true);
+    app.set_settings_selected_id(7);
+    app.set_settings_detail_open(true);
+    app.set_sync_pair_prompt_visible(true);
+    app.set_sync_pair_prompt_name("Living room television with a long device name".into());
+    app.set_sync_pair_prompt_code("123456".into());
+    app.global::<nova::Anim>().set_enabled(false);
+    app.show().unwrap();
+    for locale in ["en", "hr"] {
+        slint::select_bundled_translation(locale).unwrap();
+        for (width, height) in [(320, 800), (360, 800), (390, 844), (720, 360), (1280, 900)] {
+            app.window()
+                .set_size(slint::PhysicalSize::new(width, height));
+            for _ in 0..20 {
+                let _ = max_right_edge(&app);
+                i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+            }
+            let edge = max_right_edge(&app);
+            assert!(
+                edge <= width as f32 + 1.0,
+                "{locale} incoming pairing at {width}x{height}: content reaches {edge}"
+            );
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
+}

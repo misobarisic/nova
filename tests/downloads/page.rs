@@ -341,7 +341,14 @@ fn group_toggles_update_rows_immediately_and_keep_header_fixed() {
         app.window()
             .set_size(slint::PhysicalSize::new(width, viewport_height));
         advance(300);
-        assert_eq!(height(), 250.0);
+        let card_width = ElementHandle::find_by_element_type_name(&app, "DownloadSeriesCard")
+            .next()
+            .unwrap()
+            .size()
+            .width;
+        let row_height = if card_width < 480.0 { 118.0 } else { 82.0 };
+        let expanded_height = 86.0 + 2.0 * row_height;
+        assert_eq!(height(), expanded_height);
         for (master, transitions) in [(true, true), (true, false), (false, true)] {
             app.global::<nova::Anim>().set_enabled(master);
             app.global::<nova::Anim>().set_transitions(transitions);
@@ -361,21 +368,25 @@ fn group_toggles_update_rows_immediately_and_keep_header_fixed() {
             advance(1);
             assert_eq!(
                 height(),
-                250.0,
+                expanded_height,
                 "episode list opens immediately even with motion enabled"
             );
             for row in ElementHandle::find_by_element_type_name(&app, "DownloadEpisodeRow") {
-                assert_eq!(row.size().height, 82.0);
+                assert_eq!(row.size().height, row_height);
             }
             advance(70);
-            assert_eq!(height(), 250.0, "chevron motion must not resize the list");
+            assert_eq!(
+                height(),
+                expanded_height,
+                "chevron motion must not resize the list"
+            );
         }
         // Periodic backend publication keeps row geometry stable.
         let mut row = episodes.row_data(0).unwrap();
         row.progress = 0.6;
         episodes.set_row_data(0, row);
         advance(1);
-        assert_eq!(height(), 250.0);
+        assert_eq!(height(), expanded_height);
     }
 }
 
@@ -489,4 +500,113 @@ fn chevron_rotation_paints_intermediate_frames_inside_the_header() {
         },
     );
     app.run().unwrap();
+}
+
+#[test]
+fn long_download_actions_preserve_readable_episode_and_transfer_text() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::long_download_actions_preserve_readable_episode_and_transfer_text"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_show_home(false);
+    app.set_show_downloads(true);
+    app.window().show().unwrap();
+    for (language, action) in [
+        ("en", "Play downloaded file"),
+        ("hr", "Reproducirajte preuzetu datoteku"),
+    ] {
+        slint::select_bundled_translation(language).unwrap();
+        let episode = nova::DownloadEpisode {
+            id: "job".into(),
+            badge: "S12 E24".into(),
+            title: "A long episode title with a meaningful beginning".into(),
+            details: "1.8 GiB · 1080p · Waiting for the network connection".into(),
+            action_label: action.into(),
+            action_kind: 4,
+            ..Default::default()
+        };
+        app.set_downloads_page_transfers(Rc::new(VecModel::from(vec![episode.clone()])).into());
+        app.set_downloads_page_groups(
+            Rc::new(VecModel::from(vec![nova::DownloadGroup {
+                id: "series".into(),
+                title: "Downloaded series".into(),
+                episodes: Rc::new(VecModel::from(vec![episode])).into(),
+                ..Default::default()
+            }]))
+            .into(),
+        );
+        for (width, height) in [
+            (320, 1200),
+            (360, 1200),
+            (390, 1200),
+            (800, 360),
+            (1280, 900),
+        ] {
+            app.window()
+                .set_size(slint::PhysicalSize::new(width, height));
+            // The short landscape viewport must scroll past the retained
+            // search/filter controls before an episode can be inspected.
+            for delta_y in [10000.0, if height < 500 { -260.0 } else { 0.0 }] {
+                app.window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                        position: LogicalPosition::new(width as f32 / 2.0, height as f32 - 30.0),
+                        delta_x: 0.0,
+                        delta_y,
+                    });
+                i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(50));
+            }
+            for _ in 0..3 {
+                for row in ElementHandle::find_by_element_type_name(&app, "DownloadEpisodeRow") {
+                    let _ = row.size();
+                }
+                i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(50));
+            }
+            let rows: Vec<_> =
+                ElementHandle::find_by_element_type_name(&app, "DownloadEpisodeRow").collect();
+            assert!(!rows.is_empty());
+            for row in rows {
+                let text = row
+                    .query_descendants()
+                    .match_id("DownloadEpisodeRow::episode_text")
+                    .find_first()
+                    .unwrap();
+                let button = row
+                    .query_descendants()
+                    .match_id("DownloadEpisodeRow::episode_action")
+                    .find_first()
+                    .unwrap();
+                assert!(
+                    button.size().width >= 100.0,
+                    "{language} {width}: action label cramped: {:?}",
+                    button.size()
+                );
+                assert!(
+                    text.size().width >= 180.0,
+                    "{language} {width}: metadata lane cramped: {:?}",
+                    text.size()
+                );
+                if row.size().width < 480.0 {
+                    assert!(
+                        text.absolute_position().y + text.size().height
+                            <= button.absolute_position().y
+                    );
+                } else {
+                    assert!(
+                        text.absolute_position().x + text.size().width
+                            <= button.absolute_position().x
+                    );
+                }
+                assert!(
+                    button.absolute_position().x + button.size().width
+                        <= row.absolute_position().x + row.size().width - 51.5
+                );
+            }
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
 }

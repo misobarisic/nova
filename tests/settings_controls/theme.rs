@@ -114,7 +114,7 @@ fn theme_search_toggle_resize_and_android_back() {
             < 1.0,
         "search/shortcuts canvas pins below the compact title and its opaque seam"
     );
-    assert!((mask.size().height - 124.0).abs() < 1.0);
+    assert!((mask.size().height - 112.0).abs() < 1.0);
     // Theme presets are keyboard-reachable and feed the mounted theme
     // immediately. Zero must produce square corners and no card gaps.
     key(&app, slint::platform::Key::DownArrow.into());
