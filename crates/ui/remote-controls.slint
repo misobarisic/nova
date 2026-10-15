@@ -253,15 +253,16 @@ export component RemotePlayingSection inherits VerticalLayout {
 export component RemoteTargetMenu inherits Rectangle {
     in property <length> popup-height: 180px;
     height: 32px;
-    width: 80px; horizontal-stretch: 0;
-    PillButton {
-        width: 100%; height: 32px;
+    width: output_button.width; horizontal-stretch: 0;
+    output_button := PillButton {
+        x: 0px; y: (root.height - self.height) / 2;
+        btn_min_width: 80px; height: 32px;
         compact: true; label: @tr("Play on"); primary: RemoteBridge.target_id != "";
         clicked => { target_popup.show(); }
     }
     target_popup := PopupWindow {
         width: 240px; height: Math.max(60px, Math.min(root.popup-height, 220px));
-        x: root.width - self.width; y: root.height;
+        x: root.width - self.width; y: output_button.y + output_button.height;
         close-policy: close-on-click-outside;
         forward-focus: popup_focus;
         popup_focus := FocusScope {

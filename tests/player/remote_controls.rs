@@ -222,3 +222,95 @@ fn devices_cards_stay_compact_and_only_ready_sessions_open() {
     key(&app, slint::platform::Key::Escape);
     assert!(!app.get_remote_devices_open());
 }
+
+#[test]
+fn remote_pages_translate_and_fit_in_english_and_croatian() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::remote_pages_translate_and_fit_in_english_and_croatian"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.window().set_size(slint::PhysicalSize::new(320, 1800));
+    app.set_remote_target_name("Living room television with a long device name".into());
+    app.set_remote_devices(
+        Rc::new(slint::VecModel::from(vec![nova::RemoteDeviceRow {
+            id: "receiver".into(),
+            name: "Living room television with a long device name".into(),
+            ready: true,
+            has_session: true,
+            ..Default::default()
+        }]))
+        .into(),
+    );
+    app.window().show().unwrap();
+    let has = |label: &str| {
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, label)
+                .next()
+                .is_some(),
+            "missing translated label: {label}"
+        );
+    };
+    for (language, devices, refresh, controls, connecting, disconnected, labels) in [
+        (
+            "en",
+            "Devices",
+            "Refresh",
+            "Controls",
+            "Connecting…",
+            "Disconnected",
+            ["Pause", "Mute", "Volume", "Audio tracks"],
+        ),
+        (
+            "hr",
+            "Uređaji",
+            "Osvježite",
+            "Kontrole",
+            "Povezivanje…",
+            "Veza je prekinuta",
+            ["Pauzirajte", "Isključite zvuk", "Glasnoća", "Zvučni zapisi"],
+        ),
+    ] {
+        slint::select_bundled_translation(language).unwrap();
+        app.set_remote_controls_open(false);
+        app.set_remote_devices_open(true);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+        has(devices);
+        has(refresh);
+        has(controls);
+        app.set_remote_devices_open(false);
+        app.set_remote_controls_open(true);
+        app.set_remote_loading(true);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+        has(connecting);
+        app.set_remote_loading(false);
+        app.set_remote_connected(false);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+        has(disconnected);
+        app.set_remote_connected(true);
+        app.set_remote_session("session".into());
+        app.set_remote_can_tracks(true);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+        for label in labels {
+            has(label);
+        }
+        has(controls);
+        for button in i_slint_backend_testing::ElementQuery::from_root(&app)
+            .find_all()
+            .into_iter()
+            .filter(|item| item.accessible_role() == Some(AccessibleRole::Button))
+        {
+            assert!(button.absolute_position().x >= 0.0);
+            assert!(
+                button.absolute_position().x + button.size().width <= 320.5,
+                "{language} button overflows: {:?}",
+                button.accessible_label()
+            );
+        }
+    }
+    slint::select_bundled_translation("en").unwrap();
+}

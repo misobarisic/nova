@@ -616,43 +616,70 @@ fn paired_output_picker_keeps_short_results_and_routes_receiver_selection() {
     idle();
     // Output choice occupies the existing heading at every size. Removing all
     // available receivers restores the original results geometry exactly.
-    for (width, height) in [
-        (320, 360),
-        (390, 844),
-        (700, 360),
-        (900, 360),
-        (1000, 800),
-        (1440, 900),
-        (1920, 1440),
-    ] {
-        app.window()
-            .set_size(slint::PhysicalSize::new(width, height));
-        idle();
-        let heading = element(&app, "StreamSelector::stream_heading");
-        let picker = element(&app, "StreamSelector::output_picker");
-        let results = element(&app, "StreamSelector::result_scroll");
-        let original_y = results.absolute_position().y;
-        let original_height = results.size().height;
-        assert!(picker.absolute_position().y >= heading.absolute_position().y);
-        assert!(
-            picker.absolute_position().y + picker.size().height
-                <= heading.absolute_position().y + heading.size().height + 1.0
-        );
-        assert!(picker.absolute_position().x + picker.size().width <= width as f32);
-        assert!(original_height >= 70.0);
-        app.set_remote_has_ready_devices(false);
-        idle();
-        assert!(
-            ElementHandle::find_by_element_id(&app, "StreamSelector::output_picker")
-                .next()
-                .is_none()
-        );
-        let restored = element(&app, "StreamSelector::result_scroll");
-        assert!((restored.absolute_position().y - original_y).abs() <= 1.0);
-        assert!((restored.size().height - original_height).abs() <= 1.0);
-        app.set_remote_has_ready_devices(true);
-        idle();
+    for language in ["en", "hr"] {
+        slint::select_bundled_translation(language).unwrap();
+        for (width, height) in [
+            (320, 360),
+            (390, 844),
+            (700, 360),
+            (900, 360),
+            (1000, 800),
+            (1440, 900),
+            (1920, 1440),
+        ] {
+            app.window()
+                .set_size(slint::PhysicalSize::new(width, height));
+            idle();
+            let heading = element(&app, "StreamSelector::stream_heading");
+            let picker = element(&app, "StreamSelector::output_picker");
+            let output_button = element(&app, "RemoteTargetMenu::output_button");
+            if language == "hr" {
+                assert!(
+                    output_button.size().width > 80.0,
+                    "Croatian output label must fit instead of clipping into the English width"
+                );
+                assert!(
+                    ElementHandle::find_by_accessible_label(&app, "Reproducirajte na")
+                        .next()
+                        .is_some()
+                );
+            }
+            let title = element(&app, "StreamSelector::heading_title");
+            let count = element(&app, "StreamSelector::stream_count");
+            let center_y =
+                |item: &ElementHandle| item.absolute_position().y + item.size().height / 2.0;
+            for peer in [&heading, &title, &count] {
+                assert!(
+                    (center_y(&output_button) - center_y(peer)).abs() <= 1.0,
+                    "Play on must share the heading's vertical center at {width}x{height}"
+                );
+            }
+            let results = element(&app, "StreamSelector::result_scroll");
+            let original_y = results.absolute_position().y;
+            let original_height = results.size().height;
+            assert!(picker.absolute_position().y >= heading.absolute_position().y);
+            assert!(
+                picker.absolute_position().y + picker.size().height
+                    <= heading.absolute_position().y + heading.size().height + 1.0
+            );
+            assert!(picker.absolute_position().x + picker.size().width <= width as f32);
+            assert!(original_height >= 70.0);
+            app.set_remote_has_ready_devices(false);
+            idle();
+            assert!(
+                ElementHandle::find_by_element_id(&app, "StreamSelector::output_picker")
+                    .next()
+                    .is_none()
+            );
+            let restored = element(&app, "StreamSelector::result_scroll");
+            assert!((restored.absolute_position().y - original_y).abs() <= 1.0);
+            assert!((restored.size().height - original_height).abs() <= 1.0);
+            app.set_remote_has_ready_devices(true);
+            idle();
+        }
     }
+    slint::select_bundled_translation("en").unwrap();
+    idle();
     let selected = Rc::new(RefCell::new(Vec::new()));
     let recorded = selected.clone();
     let weak = app.as_weak();

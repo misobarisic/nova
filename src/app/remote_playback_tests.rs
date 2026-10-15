@@ -1199,3 +1199,85 @@ fn selector_lookup_cache_survives_target_toggle_but_not_expiry_context_or_close(
         },
     );
 }
+
+#[test]
+fn language_changes_refresh_remote_statuses_without_reconnecting() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::language_changes_refresh_remote_statuses_without_reconnecting"
+        ),
+        |Fixture { app, bridge }| {
+            use nova_config::Language;
+            slint::select_bundled_translation("hr").unwrap();
+            app.set_remote_devices(
+                Rc::new(VecModel::from(vec![
+                    crate::RemoteDeviceRow {
+                        id: "receiver".into(),
+                        name: "Living room".into(),
+                        ready: true,
+                        status: "Available".into(),
+                        ..Default::default()
+                    },
+                    crate::RemoteDeviceRow {
+                        id: "offline".into(),
+                        name: "Bedroom".into(),
+                        status: "Open Nova to connect".into(),
+                        ..Default::default()
+                    },
+                ]))
+                .into(),
+            );
+            let snapshot = PlaybackSnapshot {
+                ready: true,
+                session: Some(SessionId {
+                    epoch: 1,
+                    sequence: 2,
+                }),
+                phase: PlaybackPhase::Paused,
+                paused: true,
+                resume_prompt: true,
+                ..Default::default()
+            };
+            let settings = |language| CacheSettings {
+                language,
+                ..CacheSettings::default()
+            };
+            bridge.apply_language(&settings(Language::English));
+            bridge.apply_remote_snapshot(snapshot);
+            app.set_remote_error("preserved connection error".into());
+            assert_eq!(app.get_remote_phase(), "Paused");
+            let session = app.get_remote_session();
+            bridge.apply_language(&settings(Language::Croatian));
+            assert_eq!(app.get_remote_phase(), "Pauzirano");
+            assert_eq!(app.get_remote_prompt(), "Nastaviti reprodukciju?");
+            assert_eq!(
+                app.get_remote_devices().row_data(0).unwrap().status,
+                "Dostupno"
+            );
+            assert_eq!(
+                app.get_remote_devices().row_data(1).unwrap().status,
+                "Otvorite Novu za povezivanje"
+            );
+            assert_eq!(app.get_remote_session(), session);
+            assert!(app.get_remote_connected());
+            assert_eq!(app.get_remote_error(), "preserved connection error");
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .remote_playback
+                    .queued
+                    .is_empty()
+            );
+            bridge.apply_language(&settings(Language::English));
+            assert_eq!(app.get_remote_phase(), "Paused");
+            assert_eq!(app.get_remote_prompt(), "Resume playback?");
+            assert_eq!(
+                app.get_remote_devices().row_data(0).unwrap().status,
+                "Available"
+            );
+        },
+    );
+}

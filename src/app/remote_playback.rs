@@ -251,6 +251,34 @@ fn error_text(error: &PlaybackError) -> String {
     .to_string()
 }
 
+fn remote_phase_text(snapshot: &PlaybackSnapshot) -> &'static str {
+    text::tr(if snapshot.screenshot_busy {
+        "Capturing screenshot…"
+    } else if snapshot.screenshot_saved {
+        "Screenshot saved on the playing device"
+    } else if snapshot.screenshot_failed {
+        "Screenshot failed on the playing device"
+    } else {
+        match snapshot.phase {
+            PlaybackPhase::Loading => "Loading stream…",
+            PlaybackPhase::Playing => "Playing",
+            PlaybackPhase::Paused => "Paused",
+            PlaybackPhase::Failed => "Playback failed",
+            _ => "No active playback",
+        }
+    })
+}
+
+fn remote_prompt_text(snapshot: &PlaybackSnapshot) -> &'static str {
+    text::tr(if snapshot.resume_prompt {
+        "Resume playback?"
+    } else if snapshot.next_episode_prompt {
+        "Choose streams for the next episode?"
+    } else {
+        ""
+    })
+}
+
 impl Bridge {
     pub(super) fn wire_remote_playback(&self) {
         let Some(app) = self.app() else { return };
@@ -1593,6 +1621,31 @@ impl Bridge {
         }
     }
 
+    /// Refresh presentation only: a locale change must not reconnect or mutate
+    /// receiver state, capabilities, prompts, or queued actions.
+    pub(super) fn refresh_remote_language_text(&self) {
+        let Some(app) = self.app() else { return };
+        let rows = app
+            .get_remote_devices()
+            .iter()
+            .map(|mut row| {
+                row.status = text::tr(if row.ready {
+                    "Available"
+                } else {
+                    "Open Nova to connect"
+                })
+                .into();
+                row
+            })
+            .collect::<Vec<_>>();
+        app.set_remote_devices(Rc::new(VecModel::from(rows)).into());
+        let snapshot = self.shared.lock().unwrap().remote_playback.snapshot.clone();
+        if let Some(snapshot) = snapshot {
+            app.set_remote_phase(remote_phase_text(&snapshot).into());
+            app.set_remote_prompt(remote_prompt_text(&snapshot).into());
+        }
+    }
+
     fn apply_remote_snapshot(&self, snapshot: PlaybackSnapshot) {
         let Some(app) = self.app() else { return };
         app.set_remote_loading(false);
@@ -1617,24 +1670,7 @@ impl Bridge {
         app.set_remote_can_tracks(snapshot.capabilities.tracks);
         app.set_remote_can_fullscreen(snapshot.capabilities.fullscreen);
         app.set_remote_can_screenshot(snapshot.capabilities.screenshot);
-        app.set_remote_phase(
-            text::tr(if snapshot.screenshot_busy {
-                "Capturing screenshot…"
-            } else if snapshot.screenshot_saved {
-                "Screenshot saved on the playing device"
-            } else if snapshot.screenshot_failed {
-                "Screenshot failed on the playing device"
-            } else {
-                match snapshot.phase {
-                    PlaybackPhase::Loading => "Loading stream…",
-                    PlaybackPhase::Playing => "Playing",
-                    PlaybackPhase::Paused => "Paused",
-                    PlaybackPhase::Failed => "Playback failed",
-                    _ => "No active playback",
-                }
-            })
-            .into(),
-        );
+        app.set_remote_phase(remote_phase_text(&snapshot).into());
         app.set_remote_time_text(
             format!(
                 "{} / {}",
@@ -1660,16 +1696,7 @@ impl Bridge {
             tracks(&snapshot.subtitle_tracks, snapshot.subtitle_track).into(),
         );
         app.set_remote_resume_prompt(snapshot.resume_prompt);
-        app.set_remote_prompt(
-            text::tr(if snapshot.resume_prompt {
-                "Resume playback?"
-            } else if snapshot.next_episode_prompt {
-                "Choose streams for the next episode?"
-            } else {
-                ""
-            })
-            .into(),
-        );
+        app.set_remote_prompt(remote_prompt_text(&snapshot).into());
         app.set_remote_prompt_token(if snapshot.resume_prompt {
             session_text(snapshot.session).into()
         } else {

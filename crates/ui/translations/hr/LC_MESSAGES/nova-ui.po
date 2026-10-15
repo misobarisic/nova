@@ -2654,3 +2654,27 @@ msgstr "Snimanje zaslona nije uspjelo na uređaju za reprodukciju"
 
 msgid "Show paired-device playback controls on Home."
 msgstr "Prikaži kontrole reprodukcije uparenih uređaja na početnoj stranici."
+
+#: remote-controls.slint
+msgid "Audio tracks"
+msgstr "Zvučni zapisi"
+
+#: remote-controls.slint
+msgid "Connecting…"
+msgstr "Povezivanje…"
+
+#: remote-controls.slint
+msgid "Disconnected"
+msgstr "Veza je prekinuta"
+
+#: remote-controls.slint
+msgid "Mute"
+msgstr "Isključite zvuk"
+
+#: remote-controls.slint
+msgid "Pause"
+msgstr "Pauzirajte"
+
+#: remote-controls.slint
+msgid "Volume"
+msgstr "Glasnoća"

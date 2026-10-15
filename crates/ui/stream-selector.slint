@@ -816,20 +816,24 @@ export component StreamSelector inherits Rectangle {
                 stream_heading := HorizontalLayout {
                     height: root.short ? 32px : 40px;
                     spacing: 8px;
-                    Text {
+                    heading_title := Text {
                         text: @tr("Choose a stream");
                         color: Theme.current.text_bright;
                         font-size: root.narrow ? 20px : 26px; font-weight: 700;
                         vertical-alignment: center;
                         overflow: elide; min-width: 0px; horizontal-stretch: 1;
                     }
-                    Text {
+                    stream_count := Text {
                         text: @tr("{n} stream" | "{n} streams" % root.total);
                         color: Theme.current.text_muted;
                         font-size: 13px; vertical-alignment: center;
                         horizontal-stretch: 0;
                     }
-                    if root.has_output_choice: output_picker := RemoteTargetMenu { popup-height: root.height - selector_body.y - 44px - root.safe-bottom; }
+                    if root.has_output_choice: output_picker := RemoteTargetMenu {
+                        // Fill the fixed heading lane so the smaller button can center in it.
+                        height: stream_heading.height;
+                        popup-height: root.height - selector_body.y - 44px - root.safe-bottom;
+                    }
                     if root.page_count > 1 && !root.narrow && !root.scrolling_landscape: top_pager := EpisodePager {
                         page: root.page; count: root.page_count;
                         picked(p) => { root.kb_active = false; root.move_page(p - root.page); }
