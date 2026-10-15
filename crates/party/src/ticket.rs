@@ -4,7 +4,7 @@ use iroh::EndpointAddr;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const PREFIX: &str = "NVP1";
+const PREFIX: &str = "NVP2";
 const MAX_TICKET_BYTES: usize = 4_096;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -95,11 +95,13 @@ mod tests {
             expires_unix: unix_now() + 60,
         };
         let encoded = ticket.encode().unwrap();
+        assert!(encoded.starts_with("NVP2"));
+        assert!(Ticket::decode(&encoded.replacen("NVP2", "NVP1", 1)).is_err());
         let decoded = Ticket::decode(&encoded).unwrap();
         assert_eq!(decoded.capability, ticket.capability);
         assert_eq!(decoded.host, ticket.host);
         assert!(Ticket::decode(&(encoded.clone() + "00")).is_err());
-        assert!(Ticket::decode(&format!("NVP1{}", "a".repeat(10_000))).is_err());
+        assert!(Ticket::decode(&format!("NVP2{}", "a".repeat(10_000))).is_err());
         assert!(
             Ticket::decode(
                 &Ticket {

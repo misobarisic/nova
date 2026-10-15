@@ -30,7 +30,10 @@ fn pause_disconnected(snapshot: &mut RoomSnapshot, now: u64) {
     snapshot.timeline.position = snapshot
         .timeline
         .position_at(now as f64 + snapshot.clock_offset_ms)
-        .clamp(0.0, snapshot.media.duration);
+        .clamp(
+            0.0,
+            snapshot.media.as_ref().map_or(0.0, |media| media.duration),
+        );
     snapshot.timeline.paused = true;
     snapshot.connected = false;
 }
@@ -144,6 +147,21 @@ impl PartyService {
             "host media differs"
         );
         engine::validate_report(&report)?;
+        self.create_room(Some(media), report, name)
+    }
+
+    /// Invite people before choosing a show or a local playback source.
+    pub fn create_lobby(&self, name: String) -> Result<String> {
+        validate_name(&name)?;
+        self.create_room(None, LocalReport::default(), name)
+    }
+
+    fn create_room(
+        &self,
+        media: Option<PartyMedia>,
+        report: LocalReport,
+        name: String,
+    ) -> Result<String> {
         let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
         ensure!(session.network.is_none(), "already in a party");
         let runtime = self.runtime()?;
@@ -161,15 +179,21 @@ impl PartyService {
                 return Err(error);
             }
         };
-        let room = HostRoom::new(
-            ticket.room_id,
-            network.endpoint.id().to_string(),
-            ticket.capability,
-            media,
-            report,
-            name,
-            local_now_ms(),
-        );
+        let host_id = network.endpoint.id().to_string();
+        let now = local_now_ms();
+        let room = if let Some(media) = media {
+            HostRoom::new(
+                ticket.room_id,
+                host_id,
+                ticket.capability,
+                media,
+                report,
+                name,
+                now,
+            )
+        } else {
+            HostRoom::lobby(ticket.room_id, host_id, ticket.capability, name, now)
+        };
         self.shared.publish(room.snapshot.clone());
         *self.shared.host.lock().unwrap_or_else(|e| e.into_inner()) = Some(room);
         session.network = Some(network);
@@ -286,13 +310,36 @@ impl PartyService {
         let room = host
             .as_mut()
             .context("only the host can change the party timeline")?;
-        operation(room)?;
+        let result = operation(room);
+        // Expiry checks may end the room even when the requested operation is
+        // rejected; publish that terminal state as well.
         self.shared.publish(room.snapshot.clone());
-        Ok(())
+        result
     }
 
     pub fn command(&self, command: HostCommand) -> Result<()> {
         self.with_host(|room| room.command(command, local_now_ms()))
+    }
+
+    /// Apply a queued intent only to the media it was captured for.
+    pub fn command_for_generation(&self, generation: u64, command: HostCommand) -> Result<()> {
+        self.with_host(|room| {
+            ensure!(
+                room.snapshot.generation == generation,
+                "party media changed"
+            );
+            room.command(command, local_now_ms())
+        })
+    }
+
+    /// Replace the shared selection without changing invites or membership.
+    pub fn select_media(&self, media: PartyMedia, report: LocalReport) -> Result<()> {
+        self.with_host(|room| room.select_media(media, report, local_now_ms()))
+    }
+
+    /// Keep the room open while the host browses for its next selection.
+    pub fn clear_media(&self) -> Result<()> {
+        self.with_host(|room| room.clear_media(local_now_ms()))
     }
 
     pub fn kick(&self, member_id: &str) -> Result<()> {
@@ -405,10 +452,19 @@ async fn exchange(
                 snapshot.room_id == guest.ticket.room_id
                     && snapshot.host_id == guest.ticket.host.id.to_string()
                     && snapshot.participants.len() <= MAX_MEMBERS
-                    && snapshot.generation == 1,
+                    && snapshot.generation >= 1,
                 "invalid party snapshot"
             );
-            engine::validate_media(&snapshot.media)?;
+            if let Some(media) = &snapshot.media {
+                engine::validate_media(media)?;
+            } else {
+                ensure!(
+                    snapshot.timeline.paused
+                        && snapshot.timeline.position == 0.0
+                        && snapshot.waiting.is_empty(),
+                    "invalid party lobby"
+                );
+            }
             ensure!(
                 snapshot.timeline.position.is_finite() && snapshot.timeline.position >= 0.0,
                 "invalid party timeline"
@@ -607,6 +663,142 @@ mod tests {
         assert!(!snapshot.connected);
         assert!(snapshot.timeline.paused);
         assert_eq!(snapshot.timeline.position_at(9_000.0), 11.0);
+    }
+
+    #[test]
+    fn only_host_selects_media_and_queued_commands_cannot_cross_generations() {
+        let guest = PartyService::new().unwrap();
+        let mut snapshot = engine::tests::room().snapshot;
+        snapshot.role = PartyRole::Guest;
+        guest.shared.publish(snapshot);
+        assert!(
+            guest
+                .select_media(engine::tests::media(), engine::tests::report())
+                .is_err()
+        );
+        assert!(guest.clear_media().is_err());
+        assert!(guest.runtime.get().is_none());
+
+        let host = PartyService::new().unwrap();
+        *host.shared.host.lock().unwrap() = Some(HostRoom::lobby(
+            "a".repeat(32),
+            "host".into(),
+            [7; 32],
+            "Host".into(),
+            local_now_ms(),
+        ));
+        host.select_media(engine::tests::media(), engine::tests::report())
+            .unwrap();
+        let generation = host.snapshot().unwrap().generation;
+        host.clear_media().unwrap();
+        host.select_media(engine::tests::media(), engine::tests::report())
+            .unwrap();
+        assert!(
+            host.command_for_generation(generation, HostCommand::SeekAbsolute(90.0))
+                .is_err()
+        );
+        assert_eq!(host.snapshot().unwrap().timeline.position, 10.0);
+        let current = host.snapshot().unwrap().generation;
+        host.command_for_generation(current, HostCommand::SeekAbsolute(20.0))
+            .unwrap();
+        assert_eq!(host.snapshot().unwrap().timeline.position, 20.0);
+    }
+
+    #[tokio::test]
+    async fn guest_joins_lobby_and_receives_replacements_through_the_same_invite() {
+        let (host, router, handler, ticket) = host().await;
+        handler
+            .shared
+            .host
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .clear_media(local_now_ms())
+            .unwrap();
+        let endpoint = endpoint().await;
+        let mut guest = guest(ticket);
+        let lobby = exchange(
+            &endpoint,
+            &mut guest,
+            Operation::Join {
+                name: "Guest".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(lobby.media.is_none() && lobby.timeline.paused && lobby.waiting.is_empty());
+        assert!(!lobby.ended);
+        handler
+            .shared
+            .host
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .select_media(
+                engine::tests::media(),
+                engine::tests::report(),
+                local_now_ms(),
+            )
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let selected = exchange(
+            &endpoint,
+            &mut guest,
+            Operation::Report(LocalReport::default()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(selected.media, Some(engine::tests::media()));
+        assert!(selected.generation > lobby.generation);
+        let mut next = engine::tests::media();
+        next.identity.episode_id = "next".into();
+        let next_report = LocalReport {
+            media: Some(next.identity.clone()),
+            position: 0.0,
+            ..engine::tests::report()
+        };
+        handler
+            .shared
+            .host
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .select_media(next.clone(), next_report, local_now_ms())
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let stale = LocalReport {
+            generation: selected.generation,
+            ended: true,
+            ..engine::tests::report()
+        };
+        let replaced = exchange(&endpoint, &mut guest, Operation::Report(stale))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(replaced.media, Some(next));
+        assert_eq!(replaced.room_id, lobby.room_id);
+        assert_eq!(replaced.host_id, host.id().to_string());
+        assert_eq!(replaced.member_id, lobby.member_id);
+        assert_eq!(replaced.participants.len(), 2);
+        assert!(!replaced.ended);
+        assert_eq!(replaced.waiting, ["Guest"]);
+        assert!(replaced.timeline.paused);
+        assert_eq!(replaced.timeline.position, 0.0);
+        assert!(
+            !replaced
+                .participants
+                .iter()
+                .find(|p| !p.is_host)
+                .unwrap()
+                .ready
+        );
+        endpoint.close().await;
+        router.shutdown().await.unwrap();
     }
 
     #[tokio::test]

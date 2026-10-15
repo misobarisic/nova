@@ -212,6 +212,9 @@ impl Bridge {
         // The normal close callback finalizes history and torrent/brightness state.
         self.note_player_progress_from_ui();
         app.invoke_close_player();
+        // Stop returns a party participant to the room. A valid Next action
+        // continues directly into its local source picker instead.
+        app.set_party_page_open(false);
         self.episode_streams_by_id(&series, &episode);
     }
 }

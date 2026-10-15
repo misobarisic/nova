@@ -164,6 +164,37 @@ impl HostRoom {
         name: String,
         now: u64,
     ) -> Self {
+        Self::with_media(room_id, host_id, capability, Some(media), report, name, now)
+    }
+
+    pub fn lobby(
+        room_id: String,
+        host_id: String,
+        capability: [u8; 32],
+        name: String,
+        now: u64,
+    ) -> Self {
+        Self::with_media(
+            room_id,
+            host_id,
+            capability,
+            None,
+            LocalReport::default(),
+            name,
+            now,
+        )
+    }
+
+    fn with_media(
+        room_id: String,
+        host_id: String,
+        capability: [u8; 32],
+        media: Option<PartyMedia>,
+        report: LocalReport,
+        name: String,
+        now: u64,
+    ) -> Self {
+        let paused = media.is_none();
         let mut host = Member::new(host_id.clone(), name, true, now);
         host.report = report.clone();
         let mut room = Self {
@@ -178,7 +209,7 @@ impl HostRoom {
                 timeline: Timeline {
                     position: report.position,
                     anchor_ms: now + START_LEAD_MS,
-                    paused: false,
+                    paused,
                 },
                 participants: Vec::new(),
                 waiting: Vec::new(),
@@ -269,7 +300,7 @@ impl HostRoom {
         member.last_sequence = sequence;
         member.last_seen = now;
         // Out-of-order reports must not replace readiness for the active media.
-        if report.generation == self.snapshot.generation {
+        if report.generation == self.snapshot.generation && self.snapshot.media.is_some() {
             member.report = report;
         }
         self.tick(now);
@@ -282,32 +313,109 @@ impl HostRoom {
             self.snapshot.ended = true;
             self.snapshot.error = Some("host disconnected".into());
         }
-        // A party is bound to one edition/episode. The next episode must create
-        // a new room rather than carrying guests into unrelated playback.
-        if report.loaded
-            && (report.generation != self.snapshot.generation
-                || !media_matches(&self.snapshot.media.identity, report.media.as_ref()))
+        // Reports from a previous load can still be queued while the host
+        // chooses another episode. They keep the foreground heartbeat alive,
+        // but cannot finish or change readiness for the current selection.
+        let current = report.generation == self.snapshot.generation;
+        if current
+            && report.ended
+            && self
+                .snapshot
+                .media
+                .as_ref()
+                .is_some_and(|media| media_matches(&media.identity, report.media.as_ref()))
+            && !self.snapshot.ended
         {
-            self.snapshot.ended = true;
-            self.snapshot.error = Some("host changed media".into());
-            self.snapshot.timeline.paused = true;
-        }
-        if report.ended
-            && report.generation == self.snapshot.generation
-            && media_matches(&self.snapshot.media.identity, report.media.as_ref())
-        {
-            self.snapshot.ended = true;
-            self.snapshot.error = Some("media finished".into());
-            self.snapshot.timeline.position = report.position.min(self.snapshot.media.duration);
-            self.snapshot.timeline.anchor_ms = now;
-            self.snapshot.timeline.paused = true;
+            self.reset_media(None, LocalReport::default(), now)?;
         }
         let host = self
             .members
             .get_mut(&self.snapshot.host_id)
             .expect("host exists");
-        host.report = report;
+        if report.generation == self.snapshot.generation && self.snapshot.media.is_some() {
+            host.report = report;
+        }
         host.last_seen = now;
+        self.tick(now);
+        Ok(())
+    }
+
+    pub fn select_media(
+        &mut self,
+        media: PartyMedia,
+        mut report: LocalReport,
+        now: u64,
+    ) -> Result<()> {
+        validate_media(&media)?;
+        validate_report(&report)?;
+        ensure!(
+            report.loaded && report.seekable && !report.ended,
+            "load a seekable stream before hosting"
+        );
+        ensure!(
+            duration_matches(media.duration, report.duration),
+            "host media duration differs"
+        );
+        if report.media.is_none() {
+            report.media = Some(media.identity.clone());
+        }
+        ensure!(
+            media_matches(&media.identity, report.media.as_ref()),
+            "host media differs"
+        );
+        self.tick(now);
+        ensure!(!self.snapshot.ended, "party has ended");
+        self.reset_media(Some(media), report, now)
+    }
+
+    pub fn clear_media(&mut self, now: u64) -> Result<()> {
+        self.tick(now);
+        ensure!(!self.snapshot.ended, "party has ended");
+        self.reset_media(None, LocalReport::default(), now)
+    }
+
+    fn reset_media(
+        &mut self,
+        media: Option<PartyMedia>,
+        mut report: LocalReport,
+        now: u64,
+    ) -> Result<()> {
+        let generation = self
+            .snapshot
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("party generation exhausted"))?;
+        report.generation = generation;
+        self.snapshot.timeline = Timeline {
+            position: report
+                .position
+                .min(media.as_ref().map_or(0.0, |media| media.duration)),
+            anchor_ms: now + START_LEAD_MS,
+            paused: media.is_none(),
+        };
+        self.snapshot.media = media;
+        self.snapshot.generation = generation;
+        self.snapshot.error = None;
+        self.intended_paused = false;
+        self.held = false;
+        // People already present chose to watch the next selection together:
+        // hold its initial anchor while they resolve their own streams. New
+        // arrivals during playback still join the barrier only once ready.
+        // Transport sequence numbers and membership remain room-scoped.
+        for member in self.members.values_mut() {
+            member.report = LocalReport::default();
+            let waiting_for_selection = self.snapshot.media.is_some()
+                && !member.participant.is_host
+                && now.saturating_sub(member.last_seen) <= DISCONNECTED_MS;
+            member.admitted = member.participant.is_host || waiting_for_selection;
+            member.stalled = waiting_for_selection;
+            member.bad_since = None;
+            member.recovered_since = None;
+            if member.participant.is_host {
+                member.report = report.clone();
+                member.last_seen = now;
+            }
+        }
         self.tick(now);
         Ok(())
     }
@@ -321,7 +429,14 @@ impl HostRoom {
     }
 
     pub fn command(&mut self, command: HostCommand, now: u64) -> Result<()> {
+        self.tick(now);
         ensure!(!self.snapshot.ended, "party has ended");
+        let duration = self
+            .snapshot
+            .media
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("choose party media first"))?
+            .duration;
         let current = self.snapshot.timeline.position_at(now as f64);
         match command {
             HostCommand::SetPaused(paused) => {
@@ -340,7 +455,7 @@ impl HostRoom {
                     position
                 };
                 self.snapshot.timeline = Timeline {
-                    position: position.clamp(0.0, self.snapshot.media.duration),
+                    position: position.clamp(0.0, duration),
                     anchor_ms: now + START_LEAD_MS,
                     paused: self.intended_paused || self.held,
                 };
@@ -351,6 +466,10 @@ impl HostRoom {
     }
 
     pub fn continue_without_waiting(&mut self, now: u64) {
+        if self.snapshot.media.is_none() || self.snapshot.ended {
+            self.tick(now);
+            return;
+        }
         for member in self.members.values_mut() {
             if !member.participant.is_host
                 && (!member.participant.ready || !member.participant.connected)
@@ -377,14 +496,19 @@ impl HostRoom {
             let age = now.saturating_sub(member.last_seen);
             // A slightly shorter compatible edition can reach EOF first. It
             // remains a visible, paused member without holding everyone else.
-            if member.report.ended && !member.participant.is_host {
+            if member.report.ended
+                && !member.participant.is_host
+                && member.report.generation == self.snapshot.generation
+                && self.snapshot.media.as_ref().is_some_and(|media| {
+                    media_matches(&media.identity, member.report.media.as_ref())
+                })
+            {
                 member.admitted = false;
             }
             member.participant.connected = age <= DISCONNECTED_MS;
-            let mut issue = reason(
-                &self.snapshot.media,
-                self.snapshot.generation,
-                &member.report,
+            let mut issue = self.snapshot.media.as_ref().map_or_else(
+                || Some("waiting for host to choose media".into()),
+                |media| reason(media, self.snapshot.generation, &member.report),
             );
             if !member.participant.connected {
                 issue = Some("disconnected".into());
@@ -415,7 +539,8 @@ impl HostRoom {
                 self.snapshot.ended = true;
                 self.snapshot.error = Some("host disconnected".into());
             }
-            if member.admitted
+            if self.snapshot.media.is_some()
+                && member.admitted
                 && member.stalled
                 && (member.participant.is_host || self.snapshot.wait_for_guests)
             {
@@ -432,7 +557,7 @@ impl HostRoom {
             };
             self.held = hold;
         }
-        if self.snapshot.ended {
+        if self.snapshot.ended || self.snapshot.media.is_none() {
             self.snapshot.timeline.paused = true;
         }
         self.snapshot.waiting = waiting;
@@ -613,7 +738,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn limits_and_media_change_terminate_room_without_sync_state() {
+    fn member_limit_and_unselected_host_playback_do_not_replace_shared_media() {
         let mut room = room();
         for n in 1..MAX_MEMBERS {
             room.join(&format!("g{n}"), "Guest".into(), 1, n as u64)
@@ -623,7 +748,9 @@ pub(crate) mod tests {
         let mut changed = report();
         changed.media.as_mut().unwrap().episode_id = "next".into();
         room.local_report(changed, 100).unwrap();
-        assert!(room.snapshot.ended && room.snapshot.timeline.paused);
+        assert!(!room.snapshot.ended);
+        assert_eq!(room.snapshot.media, Some(media()));
+        assert!(!room.members["host"].participant.ready);
     }
 
     #[test]
@@ -639,7 +766,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn guest_eof_does_not_hold_room_and_host_eof_ends_it() {
+    fn guest_eof_does_not_hold_room_and_host_eof_returns_to_lobby() {
         let mut room = room();
         room.join("guest", "Guest".into(), 1, 100).unwrap();
         room.report("guest", report(), 2, 200).unwrap();
@@ -660,9 +787,222 @@ pub(crate) mod tests {
         room.report("guest", report(), 4, 1_300).unwrap();
         assert!(room.members["guest"].admitted);
         room.local_report(eof, 1_400).unwrap();
-        assert!(room.snapshot.ended && room.snapshot.timeline.paused);
-        assert_eq!(room.snapshot.timeline.position, 120.0);
-        assert_eq!(room.snapshot.error.as_deref(), Some("media finished"));
+        assert!(!room.snapshot.ended && room.snapshot.timeline.paused);
+        assert!(room.snapshot.media.is_none());
+        assert_eq!(room.snapshot.timeline.position, 0.0);
+        assert_eq!(room.snapshot.generation, 2);
+        assert_eq!(room.members.len(), 2);
+        assert!(room.snapshot.error.is_none());
+        // A final duplicate decoder event cannot end the lobby or next episode.
+        room.local_report(
+            LocalReport {
+                ended: true,
+                ..report()
+            },
+            1_500,
+        )
+        .unwrap();
+        assert!(!room.snapshot.ended && room.snapshot.media.is_none());
+        room.select_media(media(), report(), 1_600).unwrap();
+        assert_eq!(room.snapshot.generation, 3);
+        assert!(!room.snapshot.ended);
+    }
+
+    #[test]
+    fn lobby_join_and_media_replacement_keep_room_membership_and_expiry() {
+        let mut room = HostRoom::lobby("a".repeat(32), "host".into(), [7; 32], "Host".into(), 0);
+        room.join("guest", "Guest".into(), 1, 100).unwrap();
+        room.local_report(LocalReport::default(), 1_000).unwrap();
+        assert!(room.snapshot.media.is_none());
+        assert!(room.snapshot.waiting.is_empty());
+        assert!(room.snapshot.timeline.paused && !room.snapshot.ended);
+        assert!(
+            room.command(HostCommand::SeekAbsolute(10.0), 1_000)
+                .is_err()
+        );
+        let correction = drift_correction(&room.snapshot, &report(), 1_000);
+        assert!(correction.paused && correction.seek_to.is_none() && correction.rate == 1.0);
+        room.select_media(media(), report(), 1_100).unwrap();
+        assert_eq!(room.snapshot.generation, 2);
+        assert!(room.members["host"].participant.ready);
+        let mut ready = report();
+        ready.generation = 2;
+        room.report("guest", ready, 2, 1_200).unwrap();
+        assert!(room.members["guest"].admitted);
+        room.clear_media(1_300).unwrap();
+        assert_eq!(room.snapshot.generation, 3);
+        assert!(room.snapshot.media.is_none() && room.snapshot.waiting.is_empty());
+        assert!(!room.members["guest"].admitted);
+        let mut next = media();
+        next.identity.episode_id = "episode-2".into();
+        let next_report = LocalReport {
+            media: Some(next.identity.clone()),
+            position: 0.0,
+            ..report()
+        };
+        room.select_media(next.clone(), next_report, 1_400).unwrap();
+        assert_eq!(room.snapshot.media, Some(next));
+        assert_eq!(room.snapshot.generation, 4);
+        assert_eq!(room.snapshot.room_id, "a".repeat(32));
+        assert_eq!(room.capability, [7; 32]);
+        assert_eq!(room.created, 0);
+        assert_eq!(room.members.len(), 2);
+        assert_eq!(room.members["guest"].last_sequence, 2);
+        assert!(room.members["guest"].admitted);
+        assert_eq!(room.snapshot.waiting, ["Guest"]);
+        assert!(room.snapshot.timeline.paused);
+        assert!(!room.members["guest"].participant.ready);
+        let stale = LocalReport {
+            ended: true,
+            position: 120.0,
+            ..report()
+        };
+        room.report("guest", stale.clone(), 3, 1_500).unwrap();
+        room.local_report(stale, 1_500).unwrap();
+        assert!(!room.snapshot.ended);
+        assert_eq!(room.snapshot.timeline.position, 0.0);
+        assert!(room.members["host"].participant.ready);
+        assert!(!room.members["guest"].participant.ready);
+        assert!(
+            room.join("late", "Late".into(), 1, INVITE_LIFETIME_MS + 1)
+                .is_err()
+        );
+        assert!(room.clear_media(ROOM_LIFETIME_MS).is_err());
+        assert!(room.snapshot.ended);
+    }
+
+    #[test]
+    fn lobby_members_hold_the_initial_anchor_and_replacements_until_ready() {
+        let mut room = HostRoom::lobby("a".repeat(32), "host".into(), [7; 32], "Host".into(), 0);
+        room.join("guest", "Guest".into(), 1, 100).unwrap();
+        room.select_media(media(), report(), 200).unwrap();
+        assert!(room.snapshot.timeline.paused);
+        assert_eq!(room.snapshot.timeline.position_at(5_000.0), 10.0);
+        assert_eq!(room.snapshot.waiting, ["Guest"]);
+        let ready = LocalReport {
+            generation: room.snapshot.generation,
+            ..report()
+        };
+        room.report("guest", ready.clone(), 2, 300).unwrap();
+        assert!(
+            room.snapshot.timeline.paused,
+            "readiness must settle before resuming"
+        );
+        room.report("guest", ready.clone(), 3, 800).unwrap();
+        assert!(!room.snapshot.timeline.paused);
+        assert_eq!(room.snapshot.timeline.anchor_ms, 1_800);
+        room.select_media(media(), report(), 900).unwrap();
+        assert_eq!(room.snapshot.waiting, ["Guest"]);
+        assert!(room.snapshot.timeline.paused);
+        // Even the same episode must report readiness for its new generation.
+        room.report("guest", ready, 4, 1_000).unwrap();
+        assert!(room.snapshot.timeline.paused);
+        // The old decoder may still expose EOF while the app is waiting for
+        // this generation's matching source; that is not this episode's EOF.
+        room.report(
+            "guest",
+            LocalReport {
+                generation: room.snapshot.generation,
+                ended: true,
+                ..LocalReport::default()
+            },
+            5,
+            1_100,
+        )
+        .unwrap();
+        assert!(room.snapshot.timeline.paused);
+        let ready = LocalReport {
+            generation: room.snapshot.generation,
+            ..report()
+        };
+        room.report("guest", ready.clone(), 6, 1_200).unwrap();
+        room.report("guest", ready, 7, 1_700).unwrap();
+        assert!(!room.snapshot.timeline.paused);
+        // A new arrival must choose a source before it can stall this playback.
+        room.join("late", "Late".into(), 1, 1_800).unwrap();
+        room.local_report(
+            LocalReport {
+                generation: room.snapshot.generation,
+                ..report()
+            },
+            2_600,
+        )
+        .unwrap();
+        assert!(!room.members["late"].admitted);
+        assert!(room.snapshot.waiting.is_empty());
+        assert!(!room.snapshot.timeline.paused);
+    }
+
+    #[test]
+    fn initial_selection_wait_can_be_disabled_or_skipped_by_host() {
+        for disable_wait in [false, true] {
+            let mut room = room();
+            room.join("guest", "Guest".into(), 1, 100).unwrap();
+            room.select_media(media(), report(), 200).unwrap();
+            assert!(room.snapshot.timeline.paused);
+            if disable_wait {
+                room.snapshot.wait_for_guests = false;
+                room.tick(300);
+            } else {
+                room.continue_without_waiting(300);
+                assert!(!room.members["guest"].admitted);
+            }
+            assert!(room.snapshot.waiting.is_empty());
+            assert!(!room.snapshot.timeline.paused);
+            assert_eq!(room.snapshot.timeline.anchor_ms, 1_300);
+            room.clear_media(400).unwrap();
+            assert!(room.snapshot.waiting.is_empty());
+            assert!(room.snapshot.timeline.paused);
+        }
+        let mut room = room();
+        room.join("guest", "Guest".into(), 1, 100).unwrap();
+        room.snapshot.wait_for_guests = false;
+        room.select_media(media(), report(), 200).unwrap();
+        assert!(room.snapshot.waiting.is_empty());
+        assert!(!room.snapshot.timeline.paused);
+    }
+
+    #[test]
+    fn initial_selection_wait_has_finite_disconnect_grace() {
+        let mut room = room();
+        room.join("guest", "Guest".into(), 1, 100).unwrap();
+        room.select_media(media(), report(), 200).unwrap();
+        let current = LocalReport {
+            generation: room.snapshot.generation,
+            ..report()
+        };
+        room.local_report(current.clone(), 3_000).unwrap();
+        assert!(!room.members["guest"].participant.connected);
+        assert!(room.snapshot.timeline.paused);
+        assert_eq!(room.snapshot.waiting, ["Guest"]);
+        room.local_report(current, 10_101).unwrap();
+        assert!(!room.members["guest"].admitted);
+        assert!(room.snapshot.waiting.is_empty());
+        assert!(!room.snapshot.timeline.paused);
+        assert!(!room.snapshot.ended);
+        // A member already disconnected when selection changes is not waited on.
+        room.select_media(media(), report(), 10_200).unwrap();
+        assert!(!room.members["guest"].admitted);
+        assert!(room.snapshot.waiting.is_empty());
+        assert!(!room.snapshot.timeline.paused);
+    }
+
+    #[test]
+    fn clearing_media_preserves_revocation_and_does_not_revive_ended_rooms() {
+        let mut room = room();
+        room.join("guest", "Guest".into(), 1, 100).unwrap();
+        room.remove("guest", 200).unwrap();
+        room.clear_media(300).unwrap();
+        room.select_media(media(), report(), 400).unwrap();
+        assert!(
+            room.authorize(&"a".repeat(32), &[7; 32], "guest", 500)
+                .is_err()
+        );
+        assert!(
+            room.select_media(media(), report(), HOST_TIMEOUT_MS + 401)
+                .is_err()
+        );
+        assert!(room.snapshot.ended);
     }
 
     #[test]

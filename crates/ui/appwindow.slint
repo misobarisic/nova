@@ -78,6 +78,8 @@ export component AppWindow inherits Window {
     in-out property <bool> party_active <=> PartyBridge.active;
     in-out property <bool> party_is_host <=> PartyBridge.is_host;
     in-out property <bool> party_can_host <=> PartyBridge.can_host;
+    in-out property <bool> party_has_media <=> PartyBridge.has_media;
+    in-out property <bool> party_can_return_to_player <=> PartyBridge.can_return_to_player;
     in-out property <bool> party_busy <=> PartyBridge.busy;
     in-out property <bool> party_waiting <=> PartyBridge.waiting;
     in-out property <bool> party_paused <=> PartyBridge.paused;
@@ -99,6 +101,8 @@ export component AppWindow inherits Window {
     public function party_bridge_join(value: string) { root.party_join(value); }
     callback party_leave();
     public function party_bridge_leave() { root.party_leave(); }
+    callback party_choose_media();
+    public function party_bridge_choose_media() { root.party_choose_media(); }
     callback party_choose_stream();
     public function party_bridge_choose_stream() { root.party_choose_stream(); }
     callback party_copy_invite();
@@ -2235,7 +2239,7 @@ export component AppWindow inherits Window {
         safe_right: root.safe-area-insets.right;
         system_back_request: root.system_back_request;
     }
-    if (root.party_active || root.party_can_host || root.party_busy) && root.player_open && !root.party_page_open: PartyPlayerBadge {
+    if (root.party_active || root.party_busy) && root.player_open && !root.party_page_open: PartyPlayerBadge {
         x: root.safe-area-insets.left + 18px;
         y: root.safe-area-insets.top + 72px;
         width: Math.min(300px, root.width - root.safe-area-insets.left - root.safe-area-insets.right - 36px);

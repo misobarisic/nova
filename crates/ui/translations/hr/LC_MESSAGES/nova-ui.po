@@ -2706,16 +2706,12 @@ msgid "Host a party"
 msgstr "Budite domaćin gledanja"
 
 #: party.slint
-msgid "Start playing a film or episode, then invite friends. Everyone chooses their own stream."
-msgstr "Pokrenite film ili epizodu pa pozovite prijatelje. Svatko bira svoj izvor."
+msgid "Invite friends, then choose a film or episode together. Everyone chooses their own stream."
+msgstr "Pozovite prijatelje pa zajedno odaberite film ili epizodu. Svatko bira svoj izvor."
 
 #: party.slint
 msgid "Create party"
 msgstr "Pokrenite zajedničko gledanje"
-
-#: party.slint
-msgid "Play something on this device to host."
-msgstr "Pokrenite nešto na ovom uređaju kako biste bili domaćin."
 
 #: party.slint
 msgid "Join a party"
@@ -2840,3 +2836,27 @@ msgstr "Spremit će se samo odabrane ocjene."
 
 msgid "Close rating prompt"
 msgstr "Zatvori upit za ocjenu"
+
+#: party.slint
+msgid "Party lobby"
+msgstr "Predvorje zajedničkog gledanja"
+
+#: party.slint
+msgid "Invite friends and choose what everyone will watch. You can change it later without ending the party."
+msgstr "Pozovite prijatelje i odaberite što ćete svi gledati. Odabir možete promijeniti kasnije bez završetka zajedničkog gledanja."
+
+#: party.slint
+msgid "Waiting for the host to choose what to watch."
+msgstr "Čekanje da domaćin odabere što ćete gledati."
+
+#: party.slint
+msgid "Choose what to watch"
+msgstr "Odaberite što ćete gledati"
+
+#: party.slint
+msgid "Change what to watch"
+msgstr "Promijenite što ćete gledati"
+
+#: party.slint
+msgid "Waiting for the host"
+msgstr "Čekanje domaćina"

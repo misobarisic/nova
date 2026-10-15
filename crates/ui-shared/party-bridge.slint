@@ -7,6 +7,8 @@ export global PartyBridge {
     in-out property <bool> active;
     in-out property <bool> is_host;
     in-out property <bool> can_host;
+    in-out property <bool> has_media;
+    in-out property <bool> can_return_to_player;
     in-out property <bool> busy;
     in-out property <bool> waiting;
     in-out property <bool> paused;
@@ -25,6 +27,7 @@ export global PartyBridge {
     callback create();
     callback join(string);
     callback leave();
+    callback choose_media();
     callback choose_stream();
     callback copy_invite();
     callback return_to_player();

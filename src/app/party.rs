@@ -18,6 +18,9 @@ pub(super) struct State {
     last_report: Option<Instant>,
     /// A user explicitly chose to find this room's episode in their own addons.
     choosing_source: bool,
+    /// Only an explicit host selection may replace the shared title.
+    choosing_media: bool,
+    selection_epoch: u64,
     last_seek: Option<(Instant, f64)>,
     resume_guard: bool,
     setup_restore: Option<(u64, bool)>,
@@ -30,7 +33,9 @@ impl State {
 }
 
 enum Operation {
-    Command(HostCommand),
+    Command(u64, HostCommand),
+    ClearMedia { browse: bool },
+    SelectMedia(PartyMedia, LocalReport),
     Kick(String),
     Wait(bool),
     Continue,
@@ -97,11 +102,15 @@ impl Bridge {
             }
             (party.snapshot.clone()?, party.choosing_source)
         };
+        if room.role == PartyRole::Host && self.shared.lock().unwrap().party.choosing_media {
+            return Some(0.0);
+        }
+        let media = room.media.as_ref()?;
         let local = self.party_media()?;
-        compatible_media(&local, &room.media, manual).then(|| {
+        compatible_media(&local, media, manual).then(|| {
             room.timeline
                 .position_at(nova_party::local_now_ms() as f64 + room.clock_offset_ms)
-                .clamp(0.0, room.media.duration)
+                .clamp(0.0, media.duration)
         })
     }
 
@@ -116,6 +125,8 @@ impl Bridge {
         let b = self.clone();
         app.on_party_choose_stream(move || b.party_choose_stream());
         let b = self.clone();
+        app.on_party_choose_media(move || b.party_prepare_media_change(true));
+        let b = self.clone();
         app.on_party_copy_invite(move || {
             if let Some(app) = b.app() {
                 copy_to_clipboard(app.get_party_invite().as_str());
@@ -128,15 +139,11 @@ impl Bridge {
             }
         });
         let b = self.clone();
-        app.on_party_set_paused(move |paused| {
-            b.party_enqueue(Operation::Command(HostCommand::SetPaused(paused)))
-        });
+        app.on_party_set_paused(move |paused| b.party_command(HostCommand::SetPaused(paused)));
         let b = self.clone();
         app.on_party_seek(move |position| {
             if position.is_finite() {
-                b.party_enqueue(Operation::Command(HostCommand::SeekAbsolute(
-                    position as f64,
-                )));
+                b.party_command(HostCommand::SeekAbsolute(position as f64));
             }
         });
         let b = self.clone();
@@ -192,19 +199,29 @@ impl Bridge {
         let Some(app) = self.app() else {
             return LocalReport::default();
         };
+        if let Some(room) = room
+            && room.media.is_none()
+        {
+            return LocalReport {
+                generation: room.generation,
+                ..Default::default()
+            };
+        }
         let local = self.party_media();
         let manual = self.shared.lock().unwrap().party.choosing_source;
         let matches = room.is_none_or(|room| {
-            local
-                .as_ref()
-                .is_some_and(|local| compatible_media(local, &room.media, manual))
+            local.as_ref().is_some_and(|local| {
+                room.media
+                    .as_ref()
+                    .is_some_and(|media| compatible_media(local, media, manual))
+            })
         });
         let readiness = self.player.playback_readiness();
         let loaded =
             app.get_player_open() && app.get_playback_started() && !app.get_resume_prompt_visible();
         let media = matches
             .then(|| {
-                room.map(|r| r.media.identity.clone())
+                room.and_then(|r| r.media.as_ref().map(|media| media.identity.clone()))
                     .or_else(|| local.as_ref().map(|m| m.identity.clone()))
             })
             .flatten();
@@ -234,18 +251,6 @@ impl Bridge {
             );
             return;
         }
-        let report = self.party_report(None);
-        let media = self.party_media();
-        if invite.is_none()
-            && (!report.loaded
-                || !report.seekable
-                || media.as_ref().is_none_or(|m| m.duration <= 0.0))
-        {
-            app.set_party_error(
-                text::tr("Start a seekable video before hosting a watch party.").into(),
-            );
-            return;
-        }
         if invite
             .as_ref()
             .is_some_and(|ticket| ticket.len() > 8192 || ticket.trim().is_empty())
@@ -269,8 +274,8 @@ impl Bridge {
         app.set_party_busy(true);
         app.set_party_error("".into());
         self.release_speed_preview_for_party();
-        // Endpoint setup may take seconds; freeze the initial anchor before
-        // hosting as well as joining, rather than seeking the host backwards.
+        // Pause unrelated playback while creating/joining the lobby; only a
+        // subsequent source selection can bind it to the room.
         if app.get_player_open() {
             self.player.set_paused(true);
         }
@@ -284,6 +289,7 @@ impl Bridge {
         } else {
             name
         };
+        let invite_is_host = invite.is_none();
         let b = self.clone();
         thread::spawn(move || {
             let result = PartyService::new().and_then(|service| {
@@ -291,12 +297,7 @@ impl Bridge {
                     service.join(invite.trim(), name)?;
                     String::new()
                 } else {
-                    let ticket =
-                        service.create(media.expect("validated host media"), report, name)?;
-                    if was_paused {
-                        service.command(HostCommand::SetPaused(true))?;
-                    }
-                    ticket
+                    service.create_lobby(name)?
                 };
                 Ok((service, ticket))
             });
@@ -320,6 +321,8 @@ impl Bridge {
                             state.party.setup_restore = None;
                             state.party.service = Some(service);
                             state.party.snapshot = snapshot;
+                            state.party.choosing_media = invite_is_host;
+                            state.party.selection_epoch = playback_epoch;
                         }
                         b.release_speed_preview_for_party();
                         b.player.set_party_playback_rate(Some(1.0));
@@ -374,6 +377,8 @@ impl Bridge {
         self.party_restore_setup(restore);
         if let Some(app) = self.app() {
             app.set_party_active(false);
+            app.set_party_has_media(false);
+            app.set_party_can_return_to_player(false);
             app.set_party_busy(false);
             app.set_party_waiting(false);
             app.set_party_invite("".into());
@@ -393,25 +398,85 @@ impl Bridge {
     fn party_choose_stream(&self) {
         let title = {
             let mut state = self.shared.lock().unwrap();
+            let Some(media) = state.party.snapshot.as_ref().and_then(|r| r.media.as_ref()) else {
+                return;
+            };
+            let title = media.identity.title.clone();
             state.party.choosing_source = true;
-            state
-                .party
-                .snapshot
-                .as_ref()
-                .map(|room| room.media.identity.title.clone())
+            title
         };
-        let Some(title) = title else { return };
+        self.party_browse(Some(&title));
+    }
+
+    fn party_browse(&self, title: Option<&str>) {
         if let Some(app) = self.app() {
             app.set_party_page_open(false);
             app.set_more_open(false);
             app.set_modal_visible(false);
             app.set_stream_selector_open(false);
         }
+        // This is a local source replacement, not Leave/End party.
         if self.app().is_some_and(|app| app.get_player_open()) {
             let _ = self.execute_playback_action(PlaybackAction::Stop);
         }
-        self.show_discover_page();
-        self.submit_search(&title);
+        if let Some(app) = self.app() {
+            // Route through the shared navigation owner so retained Calendar,
+            // Downloads and More subpage flags cannot cover the picker.
+            app.invoke_navigate_section(1);
+        }
+        if let Some(title) = title {
+            self.submit_search(title);
+        } else {
+            self.submit_search("");
+            if let Some(app) = self.app() {
+                app.set_search_text("".into());
+                app.set_discover_search_open(false);
+            }
+        }
+    }
+
+    fn party_prepare_media_change(&self, browse: bool) {
+        {
+            let mut state = self.shared.lock().unwrap();
+            let party = &mut state.party;
+            if party.service.is_none()
+                || !party
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|r| r.role == PartyRole::Host)
+            {
+                return;
+            }
+            party.choosing_media = true;
+            party.selection_epoch = self.player.screenshot_session();
+            party.choosing_source = false;
+            // Retire controls and reports for the old title before returning
+            // the room to its lobby. Membership and the invite stay intact.
+            party
+                .pending
+                .retain(|op| matches!(op, Operation::Kick(_) | Operation::Wait(_)));
+            party.pending.push_front(Operation::ClearMedia { browse });
+        }
+        self.player.set_paused(true);
+        if let Some(app) = self.app() {
+            app.set_party_busy(true);
+            app.set_party_error("".into());
+        }
+        self.party_tick();
+    }
+
+    fn party_command(&self, command: HostCommand) {
+        let generation = {
+            let state = self.shared.lock().unwrap();
+            if state.party.choosing_media {
+                return;
+            }
+            let Some(room) = state.party.snapshot.as_ref().filter(|r| r.media.is_some()) else {
+                return;
+            };
+            room.generation
+        };
+        self.party_enqueue(Operation::Command(generation, command));
     }
 
     fn party_enqueue(&self, operation: Operation) {
@@ -476,17 +541,45 @@ impl Bridge {
                 return true;
             }
             PlaybackAction::Stop => {
-                self.party_leave();
+                let host = self
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .party
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|r| r.role == PartyRole::Host);
+                if host {
+                    self.party_prepare_media_change(false);
+                }
+                if let Some(app) = self.app() {
+                    app.set_party_page_open(true);
+                }
                 return false;
             }
             PlaybackAction::NextEpisode { .. } => {
-                self.party_leave();
-                return false;
+                if self
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .party
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|r| r.role == PartyRole::Host)
+                {
+                    return false;
+                }
+                if let Some(app) = self.app() {
+                    app.set_party_error(
+                        text::tr("Only the host controls the shared timeline.").into(),
+                    );
+                }
+                return true;
             }
             _ => return false,
         };
         if let Some(command) = command {
-            self.party_enqueue(Operation::Command(command));
+            self.party_command(command);
         }
         true
     }
@@ -501,13 +594,20 @@ impl Bridge {
             let mut state = self.shared.lock().unwrap();
             let p = &mut state.party;
             p.resume_guard = true;
-            p.pending.clear();
+            p.pending.retain(|operation| {
+                matches!(
+                    operation,
+                    Operation::ClearMedia { .. } | Operation::SelectMedia(..)
+                )
+            });
             if p.snapshot
                 .as_ref()
-                .is_some_and(|s| s.role == PartyRole::Host)
+                .is_some_and(|s| s.role == PartyRole::Host && s.media.is_some())
             {
-                p.pending
-                    .push_front(Operation::Command(HostCommand::SetPaused(true)));
+                p.pending.push_front(Operation::Command(
+                    p.snapshot.as_ref().map_or(0, |r| r.generation),
+                    HostCommand::SetPaused(true),
+                ));
             }
             p.service.clone()
         };
@@ -516,10 +616,13 @@ impl Bridge {
             // applies its disconnect grace without keeping Android awake.
             if service
                 .snapshot()
-                .is_some_and(|s| s.role == PartyRole::Host)
+                .is_some_and(|s| s.role == PartyRole::Host && s.media.is_some())
             {
                 thread::spawn(move || {
-                    let _ = service.command(HostCommand::SetPaused(true));
+                    if let Some(room) = service.snapshot() {
+                        let _ = service
+                            .command_for_generation(room.generation, HostCommand::SetPaused(true));
+                    }
                 });
             }
         }
@@ -527,14 +630,12 @@ impl Bridge {
 
     pub(super) fn party_tick(&self) {
         let Some(app) = self.app() else { return };
-        let readiness = self.player.playback_readiness();
         app.set_party_can_host(
             !self.party_active()
-                && app.get_player_open()
-                && app.get_playback_started()
-                && readiness.seekable
-                && app.get_duration() > 0.0,
+                && !self.remote_output_selected()
+                && !app.get_remote_controls_open(),
         );
+        app.set_party_can_return_to_player(app.get_player_open());
         if !remote_playback::is_foreground() {
             return;
         }
@@ -550,10 +651,44 @@ impl Bridge {
         if self.party_active() && snapshot.is_none() {
             return;
         }
+        // Attach a newly chosen source only after its native duration and
+        // seekability are known. Never reselect the video being replaced.
+        let selecting = {
+            let state = self.shared.lock().unwrap();
+            state.party.choosing_media
+                && !state.party.busy
+                && state.party.selection_epoch != self.player.screenshot_session()
+                && snapshot
+                    .as_ref()
+                    .is_some_and(|r| r.role == PartyRole::Host && r.media.is_none())
+        };
+        if selecting {
+            let candidate = self.party_report(None);
+            if candidate.loaded && (!candidate.seekable || candidate.duration <= 0.0) {
+                app.set_party_error(text::tr("Choose a seekable stream to watch together.").into());
+            }
+            if candidate.loaded
+                && candidate.seekable
+                && !candidate.ended
+                && candidate.duration > 0.0
+                && let Some(media) = self.party_media()
+            {
+                let mut state = self.shared.lock().unwrap();
+                state
+                    .party
+                    .pending
+                    .push_front(Operation::SelectMedia(media, candidate));
+                app.set_party_busy(true);
+            }
+        }
         let report = self.party_report(snapshot.as_ref());
+        if snapshot.as_ref().is_some_and(|r| r.media.is_none()) && app.get_player_open() {
+            self.player.set_paused(true);
+        }
         if let Some(room) = snapshot.as_ref()
             && report.loaded
             && !self.shared.lock().unwrap().party.resume_guard
+            && !self.shared.lock().unwrap().party.choosing_media
         {
             if report.media.is_some()
                 && let Some(target) = self.shared.lock().unwrap().playback.as_mut()
@@ -611,11 +746,37 @@ impl Bridge {
         let b = self.clone();
         thread::spawn(move || {
             let (service, operation, generation, resumed) = work;
-            let result = if !remote_playback::is_foreground() {
+            let browse = matches!(operation, Operation::ClearMedia { browse: true });
+            let media_change = matches!(
+                operation,
+                Operation::ClearMedia { .. } | Operation::SelectMedia(..)
+            );
+            let selecting_media = matches!(operation, Operation::SelectMedia(..));
+            let report_only = matches!(operation, Operation::Report(_));
+            let result = if !remote_playback::is_foreground() && report_only {
                 Ok(())
             } else {
                 match operation {
-                    Operation::Command(command) => service.command(command),
+                    Operation::Command(media_generation, command) => {
+                        service.command_for_generation(media_generation, command)
+                    }
+                    Operation::ClearMedia { .. } => service.clear_media(),
+                    Operation::SelectMedia(media, report) => {
+                        service.select_media(media, report).and_then(|()| {
+                            // A load can finish after Android suspends. A prior
+                            // generation's pause must not let its replacement
+                            // start playing for the other participants.
+                            if !remote_playback::is_foreground()
+                                && let Some(room) = service.snapshot()
+                            {
+                                service.command_for_generation(
+                                    room.generation,
+                                    HostCommand::SetPaused(true),
+                                )?;
+                            }
+                            Ok(())
+                        })
+                    }
                     Operation::Kick(id) => service.kick(&id),
                     Operation::Wait(enabled) => service.set_wait_for_guests(enabled),
                     Operation::Continue => service.continue_without_waiting(),
@@ -624,14 +785,30 @@ impl Bridge {
             };
             let snapshot = service.snapshot();
             let _ = slint::invoke_from_event_loop(move || {
+                let reopen_room;
                 {
                     let mut state = b.shared.lock().unwrap();
                     let p = &mut state.party;
                     if p.generation != generation {
                         return;
                     }
+                    reopen_room = snapshot.as_ref().is_some_and(|room| {
+                        p.snapshot.as_ref().map(|old| old.generation) != Some(room.generation)
+                            && (room.role == PartyRole::Guest || room.media.is_none())
+                    });
                     p.busy = false;
+                    // Keep the selection intent while a load is pending so
+                    // suspension cannot strand an otherwise ready lobby.
+                    if selecting_media || (media_change && result.is_err()) {
+                        p.choosing_media = false;
+                    }
                     if snapshot.is_some() {
+                        let changed = p.snapshot.as_ref().map(|r| r.generation)
+                            != snapshot.as_ref().map(|r| r.generation);
+                        if changed {
+                            p.last_seek = None;
+                            p.choosing_source = false;
+                        }
                         p.snapshot = snapshot;
                     }
                     if resumed && result.is_ok() && remote_playback::is_foreground() {
@@ -639,13 +816,24 @@ impl Bridge {
                     }
                 }
                 if let Some(app) = b.app() {
+                    // Guests choose their own source for each newly selected
+                    // title. EOF brings the host back to the existing lobby.
+                    if reopen_room {
+                        app.set_party_page_open(true);
+                    }
+                    if media_change {
+                        app.set_party_busy(false);
+                    }
                     if result.is_err() {
                         app.set_party_error(
                             text::tr("Could not connect to the watch party. Try again.").into(),
                         );
-                    } else {
+                    } else if !report_only {
                         app.set_party_error("".into());
                     }
+                }
+                if browse && result.is_ok() {
+                    b.party_browse(None);
                 }
                 if remote_playback::is_foreground() {
                     b.party_publish();
@@ -668,26 +856,38 @@ impl Bridge {
         app.set_party_waiting(!room.waiting.is_empty() || !room.connected);
         app.set_party_wait_for_guests(room.wait_for_guests);
         app.set_party_paused(room.timeline.paused);
-        app.set_party_title(room.media.identity.title.clone().into());
-        app.set_party_episode(room.media.identity.episode.clone().into());
+        let media = room.media.as_ref();
+        app.set_party_has_media(media.is_some());
+        app.set_party_can_return_to_player(app.get_player_open());
+        app.set_party_title(media.map_or("", |m| m.identity.title.as_str()).into());
+        app.set_party_episode(media.map_or("", |m| m.identity.episode.as_str()).into());
+        let duration = media.map_or(0.0, |m| m.duration);
         let position = room
             .timeline
             .position_at(nova_party::local_now_ms() as f64 + room.clock_offset_ms)
-            .clamp(0.0, room.media.duration);
+            .clamp(0.0, duration);
         app.set_party_position(position as f32);
-        app.set_party_duration(room.media.duration as f32);
-        app.set_party_time_text(
+        app.set_party_duration(duration as f32);
+        app.set_party_time_text(if media.is_some() {
             format!(
                 "{} / {}",
                 crate::player::format_time(position),
-                crate::player::format_time(room.media.duration)
+                crate::player::format_time(duration)
             )
-            .into(),
-        );
+            .into()
+        } else {
+            "".into()
+        });
         let status = if room.ended {
             "The watch party has ended."
         } else if !room.connected {
             "Reconnecting to the host…"
+        } else if media.is_none() {
+            if room.role == PartyRole::Host {
+                "Choose what to watch"
+            } else {
+                "Waiting for the host to choose"
+            }
         } else if !room.waiting.is_empty() {
             "Waiting for participants to buffer…"
         } else if room.timeline.paused {
@@ -696,7 +896,7 @@ impl Bridge {
             "Watching together"
         };
         app.set_party_status(text::tr(status).into());
-        app.set_party_warning(text::tr("Choose the same episode and edition. Different cuts cannot be aligned automatically.").into());
+        app.set_party_warning(if media.is_some() { text::tr("Choose the same episode and edition. Different cuts cannot be aligned automatically.").into() } else { "".into() });
         app.set_party_participants(
             Rc::new(VecModel::from(
                 room.participants
@@ -716,6 +916,9 @@ impl Bridge {
                                 "Ready"
                             } else {
                                 match p.reason.as_deref() {
+                                    Some("waiting for host to choose media") => {
+                                        "Waiting for the host to choose"
+                                    }
                                     Some("buffering") => "Buffering",
                                     Some("waiting for current media") => "Loading stream…",
                                     Some("different media duration or edition") => {

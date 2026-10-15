@@ -106,8 +106,10 @@ pub fn tr(english: &str) -> &str {
         "Disconnect remote controls before joining a watch party." => {
             "Prekinite daljinsko upravljanje prije pridruživanja zajedničkom gledanju."
         }
-        "Start a seekable video before hosting a watch party." => {
-            "Prije pokretanja zajedničkog gledanja pokrenite videozapis koji podržava premotavanje."
+        "Choose what to watch" => "Odaberite što ćete gledati",
+        "Waiting for the host to choose" => "Čekanje odabira domaćina",
+        "Choose a seekable stream to watch together." => {
+            "Za zajedničko gledanje odaberite prijenos koji podržava premotavanje."
         }
         "The watch-party invite is invalid or expired." => {
             "Pozivnica za zajedničko gledanje nije valjana ili je istekla."

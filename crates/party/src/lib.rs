@@ -14,7 +14,7 @@ pub use service::PartyService;
 use std::sync::LazyLock;
 use std::time::Instant;
 
-pub const ALPN: &[u8] = b"nova/party/1";
+pub const ALPN: &[u8] = b"nova/party/2";
 pub const MAX_MEMBERS: usize = 8;
 pub const BUFFER_READY_SECONDS: f64 = 2.0;
 pub const START_LEAD_MS: u64 = 1_000;
@@ -95,7 +95,8 @@ pub struct RoomSnapshot {
     pub room_id: String,
     pub host_id: String,
     pub member_id: String,
-    pub media: PartyMedia,
+    /// No shared selection while the host is choosing what to watch.
+    pub media: Option<PartyMedia>,
     pub generation: u64,
     pub revision: u64,
     pub timeline: Timeline,
@@ -126,21 +127,28 @@ pub struct DriftCorrection {
 
 /// Compute all adjustments together so a seek never loses a simultaneous pause.
 pub fn drift_correction(room: &RoomSnapshot, local: &LocalReport, now_ms: u64) -> DriftCorrection {
+    let Some(media) = &room.media else {
+        return DriftCorrection {
+            paused: true,
+            seek_to: None,
+            rate: 1.0,
+        };
+    };
     let host_now = now_ms as f64 + room.clock_offset_ms;
-    let matching = engine::media_matches(&room.media.identity, local.media.as_ref());
+    let matching = engine::media_matches(&media.identity, local.media.as_ref());
     let compatible = matching
         && local.generation == room.generation
-        && engine::duration_matches(room.media.duration, local.duration);
+        && engine::duration_matches(media.duration, local.duration);
     let paused = room.ended
         || !room.connected
         || !compatible
-        || !engine::ready_for_media(&room.media, room.generation, local)
+        || !engine::ready_for_media(media, room.generation, local)
         || room.timeline.paused
         || host_now < room.timeline.anchor_ms as f64;
     let target = room
         .timeline
         .position_at(host_now)
-        .clamp(0.0, room.media.duration);
+        .clamp(0.0, media.duration);
     let delta = target - local.position;
     let seek_threshold = if paused { 0.15 } else { 1.25 };
     let seek_to = (compatible
