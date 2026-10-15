@@ -934,6 +934,10 @@ export component PlayerOverlay {
     // content rate only once the OSD has fully faded out, not when the logical
     // `osd_visible` flag flips.
     private property <float> osd_current_opacity: osd.opacity;
+    // Initial opacity can already equal its target (for example with motion
+    // disabled), so a change notification alone would leave parent overlays
+    // using an old value from the previous playback session.
+    init => { root.osd_opacity_changed(osd_current_opacity); }
     changed osd_current_opacity => {
         root.osd_opacity_changed(osd_current_opacity);
         root.subtitle_clearance_changed(root.subtitle_clearance_fraction, osd_current_opacity);

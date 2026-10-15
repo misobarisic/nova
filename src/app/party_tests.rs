@@ -655,18 +655,23 @@ fn host_title_changes_preserve_membership_and_retire_the_old_timeline() {
             assert!(app.get_is_paused());
             assert_eq!(bridge.party_start_position(), Some(0.0));
 
-            // Successful ClearMedia completion uses this browse path. It
-            // starts unfiltered discovery instead of searching the old title.
-            app.set_show_downloads(true);
-            app.set_show_calendar(true);
+            // Explicit title choice returns to the current page. It must not
+            // force Discover or clear the user's retained browsing filters.
+            app.invoke_navigate_section(5);
+            app.set_search_text("keep this query".into());
             bridge.party_browse(None);
-            assert!(!app.get_show_downloads());
+            assert!(app.get_show_downloads());
             assert!(!app.get_show_calendar());
             assert!(!app.get_more_open());
             assert!(!app.get_player_open());
-            assert!(app.get_search_text().is_empty());
+            assert_eq!(app.get_search_text(), "keep this query");
             assert!(!app.get_discover_search_open());
             assert!(bridge.party_active());
+            app.invoke_navigate_section(3);
+            app.set_party_page_open(true);
+            bridge.party_browse(None);
+            assert!(app.get_more_open(), "manual browsing also retains More");
+            assert!(!app.get_party_page_open());
         },
     );
 }

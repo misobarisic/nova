@@ -457,7 +457,48 @@ fn player_only_exposes_party_access_when_connected_or_connecting() {
             .is_none()
     );
     app.set_party_active(true);
-    settle();
-    button(&app, "Open watch party").mock_single_click(slint::platform::PointerEventButton::Left);
-    assert!(app.get_party_page_open());
+    app.set_playback_started(true);
+    let weak = app.as_weak();
+    app.on_osd_mouse_moved(move || weak.upgrade().unwrap().set_osd_visible(true));
+    for android in [true, false] {
+        app.set_is_android(android);
+        app.set_osd_visible(true);
+        settle();
+        let badge = button(&app, "Open watch party");
+        assert_eq!(badge.computed_opacity(), 1.0);
+        let origin = badge.absolute_position();
+        let size = badge.size();
+        let position =
+            slint::LogicalPosition::new(origin.x + size.width / 2.0, origin.y + size.height / 2.0);
+        app.set_osd_visible(false);
+        settle();
+        assert!(
+            ElementHandle::find_by_accessible_label(&app, "Open watch party")
+                .next()
+                .is_none(),
+            "hidden OSD removes party access from hit-testing and accessibility"
+        );
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            });
+        settle();
+        assert!(
+            !app.get_party_page_open(),
+            "a hidden badge must not intercept a wake tap"
+        );
+        app.set_osd_visible(true);
+        settle();
+        button(&app, "Open watch party")
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+        assert!(app.get_party_page_open());
+        app.set_party_page_open(false);
+        settle();
+    }
 }

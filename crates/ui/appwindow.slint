@@ -2240,6 +2240,9 @@ export component AppWindow inherits Window {
         system_back_request: root.system_back_request;
     }
     if (root.party_active || root.party_busy) && root.player_open && !root.party_page_open: PartyPlayerBadge {
+        // Share the actual OSD fade, including loading and open player menus.
+        opacity: root.osd_opacity;
+        visible: self.opacity > 0;
         x: root.safe-area-insets.left + 18px;
         y: root.safe-area-insets.top + 72px;
         width: Math.min(300px, root.width - root.safe-area-insets.left - root.safe-area-insets.right - 36px);

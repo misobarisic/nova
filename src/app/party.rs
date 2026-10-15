@@ -409,29 +409,23 @@ impl Bridge {
     }
 
     fn party_browse(&self, title: Option<&str>) {
-        if let Some(app) = self.app() {
-            app.set_party_page_open(false);
-            app.set_more_open(false);
-            app.set_modal_visible(false);
-            app.set_stream_selector_open(false);
-        }
         // This is a local source replacement, not Leave/End party.
         if self.app().is_some_and(|app| app.get_player_open()) {
             let _ = self.execute_playback_action(PlaybackAction::Stop);
         }
         if let Some(app) = self.app() {
-            // Route through the shared navigation owner so retained Calendar,
-            // Downloads and More subpage flags cannot cover the picker.
-            app.invoke_navigate_section(1);
+            app.set_party_page_open(false);
+            if title.is_some() {
+                app.set_modal_visible(false);
+                app.set_stream_selector_open(false);
+                // A guest looking for the selected title gets a prepared
+                // search. Hosts choose a new title manually from their current
+                // page, retaining Library, Downloads and browsing filters.
+                app.invoke_navigate_section(1);
+            }
         }
         if let Some(title) = title {
             self.submit_search(title);
-        } else {
-            self.submit_search("");
-            if let Some(app) = self.app() {
-                app.set_search_text("".into());
-                app.set_discover_search_open(false);
-            }
         }
     }
 

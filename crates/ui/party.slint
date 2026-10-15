@@ -120,7 +120,7 @@ export component PartyPage inherits Rectangle {
     }
 }
 
-// Always available above playback, even while the main OSD has faded away.
+// AppWindow binds visibility and opacity to the player OSD fade.
 export component PartyPlayerBadge inherits Rectangle {
     height: 44px; border-radius: Theme.button_corner_radius;
     background: Theme.current.player_menu; border-width: 1px; border-color: Theme.current.player_menu_border;
