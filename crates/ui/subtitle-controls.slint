@@ -1,4 +1,4 @@
-import { Theme } from "@NovaUiShared";
+import { Theme, SubtitleStyle } from "@NovaUiShared";
 import { MiniSlider, PillButton } from "settings-controls.slint";
 
 // Both hosts use the same units and bounds. The backend owns normalization and
@@ -23,13 +23,13 @@ export component SubtitleControls inherits VerticalLayout {
             spacing: 6px;
             PillButton { label: "−"; compact: true; btn_min_width: 44px;
                 accessible-label: @tr("Decrease") + " " + caption;
-                clicked => { root.edited(i, root.values[i] - (i == 0 ? 0.1 : i == 4 ? 0.05 : 1)); } }
+                clicked => { root.edited(i, root.values[i] - SubtitleStyle.step(i)); } }
             MiniSlider {
                 horizontal-stretch: 1; min-width: 24px;
                 name: caption; focused: root.focused_idx == i;
                 value: root.values[i]; minimum: i == 0 ? -60 : i == 1 ? 16 : 0;
                 maximum: i == 0 ? 60 : i == 1 ? 100 : i == 2 ? 200 : i == 3 ? 100 : 10;
-                step: i == 0 ? 0.1 : i == 4 ? 0.05 : 1;
+                step: SubtitleStyle.step(i);
                 changed(v) => { root.edited(i, v); }
             }
             Text {
@@ -40,7 +40,7 @@ export component SubtitleControls inherits VerticalLayout {
             }
             PillButton { label: "+"; compact: true; btn_min_width: 44px;
                 accessible-label: @tr("Increase") + " " + caption;
-                clicked => { root.edited(i, root.values[i] + (i == 0 ? 0.1 : i == 4 ? 0.05 : 1)); } }
+                clicked => { root.edited(i, root.values[i] + SubtitleStyle.step(i)); } }
         }
     }
     Text {

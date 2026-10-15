@@ -484,6 +484,61 @@ fn parse_home_showcase_catalog(bytes: &[u8], type_: &str) -> Option<Vec<MetaPrev
     Some(previews)
 }
 
+fn home_catalog_targets(
+    sources: &[HomeCatalogSource],
+    installed: &[Installed],
+) -> Vec<(HomeCatalogSource, String)> {
+    sources
+        .iter()
+        .filter_map(|source| {
+            let addon = installed
+                .iter()
+                .find(|addon| addon.url == source.addon_url && addon.enabled && addon.available)?;
+            addon
+                .manifest
+                .catalog_for(&source.type_, &source.catalog_id)?;
+            let addon = Addon::new(&addon.url).ok()?;
+            let extra = if source.genre.is_empty() {
+                Vec::new()
+            } else {
+                vec![("genre", source.genre.as_str())]
+            };
+            Some((
+                source.clone(),
+                addon.catalog_url(&source.type_, &source.catalog_id, &extra),
+            ))
+        })
+        .collect()
+}
+
+// Share transport and response collection, while each Home surface retains
+// its own generation checks, cache limits and publication policy.
+fn fetch_home_catalogs(
+    targets: Vec<(HomeCatalogSource, String)>,
+    finish: impl FnOnce(Vec<HomeShowcaseBatch>) + Clone + Send + 'static,
+) {
+    if targets.is_empty() {
+        return;
+    }
+    let results = Arc::new(Mutex::new(Vec::<HomeShowcaseBatch>::new()));
+    let remaining = Arc::new(AtomicUsize::new(targets.len()));
+    for (source, url) in targets {
+        let results = results.clone();
+        let remaining = remaining.clone();
+        let finish = finish.clone();
+        net::fetch_bytes(url, move |result| {
+            let previews = result
+                .ok()
+                .and_then(|bytes| parse_home_showcase_catalog(&bytes, &source.type_));
+            results.lock().unwrap().push((source, previews));
+            if remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
+                let batches = std::mem::take(&mut *results.lock().unwrap());
+                let _ = slint::invoke_from_event_loop(move || finish(batches));
+            }
+        });
+    }
+}
+
 impl Bridge {
     /// Load a small first page from each selected Home catalog. Each catalog
     /// contributes at most five distinct titles; Discover's current picker,
@@ -499,27 +554,7 @@ impl Bridge {
                 state.home_showcase_sources = sources.clone();
                 state.home_showcase_refresh = None;
             }
-            let targets = sources
-                .iter()
-                .filter_map(|source| {
-                    let addon = state.installed.iter().find(|addon| {
-                        addon.url == source.addon_url && addon.enabled && addon.available
-                    })?;
-                    addon
-                        .manifest
-                        .catalog_for(&source.type_, &source.catalog_id)?;
-                    let addon = Addon::new(&addon.url).ok()?;
-                    let extra = if source.genre.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![("genre", source.genre.as_str())]
-                    };
-                    Some((
-                        source.clone(),
-                        addon.catalog_url(&source.type_, &source.catalog_id, &extra),
-                    ))
-                })
-                .collect::<Vec<_>>();
+            let targets = home_catalog_targets(&sources, &state.installed);
             (
                 state.cache_settings.home_catalog_sources.clone(),
                 sources,
@@ -537,30 +572,10 @@ impl Bridge {
         if restore {
             self.install_home_showcase(cached.previews(&sources));
         }
-        if targets.is_empty() {
-            return;
-        }
-
-        let results = Arc::new(Mutex::new(Vec::<HomeShowcaseBatch>::new()));
-        let remaining = Arc::new(AtomicUsize::new(targets.len()));
-        for (source, url) in targets {
-            let bridge = self.clone();
-            let results = results.clone();
-            let remaining = remaining.clone();
-            let sources = sources.clone();
-            net::fetch_bytes(url, move |result| {
-                let previews = result
-                    .ok()
-                    .and_then(|bytes| parse_home_showcase_catalog(&bytes, &source.type_));
-                results.lock().unwrap().push((source, previews));
-                if remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    let batches = std::mem::take(&mut *results.lock().unwrap());
-                    let _ = slint::invoke_from_event_loop(move || {
-                        bridge.finish_home_showcase_refresh(generation, sources, batches);
-                    });
-                }
-            });
-        }
+        let bridge = self.clone();
+        fetch_home_catalogs(targets, move |batches| {
+            bridge.finish_home_showcase_refresh(generation, sources, batches);
+        });
     }
 
     /// Invalidate any in-flight response when addon/catalog preferences
@@ -613,27 +628,7 @@ impl Bridge {
             if restore {
                 state.home_catalog_row_sources = sources.clone();
             }
-            let targets = sources
-                .iter()
-                .filter_map(|source| {
-                    let addon = state.installed.iter().find(|addon| {
-                        addon.url == source.addon_url && addon.enabled && addon.available
-                    })?;
-                    addon
-                        .manifest
-                        .catalog_for(&source.type_, &source.catalog_id)?;
-                    let addon = Addon::new(&addon.url).ok()?;
-                    let extra = if source.genre.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![("genre", source.genre.as_str())]
-                    };
-                    Some((
-                        source.clone(),
-                        addon.catalog_url(&source.type_, &source.catalog_id, &extra),
-                    ))
-                })
-                .collect::<Vec<_>>();
+            let targets = home_catalog_targets(&sources, &state.installed);
             (
                 state.cache_settings.home_addon_sources(false),
                 sources,
@@ -654,30 +649,10 @@ impl Bridge {
             let groups = home_catalog_row_groups(&cached, &sources, &installed);
             self.install_home_catalog_rows(groups);
         }
-        if targets.is_empty() {
-            return;
-        }
-
-        let results = Arc::new(Mutex::new(Vec::<HomeShowcaseBatch>::new()));
-        let remaining = Arc::new(AtomicUsize::new(targets.len()));
-        for (source, url) in targets {
-            let bridge = self.clone();
-            let results = results.clone();
-            let remaining = remaining.clone();
-            let sources = sources.clone();
-            net::fetch_bytes(url, move |result| {
-                let previews = result
-                    .ok()
-                    .and_then(|bytes| parse_home_showcase_catalog(&bytes, &source.type_));
-                results.lock().unwrap().push((source, previews));
-                if remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    let batches = std::mem::take(&mut *results.lock().unwrap());
-                    let _ = slint::invoke_from_event_loop(move || {
-                        bridge.finish_home_catalog_rows_refresh(generation, sources, batches);
-                    });
-                }
-            });
-        }
+        let bridge = self.clone();
+        fetch_home_catalogs(targets, move |batches| {
+            bridge.finish_home_catalog_rows_refresh(generation, sources, batches);
+        });
     }
 
     pub(super) fn invalidate_home_catalog_rows(&self) {

@@ -33,6 +33,13 @@ export global SettingsStyle {
     in-out property <length> focus-height;
     in-out property <bool> navigation-focus: false;
     in-out property <int> focus-request: 0;
+
+    public function reveal_control(y: length, height: length, navigation: bool) {
+        self.focus-y = y;
+        self.focus-height = height;
+        self.navigation-focus = navigation;
+        self.focus-request += 1;
+    }
 }
 
 export global SettingsDestinations {
@@ -93,5 +100,12 @@ export global PlaybackSpeed {
         let hundredths = Math.round(speed * 100);
         let fraction = Math.mod(hundredths, 100);
         return Math.floor(hundredths / 100) + "." + (fraction < 10 ? "0" : "") + fraction + "×";
+    }
+}
+
+// Buttons, sliders and both keyboard hosts must use the same increments.
+export global SubtitleStyle {
+    public pure function step(index: int) -> float {
+        return index == 0 ? 0.1 : index == 4 ? 0.05 : 1;
     }
 }

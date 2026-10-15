@@ -76,10 +76,7 @@ export component PillButton inherits Rectangle {
     property <bool> focus_visible: root.enabled && SettingsStyle.keyboard-mode && (root.focused || key_focus.has-focus);
     changed focus_visible => {
         if (self.focus_visible) {
-            SettingsStyle.focus-y = root.absolute-position.y;
-            SettingsStyle.focus-height = root.height;
-            SettingsStyle.navigation-focus = false;
-            SettingsStyle.focus-request += 1;
+            SettingsStyle.reveal_control(root.absolute-position.y, root.height, false);
         }
     }
     forward-focus: key_focus;
@@ -150,10 +147,7 @@ export component ToggleSwitch inherits Rectangle {
     property <bool> focus_visible: root.enabled && SettingsStyle.keyboard-mode && (root.focused || key_focus.has-focus);
     changed focus_visible => {
         if (self.focus_visible) {
-            SettingsStyle.focus-y = root.absolute-position.y;
-            SettingsStyle.focus-height = root.height;
-            SettingsStyle.navigation-focus = false;
-            SettingsStyle.focus-request += 1;
+            SettingsStyle.reveal_control(root.absolute-position.y, root.height, false);
         }
     }
     forward-focus: key_focus;
@@ -204,10 +198,7 @@ export component AddonIconButton inherits Rectangle {
     property <bool> focus_visible: root.enabled && SettingsStyle.keyboard-mode && (root.focused || key_focus.has-focus);
     changed focus_visible => {
         if (self.focus_visible) {
-            SettingsStyle.focus-y = root.absolute-position.y;
-            SettingsStyle.focus-height = root.height;
-            SettingsStyle.navigation-focus = false;
-            SettingsStyle.focus-request += 1;
+            SettingsStyle.reveal_control(root.absolute-position.y, root.height, false);
         }
     }
     forward-focus: key_focus;
@@ -401,10 +392,7 @@ export component MiniSlider inherits Rectangle {
     property <bool> focus_visible: root.enabled && SettingsStyle.keyboard-mode && (root.focused || key_focus.has-focus);
     changed focus_visible => {
         if (self.focus_visible) {
-            SettingsStyle.focus-y = root.absolute-position.y;
-            SettingsStyle.focus-height = root.height;
-            SettingsStyle.navigation-focus = false;
-            SettingsStyle.focus-request += 1;
+            SettingsStyle.reveal_control(root.absolute-position.y, root.height, false);
         }
     }
     forward-focus: key_focus;
@@ -448,10 +436,7 @@ export component Segmented inherits HorizontalLayout {
         property <bool> focus_visible: root.enabled && SettingsStyle.keyboard-mode && ((root.focused && root.current_index == i) || segment_focus.has-focus);
         changed focus_visible => {
             if (self.focus_visible) {
-                SettingsStyle.focus-y = self.absolute-position.y;
-                SettingsStyle.focus-height = self.height;
-                SettingsStyle.navigation-focus = false;
-                SettingsStyle.focus-request += 1;
+                SettingsStyle.reveal_control(self.absolute-position.y, self.height, false);
             }
         }
         forward-focus: segment_focus;
@@ -873,10 +858,7 @@ export component SettingsLink inherits Rectangle {
     property <bool> focus_visible: root.interactive && SettingsStyle.keyboard-mode && (root.focused || link_focus.has-focus);
     changed focus_visible => {
         if (self.focus_visible) {
-            SettingsStyle.focus-y = root.absolute-position.y;
-            SettingsStyle.focus-height = root.height;
-            SettingsStyle.navigation-focus = true;
-            SettingsStyle.focus-request += 1;
+            SettingsStyle.reveal_control(root.absolute-position.y, root.height, true);
         }
     }
     link_focus := FocusScope {
@@ -955,10 +937,7 @@ export component SettingsBackButton inherits Rectangle {
     property <bool> focus_visible: SettingsStyle.keyboard-mode && (root.focused || back_focus.has-focus);
     changed focus_visible => {
         if (self.focus_visible && root.reveal-on-focus) {
-            SettingsStyle.focus-y = root.absolute-position.y;
-            SettingsStyle.focus-height = root.height;
-            SettingsStyle.navigation-focus = false;
-            SettingsStyle.focus-request += 1;
+            SettingsStyle.reveal_control(root.absolute-position.y, root.height, false);
         }
     }
 }
@@ -999,10 +978,7 @@ export component SettingsInput inherits SearchField {
     property <bool> focus-visible: root.has-focus && SettingsStyle.keyboard-mode;
     changed focus-visible => {
         if (self.focus-visible) {
-            SettingsStyle.focus-y = root.absolute-position.y;
-            SettingsStyle.focus-height = root.height;
-            SettingsStyle.navigation-focus = false;
-            SettingsStyle.focus-request += 1;
+            SettingsStyle.reveal_control(root.absolute-position.y, root.height, false);
         }
     }
     accessible-role: text-input;

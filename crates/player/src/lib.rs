@@ -1063,6 +1063,21 @@ struct State {
     frame_rate_reapply: AtomicBool,
 }
 
+impl State {
+    fn apply_subtitle_style(
+        &self,
+        mpv: &Mpv,
+        style: nova_config::playback_preferences::SubtitleStyle,
+    ) {
+        // Every live edit replaces the base used by the temporary OSD lift.
+        self.subtitle_position
+            .lock()
+            .unwrap()
+            .set_base(mpv, style.position as f64);
+        apply_subtitle_style(mpv, style, self.native_subtitle_defaults);
+    }
+}
+
 impl Drop for State {
     fn drop(&mut self) {
         if self.underlay.get_mut().unwrap().is_some() {
@@ -2307,15 +2322,7 @@ impl Player {
             if let Some(mpv) = mpv.as_ref() {
                 if control == 3 {
                     self.state
-                        .subtitle_position
-                        .lock()
-                        .unwrap()
-                        .set_base(mpv, session.preferences.subtitle_style().position as f64);
-                    apply_subtitle_style(
-                        mpv,
-                        session.preferences.subtitle_style(),
-                        self.state.native_subtitle_defaults,
-                    );
+                        .apply_subtitle_style(mpv, session.preferences.subtitle_style());
                 } else if control == 2 {
                     if self.state.party_playback_rate.lock().unwrap().is_none() {
                         let _ = mpv.set_property("speed", session.preferences.speed() as f64);
@@ -2388,12 +2395,7 @@ impl Player {
         session.preferences.title.subtitle_style = Some(patch);
         if let Some(mpv) = mpv.as_ref() {
             let style = session.preferences.subtitle_style();
-            self.state
-                .subtitle_position
-                .lock()
-                .unwrap()
-                .set_base(mpv, style.position as f64);
-            apply_subtitle_style(mpv, style, self.state.native_subtitle_defaults);
+            self.state.apply_subtitle_style(mpv, style);
         }
         patch
     }
@@ -2433,12 +2435,7 @@ impl Player {
             session.preferences.default_subtitle_style = settings.subtitle_style.normalized();
             if let Some(mpv) = mpv.as_ref() {
                 let style = session.preferences.subtitle_style();
-                self.state
-                    .subtitle_position
-                    .lock()
-                    .unwrap()
-                    .set_base(mpv, style.position as f64);
-                apply_subtitle_style(mpv, style, self.state.native_subtitle_defaults);
+                self.state.apply_subtitle_style(mpv, style);
             }
         }
     }

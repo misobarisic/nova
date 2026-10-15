@@ -1,4 +1,4 @@
-import { PartyBridge, Theme, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
+import { SubtitleStyle, PartyBridge, Theme, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 
@@ -1233,7 +1233,7 @@ export component PlayerOverlay {
                                 root.playback_speed_stepped(1);
                             } else if root.settings_page == 5 && root.kb_menu > 0 {
                                 let i = root.kb_menu - 1;
-                                root.subtitle_style_changed(i, root.subtitle_style[i] + (i == 0 ? 0.1 : i == 4 ? 0.05 : 1));
+                                root.subtitle_style_changed(i, root.subtitle_style[i] + SubtitleStyle.step(i));
                             }
                             accept
                         } else if (e.text == Key.Return) {
@@ -1244,7 +1244,7 @@ export component PlayerOverlay {
                                 root.playback_speed_stepped(-1);
                             } else if root.settings_page == 5 && root.kb_menu > 0 {
                                 let i = root.kb_menu - 1;
-                                root.subtitle_style_changed(i, root.subtitle_style[i] - (i == 0 ? 0.1 : i == 4 ? 0.05 : 1));
+                                root.subtitle_style_changed(i, root.subtitle_style[i] - SubtitleStyle.step(i));
                             } else {
                                 root.settings_back();
                             }

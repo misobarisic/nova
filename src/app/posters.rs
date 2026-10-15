@@ -941,6 +941,37 @@ impl Bridge {
         }
     }
 
+    // Keep request completion policy shared while each rail retains its own
+    // row identity/index rules and, for Upcoming, calendar-day publication.
+    fn fetch_episode_home_poster(
+        &self,
+        id: SharedString,
+        url: SharedString,
+        type_: String,
+        fallback: String,
+        retry: impl FnOnce(&Self) + Send + 'static,
+        publish: impl FnOnce(&AppWindow, SharedPixelBuffer<Rgba8Pixel>) + Send + 'static,
+    ) {
+        let bridge = self.clone();
+        let failed_poster = fallback.clone();
+        let image_revision = image_settings_revision();
+        fetch_home_card_art(url.to_string(), fallback, move |pixels| {
+            let _ = slint::invoke_from_event_loop(move || {
+                if image_settings_revision() != image_revision {
+                    retry(&bridge);
+                    return;
+                }
+                let Some(pixels) = pixels else {
+                    bridge.recover_missing_artwork(&type_, id.as_str(), &failed_poster);
+                    return;
+                };
+                if let Some(app) = bridge.app() {
+                    publish(&app, pixels);
+                }
+            });
+        });
+    }
+
     /// Fetch the Home card's selected thumbnail/poster off the UI thread.
     /// Guard both series and URL: the next episode can occupy the same slot.
     pub(super) fn dispatch_continue_posters(&self) {
@@ -1006,23 +1037,14 @@ impl Bridge {
                 (index, row.id, row.art_url, type_, fallback)
             })
             .collect();
-        let app_weak = self.app.clone();
         for (_index, id, url, type_, fallback) in items {
-            let weak = app_weak.clone();
-            let bridge = self.clone();
-            let failed_poster = fallback.clone();
-            let image_revision = image_settings_revision();
-            fetch_home_card_art(url.to_string(), fallback, move |pixels| {
-                let _ = slint::invoke_from_event_loop(move || {
-                    if image_settings_revision() != image_revision {
-                        bridge.dispatch_episode_home_posters(new);
-                        return;
-                    }
-                    let Some(pixels) = pixels else {
-                        bridge.recover_missing_artwork(&type_, id.as_str(), &failed_poster);
-                        return;
-                    };
-                    let Some(app) = weak.upgrade() else { return };
+            self.fetch_episode_home_poster(
+                id.clone(),
+                url.clone(),
+                type_,
+                fallback,
+                move |bridge| bridge.dispatch_episode_home_posters(new),
+                move |app, pixels| {
                     let model = if new {
                         app.get_home_new_episodes()
                     } else {
@@ -1040,8 +1062,8 @@ impl Bridge {
                         row.is_loaded = true;
                         model.set_row_data(index, row);
                     }
-                });
-            });
+                },
+            );
         }
     }
 
@@ -1088,23 +1110,14 @@ impl Bridge {
                 (index, row.id, row.art_url, type_, fallback)
             })
             .collect();
-        let app_weak = self.app.clone();
         for (_index, id, url, type_, fallback) in items {
-            let weak = app_weak.clone();
-            let bridge = self.clone();
-            let failed_poster = fallback.clone();
-            let image_revision = image_settings_revision();
-            fetch_home_card_art(url.to_string(), fallback, move |pixels| {
-                let _ = slint::invoke_from_event_loop(move || {
-                    if image_settings_revision() != image_revision {
-                        bridge.dispatch_upcoming_posters();
-                        return;
-                    }
-                    let Some(pixels) = pixels else {
-                        bridge.recover_missing_artwork(&type_, id.as_str(), &failed_poster);
-                        return;
-                    };
-                    let Some(app) = weak.upgrade() else { return };
+            self.fetch_episode_home_poster(
+                id.clone(),
+                url.clone(),
+                type_,
+                fallback,
+                Self::dispatch_upcoming_posters,
+                move |app, pixels| {
                     let model = app.get_home_upcoming();
                     if let Some((index, mut row)) = model
                         .iter()
@@ -1132,8 +1145,8 @@ impl Bridge {
                             day_model.set_row_data(day_index, row);
                         }
                     }
-                });
-            });
+                },
+            );
         }
     }
 

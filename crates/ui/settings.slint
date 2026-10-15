@@ -1,5 +1,5 @@
 import { SettingsSectionHost } from "settings-section-host.slint";
-import { SettingsBridge, SettingsContent, SettingsSync, Theme, PluginSettingRow, TrackingAccountRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, NavMetrics, NavState, Anim, SliderGesture, SettingsStyle, SettingsDestinations } from "@NovaUiShared";
+import { SubtitleStyle, SettingsBridge, SettingsContent, SettingsSync, Theme, PluginSettingRow, TrackingAccountRow, AddonRow, CategoryRow, HomeCatalogRow, SyncPeer, SyncInvite, DownloadRow, NavMetrics, NavState, Anim, SliderGesture, SettingsStyle, SettingsDestinations } from "@NovaUiShared";
 import { SettingSyncModal } from "settings-sync-modal.slint";
 
 import { ScrollView } from "scrollview.slint";
@@ -1297,7 +1297,7 @@ export component SettingsPage {
             root.schedule_setting("screenshot_show_folder");
         } else if root.player_backend_index == 0 && root.kb_pr >= root.kb_player_speed_row() + (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 ? 5 : 4) {
             let index = root.kb_pr - root.kb_player_speed_row() - (root.screenshot_format_index == 1 || root.screenshot_format_index == 3 ? 5 : 4);
-            SettingsBridge.subtitle_style_changed(index, SettingsBridge.subtitle_style[index] + d * (index == 0 ? 0.1 : index == 4 ? 0.05 : 1));
+            SettingsBridge.subtitle_style_changed(index, SettingsBridge.subtitle_style[index] + d * SubtitleStyle.step(index));
             root.schedule_setting("subtitle_style");
         } else if root.player_backend_index == 0 && root.kb_pr == root.kb_player_speed_row() + 4 {
             if root.screenshot_format_index == 1 {
