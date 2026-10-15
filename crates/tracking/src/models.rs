@@ -96,4 +96,6 @@ pub struct TrackingState {
     pub active_accounts: Vec<AccountKey>,
     #[serde(default)]
     pub automatic_paused: Vec<Service>,
+    #[serde(default)]
+    pub completion: crate::CompletionPrompts,
 }

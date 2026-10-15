@@ -29,6 +29,8 @@ export component SettingsTrackingModule inherits Window {
             changed input_focused => {SettingsContent.tracking_input_focused=self.input_focused;}
             blur: SettingsContent.tracking_blur;
             notice: SettingsBridge.tracking_notice;
+            completion_rating_prompts_enabled <=> SettingsBridge.completion_rating_prompts_enabled;
+            completion_prompts_changed => { SettingsBridge.settings_edited("completion_rating_prompts_enabled"); }
             connect(service,client,redirect) => {SettingsBridge.tracking_connect(service,client,redirect);}
             complete(service,value) => {SettingsBridge.tracking_complete(service,value);}
             disconnect(service) => {SettingsBridge.tracking_disconnect(service);}

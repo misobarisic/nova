@@ -7,6 +7,12 @@ use nova_tracking::{Service, SourceRef};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 
 pub(super) type StateHandle = Arc<TrackingHandle>;
+#[derive(Clone, Copy)]
+struct CompletionPromptPolicy {
+    enabled: bool,
+    watermark: u64,
+    revision: u64,
+}
 pub(super) struct TrackingHandle {
     tx: SyncSender<worker::Command>,
     alive: AtomicBool,
@@ -14,6 +20,7 @@ pub(super) struct TrackingHandle {
     context_generation: AtomicU64,
     context_evidence: Mutex<Option<(SourceRef, Vec<nova_tracking::EpisodeInfo>)>>,
     login_generation: [AtomicU64; 2],
+    completion_policy: Mutex<Option<CompletionPromptPolicy>>,
 }
 impl TrackingHandle {
     pub(super) fn new() -> Self {
@@ -25,8 +32,29 @@ impl TrackingHandle {
             context_generation: AtomicU64::new(0),
             context_evidence: Mutex::new(None),
             login_generation: [AtomicU64::new(0), AtomicU64::new(0)],
+            completion_policy: Mutex::new(None),
         }
     }
+    fn completion_policy_with(
+        &self,
+        enabled: bool,
+        read_watermark: impl FnOnce() -> Result<u64, String>,
+    ) -> Result<CompletionPromptPolicy, String> {
+        let mut policy = self.completion_policy.lock().unwrap();
+        if let Some(current) = *policy
+            && current.enabled == enabled
+        {
+            return Ok(current);
+        }
+        let current = CompletionPromptPolicy {
+            enabled,
+            watermark: read_watermark()?,
+            revision: policy.map_or(1, |p| p.revision.wrapping_add(1)),
+        };
+        *policy = Some(current);
+        Ok(current)
+    }
+
     fn send(&self, command: worker::Command) {
         if self.tx.try_send(command).is_err() {
             tracing::warn!("tracking command queue unavailable");
@@ -77,6 +105,66 @@ fn service_index(service: Service) -> usize {
     }
 }
 impl Bridge {
+    /// Capture the journal boundary when a preference changes, rather than
+    /// after a slow tracker request. The sync store includes not-yet-flushed
+    /// history events, so retrying a failed write cannot turn old history new.
+    fn tracking_completion_policy(&self) -> Result<CompletionPromptPolicy, String> {
+        let enabled = self
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .completion_rating_prompts_enabled;
+        self.tracking.completion_policy_with(enabled, || {
+            let owner = nova_sync::local_store()
+                .map_err(|_| text::tr("Tracking event data needs recovery.").to_string())?;
+            owner
+                .lock()
+                .unwrap()
+                .extra_value(nova_tracking::EVENT_COUNTER_KEY)
+                .map_err(|_| text::tr("Tracking event data needs recovery.").to_string())?
+                .map(|raw| serde_json::from_str::<u64>(&raw))
+                .transpose()
+                .map_err(|_| text::tr("Tracking event data needs recovery.").to_string())
+                .map(|value| value.unwrap_or(0))
+        })
+    }
+    pub(in crate::app) fn tracking_completion_preferences(&self, enabled: bool) {
+        if self.tracking_completion_policy().is_err() {
+            return;
+        }
+        self.tracking
+            .send(worker::Command::CompletionPreferences { enabled });
+    }
+    pub(in crate::app) fn tracking_completion_sync_apply(&self) {
+        self.tracking.send(worker::Command::CompletionSync);
+    }
+    pub(in crate::app) fn refresh_completion_language_text(&self) {
+        self.tracking.send(worker::Command::CompletionRefresh);
+    }
+    pub(in crate::app) fn wire_completion_prompts(&self) {
+        let Some(app) = self.app() else { return };
+        let b = self.clone();
+        app.on_completion_score_changed(move |token, id, value| {
+            b.tracking.send(worker::Command::CompletionScore {
+                token: token.to_string(),
+                id: id.to_string(),
+                value: value.to_string(),
+            });
+        });
+        let b = self.clone();
+        app.on_completion_save(move |token| {
+            b.tracking.send(worker::Command::CompletionSave {
+                token: token.to_string(),
+            });
+        });
+        let b = self.clone();
+        app.on_completion_dismiss(move |token| {
+            b.tracking.send(worker::Command::CompletionDismiss {
+                token: token.to_string(),
+            });
+        });
+    }
     pub(in crate::app) fn tracking_sync_apply(&self) {
         self.tracking.send(worker::Command::Sync);
     }
@@ -577,5 +665,39 @@ mod metadata_tests {
         let mut dated = episode;
         dated.released.year = Some(2021);
         assert_eq!(handle.metadata_generation(&source, &[dated]), Some(2));
+    }
+}
+
+#[cfg(test)]
+mod completion_policy_tests {
+    use super::*;
+
+    #[test]
+    fn preference_boundary_is_captured_once_before_delayed_processing() {
+        let handle = TrackingHandle::new();
+        let enabled = handle.completion_policy_with(true, || Ok(5)).unwrap();
+        let delayed = handle
+            .completion_policy_with(true, || panic!("must not resample event 6"))
+            .unwrap();
+        assert_eq!(delayed.watermark, 5);
+        assert_eq!(delayed.revision, enabled.revision);
+        let disabled = handle.completion_policy_with(false, || Ok(6)).unwrap();
+        let enabled_again = handle.completion_policy_with(true, || Ok(6)).unwrap();
+        assert!(disabled.revision > enabled.revision);
+        assert!(enabled_again.revision > disabled.revision);
+        assert_eq!(enabled_again.watermark, 6);
+    }
+
+    #[test]
+    fn failed_watermark_read_cannot_enable_a_zero_floor() {
+        let handle = TrackingHandle::new();
+        assert!(
+            handle
+                .completion_policy_with(true, || Err("unreadable counter".into()))
+                .is_err()
+        );
+        assert!(handle.completion_policy.lock().unwrap().is_none());
+        let recovered = handle.completion_policy_with(true, || Ok(42)).unwrap();
+        assert_eq!(recovered.watermark, 42);
     }
 }

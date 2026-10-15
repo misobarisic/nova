@@ -78,6 +78,7 @@ fn state() -> TrackingState {
         link_checkpoints: vec![],
         snapshots: vec![],
         automatic_paused: vec![],
+        completion: CompletionPrompts::default(),
         active_accounts: vec![AccountKey {
             service: Service::AniList,
             remote_user_id: n(7),
@@ -820,7 +821,7 @@ fn schema_one_upgrades_on_save_and_schema_two_requires_an_outbox() {
     watch(&mut store, 1);
     let current: serde_json::Value =
         serde_json::from_str(&storage.read(TRACKING_STATE_KEY).unwrap().unwrap()).unwrap();
-    assert_eq!(current["version"], 3);
+    assert_eq!(current["version"], 4);
     legacy["version"] = serde_json::json!(2);
     storage
         .write(&[(TRACKING_STATE_KEY.into(), Some(legacy.to_string()))])
@@ -1304,4 +1305,345 @@ fn journal_replay_after_unwatch_cannot_restore_a_watched_transition() {
     state.consume_event(&change(1, true)).unwrap();
     assert!(state.outbox.pending().is_empty());
     assert_eq!(state.link_checkpoints[0].sequence, 2);
+}
+
+fn completion_state() -> TrackingState {
+    let mut state = delivery_state();
+    state.snapshots.push(snapshot(&state));
+    state.link_checkpoints.push(LinkCheckpoint {
+        binding_id: state.bindings[0].id.clone(),
+        sequence: 0,
+    });
+    state.configure_completion_prompts(true, 0);
+    state
+}
+fn completion_event(sequence: u64, ordinal: u32, watched: bool) -> WatchEvent {
+    WatchEvent {
+        sequence,
+        origin: EventOrigin::Local,
+        date: None,
+        changes: vec![WatchChange {
+            series_id: "opaque-source".into(),
+            episode_id: format!("episode-{ordinal}"),
+            watched,
+            started: false,
+        }],
+    }
+}
+fn completion_remote(key: &TargetKey, score_tenths: u32) -> RemoteEntry {
+    RemoteEntry {
+        account: key.account.clone(),
+        media_id: key.remote_media_id,
+        entry_id: None,
+        progress: 12,
+        status: ListStatus::Completed,
+        score_tenths,
+        started: ListDate::default(),
+        completed: ListDate::default(),
+        repeating: false,
+    }
+}
+
+#[test]
+fn completion_requires_a_new_local_finished_known_release_transition() {
+    let mut state = completion_state();
+    state.consume_event(&completion_event(1, 8, true)).unwrap();
+    assert!(state.pending_completions().is_empty());
+    state.consume_event(&completion_event(2, 12, true)).unwrap();
+    assert_eq!(state.pending_completions().len(), 1);
+    // Replaying after a later unwatch is harmless, including across reloads.
+    state
+        .consume_event(&completion_event(3, 12, false))
+        .unwrap();
+    state.consume_event(&completion_event(2, 12, true)).unwrap();
+    assert_eq!(state.pending_completions().len(), 1);
+    let key = state.targets[0].key.clone();
+    state.dismiss_completion(&key).unwrap();
+    state.replace_progress(&key, 0, vec![]).unwrap();
+    state.consume_event(&completion_event(4, 12, true)).unwrap();
+    assert!(state.pending_completions().is_empty());
+    assert_eq!(state.completion.handled, vec![key]);
+    state.validate().unwrap();
+
+    for (finished, total, origin) in [
+        (false, Some(n(12)), EventOrigin::Local),
+        (true, None, EventOrigin::Local),
+        (true, Some(n(12)), EventOrigin::PairedDevice),
+    ] {
+        let mut state = completion_state();
+        state.targets[0].release_finished = finished;
+        state.targets[0].final_episode_total = total;
+        let mut event = completion_event(1, 12, true);
+        event.origin = origin;
+        state.consume_event(&event).unwrap();
+        assert!(state.pending_completions().is_empty());
+    }
+    // Linking/importing already watched history establishes a checkpoint only.
+    let mut state = completion_state();
+    let b = &state.bindings[0];
+    state.projections[0] = Projection::new(
+        b.target.clone(),
+        rev(1),
+        0,
+        vec![Observation {
+            episode: episode(b, "episode-12"),
+            watched: true,
+        }],
+    );
+    state.consume_event(&completion_event(1, 12, true)).unwrap();
+    assert!(state.pending_completions().is_empty());
+}
+
+#[test]
+fn completion_enable_watermark_and_disable_never_prompt_old_history() {
+    let mut state = completion_state();
+    state.configure_completion_prompts(false, 0);
+    state.configure_completion_prompts(true, 2);
+    state.consume_event(&completion_event(1, 12, true)).unwrap();
+    assert!(state.pending_completions().is_empty());
+    let key = state.targets[0].key.clone();
+    state.replace_progress(&key, 0, vec![]).unwrap();
+    state.consume_event(&completion_event(3, 12, true)).unwrap();
+    assert_eq!(state.pending_completions().len(), 1);
+    state.configure_completion_prompts(false, 3);
+    assert!(state.completion.pending.is_empty());
+    state.configure_completion_prompts(true, 3);
+    state.replace_progress(&key, 0, vec![]).unwrap();
+    state.consume_event(&completion_event(4, 12, true)).unwrap();
+    assert!(state.pending_completions().is_empty());
+    assert!(state.completion.handled.is_empty());
+}
+
+#[test]
+fn completion_ignores_existing_scores_and_invalidates_stale_account_or_mapping() {
+    let mut rated = completion_state();
+    rated.snapshots[0].remote = Some(completion_remote(&rated.targets[0].key, 80));
+    rated.consume_event(&completion_event(1, 12, true)).unwrap();
+    assert!(rated.pending_completions().is_empty());
+    for guard in 0..4 {
+        let mut state = completion_state();
+        state.consume_event(&completion_event(1, 12, true)).unwrap();
+        match guard {
+            0 => state.active_accounts.clear(),
+            1 => state.accounts[0].generation = rev(2),
+            2 => state.bindings[0].mapping_revision = rev(2),
+            _ => state.snapshots[0].remote = Some(completion_remote(&state.targets[0].key, 90)),
+        }
+        assert!(state.pending_completions().is_empty());
+        state.prune_completion_prompts();
+        assert!(state.completion.pending.is_empty());
+        assert!(
+            state
+                .dismiss_completion(&state.targets[0].key.clone())
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn completion_pending_and_handled_save_survive_atomic_journal_failures_and_restart() {
+    let storage = MemoryStorage::default();
+    let mut store = Store::load(storage.clone()).unwrap();
+    store.save(completion_state()).unwrap();
+    let event = completion_event(1, 12, true);
+    let journal_key = format!("{EVENT_PREFIX}{:020}", 1);
+    storage
+        .write(&[(
+            journal_key.clone(),
+            Some(serde_json::to_string(&event).unwrap()),
+        )])
+        .unwrap();
+    let mut next = store.state().clone();
+    next.consume_event(&event).unwrap();
+    storage.0.lock().unwrap().fail = true;
+    assert!(
+        store
+            .save_with_events(next.clone(), std::slice::from_ref(&journal_key))
+            .is_err()
+    );
+    assert!(store.state().pending_completions().is_empty());
+    assert!(storage.read(&journal_key).unwrap().is_some());
+    storage.0.lock().unwrap().fail = false;
+    store
+        .save_with_events(next, &[journal_key.clone()])
+        .unwrap();
+    let mut store = Store::load(storage.clone()).unwrap();
+    assert_eq!(store.state().pending_completions().len(), 1);
+    assert!(storage.read(&journal_key).unwrap().is_none());
+    let key = store.state().targets[0].key.clone();
+    store
+        .mutate(|state| state.enqueue_completion_rating(&key, 85))
+        .unwrap();
+    let mut store = Store::load(storage).unwrap();
+    assert!(store.state().pending_completions().is_empty());
+    assert_eq!(store.state().completion.handled, vec![key.clone()]);
+    let edit = store
+        .mutate(|state| state.begin_edit(&key, 0))
+        .unwrap()
+        .unwrap();
+    assert!(edit.edit().only_if_unrated);
+    assert_eq!(
+        edit.edit().patch,
+        EntryPatch {
+            score_tenths: Some(85),
+            ..Default::default()
+        }
+    );
+    // A worker's fresh read can acknowledge without writing over a new score.
+    store
+        .mutate(|state| state.finish_edit(&edit, Ok(completion_remote(&key, 90)), 0))
+        .unwrap();
+    assert!(store.state().outbox.edits().is_empty());
+    assert_eq!(
+        store.state().snapshots[0]
+            .remote
+            .as_ref()
+            .unwrap()
+            .score_tenths,
+        90
+    );
+}
+
+#[test]
+fn completion_rating_edit_keeps_mapping_guard_and_ordinary_edits_are_unguarded() {
+    let mut state = completion_state();
+    state.consume_event(&completion_event(1, 12, true)).unwrap();
+    let key = state.targets[0].key.clone();
+    assert!(state.enqueue_completion_rating(&key, 0).is_err());
+    assert!(state.enqueue_completion_rating(&key, 101).is_err());
+    state.enqueue_completion_rating(&key, 85).unwrap();
+    state.bindings[0].mapping_revision = rev(2);
+    assert!(state.begin_edit(&key, 0).unwrap().is_none());
+    assert_eq!(state.outbox.edits()[0].state, DeliveryState::NeedsAlignment);
+    state
+        .enqueue_edit(
+            &key,
+            EntryPatch {
+                score_tenths: Some(90),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(!state.outbox.edits()[0].only_if_unrated);
+    state.validate().unwrap();
+    let mut json = serde_json::to_value(&state).unwrap();
+    json["outbox"]["edits"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("only_if_unrated");
+    json["outbox"]["edits"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("completion_mappings");
+    let legacy: TrackingState = serde_json::from_value(json).unwrap();
+    assert!(!legacy.outbox.edits()[0].only_if_unrated);
+}
+
+#[test]
+fn completion_receipts_are_monotonic_and_use_an_additive_peer_domain() {
+    let mut a = completion_state();
+    let mut b = a.clone();
+    a.consume_event(&completion_event(1, 12, true)).unwrap();
+    b.consume_event(&completion_event(1, 12, true)).unwrap();
+    let key = a.targets[0].key.clone();
+    a.dismiss_completion(&key).unwrap();
+    let records: Vec<_> = completion_peer_records(&a)
+        .unwrap()
+        .into_iter()
+        .map(|(k, v, _)| (k, v))
+        .collect();
+    assert!(crate::peer::apply_peer_records(&b, &records, 2, |_| false).is_err());
+    let b = apply_completion_peer_records(&b, &records).unwrap();
+    assert!(b.pending_completions().is_empty());
+    let b = apply_completion_peer_records(&b, &[]).unwrap();
+    assert_eq!(b.completion.handled, vec![key]);
+    assert_eq!(
+        completion_peer_records(&b).unwrap(),
+        completion_peer_records(&a).unwrap()
+    );
+    assert!(
+        apply_completion_peer_records(&b, &[("handled:bad".into(), records[0].1.clone())]).is_err()
+    );
+    let new_device = apply_completion_peer_records(&TrackingState::default(), &records).unwrap();
+    assert!(new_device.completion.pending.is_empty());
+    assert_eq!(new_device.completion.handled, a.completion.handled);
+    assert!(new_device.accounts.is_empty());
+}
+
+#[test]
+fn schema_three_upgrade_does_not_enable_completion_or_replay_old_events() {
+    let storage = MemoryStorage::default();
+    let mut json = serde_json::json!({"version":3,"state":completion_state()});
+    json["state"].as_object_mut().unwrap().remove("completion");
+    storage
+        .write(&[(TRACKING_STATE_KEY.into(), Some(json.to_string()))])
+        .unwrap();
+    let mut store = Store::load(storage.clone()).unwrap();
+    assert!(!store.state().completion.enabled);
+    store
+        .mutate(|state| {
+            state.configure_completion_prompts(true, 10);
+            state.consume_event(&completion_event(1, 12, true))
+        })
+        .unwrap();
+    assert!(store.state().pending_completions().is_empty());
+    let saved: serde_json::Value =
+        serde_json::from_str(&storage.read(TRACKING_STATE_KEY).unwrap().unwrap()).unwrap();
+    assert_eq!(saved["version"], 4);
+}
+
+#[test]
+fn completion_groups_split_bindings_but_keeps_services_independent() {
+    let mut state = completion_state();
+    let mut split = state.bindings[0].clone();
+    split.id = "split".into();
+    split.assignments.retain(|a| a.target_episode.get() == 12);
+    state.bindings[0]
+        .assignments
+        .retain(|a| a.target_episode.get() != 12);
+    state.link_checkpoints.push(LinkCheckpoint {
+        binding_id: split.id.clone(),
+        sequence: 0,
+    });
+    state.bindings.push(split);
+    let mal = target(Service::MyAnimeList, 42);
+    let mut mal_binding = state.bindings[1].clone();
+    mal_binding.id = "mal".into();
+    mal_binding.target = mal.key.clone();
+    state.accounts.push(Account {
+        key: mal.key.account.clone(),
+        generation: rev(1),
+        display_name: "MAL".into(),
+    });
+    state.active_accounts.push(mal.key.account.clone());
+    let mut mal_snapshot = snapshot(&state);
+    mal_snapshot.target = mal.key.clone();
+    mal_snapshot.media.id = mal.key.remote_media_id;
+    mal_snapshot.score_format = ScoreFormat::Point10;
+    state.snapshots.push(mal_snapshot);
+    state
+        .projections
+        .push(Projection::new(mal.key.clone(), rev(1), 0, vec![]));
+    state.link_checkpoints.push(LinkCheckpoint {
+        binding_id: mal_binding.id.clone(),
+        sequence: 0,
+    });
+    state.bindings.push(mal_binding);
+    state.targets.push(mal);
+    state.validate().unwrap();
+    state.consume_event(&completion_event(1, 8, true)).unwrap();
+    assert!(state.pending_completions().is_empty());
+    state.consume_event(&completion_event(2, 12, true)).unwrap();
+    let pending = state.pending_completions();
+    assert_eq!(pending.len(), 2);
+    assert_eq!(pending[0].mappings.len(), 2);
+    assert_eq!(pending[1].mappings.len(), 1);
+    state
+        .enqueue_completion_rating(&pending[0].target, 85)
+        .unwrap();
+    state.dismiss_completion(&pending[1].target).unwrap();
+    assert_eq!(state.completion.handled.len(), 2);
+    assert!(state.pending_completions().is_empty());
+    assert_eq!(state.outbox.edits().len(), 1);
+    state.validate().unwrap();
 }

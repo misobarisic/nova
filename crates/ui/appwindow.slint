@@ -1,11 +1,12 @@
+import { CompletionRatingPrompt } from "completion-rating.slint";
 import { PartyPage, PartyPlayerBadge } from "party.slint";
 import { RemoteControlsPage, RemoteDevicesPage, RemoteReplacementDialog } from "remote-controls.slint";
 import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
-import { PartyMemberRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
+import { CompletionBridge, CompletionDestination, PartyMemberRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
 // Types and globals have one shared compiled definition. Page visual trees
 // live in independent factory products, never imported into AppWindow.
 
-export { PartyBridge, RemoteBridge, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge }
+export { CompletionBridge, PartyBridge, RemoteBridge, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge }
 // Bundle the same UI family on desktop and Android, including a real bold face.
 import "../../assets/fonts/Roboto-Regular.ttf";
 import "../../assets/fonts/Roboto-Bold.ttf";
@@ -32,6 +33,41 @@ import { BottomNav } from "bottomnav.slint";
 // forwards them into the per-screen components below. The screen switching
 // guards live here so each page component stays self-contained.
 export component AppWindow inherits Window {
+    in-out property <bool> completion_prompt_open <=> CompletionBridge.open;
+    in-out property <string> completion_prompt_token <=> CompletionBridge.token;
+    in-out property <string> completion_prompt_title <=> CompletionBridge.title;
+    in-out property <string> completion_prompt_subtitle <=> CompletionBridge.subtitle;
+    in-out property <string> completion_prompt_error <=> CompletionBridge.error;
+    in-out property <image> completion_prompt_poster <=> CompletionBridge.poster;
+    in-out property <[CompletionDestination]> completion_prompt_destinations <=> CompletionBridge.destinations;
+    in-out property <bool> completion_prompt_can_save <=> CompletionBridge.can_save;
+    // Detail is a normal route despite its historical modal_visible name.
+    // Hide the draft behind active tasks and restore it when they finish.
+    out property <bool> completion_prompt_visible: root.completion_prompt_open && root.completion_rating_prompts_enabled
+        && !root.player_open && !root.stream_selector_open && !root.onboarding_visible
+        && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open
+        && root.remote_replacement_token == "" && !root.resume_prompt_visible
+        && !root.categories_modal && !root.library_duplicates_open
+        && !root.show_settings && !SettingsSync.open
+        && !SettingsContent.sync_remove_prompt_visible && !SettingsContent.tracking_reset_confirm
+        && !SettingsBridge.sync_pair_prompt_visible && !SettingsBridge.addon_config_open
+        && !DetailContent.entry_editing && !DetailContent.entry_history_confirm && !DetailContent.entry_unlink_confirm;
+    changed completion_prompt_visible => {
+        // The mounted dialog owns entry focus. Recover the persistent scope
+        // only after it disappears; deferred page focus would steal its keys.
+        if !root.completion_prompt_visible {
+            root.preserve_back_focus();
+            page_release_timer.start();
+        }
+    }
+    callback completion_score_changed(string, string, string);
+    callback completion_save(string);
+    callback completion_dismiss(string);
+    public function completion_bridge_score_changed(token: string, id: string, score: string) { root.completion_score_changed(token, id, score); }
+    public function completion_bridge_save(token: string) { root.completion_save(token); }
+    public function completion_bridge_dismiss(token: string) { root.completion_dismiss(token); }
+    in-out property <bool> completion_rating_prompts_enabled <=> SettingsBridge.completion_rating_prompts_enabled;
+
     in-out property <bool> party_page_open <=> PartyBridge.page_open;
     changed party_page_open => {
         if !root.party_page_open && root.player_open && !root.onboarding_visible {
@@ -569,7 +605,7 @@ export component AppWindow inherits Window {
     callback onboarding_finished();
 
     property <int> back_focus_request: 0;
-    changed back_focus_request => { system_back_scope.focus(); }
+    changed back_focus_request => { if !root.completion_prompt_visible { system_back_scope.focus(); } }
     // Factory construction temporarily blocks focus changes. Recover native
     // keyboard navigation after publication only while the persistent scope
     // still owns focus, so a pointer-focused editor is never interrupted.
@@ -577,6 +613,7 @@ export component AppWindow inherits Window {
         // The wizard retains the underlying page visually. Its Rust callback
         // excludes inputs already owned by the wizard before recovering focus
         // from that underlying page, rather than relying on baseline ownership.
+        if root.completion_prompt_visible { return; }
         if root.onboarding_visible { OnboardingBridge.focus_shell(); return; }
         if !system_back_scope.has-focus { return; }
         if root.player_open { PlayerOsdBridge.focus_shell(); }
@@ -598,6 +635,8 @@ export component AppWindow inherits Window {
         }
     }
     public function preserve_back_focus() {
+        // A late underlying-page mount must not take the active dialog's keys.
+        if root.completion_prompt_visible { return; }
         // Incoming page init can replace focus before outgoing page teardown.
         // The change handler runs after tree instantiation, keeping release and
         // held-repeat events on a scope that survives the transition.
@@ -1767,7 +1806,9 @@ export component AppWindow inherits Window {
         height: 100%;
 
         capture-key-pressed(e) => {
-            if ((e.text == Key.Escape || e.text == Key.Backspace) && root.party_page_open) {
+            if (e.text == Key.Escape && root.completion_prompt_visible) {
+                if !e.repeat { CompletionBridge.dismiss(CompletionBridge.token); } accept
+            } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.party_page_open) {
                 if !e.repeat { root.party_page_open = false; } accept
             } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.remote_replacement_token != "") {
                 if !e.repeat { root.remote_replacement_confirmed(root.remote_replacement_token, false); } accept
@@ -1794,6 +1835,8 @@ export component AppWindow inherits Window {
                     // page or overlay, including before its first pointer press.
                     root.system_back_request += 1;
                     accept
+                } else if (root.completion_prompt_visible) {
+                    CompletionBridge.dismiss(CompletionBridge.token); accept
                 } else if (root.party_page_open) {
                     root.party_page_open = false; accept
                 } else if (root.remote_replacement_token != "") {
@@ -2214,7 +2257,15 @@ export component AppWindow inherits Window {
         width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
         safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right;
     }
-    }
 
+    if root.completion_prompt_visible: CompletionRatingPrompt {
+        width: parent.width; height: parent.height;
+        phone: root.is_android || root.narrow_ui;
+        safe-bottom: root.safe-area-insets.bottom;
+        safe-top: root.safe-area-insets.top;
+        safe-left: root.safe-area-insets.left;
+        safe-right: root.safe-area-insets.right;
+    }
+    }
 
 }

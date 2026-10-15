@@ -20,6 +20,11 @@ pub struct PendingEdit {
     pub patch: EntryPatch,
     #[serde(default)]
     pub score_format: Option<ScoreFormat>,
+    /// Completion ratings never replace a score added by another client.
+    #[serde(default)]
+    pub only_if_unrated: bool,
+    #[serde(default)]
+    pub completion_mappings: Vec<MappingStamp>,
     pub state: DeliveryState,
     pub attempts: u32,
     pub next_attempt_at: u64,
@@ -108,6 +113,8 @@ impl TrackingState {
                 None
             },
             patch,
+            only_if_unrated: false,
+            completion_mappings: vec![],
             state: DeliveryState::Queued,
             attempts: 0,
             next_attempt_at: 0,
@@ -156,6 +163,19 @@ impl TrackingState {
         if !self.bindings.iter().any(|b| {
             b.enabled && b.target == *target && b.account_generation == edit.account_generation
         }) {
+            edit.state = DeliveryState::NeedsAlignment;
+            return Ok(None);
+        }
+        if edit.only_if_unrated
+            && !edit.completion_mappings.iter().all(|stamp| {
+                self.bindings.iter().any(|binding| {
+                    binding.enabled
+                        && binding.target == *target
+                        && binding.account_generation == edit.account_generation
+                        && stamp.matches(binding)
+                })
+            })
+        {
             edit.state = DeliveryState::NeedsAlignment;
             return Ok(None);
         }

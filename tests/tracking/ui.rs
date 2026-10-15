@@ -286,12 +286,44 @@ fn tracking_settings_and_overlay_fit_phone_and_require_history_confirmation() {
         settle().await;
         click(&app, "settings:tracking").await;
         check_width(&app, &f);
-        assert_eq!(
-            ElementHandle::find_by_element_type_name(&app, "AccountEditor").count(),
-            2
+        // The rating preference and long account name leave AniList below
+        // the phone viewport. Check both real cards while scrolling rather
+        // than requiring every account to be visible at the same instant.
+        let mut saw_mal = false;
+        let mut saw_anilist = false;
+        for _ in 0..8 {
+            for account in ElementHandle::find_by_element_type_name(&app, "AccountEditor") {
+                saw_mal |= account
+                    .query_descendants()
+                    .match_predicate(|element| {
+                        element.accessible_label().as_deref() == Some("MyAnimeList")
+                    })
+                    .find_first()
+                    .is_some();
+                saw_anilist |= account
+                    .query_descendants()
+                    .match_predicate(|element| {
+                        element.accessible_label().as_deref() == Some("AniList")
+                    })
+                    .find_first()
+                    .is_some();
+            }
+            let token_visible = ElementHandle::find_by_accessible_label(&app, "AniList token")
+                .any(|element| element.accessible_role() == Some(AccessibleRole::TextInput));
+            let finish_visible = ElementHandle::find_by_accessible_label(&app, "Finish sign-in")
+                .any(|element| element.accessible_role() == Some(AccessibleRole::Button));
+            if saw_mal && saw_anilist && token_visible && finish_visible {
+                break;
+            }
+            scroll_down(&app).await;
+        }
+        assert!(saw_mal, "MyAnimeList account card must be reachable");
+        assert!(
+            saw_anilist,
+            "AniList account card must be reachable by scrolling"
         );
-        // AniList is below MAL on a phone; reveal its pending sign-in controls.
-        scroll_down(&app).await;
+        check_width(&app, &f);
+        // Keep the pending AniList token and its explicit finish action in view.
         assert_eq!(
             ElementHandle::find_by_accessible_label(&app, "AniList token")
                 .filter(|e| e.accessible_role()

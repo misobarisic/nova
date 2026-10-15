@@ -499,6 +499,9 @@ cache_settings_type! {
     /// Allow paired devices to inspect and control playback here. Device-local; never synced.
     #[serde(default = "default_true")]
     pub remote_control_enabled: bool,
+    /// Ask once for unrated tracker releases completed locally. Synced with general settings.
+    #[serde(default = "default_true")]
+    pub completion_rating_prompts_enabled: bool,
     /// Minimum grid columns for My Library (same scheme).
     #[serde(default = "default_min_cols")]
     pub library_min_cols: u32,
@@ -678,6 +681,7 @@ impl Default for CacheSettings {
             home_episode_artwork: false,
             home_devices_enabled: true,
             remote_control_enabled: true,
+            completion_rating_prompts_enabled: true,
             library_min_cols: 2,
             android_hwdec: AndroidHwdec::HwPlus,
             player_external: false,
@@ -1278,6 +1282,17 @@ mod tests {
             let restored: CacheSettings = serde_json::from_str(&saved).unwrap();
             assert_eq!(restored.remote_control_enabled, enabled);
         }
+    }
+
+    #[test]
+    fn completion_prompts_migrate_enabled_and_preserve_explicit_opt_out() {
+        let mut settings: CacheSettings =
+            serde_json::from_str(r#"{"enabled":false,"format":"webp","quality":85}"#).unwrap();
+        assert!(settings.completion_rating_prompts_enabled);
+        settings.completion_rating_prompts_enabled = false;
+        let restored: CacheSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert!(!restored.completion_rating_prompts_enabled);
     }
 
     #[test]

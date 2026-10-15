@@ -85,6 +85,19 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Only selected ratings will be saved." => "Spremit će se samo odabrane ocjene.",
+        "Close rating prompt" => "Zatvori upit za ocjenu",
+        "Finished watching" => "Gledanje završeno",
+        "How was it?" => "Kako vam se svidjelo?",
+        "Rate your completed release." => "Ocijenite dovršeno izdanje.",
+        "Dismiss" => "Zatvori",
+        "Save ratings" => "Spremi ocjene",
+        "Unrated" => "Bez ocjene",
+        "Rating" => "Ocjena",
+        "Increase rating" => "Povećaj ocjenu",
+        "Decrease rating" => "Smanji ocjenu",
+        "Ask for ratings after completion" => "Traži ocjene nakon završetka",
+
         "Different edition or duration" => "Različito izdanje ili trajanje",
         "This stream cannot seek" => "Ovaj prijenos ne podržava premotavanje",
         "Local stream unavailable" => "Lokalni prijenos nije dostupan",
@@ -1255,6 +1268,17 @@ pub fn cal_month_title(month: u32, year: i64) -> String {
     format!("{} {year}", month_name(month))
 }
 
+/// The prompt names the completed mapping rather than the containing series.
+pub fn completion_release_subtitle(episodes: u32) -> String {
+    if croatian() {
+        let noun = plural(u64::from(episodes), "epizoda", "epizode", "epizoda");
+        format!("Povezano izdanje · {episodes} {noun}")
+    } else {
+        let noun = if episodes == 1 { "episode" } else { "episodes" };
+        format!("Mapped release · {episodes} {noun}")
+    }
+}
+
 pub fn tracking_setup_summary(releases: usize, episodes: usize) -> String {
     if croatian() {
         format!("Izdanja: {releases} · Epizode za povezivanje: {episodes}")
@@ -1708,6 +1732,31 @@ mod tests {
                 "Croatian (hr)"
             );
             assert_eq!(tr("Not received yet"), "Još nije primljeno");
+        });
+    }
+
+    #[test]
+    fn completion_release_counts_use_localized_plural_forms() {
+        with_language(Language::English, || {
+            assert_eq!(completion_release_subtitle(1), "Mapped release · 1 episode");
+            assert_eq!(
+                completion_release_subtitle(24),
+                "Mapped release · 24 episodes"
+            );
+        });
+        with_language(Language::Croatian, || {
+            assert_eq!(
+                completion_release_subtitle(1),
+                "Povezano izdanje · 1 epizoda"
+            );
+            assert_eq!(
+                completion_release_subtitle(24),
+                "Povezano izdanje · 24 epizode"
+            );
+            assert_eq!(
+                completion_release_subtitle(12),
+                "Povezano izdanje · 12 epizoda"
+            );
         });
     }
 

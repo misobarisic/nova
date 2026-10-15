@@ -182,7 +182,13 @@ impl TrackingState {
                 .iter()
                 .find(|s| s.target == edit.target)
                 .ok_or_else(|| invalid("edit has no target snapshot"))?;
-            if edit.patch.progress.is_some()
+            if (edit.only_if_unrated
+                && (edit.completion_mappings.is_empty()
+                    || edit.patch.score_tenths.is_none_or(|score| score == 0)
+                    || edit.patch.status.is_some()
+                    || edit.patch.started.is_some()
+                    || edit.patch.completed.is_some()))
+                || edit.patch.progress.is_some()
                 || edit
                     .patch
                     .validate(
@@ -201,6 +207,7 @@ impl TrackingState {
                 return Err(invalid("invalid manual field edit"));
             }
         }
+        self.completion.validate()?;
         self.outbox.validate()?;
         for patch in self.outbox.pending() {
             if !self.targets.iter().any(|target| target.key == patch.target) {

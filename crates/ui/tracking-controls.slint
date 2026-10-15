@@ -12,6 +12,7 @@ export component TrackingButton inherits Rectangle {
     in property <bool> compact: false;
     in property <int> icon: 0; // 1 close, 2 reload, 3 forward, 4 MAL, 5 AniList.
     callback clicked();
+    out property <bool> has-focus: focus.has-focus;
     min-height: root.icon >= 6 ? 68px : root.primary && !root.compact ? 52px : 44px;
     max-height: self.min-height;
     min-width: 0px;

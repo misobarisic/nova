@@ -2804,3 +2804,39 @@ msgstr "Zajedničko gledanje koristi normalnu brzinu."
 #: party.slint
 msgid "Watch together"
 msgstr "Gledajte zajedno"
+
+msgid "Finished watching"
+msgstr "Gledanje završeno"
+
+msgid "How was it?"
+msgstr "Kako vam se svidjelo?"
+
+msgid "Rate your completed release."
+msgstr "Ocijenite dovršeno izdanje."
+
+msgid "Dismiss"
+msgstr "Zatvori"
+
+msgid "Save ratings"
+msgstr "Spremi ocjene"
+
+msgid "Unrated"
+msgstr "Bez ocjene"
+
+msgid "Rating"
+msgstr "Ocjena"
+
+msgid "Increase rating"
+msgstr "Povećaj ocjenu"
+
+msgid "Decrease rating"
+msgstr "Smanji ocjenu"
+
+msgid "Ask for ratings after completion"
+msgstr "Traži ocjene nakon završetka"
+
+msgid "Only selected ratings will be saved."
+msgstr "Spremit će se samo odabrane ocjene."
+
+msgid "Close rating prompt"
+msgstr "Zatvori upit za ocjenu"

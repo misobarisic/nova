@@ -133,6 +133,11 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             // mount guard established. Recover only absent focus; a live
             // editor (even outside the scroll viewport) or separate popup
             // retains its own native ownership.
+            if app.get_completion_prompt_visible() {
+                // The dialog defers its initial focus until tree publication.
+                // Covered page recovery must never replace its input focus.
+                return;
+            }
             let missing_focus = window.focus_item.borrow().upgrade().is_none();
             if window.active_popups().is_empty() {
                 if missing_focus {

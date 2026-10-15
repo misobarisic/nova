@@ -5,7 +5,7 @@ use crate::{TrackingState, ValidationError};
 pub const TRACKING_STATE_KEY: &str = "tracking:state:v1";
 // Keep the storage key stable so an older binary encounters the newer
 // envelope and refuses to overwrite durable intents it cannot understand.
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 
 /// Injection keeps recovery tests independent of the process-global database.
 pub trait StateStorage {
@@ -149,6 +149,9 @@ impl<S: StateStorage> Store<S> {
                     || value["state"]["outbox"].get("edits").is_none())
             {
                 return Err("missing tracking journal or manual-edit fields in schema 3".into());
+            }
+            if version >= 4 && value["state"].get("completion").is_none() {
+                return Err("missing completion policy in tracking schema 4".into());
             }
             let envelope: Envelope = serde_json::from_value(value).map_err(|e| e.to_string())?;
             envelope.state.validate().map_err(|e| e.to_string())?;

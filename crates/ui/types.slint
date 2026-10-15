@@ -1,3 +1,13 @@
+// Tokens identify backend drafts; tracker account identifiers stay in Rust.
+export struct CompletionDestination {
+    id: string,
+    label: string,
+    max: float,
+    step: float,
+    score: string,
+    selected: bool,
+}
+
 export struct MediaCard {
     id: string,
     title: string,

@@ -1,0 +1,250 @@
+import { CompletionBridge, CompletionDestination, Theme, Anim } from "@NovaUiShared";
+import { ScrollView } from "scrollview.slint";
+import { TrackingButton } from "tracking-controls.slint";
+import { SettingsInput } from "settings-controls.slint";
+import { IcCheck, IcVideoLibrary } from "icons.slint";
+
+component DestinationRating inherits Rectangle {
+    in property <CompletionDestination> destination;
+    property <string> prompt-token: CompletionBridge.token;
+    property <string> shown-token;
+    property <string> shown-id;
+    property <string> draft-score;
+    property <float> numeric-score: root.draft-score.replace-all(",", ".").to-float();
+    // Actor acknowledgements can arrive after another keypress. Only a new
+    // prompt or destination initializes this local editor; older snapshots
+    // must not overwrite text, move the caret, or lose rapid stepper clicks.
+    function initialize_draft() {
+        if root.shown-token != root.prompt-token || root.shown-id != root.destination.id {
+            root.shown-token = root.prompt-token;
+            root.shown-id = root.destination.id;
+            root.draft-score = root.destination.score;
+        }
+    }
+    init => { root.initialize_draft(); }
+    changed destination => { root.initialize_draft(); }
+    changed prompt-token => { root.initialize_draft(); }
+    property <int> scale-size: Math.round(root.destination.max);
+    property <bool> pills: root.destination.step == 1 && root.destination.max <= 10;
+    background: Theme.current.tracking_panel;
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: Theme.current.border_soft;
+    min-width: 0px;
+    vertical-stretch: 0;
+    callback reveal(length, length);
+    function choose(value: string) {
+        root.draft-score = value;
+        CompletionBridge.score_changed(CompletionBridge.token, root.destination.id, value);
+    }
+    VerticalLayout {
+        padding: 14px; spacing: 12px;
+        HorizontalLayout {
+            spacing: 10px;
+            Text { text: root.destination.label; color: Theme.current.text_bright; font-weight: 700; wrap: word-wrap; min-width: 0px; }
+            Text { text: "/ " + root.destination.max; color: Theme.current.text_muted; horizontal-stretch: 0; vertical-alignment: center; }
+        }
+        if root.pills: rating_pills := Rectangle {
+            property <int> columns: root.destination.max == 10 && self.width < 480px ? 5 : root.destination.max;
+            height: root.destination.max > self.columns ? 96px : 44px;
+            min-width: 0px;
+            for n in root.scale-size: TrackingButton {
+                x: Math.mod(n, rating_pills.columns) * (rating_pills.width + 6px) / rating_pills.columns;
+                y: Math.floor(n / rating_pills.columns) * 52px;
+                width: (rating_pills.width - (rating_pills.columns - 1) * 6px) / rating_pills.columns;
+                height: 44px;
+                text: "" + (n + 1);
+                compact: true;
+                accessible-label: root.destination.label + " " + (n + 1);
+                selected: root.draft-score != "" && root.numeric-score == n + 1;
+                accessible-checkable: true;
+                accessible-checked: self.selected;
+                changed has-focus => { if self.has-focus { root.reveal(self.absolute-position.y, self.height); } }
+                clicked => { root.choose("" + (n + 1)); }
+            }
+        }
+        if !root.pills: HorizontalLayout {
+            spacing: 10px;
+            TrackingButton {
+                width: 44px; horizontal-stretch: 0; compact: true; text: "−";
+                accessible-label: @tr("Decrease rating") + " · " + root.destination.label;
+                changed has-focus => { if self.has-focus { root.reveal(self.absolute-position.y, self.height); } }
+                clicked => { root.choose("" + Math.max(root.destination.step, Math.round((root.numeric-score - root.destination.step) / root.destination.step) * root.destination.step)); }
+            }
+            rating_input := SettingsInput {
+                min-width: 0px; text <=> root.draft-score;
+                placeholder-text: @tr("Unrated");
+                input-type: decimal;
+                accessible-label: @tr("Rating") + " · " + root.destination.label;
+                changed has-focus => { if self.has-focus { root.reveal(self.absolute-position.y, self.height); } }
+                edited(value) => { root.choose(value); }
+            }
+            TrackingButton {
+                width: 44px; horizontal-stretch: 0; compact: true; text: "+";
+                accessible-label: @tr("Increase rating") + " · " + root.destination.label;
+                changed has-focus => { if self.has-focus { root.reveal(self.absolute-position.y, self.height); } }
+                clicked => { root.choose("" + Math.min(root.destination.max, Math.round((root.numeric-score + root.destination.step) / root.destination.step) * root.destination.step)); }
+            }
+        }
+    }
+}
+
+// A phone bottom sheet and a centered desktop dialog share one transient draft.
+// The scroll body may shrink in landscape; the actions always remain reachable.
+export component CompletionRatingPrompt inherits Rectangle {
+    in property <bool> phone;
+    in property <length> safe-bottom;
+    in property <length> safe-top;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    background: #0009;
+    property <bool> content-focus-claimed;
+    property <bool> motion-enabled: Anim.enabled && Anim.transitions;
+    property <bool> revealed;
+    property <float> reveal-alpha: root.revealed ? 1 : 0;
+    property <length> reveal-rise: root.revealed ? 0px : 20px;
+    opacity: root.reveal-alpha;
+    animate reveal-alpha { duration: Anim.transition_fade; easing: ease-out; }
+    animate reveal-rise { duration: Anim.transition_slide; easing: ease-out; }
+    init => {
+        focus_timer.start();
+        if root.motion-enabled { enter_timer.start(); }
+        else { root.revealed = true; }
+    }
+    changed motion-enabled => {
+        if !root.motion-enabled { enter_timer.stop(); root.revealed = true; }
+    }
+    // Embedded page/window initialization can temporarily block or replace
+    // focus. Recover once after publication, preserving an already used editor.
+    focus_timer := Timer {
+        interval: 1ms; running: false;
+        triggered => {
+            self.stop();
+            if !root.content-focus-claimed { completion_close.focus(); }
+        }
+    }
+    enter_timer := Timer {
+        interval: 1ms; running: false;
+        triggered => { self.stop(); root.revealed = true; }
+    }
+    FocusScope {
+        width: 100%; height: 100%;
+        // A button focus never opens the keyboard. Sentinels contain native
+        // Tab traversal in this dialog, including its editable numeric field.
+        init => { completion_close.focus(); }
+        key-pressed(e) => { reject }
+        FocusScope {
+            width: 0px; height: 0px;
+            changed has-focus => {
+                if self.has-focus {
+                    if CompletionBridge.can_save { completion_save.focus(); }
+                    else { completion_dismiss.focus(); }
+                }
+            }
+        }
+        TouchArea {
+            clicked => { CompletionBridge.dismiss(CompletionBridge.token); }
+        }
+        completion_panel := Rectangle {
+            x: root.safe-left + (parent.width - root.safe-left - root.safe-right - self.width) / 2;
+            y: root.safe-top + (root.phone
+                ? parent.height - root.safe-top - self.height
+                : (parent.height - root.safe-top - root.safe-bottom - self.height) / 2)
+                + (root.phone ? root.reveal-rise : 0px);
+            width: Math.max(0px, Math.min(480px, parent.width - root.safe-left - root.safe-right - (root.phone ? 0px : 48px)));
+            height: Math.max(0px, Math.min(parent.height - root.safe-top - (root.phone ? 12px : root.safe-bottom + 48px), 604px + (root.phone ? root.safe-bottom : 0px)));
+            background: Theme.current.popup;
+            border-radius: 24px;
+            border-width: 1px; border-color: Theme.current.border_soft;
+            clip: true;
+            TouchArea { }
+            VerticalLayout {
+                padding-left: 20px; padding-right: 20px;
+                padding-top: 18px; padding-bottom: 16px + (root.phone ? root.safe-bottom : 0px);
+                spacing: 16px;
+                if root.phone: Rectangle {
+                    width: 36px; height: 4px; border-radius: 2px;
+                    horizontal-stretch: 0; background: Theme.current.border_medium;
+                }
+                completion_scroll := ScrollView {
+                    min-height: 0px; min-width: 0px;
+                    content-width: self.visible-width;
+                    mouse-drag-pan-enabled: true;
+                    function reveal(y: length, height: length) {
+                        let top = y - self.absolute-position.y;
+                        if top < 0px { self.content-y -= top; }
+                        else if top + height > self.visible-height { self.content-y -= top + height - self.visible-height; }
+                    }
+                    VerticalLayout {
+                        width: 100%; spacing: 18px; alignment: start;
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Rectangle {
+                                width: 30px; height: 30px; border-radius: 15px; background: Theme.current.selection_wash;
+                                IcCheck { x: 6px; y: 6px; width: 18px; height: 18px; fill: Theme.current.accent_vivid; }
+                            }
+                            Text { text: @tr("Finished watching"); color: Theme.current.text_bright; font-size: 23px; font-weight: 700; wrap: word-wrap; min-width: 0px; }
+                            completion_close := TrackingButton {
+                                width: 44px; horizontal-stretch: 0; text: @tr("Dismiss");
+                                icon: 1; quiet: true; compact: true;
+                                accessible-label: @tr("Close rating prompt");
+                                clicked => { CompletionBridge.dismiss(CompletionBridge.token); }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 14px;
+                            Rectangle {
+                                width: 62px; height: 90px; horizontal-stretch: 0;
+                                background: Theme.current.artwork_canvas; border-radius: 10px; clip: true;
+                                if CompletionBridge.poster.width > 0: Image { source: CompletionBridge.poster; image-fit: cover; }
+                                if CompletionBridge.poster.width == 0: IcVideoLibrary {
+                                    x: 17px; y: 31px; width: 28px; height: 28px;
+                                    fill: Theme.current.accent_soft;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center; spacing: 6px;
+                                Text { text: CompletionBridge.title; color: Theme.current.text_bright; font-size: 18px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+                                if CompletionBridge.subtitle != "": Text { text: CompletionBridge.subtitle; color: Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                            }
+                        }
+                        VerticalLayout {
+                            spacing: 5px;
+                            Text { text: @tr("How was it?"); color: Theme.current.text_bright; font-size: 19px; font-weight: 600; }
+                            Text { text: @tr("Rate your completed release."); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
+                        }
+                        for destination in CompletionBridge.destinations: DestinationRating {
+                            destination: destination;
+                            reveal(y, height) => {
+                                root.content-focus-claimed = true;
+                                completion_scroll.reveal(y, height);
+                            }
+                        }
+                        Text { text: @tr("Only selected ratings will be saved."); color: Theme.current.text_muted; font-size: 12px; wrap: word-wrap; min-width: 0px; }
+                        if CompletionBridge.error != "": Text {
+                            text: CompletionBridge.error;
+                            color: Theme.current.text_destructive;
+                            wrap: word-wrap; min-width: 0px;
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 10px; vertical-stretch: 0;
+                    completion_dismiss := TrackingButton {
+                        text: @tr("Dismiss"); compact: true;
+                        clicked => { CompletionBridge.dismiss(CompletionBridge.token); }
+                    }
+                    completion_save := TrackingButton {
+                        text: @tr("Save ratings"); primary: true; compact: true;
+                        enabled: CompletionBridge.can_save;
+                        clicked => { if CompletionBridge.can_save { CompletionBridge.save(CompletionBridge.token); } }
+                    }
+                }
+            }
+        }
+        FocusScope {
+            width: 0px; height: 0px;
+            changed has-focus => { if self.has-focus { completion_close.focus(); } }
+        }
+    }
+}

@@ -62,6 +62,7 @@ impl TrackingState {
                         .automatic_paused
                         .contains(&binding.target.account.service)
                 {
+                    let previously_complete = self.target_may_complete(&binding.target);
                     let revision = match self.observe_episode(&binding.id, &episode, change.watched)
                     {
                         Ok(revision) => revision,
@@ -80,6 +81,12 @@ impl TrackingState {
                         }
                         Err(error) => return Err(error),
                     };
+                    if revision.is_some()
+                        && !previously_complete
+                        && self.target_may_complete(&binding.target)
+                    {
+                        self.record_completion(&binding.target, event.sequence);
+                    }
                     let start_revision =
                         if change.started && revision.is_none() {
                             Some(self.enqueue_progress(
@@ -116,6 +123,7 @@ impl TrackingState {
         for cursor in &mut self.link_checkpoints {
             cursor.sequence = cursor.sequence.max(event.sequence);
         }
+        self.prune_completion_prompts();
         Ok(())
     }
 }

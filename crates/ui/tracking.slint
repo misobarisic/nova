@@ -67,6 +67,8 @@ component AccountEditor inherits Rectangle {
 }
 export component TrackingSettings inherits Rectangle {
     in property <[TrackingAccountRow]> accounts;
+    in-out property <bool> completion_rating_prompts_enabled: true;
+    callback completion_prompts_changed();
     in property <string> notice;
     callback connect(int,string,string);
     callback complete(int,string);
@@ -98,6 +100,15 @@ export component TrackingSettings inherits Rectangle {
     min-width: 0px;
     VerticalLayout {
         spacing: 14px;
+        SettingsRow {
+            setting-key: "completion_rating_prompts_enabled";
+            row-title: @tr("Ask for ratings after completion");
+            ToggleSwitch {
+                name: @tr("Ask for ratings after completion");
+                checked <=> root.completion_rating_prompts_enabled;
+                toggled => { root.completion_prompts_changed(); }
+            }
+        }
         Text { text: @tr("Sign-in is saved and shared with paired devices. Disconnect removes shared sign-in."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0; }
         Text { text: root.notice; color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0; }
         for row in root.accounts: AccountEditor {

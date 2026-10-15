@@ -4,6 +4,70 @@ use nova_tracking::peer::{
     TRACKING_DOMAIN, apply_peer_records, connection_record, peer_connections, peer_records,
 };
 impl Coordinator {
+    /// Receipts are immutable and grow-only. Publishing a local decision must
+    /// never tombstone an opaque receipt received from a newer application.
+    pub(super) fn publish_completion_shared(&self) -> Result<(), String> {
+        let records = completion_peer_records(self.store.state()).map_err(|_| storage_message())?;
+        let owner = nova_sync::local_store().map_err(|_| storage_message())?;
+        let dev = nova_sync::local_device().map_err(|_| storage_message())?;
+        let mut store = owner.lock().unwrap();
+        let mut changed = false;
+        for (key, value, timestamp) in records {
+            if store
+                .record(TRACKING_COMPLETION_DOMAIN, &key)
+                .and_then(|r| r.value.as_ref())
+                .is_none()
+            {
+                changed |= store.set(
+                    TRACKING_COMPLETION_DOMAIN,
+                    &key,
+                    Some(value),
+                    timestamp,
+                    dev,
+                );
+            }
+        }
+        store.save().map_err(|_| storage_message())?;
+        drop(store);
+        if changed && !crate::app::sync::applying() {
+            nova_sync::request_local_sync();
+        }
+        Ok(())
+    }
+    pub(super) fn apply_completion_shared(&mut self, force: bool) -> Result<(), String> {
+        let force = force || !self.completion_restored;
+        let owner = nova_sync::local_store().map_err(|_| storage_message())?;
+        let (records, basis) = {
+            let mut store = owner.lock().unwrap();
+            store.save().map_err(|_| storage_message())?;
+            if !force
+                && !store
+                    .pending_domains()
+                    .iter()
+                    .any(|d| d == TRACKING_COMPLETION_DOMAIN)
+            {
+                return Ok(());
+            }
+            let Some(basis) = store.digest().get(TRACKING_COMPLETION_DOMAIN).cloned() else {
+                self.completion_restored = true;
+                return Ok(());
+            };
+            (store.records(TRACKING_COMPLETION_DOMAIN), basis)
+        };
+        let _guard = crate::app::sync::ApplyingGuard::new();
+        let state = apply_completion_peer_records(self.store.state(), &records)
+            .map_err(|_| storage_message())?;
+        if state != *self.store.state() {
+            self.store.save(state).map_err(|_| storage_message())?;
+        }
+        let mut store = owner.lock().unwrap();
+        store
+            .mark_projected(TRACKING_COMPLETION_DOMAIN, &basis)
+            .map_err(|_| storage_message())?;
+        store.save().map_err(|_| storage_message())?;
+        self.completion_restored = true;
+        Ok(())
+    }
     fn shared_records(&self) -> Result<Vec<(String, String, u64)>, String> {
         let mut records = peer_records(self.store.state()).map_err(|_| storage_message())?;
         for service in [Service::MyAnimeList, Service::AniList] {

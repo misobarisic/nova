@@ -1,0 +1,17 @@
+import { CompletionDestination } from "../ui/types.slint";
+
+// A transient rating draft. Callbacks include the prompt token so a stale
+// editor cannot change a later completed release.
+export global CompletionBridge {
+    in-out property <bool> open;
+    in-out property <string> token;
+    in-out property <string> title;
+    in-out property <string> subtitle;
+    in-out property <string> error;
+    in-out property <image> poster;
+    in-out property <[CompletionDestination]> destinations;
+    in-out property <bool> can_save;
+    callback score_changed(string, string, string);
+    callback save(string);
+    callback dismiss(string);
+}

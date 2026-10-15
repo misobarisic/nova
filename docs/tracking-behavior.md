@@ -78,7 +78,7 @@ JSON records: one link per typed source/account/release identity, one paused
 preference per service, and `credentials:mal` / `credentials:anilist` sign-in
 records. Start tracking, alignment repair, unlink, pause/resume, refresh-token
 rotation and Disconnect all propagate. Local-only tracking state remains a
-schema-3 envelope; the generic sync wire structure and ALPN do not change.
+schema-4 envelope; the generic sync wire structure and ALPN do not change.
 
 Receiving a link preserves stable episode IDs but uses the receiving device's
 account generation, mapping revision and current history checkpoint. Tokens are
@@ -232,6 +232,33 @@ dates accept complete or partial dates; a checked empty date clears that field.
 MAL's documented API exposes dates for reading but does not support writing them,
 so those controls are disabled. Manually changed status/dates are pinned; **Restore
 automatic status and dates** releases those pins for future eligible events.
+
+## Completion ratings
+
+A new local watched transition that reaches a finished mapped release's known
+final episode can queue a rating prompt. This follows tracker progress ordinals,
+not a count of every locally watched episode or the parent catalog show's total.
+Playback and explicit watched actions qualify; paired-device imports, old
+history, initial linking and metadata refreshes do not. The prompt waits until
+playback and blocking dialogs close.
+
+Only unrated entries are offered. Verified MAL/AniList identities for the same
+release can share one prompt, with independent controls in each account's native
+score scale. Save ratings queues only selected scores; untouched destinations are
+skipped. Dismiss leaves tracker values unchanged. Both decisions handle each
+account/release once and sync as grow-only `tracking_completion` receipts; local
+prompt queues, enablement watermarks and drafts are not shared. Offline devices
+may independently prompt before receipts synchronize.
+
+Settings → Tracking → Ask for ratings after completion defaults on and follows
+normal settings sync/override policy. Disabling clears pending prompts; enabling
+starts at the current journal boundary rather than replaying existing history.
+Account, mapping and score-format guards invalidate stale drafts. Completion
+score edits re-read the tracker before delivery and preserve a rating already
+saved there. Local save failures retain the draft for retry. Schema 4 keeps these
+guarded intents and decisions atomic with tracking state; older schema 1–3 data
+upgrades without creating historical prompts, while older binaries refuse the
+new envelope instead of overwriting unfamiliar intents.
 
 ## Delivery and recovery
 

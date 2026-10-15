@@ -1079,6 +1079,10 @@ impl Bridge {
                     self.tracking_sync_apply();
                     continue;
                 }
+                nova_tracking::TRACKING_COMPLETION_DOMAIN => {
+                    self.tracking_completion_sync_apply();
+                    continue;
+                }
                 _ => {}
             }
             if let (Ok(owner), Some(basis)) = (
@@ -1575,6 +1579,7 @@ impl Bridge {
             self.shared.lock().unwrap().cache_settings = settings.clone();
         }
         set_active_cache_settings(settings.clone());
+        self.tracking_completion_preferences(settings.completion_rating_prompts_enabled);
         write_settings(&settings);
         if publish_models {
             self.settings_to_ui();
@@ -2840,6 +2845,14 @@ mod tests {
         assert!(!fields.contains_key("android_hwdec"));
         assert!(!fields.contains_key("player_external"));
         assert!(!fields.contains_key("remote_control_enabled"));
+        assert_eq!(fields["completion_rating_prompts_enabled"], "true");
+        assert!(
+            !merge_settings_fields(
+                &settings,
+                &[("completion_rating_prompts_enabled".into(), "false".into())]
+            )
+            .completion_rating_prompts_enabled
+        );
         assert!(!fields.contains_key("desktop_external_app"));
         assert!(fields.contains_key("playback_speed"));
         assert!(fields.contains_key("default_audio_language"));

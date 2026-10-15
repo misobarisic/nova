@@ -183,6 +183,7 @@ impl Bridge {
     /// Mirror the stored cache settings onto the Settings page controls.
     pub(super) fn settings_to_ui(&self) {
         let settings = self.shared.lock().unwrap().cache_settings.clone();
+        self.tracking_completion_preferences(settings.completion_rating_prompts_enabled);
         self.invalidate_home_pending_logo();
         if let Some(app) = self.app() {
             app.set_persistence_failed(storage::last_error().is_some());
@@ -241,6 +242,7 @@ impl Bridge {
             app.set_home_episode_artwork(settings.home_episode_artwork);
             app.set_home_devices_enabled(settings.home_devices_enabled);
             app.set_remote_control_enabled(settings.remote_control_enabled);
+            app.set_completion_rating_prompts_enabled(settings.completion_rating_prompts_enabled);
             app.set_library_min_cols(settings.library_min_cols as i32);
             app.set_android_hwdec_index(settings.android_hwdec.index());
             app.set_player_backend_index(if settings.player_external { 1 } else { 0 });
@@ -454,6 +456,7 @@ impl Bridge {
                 home_episode_artwork: app.get_home_episode_artwork(),
                 home_devices_enabled: app.get_home_devices_enabled(),
                 remote_control_enabled: app.get_remote_control_enabled(),
+                completion_rating_prompts_enabled: app.get_completion_rating_prompts_enabled(),
                 discover_min_cols: app.get_discover_min_cols().clamp(2, 6) as u32,
                 discover_catalog_addon_names: app.get_discover_catalog_addon_names(),
                 library_min_cols: app.get_library_min_cols().clamp(2, 6) as u32,
@@ -521,6 +524,7 @@ impl Bridge {
                 self.remote_control_policy_changed(settings.remote_control_enabled);
             }
         }
+        self.tracking_completion_preferences(settings.completion_rating_prompts_enabled);
         set_active_cache_settings(settings.clone());
         self.invalidate_home_pending_logo();
         if !applying() {

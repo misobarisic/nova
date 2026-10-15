@@ -338,6 +338,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     bridge.wire_remote_playback();
     bridge.wire_party();
+    bridge.wire_completion_prompts();
 
     bridge.last_stream = Arc::new(last_stream::Cache::open_synced(
         nova_config::app_cache_dir().join("last-stream-v1.json"),

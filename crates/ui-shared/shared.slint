@@ -1,4 +1,4 @@
-export { PartyMemberRow, RemoteOfferRow, RemoteDeviceRow, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadEpisode, DownloadGroup, SettingsDestination } from "../ui/types.slint";
+export { CompletionDestination, PartyMemberRow, RemoteOfferRow, RemoteDeviceRow, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadEpisode, DownloadGroup, SettingsDestination } from "../ui/types.slint";
 export { Theme, ThemePalette } from "../ui/theme.slint";
 export { Anim } from "../ui/anim.slint";
 export { NavMetrics, NavState, SettingsStyle, SettingsDestinations, SettingsSync, ControlInput, SliderGesture, PlaybackSpeed } from "globals.slint";
@@ -22,3 +22,5 @@ export component SharedRoot inherits Window { background: transparent; width: 1p
 export { RemoteBridge } from "remote-bridge.slint";
 
 export { PartyBridge } from "party-bridge.slint";
+
+export { CompletionBridge } from "completion-bridge.slint";

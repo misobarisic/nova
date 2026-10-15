@@ -4,6 +4,8 @@ use super::*;
 #[cfg(any(target_os = "android", test))]
 #[path = "background.rs"]
 mod background;
+#[path = "completion.rs"]
+mod completion;
 #[path = "peer.rs"]
 mod peer;
 #[path = "setup.rs"]
@@ -65,6 +67,22 @@ impl Registrations {
     }
 }
 pub(super) enum Command {
+    CompletionPreferences {
+        enabled: bool,
+    },
+    CompletionScore {
+        token: String,
+        id: String,
+        value: String,
+    },
+    CompletionSave {
+        token: String,
+    },
+    CompletionDismiss {
+        token: String,
+    },
+    CompletionSync,
+    CompletionRefresh,
     Sync,
     Reset,
     Automatic {
@@ -211,6 +229,12 @@ struct Coordinator {
     cache: CatalogCache,
     restore_after: [u64; 2],
     pending_restore: Vec<SavedConnection>,
+    completion_prompt: Option<completion::PromptDraft>,
+    completion_prompt_revision: u64,
+    completion_publication: Arc<AtomicU64>,
+    completion_prompt_error: String,
+    completion_restored: bool,
+    completion_policy_revision: Option<u64>,
 }
 enum Completion {
     Progress(DeliveryAttempt, DeliveryOutcome, Option<RemoteEntry>),
@@ -276,11 +300,30 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
         completion: None,
         restore_after: [0; 2],
         pending_restore: vec![],
+        completion_prompt: None,
+        completion_prompt_revision: 0,
+        completion_publication: Arc::new(AtomicU64::new(0)),
+        completion_prompt_error: String::new(),
+        completion_restored: false,
+        completion_policy_revision: None,
         cache: read_json_result(CATALOG_CACHE_KEY)
             .ok()
             .flatten()
             .unwrap_or_default(),
     };
+    let enabled = coordinator
+        .bridge
+        .shared
+        .lock()
+        .unwrap()
+        .cache_settings
+        .completion_rating_prompts_enabled;
+    if let Err(error) = coordinator
+        .configure_completion(enabled)
+        .and_then(|_| coordinator.apply_completion_shared(true))
+    {
+        coordinator.notice = error;
+    }
     if let Err(error) = coordinator
         .publish_shared(true)
         .and_then(|_| coordinator.apply_shared(true))
@@ -324,6 +367,14 @@ pub(super) fn run(bridge: Bridge, rx: Receiver<Command>) {
         });
         for (service, epoch) in expired {
             coordinator.restore_session_epoch(service, epoch);
+        }
+        // Completion receipts remain independently usable even if the older
+        // tracking projection or the playback journal needs recovery.
+        if let Err(error) = coordinator.apply_completion_shared(false) {
+            coordinator.notice = error;
+        }
+        if let Err(error) = coordinator.publish_completion_shared() {
+            coordinator.notice = error;
         }
         if let Err(error) = coordinator.consume_events() {
             coordinator.notice = error;
@@ -505,6 +556,14 @@ impl Coordinator {
     }
     fn command(&mut self, command: Command) -> Result<(), String> {
         match command {
+            Command::CompletionPreferences { enabled } => self.configure_completion(enabled),
+            Command::CompletionScore { token, id, value } => {
+                self.completion_score(&token, &id, value)
+            }
+            Command::CompletionSave { token } => self.finish_completion_prompt(&token, true),
+            Command::CompletionDismiss { token } => self.finish_completion_prompt(&token, false),
+            Command::CompletionSync => self.apply_completion_shared(true),
+            Command::CompletionRefresh => Ok(()),
             Command::CallbackFailed {
                 service,
                 epoch,
@@ -547,6 +606,16 @@ impl Coordinator {
                 self.sessions.clear();
                 self.pending_restore.clear();
                 self.store = replacement;
+                self.completion_prompt = None;
+                let enabled = self
+                    .bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .cache_settings
+                    .completion_rating_prompts_enabled;
+                self.configure_completion(enabled)?;
+                self.apply_completion_shared(true)?;
                 self.choice = None;
                 self.candidates.clear();
                 self.notice = text::tr(
@@ -1861,6 +1930,14 @@ impl Coordinator {
         Ok(())
     }
     fn consume_events(&mut self) -> Result<(), String> {
+        let enabled = self
+            .bridge
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .completion_rating_prompts_enabled;
+        self.configure_completion(enabled)?;
         if storage::try_get_str(JOURNAL_ERROR_KEY)
             .map_err(|_| storage_message())?
             .is_some()
@@ -2021,6 +2098,11 @@ impl Coordinator {
                                 != self.sessions[index].epoch
                             {
                                 return Err(ApiError::Authentication);
+                            }
+                            if let Some(remote) = remote.as_ref().filter(|remote| {
+                                completion::keep_remote_rating(attempt.edit(), remote)
+                            }) {
+                                return Ok(remote.clone());
                             }
                             if attempt.edit().patch.score_tenths.is_some()
                                 && attempt.edit().score_format
@@ -2198,7 +2280,9 @@ impl Coordinator {
             false
         }
     }
-    fn publish(&self) {
+    fn publish(&mut self) {
+        self.refresh_completion_prompt();
+        self.publish_completion_prompt();
         use crate::{TrackingAccountRow, TrackingCandidateRow, TrackingLinkRow};
         let state = self.store.state();
         let accounts = vec![Service::MyAnimeList, Service::AniList]
