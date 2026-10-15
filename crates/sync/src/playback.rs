@@ -151,8 +151,29 @@ impl PlaybackService {
     }
     pub(crate) fn set_handler(&self, handler: Option<PlaybackHandler>) {
         let mut adapter = self.adapter.lock().unwrap_or_else(|e| e.into_inner());
+        let disabled = handler.is_none();
         *adapter = handler;
         self.adapter_generation.fetch_add(1, Ordering::AcqRel);
+        // Retire replies as well as queued UI authority: a retry after opting
+        // out must not reveal an old title or replay a formerly accepted start.
+        // Keep the high-water marks so re-enabling cannot execute old IDs again.
+        for history in self
+            .history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values_mut()
+        {
+            history.retired_through = history.retired_through.max(history.highest);
+            history.entries.clear();
+        }
+        drop(adapter);
+        if disabled {
+            let connections =
+                std::mem::take(&mut *self.inbound.lock().unwrap_or_else(|e| e.into_inner()));
+            for (_, (_, connection)) in connections {
+                connection.close(0u32.into(), b"playback unavailable");
+            }
+        }
     }
     fn authorized(&self, peer: &str) -> bool {
         !self.stop.load(Ordering::Acquire)
@@ -256,7 +277,12 @@ impl PlaybackService {
         }
         let mut receiver;
         let mut owner = false;
-        {
+        let (adapter, generation) = {
+            // Bind queued work to the policy that accepted it, before spawning.
+            // Take locks in the same order as set_handler so an off/on cycle
+            // cannot give an old request the replacement adapter's authority.
+            let adapter = self.adapter.lock().unwrap_or_else(|e| e.into_inner());
+            let generation = self.adapter_generation.load(Ordering::Acquire);
             let mut histories = self.history.lock().unwrap_or_else(|e| e.into_inner());
             let history = histories.entry(peer.to_owned()).or_default();
             if wire.epoch < history.epoch {
@@ -324,7 +350,8 @@ impl PlaybackService {
                 );
                 owner = true;
             }
-        }
+            (adapter.clone(), generation)
+        };
         if owner {
             let service = self.clone();
             let peer = peer.to_owned();
@@ -333,6 +360,8 @@ impl PlaybackService {
                 let base = service.context(peer.clone(), wire.id, wire.epoch, live.clone());
                 let authorization_service = service.clone();
                 let authorization_peer = peer.clone();
+                let request_id = wire.id;
+                let request_epoch = wire.epoch;
                 let context = PeerContext::new(
                     peer.clone(),
                     wire.id,
@@ -341,6 +370,19 @@ impl PlaybackService {
                         connected.load(Ordering::Acquire)
                             && request_alive.load(Ordering::Acquire)
                             && base.is_authorized()
+                            && generation
+                                == authorization_service
+                                    .adapter_generation
+                                    .load(Ordering::Acquire)
+                            && authorization_service
+                                .history
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .get(&authorization_peer)
+                                .is_some_and(|history| {
+                                    history.epoch == request_epoch
+                                        && history.entries.contains_key(&request_id)
+                                })
                             && (connection_id == 0
                                 || authorization_service
                                     .inbound
@@ -351,12 +393,9 @@ impl PlaybackService {
                     }),
                 )
                 .with_connection_id(connection_id);
-                let adapter = service
-                    .adapter
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone();
-                let response = if let Some(adapter) = adapter {
+                let response = if !context.is_authorized() {
+                    Response::Error(PlaybackError::Unauthorized)
+                } else if let Some(adapter) = adapter {
                     let timeout = request_timeout(&wire.request);
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     adapter(
@@ -1416,6 +1455,142 @@ mod tests {
             service.dispatch("paired", wire(3, Request::Snapshot)).await,
             Response::Error(PlaybackError::InvalidRequest)
         );
+    }
+
+    #[tokio::test]
+    async fn adapter_replacement_cannot_authorize_an_unstarted_dispatch() {
+        let service = service();
+        let executions = Arc::new(AtomicUsize::new(0));
+        let count = executions.clone();
+        let adapter: PlaybackHandler = Arc::new(move |_, _, done| {
+            count.fetch_add(1, Ordering::Relaxed);
+            done(Response::Accepted);
+        });
+        service.set_handler(Some(adapter.clone()));
+        let pending = service.dispatch("paired", wire(1, Request::ReleasePreview));
+        tokio::pin!(pending);
+        // Poll acceptance without yielding to its spawned owner task. The same
+        // race occurs for a connection admitted during the disabled interval.
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(pending.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        service.set_handler(None);
+        service.set_handler(Some(adapter));
+        assert_eq!(pending.await, Response::Error(PlaybackError::Unavailable));
+        tokio::task::yield_now().await;
+        assert_eq!(executions.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            service
+                .dispatch("paired", wire(1, Request::ReleasePreview))
+                .await,
+            Response::Error(PlaybackError::InvalidRequest)
+        );
+        assert_eq!(
+            service
+                .dispatch("paired", wire(2, Request::ReleasePreview))
+                .await,
+            Response::Accepted
+        );
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn disabling_closes_live_incoming_connections_and_revokes_queued_work() {
+        let controller = Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .alpns(vec![ALPN.to_vec()])
+            .bind()
+            .await
+            .unwrap();
+        let receiver = Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .alpns(vec![ALPN.to_vec()])
+            .bind()
+            .await
+            .unwrap();
+        let service = test_service(
+            Arc::new(Mutex::new(vec![controller.id().to_string()])),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let queued = Arc::new(Mutex::new(None));
+        let captured = queued.clone();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let notified = started.clone();
+        service.set_handler(Some(Arc::new(move |context, _, done| {
+            *captured.lock().unwrap() = Some((context, done));
+            notified.notify_one();
+        })));
+        let router = iroh::protocol::Router::builder(receiver.clone())
+            .accept(ALPN, service.clone())
+            .spawn();
+        let connection = controller.connect(receiver.addr(), ALPN).await.unwrap();
+        let (mut send, _recv) = connection.open_bi().await.unwrap();
+        write_frame(&mut send, &wire(1, Request::Snapshot))
+            .await
+            .unwrap();
+        send.finish().unwrap();
+        tokio::time::timeout(Duration::from_secs(3), started.notified())
+            .await
+            .unwrap();
+        service.set_handler(None);
+        tokio::time::timeout(Duration::from_secs(3), connection.closed())
+            .await
+            .unwrap();
+        let (context, done) = queued.lock().unwrap().take().unwrap();
+        assert!(!context.is_authorized());
+        assert!(service.inbound.lock().unwrap().is_empty());
+        assert!(
+            service
+                .peers
+                .lock()
+                .unwrap()
+                .contains(&controller.id().to_string()),
+            "playback opt-out does not unpair sync"
+        );
+        done(Response::Accepted);
+        router.shutdown().await.unwrap();
+        controller.close().await;
+        receiver.close().await;
+    }
+
+    #[tokio::test]
+    async fn disabling_retires_cached_private_replies_without_allowing_replay() {
+        let service = service();
+        service.set_handler(Some(Arc::new(|_, _, done| {
+            done(Response::Snapshot(PlaybackSnapshot {
+                ready: true,
+                title: "Private title".into(),
+                ..Default::default()
+            }))
+        })));
+        assert!(matches!(
+            service.dispatch("paired", wire(1, Request::Snapshot)).await,
+            Response::Snapshot(PlaybackSnapshot { ready: true, .. })
+        ));
+        service.set_handler(None);
+        assert_eq!(
+            service.dispatch("paired", wire(1, Request::Snapshot)).await,
+            Response::Error(PlaybackError::InvalidRequest)
+        );
+        assert_eq!(
+            service.dispatch("paired", wire(2, Request::Snapshot)).await,
+            Response::Snapshot(PlaybackSnapshot::default())
+        );
+        let executions = Arc::new(AtomicUsize::new(0));
+        let count = executions.clone();
+        service.set_handler(Some(Arc::new(move |_, _, done| {
+            count.fetch_add(1, Ordering::Relaxed);
+            done(Response::Accepted);
+        })));
+        assert_eq!(
+            service.dispatch("paired", wire(1, Request::Snapshot)).await,
+            Response::Error(PlaybackError::InvalidRequest)
+        );
+        assert_eq!(
+            service.dispatch("paired", wire(3, Request::Snapshot)).await,
+            Response::Accepted
+        );
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]

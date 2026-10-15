@@ -143,6 +143,71 @@ struct PendingReplacement {
     session: Option<SessionId>,
 }
 
+/// Discovery and control share retry policy, but keep independent attempt clocks.
+/// A live controller must not speed up a whole paired-device fan-out.
+#[derive(Default)]
+struct PeerPoll {
+    attempted: Option<Instant>,
+    failures: u8,
+    snapshot: Option<PlaybackSnapshot>,
+}
+
+impl PeerPoll {
+    fn retry_delay(&self) -> Duration {
+        Duration::from_secs(match self.failures {
+            0 => 0,
+            1 => 5,
+            2 => 15,
+            3 => 30,
+            _ => 60,
+        })
+    }
+
+    fn ready(&self, now: Instant) -> bool {
+        self.attempted
+            .is_none_or(|at| now.saturating_duration_since(at) >= self.retry_delay())
+    }
+
+    fn complete(&mut self, snapshot: Option<PlaybackSnapshot>) {
+        self.failures = if snapshot.as_ref().is_some_and(|snapshot| snapshot.ready) {
+            0
+        } else {
+            self.failures.saturating_add(1)
+        };
+        self.snapshot = snapshot;
+    }
+}
+
+fn poll_due(at: Option<Instant>, now: Instant, interval: Duration) -> bool {
+    at.is_none_or(|at| now.saturating_duration_since(at) >= interval)
+}
+
+fn control_poll_interval(paused: bool, interacting: bool) -> Duration {
+    if paused && !interacting {
+        Duration::from_secs(1)
+    } else {
+        Duration::from_millis(250)
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum DiscoveryView {
+    #[default]
+    Hidden,
+    Home,
+    Picker,
+}
+
+impl DiscoveryView {
+    fn interval(self, playing: bool) -> Option<Duration> {
+        match self {
+            Self::Hidden => None,
+            Self::Home if !playing => Some(Duration::from_secs(30)),
+            _ => Some(Duration::from_secs(5)),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct State {
     role: Role,
@@ -168,6 +233,13 @@ pub(super) struct State {
     lookup_in_flight: bool,
     discovery_running: bool,
     discovery_at: Option<Instant>,
+    discovery_view: DiscoveryView,
+    discovery_forced: bool,
+    discovery_token: u64,
+    discovered: HashMap<String, PeerPoll>,
+    polling_engine: Option<std::sync::Weak<nova_sync::SyncEngine>>,
+    control_poll: PeerPoll,
+    interacting_until: Option<Instant>,
     replacement: Option<PendingReplacement>,
     preview_owner: Option<String>,
     preview_epoch: u64,
@@ -176,6 +248,72 @@ pub(super) struct State {
 }
 
 impl State {
+    fn control_request_due(&self, now: Instant) -> bool {
+        let interacting = self.interacting_until.is_some_and(|until| now < until);
+        let interval = control_poll_interval(
+            self.snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.paused),
+            interacting,
+        );
+        !self.queued.is_empty()
+            || (self.control_poll.ready(now)
+                && poll_due(self.control_poll.attempted, now, interval))
+    }
+
+    fn reconcile_polling_engine(&mut self, engine: &Arc<nova_sync::SyncEngine>) -> bool {
+        if self
+            .polling_engine
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .is_some_and(|previous| Arc::ptr_eq(&previous, engine))
+        {
+            return false;
+        }
+        self.polling_engine = Some(Arc::downgrade(engine));
+        self.invalidate_polling_engine();
+        true
+    }
+
+    fn invalidate_polling_engine(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.queued.clear();
+        self.in_flight = false;
+        self.lookup_in_flight = false;
+        self.snapshot = None;
+        self.remote_offers.clear();
+        self.visible_offers.clear();
+        self.replacement = None;
+        self.control_poll = PeerPoll::default();
+        self.discovered.clear();
+        self.discovery_at = None;
+        // Keep the running guard until the old fan-out completes. Its engine
+        // check rejects the result without allowing overlapping fan-outs.
+    }
+
+    fn discovery_peers(&mut self, peers: &[String], now: Instant, force: bool) -> Vec<String> {
+        self.discovered.retain(|peer, _| peers.contains(peer));
+        let mut due = peers
+            .iter()
+            .filter(|peer| {
+                force
+                    || self
+                        .discovered
+                        .get(*peer)
+                        .is_none_or(|poll| poll.ready(now))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        // Oldest attempts first keeps paired devices beyond the fan-out cap
+        // from starving, while retaining the latest status for skipped peers.
+        due.sort_by_key(|peer| self.discovered.get(peer).and_then(|poll| poll.attempted));
+        due.truncate(32);
+        for peer in &due {
+            self.discovered.entry(peer.clone()).or_default().attempted = Some(now);
+        }
+        due
+    }
+
     fn cached_selector_offers(
         &self,
         target: &str,
@@ -280,6 +418,41 @@ fn remote_prompt_text(snapshot: &PlaybackSnapshot) -> &'static str {
 }
 
 impl Bridge {
+    fn reconcile_remote_polling_engine(&self, engine: &Arc<nova_sync::SyncEngine>) {
+        let changed = self
+            .shared
+            .lock()
+            .unwrap()
+            .remote_playback
+            .reconcile_polling_engine(engine);
+        if !changed {
+            return;
+        }
+        let Some(app) = self.app() else { return };
+        app.set_remote_connected(false);
+        app.set_remote_has_playing_devices(false);
+        app.set_remote_has_ready_devices(false);
+        app.set_remote_devices(Default::default());
+        app.set_remote_replacement_token(SharedString::default());
+        app.set_remote_offers(Default::default());
+        if app.get_stream_selector_open() && self.remote_output_selected() {
+            // The old lookup completion is deliberately rejected. Release its
+            // loading state so Reload can start a lookup against this engine.
+            app.set_streams_searching(false);
+            app.set_streams(Default::default());
+            app.set_stream_total(0);
+            app.set_streams_hint(error_text(&PlaybackError::Unavailable).into());
+        }
+    }
+
+    fn remote_control_enabled(&self) -> bool {
+        self.shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .remote_control_enabled
+    }
+
     pub(super) fn wire_remote_playback(&self) {
         let Some(app) = self.app() else { return };
         let b = self.clone();
@@ -305,6 +478,10 @@ impl Bridge {
     }
 
     pub(super) fn attach_playback_service(&self, engine: &Arc<nova_sync::SyncEngine>) {
+        if !self.remote_control_enabled() {
+            engine.set_playback_handler(None);
+            return;
+        }
         let bridge = self.clone();
         engine.set_playback_handler(Some(Arc::new(move |peer, request, done| {
             let bridge = bridge.clone();
@@ -314,6 +491,38 @@ impl Bridge {
                 bridge.receive_playback_request(peer, request, done)
             });
         })));
+    }
+
+    /// Revoke queued receiver work immediately without stopping local playback
+    /// or the independent sync service. Reattaching advances the adapter epoch,
+    /// so work accepted before an opt-out cannot become valid after re-enabling.
+    pub(super) fn remote_control_policy_changed(&self, enabled: bool) {
+        if let Some(engine) = nova_sync::engine() {
+            if enabled {
+                self.attach_playback_service(&engine);
+            } else {
+                engine.set_playback_handler(None);
+            }
+        }
+        if !enabled {
+            let release = {
+                let mut state = self.shared.lock().unwrap();
+                let remote = &mut state.remote_playback;
+                remote.offers.clear();
+                let release = remote
+                    .preview_owner
+                    .as_deref()
+                    .is_some_and(|owner| owner != "local");
+                if release {
+                    remote.preview_owner = None;
+                    remote.preview_seen = None;
+                }
+                release
+            };
+            if release {
+                let _ = self.execute_playback_action(PlaybackAction::EndSpeedPreview);
+            }
+        }
     }
 
     /// A held preview has one input owner. Local release cannot cancel a
@@ -384,6 +593,10 @@ impl Bridge {
             return PlaybackSnapshot::default();
         };
         let state = self.shared.lock().unwrap();
+        // Opted-out devices do not expose titles, tracks or session details.
+        if !state.cache_settings.remote_control_enabled {
+            return PlaybackSnapshot::default();
+        }
         let remote = &state.remote_playback;
         let started = app.get_playback_started();
         let active = remote.session.is_some();
@@ -507,7 +720,7 @@ impl Bridge {
             done(Response::Accepted);
             return;
         }
-        if !peer.is_authorized() {
+        if !peer.is_authorized() || !self.remote_control_enabled() {
             done(Response::Error(PlaybackError::Unauthorized));
             return;
         }
@@ -667,7 +880,7 @@ impl Bridge {
             done(Response::Error(PlaybackError::NotFound));
             return;
         };
-        if !peer.is_authorized() {
+        if !peer.is_authorized() || !self.remote_control_enabled() {
             done(Response::Error(PlaybackError::Unauthorized));
             return;
         }
@@ -691,7 +904,7 @@ impl Bridge {
         item: Option<MetaItem>,
         done: Completion,
     ) {
-        if !peer.is_authorized() {
+        if !peer.is_authorized() || !self.remote_control_enabled() {
             done(Response::Error(PlaybackError::Unauthorized));
             return;
         }
@@ -727,7 +940,7 @@ impl Bridge {
         year: String,
         done: Completion,
     ) {
-        if !peer.is_authorized() {
+        if !peer.is_authorized() || !self.remote_control_enabled() {
             done(Response::Error(PlaybackError::Unauthorized));
             return;
         }
@@ -765,7 +978,7 @@ impl Bridge {
         urls: Vec<(String, String, String, u64)>,
         done: Completion,
     ) {
-        if !peer.is_authorized() {
+        if !peer.is_authorized() || !self.remote_control_enabled() {
             done(Response::Error(PlaybackError::Unauthorized));
             return;
         }
@@ -792,7 +1005,7 @@ impl Bridge {
                     .and_then(|bytes| Addon::parse_streams(&bytes).ok())
                     .unwrap_or_default();
                 let _ = slint::invoke_from_event_loop(move || {
-                    if !peer.is_authorized() {
+                    if !peer.is_authorized() || !bridge.remote_control_enabled() {
                         if let Some(done) = batch.lock().unwrap().done.take() {
                             done(Response::Error(PlaybackError::Unauthorized));
                         }
@@ -858,7 +1071,7 @@ impl Bridge {
         settings_generation: u64,
         done: Completion,
     ) {
-        if !peer.is_authorized() {
+        if !peer.is_authorized() || !self.remote_control_enabled() {
             done(Response::Error(PlaybackError::Unauthorized));
             return;
         }
@@ -1069,6 +1282,8 @@ impl Bridge {
             r.queued.clear();
             r.in_flight = false;
             r.lookup_in_flight = false;
+            r.control_poll = PeerPoll::default();
+            r.interacting_until = None;
             r.remote_offers.clear();
             r.visible_offers.clear();
             r.replacement = None;
@@ -1130,6 +1345,7 @@ impl Bridge {
             }
         }
         self.remote_disconnect();
+        self.reconcile_remote_polling_engine(&engine);
         {
             let mut state = self.shared.lock().unwrap();
             state.remote_playback.role = Role::Remote;
@@ -1203,6 +1419,7 @@ impl Bridge {
             return;
         }
         self.detach_remote_playback(true);
+        self.reconcile_remote_polling_engine(&engine);
         self.shared
             .lock()
             .unwrap()
@@ -1262,6 +1479,15 @@ impl Bridge {
             let response = engine.request_prepared_playback(request);
             let _ = slint::invoke_from_event_loop(move || {
                 if b.shared.lock().unwrap().remote_playback.generation != generation {
+                    return;
+                }
+                if !nova_sync::engine().is_some_and(|current| Arc::ptr_eq(&current, &engine)) {
+                    if let Some(current) = nova_sync::engine() {
+                        b.reconcile_remote_polling_engine(&current);
+                    } else if let Some(app) = b.app() {
+                        app.set_streams_searching(false);
+                        app.set_streams_hint(error_text(&PlaybackError::Unavailable).into());
+                    }
                     return;
                 }
                 let Some(app) = b.app() else { return };
@@ -1506,6 +1732,9 @@ impl Bridge {
     }
 
     fn remote_ui_action(&self, name: &str, value: f32, token: &str) {
+        if !FOREGROUND.load(Ordering::Acquire) {
+            return;
+        }
         let snapshot = self.shared.lock().unwrap().remote_playback.snapshot.clone();
         let Some(snapshot) = snapshot else { return };
         let Some(session) = snapshot.session else {
@@ -1575,6 +1804,7 @@ impl Bridge {
                         .queued
                         .push_back(Request::Lookup(media));
                 }
+                self.remote_tick();
                 return;
             }
             "prompt_reject" if snapshot.next_episode_prompt => PlaybackAction::DismissNextEpisode {
@@ -1585,6 +1815,7 @@ impl Bridge {
         let mut state = self.shared.lock().unwrap();
         // A bounded command queue preserves order without replay on reconnect.
         let r = &mut state.remote_playback;
+        r.interacting_until = Some(Instant::now() + Duration::from_secs(1));
         // Only consecutive slider updates commute. Searching further back
         // could move a new absolute seek before an intervening relative seek,
         // or a new speed before ResetSpeed, reversing the user's final intent.
@@ -1597,6 +1828,8 @@ impl Bridge {
             && matches!(old, Request::Command { session: old_session, action: old_action } if *old_session == session && std::mem::discriminant(old_action) == std::mem::discriminant(&action))
         {
             *old = Request::Command { session, action };
+            drop(state);
+            self.remote_tick();
             return;
         }
         if action == PlaybackAction::EndSpeedPreview {
@@ -1619,6 +1852,8 @@ impl Bridge {
         } else if r.queued.len() < 32 {
             r.queued.push_back(Request::Command { session, action });
         }
+        drop(state);
+        self.remote_tick();
     }
 
     /// Refresh presentation only: a locale change must not reconnect or mutate
@@ -1722,9 +1957,39 @@ impl Bridge {
     }
 
     pub(super) fn remote_tick(&self) {
+        // Slint timers can still tick around Android lifecycle transitions.
+        // Backgrounding must never launch discovery or controller polling.
+        if !FOREGROUND.load(Ordering::Acquire) {
+            self.shared.lock().unwrap().remote_playback.queued.clear();
+            return;
+        }
         let Some(app) = self.app() else { return };
+        if let Some(engine) = nova_sync::engine() {
+            self.reconcile_remote_polling_engine(&engine);
+        }
         {
             let mut state = self.shared.lock().unwrap();
+            if let Some(engine) = nova_sync::engine() {
+                let peers = engine.peers();
+                state
+                    .remote_playback
+                    .discovered
+                    .retain(|peer, _| peers.contains(peer));
+                if app
+                    .get_remote_devices()
+                    .iter()
+                    .any(|row| !peers.iter().any(|peer| peer == row.id.as_str()))
+                {
+                    let rows = app
+                        .get_remote_devices()
+                        .iter()
+                        .filter(|row| peers.iter().any(|peer| peer == row.id.as_str()))
+                        .collect::<Vec<_>>();
+                    app.set_remote_has_playing_devices(rows.iter().any(|row| row.has_session));
+                    app.set_remote_has_ready_devices(rows.iter().any(|row| row.ready));
+                    app.set_remote_devices(Rc::new(VecModel::from(rows)).into());
+                }
+            }
             if !app.get_stream_selector_open() {
                 state.remote_playback.selector_lookups.clear();
                 state.remote_playback.selector_engine = None;
@@ -1774,7 +2039,15 @@ impl Bridge {
                     self.remote_disconnect();
                     return;
                 }
+                let now = Instant::now();
+                if !r.control_request_due(now) {
+                    return;
+                }
+                if r.lookup_in_flight && matches!(r.queued.front(), Some(Request::Lookup(_))) {
+                    return;
+                }
                 let request = r.queued.pop_front().unwrap_or(Request::Snapshot);
+                r.control_poll.attempted = Some(now);
                 let is_lookup = matches!(request, Request::Lookup(_));
                 if matches!(request, Request::Start { .. }) {
                     r.selector_lookups.remove(&r.target);
@@ -1804,6 +2077,8 @@ impl Bridge {
                     } else {
                         state.remote_playback.in_flight = false;
                     }
+                    state.remote_playback.control_poll.complete(None);
+                    state.remote_playback.queued.clear();
                     drop(state);
                     app.set_remote_error(error_text(&PlaybackError::Unavailable).into());
                     return;
@@ -1811,17 +2086,47 @@ impl Bridge {
             };
             let b = self.clone();
             thread::spawn(move || {
-                let response = engine.request_prepared_playback(request);
+                // Lifecycle can change between preparing and starting the worker.
+                let response = if FOREGROUND.load(Ordering::Acquire) {
+                    engine.request_prepared_playback(request)
+                } else {
+                    Err(std::io::Error::other("playback controller backgrounded").into())
+                };
                 let _ = slint::invoke_from_event_loop(move || {
                     {
                         let mut state = b.shared.lock().unwrap();
                         if state.remote_playback.generation != generation {
                             return;
                         }
+                        if !nova_sync::engine()
+                            .is_some_and(|current| Arc::ptr_eq(&current, &engine))
+                        {
+                            state.remote_playback.in_flight = false;
+                            state.remote_playback.lookup_in_flight = false;
+                            state.remote_playback.queued.clear();
+                            return;
+                        }
                         if is_lookup {
                             state.remote_playback.lookup_in_flight = false;
                         } else {
                             state.remote_playback.in_flight = false;
+                        }
+                        if !FOREGROUND.load(Ordering::Acquire) {
+                            state.remote_playback.queued.clear();
+                            return;
+                        }
+                        let r = &mut state.remote_playback;
+                        match &response {
+                            Ok(Response::Snapshot(snapshot)) => {
+                                r.control_poll.complete(Some(snapshot.clone()))
+                            }
+                            Ok(Response::Accepted | Response::Offers(_)) => {
+                                r.control_poll.failures = 0;
+                                // Commands which acknowledge without a snapshot
+                                // need an immediate read to publish their result.
+                                r.control_poll.attempted = None;
+                            }
+                            _ => r.control_poll.complete(None),
                         }
                         if is_lookup
                             && state
@@ -1871,31 +2176,56 @@ impl Bridge {
                                     error_text(&PlaybackError::Unavailable).into(),
                                 );
                             }
-                            if !is_lookup {
-                                b.shared.lock().unwrap().remote_playback.queued.clear();
-                            }
+                            b.shared.lock().unwrap().remote_playback.queued.clear();
                         }
                     }
+                    // Preserve queue order while letting commands run as soon
+                    // as the previous operation completes, without timer delay.
+                    b.remote_tick();
                 });
             });
-        } else if app.get_remote_devices_open()
-            || app.get_show_home()
-            || app.get_stream_selector_open()
-        {
-            let due = self
-                .shared
-                .lock()
-                .unwrap()
-                .remote_playback
-                .discovery_at
-                .is_none_or(|at| at.elapsed() >= Duration::from_secs(5));
+        } else {
+            let home_visible = app.get_show_home()
+                && !app.get_player_open()
+                && !app.get_modal_visible()
+                && !app.get_show_library()
+                && !app.get_show_settings()
+                && !app.get_show_about()
+                && !app.get_more_open()
+                && !app.get_show_calendar()
+                && !app.get_show_downloads();
+            let due = {
+                let mut state = self.shared.lock().unwrap();
+                let home_enabled = state.cache_settings.home_devices_enabled;
+                let r = &mut state.remote_playback;
+                let view = if app.get_remote_devices_open() || app.get_stream_selector_open() {
+                    DiscoveryView::Picker
+                } else if home_visible && home_enabled {
+                    DiscoveryView::Home
+                } else {
+                    DiscoveryView::Hidden
+                };
+                let opened_picker = view == DiscoveryView::Picker && r.discovery_view != view;
+                r.discovery_view = view;
+                opened_picker
+                    || view
+                        .interval(app.get_remote_has_playing_devices())
+                        .is_some_and(|interval| poll_due(r.discovery_at, Instant::now(), interval))
+            };
             if due {
-                self.refresh_playback_devices();
+                self.poll_playback_devices(false);
             }
         }
     }
 
     fn refresh_playback_devices(&self) {
+        self.poll_playback_devices(true);
+    }
+
+    fn poll_playback_devices(&self, force: bool) {
+        if !FOREGROUND.load(Ordering::Acquire) {
+            return;
+        }
         let Some(engine) = nova_sync::engine() else {
             if let Some(app) = self.app() {
                 app.set_remote_has_playing_devices(false);
@@ -1904,31 +2234,42 @@ impl Bridge {
             }
             return;
         };
-        {
+        self.reconcile_remote_polling_engine(&engine);
+        let now = Instant::now();
+        let allowed = engine.peers();
+        let (peers, token) = {
             let mut state = self.shared.lock().unwrap();
-            if state.remote_playback.discovery_running {
+            let r = &mut state.remote_playback;
+            r.discovered.retain(|peer, _| allowed.contains(peer));
+            if r.discovery_running {
+                r.discovery_forced |= force;
                 return;
             }
-            state.remote_playback.discovery_running = true;
-            state.remote_playback.discovery_at = Some(Instant::now());
-        }
-        let peers = engine.peers();
-        let names = engine.peer_names();
+            let pending_force = std::mem::take(&mut r.discovery_forced);
+            let force = force || pending_force;
+            let peers = r.discovery_peers(&allowed, now, force);
+            r.discovery_at = Some(now);
+            r.discovery_running = true;
+            r.discovery_token = r.discovery_token.wrapping_add(1);
+            (peers, r.discovery_token)
+        };
         let b = self.clone();
         thread::spawn(move || {
             // Bounded discovery fan-out avoids an offline device delaying live peers.
             let results = peers
                 .into_iter()
-                .take(32)
                 .map(|peer| {
                     let engine = engine.clone();
-                    let name = names.get(&peer).cloned().unwrap_or_else(|| peer.clone());
                     thread::spawn(move || {
-                        let snapshot = match engine.request_playback(&peer, Request::Snapshot) {
-                            Ok(Response::Snapshot(s)) => Some(s),
-                            _ => None,
+                        let snapshot = if FOREGROUND.load(Ordering::Acquire) {
+                            match engine.request_playback(&peer, Request::Snapshot) {
+                                Ok(Response::Snapshot(s)) => Some(s),
+                                _ => None,
+                            }
+                        } else {
+                            None
                         };
-                        (peer, name, snapshot)
+                        (peer, snapshot)
                     })
                 })
                 .collect::<Vec<_>>()
@@ -1936,36 +2277,72 @@ impl Bridge {
                 .filter_map(|h| h.join().ok())
                 .collect::<Vec<_>>();
             let _ = slint::invoke_from_event_loop(move || {
-                b.shared.lock().unwrap().remote_playback.discovery_running = false;
+                {
+                    let mut state = b.shared.lock().unwrap();
+                    let r = &mut state.remote_playback;
+                    if r.discovery_token != token {
+                        return;
+                    }
+                    r.discovery_running = false;
+                }
+                let Some(current) = nova_sync::engine() else {
+                    return;
+                };
+                if !Arc::ptr_eq(&current, &engine) || !FOREGROUND.load(Ordering::Acquire) {
+                    return;
+                }
                 let Some(app) = b.app() else { return };
-                let allowed = nova_sync::engine().map(|e| e.peers()).unwrap_or_default();
-                let rows = results
-                    .into_iter()
-                    .filter(|(peer, _, _)| allowed.contains(peer))
-                    .map(|(peer, name, snapshot)| crate::RemoteDeviceRow {
-                        id: peer.into(),
-                        name: name.into(),
-                        ready: snapshot.as_ref().is_some_and(|s| s.ready),
-                        has_session: snapshot
-                            .as_ref()
-                            .is_some_and(|s| s.ready && s.session.is_some()),
-                        playing_title: snapshot
-                            .as_ref()
-                            .filter(|s| s.session.is_some())
-                            .map(|s| s.title.clone())
-                            .unwrap_or_default()
-                            .into(),
-                        status: text::tr(if snapshot.as_ref().is_some_and(|s| s.ready) {
-                            "Available"
-                        } else {
-                            "Open Nova to connect"
+                let allowed = current.peers();
+                let names = current.peer_names();
+                let (rows, refresh_pending) = {
+                    let mut state = b.shared.lock().unwrap();
+                    let r = &mut state.remote_playback;
+                    r.discovered.retain(|peer, _| allowed.contains(peer));
+                    for (peer, snapshot) in results {
+                        if allowed.contains(&peer) {
+                            r.discovered.entry(peer).or_default().complete(snapshot);
+                        }
+                    }
+                    let rows = allowed
+                        .into_iter()
+                        .map(|peer| {
+                            let snapshot = r
+                                .discovered
+                                .get(&peer)
+                                .and_then(|poll| poll.snapshot.as_ref());
+                            let ready = snapshot.is_some_and(|s| s.ready);
+                            crate::RemoteDeviceRow {
+                                name: names
+                                    .get(&peer)
+                                    .cloned()
+                                    .unwrap_or_else(|| peer.clone())
+                                    .into(),
+                                id: peer.into(),
+                                ready,
+                                has_session: snapshot
+                                    .is_some_and(|s| s.ready && s.session.is_some()),
+                                playing_title: snapshot
+                                    .filter(|s| s.session.is_some())
+                                    .map(|s| s.title.clone())
+                                    .unwrap_or_default()
+                                    .into(),
+                                status: text::tr(if ready {
+                                    "Available"
+                                } else {
+                                    "Open Nova to connect"
+                                })
+                                .into(),
+                            }
                         })
-                        .into(),
-                    })
-                    .collect::<Vec<_>>();
+                        .collect::<Vec<_>>();
+                    (rows, r.discovery_forced)
+                };
                 app.set_remote_has_playing_devices(rows.iter().any(|row| row.has_session));
                 app.set_remote_has_ready_devices(rows.iter().any(|row| row.ready));
                 app.set_remote_devices(Rc::new(VecModel::from(rows)).into());
+                if refresh_pending {
+                    b.poll_playback_devices(false);
+                }
             });
         });
     }
@@ -2048,3 +2425,7 @@ mod tests {
 #[cfg(all(test, feature = "desktop"))]
 #[path = "remote_playback_tests.rs"]
 mod integration_tests;
+
+#[cfg(test)]
+#[path = "remote_polling_tests.rs"]
+mod polling_tests;

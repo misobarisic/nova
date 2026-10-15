@@ -1281,3 +1281,153 @@ fn language_changes_refresh_remote_statuses_without_reconnecting() {
         },
     );
 }
+
+#[test]
+fn remote_opt_out_revokes_offers_and_preserves_local_playback() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::remote_opt_out_revokes_offers_and_preserves_local_playback"
+        ),
+        |Fixture { app, bridge }| {
+            let pending = bridge.begin_playback_request();
+            let session = bridge.playback_snapshot().session.unwrap();
+            app.set_player_open(true);
+            app.set_player_show_title("Private title".into());
+            app.set_position(42.0);
+            let offer = retain_offer(&bridge);
+            app.set_playback_started(true);
+            assert!(
+                bridge
+                    .prepare_speed_preview(
+                        &PlaybackAction::BeginSpeedPreview,
+                        Some(&peer("controller", 1, true))
+                    )
+                    .unwrap()
+            );
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .cache_settings
+                .remote_control_enabled = false;
+            bridge.remote_control_policy_changed(false);
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .remote_playback
+                    .offers
+                    .is_empty()
+            );
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .remote_playback
+                    .preview_owner
+                    .is_none()
+            );
+            assert!(
+                bridge
+                    .prepare_speed_preview(&PlaybackAction::BeginSpeedPreview, None)
+                    .unwrap()
+            );
+            bridge.remote_control_policy_changed(false);
+            assert_eq!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .remote_playback
+                    .preview_owner
+                    .as_deref(),
+                Some("local")
+            );
+
+            let snapshot = bridge.playback_snapshot();
+            assert!(!snapshot.ready);
+            assert!(snapshot.session.is_none());
+            assert!(snapshot.title.is_empty());
+            for request in [
+                Request::Snapshot,
+                Request::Start {
+                    offer_id: offer.id.clone(),
+                    expected_session: Some(session),
+                },
+                Request::Command {
+                    session,
+                    action: PlaybackAction::Stop,
+                },
+            ] {
+                assert_eq!(
+                    receive(&bridge, peer("controller", 1, true), request),
+                    Response::Error(PlaybackError::Unauthorized)
+                );
+            }
+            // A lookup accepted before opting out must not publish fresh offers.
+            let result = Arc::new(Mutex::new(None));
+            let captured = result.clone();
+            bridge.finish_remote_lookup(
+                peer("controller", 1, true),
+                MediaIdentity::default(),
+                vec![],
+                nova_providers::plugin_settings::settings_generation(),
+                Box::new(move |r| *captured.lock().unwrap() = Some(r)),
+            );
+            assert_eq!(
+                result.lock().unwrap().take(),
+                Some(Response::Error(PlaybackError::Unauthorized))
+            );
+            assert!(app.get_player_open());
+            assert_eq!(app.get_position(), 42.0);
+            assert!(pending.is_current());
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .cache_settings
+                .remote_control_enabled = true;
+            bridge.remote_control_policy_changed(true);
+            assert_eq!(bridge.playback_snapshot().session, Some(session));
+            assert!(bridge.playback_snapshot().ready);
+            assert_eq!(
+                bridge.start_remote_offer(&peer("controller", 1, true), &offer.id, Some(session)),
+                Response::Error(PlaybackError::NotFound)
+            );
+        },
+    );
+}
+
+#[test]
+fn background_ticks_do_not_start_device_discovery() {
+    isolated(
+        concat!(
+            module_path!(),
+            "::background_ticks_do_not_start_device_discovery"
+        ),
+        |Fixture { app, bridge }| {
+            app.set_show_home(true);
+            app.set_remote_has_ready_devices(true);
+            playback_foreground(false);
+            bridge.remote_tick();
+            bridge.refresh_playback_devices();
+            assert!(
+                bridge
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .remote_playback
+                    .discovery_at
+                    .is_none()
+            );
+            assert!(
+                app.get_remote_has_ready_devices(),
+                "background discovery must not even rewrite the model"
+            );
+            playback_foreground(true);
+        },
+    );
+}

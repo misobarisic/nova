@@ -496,6 +496,9 @@ cache_settings_type! {
     /// Show paired-device playback on Home; synced with general settings.
     #[serde(default = "default_true")]
     pub home_devices_enabled: bool,
+    /// Allow paired devices to inspect and control playback here. Device-local; never synced.
+    #[serde(default = "default_true")]
+    pub remote_control_enabled: bool,
     /// Minimum grid columns for My Library (same scheme).
     #[serde(default = "default_min_cols")]
     pub library_min_cols: u32,
@@ -674,6 +677,7 @@ impl Default for CacheSettings {
             home_upcoming_enabled: true,
             home_episode_artwork: false,
             home_devices_enabled: true,
+            remote_control_enabled: true,
             library_min_cols: 2,
             android_hwdec: AndroidHwdec::HwPlus,
             player_external: false,
@@ -1261,6 +1265,19 @@ mod tests {
                 "genre": "Action"
             })
         );
+    }
+
+    #[test]
+    fn remote_control_preference_defaults_on_and_round_trips() {
+        let mut settings: CacheSettings =
+            serde_json::from_str(r#"{"enabled":false,"format":"webp","quality":85}"#).unwrap();
+        assert!(settings.remote_control_enabled);
+        for enabled in [false, true] {
+            settings.remote_control_enabled = enabled;
+            let saved = serde_json::to_string(&settings).unwrap();
+            let restored: CacheSettings = serde_json::from_str(&saved).unwrap();
+            assert_eq!(restored.remote_control_enabled, enabled);
+        }
     }
 
     #[test]

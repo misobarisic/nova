@@ -258,7 +258,7 @@ export component RemoteTargetMenu inherits Rectangle {
         x: 0px; y: (root.height - self.height) / 2;
         btn_min_width: 80px; height: 32px;
         compact: true; label: @tr("Play on"); primary: RemoteBridge.target_id != "";
-        clicked => { target_popup.show(); }
+        clicked => { RemoteBridge.device_refresh(); target_popup.show(); }
     }
     target_popup := PopupWindow {
         width: 240px; height: Math.max(60px, Math.min(root.popup-height, 220px));

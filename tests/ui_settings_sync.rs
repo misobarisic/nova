@@ -14,3 +14,6 @@ mod scopes;
 
 #[path = "settings_sync/sync_overflow.rs"]
 mod sync_overflow;
+
+#[path = "settings_sync/remote_policy.rs"]
+mod remote_policy;

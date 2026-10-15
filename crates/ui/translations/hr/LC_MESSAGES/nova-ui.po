@@ -2678,3 +2678,9 @@ msgstr "Pauzirajte"
 #: remote-controls.slint
 msgid "Volume"
 msgstr "Glasnoća"
+
+msgid "Allow remote control"
+msgstr "Dopustite daljinsko upravljanje"
+
+msgid "Let paired devices view playback, start streams and control this device. Turning this off keeps normal sync working. Applies only to this device."
+msgstr "Dopustite uparenim uređajima pregled reprodukcije, pokretanje prijenosa i upravljanje ovim uređajem. Isključivanje ne utječe na redovitu sinkronizaciju. Vrijedi samo za ovaj uređaj."

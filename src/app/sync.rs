@@ -506,6 +506,7 @@ pub(crate) fn sort_by_order(current: Vec<String>, order: &[String]) -> Vec<Strin
 const UNSYNCED_SETTINGS_FIELDS: &[&str] = &[
     "android_hwdec",
     "player_external",
+    "remote_control_enabled",
     "desktop_external_app",
     "android_auto_continue",
     "sync_overrides",
@@ -739,6 +740,7 @@ fn merge_settings_fields(base: &CacheSettings, fields: &[(String, String)]) -> C
     // Device-specific fields are never taken from the remote record.
     merged.android_hwdec = base.android_hwdec;
     merged.player_external = base.player_external;
+    merged.remote_control_enabled = base.remote_control_enabled;
     merged.desktop_external_app = base.desktop_external_app;
     merged
 }
@@ -2837,6 +2839,7 @@ mod tests {
         assert!(!fields.contains_key("categories"));
         assert!(!fields.contains_key("android_hwdec"));
         assert!(!fields.contains_key("player_external"));
+        assert!(!fields.contains_key("remote_control_enabled"));
         assert!(!fields.contains_key("desktop_external_app"));
         assert!(fields.contains_key("playback_speed"));
         assert!(fields.contains_key("default_audio_language"));
@@ -3026,6 +3029,7 @@ mod tests {
         let base = CacheSettings {
             android_hwdec: AndroidHwdec::Sw,
             player_external: true,
+            remote_control_enabled: false,
             desktop_external_app: DesktopExternalApp::Mpv,
             home_catalog_sources: vec![HomeCatalogSource {
                 addon_url: "https://local.test/manifest.json".into(),
@@ -3045,6 +3049,7 @@ mod tests {
             ("cache".to_string(), "{\"quality\":77}".to_string()),
             ("android_hwdec".to_string(), "\"hw+\"".to_string()),
             ("player_external".to_string(), "false".to_string()),
+            ("remote_control_enabled".to_string(), "true".to_string()),
             ("desktop_external_app".to_string(), "\"system\"".to_string()),
             (
                 "home_catalog_sources".to_string(),
@@ -3056,6 +3061,7 @@ mod tests {
         // Device-specific fields are never taken from the remote record.
         assert_eq!(merged.android_hwdec, AndroidHwdec::Sw);
         assert!(merged.player_external);
+        assert!(!merged.remote_control_enabled);
         assert_eq!(merged.desktop_external_app, DesktopExternalApp::Mpv);
         assert_eq!(merged.home_catalog_sources, remote_home_sources);
     }

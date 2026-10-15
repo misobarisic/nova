@@ -183,6 +183,21 @@ export component SettingsSyncModule inherits Window {
                     label: @tr("THIS DEVICE");
                 }
 
+                SettingsRow {
+                    border-radius: 16px;
+                    border-width: 1px;
+                    border-color: Theme.current.border_soft;
+                    clip: true;
+                    setting-key: "remote_control_enabled";
+                    row-title: @tr("Allow remote control");
+                    row-desc: @tr("Let paired devices view playback, start streams and control this device. Turning this off keeps normal sync working. Applies only to this device.");
+                    ToggleSwitch {
+                        name: @tr("Allow remote control");
+                        checked <=> SettingsBridge.remote_control_enabled;
+                        toggled => { SettingsContent.schedule_setting("remote_control_enabled"); }
+                    }
+                }
+
                 Rectangle {
                     background: Theme.current.card;
                     border-radius: 16px;

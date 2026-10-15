@@ -240,6 +240,7 @@ impl Bridge {
             app.set_home_upcoming_enabled(settings.home_row_enabled(&HomeRowSource::Upcoming));
             app.set_home_episode_artwork(settings.home_episode_artwork);
             app.set_home_devices_enabled(settings.home_devices_enabled);
+            app.set_remote_control_enabled(settings.remote_control_enabled);
             app.set_library_min_cols(settings.library_min_cols as i32);
             app.set_android_hwdec_index(settings.android_hwdec.index());
             app.set_player_backend_index(if settings.player_external { 1 } else { 0 });
@@ -452,6 +453,7 @@ impl Bridge {
                 home_upcoming_enabled: app.get_home_upcoming_enabled(),
                 home_episode_artwork: app.get_home_episode_artwork(),
                 home_devices_enabled: app.get_home_devices_enabled(),
+                remote_control_enabled: app.get_remote_control_enabled(),
                 discover_min_cols: app.get_discover_min_cols().clamp(2, 6) as u32,
                 discover_catalog_addon_names: app.get_discover_catalog_addon_names(),
                 library_min_cols: app.get_library_min_cols().clamp(2, 6) as u32,
@@ -511,7 +513,13 @@ impl Bridge {
         app.set_hero_title_alignment(settings.hero_title_alignment.index());
         {
             let mut state = self.shared.lock().unwrap();
+            let remote_changed =
+                state.cache_settings.remote_control_enabled != settings.remote_control_enabled;
             state.cache_settings = settings.clone();
+            drop(state);
+            if remote_changed {
+                self.remote_control_policy_changed(settings.remote_control_enabled);
+            }
         }
         set_active_cache_settings(settings.clone());
         self.invalidate_home_pending_logo();
