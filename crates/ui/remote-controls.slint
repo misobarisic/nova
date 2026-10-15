@@ -212,11 +212,14 @@ export component RemoteControlsPage inherits Rectangle {
 }
 
 export component RemoteDevicesPage inherits Rectangle {
+    in property <bool> active: true;
+    callback back();
+    back => { RemoteBridge.devices_open = false; }
     in property <length> safe-top; in property <length> safe-bottom;
     in property <length> safe-left; in property <length> safe-right;
     background: Theme.current.artwork_canvas;
-    FocusScope { width: 100%; height: 100%; init => { self.focus(); }
-        key-pressed(e) => { if e.text == Key.Escape || e.text == Key.Backspace || e.text == Key.Back { if !e.repeat { RemoteBridge.devices_open = false; } accept } else { reject } }
+    FocusScope { enabled: root.active; width: 100%; height: 100%; init => { self.focus(); }
+        key-pressed(e) => { if e.text == Key.Escape || e.text == Key.Backspace || e.text == Key.Back { if !e.repeat { root.back(); } accept } else { reject } }
     }
     ScrollView {
         x: root.safe-left + 18px; y: root.safe-top + 18px;
@@ -230,7 +233,7 @@ export component RemoteDevicesPage inherits Rectangle {
                 PageHeader {
                     min-width: 0px; horizontal-stretch: 1;
                     title: @tr("Devices"); narrow: root.width < 700px; show-back: true;
-                    back => { RemoteBridge.devices_open = false; }
+                    back => { root.back(); }
                 }
                 PillButton {
                     label: @tr("Refresh"); compact: true;
@@ -277,6 +280,9 @@ export component RemoteDevicesPage inherits Rectangle {
             }
         }
     }
+    // The outgoing page remains painted during More's return transition.
+    if !root.active: TouchArea { width: 100%; height: 100%; scroll-event => { accept } }
+
 }
 
 export component RemotePlayingSection inherits VerticalLayout {

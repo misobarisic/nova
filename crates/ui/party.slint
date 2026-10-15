@@ -6,16 +6,19 @@ import { IcSync } from "icons.slint";
 
 // The room remains independent of sync setup and of the selected local source.
 export component PartyPage inherits Rectangle {
+    in property <bool> active: true;
+    callback back();
+    back => { PartyBridge.page_open = false; }
     in property <length> safe-top;
     in property <length> safe-bottom;
     in property <length> safe-left;
     in property <length> safe-right;
     background: Theme.current.artwork_canvas;
-    FocusScope {
+    FocusScope { enabled: root.active;
         width: 100%; height: 100%; init => { self.focus(); }
         key-pressed(e) => {
             if e.text == Key.Escape || e.text == Key.Backspace || e.text == Key.Back {
-                if !e.repeat { PartyBridge.page_open = false; } accept
+                if !e.repeat { root.back(); } accept
             } else { reject }
         }
     }
@@ -31,7 +34,7 @@ export component PartyPage inherits Rectangle {
             room_header := PageHeader {
                 title: @tr("Watch party"); subtitle: PartyBridge.active ? (PartyBridge.is_host ? @tr("You are hosting") : @tr("Watching together")) : @tr("Watch together on your own devices");
                 narrow: root.width < 700px; show-back: true;
-                back => { PartyBridge.page_open = false; }
+                back => { root.back(); }
             }
             if !PartyBridge.active && PartyBridge.busy: PillButton {
                 label: @tr("Cancel"); clicked => { PartyBridge.leave(); }
@@ -118,6 +121,9 @@ export component PartyPage inherits Rectangle {
             if PartyBridge.active: PillButton { label: PartyBridge.is_host ? @tr("End party") : @tr("Leave party"); destructive: true; enabled: !PartyBridge.busy; clicked => { PartyBridge.leave(); } }
         }
     }
+    // The outgoing page remains painted during More's return transition.
+    if !root.active: TouchArea { width: 100%; height: 100%; scroll-event => { accept } }
+
 }
 
 // AppWindow binds visibility and opacity to the player OSD fade.

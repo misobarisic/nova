@@ -71,6 +71,10 @@ export component AppWindow inherits Window {
 
     in-out property <bool> party_page_open <=> PartyBridge.page_open;
     changed party_page_open => {
+        if root.party_page_open && root.more_open { root.more_choice = 5; root.route_page(9, true); }
+        if !root.party_page_open && root.more_service_route == 9 && !root.more_return_pending {
+            root.cancel_more_subpage_back(); root.more_service_route = 0; root.more_parent = false; root.more_open = true;
+        }
         if !root.party_page_open && root.player_open && !root.onboarding_visible {
             root.preserve_back_focus();
             page_release_timer.start();
@@ -127,6 +131,12 @@ export component AppWindow inherits Window {
     in-out property <bool> remote_has_ready_devices <=> RemoteBridge.has_ready_devices;
     in-out property <bool> remote_controls_open <=> RemoteBridge.controls_open;
     in-out property <bool> remote_devices_open <=> RemoteBridge.devices_open;
+    changed remote_devices_open => {
+        if root.remote_devices_open && root.more_open { root.more_choice = 4; root.route_page(8, true); }
+        if !root.remote_devices_open && root.more_service_route == 8 && !root.more_return_pending {
+            root.cancel_more_subpage_back(); root.more_service_route = 0; root.more_parent = false; root.more_open = true;
+        }
+    }
     in-out property <string> remote_target_id <=> RemoteBridge.target_id;
     in-out property <string> remote_target_name <=> RemoteBridge.target_name;
     in-out property <bool> remote_connected <=> RemoteBridge.connected;
@@ -574,7 +584,7 @@ export component AppWindow inherits Window {
     changed settings_page_mounted => { if root.settings_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
     private property <bool> library_page_mounted: root.show_library && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
     changed library_page_mounted => { if root.library_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
-    private property <bool> more_page_mounted: (root.more_open || root.more_parent) && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible;
+    private property <bool> more_page_mounted: (root.more_open || root.more_parent) && !root.player_open && (!root.party_page_open || root.more_parent) && !root.remote_controls_open && (!root.remote_devices_open || root.more_parent) && !root.modal_visible;
     changed more_page_mounted => { if root.more_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
     private property <bool> about_page_mounted: root.show_about && !root.more_open && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_home && !root.show_library && !root.show_settings;
     changed about_page_mounted => { if root.about_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
@@ -952,6 +962,8 @@ export component AppWindow inherits Window {
     private property <int> family_nav_zone: 1;
     private property <int> family_nav_index: 3;
     private property <bool> more_parent: false;
+    // Service pages also open over Home/player; only More-origin visits use its route.
+    private property <int> more_service_route: 0;
     private property <int> more_route_generation: 0;
     private property <int> more_return_generation: 0;
     private property <bool> more_subpage_entered: true;
@@ -992,6 +1004,7 @@ export component AppWindow inherits Window {
         root.preserve_back_focus();
         root.cancel_more_subpage_back();
         root.more_parent = from_more;
+        root.more_service_route = from_more && index >= 8 ? index : 0;
         root.more_open = false;
         root.more_subpage_entered = !from_more;
         if (from_more) {
@@ -1009,6 +1022,8 @@ export component AppWindow inherits Window {
         root.show_about = index == 7;
         root.show_calendar = index == 4;
         root.show_downloads = index == 5;
+        root.remote_devices_open = index == 8;
+        root.party_page_open = index == 9;
         if (index == 0) { root.home_picked(); }
         else if (index == 1) { root.discover_picked(); }
         else if (index == 2) { root.library_picked(); }
@@ -1043,6 +1058,8 @@ export component AppWindow inherits Window {
         root.show_about = false;
         root.show_home = false;
         root.show_library = false;
+        root.remote_devices_open = false;
+        root.party_page_open = false;
         root.more_parent = false;
         root.more_open = true;
     }
@@ -1876,13 +1893,13 @@ export component AppWindow inherits Window {
             } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.playback_end_menu_shown) {
                 if !e.repeat { root.playback_end_stay(); } accept
             } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.party_page_open) {
-                if !e.repeat { root.party_page_open = false; } accept
+                if !e.repeat { if root.more_service_route == 9 { root.more_subpage_back(); } else { root.party_page_open = false; } } accept
             } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.remote_replacement_token != "") {
                 if !e.repeat { root.remote_replacement_confirmed(root.remote_replacement_token, false); } accept
             } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.remote_controls_open) {
                 if !e.repeat { if RemoteBridge.track_picker != 0 { RemoteBridge.track_picker = 0; } else { root.remote_device_close(); } } accept
             } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.remote_devices_open) {
-                if !e.repeat { root.remote_devices_open = false; } accept
+                if !e.repeat { if root.more_service_route == 8 { root.more_subpage_back(); } else { root.remote_devices_open = false; } } accept
             } else if (e.text == Key.Back && (e.repeat || root.system_back_held)) {
                 // Keep repeat protection ahead of modal dismissal.
                 accept
@@ -1905,13 +1922,13 @@ export component AppWindow inherits Window {
                 } else if (root.completion_prompt_visible) {
                     CompletionBridge.dismiss(CompletionBridge.token); accept
                 } else if (root.party_page_open) {
-                    root.party_page_open = false; accept
+                    if root.more_service_route == 9 { root.more_subpage_back(); } else { root.party_page_open = false; } accept
                 } else if (root.remote_replacement_token != "") {
                     root.remote_replacement_confirmed(root.remote_replacement_token, false); accept
                 } else if (root.remote_controls_open) {
                     if RemoteBridge.track_picker != 0 { RemoteBridge.track_picker = 0; } else { root.remote_device_close(); } accept
                 } else if (root.remote_devices_open) {
-                    root.remote_devices_open = false; accept
+                    if root.more_service_route == 8 { root.more_subpage_back(); } else { root.remote_devices_open = false; } accept
                 } else if (root.resume_prompt_visible) {
                     root.resume_cancel();
                     accept
@@ -2087,7 +2104,7 @@ export component AppWindow inherits Window {
 
     more_content_host := Rectangle {
         // Its focus-capture scope must not cover unrelated pages or Detail.
-        visible: !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && (root.more_open || root.more_parent || root.show_settings || root.show_about || root.show_calendar || root.show_downloads);
+        visible: !root.player_open && (!root.party_page_open || root.more_parent) && !root.remote_controls_open && (!root.remote_devices_open || root.more_parent) && !root.modal_visible && (root.more_open || root.more_parent || root.show_settings || root.show_about || root.show_calendar || root.show_downloads);
         x: root.more_rail_width; y: 0px;
         width: root.width - root.more_rail_width; height: root.height;
         clip: true;
@@ -2095,7 +2112,7 @@ export component AppWindow inherits Window {
         // Capture before descendants handle keys; persistent chrome is outside
         // this scope and remains available to interrupt the return.
         content_input_scope := FocusScope {
-            enabled: !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open;
+            enabled: (!root.party_page_open || root.more_parent) && !root.remote_controls_open && (!root.remote_devices_open || root.more_parent);
             width: 100%; height: 100%;
             // Forward Tab from the persistent window scope lands here before
             // any outgoing editor; active pages gain no extra tab stop.
@@ -2212,18 +2229,36 @@ export component AppWindow inherits Window {
         system_back_request: root.page_back_request;
     }
 
+    if root.more_service_route == 9 && root.party_page_open: PartyPage {
+        width: more_content_host.width; height: more_content_host.height;
+        x: more_content_host.width * root.more_subpage_offset;
+        opacity: root.more_subpage_alpha;
+        active: !root.more_return_pending;
+        safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
+        safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px; safe-right: root.safe-area-insets.right;
+        back => { root.more_subpage_back(); }
+    }
+    if root.more_service_route == 8 && root.remote_devices_open: RemoteDevicesPage {
+        width: more_content_host.width; height: more_content_host.height;
+        x: more_content_host.width * root.more_subpage_offset;
+        opacity: root.more_subpage_alpha;
+        active: !root.more_return_pending;
+        safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
+        safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px; safe-right: root.safe-area-insets.right;
+        back => { root.more_subpage_back(); }
+    }
         }
     }
-    if root.more_family && !root.narrow_ui && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible: SideNav {
+    if root.more_family && !root.narrow_ui && !root.player_open && (!root.party_page_open || root.more_parent) && !root.remote_controls_open && (!root.remote_devices_open || root.more_parent) && !root.modal_visible: SideNav {
         viewport-width: root.width;
-        active: root.more_open || root.more_return_pending || root.show_settings || root.show_about ? 3 : root.show_calendar ? 4 : 5;
+        active: root.more_open || root.more_service_route != 0 || root.more_return_pending || root.show_settings || root.show_about ? 3 : root.show_calendar ? 4 : 5;
         safe-top: root.safe-area-insets.top; safe-left: root.safe-area-insets.left; safe-bottom: root.safe-area-insets.bottom;
         kb_zone: root.more_open ? root.more_focus_zone : root.family_nav_zone;
         kb_nav: root.more_open || root.more_return_pending ? root.more_nav_index : root.family_nav_index; kb_active <=> root.kb_active;
         home_picked => { root.navigate_section(0); } discover_picked => { root.navigate_section(1); }
         library_picked => { root.navigate_section(2); } more_picked => { root.navigate_section(3); }
     }
-    if (root.more_open || root.more_return_pending) && root.narrow_ui && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible: BottomNav {
+    if (root.more_open || root.more_return_pending) && root.narrow_ui && !root.player_open && (!root.party_page_open || root.more_return_pending) && !root.remote_controls_open && (!root.remote_devices_open || root.more_return_pending) && !root.modal_visible: BottomNav {
         y: root.height - self.height; width: root.width;
         active: 3; kb_zone: root.more_focus_zone; kb_nav: root.more_open || root.more_return_pending ? root.more_nav_index : root.family_nav_index; kb_active <=> root.kb_active;
         safe-bottom: root.safe-area-insets.bottom; safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px; safe-right: root.safe-area-insets.right;
@@ -2329,12 +2364,12 @@ export component AppWindow inherits Window {
         y: Math.max(root.safe-area-insets.top + 16px, PlayerOsdBridge.header_bottom + 12px);
         width: Math.min(300px, root.width - root.safe-area-insets.left - root.safe-area-insets.right - 36px);
     }
-    if root.party_page_open: PartyPage {
+    if root.party_page_open && root.more_service_route != 9: PartyPage {
         width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
         safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right;
     }
     // Controls and discovery cover the catalog, independently of local playback.
-    if root.remote_devices_open: RemoteDevicesPage {
+    if root.remote_devices_open && root.more_service_route != 8: RemoteDevicesPage {
         width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
         safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right;
     }

@@ -147,6 +147,8 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
             ("About", "AboutPage"),
             ("Calendar", "CalendarPage"),
             ("Downloads", "DownloadsPage"),
+            ("Devices", "RemoteDevicesPage"),
+            ("Watch party", "PartyPage"),
         ] {
             let app = nova::AppWindow::new().unwrap();
             app.set_is_android(true);
@@ -371,12 +373,71 @@ fn more_subpages_slide_fade_and_accept_back_during_entry() {
             );
         }
     }
+    more_service_pages_keep_desktop_chrome_and_direct_overlay_navigation();
     more_return_cancels_for_destination_navigation();
     more_return_animates_wide_and_motion_toggle_finishes_pending_return();
     canonical_direct_routes_and_modal_interruptions();
     more_state_survives_children_and_breakpoints();
     settings_navigation_has_six_desktop_targets();
     pending_return_blocks_scroll_and_editor_input();
+}
+
+fn more_service_pages_keep_desktop_chrome_and_direct_overlay_navigation() {
+    for (label, component, party) in [
+        ("Devices", "RemoteDevicesPage", false),
+        ("Watch party", "PartyPage", true),
+    ] {
+        let app = nova::AppWindow::new().unwrap();
+        app.window().set_size(slint::PhysicalSize::new(1200, 800));
+        app.global::<nova::Anim>().set_enabled(true);
+        app.global::<nova::Anim>().set_transitions(true);
+        app.show().unwrap();
+        app.set_more_open(true);
+        let _ = page(&app, "MorePage").size();
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+        let rail_position = page(&app, "SideNav").absolute_position();
+        tap(&app, button(&app, label));
+        for _ in 0..35 {
+            let _ = page(&app, component).absolute_position();
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(10));
+        }
+        let content_x = page(&app, component).absolute_position().x;
+        assert!(content_x > 0.0, "{component} must leave room for the rail");
+        assert_eq!(page(&app, "SideNav").absolute_position(), rail_position);
+        back(&app);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(110));
+        assert!(page(&app, component).absolute_position().x > content_x);
+        assert_eq!(page(&app, "SideNav").absolute_position(), rail_position);
+        // Navigation may interrupt the pending return without its timer
+        // reopening More or leaving either service overlay behind.
+        let library = ElementHandle::find_by_element_type_name(&app, "SideItem")
+            .nth(2)
+            .unwrap();
+        tap(&app, library);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
+        assert!(app.get_show_library());
+        assert!(
+            !app.get_more_open() && !app.get_party_page_open() && !app.get_remote_devices_open()
+        );
+
+        let direct = nova::AppWindow::new().unwrap();
+        direct.window().set_size(slint::PhysicalSize::new(360, 800));
+        direct.show().unwrap();
+        if party {
+            direct.set_party_page_open(true);
+        } else {
+            direct.set_remote_devices_open(true);
+        }
+        let overlay = page(&direct, component);
+        assert!(overlay.absolute_position().x.abs() < 0.1);
+        assert!(overlay.computed_opacity() > 0.99);
+        back(&direct);
+        assert!(!direct.get_party_page_open() && !direct.get_remote_devices_open());
+        assert!(
+            !direct.get_more_open(),
+            "direct overlays must retain their original parent"
+        );
+    }
 }
 
 fn more_return_cancels_for_destination_navigation() {
