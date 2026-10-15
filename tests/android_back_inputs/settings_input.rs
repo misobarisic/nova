@@ -88,13 +88,13 @@ async fn open_tracking(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) -
     false
 }
 
-async fn focus_client_input(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) -> bool {
-    let Some(input) = ElementHandle::find_by_accessible_label(app, "Public client ID")
+async fn focus_return_input(app: &nova::AppWindow, failures: &RefCell<Vec<String>>) -> bool {
+    let Some(input) = ElementHandle::find_by_accessible_label(app, "Full return URL")
         .find(|element| element.accessible_role() == Some(AccessibleRole::TextInput))
     else {
         failures
             .borrow_mut()
-            .push("missing Public client ID text-input control".to_string());
+            .push("missing sign-in return URL text-input control".to_string());
         return false;
     };
     let before = input.accessible_value();
@@ -118,7 +118,7 @@ async fn focus_client_input(app: &nova::AppWindow, failures: &RefCell<Vec<String
         && after.as_ref().is_some_and(|value| value.contains('x'));
     if !focused {
         failures.borrow_mut().push(format!(
-            "Public client ID must accept typed text before Back: result={typed:?}, before={before:?}, after={after:?}, position={:?}, size={:?}",
+            "sign-in return URL must accept typed text before Back: result={typed:?}, before={before:?}, after={after:?}, position={:?}, size={:?}",
             input.absolute_position(),
             input.size(),
         ));
@@ -187,6 +187,7 @@ fn tracking_settings_back_blurs_then_returns_to_landing_and_home() {
             name: "MyAnimeList account".into(),
             client_id: "public-client".into(),
             redirect_uri: "http://127.0.0.1:53926/callback".into(),
+            signing_in: true,
             ..Default::default()
         }]))
         .into(),
@@ -212,7 +213,7 @@ fn tracking_settings_back_blurs_then_returns_to_landing_and_home() {
         let app = weak.upgrade().unwrap();
         let failures = &recorded_failures;
         settle().await;
-        if !open_tracking(&app, failures).await || !focus_client_input(&app, failures).await {
+        if !open_tracking(&app, failures).await || !focus_return_input(&app, failures).await {
             slint::quit_event_loop().unwrap();
             return;
         }
@@ -255,7 +256,7 @@ fn tracking_settings_back_blurs_then_returns_to_landing_and_home() {
         app.set_show_home(false);
         app.set_show_settings(true);
         settle().await;
-        if !open_tracking(&app, failures).await || !focus_client_input(&app, failures).await {
+        if !open_tracking(&app, failures).await || !focus_return_input(&app, failures).await {
             slint::quit_event_loop().unwrap();
             return;
         }

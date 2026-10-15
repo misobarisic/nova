@@ -3,7 +3,7 @@
 //! committed previous value when deriving activity and tracking journal edits.
 use super::*;
 use std::collections::VecDeque;
-use std::sync::Condvar;
+use std::sync::{Condvar, mpsc};
 
 const MAX_PENDING: usize = 64;
 static ACTIVE: Mutex<Option<Arc<Queue>>> = Mutex::new(None);
@@ -32,7 +32,60 @@ pub(super) fn register_collections() {
 enum Snapshot {
     Library(Vec<LibraryEntry>),
     Progress(HashMap<String, EpisodeProgress>, bool),
+    External(Box<ExternalPatch>, mpsc::Sender<Result<(), String>>),
 }
+
+/// A remote materialization changes only these records. Resolve it against
+/// committed snapshots on the ordered writer so unrelated queued local edits
+/// are retained, without copying or serializing the whole history on the UI.
+#[derive(Clone, Default)]
+pub(super) struct ExternalPatch {
+    pub library: Option<ExternalLibraryEdit>,
+    pub progress: HashMap<String, EpisodeProgress>,
+}
+
+#[derive(Clone)]
+pub(super) struct ExternalLibraryEdit {
+    pub id: String,
+    pub media_type: String,
+    pub entry: Option<LibraryEntry>,
+}
+
+impl ExternalPatch {
+    pub fn is_empty(&self) -> bool {
+        self.library.is_none() && self.progress.is_empty()
+    }
+
+    fn save(&self) -> Result<(), String> {
+        // Origin is thread-local: recreate both guards on the actual writer.
+        let _applying = sync::ApplyingGuard::new();
+        let _external = stremio_events::ExternalGuard::new();
+        if let Some(edit) = &self.library {
+            let mut entries = read_persisted_library();
+            edit.apply(&mut entries);
+            let raw = serde_json::to_string(&entries).map_err(|error| error.to_string())?;
+            persist_sync_snapshot("library", &raw, false).map_err(|error| format!("{error:#}"))?;
+        }
+        if !self.progress.is_empty() {
+            let mut progress = read_progress_map();
+            progress.extend(self.progress.clone());
+            let raw = serde_json::to_string(&progress).map_err(|error| error.to_string())?;
+            persist_sync_snapshot(EPISODE_PROGRESS_KEY, &raw, false)
+                .map_err(|error| format!("{error:#}"))?;
+        }
+        Ok(())
+    }
+}
+
+impl ExternalLibraryEdit {
+    fn apply(&self, entries: &mut Vec<LibraryEntry>) {
+        entries.retain(|entry| entry.id != self.id || entry.type_ != self.media_type);
+        if let Some(entry) = &self.entry {
+            entries.push(entry.clone());
+        }
+    }
+}
+
 impl Snapshot {
     fn periodic(&self) -> bool {
         matches!(self, Self::Progress(_, true))
@@ -41,6 +94,7 @@ impl Snapshot {
         let (key, raw) = match self {
             Self::Library(entries) => ("library", serde_json::to_string(entries)),
             Self::Progress(map, _) => (EPISODE_PROGRESS_KEY, serde_json::to_string(map)),
+            Self::External(patch, _) => return patch.save(),
         };
         let raw = raw.map_err(|error| error.to_string())?;
         let save = || persist_sync_snapshot(key, &raw, false).map_err(|error| format!("{error:#}"));
@@ -176,6 +230,9 @@ impl Worker {
                             .unwrap_or_else(|_| {
                                 Err("persistence worker panicked; pending saves retained".into())
                             });
+                    if let Snapshot::External(_, done) = &snapshot {
+                        let _ = done.send(result.clone());
+                    }
                     let mut state = worker.state.lock().unwrap();
                     match result {
                         Ok(()) => {
@@ -257,6 +314,33 @@ pub(super) fn failed() -> bool {
     let queue = ACTIVE.lock().unwrap().clone();
     queue.is_some_and(|queue| queue.state.lock().unwrap().error.is_some())
 }
+
+/// Never wait for queue capacity on the event loop. A busy writer makes the
+/// Stremio worker retry preparation; accepted jobs remain ordered with manual
+/// edits, and only their background completion acknowledges delivery.
+pub(super) fn try_external(patch: ExternalPatch) -> Option<mpsc::Receiver<Result<(), String>>> {
+    // Without the ordered writer there is nowhere to retain a failed save.
+    // Leave Shared untouched and delivery pending rather than launch a
+    // one-shot write whose failure could later look like a successful no-op.
+    let queue = ACTIVE.lock().unwrap().clone()?;
+    let (done, receipt) = mpsc::channel();
+    let mut state = queue.state.try_lock().ok()?;
+    if state.pending.len() >= MAX_PENDING || state.stop || state.closing {
+        return None;
+    }
+    state.next += 1;
+    let sequence = state.next;
+    state
+        .pending
+        .push_back((sequence, Snapshot::External(Box::new(patch), done)));
+    queue.changed.notify_all();
+    Some(receipt)
+}
+
+#[cfg(test)]
+pub(super) fn running() -> bool {
+    ACTIVE.lock().unwrap().is_some()
+}
 fn enqueue(snapshot: Snapshot) -> bool {
     if applying() || IN_WORKER.get() {
         return false;
@@ -291,30 +375,62 @@ pub(super) fn pending_library() -> Option<Vec<LibraryEntry>> {
         return None;
     }
     let queue = ACTIVE.lock().unwrap().clone()?;
-    let state = queue.state.lock().unwrap();
-    state
-        .pending
-        .iter()
-        .rev()
-        .find_map(|(_, snapshot)| match snapshot {
-            Snapshot::Library(entries) => Some(entries.clone()),
-            _ => None,
-        })
+    let (base, edits) = {
+        let state = queue.state.lock().unwrap();
+        let mut base = None;
+        let mut edits = Vec::new();
+        for (_, snapshot) in state.pending.iter().rev() {
+            match snapshot {
+                Snapshot::Library(entries) => {
+                    base = Some(entries.clone());
+                    break;
+                }
+                Snapshot::External(patch, _) => edits.extend(patch.library.iter().cloned()),
+                _ => {}
+            }
+        }
+        (base, edits)
+    };
+    if base.is_none() && edits.is_empty() {
+        return None;
+    }
+    let mut entries = base.unwrap_or_else(|| read_json("library").unwrap_or_default());
+    for edit in edits.into_iter().rev() {
+        edit.apply(&mut entries);
+    }
+    Some(entries)
 }
 pub(super) fn pending_progress() -> Option<HashMap<String, EpisodeProgress>> {
     if IN_WORKER.get() {
         return None;
     }
     let queue = ACTIVE.lock().unwrap().clone()?;
-    let state = queue.state.lock().unwrap();
-    state
-        .pending
-        .iter()
-        .rev()
-        .find_map(|(_, snapshot)| match snapshot {
-            Snapshot::Progress(map, _) => Some(map.clone()),
-            _ => None,
-        })
+    let (base, edits) = {
+        let state = queue.state.lock().unwrap();
+        let mut base = None;
+        let mut edits = Vec::new();
+        for (_, snapshot) in state.pending.iter().rev() {
+            match snapshot {
+                Snapshot::Progress(map, _) => {
+                    base = Some(map.clone());
+                    break;
+                }
+                Snapshot::External(patch, _) if !patch.progress.is_empty() => {
+                    edits.push(patch.progress.clone())
+                }
+                _ => {}
+            }
+        }
+        (base, edits)
+    };
+    if base.is_none() && edits.is_empty() {
+        return None;
+    }
+    let mut progress = base.unwrap_or_else(|| read_json(EPISODE_PROGRESS_KEY).unwrap_or_default());
+    for edit in edits.into_iter().rev() {
+        progress.extend(edit);
+    }
+    Some(progress)
 }
 
 #[cfg(test)]

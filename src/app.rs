@@ -26,7 +26,7 @@ pub(crate) const OPEN_SOURCE_LICENSE_CATALOG: &str =
     include_str!(concat!(env!("OUT_DIR"), "/nova_license_catalog.txt"));
 
 pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
-    const WORKSPACE_CRATES: [&str; 13] = [
+    const WORKSPACE_CRATES: [&str; 14] = [
         "nova",
         "addons",
         "nova-providers",
@@ -40,6 +40,7 @@ pub(crate) fn open_source_license_sources() -> Vec<LicenseSource> {
         "nova-playback-api",
         "nova-sync",
         "nova-tracking",
+        "nova-stremio",
     ];
 
     let mut sources = include_str!(concat!(env!("OUT_DIR"), "/nova_license_sources.tsv"))
@@ -743,6 +744,7 @@ struct Bridge {
     /// Bounded tracker actor; unavailable stores retain their originals and
     /// require explicit recovery without blocking playback.
     tracking: tracking::StateHandle,
+    stremio: Arc<stremio::Handle>,
     downloads_seen: Arc<AtomicU64>,
     image_usage_scan: Arc<Mutex<settings::DiskUsageScan>>,
     torrent_usage_scan: Arc<Mutex<settings::DiskUsageScan>>,
@@ -796,6 +798,9 @@ mod episodes;
 mod i18n;
 mod io;
 mod streams;
+mod stremio;
+mod stremio_events;
+mod stremio_metadata;
 mod sync;
 mod tracking;
 mod watch_state;

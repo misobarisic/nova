@@ -40,6 +40,7 @@ members = [
     "crates/party",
     "crates/sync",
     "crates/tracking",
+    "crates/stremio",
 ]
 resolver = "3"
 
@@ -120,6 +121,7 @@ nova-party = { path = "crates/party" }
 nova-torrent = { path = "crates/torrent" }
 nova-sync = { path = "crates/sync" }
 nova-tracking = { path = "crates/tracking" }
+nova-stremio = { path = "crates/stremio" }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 unicode-normalization = "0.1"

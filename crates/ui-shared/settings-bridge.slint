@@ -27,6 +27,17 @@ export global SettingsBridge {
     in-out property <length> nav-viewport-width;
     in-out property <[TrackingAccountRow]> tracking_accounts;
     in-out property <string> tracking_notice;
+    in-out property <bool> stremio_connected;
+    in-out property <bool> stremio_busy;
+    in-out property <bool> stremio_automatic;
+    in-out property <string> stremio_status;
+    in-out property <string> stremio_account;
+    in-out property <string> stremio_link_code;
+    in-out property <string> stremio_link_url;
+    in-out property <string> stremio_preview;
+    in-out property <string> stremio_pending;
+    in-out property <bool> stremio_merge_ready;
+
     in-out property <bool> persistence_failed: false;
     in-out property <[AddonRow]> addon_rows: [];
     in-out property <string> addon_search_text: "";
@@ -205,6 +216,14 @@ export global SettingsBridge {
     callback sync_respond_pair(string, bool);
     callback cancel_reencode();
     callback tracking_reset();
+    callback stremio_connect();
+    callback stremio_cancel();
+    callback stremio_start();
+    callback stremio_sync();
+    callback stremio_automatic_changed(bool);
+    callback stremio_disconnect();
+    callback stremio_open_link();
+
     callback addon_filter_changed();
     callback discover_picked();
     callback home_picked();

@@ -175,6 +175,7 @@ fn focused_editors_keep_back_navigation_after_rotation() {
             name: "MyAnimeList account".into(),
             client_id: "public-client".into(),
             redirect_uri: "http://127.0.0.1:53926/callback".into(),
+            signing_in: true,
             ..Default::default()
         }]))
         .into(),
@@ -263,10 +264,10 @@ fn focused_editors_keep_back_navigation_after_rotation() {
             slint::quit_event_loop().unwrap();
             return;
         }
-        let Some(input) = ElementHandle::find_by_accessible_label(&app, "Public client ID")
+        let Some(input) = ElementHandle::find_by_accessible_label(&app, "Full return URL")
             .find(|element| element.accessible_role() == Some(AccessibleRole::TextInput))
         else {
-            failures.borrow_mut().push("missing Public client ID TextInput".into());
+            failures.borrow_mut().push("missing sign-in return URL TextInput".into());
             slint::quit_event_loop().unwrap();
             return;
         };
@@ -278,7 +279,7 @@ fn focused_editors_keep_back_navigation_after_rotation() {
         let typed = type_text(&app, "x").await;
         let after = input.accessible_value();
         let focused = typed && before != after && after.as_ref().is_some_and(|value| value.contains('x'));
-        check(failures, focused, &format!("Public client ID must genuinely receive text before rotation: before={before:?}, after={after:?}"));
+        check(failures, focused, &format!("sign-in return URL must receive text before rotation: before={before:?}, after={after:?}"));
         if !focused {
             slint::quit_event_loop().unwrap();
             return;

@@ -220,7 +220,8 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
     };
     // Playback and its activity checkpoint share a transaction. Availability
     // refreshes never produce an Active record, and remote apply never echoes.
-    let activity_update = if key == EPISODE_PROGRESS_KEY && !applying() && !seed {
+    let projection = applying() && !stremio_events::external();
+    let activity_update = if key == EPISODE_PROGRESS_KEY && !projection && !seed {
         let mut activity = read_viewing_activity();
         if writable_key(VIEWING_ACTIVITY_KEY) {
             let before = activity.clone();
@@ -288,11 +289,13 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
             domain,
             &records,
             None,
-            applying() || untouched,
+            projection || untouched,
             seed,
         )?;
     }
     let old = store.extra_value(key)?;
+    stremio_events::capture(&mut store, key, old.as_deref(), raw, seed)?;
+    changed |= store.has_dirty_records();
     if key == EPISODE_PROGRESS_KEY {
         tracking::journal_progress(&mut store, old.as_deref(), raw, applying(), seed)?;
     }
@@ -311,7 +314,7 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
     store.queue_extra(key, Some(raw));
     store.save()?;
     drop(store);
-    if changed && !applying() && !seed {
+    if changed && !projection && !seed {
         nova_sync::request_local_sync();
     }
     Ok(())
@@ -1001,6 +1004,10 @@ impl Bridge {
                 .ok()
                 .and_then(|s| s.lock().unwrap().digest().get(&domain).cloned());
             match domain.as_str() {
+                stremio::DOMAIN => {
+                    self.stremio_wake();
+                    continue;
+                }
                 DOMAIN_LIBRARY => self.sync_apply_library(),
                 DOMAIN_PROGRESS => self.sync_apply_progress(),
                 DOMAIN_PLAYBACK_PREFERENCES => self.sync_apply_json_map::<PreferenceValue>(

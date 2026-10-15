@@ -85,6 +85,68 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Stremio" => "Stremio",
+        "Sync library and watch progress with Stremio" => {
+            "Sinkronizirajte zbirku i napredak gledanja sa Stremiom"
+        }
+        "Start sync" => "Pokreni sinkronizaciju",
+        "Automatic sync" => "Automatska sinkronizacija",
+        "Pending mappings" => "Preslikavanja na čekanju",
+        "Initial merge" => "Početno spajanje",
+        "Open browser" => "Otvori preglednik",
+        "Open the link in your browser and enter this code to sign in to Stremio." => {
+            "Otvorite poveznicu u pregledniku i unesite ovaj kod za prijavu u Stremio."
+        }
+        "Merge both libraries first, then keep library changes and watch progress in sync. The latest change wins conflicts." => {
+            "Prvo spojite obje zbirke, a zatim sinkronizirajte promjene zbirke i napredak gledanja. U sukobu se primjenjuje najnovija promjena."
+        }
+        "Some titles need compatible metadata addons or confirmed episode mappings." => {
+            "Neki naslovi trebaju kompatibilne dodatke za metapodatke ili potvrđena preslikavanja epizoda."
+        }
+        "Stremio is disconnected" => "Stremio nije povezan",
+        "Connecting to Stremio…" => "Povezivanje sa Stremiom…",
+        "Finish sign-in in your browser" => "Dovršite prijavu u pregledniku",
+        "Stremio sign-in expired. Connect again." => {
+            "Prijava u Stremio je istekla. Ponovno se povežite."
+        }
+        "Preparing library merge…" => "Priprema spajanja zbirki…",
+        "Ready to merge both libraries" => "Sve je spremno za spajanje zbirki",
+        "Syncing with Stremio…" => "Sinkronizacija sa Stremiom…",
+        "Stremio sync complete" => "Sinkronizacija sa Stremiom je dovršena",
+        "Stremio needs reconnection" => "Potrebno je ponovno povezivanje sa Stremiom",
+        "Stremio is unavailable. Changes will retry." => {
+            "Stremio nije dostupan. Promjene će se ponovno pokušati poslati."
+        }
+        "Stremio request timed out. Changes will retry." => {
+            "Zahtjev Stremiju je istekao. Promjene će se ponovno pokušati poslati."
+        }
+        "Restoring Stremio connection…" => "Obnavljanje veze sa Stremiom…",
+        "Reading Stremio addons…" => "Učitavanje dodataka Stremija…",
+        "Reading Stremio library…" => "Učitavanje zbirke Stremija…",
+        "Resolving Stremio episode metadata…" => "Učitavanje metapodataka epizoda Stremija…",
+        "Saving local changes…" => "Spremanje lokalnih promjena…",
+        "Saving merged library on this device…" => "Spremanje spojene zbirke na ovom uređaju…",
+        "Uploading changes to Stremio…" => "Slanje promjena Stremiju…",
+        "Confirming changes with Stremio…" => "Potvrđivanje promjena sa Stremiom…",
+        "Unsupported title identifier" => "Nepodržani identifikator naslova",
+        "Episode metadata unavailable" => "Metapodaci epizoda nisu dostupni",
+        "Conflicting episode mappings" => "Sukobljena preslikavanja epizoda",
+        "No confirmed episode mapping" => "Nema potvrđenog preslikavanja epizoda",
+        "No confirmed Stremio catalog identifier" => {
+            "Nema potvrđenog identifikatora kataloga Stremija"
+        }
+        "Conflicting title mapping" => "Sukobljeno preslikavanje naslova",
+        "Watched history could not be aligned" => "Nije moguće uskladiti povijest gledanja",
+        "Source identifier omitted" => "Identifikator izvora je izostavljen",
+        "Stremio returned invalid data" => "Stremio je vratio neispravne podatke",
+        "Stremio sync could not be saved" => "Sinkronizaciju sa Stremiom nije moguće spremiti",
+        "Stremio sign-in cancelled" => "Prijava u Stremio je otkazana",
+        "Automatic Stremio sync is paused" => "Automatska sinkronizacija sa Stremiom je pauzirana",
+        "Stremio sync is rate limited. Changes will retry." => {
+            "Stremio je ograničio učestalost sinkronizacije. Promjene će se ponovno pokušati poslati."
+        }
+        "Stremio sync is ready" => "Sinkronizacija sa Stremiom je spremna",
+
         "Only selected ratings will be saved." => "Spremit će se samo odabrane ocjene.",
         "Close rating prompt" => "Zatvori upit za ocjenu",
         "Timeline" => "Vremenska crta",
@@ -1859,4 +1921,60 @@ mod tests {
             assert_eq!(cal_month_title(2, 2026), "veljača 2026");
         });
     }
+}
+
+/// Preview copy keeps the initial merge approval separate from later syncs.
+pub fn stremio_preview(titles: usize) -> String {
+    if croatian() {
+        format!("Spojit će se {titles} naslova. Već pogledane epizode bit će sačuvane.")
+    } else {
+        format!("{titles} titles will be merged. Existing watched episodes will be kept.")
+    }
+}
+
+pub fn stremio_http_error(status: u16) -> String {
+    if croatian() {
+        format!("Stremio je vratio HTTP {status}. Promjene će se ponovno pokušati poslati.")
+    } else {
+        format!("Stremio returned HTTP {status}. Changes will retry.")
+    }
+}
+
+pub fn stremio_api_error(code: Option<u64>) -> String {
+    match (croatian(), code) {
+        (true, Some(code)) => format!(
+            "Stremio je odbio zahtjev (kôd {code}). Promjene će se ponovno pokušati poslati."
+        ),
+        (false, Some(code)) => {
+            format!("Stremio rejected the request (code {code}). Changes will retry.")
+        }
+        (true, None) => "Stremio je odbio zahtjev. Promjene će se ponovno pokušati poslati.".into(),
+        (false, None) => "Stremio rejected the request. Changes will retry.".into(),
+    }
+}
+
+pub fn stremio_failure(message: &str, phase: &str) -> String {
+    if phase.is_empty() {
+        message.to_owned()
+    } else {
+        format!("{}\n{}", tr(phase), message)
+    }
+}
+
+/// IDs aid diagnosis, but opaque source IDs can contain configured URLs. Show
+/// ordinary catalog/provider identifiers only, never URL/query credentials.
+pub fn stremio_pending_title(name: &str, media_type: &str, id: &str, reason: &str) -> String {
+    let safe = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 256
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b":._-".contains(&byte))
+    };
+    let identity = if safe(media_type) && safe(id) {
+        format!("{media_type} · {id}")
+    } else {
+        tr("Source identifier omitted").into()
+    };
+    format!("{name}\n{}\n{identity}", tr(reason))
 }

@@ -420,6 +420,17 @@ export component AppWindow inherits Window {
         kb_active <=> root.kb_active;
     }
     SettingsBindings {
+        stremio_connected <=> root.stremio_connected;
+        stremio_busy <=> root.stremio_busy;
+        stremio_automatic <=> root.stremio_automatic;
+        stremio_status <=> root.stremio_status;
+        stremio_account <=> root.stremio_account;
+        stremio_link_code <=> root.stremio_link_code;
+        stremio_link_url <=> root.stremio_link_url;
+        stremio_preview <=> root.stremio_preview;
+        stremio_pending <=> root.stremio_pending;
+        stremio_merge_ready <=> root.stremio_merge_ready;
+
         kb_zone <=> root.family_nav_zone;
         kb_nav <=> root.family_nav_index;
         sel <=> root.settings_selected_id;
@@ -666,6 +677,17 @@ export component AppWindow inherits Window {
     in-out property <[string]> tracking_preview_rows;
     in-out property <[TrackingMappingRow]> tracking_mapping_rows;
     in-out property <string> tracking_notice;
+    in-out property <bool> stremio_connected;
+    in-out property <bool> stremio_busy;
+    in-out property <bool> stremio_automatic;
+    in-out property <string> stremio_status;
+    in-out property <string> stremio_account;
+    in-out property <string> stremio_link_code;
+    in-out property <string> stremio_link_url;
+    in-out property <string> stremio_preview;
+    in-out property <string> stremio_pending;
+    in-out property <bool> stremio_merge_ready;
+
     in-out property <string> tracking_candidate_title;
     in-out property <bool> tracking_busy;
     in-out property <bool> tracking_can_confirm;
@@ -682,6 +704,14 @@ export component AppWindow inherits Window {
     callback tracking_disconnect(int);
     callback tracking_cancel(int);
     callback tracking_reset();
+    callback stremio_connect();
+    callback stremio_cancel();
+    callback stremio_start();
+    callback stremio_sync();
+    callback stremio_automatic_changed(bool);
+    callback stremio_disconnect();
+    callback stremio_open_link();
+
     callback tracking_automatic(int,bool);
     callback tracking_show();
     callback tracking_close();
@@ -1800,6 +1830,14 @@ export component AppWindow inherits Window {
     public function settings_bridge_sync_respond_pair(id: string, ok: bool) { root.sync_respond_pair(id, ok); }
     public function settings_bridge_cancel_reencode() { root.cancel_reencode(); }
     public function settings_bridge_tracking_reset() { root.tracking_reset(); }
+    public function settings_bridge_stremio_connect() { root.stremio_connect(); }
+    public function settings_bridge_stremio_cancel() { root.stremio_cancel(); }
+    public function settings_bridge_stremio_start() { root.stremio_start(); }
+    public function settings_bridge_stremio_sync() { root.stremio_sync(); }
+    public function settings_bridge_stremio_automatic_changed(value: bool) { root.stremio_automatic_changed(value); }
+    public function settings_bridge_stremio_disconnect() { root.stremio_disconnect(); }
+    public function settings_bridge_stremio_open_link() { root.stremio_open_link(); }
+
     public function settings_bridge_addon_filter_changed() { root.addon_filter_changed(); }
     public function settings_bridge_discover_picked() { root.navigate_section(1); }
     public function settings_bridge_home_picked() { root.navigate_section(0); }

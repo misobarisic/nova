@@ -465,6 +465,12 @@ impl Store {
         (self.digest(), self.hlc)
     }
 
+    /// Cheap optimistic-read token. Record writes and remote observations
+    /// advance this clock, without requiring a copy of the complete digest.
+    pub fn clock(&self) -> Hlc {
+        self.hlc
+    }
+
     pub fn digest(&self) -> Digest {
         self.domains
             .iter()
@@ -508,6 +514,26 @@ impl Store {
             .map(|m| {
                 m.iter()
                     .filter_map(|(k, r)| r.value.clone().map(|v| (k.clone(), v)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Read one materialized record family without cloning the whole domain.
+    /// Large integrations keep independent episode fields in the same domain.
+    pub fn records_with_prefix(&self, domain: &str, prefix: &str) -> Vec<(String, String)> {
+        self.domains
+            .get(domain)
+            .map(|records| {
+                records
+                    .range(prefix.to_owned()..)
+                    .take_while(|(key, _)| key.starts_with(prefix))
+                    .filter_map(|(key, record)| {
+                        record
+                            .value
+                            .as_ref()
+                            .map(|value| (key.clone(), value.clone()))
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -608,6 +634,24 @@ fn migrate_legacy(value: &mut serde_json::Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prefix_records_are_live_and_confined_to_the_requested_family() {
+        let mut store = super::Store::default();
+        for key in [
+            "title:a:saved",
+            "title:a:watched:1",
+            "title:ab:saved",
+            "other",
+        ] {
+            store.set("integration", key, Some(key.into()), 0, 1);
+        }
+        store.set("integration", "title:a:watched:1", None, 0, 1);
+        assert_eq!(
+            store.records_with_prefix("integration", "title:a:"),
+            vec![("title:a:saved".into(), "title:a:saved".into())]
+        );
+        assert!(store.records_with_prefix("missing", "title:a:").is_empty());
+    }
     use super::*;
 
     const DEV_A: u64 = 10;

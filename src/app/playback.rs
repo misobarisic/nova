@@ -954,6 +954,7 @@ impl Bridge {
             write_progress_map(&map);
         }
         nova_sync::flush_local_sync();
+        self.stremio_checkpoint();
     }
 
     fn publish_player_context(&self, context: &PlaybackContext) {

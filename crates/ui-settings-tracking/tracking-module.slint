@@ -1,6 +1,7 @@
 import { SettingsBridge, SettingsContent } from "@NovaUiShared";
 
 import { TrackingSettings } from "../ui/tracking.slint";
+import { StremioSettings } from "../ui/stremio.slint";
 
 // The shell owns scrolling and transitions. Report intrinsic layout sizes
 // only while this section is selected, so outgoing instances cannot resize it.
@@ -20,7 +21,8 @@ export component SettingsTrackingModule inherits Window {
         }
     }
     body_layout := VerticalLayout {
-        width: 100%; height: 100%; spacing: 0px;
+        width: 100%; height: 100%; spacing: 24px;
+        alignment: start;
         tracking_settings := TrackingSettings {
 
             init => { SettingsContent.tracking_input_focused = self.input_focused; }
@@ -37,6 +39,7 @@ export component SettingsTrackingModule inherits Window {
             cancel(service) => {SettingsBridge.tracking_cancel(service);}
             reset => {SettingsBridge.tracking_reset();}
             automatic(service,enabled) => {SettingsBridge.tracking_automatic(service,enabled);}
+            StremioSettings {}
         }
     }
 }

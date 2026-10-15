@@ -579,6 +579,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let b = bridge.clone();
     app.on_tracking_reset(move || b.tracking_reset());
     let b = bridge.clone();
+    app.on_stremio_connect(move || b.stremio_connect());
+    let b = bridge.clone();
+    app.on_stremio_cancel(move || b.stremio_cancel());
+    let b = bridge.clone();
+    app.on_stremio_start(move || b.stremio_start());
+    let b = bridge.clone();
+    app.on_stremio_sync(move || b.stremio_sync());
+    let b = bridge.clone();
+    app.on_stremio_automatic_changed(move |enabled| b.stremio_automatic(enabled));
+    let b = bridge.clone();
+    app.on_stremio_disconnect(move || b.stremio_disconnect());
+    let b = bridge.clone();
+    app.on_stremio_open_link(move || b.stremio_open_link());
+    let b = bridge.clone();
     app.on_tracking_automatic(move |service, enabled| b.tracking_automatic(service, enabled));
     let b = bridge.clone();
     app.on_tracking_show(move || b.tracking_show());
@@ -975,6 +989,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.settings_to_ui();
     let image_gc_worker = cache_gc::start(&bridge);
     let persistence_worker = persistence::start();
+    bridge.start_stremio();
     bridge.shared.lock().unwrap().restoring_models = false;
     bridge.apply_library_to_ui();
     // Home landing page: derive Continue Watching, New episodes and Upcoming
@@ -1262,6 +1277,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     storage::last_error().is_some() || persistence::failed(),
                 );
             }
+            tick_bridge.refresh_stremio_surfaces_if_visible();
             let today = today_days();
             if today != episode_day {
                 episode_day = today;
@@ -1349,6 +1365,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     bridge.persist_outgoing_playback();
     bridge.party_leave();
     bridge.shutdown_tracking();
+    bridge.shutdown_stremio();
     drop(persistence_worker);
     drop(image_gc_worker);
     result?;

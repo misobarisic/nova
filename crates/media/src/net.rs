@@ -407,3 +407,14 @@ impl nova_providers::AddonMetadataTransport for MetadataTransport {
 pub fn init_metadata_transport() {
     nova_providers::set_metadata_transport(std::sync::Arc::new(MetadataTransport));
 }
+
+/// Bounded addon metadata GET for account integrations using the same platform
+/// TLS configuration as installed providers. No account credentials are sent.
+pub fn fetch_metadata_bytes(
+    url: &str,
+    timeout: std::time::Duration,
+    response_limit: usize,
+) -> Result<Vec<u8>, nova_providers::ProviderHostError> {
+    use nova_providers::AddonMetadataTransport;
+    MetadataTransport.fetch(url, timeout, response_limit)
+}

@@ -39,8 +39,9 @@ pub use matching::{MetadataMatch, match_metadata};
 pub use metadata::{
     AddonMetadataTransport, EnrichmentRequest, EnrichmentResult, EpisodeEnrichment, MetadataAddon,
     MetadataCache, MetadataConnection, ProviderDetails, addon_metadata_id, apply_enrichment,
-    configure_metadata_addons, enrich_addon_response, enrich_metadata, metadata_revision,
-    reconcile_episode_metadata, set_metadata_cache, set_metadata_transport,
+    configure_metadata_addons, enrich_addon_response, enrich_addon_response_with_budget,
+    enrich_metadata, metadata_revision, reconcile_episode_metadata, set_metadata_cache,
+    set_metadata_transport,
 };
 pub use models::{
     CatalogRequest, ContentProvider, Episode, ExternalIds, MediaItem, MediaRequest,

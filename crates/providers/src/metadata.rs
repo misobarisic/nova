@@ -101,6 +101,42 @@ pub fn set_metadata_transport(value: Arc<dyn AddonMetadataTransport>) {
     *transport().lock().unwrap() = Some(value);
 }
 
+/// A single monotonic allowance shared by optional response enrichment stages.
+struct ResponseBudget {
+    start: Instant,
+    budget: Duration,
+}
+impl ResponseBudget {
+    fn remaining(&self) -> Duration {
+        self.budget.saturating_sub(self.start.elapsed())
+    }
+}
+
+struct BudgetTransport<'a> {
+    transport: &'a dyn AddonMetadataTransport,
+    budget: &'a ResponseBudget,
+}
+impl AddonMetadataTransport for BudgetTransport<'_> {
+    fn fetch(
+        &self,
+        url: &str,
+        timeout: Duration,
+        response_limit: usize,
+    ) -> Result<Vec<u8>, ProviderHostError> {
+        let remaining = self
+            .budget
+            .remaining()
+            .min(timeout)
+            .min(Duration::from_secs(5));
+        if remaining.is_zero() {
+            return Err(ProviderHostError(
+                "metadata enrichment budget exhausted".into(),
+            ));
+        }
+        self.transport.fetch(url, remaining, response_limit)
+    }
+}
+
 thread_local! { static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
 pub(crate) fn nested() -> bool {
     DEPTH.with(|d| d.get() > 0)
@@ -1110,6 +1146,33 @@ fn apply_enrichment_with_inventory(
 /// Enrich ordinary installed-addon details through the same broker as JS.
 /// Candidate fetches carry the thread-local guard and cannot recursively enrich.
 pub fn enrich_addon_response(raw_url: &str, bytes: Vec<u8>) -> Vec<u8> {
+    enrich_addon_response_inner(raw_url, bytes, None, || transport().lock().unwrap().clone())
+}
+
+/// Enrich details with one elapsed-time budget for artwork repair and the broker.
+/// A zero budget only normalizes explicit request identity, without networking.
+pub fn enrich_addon_response_with_budget(
+    raw_url: &str,
+    bytes: Vec<u8>,
+    budget: Duration,
+) -> Vec<u8> {
+    enrich_addon_response_inner(
+        raw_url,
+        bytes,
+        Some(ResponseBudget {
+            start: Instant::now(),
+            budget,
+        }),
+        || transport().lock().unwrap().clone(),
+    )
+}
+
+fn enrich_addon_response_inner(
+    raw_url: &str,
+    bytes: Vec<u8>,
+    budget: Option<ResponseBudget>,
+    image_transport: impl FnOnce() -> Option<Arc<dyn AddonMetadataTransport>>,
+) -> Vec<u8> {
     let Ok(mut response) = serde_json::from_slice::<Value>(&bytes) else {
         return bytes;
     };
@@ -1117,17 +1180,32 @@ pub fn enrich_addon_response(raw_url: &str, bytes: Vec<u8>) -> Vec<u8> {
         return bytes;
     };
     let normalized = crate::stremio::normalize_detail_request_identity(raw_url, meta);
-    if nested() || meta.get("novaConnections").is_some() {
+    if nested()
+        || meta.get("novaConnections").is_some()
+        || budget
+            .as_ref()
+            .is_some_and(|budget| budget.remaining().is_zero())
+    {
         return if normalized {
             serde_json::to_vec(&response).unwrap_or(bytes)
         } else {
             bytes
         };
     }
-    let image_transport = transport().lock().unwrap().clone();
-    if let Some(transport) = image_transport {
+    if let Some(transport) = image_transport() {
         let _guard = NestedGuard::new();
-        cinemeta::repair(raw_url, meta, transport.as_ref());
+        if let Some(budget) = &budget {
+            cinemeta::repair(
+                raw_url,
+                meta,
+                &BudgetTransport {
+                    transport: transport.as_ref(),
+                    budget,
+                },
+            );
+        } else {
+            cinemeta::repair(raw_url, meta, transport.as_ref());
+        }
     }
     let bytes = serde_json::to_vec(&response).unwrap_or(bytes);
     let meta = &mut response["meta"];
@@ -1157,7 +1235,7 @@ pub fn enrich_addon_response(raw_url: &str, bytes: Vec<u8>) -> Vec<u8> {
     for e in &mut episodes {
         e.provider_id.clear();
     }
-    let result = enrich_metadata(
+    let result = enrich_metadata_with_budget(
         EnrichmentRequest {
             details: ProviderDetails { media, episodes },
             source_sequences: vec![],
@@ -1165,6 +1243,9 @@ pub fn enrich_addon_response(raw_url: &str, bytes: Vec<u8>) -> Vec<u8> {
             query: None,
         },
         &installed.url,
+        budget
+            .as_ref()
+            .map_or(Duration::from_secs(5), ResponseBudget::remaining),
     );
     apply_enrichment(meta, &result);
     meta["novaSourceUrl"] = json!(installed.url);
@@ -1182,6 +1263,108 @@ pub fn enrich_addon_response(raw_url: &str, bytes: Vec<u8>) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::{Episode, ExternalIds, MemoryProviderHost, PluginManifest, PluginRuntime};
+
+    #[test]
+    fn zero_response_budget_only_normalizes_identity_without_transport() {
+        let raw_url = "https://metadata.example/meta/series/kitsu:1415.json";
+        let bytes = serde_json::to_vec(&json!({"meta": {
+            "id": "tt0994314", "type": "series", "_kitsuId": "1415",
+            "videos": [{"id": "tt0994314:1:1", "season": 1, "episode": 1}]
+        }}))
+        .unwrap();
+        let response = enrich_addon_response_inner(
+            raw_url,
+            bytes.clone(),
+            Some(ResponseBudget {
+                start: Instant::now(),
+                budget: Duration::ZERO,
+            }),
+            || panic!("zero budget must not access the transport"),
+        );
+        assert_eq!(
+            enrich_addon_response_with_budget(raw_url, bytes, Duration::ZERO),
+            response
+        );
+        let response: Value = serde_json::from_slice(&response).unwrap();
+        assert_eq!(response["meta"]["id"], "kitsu:1415");
+        assert_eq!(response["meta"]["videos"][0]["id"], "tt0994314:1:1");
+        assert!(response["meta"].get("novaConnections").is_none());
+
+        let bytes = serde_json::to_vec(&json!({"meta": {
+            "id": "tt0994314", "type": "series", "videos": [{
+                "id": "tt0994314:1:1",
+                "thumbnail": "https://episodes.metahub.space/tt0994314/1/1/w780.jpg"
+            }]
+        }}))
+        .unwrap();
+        assert_eq!(
+            enrich_addon_response_inner(
+                "https://v3-cinemeta.strem.io/meta/series/tt0994314.json",
+                bytes.clone(),
+                Some(ResponseBudget {
+                    start: Instant::now(),
+                    budget: Duration::ZERO
+                }),
+                || panic!("zero budget must skip optional artwork repair"),
+            ),
+            bytes
+        );
+    }
+
+    #[test]
+    fn response_budget_decreases_across_artwork_and_broker_requests() {
+        #[derive(Default)]
+        struct Timeouts(Mutex<Vec<Duration>>);
+        impl AddonMetadataTransport for Timeouts {
+            fn fetch(
+                &self,
+                _: &str,
+                timeout: Duration,
+                _: usize,
+            ) -> Result<Vec<u8>, ProviderHostError> {
+                self.0.lock().unwrap().push(timeout);
+                Ok(vec![])
+            }
+        }
+        let transport = Arc::new(Timeouts::default());
+        let mut budget = ResponseBudget {
+            start: Instant::now(),
+            budget: Duration::from_secs(3),
+        };
+        BudgetTransport {
+            transport: transport.as_ref(),
+            budget: &budget,
+        }
+        .fetch("artwork", Duration::from_secs(5), RESPONSE_LIMIT)
+        .unwrap();
+        // Advance elapsed time without wall-clock sleeps. The broker receives
+        // only what remains after the optional artwork stage has finished.
+        budget.start -= Duration::from_secs(1);
+        let mut operation = Operation {
+            start: Instant::now(),
+            budget: budget.remaining(),
+            calls: 0,
+            detail_calls: 0,
+            visited: BTreeSet::new(),
+            transport: transport.clone(),
+        };
+        assert!(operation.fetch("broker").is_some());
+        let timeouts = transport.0.lock().unwrap().clone();
+        assert_eq!(timeouts.len(), 2);
+        assert!(timeouts[0] <= Duration::from_secs(3));
+        assert!(timeouts[1] <= Duration::from_secs(2));
+        assert!(timeouts[1] < timeouts[0]);
+        budget.start -= Duration::from_secs(3);
+        assert!(
+            BudgetTransport {
+                transport: transport.as_ref(),
+                budget: &budget
+            }
+            .fetch("expired", Duration::from_secs(5), RESPONSE_LIMIT)
+            .is_err()
+        );
+        assert_eq!(transport.0.lock().unwrap().len(), 2);
+    }
 
     #[test]
     fn inventory_revision_ignores_manifest_map_iteration_order() {

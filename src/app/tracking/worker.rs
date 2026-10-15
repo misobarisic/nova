@@ -17,6 +17,27 @@ use nova_tracking::{
     *,
 };
 use std::num::{NonZeroU32, NonZeroU64};
+
+/// All account integrations share ownership of the Android authorization
+/// service, so finishing one sign-in cannot interrupt another one.
+pub(super) fn sign_in_background() -> Result<Box<dyn Send>, String> {
+    #[cfg(target_os = "android")]
+    {
+        let lease = LOGIN_BACKGROUND.acquire(
+            || {
+                crate::app::android_bg::start_auth_service(
+                    "Stremio",
+                    text::tr("Finish sign-in in your browser"),
+                )
+                .ok_or_else(|| text::tr("Stremio is unavailable. Changes will retry.").to_string())
+            },
+            crate::app::android_bg::stop_auth_service,
+        )?;
+        Ok(Box::new(lease))
+    }
+    #[cfg(not(target_os = "android"))]
+    Ok(Box::new(()))
+}
 const CLIENTS_KEY: &str = "tracking:clients:v1";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 #[cfg(target_os = "android")]

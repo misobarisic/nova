@@ -46,6 +46,9 @@ cargo test --test ui_settings_sync -- sync_overflow:: # headless Slint UI regres
 - Android is built with `--no-default-features --features android`; verify
   desktop-only code is gated (`#[cfg(feature = "desktop")]`,
   `#[cfg(not(target_os = "android"))]`).
+- Build Android APKs for device delivery in release mode with
+  `nix develop .#android --command make android-build-release`, unless the user
+  explicitly requests a debug build.
 - CI runs Rust formatting, Clippy, the default workspace `cargo check`, the
   shared OpenGL state guard regression, Windows GNU-target `cargo check`,
   and ARM64 Android library `cargo check` in the Android Nix shell

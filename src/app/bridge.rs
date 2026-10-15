@@ -44,6 +44,7 @@ impl Bridge {
             downloads,
             last_stream: Arc::default(),
             tracking: Arc::new(tracking::TrackingHandle::new()),
+            stremio: Arc::new(stremio::Handle::new()),
             downloads_seen: Arc::new(AtomicU64::new(0)),
             image_usage_scan: Arc::default(),
             torrent_usage_scan: Arc::default(),

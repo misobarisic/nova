@@ -214,6 +214,13 @@ fn tracking_settings_and_overlay_fit_phone_and_require_history_confirmation() {
         .into(),
     );
     let failures = Rc::new(RefCell::new(Vec::new()));
+    let connections = Rc::new(RefCell::new(Vec::new()));
+    let recorded_connections = connections.clone();
+    app.on_tracking_connect(move |service, client, redirect| {
+        recorded_connections
+            .borrow_mut()
+            .push((service, client.to_string(), redirect.to_string()));
+    });
     let actions = Rc::new(Cell::new(0));
     let actions2 = actions.clone();
     app.on_tracking_action(move |id, action| {
@@ -286,6 +293,30 @@ fn tracking_settings_and_overlay_fit_phone_and_require_history_confirmation() {
         settle().await;
         click(&app, "settings:tracking").await;
         check_width(&app, &f);
+        for label in [
+            "Public client ID",
+            "Registered redirect URL",
+            "public-client",
+            "http://127.0.0.1:53926/callback",
+        ] {
+            assert!(
+                ElementHandle::find_by_accessible_label(&app, label)
+                    .next()
+                    .is_none(),
+                "registration details must stay out of account cards: {label}"
+            );
+        }
+        click(&app, "MyAnimeList").await;
+        click(&app, "Connect").await;
+        assert_eq!(
+            *connections.borrow(),
+            vec![(
+                0,
+                "public-client".to_string(),
+                "http://127.0.0.1:53926/callback".to_string()
+            )],
+            "connect must retain the stored registration without editable fields"
+        );
         // The rating preference and long account name leave AniList below
         // the phone viewport. Check both real cards while scrolling rather
         // than requiring every account to be visible at the same instant.

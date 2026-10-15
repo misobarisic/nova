@@ -357,6 +357,13 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
     for width in [320, 390, 1280] {
         app.window().set_size(slint::PhysicalSize::new(width, 1400));
         settle(&app);
+        if !has_badge(&app, "tracking_automatic_0") {
+            ElementHandle::find_by_accessible_label(&app, "MyAnimeList")
+                .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+                .expect("MAL account disclosure")
+                .mock_single_click(slint::platform::PointerEventButton::Left);
+            settle(&app);
+        }
         let sync = badge(&app, "tracking_automatic_0");
         assert_eq!(sync.accessible_label().as_deref(), Some("Synced"));
         sync.mock_single_click(slint::platform::PointerEventButton::Left);
@@ -373,11 +380,9 @@ fn scoped_setting_badges_and_comparison_modal_fit_and_dispatch() {
             count,
             "automatic tracking stays sync-only"
         );
-        assert_eq!(
-            badge(&app, "tracking_client_0")
-                .accessible_label()
-                .as_deref(),
-            Some("This device")
+        assert!(
+            !has_badge(&app, "tracking_client_0"),
+            "internal client registration has no account-card field or badge"
         );
         if width == 320 {
             let scope = badge(&app, "tracking_automatic_0");

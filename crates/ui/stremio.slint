@@ -1,0 +1,77 @@
+import { SettingsBridge, Theme } from "@NovaUiShared";
+import { PillButton, ToggleSwitch, SettingsRow } from "settings-controls.slint";
+import { TrackingAccountCard } from "tracking-account-card.slint";
+
+// Embedded in Tracking; the compiled submenu owns measurement and scrolling.
+export component StremioSettings inherits TrackingAccountCard {
+    title: "Stremio";
+    status: SettingsBridge.stremio_account != "" ? SettingsBridge.stremio_account : @tr("Not connected");
+    logo: @image-url("../../assets/icons/services/stremio.svg");
+    brand_color: #7953d6;
+    brand_dark: #372367;
+    property <string> sign_in_code: SettingsBridge.stremio_link_code;
+    changed sign_in_code => { if root.sign_in_code != "" { root.expanded = true; } }
+    min-width: 0px;
+    vertical-stretch: 0;
+    // Zero stretch alone still grows every child when the layout has spare
+    // space. Start alignment keeps labels at their wrapped content height.
+    body_layout := VerticalLayout {
+        alignment: start;
+        spacing: 14px;
+        Text {
+            text: @tr("Merge both libraries first, then keep library changes and watch progress in sync. The latest change wins conflicts.");
+            color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; vertical-stretch: 0;
+        }
+        if SettingsBridge.stremio_status != "": Text {
+            text: SettingsBridge.stremio_status;
+            color: Theme.current.text_tracking_notice; wrap: word-wrap; min-width: 0px; vertical-stretch: 0;
+        }
+        if !SettingsBridge.stremio_connected && SettingsBridge.stremio_link_code == "": PillButton {
+            label: @tr("Connect Stremio"); primary: true;
+            enabled: !SettingsBridge.stremio_busy;
+            wrap_label: true;
+            clicked => { SettingsBridge.stremio_connect(); }
+        }
+        // Keep conditional leaves in this persistent layout: conditional
+        // layout wrappers measure wrapped text at a natural width rather
+        // than the live card width and leave unused height below controls.
+        if SettingsBridge.stremio_link_code != "": Text { text: @tr("Open the link in your browser and enter this code to sign in to Stremio."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
+        if SettingsBridge.stremio_link_code != "": Text { text: SettingsBridge.stremio_link_code; color: Theme.current.text_bright; font-weight: 700; font-size: 24px; wrap: char-wrap; min-width: 0px; vertical-stretch: 0; }
+        if SettingsBridge.stremio_link_code != "": Text { text: SettingsBridge.stremio_link_url; color: Theme.current.text_settings; wrap: char-wrap; min-width: 0px; vertical-stretch: 0; }
+        if SettingsBridge.stremio_link_code != "": PillButton { label: @tr("Open browser"); enabled: SettingsBridge.stremio_link_url != ""; wrap_label: true; clicked => { SettingsBridge.stremio_open_link(); } }
+        if SettingsBridge.stremio_link_code != "": PillButton { label: @tr("Cancel sign-in"); wrap_label: true; clicked => { SettingsBridge.stremio_cancel(); } }
+        if SettingsBridge.stremio_connected && SettingsBridge.stremio_preview != "": Text {
+            text: @tr("Initial merge"); color: Theme.current.text_bright; font-weight: 700; wrap: word-wrap; min-width: 0px; vertical-stretch: 0;
+        }
+        if SettingsBridge.stremio_connected && SettingsBridge.stremio_preview != "": Text {
+            text: SettingsBridge.stremio_preview; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; vertical-stretch: 0;
+        }
+        // Retain one action across the preview transition so native
+        // pointer and keyboard focus remain attached to the same control.
+        if SettingsBridge.stremio_connected: PillButton {
+            label: SettingsBridge.stremio_preview == "" ? @tr("Sync now") : @tr("Start sync");
+            primary: true; wrap_label: true;
+            enabled: !SettingsBridge.stremio_busy && (SettingsBridge.stremio_preview == "" || SettingsBridge.stremio_merge_ready);
+            clicked => {
+                if SettingsBridge.stremio_preview == "" { SettingsBridge.stremio_sync(); }
+                else { SettingsBridge.stremio_start(); }
+            }
+        }
+        if SettingsBridge.stremio_connected: SettingsRow {
+            row-title: @tr("Automatic sync");
+            ToggleSwitch {
+                name: @tr("Automatic sync");
+                checked: SettingsBridge.stremio_automatic;
+                enabled: !SettingsBridge.stremio_busy;
+                toggled => { SettingsBridge.stremio_automatic_changed(self.checked); }
+            }
+        }
+        if SettingsBridge.stremio_connected && SettingsBridge.stremio_pending != "": pending_heading := Text { text: @tr("Pending mappings"); color: Theme.current.text_bright; font-weight: 700; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
+        if SettingsBridge.stremio_connected && SettingsBridge.stremio_pending != "": pending_explanation := Text { text: @tr("Some titles need compatible metadata addons or confirmed episode mappings."); color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; vertical-stretch: 0; }
+        if SettingsBridge.stremio_connected && SettingsBridge.stremio_pending != "": pending_titles := Text { text: SettingsBridge.stremio_pending; color: Theme.current.text_settings; wrap: char-wrap; min-width: 0px; vertical-stretch: 0; }
+        if SettingsBridge.stremio_connected || SettingsBridge.stremio_account != "": PillButton {
+            label: @tr("Disconnect"); destructive: true; wrap_label: true;
+            clicked => { SettingsBridge.stremio_disconnect(); }
+        }
+    }
+}

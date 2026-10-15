@@ -2884,3 +2884,120 @@ msgstr "Učitaj više epizoda"
 
 msgid "No upcoming releases"
 msgstr "Nema nadolazećih epizoda"
+
+msgid "Stremio"
+msgstr "Stremio"
+
+msgid "Sync library and watch progress with Stremio"
+msgstr "Sinkronizirajte zbirku i napredak gledanja sa Stremiom"
+
+msgid "Start sync"
+msgstr "Pokreni sinkronizaciju"
+
+msgid "Automatic sync"
+msgstr "Automatska sinkronizacija"
+
+msgid "Pending mappings"
+msgstr "Preslikavanja na čekanju"
+
+msgid "Initial merge"
+msgstr "Početno spajanje"
+
+msgid "Open browser"
+msgstr "Otvori preglednik"
+
+msgid "Open the link in your browser and enter this code to sign in to Stremio."
+msgstr "Otvorite poveznicu u pregledniku i unesite ovaj kod za prijavu u Stremio."
+
+msgid "Merge both libraries first, then keep library changes and watch progress in sync. The latest change wins conflicts."
+msgstr "Prvo spojite obje zbirke, a zatim sinkronizirajte promjene zbirke i napredak gledanja. U sukobu se primjenjuje najnovija promjena."
+
+msgid "Some titles need compatible metadata addons or confirmed episode mappings."
+msgstr "Neki naslovi trebaju kompatibilne dodatke za metapodatke ili potvrđena preslikavanja epizoda."
+
+msgid "Stremio is disconnected"
+msgstr "Stremio nije povezan"
+
+msgid "Connecting to Stremio…"
+msgstr "Povezivanje sa Stremiom…"
+
+msgid "Finish sign-in in your browser"
+msgstr "Dovršite prijavu u pregledniku"
+
+msgid "Stremio sign-in expired. Connect again."
+msgstr "Prijava u Stremio je istekla. Ponovno se povežite."
+
+msgid "Preparing library merge…"
+msgstr "Priprema spajanja zbirki…"
+
+msgid "Ready to merge both libraries"
+msgstr "Sve je spremno za spajanje zbirki"
+
+msgid "Syncing with Stremio…"
+msgstr "Sinkronizacija sa Stremiom…"
+
+msgid "Stremio sync complete"
+msgstr "Sinkronizacija sa Stremiom je dovršena"
+
+msgid "Stremio needs reconnection"
+msgstr "Potrebno je ponovno povezivanje sa Stremiom"
+
+msgid "Stremio is unavailable. Changes will retry."
+msgstr "Stremio nije dostupan. Promjene će se ponovno pokušati poslati."
+
+msgid "Stremio request timed out. Changes will retry."
+msgstr "Zahtjev Stremiju je istekao. Promjene će se ponovno pokušati poslati."
+
+msgid "Restoring Stremio connection…"
+msgstr "Obnavljanje veze sa Stremiom…"
+
+msgid "Reading Stremio addons…"
+msgstr "Učitavanje dodataka Stremija…"
+
+msgid "Reading Stremio library…"
+msgstr "Učitavanje zbirke Stremija…"
+
+msgid "Resolving Stremio episode metadata…"
+msgstr "Učitavanje metapodataka epizoda Stremija…"
+
+msgid "Saving local changes…"
+msgstr "Spremanje lokalnih promjena…"
+
+msgid "Saving merged library on this device…"
+msgstr "Spremanje spojene zbirke na ovom uređaju…"
+
+msgid "Uploading changes to Stremio…"
+msgstr "Slanje promjena Stremiju…"
+
+msgid "Confirming changes with Stremio…"
+msgstr "Potvrđivanje promjena sa Stremiom…"
+
+msgid "Stremio returned invalid data"
+msgstr "Stremio je vratio neispravne podatke"
+
+msgid "Stremio sync could not be saved"
+msgstr "Sinkronizaciju sa Stremiom nije moguće spremiti"
+
+msgid "Stremio sign-in cancelled"
+msgstr "Prijava u Stremio je otkazana"
+
+msgid "Automatic Stremio sync is paused"
+msgstr "Automatska sinkronizacija sa Stremiom je pauzirana"
+
+msgid "Stremio sync is rate limited. Changes will retry."
+msgstr "Stremio je ograničio učestalost sinkronizacije. Promjene će se ponovno pokušati poslati."
+
+msgid "Stremio sync is ready"
+msgstr "Sinkronizacija sa Stremiom je spremna"
+
+msgid "Connect Stremio"
+msgstr "Poveži Stremio"
+
+msgid "Anime tracking and Stremio library sync"
+msgstr "Praćenje animea i sinkronizacija zbirke sa Stremiom"
+
+msgid "Accounts"
+msgstr "Računi"
+
+msgid "Not connected"
+msgstr "Nije povezano"

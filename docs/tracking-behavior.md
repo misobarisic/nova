@@ -6,6 +6,11 @@ choose **Tracking** to open its full-screen page (the sync icon opens the same p
 
 ## Connecting
 
+MAL, AniList and Stremio use compact colored account cards with their service
+icons. Expand a card to connect, reconnect, disconnect or change its automatic
+tracking/sync preference; the closed card keeps account/status visible. Cards
+precede the shared tracking preferences and reset controls.
+
 Sign-in is saved, shared with paired devices through Nova sync, and restored
 after restarting Nova. Saved tokens
 are verified against the stored account before retained updates can resume.
@@ -14,9 +19,9 @@ are saved immediately. Offline restoration retries without deleting saved sign-i
 Only one account is active per service. Switching accounts retains the previous
 account's links but does not send its work as the new account.
 
-Nova includes its public application IDs and redirect URLs as defaults.
-Existing custom registrations remain available in the connection form. Never
-enter a client secret. MAL uses a public/native application, plain PKCE, and a
+Nova uses its bundled public application IDs and redirect URLs automatically;
+the account cards show sign-in/status and tracking controls without registration
+fields. Saved custom registrations continue to take precedence internally. MAL uses a public/native application, plain PKCE, and a
 loopback redirect such as `http://127.0.0.1:53926/callback`. The port must be available locally.
 AniList defaults to manual token sign-in using its registered PIN redirect
 `https://anilist.co/api/v2/oauth/pin`. Nova opens the minimal authorization URL
@@ -97,8 +102,10 @@ applying remote records and after restart. Reset local tracking also publishes
 removals for the shared configuration; recovery backups retain local state and
 journal records, rather than live tokens.
 
-Android browser sign-in starts a separate `NovaAuthService` foreground service
-before opening the browser and waits for foreground promotion. Its notification
+Android browser sign-in uses a separate `NovaAuthService` foreground service
+shared with Stremio sign-in in the same Settings submenu. Both integrations
+use the same lease counter, so finishing one cannot interrupt another.
+Nova starts the service and waits for foreground promotion before opening the browser. Its notification
 returns to Nova; a bounded wake lock protects callback reception, token exchange,
 account verification and credential persistence while the Activity is backgrounded.
 The service uses Android's `dataSync` type for account data exchange, independently

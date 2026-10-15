@@ -1,0 +1,108 @@
+import { Theme } from "@NovaUiShared";
+import { ControlTouchArea } from "control-input.slint";
+import { IcChevronDown, IcChevronUp } from "icons.slint";
+
+// One disclosure shell for account services. Start alignment is essential:
+// zero stretch alone still distributes spare height among wrapped labels.
+export component TrackingAccountCard inherits Rectangle {
+    in property <string> title;
+    in property <string> status;
+    in property <image> logo;
+    in property <color> brand_color: #2e51a2;
+    in property <color> brand_dark: #172b55;
+    in-out property <bool> expanded: false;
+    callback toggled();
+
+    min-width: 0px;
+    vertical-stretch: 0;
+    border-radius: 20px;
+    border-width: header_focus.has-focus ? 2px : 1px;
+    border-color: header_focus.has-focus ? Theme.current.focus_ring : #ffffff26;
+    background: @linear-gradient(105deg, root.brand_color 0%, root.brand_dark 100%);
+    clip: true;
+
+    function toggle() {
+        root.expanded = !root.expanded;
+        root.toggled();
+    }
+
+    VerticalLayout {
+        spacing: 0px;
+        alignment: start;
+        header := Rectangle {
+            min-width: 0px;
+            height: Math.max(96px, labels.preferred-height + 32px);
+            vertical-stretch: 0;
+            background: header_touch.feedback-active ? #ffffff0b : transparent;
+            accessible-role: button;
+            accessible-label: root.title;
+            forward-focus: header_focus;
+
+            Image {
+                x: parent.width - 158px;
+                y: (parent.height - self.height) / 2;
+                width: 120px; height: 120px;
+                source: root.logo;
+                image-fit: contain;
+                opacity: 0.09;
+            }
+            Image {
+                x: 16px; y: (parent.height - self.height) / 2;
+                width: 40px; height: 40px;
+                source: root.logo;
+                image-fit: contain;
+            }
+            labels := VerticalLayout {
+                x: 72px; y: (parent.height - self.height) / 2;
+                width: Math.max(1px, parent.width - 124px);
+                height: self.preferred-height;
+                spacing: 4px;
+                alignment: start;
+                Text {
+                    text: root.title; color: white;
+                    font-size: 22px; font-weight: 700;
+                    wrap: word-wrap; min-width: 0px; vertical-stretch: 0;
+                }
+                Text {
+                    text: root.status; color: #ffffffd9;
+                    font-size: 14px;
+                    wrap: word-wrap; min-width: 0px; vertical-stretch: 0;
+                }
+            }
+            if root.expanded: IcChevronUp {
+                x: parent.width - 40px; y: (parent.height - self.height) / 2;
+                width: 24px; height: 24px; fill: #ffffffe6;
+            }
+            if !root.expanded: IcChevronDown {
+                x: parent.width - 40px; y: (parent.height - self.height) / 2;
+                width: 24px; height: 24px; fill: #ffffffe6;
+            }
+            header_focus := FocusScope {
+                key-pressed(event) => {
+                    if event.text == Key.Return || event.text == " " {
+                        root.toggle(); accept
+                    } else { reject }
+                }
+            }
+            header_touch := ControlTouchArea {
+                mouse-cursor: pointer;
+                clicked => { header_focus.focus(); root.toggle(); }
+            }
+        }
+        // Slint forbids @children under an `if`. Collapse this persistent
+        // content slot explicitly so hidden controls contribute no height.
+        body := Rectangle {
+            visible: root.expanded;
+            background: Theme.current.card;
+            height: root.expanded ? body_layout.preferred-height : 0px;
+            min-width: 0px; vertical-stretch: 0;
+            clip: true;
+            body_layout := VerticalLayout {
+                alignment: start;
+                spacing: 12px;
+                padding: 16px;
+                @children
+            }
+        }
+    }
+}

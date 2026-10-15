@@ -3,6 +3,9 @@ use super::*;
 use crate::providers;
 mod ui;
 mod worker;
+pub(super) fn sign_in_background() -> Result<Box<dyn Send>, String> {
+    worker::sign_in_background()
+}
 use nova_tracking::{Service, SourceRef};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 
