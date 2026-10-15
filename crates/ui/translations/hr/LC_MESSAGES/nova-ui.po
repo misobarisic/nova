@@ -1971,6 +1971,12 @@ msgstr "Desno"
 msgid "Next episode"
 msgstr "Sljedeća epizoda"
 
+msgid "Playback finished"
+msgstr "Reprodukcija je završena"
+
+msgid "Stay here"
+msgstr "Ostani ovdje"
+
 msgid "Choose streams"
 msgstr "Odaberite streamove"
 
@@ -2024,6 +2030,12 @@ msgstr "Natrag na detalje"
 
 msgid "New episodes"
 msgstr "Nove epizode"
+
+msgid "Watch history"
+msgstr "Povijest gledanja"
+
+msgid "Play again"
+msgstr "Reproducirajte ponovno"
 
 msgid "Remove from New episodes"
 msgstr "Ukloni iz novih epizoda"

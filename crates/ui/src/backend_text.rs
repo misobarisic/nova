@@ -702,6 +702,8 @@ pub fn tr(english: &str) -> &str {
         "▶ Resume" => "▶ Nastavite",
         "Caught up" => "Sve pogledano",
         "New episodes" => "Nove epizode",
+        "Watch history" => "Povijest gledanja",
+        "Play again" => "Reproducirajte ponovno",
         "Specials" => "Specijali",
         "Episode" => "Epizoda",
         "Resume" => "Nastavite",
@@ -1678,6 +1680,20 @@ pub fn calendar_week_title(first: (i64, u32, u32), last: (i64, u32, u32)) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watch_history_labels_follow_the_selected_language() {
+        with_language(Language::English, || {
+            assert_eq!(tr("Watch history"), "Watch history");
+            assert_eq!(tr("Resume"), "Resume");
+            assert_eq!(tr("Play again"), "Play again");
+        });
+        with_language(Language::Croatian, || {
+            assert_eq!(tr("Watch history"), "Povijest gledanja");
+            assert_eq!(tr("Resume"), "Nastavite");
+            assert_eq!(tr("Play again"), "Reproducirajte ponovno");
+        });
+    }
 
     #[test]
     fn setting_comparisons_translate_values_and_format_units() {

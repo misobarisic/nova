@@ -643,10 +643,10 @@ fn apply_load_playback_options(
     paused: bool,
     party_rate: Option<f64>,
 ) -> libmpv2::Result<()> {
-    // A party source waits for the coordinated start before its first audio
-    // sample. Holding its final frame also keeps explicit EOF observable until
-    // the party coordinator sends the terminal report and closes the source.
-    mpv.set_property("keep-open", if party_rate.is_some() { "yes" } else { "no" })?;
+    // Keep the decoded source and final frame available so the timeline can
+    // seek back after EOF. Party playback also needs explicit EOF to remain
+    // observable until its coordinator reports and closes the source.
+    mpv.set_property("keep-open", "yes")?;
     mpv.set_property("pause", paused || party_rate.is_some())?;
     if let Some(rate) = party_rate {
         mpv.set_property("speed", rate)?;
@@ -2046,7 +2046,9 @@ impl Player {
                 && mpv.get_property::<bool>("idle-active").ok() == Some(false)
             {
                 let _ = mpv.set_property("speed", effective as f64);
-                let _ = mpv.set_property("keep-open", if rate.is_some() { "yes" } else { "no" });
+                // Leaving a party restores the rate, while ordinary playback
+                // still retains the source for seeking after EOF.
+                let _ = mpv.set_property("keep-open", "yes");
             }
         }
         if let Some(app) = self.state.app.upgrade() {
@@ -2898,6 +2900,7 @@ impl Player {
         #[cfg(target_os = "android")]
         self.sync_frame_rate(&app, snapshot.container_fps);
 
+        let was_paused = app.get_is_paused();
         if snapshot.dur > 0.0 || snapshot.pos > 0.0 {
             // The startup wake chooses a playing/paused timeout. Publish the
             // live pause state first, rather than retaining loading's `true`.
@@ -2970,18 +2973,22 @@ impl Player {
         app.set_volume(snapshot.vol as f32);
         app.set_muted(snapshot.muted);
 
-        // Natural end of the stream: stop and return to the catalog.
+        // Retain the final frame and timeline at EOF. A terminal pause avoids
+        // rewriting identical progress every save interval and lets a seek
+        // back inspect a frame before the user explicitly presses Play.
+        // Parties own their terminal reporting and pause/rate policy.
         if self.state.started.load(Ordering::SeqCst)
             && snapshot.eof
-            && !snapshot.paused
             && self.state.party_playback_rate.lock().unwrap().is_none()
         {
-            // The app checkpoints this terminal playhead before close resets
-            // its mirror, and performs the same cleanup as the Exit control.
-            app.invoke_close_player();
-            if app.get_player_open() {
-                // Native-only embedders may not install an app coordinator.
-                self.close();
+            if !snapshot.paused {
+                self.set_paused(true);
+            }
+            app.set_is_paused(true);
+            if !snapshot.paused || !was_paused {
+                // Wake once on the terminal transition, after publishing the
+                // pause so the OSD chooses its paused timeout.
+                app.invoke_osd_mouse_moved();
             }
         }
     }
@@ -3396,7 +3403,7 @@ mod tests {
     }
 
     #[test]
-    fn party_load_pauses_before_playback_and_holds_explicit_eof() {
+    fn load_options_hold_eof_and_pause_party_start() {
         let mpv = Mpv::with_initializer(|init| {
             init.set_property("config", false)?;
             init.set_property("vo", "null")?;
@@ -3408,7 +3415,7 @@ mod tests {
         assert_eq!(mpv.get_property::<String>("keep-open").unwrap(), "yes");
         apply_load_playback_options(&mpv, false, None).unwrap();
         assert!(!mpv.get_property::<bool>("pause").unwrap());
-        assert_eq!(mpv.get_property::<String>("keep-open").unwrap(), "no");
+        assert_eq!(mpv.get_property::<String>("keep-open").unwrap(), "yes");
         apply_load_playback_options(&mpv, true, None).unwrap();
         assert!(
             mpv.get_property::<bool>("pause").unwrap(),
@@ -3637,7 +3644,7 @@ mod tests {
             init.set_property("ao", "null")
         })
         .unwrap();
-        mpv.set_property("pause", false).unwrap();
+        apply_load_playback_options(&mpv, false, None).unwrap();
         mpv_load::load_file_at(&mpv, source.to_str().unwrap(), 0.0).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while mpv.get_property::<f64>("duration").unwrap_or(0.0) <= 0.0 {
@@ -3677,6 +3684,71 @@ mod tests {
             readiness.buffered_ahead > 2.0,
             "local files need no packet cache"
         );
+
+        // Ordinary EOF keeps the source loaded and pauses exactly once. Its
+        // retained timeline can seek backwards, then explicit Play resumes
+        // from the selected position without loading a second source.
+        {
+            let guard = player.state.mpv.lock().unwrap();
+            let mpv = guard.as_ref().unwrap();
+            mpv.set_property("time-pos", mpv.get_property::<f64>("duration").unwrap())
+                .unwrap();
+            mpv.set_property("pause", false).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !player.playback_readiness().ended {
+            assert!(Instant::now() < deadline, "ordinary EOF was not retained");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        app.set_is_paused(false);
+        player.tick();
+        assert!(app.get_player_open());
+        assert!(app.get_playback_started());
+        assert!(app.get_is_paused());
+        assert!(player.is_paused());
+        assert!(app.get_position() > app.get_duration() - 0.1);
+        assert_eq!(&*wakes.borrow(), &[false, true]);
+        let terminal_position = app.get_position();
+        player.tick();
+        assert_eq!(app.get_position(), terminal_position);
+        assert_eq!(wakes.borrow().len(), 2, "steady EOF does not rearm the OSD");
+        {
+            let guard = player.state.mpv.lock().unwrap();
+            let mpv = guard.as_ref().unwrap();
+            assert!(!mpv.get_property::<bool>("idle-active").unwrap());
+            assert_eq!(
+                mpv.get_property::<String>("path").unwrap(),
+                source.to_str().unwrap()
+            );
+        }
+        player.seek_relative(-5.0);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while player.playback_readiness().ended {
+            assert!(Instant::now() < deadline, "seek did not leave EOF");
+            player.tick();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        player.tick();
+        assert!(
+            app.get_is_paused(),
+            "seeking alone preserves terminal pause"
+        );
+        let selected_position = app.get_position();
+        assert!(selected_position > 0.0 && selected_position < 8.0);
+        player.set_paused(false);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.get_position() <= selected_position + 0.05 {
+            assert!(
+                Instant::now() < deadline,
+                "Play did not resume the sought position"
+            );
+            player.tick();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.get_player_open());
+        assert!(!app.get_is_paused());
+        assert!(!player.playback_readiness().ended);
+        player.set_paused(true);
 
         let native_rate = || {
             player
@@ -3759,10 +3831,16 @@ mod tests {
             assert!(Instant::now() < deadline, "party EOF was not retained");
             std::thread::sleep(Duration::from_millis(10));
         }
+        let party_eof_paused = player.is_paused();
         player.tick();
         assert!(
             app.get_player_open(),
             "the party coordinator owns terminal close"
+        );
+        assert_eq!(
+            player.is_paused(),
+            party_eof_paused,
+            "the player tick preserves the party's terminal pause state"
         );
         assert!(player.playback_readiness().ended);
         *player.state.preference_source.lock().unwrap() = "https://example.invalid/stale".into();

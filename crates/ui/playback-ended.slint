@@ -1,0 +1,131 @@
+import { Theme, Anim } from "@NovaUiShared";
+import { TrackingButton } from "tracking-controls.slint";
+
+// Retained above the player so closing can finish its fade without exposing
+// half-built controls. Playback policy and the five-second delay live in Rust.
+export component PlaybackEnded inherits Rectangle {
+    in property <bool> open;
+    in property <bool> has_next;
+    in property <string> next_title;
+    in property <string> show_title;
+    in property <string> episode_title;
+    in property <image> artwork;
+    in property <length> safe-top;
+    in property <length> safe-bottom;
+    in property <length> safe-left;
+    in property <length> safe-right;
+    callback stay();
+    callback next();
+    callback details();
+    public function focus_shell() { if root.open { keys.focus(); } }
+
+    private property <bool> retained;
+    private property <bool> revealed;
+    private property <bool> motion: Anim.enabled && Anim.transitions;
+    private property <bool> short: root.height - root.safe-top - root.safe-bottom < 460px;
+    private property <int> selected;
+    private property <image> retained_artwork;
+    visible: root.open || root.retained;
+    clip: true;
+    background: Theme.current.artwork_canvas;
+    opacity: root.revealed ? 1 : 0;
+    animate opacity { duration: Anim.transition_fade; easing: ease-out; }
+
+    function update_open() {
+        enter.stop(); exit.stop();
+        if root.open {
+            root.retained = true;
+            root.retained_artwork = root.artwork;
+            root.selected = 0;
+            focus_timer.start();
+            if root.motion { enter.start(); } else { root.revealed = true; }
+        } else {
+            root.revealed = false;
+            if root.motion && root.retained { exit.start(); }
+            else { root.retained = false; }
+        }
+    }
+    function activate() {
+        if !root.open { return; }
+        if root.has_next && root.selected == 0 { root.next(); }
+        else if root.selected == (root.has_next ? 1 : 0) { root.stay(); }
+        else { root.details(); }
+    }
+    init => { root.update_open(); }
+    changed open => { root.update_open(); }
+    changed has_next => { root.selected = 0; }
+    changed artwork => { if root.open { root.retained_artwork = root.artwork; } }
+    changed motion => {
+        if !root.motion {
+            enter.stop(); exit.stop();
+            root.retained = root.open; root.revealed = root.open;
+        }
+    }
+    enter := Timer { interval: 1ms; running: false; triggered => { self.stop(); root.revealed = root.open; } }
+    exit := Timer { interval: Anim.transition_fade; running: false; triggered => { self.stop(); root.retained = false; } }
+    focus_timer := Timer { interval: 1ms; running: false; triggered => { self.stop(); root.focus_shell(); } }
+
+    ended_artwork := Image { source: root.retained_artwork; width: 100%; height: 100%; image-fit: cover; }
+    ended_dimmer := Rectangle { width: 100%; height: 100%; background: Theme.current.scrim_player; opacity: 0.78; }
+    TouchArea { width: 100%; height: 100%; }
+    keys := FocusScope {
+        width: 100%; height: 100%;
+        enabled: root.open;
+        capture-key-pressed(e) => {
+            if !root.open { reject }
+            else if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
+                if !e.repeat { root.stay(); } accept
+            } else if e.text == Key.UpArrow || e.text == Key.LeftArrow || (e.text == Key.Tab && e.modifiers.shift) {
+                root.selected = Math.mod(root.selected + (root.has_next ? 2 : 1), root.has_next ? 3 : 2); accept
+            } else if e.text == Key.DownArrow || e.text == Key.RightArrow || e.text == Key.Tab {
+                root.selected = Math.mod(root.selected + 1, root.has_next ? 3 : 2); accept
+            } else if e.text == Key.Return || e.text == " " {
+                if !e.repeat { root.activate(); } accept
+            } else { accept }
+        }
+        ended_content := VerticalLayout {
+            x: root.safe-left + (root.width - root.safe-left - root.safe-right - self.width) / 2;
+            y: root.safe-top + Math.max(16px, (root.height - root.safe-top - root.safe-bottom - self.preferred-height) / 2)
+                + (root.revealed ? 0px : 16px);
+            width: Math.max(0px, Math.min(520px, root.width - root.safe-left - root.safe-right - 40px));
+            height: self.preferred-height;
+            spacing: root.short ? 8px : 16px;
+            animate y { duration: Anim.transition_slide; easing: ease-out; }
+            Text {
+                text: @tr("Playback finished"); font-size: 13px; font-weight: 600;
+                color: Theme.current.accent_soft; horizontal-alignment: center;
+            }
+            Text {
+                text: root.show_title;
+                font-size: root.short ? 24px : 32px; font-weight: 800;
+                color: Theme.current.text_bright; horizontal-alignment: center;
+                wrap: word-wrap; max-lines: root.short ? 1 : 2; overflow: elide;
+            }
+            if root.episode_title != "": Text {
+                text: root.episode_title; font-size: 14px;
+                color: Theme.current.text_player_secondary; horizontal-alignment: center;
+                wrap: no-wrap; overflow: elide;
+            }
+            if root.has_next: Text {
+                text: @tr("Next episode") + (root.next_title == "" ? "" : " · " + root.next_title);
+                font-size: 13px; color: Theme.current.text_player_secondary;
+                horizontal-alignment: center; wrap: no-wrap; overflow: elide;
+            }
+            if root.has_next: TrackingButton {
+                text: @tr("Next episode"); primary: true; compact: root.short;
+                selected: root.selected == 0;
+                clicked => { if root.open { root.next(); } }
+            }
+            TrackingButton {
+                text: @tr("Stay here"); primary: !root.has_next; compact: root.short;
+                selected: root.selected == (root.has_next ? 1 : 0);
+                clicked => { if root.open { root.stay(); } }
+            }
+            TrackingButton {
+                text: @tr("Back to details"); compact: root.short;
+                selected: root.selected == (root.has_next ? 2 : 1);
+                clicked => { if root.open { root.details(); } }
+            }
+        }
+    }
+}

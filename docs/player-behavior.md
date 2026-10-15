@@ -4,6 +4,21 @@ Closing the in-app player finalizes its observed progress and immediately rebuil
 Home’s Continue Watching and Upcoming cards, including the next released episode
 and updated resume progress, without requiring a navigation change.
 
+Home also offers Watch history, newest actual playback first, with the most recent
+episode of each title. It includes titles outside Library and partial rewatches
+without clearing their watched status. Titles visibly shown in Continue Watching
+are omitted from History. Continue Watching resumes an active partial rewatch
+instead of jumping ahead. History cards open that exact episode's stream selector,
+including when metadata must reload. Default layouts enable History after Continue
+Watching; custom layouts can add/reorder it in Settings → Home.
+
+Ordinary native playback retains the paused final frame and seekable timeline at
+EOF. After five seconds at the end, a fullscreen menu offers Stay in player,
+Next episode when available, and Show details over the dimmed episode loading
+artwork. Staying dismisses this end screen; seeking backward cancels it and lets
+you replay the ending with Play. Source replacement and close reset its delay. Backgrounding suppresses the
+current end menu until playback leaves the end and reaches EOF again. Watch parties retain their coordinator-owned end behavior.
+
 Local edits request device sync after 2 seconds without another edit, with a
 10-second ceiling during continuous editing. Ordinary playback checkpoints use
 a fixed 2-minute automatic push deadline that later checkpoints do not postpone;
@@ -59,9 +74,10 @@ covers the pinned filters and the area above them, including safe-area insets.
 Artwork starts at the top and fades into the canvas. True-black cards use a thin
 gray outline for separation, with the stronger purple ring for keyboard focus.
 Ordinary bottom subtitles rise above the bottom OSD with an 8-pixel logical gap
-and follow its existing fade, including reduced-motion behavior. A higher user
-position remains unchanged; hiding controls or closing playback restores the base
-position. Native ASS dialogue already clear of the controls in letterboxed video
+and follow its existing fade, including reduced-motion behavior. The next-episode
+banner also reserves subtitle clearance while the rest of the OSD is hidden.
+A higher user position remains unchanged; hiding both controls and the banner,
+or closing playback, restores the base position. Native ASS dialogue already clear of the controls in letterboxed video
 stays put, and mpv/libass retain authored positions and styling for signs/effects.
 Nova changes only the transient `sub-pos` value and never forces ASS style overrides.
 Stream rows offer playback and an actions button; desktop keeps native menus and touch
@@ -88,7 +104,8 @@ wrapped-row and addon-gesture tests.
 
 The OSD header shows `S1E1: Episode title` beside Exit, with the show's
 name rendered as text below it. Movies show their title without an
-episode line. The header fades with the controls; the bottom strip retains
+episode line. The party badge sits below the measured caption block with a gap.
+The header fades with the controls; the bottom strip retains
 playback controls and timing without repeating the title. The displayed title belongs to
 the playback request, so browsing cannot replace it with another show's title.
 Playback no longer fetches or carries title logos. Visible controls dim the entire playing video uniformly;

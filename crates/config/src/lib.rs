@@ -219,6 +219,7 @@ pub struct HomeCatalogSource {
 #[serde(tag = "kind", content = "catalog", rename_all = "snake_case")]
 pub enum HomeRowSource {
     ContinueWatching,
+    WatchHistory,
     NewEpisodes,
     Upcoming,
     Addon(HomeCatalogSource),
@@ -716,13 +717,17 @@ impl Default for CacheSettings {
 }
 
 impl CacheSettings {
-    /// Preserve the old order and hidden built-ins until the first layout edit.
+    /// Add default built-ins to legacy layouts, preserving explicit custom rows.
     pub fn effective_home_rows(&self) -> Vec<HomeRow> {
         let rows = self.home_rows.clone().unwrap_or_else(|| {
             let mut rows = vec![
                 HomeRow {
                     source: HomeRowSource::ContinueWatching,
                     enabled: self.home_continue_enabled,
+                },
+                HomeRow {
+                    source: HomeRowSource::WatchHistory,
+                    enabled: true,
                 },
                 HomeRow {
                     source: HomeRowSource::NewEpisodes,
@@ -1159,6 +1164,49 @@ mod tests {
         assert_eq!(Language::English.label(), "English");
         assert_eq!(Language::Croatian.code(), "hr");
         assert_eq!(Language::Croatian.label(), "Hrvatski");
+    }
+
+    #[test]
+    fn watch_history_defaults_after_continue_without_changing_custom_home_rows() {
+        let legacy: CacheSettings = serde_json::from_str(
+            r#"{"enabled":false,"format":"webp","quality":85,"home_continue_enabled":false}"#,
+        )
+        .unwrap();
+        let rows = legacy.effective_home_rows();
+        assert_eq!(rows[0].source, HomeRowSource::ContinueWatching);
+        assert!(!rows[0].enabled);
+        assert_eq!(rows[1].source, HomeRowSource::WatchHistory);
+        assert!(rows[1].enabled);
+        assert_eq!(rows[2].source, HomeRowSource::NewEpisodes);
+        assert_eq!(rows[3].source, HomeRowSource::Upcoming);
+
+        let mut custom = legacy;
+        custom.set_home_rows(vec![HomeRow {
+            source: HomeRowSource::Upcoming,
+            enabled: true,
+        }]);
+        assert_eq!(custom.effective_home_rows().len(), 1);
+        assert!(!custom.home_row_enabled(&HomeRowSource::WatchHistory));
+        custom.set_home_rows(Vec::new());
+        assert!(custom.effective_home_rows().is_empty());
+    }
+
+    #[test]
+    fn watch_history_layout_choice_round_trips_and_preserves_visibility() {
+        let mut settings = CacheSettings::default();
+        settings.set_home_rows(vec![HomeRow {
+            source: HomeRowSource::WatchHistory,
+            enabled: false,
+        }]);
+        let encoded = serde_json::to_string(&settings).unwrap();
+        assert!(encoded.contains(r#""kind":"watch_history""#));
+        let restored: CacheSettings = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            restored.effective_home_rows(),
+            settings.effective_home_rows()
+        );
+        assert!(!restored.home_row_enabled(&HomeRowSource::WatchHistory));
+        assert!(restored.home_row_sources.is_empty());
     }
 
     #[test]

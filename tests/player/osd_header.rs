@@ -39,6 +39,55 @@ fn click(app: &nova::AppWindow, element: &ElementHandle) {
 }
 
 #[test]
+fn party_badge_uses_a_separate_measured_caption_lane_and_follows_osd_visibility() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::party_badge_uses_a_separate_measured_caption_lane_and_follows_osd_visibility"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_party_busy(true);
+    app.set_player_show_title("A very long show title that must elide inside its own lane".into());
+    app.window().show().unwrap();
+    for (width, height) in [(320, 568), (390, 844), (800, 360), (1280, 720)] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        for android in [false, true] {
+            app.set_is_android(android);
+            // Factory geometry also changes for asymmetric landscape cutouts.
+            let bridge = app.global::<nova::PlayerOsdBridge>();
+            bridge.set_safe_top(20.0);
+            bridge.set_safe_left(36.0);
+            bridge.set_safe_right(4.0);
+            for episode in ["", "S1 E1 · A long episode title"] {
+                app.set_player_episode_title(episode.into());
+                app.set_osd_visible(true);
+                settle(&app);
+                let header = element(&app, "PlayerOverlay::player_header");
+                let badge = ElementHandle::find_by_element_type_name(&app, "PartyPlayerBadge")
+                    .next()
+                    .unwrap();
+                assert!(
+                    badge.absolute_position().y
+                        >= header.absolute_position().y + header.size().height + 11.5,
+                    "party badge obscures the caption at {width}x{height}"
+                );
+                assert!(badge.absolute_position().y + badge.size().height < height as f32 / 2.0);
+                assert_eq!(badge.computed_opacity(), 1.0);
+                app.set_osd_visible(false);
+                settle(&app);
+                assert_eq!(badge.computed_opacity(), 0.0);
+            }
+        }
+    }
+}
+
+#[test]
 fn text_titles_fit_and_screenshot_is_guarded() {
     if !crate::isolation::run(concat!(
         module_path!(),

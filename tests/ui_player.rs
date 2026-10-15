@@ -27,6 +27,9 @@ mod buffered_progress;
 #[path = "player/subtitle_lift.rs"]
 mod subtitle_lift;
 
+#[path = "player/end_menu.rs"]
+mod end_menu;
+
 #[path = "player/remote_controls.rs"]
 mod remote_controls;
 

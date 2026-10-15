@@ -2564,6 +2564,7 @@ mod tests {
             unwatched_at_secs: unwatched_at,
             play_count: plays,
             updated_at_secs: at,
+            history: None,
         }
     }
 

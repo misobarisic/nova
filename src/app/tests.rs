@@ -101,6 +101,7 @@ mod episode_helpers_tests {
             unwatched_at_secs: 0,
             play_count: 1,
             updated_at_secs: at,
+            history: None,
         }
     }
 
@@ -297,6 +298,7 @@ mod playback_tests {
             unwatched_at_secs: 0,
             play_count: 1,
             updated_at_secs: at,
+            history: None,
         }
     }
 

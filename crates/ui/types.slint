@@ -145,6 +145,9 @@ export struct HomeCatalogCard {
     poster_url: string,
     poster: image,
     is_loaded: bool,
+    /// Empty for ordinary catalogs; localized playback action for history.
+    history_action: string,
+    progress: float,
 }
 
 /// One trusted peer device shown in the Settings → Sync list.

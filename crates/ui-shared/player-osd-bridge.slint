@@ -6,6 +6,8 @@ export global PlayerOsdBridge {
     in-out property <component-factory> factory;
     in-out property <length> viewport_width;
     in-out property <length> viewport_height;
+    // Measured caption bottom for overlays sharing the player's top lanes.
+    in-out property <length> header_bottom;
     in-out property <bool> next_episode_visible;
     in-out property <string> next_episode_token;
     in-out property <string> next_episode_title;

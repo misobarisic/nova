@@ -639,6 +639,7 @@ impl Bridge {
                 .effective_home_rows();
             for (source, label) in [
                 (HomeRowSource::ContinueWatching, "Continue Watching"),
+                (HomeRowSource::WatchHistory, "Watch history"),
                 (HomeRowSource::NewEpisodes, "New episodes"),
                 (HomeRowSource::Upcoming, "Upcoming"),
             ] {
@@ -677,10 +678,13 @@ impl Bridge {
                 .into_iter()
                 .map(|entry| match entry.source {
                     HomeRowSource::ContinueWatching
+                    | HomeRowSource::WatchHistory
                     | HomeRowSource::NewEpisodes
                     | HomeRowSource::Upcoming => HomeCatalogRow {
                         title: text::tr(if entry.source == HomeRowSource::ContinueWatching {
                             "Continue Watching"
+                        } else if entry.source == HomeRowSource::WatchHistory {
+                            "Watch history"
                         } else if entry.source == HomeRowSource::NewEpisodes {
                             "New episodes"
                         } else {

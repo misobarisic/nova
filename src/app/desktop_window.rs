@@ -13,7 +13,8 @@ pub(super) fn sync_cursor(app: &AppWindow) {
         || !app.get_playback_started()
         || app.get_osd_visible()
         || app.get_osd_opacity() > 0.0
-        || app.get_next_episode_visible();
+        || app.get_next_episode_visible()
+        || app.get_playback_end_menu_shown();
     app.window()
         .with_winit_window(|native| native.set_cursor_visible(visible));
 }

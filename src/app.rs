@@ -373,6 +373,10 @@ struct Shared {
     /// Home → Continue Watching entries, rebuilt from `progress` whenever
     /// it changes (latest resumable episode per library series first).
     continue_list: Vec<ContinueEntry>,
+    /// Recent actual playback, excluding titles visible in Continue Watching.
+    home_history_list: Vec<watch_history::HistoryEntry>,
+    /// Exact episode/resume selected from History, scoped to one modal opening.
+    history_selection: Option<watch_history_actions::HistorySelection>,
     /// Released episodes awaiting an explicit return, separate from active viewing.
     new_episodes_list: Vec<ContinueEntry>,
     /// Home → Upcoming entries, rebuilt alongside (`continue_list`):
@@ -398,8 +402,9 @@ struct Shared {
     home_showcase_loaded: bool,
     /// Home → Upcoming calendar month/selection/open flag (UI-only).
     upcoming_cal: UpcomingCal,
-    /// Episode currently playing (series flow); `None` for movies / idle.
+    /// Current episode or movie; `None` while idle.
     playback: Option<PlaybackTarget>,
+    playback_end: playback_end::State,
     /// Resolved stream held while the user chooses whether to resume.
     pending_resume_stream: Option<PendingStream>,
     resume_prompt_choice: Option<bool>,
@@ -549,10 +554,27 @@ pub(crate) struct EpisodeProgress {
     play_count: u32,
     /// Seconds since the Unix epoch of the last update.
     updated_at_secs: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    history: Option<PlaybackHistory>,
 }
 
-/// In-memory target of the currently playing episode (series flow only;
-/// movies clear it). Lives in [`Shared::playback`].
+/// Display metadata captured from the actual source, independent of Library membership.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct PlaybackHistory {
+    type_: String,
+    title: String,
+    poster_url: String,
+    episode_label: String,
+    season: Option<u32>,
+    episode: Option<u32>,
+    played_at_secs: u64,
+    /// Actual replay of watched material, including seeking back after EOF.
+    #[serde(default)]
+    rewatch: bool,
+}
+
+/// In-memory target of the currently playing episode or movie.
+/// Lives in [`Shared::playback`].
 #[derive(Clone, Debug, Default)]
 struct PlaybackTarget {
     series_id: String,
@@ -577,6 +599,8 @@ struct PlaybackTarget {
     /// Last wall-clock save (throttles KV writes during the 250 ms poll).
     last_saved_at: u64,
     last_saved_pos: f64,
+    /// Immutable source metadata; browsing another title cannot change it.
+    history: Option<PlaybackHistory>,
 }
 
 /// One Home → Continue Watching entry: the latest resumable episode of a
@@ -751,6 +775,7 @@ mod party;
 mod persistence;
 mod playback;
 mod playback_actions;
+mod playback_end;
 mod playback_preferences;
 mod plugin_cache;
 mod plugin_settings;
@@ -760,6 +785,8 @@ mod run;
 mod settings;
 mod settings_sync;
 mod stream_prefetch;
+mod watch_history;
+mod watch_history_actions;
 pub use run::run;
 
 mod qr;

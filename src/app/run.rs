@@ -1054,6 +1054,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
     let b = bridge.clone();
+    app.on_playback_end_stay(move || b.playback_end_stay());
+    let b = bridge.clone();
+    app.on_playback_end_next(move || b.playback_end_next());
+    let b = bridge.clone();
+    app.on_playback_end_details(move || b.playback_end_details());
+    let b = bridge.clone();
     app.on_resume_choice(move |resume| {
         let _ = b.dispatch_playback_action(PlaybackAction::Resume(resume));
     });
@@ -1277,6 +1283,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             tick_bridge.party_tick();
             tick_bridge.flush_playback_preferences(false);
             tick_bridge.note_player_progress_from_ui();
+            tick_bridge.refresh_playback_end_menu();
             tick_bridge.note_torrent_progress_from_ui();
             tick_bridge.refresh_download_rows();
             if tick_bridge

@@ -1,4 +1,4 @@
-//! Home page: featured catalogs, Continue Watching, and Upcoming.
+//! Home page: featured catalogs, Continue Watching, Watch history, and Upcoming.
 use super::*;
 
 const HOME_SHOWCASE_PER_CATALOG: usize = 5;
@@ -728,6 +728,8 @@ impl Bridge {
     fn install_home_catalog_rows(&self, groups: Vec<HomeCatalogGroup>) {
         let Some(app) = self.app() else { return };
         let view = app.get_home_view();
+        let history_was_open = view >= 3
+            && (view - 3) as usize == self.shared.lock().unwrap().home_catalog_row_groups.len();
         let open_source = if view >= 3 {
             self.shared
                 .lock()
@@ -738,6 +740,24 @@ impl Bridge {
         } else {
             None
         };
+        self.rebuild_watch_history_list();
+        // Keep live decoded images when language/progress changes republish
+        // models after their original cache entries have been evicted.
+        let previous_cards: HashMap<_, _> = app
+            .get_home_catalog_cards()
+            .iter()
+            .filter(|card| card.is_loaded)
+            .map(|card| {
+                (
+                    (
+                        card.media_type.to_string(),
+                        card.id.to_string(),
+                        card.poster_url.to_string(),
+                    ),
+                    card.poster,
+                )
+            })
+            .collect();
         let mut sections = Vec::new();
         let mut cards = Vec::new();
         let mut items = Vec::new();
@@ -763,6 +783,11 @@ impl Bridge {
                         ))
                     })
                     .flatten();
+                let previous = previous_cards.get(&(
+                    preview.type_.clone(),
+                    preview.id.clone(),
+                    poster_url.to_owned(),
+                ));
                 cards.push(HomeCatalogCard {
                     section_index,
                     flat_index: flat_index as i32,
@@ -770,22 +795,79 @@ impl Bridge {
                     media_type: SharedString::from(&preview.type_),
                     title: SharedString::from(preview.title()),
                     year: SharedString::from(preview.year_str().unwrap_or_default()),
+                    history_action: SharedString::default(),
+                    progress: 0.0,
                     poster_url: SharedString::from(poster_url),
                     poster: pixels
                         .as_ref()
                         .map(|pixels| Image::from_rgba8(pixels.clone()))
+                        .or_else(|| previous.cloned())
                         .unwrap_or_default(),
-                    is_loaded: pixels.is_some(),
+                    is_loaded: pixels.is_some() || previous.is_some(),
                 });
                 items.push(preview.clone());
             }
         }
+        let history = self.shared.lock().unwrap().home_history_list.clone();
+        if !history.is_empty() {
+            let section_index = sections.len() as i32;
+            sections.push(HomeCatalogSection {
+                title: text::tr("Watch history").into(),
+                first_card: cards.len() as i32,
+                card_count: history.len() as i32,
+            });
+            for (index, entry) in history.iter().enumerate() {
+                let pixels = (!entry.poster_url.is_empty())
+                    .then(|| {
+                        decoded_cache_get(&image_cache_key(
+                            &entry.poster_url,
+                            ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+                        ))
+                    })
+                    .flatten();
+                let previous = previous_cards.get(&(
+                    entry.type_.clone(),
+                    entry.series_id.clone(),
+                    entry.poster_url.clone(),
+                ));
+                cards.push(HomeCatalogCard {
+                    section_index,
+                    flat_index: (items.len() + index) as i32,
+                    id: entry.series_id.clone().into(),
+                    media_type: entry.type_.clone().into(),
+                    title: entry.title.clone().into(),
+                    year: entry.caption().into(),
+                    history_action: text::tr(if entry.can_resume() {
+                        "Resume"
+                    } else {
+                        "Play again"
+                    })
+                    .into(),
+                    progress: if entry.can_resume() {
+                        progress_fraction(entry.position_secs, entry.duration_secs)
+                    } else {
+                        0.0
+                    },
+                    poster_url: entry.poster_url.clone().into(),
+                    poster: pixels
+                        .as_ref()
+                        .map(|pixels| Image::from_rgba8(pixels.clone()))
+                        .or_else(|| previous.cloned())
+                        .unwrap_or_default(),
+                    is_loaded: pixels.is_some() || previous.is_some(),
+                });
+            }
+        }
         // A settings reorder must keep an open grid tied to its source,
         // rather than silently displaying the new catalog at the old index.
-        let next_view = open_source
-            .as_ref()
-            .and_then(|source| groups.iter().position(|group| &group.source == source))
-            .map_or(0, |index| index as i32 + 3);
+        let next_view = if history_was_open && !history.is_empty() {
+            groups.len() as i32 + 3
+        } else {
+            open_source
+                .as_ref()
+                .and_then(|source| groups.iter().position(|group| &group.source == source))
+                .map_or(0, |index| index as i32 + 3)
+        };
         {
             let mut state = self.shared.lock().unwrap();
             state.home_catalog_row_groups = groups;
@@ -1568,15 +1650,17 @@ impl Bridge {
     }
 
     pub(super) fn home_catalog_card_picked(&self, index: usize) {
-        let preview = self
-            .shared
-            .lock()
-            .unwrap()
-            .home_catalog_row_items
-            .get(index)
-            .cloned();
+        let (preview, addon_count) = {
+            let state = self.shared.lock().unwrap();
+            (
+                state.home_catalog_row_items.get(index).cloned(),
+                state.home_catalog_row_items.len(),
+            )
+        };
         if let Some(preview) = preview {
             self.open_preview(preview, 0, false, None, false);
+        } else if index >= addon_count {
+            self.watch_history_picked(index - addon_count);
         }
     }
 
@@ -1627,7 +1711,9 @@ impl Bridge {
             for record in state.progress.values() {
                 if latest_refs
                     .get(record.series_id.as_str())
-                    .is_none_or(|previous| record.updated_at_secs > previous.updated_at_secs)
+                    .is_none_or(|previous| {
+                        continue_playback_order(record) > continue_playback_order(previous)
+                    })
                 {
                     latest_refs.insert(&record.series_id, record);
                 }
@@ -1688,7 +1774,8 @@ impl Bridge {
             if bucket == "Completed" {
                 continue;
             }
-            let returning = entry.type_ != "movie" && bucket == "New episodes";
+            let returning =
+                entry.type_ != "movie" && bucket == "New episodes" && !genuine_partial_rewatch(p);
             let episode_id = if returning {
                 next_episode_to_watch(&entry.id, episode_slice, &state.progress)
                     .map(|v| v.id.clone())
@@ -1853,7 +1940,7 @@ impl Bridge {
                 .map(|p| progress_fraction(p.position_secs, p.duration_secs))
                 .unwrap_or(0.0);
             let started = record
-                .map(|p| !p.watched && p.position_secs > 0.0)
+                .map(|p| (!p.watched && p.position_secs > 0.0) || genuine_partial_rewatch(p))
                 .unwrap_or(false);
             let is_watched = |v: &Video| {
                 state
@@ -1932,8 +2019,15 @@ impl Bridge {
             }
         }
         self.apply_upcoming_cal_to_ui();
-        self.publish_home_catalog_order();
+        self.refresh_home_history_models();
         self.ensure_home_catalog_rows_loaded();
+    }
+
+    /// Republish local history immediately; addon results remain cached and
+    /// their refresh cadence is independent of playback and sync application.
+    pub(super) fn refresh_home_history_models(&self) {
+        let groups = self.shared.lock().unwrap().home_catalog_row_groups.clone();
+        self.install_home_catalog_rows(groups);
     }
 
     /// Negative IDs are built-ins; nonnegative IDs address catalog sections.
@@ -1955,6 +2049,9 @@ impl Bridge {
                     HomeRowSource::ContinueWatching if continue_count > 0 => Some(-1),
                     HomeRowSource::Upcoming if upcoming_count > 0 => Some(-2),
                     HomeRowSource::NewEpisodes if new_count > 0 => Some(-3),
+                    HomeRowSource::WatchHistory if !state.home_history_list.is_empty() => {
+                        Some(state.home_catalog_row_groups.len() as i32)
+                    }
                     HomeRowSource::Addon(source) => state
                         .home_catalog_row_groups
                         .iter()
@@ -2061,6 +2158,7 @@ impl Bridge {
         };
         let (year, month, _) = civil_from_days(first);
         app.set_home_cal_title(SharedString::from(text::cal_month_title(month, year)));
+        self.refresh_home_history_models();
     }
 
     /// Rebuild [`Shared::upcoming_list`]: unaired episodes of library
@@ -2669,7 +2767,7 @@ fn continue_remaining(record: Option<&EpisodeProgress>) -> String {
     let Some(record) = record else {
         return String::new();
     };
-    if record.watched {
+    if record.watched && !genuine_partial_rewatch(record) {
         return text::tr("Completed").into();
     }
     if record.position_secs > 0.0
@@ -2891,6 +2989,12 @@ pub(crate) fn continue_resume_id(
     episodes: Option<&[Video]>,
     progress: &HashMap<String, EpisodeProgress>,
 ) -> Option<String> {
+    // Completion stays sticky in stored progress. Only a captured playback
+    // opening can turn that record into a resumable rewatch; a manual mark at
+    // an old partial position must still advance to the next episode.
+    if genuine_partial_rewatch(latest) {
+        return Some(latest.episode_id.clone());
+    }
     if type_ == "movie" {
         return (!latest.watched && latest.position_secs > 0.0).then(|| latest.episode_id.clone());
     }
@@ -2901,6 +3005,27 @@ pub(crate) fn continue_resume_id(
     } else {
         next_episode_to_watch(item_id, episodes?, progress).map(|v| v.id.clone())
     }
+}
+
+fn genuine_partial_rewatch(record: &EpisodeProgress) -> bool {
+    record.play_count > 0
+        && record
+            .history
+            .as_ref()
+            .is_some_and(|history| history.rewatch)
+        && record.position_secs.is_finite()
+        && record.duration_secs.is_finite()
+        && resumable_position(record.position_secs, record.duration_secs, false)
+}
+
+fn continue_playback_order(record: &EpisodeProgress) -> (u64, &str) {
+    (
+        record
+            .history
+            .as_ref()
+            .map_or(record.updated_at_secs, |history| history.played_at_secs),
+        &record.episode_id,
+    )
 }
 
 /// Read the Continue Watching hide map (empty when absent/corrupt).
@@ -3973,6 +4098,7 @@ mod tests {
             unwatched_at_secs: 0,
             play_count: 1,
             updated_at_secs: updated,
+            history: None,
         }
     }
 
@@ -4215,6 +4341,151 @@ mod tests {
             activity.get("up-a").map(|v| v.phase),
             Some(ViewingPhase::AwaitingReturn)
         );
+        verify_history_catalog_projection(&bridge, &app);
+    }
+
+    /// Runs in the projection test's isolated UI/storage process above.
+    fn verify_history_catalog_projection(bridge: &Bridge, app: &AppWindow) {
+        let a = showcase_source("history-a", "");
+        let b = showcase_source("history-b", "");
+        let group = |source: &HomeCatalogSource, id: &str| HomeCatalogGroup {
+            source: source.clone(),
+            title: id.into(),
+            previews: vec![showcase_preview(id)],
+        };
+        let mut outside = progress("outside-library", "episode-2", 3600.0, true, 20);
+        outside.history = Some(PlaybackHistory {
+            type_: "series".into(),
+            title: "Outside Library".into(),
+            episode_label: "Second episode".into(),
+            season: Some(1),
+            episode: Some(2),
+            played_at_secs: 20,
+            ..Default::default()
+        });
+        let mut continued = progress("history-movie", "history-movie", 60.0, false, 10);
+        continued.history = Some(PlaybackHistory {
+            type_: "movie".into(),
+            title: "Continued movie".into(),
+            played_at_secs: 10,
+            ..Default::default()
+        });
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.entries = vec![library_entry(
+                "history-movie",
+                "movie",
+                "Continued movie",
+                WatchStatus::Auto,
+            )];
+            state.progress = [outside, continued]
+                .into_iter()
+                .map(|record| {
+                    (
+                        progress_map_key(&record.series_id, &record.episode_id),
+                        record,
+                    )
+                })
+                .collect();
+            state.continue_list = vec![ContinueEntry {
+                series_id: "history-movie".into(),
+                type_: "movie".into(),
+                episode_id: "history-movie".into(),
+                updated_at_secs: 10,
+            }];
+            state.cache_settings.home_rows = Some(vec![
+                nova_config::HomeRow {
+                    source: HomeRowSource::WatchHistory,
+                    enabled: true,
+                },
+                nova_config::HomeRow {
+                    source: HomeRowSource::Addon(b.clone()),
+                    enabled: true,
+                },
+                nova_config::HomeRow {
+                    source: HomeRowSource::Addon(a.clone()),
+                    enabled: true,
+                },
+                nova_config::HomeRow {
+                    source: HomeRowSource::ContinueWatching,
+                    enabled: true,
+                },
+            ]);
+        }
+        app.set_home_view(0);
+        app.set_home_continue(Rc::new(VecModel::from(bridge.current_continue_rows())).into());
+        bridge.install_home_catalog_rows(vec![group(&a, "addon-a"), group(&b, "addon-b")]);
+        assert_eq!(
+            app.get_home_catalog_order().iter().collect::<Vec<_>>(),
+            vec![2, 1, 0, -1]
+        );
+        assert_eq!(app.get_home_catalog_sections().row_count(), 3);
+        assert_eq!(app.get_home_catalog_cards().row_count(), 3);
+        let history_card = app.get_home_catalog_cards().row_data(2).unwrap();
+        assert_eq!(history_card.section_index, 2);
+        assert_eq!(history_card.flat_index, 2);
+        assert_eq!(history_card.id, "outside-library");
+        assert_eq!(history_card.year, "S1 E2 · Second episode");
+        assert_eq!(history_card.history_action, "Play again");
+        assert_eq!(app.get_home_catalog_positions().row_data(4), Some(0));
+        {
+            let state = bridge.shared.lock().unwrap();
+            assert_eq!(state.home_catalog_row_items.len(), 2);
+            assert_eq!(state.home_history_list.len(), 1);
+            assert_eq!(
+                state.home_history_list
+                    [(history_card.flat_index as usize) - state.home_catalog_row_items.len()]
+                .episode_id,
+                "episode-2"
+            );
+        }
+
+        // The synthetic section follows the addon groups physically, while
+        // the configured landing-row order remains independent of that index.
+        app.set_home_view(5);
+        bridge.install_home_catalog_rows(vec![group(&b, "addon-b")]);
+        assert_eq!(app.get_home_view(), 4);
+        bridge.install_home_catalog_rows(vec![group(&b, "addon-b"), group(&a, "addon-a")]);
+        assert_eq!(app.get_home_view(), 5);
+        app.set_home_view(3);
+        bridge.install_home_catalog_rows(vec![group(&a, "addon-a"), group(&b, "addon-b")]);
+        assert_eq!(app.get_home_view(), 4, "addon grid retains its source too");
+
+        app.set_home_view(5);
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .home_rows
+            .as_mut()
+            .unwrap()[3]
+            .enabled = false;
+        bridge.refresh_home_history_models();
+        assert_eq!(
+            bridge.shared.lock().unwrap().home_history_list.len(),
+            2,
+            "disabled Continue cannot suppress history even with its stale model still present"
+        );
+        let resumed = app.get_home_catalog_cards().row_data(3).unwrap();
+        assert_eq!(resumed.history_action, "Resume");
+        assert!(resumed.progress > 0.0);
+        assert_eq!(resumed.flat_index, 3);
+
+        bridge
+            .shared
+            .lock()
+            .unwrap()
+            .cache_settings
+            .home_rows
+            .as_mut()
+            .unwrap()[0]
+            .enabled = false;
+        bridge.refresh_home_history_models();
+        assert_eq!(app.get_home_view(), 0);
+        assert_eq!(app.get_home_catalog_sections().row_count(), 2);
+        assert_eq!(app.get_home_catalog_cards().row_count(), 2);
+        assert!(bridge.shared.lock().unwrap().home_history_list.is_empty());
     }
 
     fn video(id: &str, season: u32, number: u32, released: Option<&str>) -> Video {
@@ -4270,6 +4541,53 @@ mod tests {
             continue_resume_id("series", "s1", &done, Some(&eps), &map),
             Some("s1:1:2".to_string())
         );
+    }
+
+    #[test]
+    fn continue_prefers_explicit_partial_rewatch_without_changing_completion() {
+        let episodes = vec![
+            video("e1", 1, 1, Some("2020-01-01")),
+            video("e2", 1, 2, Some("2020-01-02")),
+        ];
+        let mut record = progress("rewatch", "e1", 600.0, true, 50);
+        record.history = Some(PlaybackHistory {
+            type_: "series".into(),
+            played_at_secs: 40,
+            rewatch: true,
+            ..Default::default()
+        });
+        let mut records = HashMap::from([(progress_map_key("rewatch", "e1"), record.clone())]);
+        assert_eq!(
+            continue_resume_id("series", "rewatch", &record, Some(&episodes), &records),
+            Some("e1".into())
+        );
+        assert_eq!(
+            continue_badge(genuine_partial_rewatch(&record), "e1", &episodes, |_| true),
+            0
+        );
+        assert_eq!(continue_remaining(Some(&record)), "50 min left");
+        assert!(records[&progress_map_key("rewatch", "e1")].watched);
+        let mut manual = progress("rewatch", "e2", 600.0, true, 100);
+        manual.history = Some(PlaybackHistory {
+            played_at_secs: 30,
+            ..Default::default()
+        });
+        assert!(
+            continue_playback_order(&record) > continue_playback_order(&manual),
+            "manual progress changes cannot supersede a newer actual rewatch"
+        );
+
+        record.history.as_mut().unwrap().rewatch = false;
+        records.insert(progress_map_key("rewatch", "e1"), record.clone());
+        assert_eq!(
+            continue_resume_id("series", "rewatch", &record, Some(&episodes), &records),
+            Some("e2".into()),
+            "a manual watched mark at an old partial position still advances"
+        );
+        assert_eq!(continue_remaining(Some(&record)), "Completed");
+        record.history.as_mut().unwrap().rewatch = true;
+        record.position_secs = f64::NAN;
+        assert!(!genuine_partial_rewatch(&record));
     }
 
     #[test]

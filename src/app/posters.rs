@@ -85,6 +85,9 @@ fn artwork_request_current(state: &Shared, type_: &str, id: &str, failed_url: &s
                 && preview.id == id
                 && preview.poster.as_deref().unwrap_or_default() == failed_url
         })
+        || state.home_history_list.iter().any(|entry| {
+            entry.type_ == type_ && entry.series_id == id && entry.poster_url == failed_url
+        })
         || state.modal_item.as_ref().is_some_and(|item| {
             item.type_ == type_ && item.id == id && item.poster_url == failed_url
         });

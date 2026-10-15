@@ -51,15 +51,23 @@ impl Bridge {
             return Err("No active playback".into());
         }
         match action {
-            PlaybackAction::TogglePause => self.change_playback_pause(!self.player.is_paused()),
-            PlaybackAction::SetPaused(paused) => self.change_playback_pause(paused),
+            PlaybackAction::TogglePause => {
+                self.clear_playback_end_menu();
+                self.change_playback_pause(!self.player.is_paused());
+            }
+            PlaybackAction::SetPaused(paused) => {
+                self.clear_playback_end_menu();
+                self.change_playback_pause(paused);
+            }
             PlaybackAction::SeekRelative(delta) => {
                 finite(delta)?;
+                self.clear_playback_end_menu();
                 self.player.seek_relative(delta);
                 self.refresh_next_episode_prompt();
             }
             PlaybackAction::SeekAbsolute(position) => {
                 finite(position)?;
+                self.clear_playback_end_menu();
                 let duration = app.get_duration() as f64;
                 let position = if duration > 0.0 {
                     position.clamp(0.0, duration)

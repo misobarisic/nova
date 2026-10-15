@@ -13,6 +13,9 @@ struct PlaybackContext {
     request_id: String,
     is_episode: bool,
     is_movie: bool,
+    history: Option<PlaybackHistory>,
+    /// Explicit History action: includes zero for Play again.
+    history_resume: Option<f64>,
 }
 
 /// Numbering is supplied separately by the selector; punctuation in titles is opaque.
@@ -68,6 +71,7 @@ pub(crate) fn note_android_pause_checkpoint() {
     if let Some(bridge) = bridge {
         bridge.party_suspend();
         bridge.remote_suspend();
+        bridge.refresh_playback_end_menu();
         bridge.cancel_pending_playback();
         bridge.note_player_progress_from_ui();
         bridge.persist_outgoing_playback();
@@ -260,13 +264,76 @@ impl Bridge {
                             media_type: modal.type_.clone(),
                             media_id: modal.id.clone(),
                             request_id: modal.request_id.clone(),
-                            is_episode: !modal.seasons.is_empty(),
+                            // A History deep link can supply its saved exact
+                            // episode while the full season metadata reloads.
+                            is_episode: modal.type_ != "movie"
+                                && (!modal.seasons.is_empty()
+                                    || modal.videos.iter().any(|v| v.id == modal.request_id)),
                             is_movie: modal.type_ == "movie",
+                            ..Default::default()
                         })
                         .unwrap_or_default()
                 }),
         });
-        let context = state.playback_intent.as_ref().unwrap().context.clone();
+        let mut context = state.playback_intent.as_ref().unwrap().context.clone();
+        let modal = state
+            .modal_item
+            .as_ref()
+            .filter(|modal| modal.id == context.media_id && modal.type_ == context.media_type);
+        let detached = state.playback_intent.as_ref().unwrap().detached;
+        let video = if detached {
+            state
+                .remote_playback
+                .receiver_videos
+                .iter()
+                .find(|v| v.id == context.request_id)
+        } else {
+            modal.and_then(|modal| modal.videos.iter().find(|v| v.id == context.request_id))
+        };
+        let poster_url = if detached {
+            None
+        } else {
+            modal.map(|m| m.poster_url.clone())
+        }
+        .filter(|url| !url.is_empty())
+        .or_else(|| {
+            state
+                .entries
+                .iter()
+                .find(|entry| entry.id == context.media_id && entry.type_ == context.media_type)
+                .map(|entry| entry.poster_url.clone())
+        })
+        .or_else(|| {
+            detail::read_meta_header_for(&context.media_type, &context.media_id)
+                .map(|header| header.poster_url)
+        })
+        .unwrap_or_default();
+        context.history = Some(PlaybackHistory {
+            type_: context.media_type.clone(),
+            title: context.title.clone(),
+            poster_url,
+            episode_label: video
+                .map(episode_context_label)
+                .unwrap_or_else(|| context.episode_label.clone()),
+            season: video.and_then(|video| video.season),
+            episode: video.and_then(Video::episode_number),
+            rewatch: state
+                .progress
+                .get(&progress_map_key(&context.media_id, &context.request_id))
+                .is_some_and(|p| p.watched),
+            ..Default::default()
+        });
+        context.history_resume = (!detached)
+            .then(|| {
+                state
+                    .history_selection
+                    .as_ref()
+                    .zip(state.modal_item.as_ref())
+                    .filter(|(selection, modal)| selection.matches(modal))
+                    .map(|(selection, _)| selection.resume_position())
+            })
+            .flatten();
+        state.playback_intent.as_mut().unwrap().context = context.clone();
         drop(state);
         self.publish_player_context(&context);
         token
@@ -284,6 +351,7 @@ impl Bridge {
     }
 
     pub(super) fn finish_playback_request(&self) {
+        self.clear_playback_end_menu();
         self.playback_closed();
         {
             let mut state = self.shared.lock().unwrap();
@@ -739,7 +807,12 @@ impl Bridge {
         }
         let episode = read_episodes_cache_for(&job.media_type, &job.media_id)
             .and_then(|videos| videos.into_iter().find(|v| v.id == job.request_id));
-        if let Some(intent) = self.shared.lock().unwrap().playback_intent.as_mut() {
+        let mut state = self.shared.lock().unwrap();
+        let rewatch = state
+            .progress
+            .get(&progress_map_key(&job.media_id, &job.request_id))
+            .is_some_and(|p| p.watched);
+        if let Some(intent) = state.playback_intent.as_mut() {
             intent.context = PlaybackContext {
                 title: job.title.clone(),
                 episode_label: episode
@@ -761,8 +834,25 @@ impl Bridge {
                 request_id: job.request_id.clone(),
                 is_episode: job.media_type == "series",
                 is_movie: job.media_type == "movie",
+                history: Some(PlaybackHistory {
+                    type_: job.media_type.clone(),
+                    title: job.title.clone(),
+                    poster_url: detail::read_meta_header_for(&job.media_type, &job.media_id)
+                        .map(|header| header.poster_url)
+                        .unwrap_or_default(),
+                    episode_label: episode
+                        .as_ref()
+                        .map(episode_context_label)
+                        .unwrap_or_default(),
+                    season: episode.as_ref().and_then(|video| video.season),
+                    episode: episode.as_ref().and_then(Video::episode_number),
+                    rewatch,
+                    ..Default::default()
+                }),
+                ..Default::default()
             };
         }
+        drop(state);
         self.open_requested_stream(
             request,
             path.to_string_lossy().into_owned(),
@@ -848,6 +938,7 @@ impl Bridge {
                 entry.position_secs = target.last_pos;
                 entry.duration_secs = target.last_dur;
                 entry.updated_at_secs = now_secs();
+                stamp_playback_history(entry, &target.history);
                 if target.last_pos > 0.0 {
                     entry.unwatched_at_secs = 0;
                 }
@@ -983,7 +1074,7 @@ impl Bridge {
             let history_pos = state
                 .progress
                 .get(&key)
-                .filter(|p| resumable_position(p.position_secs, p.duration_secs, p.watched))
+                .filter(|p| playback_can_resume(p))
                 .map(|p| p.position_secs);
             let behavior = state.cache_settings.episode_start_behavior;
             let resume_pos = match behavior {
@@ -1015,6 +1106,8 @@ impl Bridge {
                 session: next_episode::new_session(),
                 resume_pos: if party_active {
                     party_start
+                } else if let Some(position) = context.history_resume {
+                    Some(position)
                 } else {
                     match (behavior, resume_choice) {
                         (EpisodeStartBehavior::StartOver, _) | (_, Some(false)) => None,
@@ -1023,9 +1116,15 @@ impl Bridge {
                     }
                 },
                 resume_done: party_active,
+                history: context.history.clone(),
                 ..Default::default()
             });
-            if !party_active && ask && history_pos.is_some() && resume_choice.is_none() {
+            if !party_active
+                && context.history_resume.is_none()
+                && ask
+                && history_pos.is_some()
+                && resume_choice.is_none()
+            {
                 state.pending_resume_stream = Some(PendingStream {
                     request,
                     url,
@@ -1050,7 +1149,7 @@ impl Bridge {
             let resume_pos = state
                 .progress
                 .get(&key)
-                .filter(|p| resumable_position(p.position_secs, p.duration_secs, p.watched))
+                .filter(|p| playback_can_resume(p))
                 .map(|p| p.position_secs);
             let entry = state
                 .progress
@@ -1066,12 +1165,14 @@ impl Bridge {
             state.playback = Some(PlaybackTarget {
                 series_id,
                 episode_id,
+                session: next_episode::new_session(),
                 resume_pos: if party_active {
                     party_start
                 } else {
-                    resume_pos
+                    context.history_resume.or(resume_pos)
                 },
                 resume_done: party_active,
+                history: context.history.clone(),
                 ..Default::default()
             });
         } else {
@@ -1339,6 +1440,7 @@ impl Bridge {
                 entry.position_secs = pos;
                 entry.duration_secs = dur;
                 entry.updated_at_secs = now;
+                stamp_playback_history(entry, &target.history);
                 if watched_now {
                     entry.watched = true;
                     // Watching to the end supersedes an earlier unwatch, so
@@ -1397,6 +1499,7 @@ impl Bridge {
                     entry.position_secs = target.last_pos;
                     entry.duration_secs = target.last_dur;
                     entry.updated_at_secs = now_secs();
+                    stamp_playback_history(entry, &target.history);
                     if watched_now {
                         entry.watched = true;
                         entry.unwatched_at_secs = 0;
@@ -1470,6 +1573,34 @@ pub(crate) fn read_progress_map() -> HashMap<String, EpisodeProgress> {
         read_json::<HashMap<String, EpisodeProgress>>(EPISODE_PROGRESS_KEY).unwrap_or_default()
     })
 }
+/// A genuine partial rewatch may resume without clearing the watched flag.
+pub(super) fn playback_can_resume(progress: &EpisodeProgress) -> bool {
+    progress.position_secs.is_finite()
+        && progress.duration_secs.is_finite()
+        && resumable_position(
+            progress.position_secs,
+            progress.duration_secs,
+            progress.watched
+                && !progress
+                    .history
+                    .as_ref()
+                    .is_some_and(|history| history.rewatch),
+        )
+}
+
+/// Only observations of real playback advance History's clock. Manual watched
+/// changes and metadata refreshes must not move an old episode to the front.
+fn stamp_playback_history(entry: &mut EpisodeProgress, captured: &Option<PlaybackHistory>) {
+    if let Some(mut history) = captured.clone() {
+        history.played_at_secs = entry.updated_at_secs;
+        // Seeking back after EOF keeps the same player session. Recognize
+        // its partial replay too, without clearing sticky completion.
+        history.rewatch |=
+            entry.watched && resumable_position(entry.position_secs, entry.duration_secs, false);
+        entry.history = Some(history);
+    }
+}
+
 /// Queue a progress snapshot; storage writes only changed episode records.
 pub(crate) fn write_progress_map(map: &HashMap<String, EpisodeProgress>) {
     persistence::write_progress(map);
@@ -2241,5 +2372,189 @@ mod header_tests {
         assert_eq!(player_episode_header("E3", ""), "E3");
         assert_eq!(player_episode_header("", "Special"), "Special");
         assert_eq!(player_episode_header("", ""), "");
+    }
+}
+
+#[cfg(all(test, feature = "desktop"))]
+mod history_tests {
+    use super::*;
+
+    #[test]
+    fn seeking_back_after_completion_records_a_resumable_rewatch() {
+        let mut record = EpisodeProgress {
+            watched: true,
+            position_secs: 300.0,
+            duration_secs: 1200.0,
+            updated_at_secs: 123,
+            ..Default::default()
+        };
+        stamp_playback_history(&mut record, &Some(PlaybackHistory::default()));
+        assert!(record.watched);
+        assert!(record.history.as_ref().unwrap().rewatch);
+        assert!(playback_can_resume(&record));
+        assert_eq!(record.history.unwrap().played_at_secs, 123);
+    }
+
+    #[test]
+    fn history_opens_exact_nonlibrary_episode_and_keeps_context_through_refresh() {
+        const ROOT: &str = "NOVA_WATCH_HISTORY_ACTION_ROOT";
+        let Some(root) = std::env::var_os(ROOT) else {
+            let root = std::env::temp_dir().join(format!(
+                "nova-history-actions-{}-{}",
+                std::process::id(),
+                nova_config::now_ms()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(ROOT, &root)
+                .args(["--exact", "app::playback::history_tests::history_opens_exact_nonlibrary_episode_and_keeps_context_through_refresh", "--nocapture"])
+                .output().unwrap();
+            let _ = std::fs::remove_dir_all(&root);
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let root = PathBuf::from(root);
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        storage::init_at(&root);
+        let app = AppWindow::new().unwrap();
+        app.set_show_home(true);
+        let player = crate::player::Player::setup(&app);
+        let (hi, _) = mpsc::channel();
+        let (lo, _) = mpsc::channel();
+        let bridge = Bridge::new(
+            app.as_weak(),
+            PosterTx { hi, lo },
+            Arc::new(AtomicU64::new(0)),
+            player,
+            DownloadCoordinator::new(root.join("downloads")),
+        );
+        let entry = watch_history::HistoryEntry {
+            series_id: "not-in-library".into(),
+            type_: "series".into(),
+            episode_id: "opaque-original-e3".into(),
+            title: "Original source title".into(),
+            poster_url: String::new(),
+            episode_label: "Third episode".into(),
+            season: Some(2),
+            episode: Some(3),
+            played_at_secs: 100,
+            position_secs: 300.0,
+            duration_secs: 1200.0,
+        };
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state.home_history_list = vec![entry.clone()];
+            state.progress.insert(
+                progress_map_key(&entry.series_id, &entry.episode_id),
+                EpisodeProgress {
+                    series_id: entry.series_id.clone(),
+                    episode_id: entry.episode_id.clone(),
+                    position_secs: 300.0,
+                    duration_secs: 1200.0,
+                    watched: true,
+                    play_count: 2,
+                    ..Default::default()
+                },
+            );
+        }
+        bridge.watch_history_picked(0);
+        assert!(app.get_stream_selector_open());
+        assert!(app.get_detail_deep_stream());
+        let token = bridge
+            .shared
+            .lock()
+            .unwrap()
+            .modal_item
+            .as_ref()
+            .unwrap()
+            .open_token
+            .clone();
+        let refreshed: MetaItem = serde_json::from_value(serde_json::json!({
+            "id": entry.series_id, "type": "series", "name": "Refreshed title", "videos": [
+                {"id":"first-episode", "name":"First", "season":1,"episode":1},
+                {"id":entry.episode_id, "name":"Third episode", "season":2,"episode":3}
+            ]
+        }))
+        .unwrap();
+        bridge.apply_episode_meta(entry.series_id.clone(), Some(refreshed), false, token);
+        assert!(
+            app.get_stream_selector_open(),
+            "cold metadata must not reset the selected stream request"
+        );
+        assert_eq!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .modal_item
+                .as_ref()
+                .unwrap()
+                .request_id,
+            entry.episode_id
+        );
+        let request = bridge.begin_playback_request();
+        let captured = {
+            let state = bridge.shared.lock().unwrap();
+            let context = &state.playback_intent.as_ref().unwrap().context;
+            assert_eq!(context.history_resume, Some(300.0));
+            let history = context.history.as_ref().unwrap();
+            assert!(history.rewatch);
+            assert_eq!((history.season, history.episode), (Some(2), Some(3)));
+            assert!(state.entries.is_empty());
+            assert!(state.progress[&progress_map_key(&entry.series_id, &entry.episode_id)].watched);
+            history.clone()
+        };
+        // Another modal cannot hijack an in-flight source's captured metadata.
+        bridge.open_preview(
+            MetaPreview {
+                id: "other".into(),
+                type_: "movie".into(),
+                name: "Other title".into(),
+                ..Default::default()
+            },
+            0,
+            false,
+            None,
+            false,
+        );
+        assert!(!bridge.playback_request_is_current(&request));
+        let replacement = bridge.begin_playback_request();
+        assert!(replacement.is_current());
+        assert!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .playback_intent
+                .as_ref()
+                .unwrap()
+                .context
+                .history_resume
+                .is_none()
+        );
+        bridge.shared.lock().unwrap().playback = Some(PlaybackTarget {
+            series_id: entry.series_id.clone(),
+            episode_id: entry.episode_id.clone(),
+            last_pos: 320.0,
+            last_dur: 1200.0,
+            history: Some(captured.clone()),
+            ..Default::default()
+        });
+        bridge.persist_outgoing_playback();
+        let saved = read_progress_map();
+        let record = &saved[&progress_map_key(&entry.series_id, &entry.episode_id)];
+        assert!(record.watched, "resuming a rewatch never clears completion");
+        assert_eq!(record.position_secs, 320.0);
+        assert_eq!(record.history.as_ref().unwrap().title, captured.title);
+        assert!(record.history.as_ref().unwrap().played_at_secs > 100);
+        assert_eq!(
+            serde_json::from_value::<EpisodeProgress>(serde_json::to_value(record).unwrap())
+                .unwrap(),
+            *record
+        );
     }
 }

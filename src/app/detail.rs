@@ -83,6 +83,7 @@ impl Bridge {
         }
         {
             let mut state = self.shared.lock().unwrap();
+            state.history_selection = None;
             state.modal_item = Some(ModalItem {
                 open_token: Arc::new(()),
                 pending_watch_now: (watch_now && preview.type_ != "movie")
@@ -984,6 +985,11 @@ impl Bridge {
                     .into_iter()
                     .filter(|v| v.season.is_some())
                     .collect();
+                if !refresh && self.history_stream_selected() {
+                    self.update_episode_videos(id, videos);
+                    self.refresh_library_progress_ui();
+                    return;
+                }
                 if !refresh {
                     // First population (nothing was cached): the picker was
                     // never shown yet, so always show it now.
@@ -1060,7 +1066,7 @@ impl Bridge {
                 eprintln!("nova: detail refresh {modal_type}/{id}: no meta addon answered");
                 let had_cache = read_episodes_cache_for(&modal_type, &id)
                     .is_some_and(|videos| !ordered_seasons(&videos).is_empty());
-                if !had_cache {
+                if !had_cache && !self.history_stream_selected() {
                     self.start_stream_search(id);
                     self.refresh_watch_action();
                 }
@@ -2038,7 +2044,7 @@ impl Bridge {
         );
     }
 
-    fn select_episode_streams(
+    pub(super) fn select_episode_streams(
         &self,
         series_id: String,
         request_id: String,
@@ -2053,7 +2059,7 @@ impl Bridge {
             let resume_pos = state
                 .progress
                 .get(&progress_map_key(&series_id, &request_id))
-                .filter(|p| resumable_position(p.position_secs, p.duration_secs, p.watched))
+                .filter(|p| playback::playback_can_resume(p))
                 .map(|p| p.position_secs);
             state.playback = Some(PlaybackTarget {
                 series_id,

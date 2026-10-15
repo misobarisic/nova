@@ -1,4 +1,5 @@
 import { CompletionRatingPrompt } from "completion-rating.slint";
+import { PlaybackEnded } from "playback-ended.slint";
 import { PartyPage, PartyPlayerBadge } from "party.slint";
 import { RemoteControlsPage, RemoteDevicesPage, RemoteReplacementDialog } from "remote-controls.slint";
 import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
@@ -609,7 +610,7 @@ export component AppWindow inherits Window {
     callback onboarding_finished();
 
     property <int> back_focus_request: 0;
-    changed back_focus_request => { if !root.completion_prompt_visible { system_back_scope.focus(); } }
+    changed back_focus_request => { if !root.completion_prompt_visible && !root.playback_end_menu_shown { system_back_scope.focus(); } }
     // Factory construction temporarily blocks focus changes. Recover native
     // keyboard navigation after publication only while the persistent scope
     // still owns focus, so a pointer-focused editor is never interrupted.
@@ -618,6 +619,7 @@ export component AppWindow inherits Window {
         // excludes inputs already owned by the wizard before recovering focus
         // from that underlying page, rather than relying on baseline ownership.
         if root.completion_prompt_visible { return; }
+        if root.playback_end_menu_shown { playback_ended.focus_shell(); return; }
         if root.onboarding_visible { OnboardingBridge.focus_shell(); return; }
         if !system_back_scope.has-focus { return; }
         if root.player_open { PlayerOsdBridge.focus_shell(); }
@@ -640,7 +642,7 @@ export component AppWindow inherits Window {
     }
     public function preserve_back_focus() {
         // A late underlying-page mount must not take the active dialog's keys.
-        if root.completion_prompt_visible { return; }
+        if root.completion_prompt_visible || root.playback_end_menu_shown { return; }
         // Incoming page init can replace focus before outgoing page teardown.
         // The change handler runs after tree instantiation, keeping release and
         // held-repeat events on a scope that survives the transition.
@@ -1097,7 +1099,8 @@ export component AppWindow inherits Window {
     in-out property <int> system_back_request: 0;
     private property <int> page_back_request: 0;
     changed system_back_request => {
-        if !root.onboarding_visible { root.page_back_request += 1; }
+        if root.playback_end_menu_shown { root.playback_end_stay(); }
+        else if !root.onboarding_visible { root.page_back_request += 1; }
     }
     private property <bool> system_back_held: false;
     // --- Settings (animations) ----------------------------------------
@@ -1396,6 +1399,19 @@ export component AppWindow inherits Window {
     in-out property <string> next_episode_context: "";
     callback next_episode_streams(string);
     callback next_episode_dismiss(string);
+    in-out property <bool> playback_end_menu_visible: false;
+    in-out property <bool> playback_end_menu_has_next: false;
+    in-out property <string> playback_end_menu_next_title;
+    callback playback_end_stay();
+    callback playback_end_next();
+    callback playback_end_details();
+    out property <bool> playback_end_menu_shown: root.playback_end_menu_visible && root.player_open
+        && !root.completion_prompt_visible && !root.onboarding_visible && !root.resume_prompt_visible && !root.party_page_open
+        && !root.remote_controls_open && !root.remote_devices_open && root.remote_replacement_token == "";
+    changed playback_end_menu_shown => {
+        if root.playback_end_menu_shown { playback_ended.focus_shell(); }
+        else { root.preserve_back_focus(); page_release_timer.start(); }
+    }
     in-out property <bool> player_open: false;
     in-out property <bool> playback_started: false;
     in-out property <bool> is_paused: true;
@@ -1812,6 +1828,8 @@ export component AppWindow inherits Window {
         capture-key-pressed(e) => {
             if (e.text == Key.Escape && root.completion_prompt_visible) {
                 if !e.repeat { CompletionBridge.dismiss(CompletionBridge.token); } accept
+            } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.playback_end_menu_shown) {
+                if !e.repeat { root.playback_end_stay(); } accept
             } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.party_page_open) {
                 if !e.repeat { root.party_page_open = false; } accept
             } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.remote_replacement_token != "") {
@@ -1852,6 +1870,8 @@ export component AppWindow inherits Window {
                 } else if (root.resume_prompt_visible) {
                     root.resume_cancel();
                     accept
+                } else if (root.playback_end_menu_shown) {
+                    root.playback_end_stay(); accept
                 } else if (root.library_duplicates_open) {
                     if root.library_duplicate_selection >= 0 { root.library_duplicate_selection = -1; }
                     else { root.library_duplicates_open = false; }
@@ -2184,6 +2204,21 @@ export component AppWindow inherits Window {
         safe-right: root.safe-area-insets.right;
     }
 
+    playback_ended := PlaybackEnded {
+        width: 100%; height: 100%;
+        open: root.playback_end_menu_shown;
+        has_next: root.playback_end_menu_has_next;
+        next_title: root.playback_end_menu_next_title;
+        show_title: root.player_show_title;
+        episode_title: root.player_episode_title;
+        artwork: root.player_poster;
+        safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
+        safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right;
+        stay => { root.playback_end_stay(); }
+        next => { root.playback_end_next(); }
+        details => { root.playback_end_details(); }
+    }
+
     if root.resume_prompt_visible: Rectangle {
         x: 0; y: 0; width: 100%; height: 100%; background: Theme.current.scrim_resume;
         TouchArea {
@@ -2244,7 +2279,8 @@ export component AppWindow inherits Window {
         opacity: root.osd_opacity;
         visible: self.opacity > 0;
         x: root.safe-area-insets.left + 18px;
-        y: root.safe-area-insets.top + 72px;
+        // The episode/show captions can extend past a fixed top inset.
+        y: Math.max(root.safe-area-insets.top + 16px, PlayerOsdBridge.header_bottom + 12px);
         width: Math.min(300px, root.width - root.safe-area-insets.left - root.safe-area-insets.right - 36px);
     }
     if root.party_page_open: PartyPage {
