@@ -15,7 +15,7 @@ All releases is the default and includes every valid dated episode in the cached
 library metadata, including previous releases. Unknown or invalid release dates
 never become invented calendar dates. Search filters series names. The header
 counts releases in the displayed month or week, or the entire filtered schedule
-in Agenda (including dates not loaded yet).
+in Timeline (including dates not loaded yet).
 
 Month uses a Monday-first, fixed 42-day grid with seven equal-width columns
 aligned across every week and the weekday headings. The Week strip uses the
@@ -23,7 +23,7 @@ same equal division; date digits, release counts, preview text and selection
 borders do not change cell sizes. Today has an outline and the selected day
 has a purple highlight. Desktop shows that day's episodes and
 subsequent releases beside the grid; narrow layouts show cards below it.
-Week shows seven days and grouped release cards. Agenda is a continuous dated
+Week shows seven days and grouped release cards. Timeline is a continuous dated
 list, without month boundaries or Previous/Next month buttons. It initially
 starts at the selected day (today on first entry); scrolling near the bottom
 loads another 60 releases, crossing empty months and years. Earlier releases

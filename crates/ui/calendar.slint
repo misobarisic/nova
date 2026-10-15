@@ -89,7 +89,7 @@ component PlannerViews inherits Rectangle {
     callback picked(int);
     height: 44px;
     HorizontalLayout { spacing: 6px;
-        for label[i] in [@tr("Month"), @tr("Week"), @tr("Agenda")]: PlannerButton {
+        for label[i] in [@tr("Month"), @tr("Week"), @tr("Timeline")]: PlannerButton {
             label: label; selected: root.current == i; picked => { root.picked(i); }
         }
     }

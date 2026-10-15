@@ -87,7 +87,7 @@ pub fn tr(english: &str) -> &str {
     match english {
         "Only selected ratings will be saved." => "Spremit će se samo odabrane ocjene.",
         "Close rating prompt" => "Zatvori upit za ocjenu",
-        "Agenda" => "Raspored",
+        "Timeline" => "Vremenska crta",
         "Finished watching" => "Gledanje završeno",
         "How was it?" => "Kako vam se svidjelo?",
         "Rate your completed release." => "Ocijenite dovršeno izdanje.",

@@ -41,8 +41,8 @@ msgstr "Month"
 msgid "Week"
 msgstr "Week"
 
-msgid "Agenda"
-msgstr "Agenda"
+msgid "Timeline"
+msgstr "Timeline"
 
 msgid "All releases"
 msgstr "All releases"

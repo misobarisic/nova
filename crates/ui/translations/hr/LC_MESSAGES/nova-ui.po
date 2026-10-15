@@ -2096,8 +2096,8 @@ msgstr "Mjesec"
 msgid "Week"
 msgstr "Tjedan"
 
-msgid "Agenda"
-msgstr "Raspored"
+msgid "Timeline"
+msgstr "Vremenska crta"
 
 msgid "All releases"
 msgstr "Sva izdanja"

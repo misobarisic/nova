@@ -65,7 +65,7 @@ fn agenda_navigation(app: &nova::AppWindow) {
         assert_eq!(
             ElementHandle::find_by_accessible_label(app, label).count(),
             0,
-            "Agenda scrolls across dates instead of paging months"
+            "Timeline scrolls across dates instead of paging months"
         );
     }
     let today_calls = app.get_calendar_selected();
@@ -73,7 +73,7 @@ fn agenda_navigation(app: &nova::AppWindow) {
     assert_eq!(
         app.get_calendar_selected(),
         today_calls + 1,
-        "Agenda Today must dispatch"
+        "Timeline Today must dispatch"
     );
 }
 

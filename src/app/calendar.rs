@@ -352,7 +352,7 @@ impl Bridge {
                     civil_from_days(week_start + 6),
                 )
             } else if app.get_calendar_view() == 2 {
-                text::tr("Agenda").into()
+                text::tr("Timeline").into()
             } else {
                 text::cal_month_title(month, year)
             }
