@@ -1,10 +1,11 @@
+import { PartyPage, PartyPlayerBadge } from "party.slint";
 import { RemoteControlsPage, RemoteDevicesPage, RemoteReplacementDialog } from "remote-controls.slint";
 import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
-import { RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
+import { PartyMemberRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
 // Types and globals have one shared compiled definition. Page visual trees
 // live in independent factory products, never imported into AppWindow.
 
-export { RemoteBridge, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge }
+export { PartyBridge, RemoteBridge, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge }
 // Bundle the same UI family on desktop and Android, including a real bold face.
 import "../../assets/fonts/Roboto-Regular.ttf";
 import "../../assets/fonts/Roboto-Bold.ttf";
@@ -31,6 +32,54 @@ import { BottomNav } from "bottomnav.slint";
 // forwards them into the per-screen components below. The screen switching
 // guards live here so each page component stays self-contained.
 export component AppWindow inherits Window {
+    in-out property <bool> party_page_open <=> PartyBridge.page_open;
+    changed party_page_open => {
+        if !root.party_page_open && root.player_open && !root.onboarding_visible {
+            root.preserve_back_focus();
+            page_release_timer.start();
+        }
+    }
+    in-out property <bool> party_active <=> PartyBridge.active;
+    in-out property <bool> party_is_host <=> PartyBridge.is_host;
+    in-out property <bool> party_can_host <=> PartyBridge.can_host;
+    in-out property <bool> party_busy <=> PartyBridge.busy;
+    in-out property <bool> party_waiting <=> PartyBridge.waiting;
+    in-out property <bool> party_paused <=> PartyBridge.paused;
+    in-out property <string> party_title <=> PartyBridge.title;
+    in-out property <string> party_episode <=> PartyBridge.episode;
+    in-out property <string> party_status <=> PartyBridge.status;
+    in-out property <string> party_error <=> PartyBridge.error;
+    in-out property <string> party_warning <=> PartyBridge.warning;
+    in-out property <string> party_invite <=> PartyBridge.invite;
+    in-out property <string> party_input <=> PartyBridge.input;
+    in-out property <string> party_time_text <=> PartyBridge.time_text;
+    in-out property <float> party_position <=> PartyBridge.position;
+    in-out property <float> party_duration <=> PartyBridge.duration;
+    in-out property <bool> party_wait_for_guests <=> PartyBridge.wait_for_guests;
+    in-out property <[PartyMemberRow]> party_participants <=> PartyBridge.participants;
+    callback party_create();
+    public function party_bridge_create() { root.party_create(); }
+    callback party_join(string);
+    public function party_bridge_join(value: string) { root.party_join(value); }
+    callback party_leave();
+    public function party_bridge_leave() { root.party_leave(); }
+    callback party_choose_stream();
+    public function party_bridge_choose_stream() { root.party_choose_stream(); }
+    callback party_copy_invite();
+    public function party_bridge_copy_invite() { root.party_copy_invite(); }
+    callback party_return_to_player();
+    public function party_bridge_return_to_player() { root.party_return_to_player(); }
+    callback party_set_paused(bool);
+    public function party_bridge_set_paused(value: bool) { root.party_set_paused(value); }
+    callback party_seek(float);
+    public function party_bridge_seek(value: float) { root.party_seek(value); }
+    callback party_remove_member(string);
+    public function party_bridge_remove_member(value: string) { root.party_remove_member(value); }
+    callback party_set_wait_for_guests(bool);
+    public function party_bridge_set_wait_for_guests(value: bool) { root.party_set_wait_for_guests(value); }
+    callback party_continue_without_waiting();
+    public function party_bridge_continue_without_waiting() { root.party_continue_without_waiting(); }
+
     in-out property <[RemoteOfferRow]> remote_offers <=> RemoteBridge.offers;
     in-out property <[RemoteDeviceRow]> remote_devices <=> RemoteBridge.devices;
     in-out property <bool> remote_has_playing_devices <=> RemoteBridge.has_playing_devices;
@@ -71,6 +120,7 @@ export component AppWindow inherits Window {
     in-out property <[TrackRow]> remote_audio_tracks <=> RemoteBridge.audio_tracks;
     in-out property <[TrackRow]> remote_sub_tracks <=> RemoteBridge.sub_tracks;
     changed remote_controls_open => {
+        if !root.remote_controls_open { RemoteBridge.track_picker = 0; }
         if !root.remote_controls_open && RemoteBridge.speed_preview_token != "" {
             let token = RemoteBridge.speed_preview_token;
             RemoteBridge.speed_preview_token = "";
@@ -460,23 +510,23 @@ export component AppWindow inherits Window {
     // Keep the mount guards in one place. Shared bridge payloads outlive their
     // conditional hosts, so release their cached copies after page teardown.
     callback release_page_payloads();
-    private property <bool> home_page_mounted: root.show_home && !root.player_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
+    private property <bool> home_page_mounted: root.show_home && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
     changed home_page_mounted => { if root.home_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
-    private property <bool> discover_page_mounted: !root.player_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
+    private property <bool> discover_page_mounted: !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_library && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
     changed discover_page_mounted => { if root.discover_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
-    private property <bool> calendar_page_mounted: root.show_calendar && !root.player_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.more_open;
+    private property <bool> calendar_page_mounted: root.show_calendar && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.more_open;
     changed calendar_page_mounted => { if root.calendar_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
-    private property <bool> detail_page_mounted: root.modal_visible && !root.player_open && !root.remote_controls_open && !root.remote_devices_open;
+    private property <bool> detail_page_mounted: root.modal_visible && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open;
     changed detail_page_mounted => { if root.detail_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
-    private property <bool> settings_page_mounted: root.show_settings && !root.more_open && !root.player_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_home && !root.show_about;
+    private property <bool> settings_page_mounted: root.show_settings && !root.more_open && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_home && !root.show_about;
     changed settings_page_mounted => { if root.settings_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
-    private property <bool> library_page_mounted: root.show_library && !root.player_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
+    private property <bool> library_page_mounted: root.show_library && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_settings && !root.show_home && !root.show_about && !root.more_open && !root.show_calendar && !root.show_downloads;
     changed library_page_mounted => { if root.library_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
-    private property <bool> more_page_mounted: (root.more_open || root.more_parent) && !root.player_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible;
+    private property <bool> more_page_mounted: (root.more_open || root.more_parent) && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible;
     changed more_page_mounted => { if root.more_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
-    private property <bool> about_page_mounted: root.show_about && !root.more_open && !root.player_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_home && !root.show_library && !root.show_settings;
+    private property <bool> about_page_mounted: root.show_about && !root.more_open && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.show_home && !root.show_library && !root.show_settings;
     changed about_page_mounted => { if root.about_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
-    private property <bool> downloads_page_mounted: root.show_downloads && !root.player_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.more_open;
+    private property <bool> downloads_page_mounted: root.show_downloads && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && !root.more_open;
     changed downloads_page_mounted => { if root.downloads_page_mounted && !root.onboarding_visible { root.preserve_back_focus(); } page_release_timer.start(); }
     changed onboarding_visible => {
         root.preserve_back_focus();
@@ -675,6 +725,7 @@ export component AppWindow inherits Window {
     changed show_library => { if (root.show_library) { root.cancel_more_subpage_back(); root.more_parent = false; root.more_subpage_entered = true; root.discover_search_focused = false; root.more_open = false; } }
     changed show_settings => { if (root.show_settings) { root.discover_search_focused = false; root.more_open = false; if (root.settings_two_pane) { root.settings_detail_open = true; } } }
     changed player_open => {
+        SliderGesture.active = false; SliderGesture.hovered = false;
         root.osd_opacity_changed(root.osd_opacity);
         if !root.onboarding_visible { root.preserve_back_focus(); }
         page_release_timer.start();
@@ -1716,10 +1767,12 @@ export component AppWindow inherits Window {
         height: 100%;
 
         capture-key-pressed(e) => {
-            if ((e.text == Key.Escape || e.text == Key.Backspace) && root.remote_replacement_token != "") {
+            if ((e.text == Key.Escape || e.text == Key.Backspace) && root.party_page_open) {
+                if !e.repeat { root.party_page_open = false; } accept
+            } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.remote_replacement_token != "") {
                 if !e.repeat { root.remote_replacement_confirmed(root.remote_replacement_token, false); } accept
             } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.remote_controls_open) {
-                if !e.repeat { root.remote_device_close(); } accept
+                if !e.repeat { if RemoteBridge.track_picker != 0 { RemoteBridge.track_picker = 0; } else { root.remote_device_close(); } } accept
             } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.remote_devices_open) {
                 if !e.repeat { root.remote_devices_open = false; } accept
             } else if (e.text == Key.Back && (e.repeat || root.system_back_held)) {
@@ -1741,10 +1794,12 @@ export component AppWindow inherits Window {
                     // page or overlay, including before its first pointer press.
                     root.system_back_request += 1;
                     accept
+                } else if (root.party_page_open) {
+                    root.party_page_open = false; accept
                 } else if (root.remote_replacement_token != "") {
                     root.remote_replacement_confirmed(root.remote_replacement_token, false); accept
                 } else if (root.remote_controls_open) {
-                    root.remote_device_close(); accept
+                    if RemoteBridge.track_picker != 0 { RemoteBridge.track_picker = 0; } else { root.remote_device_close(); } accept
                 } else if (root.remote_devices_open) {
                     root.remote_devices_open = false; accept
                 } else if (root.resume_prompt_visible) {
@@ -1920,7 +1975,7 @@ export component AppWindow inherits Window {
 
     more_content_host := Rectangle {
         // Its focus-capture scope must not cover unrelated pages or Detail.
-        visible: !root.player_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && (root.more_open || root.more_parent || root.show_settings || root.show_about || root.show_calendar || root.show_downloads);
+        visible: !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible && (root.more_open || root.more_parent || root.show_settings || root.show_about || root.show_calendar || root.show_downloads);
         x: root.more_rail_width; y: 0px;
         width: root.width - root.more_rail_width; height: root.height;
         clip: true;
@@ -1928,7 +1983,7 @@ export component AppWindow inherits Window {
         // Capture before descendants handle keys; persistent chrome is outside
         // this scope and remains available to interrupt the return.
         content_input_scope := FocusScope {
-            enabled: !root.remote_controls_open && !root.remote_devices_open;
+            enabled: !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open;
             width: 100%; height: 100%;
             // Forward Tab from the persistent window scope lands here before
             // any outgoing editor; active pages gain no extra tab stop.
@@ -2046,7 +2101,7 @@ export component AppWindow inherits Window {
 
         }
     }
-    if root.more_family && !root.narrow_ui && !root.player_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible: SideNav {
+    if root.more_family && !root.narrow_ui && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible: SideNav {
         viewport-width: root.width;
         active: root.more_open || root.more_return_pending || root.show_settings || root.show_about ? 3 : root.show_calendar ? 4 : 5;
         safe-top: root.safe-area-insets.top; safe-left: root.safe-area-insets.left; safe-bottom: root.safe-area-insets.bottom;
@@ -2055,7 +2110,7 @@ export component AppWindow inherits Window {
         home_picked => { root.navigate_section(0); } discover_picked => { root.navigate_section(1); }
         library_picked => { root.navigate_section(2); } more_picked => { root.navigate_section(3); }
     }
-    if (root.more_open || root.more_return_pending) && root.narrow_ui && !root.player_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible: BottomNav {
+    if (root.more_open || root.more_return_pending) && root.narrow_ui && !root.player_open && !root.party_page_open && !root.remote_controls_open && !root.remote_devices_open && !root.modal_visible: BottomNav {
         y: root.height - self.height; width: root.width;
         active: 3; kb_zone: root.more_focus_zone; kb_nav: root.more_open || root.more_return_pending ? root.more_nav_index : root.family_nav_index; kb_active <=> root.kb_active;
         safe-bottom: root.safe-area-insets.bottom; safe-left: root.narrow_ui ? root.safe-area-insets.left : 0px; safe-right: root.safe-area-insets.right;
@@ -2136,6 +2191,15 @@ export component AppWindow inherits Window {
         safe_left: root.safe-area-insets.left;
         safe_right: root.safe-area-insets.right;
         system_back_request: root.system_back_request;
+    }
+    if (root.party_active || root.party_can_host || root.party_busy) && root.player_open && !root.party_page_open: PartyPlayerBadge {
+        x: root.safe-area-insets.left + 18px;
+        y: root.safe-area-insets.top + 72px;
+        width: Math.min(300px, root.width - root.safe-area-insets.left - root.safe-area-insets.right - 36px);
+    }
+    if root.party_page_open: PartyPage {
+        width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
+        safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right;
     }
     // Controls and discovery cover the catalog, independently of local playback.
     if root.remote_devices_open: RemoteDevicesPage {

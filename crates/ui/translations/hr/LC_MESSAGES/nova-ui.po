@@ -2684,3 +2684,123 @@ msgstr "Dopustite daljinsko upravljanje"
 
 msgid "Let paired devices view playback, start streams and control this device. Turning this off keeps normal sync working. Applies only to this device."
 msgstr "Dopustite uparenim uređajima pregled reprodukcije, pokretanje prijenosa i upravljanje ovim uređajem. Isključivanje ne utječe na redovitu sinkronizaciju. Vrijedi samo za ovaj uređaj."
+
+#: party.slint
+msgid "Watch party"
+msgstr "Zajedničko gledanje"
+
+#: party.slint
+msgid "Watch together on your own devices"
+msgstr "Gledajte zajedno na svojim uređajima"
+
+#: party.slint
+msgid "You are hosting"
+msgstr "Vi ste domaćin"
+
+#: party.slint
+msgid "Watching together"
+msgstr "Gledate zajedno"
+
+#: party.slint
+msgid "Host a party"
+msgstr "Budite domaćin gledanja"
+
+#: party.slint
+msgid "Start playing a film or episode, then invite friends. Everyone chooses their own stream."
+msgstr "Pokrenite film ili epizodu pa pozovite prijatelje. Svatko bira svoj izvor."
+
+#: party.slint
+msgid "Create party"
+msgstr "Pokrenite zajedničko gledanje"
+
+#: party.slint
+msgid "Play something on this device to host."
+msgstr "Pokrenite nešto na ovom uređaju kako biste bili domaćin."
+
+#: party.slint
+msgid "Join a party"
+msgstr "Pridružite se gledanju"
+
+#: party.slint
+msgid "Paste an invite from your host. Device pairing is not required."
+msgstr "Zalijepite pozivnicu domaćina. Uparivanje uređaja nije potrebno."
+
+#: party.slint
+msgid "Party invite"
+msgstr "Pozivnica za zajedničko gledanje"
+
+#: party.slint
+msgid "Join party"
+msgstr "Pridružite se gledanju"
+
+#: party.slint
+msgid "Now watching"
+msgstr "Trenutačno gledate"
+
+#: party.slint
+msgid "The host controls the timeline. Audio and subtitles stay yours."
+msgstr "Domaćin upravlja vremenskom crtom. Zvuk i titlove birate sami."
+
+#: party.slint
+msgid "Return to player"
+msgstr "Vratite se u reproduktor"
+
+#: party.slint
+msgid "Waiting for everyone"
+msgstr "Čekanje na sve sudionike"
+
+#: party.slint
+msgid "Different cuts may not line up. If playback stalls, choose a lower-quality stream."
+msgstr "Različite verzije možda neće biti usklađene. Ako reprodukcija zastajkuje, odaberite izvor niže kvalitete."
+
+#: party.slint
+msgid "Continue without waiting"
+msgstr "Nastavite bez čekanja"
+
+#: party.slint
+msgid "People"
+msgstr "Sudionici"
+
+#: party.slint
+msgid "Host"
+msgstr "Domaćin"
+
+#: party.slint
+msgid "Wait for everyone"
+msgstr "Pričekajte sve sudionike"
+
+#: party.slint
+msgid "Invite friends"
+msgstr "Pozovite prijatelje"
+
+#: party.slint
+msgid "Copy invite"
+msgstr "Kopirajte pozivnicu"
+
+#: party.slint
+msgid "End party"
+msgstr "Završite zajedničko gledanje"
+
+#: party.slint
+msgid "Leave party"
+msgstr "Napustite zajedničko gledanje"
+
+#: party.slint
+msgid "Open watch party"
+msgstr "Otvorite zajedničko gledanje"
+
+#: party.slint remote-controls.slint
+msgid "Playback position"
+msgstr "Položaj reprodukcije"
+
+#: party.slint
+msgid "Host controls playback"
+msgstr "Domaćin upravlja reprodukcijom"
+
+#: player.slint
+msgid "Watch parties use normal speed."
+msgstr "Zajedničko gledanje koristi normalnu brzinu."
+
+#: party.slint
+msgid "Watch together"
+msgstr "Gledajte zajedno"

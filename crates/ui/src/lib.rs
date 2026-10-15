@@ -19,9 +19,9 @@ pub use generated::*;
 pub use nova_ui_shared::{
     AddonRow, CalCell, CalendarDay, CalendarRelease, CategoryRow, ContinueRow, DownloadEpisode,
     DownloadGroup, DownloadRow, EpisodeRow, HomeCatalogCard, HomeCatalogRow, HomeCatalogSection,
-    LicenseSource, MediaCard, PluginSettingRow, RemoteDeviceRow, RemoteOfferRow, SeasonCard,
-    SettingSyncInfo, SheetItem, StreamRow, SyncInvite, SyncPeer, ThemePalette, TrackRow,
-    TrackingAccountRow, TrackingCandidateRow, TrackingLinkRow, TrackingMappingRow,
+    LicenseSource, MediaCard, PartyMemberRow, PluginSettingRow, RemoteDeviceRow, RemoteOfferRow,
+    SeasonCard, SettingSyncInfo, SheetItem, StreamRow, SyncInvite, SyncPeer, ThemePalette,
+    TrackRow, TrackingAccountRow, TrackingCandidateRow, TrackingLinkRow, TrackingMappingRow,
     TrackingSetupRow, UpcomingRow,
 };
 // Native page callbacks route through AppWindow without keeping it alive.
@@ -38,6 +38,7 @@ pub(crate) use forward_app_callbacks;
 
 mod collection_factories;
 mod page_factories;
+mod party_bridge;
 mod playback_factories;
 mod remote_bridge;
 mod settings_factory;

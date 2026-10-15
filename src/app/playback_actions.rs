@@ -12,6 +12,14 @@ impl Bridge {
         action: PlaybackAction,
         peer: Option<&nova_playback_api::PeerContext>,
     ) -> Result<(), String> {
+        if self.party_active() {
+            if peer.is_some() {
+                return Err("This device is in a watch party".into());
+            }
+            if self.party_action(&action) {
+                return Ok(());
+            }
+        }
         if !self.prepare_speed_preview(&action, peer)? {
             return Ok(());
         }

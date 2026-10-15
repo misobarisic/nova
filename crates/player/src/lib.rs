@@ -328,7 +328,11 @@ pub fn note_android_resume() {
         .and_then(|s| s.upgrade())
     {
         let mut recovery = state.recovery.lock().unwrap();
-        let play = recovery.resume(nova_config::active_cache_settings().android_auto_continue);
+        let play = resume_android_recovery(
+            &mut recovery,
+            nova_config::active_cache_settings().android_auto_continue,
+            *state.party_playback_rate.lock().unwrap(),
+        );
         alog(&format!("lifecycle resume: {recovery:?}"));
         drop(recovery);
         if play {
@@ -352,6 +356,17 @@ pub fn note_android_resume() {
             app.invoke_osd_mouse_moved();
         }
     }
+}
+
+#[cfg(any(target_os = "android", test))]
+fn resume_android_recovery(
+    recovery: &mut android_recovery::Recovery,
+    auto_continue: bool,
+    party_rate: Option<f64>,
+) -> bool {
+    // A party must fetch its host's current timeline before resuming. Native
+    // auto-continue otherwise plays stale media while the app reconnects.
+    recovery.resume(auto_continue && party_rate.is_none())
 }
 
 /// Bundled subtitle font (Roboto Regular; Apache-2.0, license kept next to the
@@ -581,6 +596,62 @@ fn estimated_buffered_until(
         return 0.0;
     }
     end.min(duration).min(f32::MAX as f64) as f32
+}
+
+/// Source-local playback telemetry. The cache span is an estimate in seconds,
+/// not a guarantee that all tracks or a particular bitrate can be sustained.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PlaybackReadiness {
+    pub buffering: bool,
+    pub seekable: bool,
+    pub buffered_ahead: f64,
+    pub ended: bool,
+}
+
+fn readiness_buffered_ahead(
+    position: f64,
+    duration: f64,
+    via_network: Option<bool>,
+    cache_time: Option<f64>,
+    cache_duration: Option<f64>,
+) -> f64 {
+    if !position.is_finite() || position < 0.0 {
+        return 0.0;
+    }
+    let remaining =
+        (duration.is_finite() && duration > 0.0).then_some((duration - position).max(0.0));
+    // mpv commonly bypasses its packet cache for local files. An empty cache
+    // there does not mean that a completed download is unready for playback.
+    if via_network == Some(false) {
+        return remaining.unwrap_or(0.0);
+    }
+    let ahead = cache_time
+        .filter(|end| end.is_finite() && *end >= 0.0)
+        .map(|end| (end - position).max(0.0))
+        .or_else(|| cache_duration.filter(|secs| secs.is_finite() && *secs >= 0.0))
+        .unwrap_or(0.0);
+    remaining.map_or(ahead, |remaining| ahead.min(remaining))
+}
+
+fn normalized_party_rate(rate: Option<f64>) -> Option<f64> {
+    rate.filter(|rate| rate.is_finite())
+        .map(|rate| rate.clamp(0.9, 1.1))
+}
+
+fn apply_load_playback_options(
+    mpv: &Mpv,
+    paused: bool,
+    party_rate: Option<f64>,
+) -> libmpv2::Result<()> {
+    // A party source waits for the coordinated start before its first audio
+    // sample. Holding its final frame also keeps explicit EOF observable until
+    // the party coordinator sends the terminal report and closes the source.
+    mpv.set_property("keep-open", if party_rate.is_some() { "yes" } else { "no" })?;
+    mpv.set_property("pause", paused || party_rate.is_some())?;
+    if let Some(rate) = party_rate {
+        mpv.set_property("speed", rate)?;
+    }
+    Ok(())
 }
 
 /// Effective presentation rate for the Android display frame-rate hint: the
@@ -842,6 +913,10 @@ struct State {
     catalog_maximized: AtomicBool,
     subtitle_position: Mutex<subtitle_position::SubtitlePosition>,
     preferences: Mutex<PreferenceSession>,
+    /// Temporary clock correction; never written to title/device preferences.
+    party_playback_rate: Mutex<Option<f64>>,
+    /// Retain real cache starvation through a transient unavailable property.
+    buffering: AtomicBool,
     preference_source: Mutex<String>,
     mpv: Mutex<Option<Mpv>>,
     /// Invalidates queued captures when a stream is replaced or closed.
@@ -1107,6 +1182,8 @@ impl Player {
                 manual_audio: false,
                 manual_subtitles: false,
             }),
+            party_playback_rate: Mutex::new(None),
+            buffering: AtomicBool::new(false),
             mpv: Mutex::new(mpv.ok()),
             screenshot_session: AtomicU64::new(0),
             #[cfg(target_os = "android")]
@@ -1376,7 +1453,7 @@ impl Player {
                                     }
                                     set_http_header_fields(mpv, &headers)?;
                                     set_string_list(mpv, c"sub-files", subtitles)?;
-                                    mpv.set_property("pause", paused)?;
+                                    apply_load_playback_options(mpv, paused, *notifier_state.party_playback_rate.lock().unwrap())?;
                                     // Runtime reloads use a per-file start;
                                     // mpv only honors global start on first load.
                                     #[cfg(target_os = "android")]
@@ -1630,7 +1707,13 @@ impl Player {
             .allow_external
             .store(allow_external, Ordering::SeqCst);
         if let Some(app) = self.state.app.upgrade() {
-            app.set_effective_playback_speed(preferences.speed());
+            app.set_effective_playback_speed(
+                self.state
+                    .party_playback_rate
+                    .lock()
+                    .unwrap()
+                    .map_or(preferences.speed(), |rate| rate as f32),
+            );
             app.set_screenshot_busy(false);
             app.set_screenshot_notice(slint::SharedString::default());
         }
@@ -1689,6 +1772,7 @@ impl Player {
             self.arm_decoder_chain();
         }
         self.state.started.store(false, Ordering::SeqCst);
+        self.state.buffering.store(false, Ordering::SeqCst);
         self.state.seek_pending.store(false, Ordering::SeqCst);
         self.state.reported.store(false, Ordering::SeqCst);
         *self.state.opened_at.lock().unwrap() = Instant::now();
@@ -1703,15 +1787,16 @@ impl Player {
         if let Ok(mpv) = self.state.mpv.lock()
             && let Some(mpv) = mpv.as_ref()
         {
-            let _ = mpv.set_property("pause", start_paused);
             let _ = mpv.set_property("start", start_pos_secs.max(0.0));
             // Rate is per device (Settings → Player / the player's own
             // settings panel); `speed` also survives stop/EOF, so set it
             // from the saved value on every play instead of letting the
             // previous session's rate leak into this one.
-            let _ = mpv.set_property(
-                "speed",
-                self.state.preferences.lock().unwrap().preferences.speed() as f64,
+            let _ = mpv.set_property("speed", self.effective_playback_speed() as f64);
+            let _ = apply_load_playback_options(
+                mpv,
+                start_paused,
+                *self.state.party_playback_rate.lock().unwrap(),
             );
         }
 
@@ -1930,11 +2015,81 @@ impl Player {
     /// Apply a live rate, including transient gesture previews. The semantic
     /// base rate lives in the session and is restored after previews/reloads.
     pub fn set_speed(&self, speed: f32) {
+        // A local gesture must not steal the party clock's temporary rate.
+        if self.state.party_playback_rate.lock().unwrap().is_some() {
+            return;
+        }
         let Ok(mpv) = self.state.mpv.lock() else {
             return;
         };
         if let Some(mpv) = mpv.as_ref() {
             let _ = mpv.set_property("speed", nova_config::clamp_playback_speed(speed) as f64);
+        }
+    }
+
+    /// Apply a temporary absolute party clock rate (0.9–1.1). Clearing it
+    /// restores the latest title/global speed, including edits made meanwhile.
+    /// A queued source receives the correction when its load is submitted.
+    pub fn set_party_playback_rate(&self, rate: Option<f64>) {
+        let rate = normalized_party_rate(rate);
+        *self.state.party_playback_rate.lock().unwrap() = rate;
+        let effective = self.effective_playback_speed();
+        if self.state.pending.lock().unwrap().is_none()
+            && self.state.started.load(Ordering::SeqCst)
+            && !self.state.source_waiting.load(Ordering::SeqCst)
+        {
+            let source = self.state.preference_source.lock().unwrap().clone();
+            if let Ok(mpv) = self.state.mpv.lock()
+                && let Some(mpv) = mpv.as_ref()
+                && !source.is_empty()
+                && mpv.get_property::<String>("path").ok().as_deref() == Some(source.as_str())
+                && mpv.get_property::<bool>("idle-active").ok() == Some(false)
+            {
+                let _ = mpv.set_property("speed", effective as f64);
+                let _ = mpv.set_property("keep-open", if rate.is_some() { "yes" } else { "no" });
+            }
+        }
+        if let Some(app) = self.state.app.upgrade() {
+            app.set_effective_playback_speed(effective);
+        }
+    }
+
+    /// Read only telemetry owned by the currently loaded source. User pause
+    /// and core-idle are deliberately not interpreted as cache starvation.
+    pub fn playback_readiness(&self) -> PlaybackReadiness {
+        if self.state.pending.lock().unwrap().is_some()
+            || !self.state.started.load(Ordering::SeqCst)
+            || self.state.source_waiting.load(Ordering::SeqCst)
+        {
+            return PlaybackReadiness::default();
+        }
+        let source = self.state.preference_source.lock().unwrap().clone();
+        let Ok(mpv) = self.state.mpv.lock() else {
+            return PlaybackReadiness::default();
+        };
+        let Some(mpv) = mpv.as_ref() else {
+            return PlaybackReadiness::default();
+        };
+        if source.is_empty()
+            || mpv.get_property::<String>("path").ok().as_deref() != Some(source.as_str())
+            || mpv.get_property::<bool>("idle-active").ok() != Some(false)
+        {
+            return PlaybackReadiness::default();
+        }
+        if let Ok(buffering) = mpv.get_property::<bool>("paused-for-cache") {
+            self.state.buffering.store(buffering, Ordering::SeqCst);
+        }
+        PlaybackReadiness {
+            buffering: self.state.buffering.load(Ordering::SeqCst),
+            seekable: mpv.get_property("seekable").unwrap_or(false),
+            ended: mpv.get_property("eof-reached").unwrap_or(false),
+            buffered_ahead: readiness_buffered_ahead(
+                mpv.get_property("time-pos").unwrap_or(f64::NAN),
+                mpv.get_property("duration").unwrap_or(0.0),
+                mpv.get_property("demuxer-via-network").ok(),
+                mpv.get_property("demuxer-cache-time").ok(),
+                mpv.get_property("demuxer-cache-duration").ok(),
+            ),
         }
     }
 
@@ -2087,7 +2242,9 @@ impl Player {
             session.tracks.clear();
             if let Some(mpv) = mpv.as_ref() {
                 if control == 2 {
-                    let _ = mpv.set_property("speed", session.preferences.speed() as f64);
+                    if self.state.party_playback_rate.lock().unwrap().is_none() {
+                        let _ = mpv.set_property("speed", session.preferences.speed() as f64);
+                    }
                 } else {
                     apply_track_options(mpv, &session.preferences, control == 0);
                 }
@@ -2114,7 +2271,12 @@ impl Player {
     }
 
     pub fn effective_playback_speed(&self) -> f32 {
-        self.state.preferences.lock().unwrap().preferences.speed()
+        let base = self.state.preferences.lock().unwrap().preferences.speed();
+        self.state
+            .party_playback_rate
+            .lock()
+            .unwrap()
+            .map_or(base, |rate| rate as f32)
     }
 
     pub fn set_title_speed(&self, speed: f32) {
@@ -2457,6 +2619,7 @@ impl Player {
             *self.state.session_hwdec.lock().unwrap() = None;
         }
         self.state.started.store(false, Ordering::SeqCst);
+        self.state.buffering.store(false, Ordering::SeqCst);
         self.state.seek_pending.store(false, Ordering::SeqCst);
         self.state.reported.store(false, Ordering::SeqCst);
 
@@ -2538,6 +2701,10 @@ impl Player {
         }
 
         self.resolve_preferred_tracks();
+
+        // Sample actual starvation on the regular native-player cadence even
+        // when party telemetry is sent less often or a UI seek skips mirroring.
+        let _ = self.playback_readiness();
 
         /// One tick's worth of mpv state.
         struct Snapshot {
@@ -2804,7 +2971,11 @@ impl Player {
         app.set_muted(snapshot.muted);
 
         // Natural end of the stream: stop and return to the catalog.
-        if self.state.started.load(Ordering::SeqCst) && snapshot.eof && !snapshot.paused {
+        if self.state.started.load(Ordering::SeqCst)
+            && snapshot.eof
+            && !snapshot.paused
+            && self.state.party_playback_rate.lock().unwrap().is_none()
+        {
             // The app checkpoints this terminal playhead before close resets
             // its mirror, and performs the same cleanup as the Exit control.
             app.invoke_close_player();
@@ -2824,6 +2995,9 @@ impl Player {
     #[cfg(target_os = "android")]
     fn hand_off_to_external_player(&self) -> bool {
         if !self.state.allow_external.load(Ordering::SeqCst)
+            // Existing playback can enter a party after its source policy was
+            // captured. The live coordinator still requires the native player.
+            || self.state.party_playback_rate.lock().unwrap().is_some()
             || !self.state.last_headers.lock().unwrap().is_empty()
             || !self.state.last_subtitles.lock().unwrap().is_empty()
         {
@@ -3116,6 +3290,7 @@ impl Player {
         // and reloads at the queued start.
         *self.state.pending.lock().unwrap() = Some(url);
         self.state.started.store(false, Ordering::SeqCst);
+        self.state.buffering.store(false, Ordering::SeqCst);
         self.state.hwdec_checked.store(false, Ordering::SeqCst);
         *self.state.last_hwdec_log.lock().unwrap() = String::from("<unset>");
         *self.state.opened_at.lock().unwrap() = Instant::now();
@@ -3151,6 +3326,95 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn android_party_resume_waits_for_host_with_or_without_renderer_loss() {
+        for renderer_lost in [false, true] {
+            let mut recovery = android_recovery::Recovery::new(true);
+            recovery.setup();
+            recovery.begin(12.0);
+            recovery.submitted();
+            recovery.observe(Some(42.0), Some(false));
+            recovery.pause();
+            if renderer_lost {
+                recovery.teardown();
+                recovery.setup();
+            }
+
+            assert!(!resume_android_recovery(&mut recovery, true, Some(1.0)));
+            if renderer_lost {
+                assert!(recovery.take_reload().unwrap().paused);
+            } else {
+                assert!(recovery.take_reload().is_none());
+            }
+
+            // The coordinator can resume once its host report arrives. Leaving
+            // the party restores the ordinary preference on the next resume.
+            recovery.observe(Some(43.0), Some(false));
+            recovery.pause();
+            assert!(resume_android_recovery(&mut recovery, true, None));
+        }
+    }
+
+    #[test]
+    fn readiness_estimate_handles_local_files_unknown_duration_and_eof() {
+        assert_eq!(
+            readiness_buffered_ahead(30.0, 100.0, Some(false), None, None),
+            70.0
+        );
+        assert_eq!(
+            readiness_buffered_ahead(98.0, 100.0, Some(true), Some(110.0), None),
+            2.0
+        );
+        assert_eq!(
+            readiness_buffered_ahead(30.0, 0.0, Some(true), None, Some(4.5)),
+            4.5
+        );
+        assert_eq!(readiness_buffered_ahead(30.0, 100.0, None, None, None), 0.0);
+        assert_eq!(
+            readiness_buffered_ahead(30.0, 100.0, Some(true), Some(20.0), Some(50.0)),
+            0.0
+        );
+        assert_eq!(
+            readiness_buffered_ahead(30.0, 100.0, Some(true), Some(f64::NAN), Some(4.5)),
+            4.5
+        );
+        assert_eq!(
+            readiness_buffered_ahead(f64::NAN, 100.0, Some(false), None, None),
+            0.0
+        );
+    }
+
+    #[test]
+    fn party_clock_rate_is_bounded_and_rejects_non_finite_values() {
+        assert_eq!(normalized_party_rate(Some(2.0)), Some(1.1));
+        assert_eq!(normalized_party_rate(Some(0.5)), Some(0.9));
+        assert_eq!(normalized_party_rate(Some(1.03)), Some(1.03));
+        assert_eq!(normalized_party_rate(Some(f64::NAN)), None);
+        assert_eq!(normalized_party_rate(Some(f64::INFINITY)), None);
+        assert_eq!(normalized_party_rate(None), None);
+    }
+
+    #[test]
+    fn party_load_pauses_before_playback_and_holds_explicit_eof() {
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_property("config", false)?;
+            init.set_property("vo", "null")?;
+            init.set_property("ao", "null")
+        })
+        .unwrap();
+        apply_load_playback_options(&mpv, false, Some(1.0)).unwrap();
+        assert!(mpv.get_property::<bool>("pause").unwrap());
+        assert_eq!(mpv.get_property::<String>("keep-open").unwrap(), "yes");
+        apply_load_playback_options(&mpv, false, None).unwrap();
+        assert!(!mpv.get_property::<bool>("pause").unwrap());
+        assert_eq!(mpv.get_property::<String>("keep-open").unwrap(), "no");
+        apply_load_playback_options(&mpv, true, None).unwrap();
+        assert!(
+            mpv.get_property::<bool>("pause").unwrap(),
+            "background recovery remains paused outside a party"
+        );
+    }
 
     #[test]
     fn buffer_estimate_prefers_end_time_clamps_and_handles_missing_data() {
@@ -3193,6 +3457,7 @@ mod tests {
         i_slint_backend_testing::init_integration_test_with_mock_time();
         let app = AppWindow::new().unwrap();
         let player = Player::setup(&app);
+        assert_eq!(player.playback_readiness(), PlaybackReadiness::default());
         let session = player.screenshot_session();
         app.window().set_maximized(true);
         player.set_playback_fullscreen_preference(true);
@@ -3277,6 +3542,7 @@ mod tests {
         assert!(app.window().is_fullscreen());
         assert!(player.state.pending.lock().unwrap().is_none());
         assert!(player.state.source_waiting.load(Ordering::SeqCst));
+        assert_eq!(player.playback_readiness(), PlaybackReadiness::default());
         assert_eq!(app.get_position(), 0.0);
         assert_eq!(app.get_duration(), 0.0);
         assert_eq!(app.get_buffered_until(), 0.0);
@@ -3320,6 +3586,7 @@ mod tests {
         assert!(app.get_screenshot_notice().is_empty());
         assert!(!player.state.started.load(Ordering::SeqCst));
         assert_eq!(app.get_buffered_until(), 0.0);
+        assert_eq!(player.playback_readiness(), PlaybackReadiness::default());
         app.set_buffered_until(100.0);
         player.seek(50.0);
         assert_eq!(app.get_buffered_until(), 0.0);
@@ -3378,6 +3645,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         *player.state.mpv.lock().unwrap() = Some(mpv);
+        *player.state.preference_source.lock().unwrap() = source.to_str().unwrap().to_owned();
         app.set_player_open(true);
         app.set_is_paused(true);
         let wakes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -3401,7 +3669,110 @@ mod tests {
             1,
             "progress does not keep controls awake"
         );
+        player.set_paused(true);
+        let readiness = player.playback_readiness();
+        assert!(readiness.seekable);
+        assert!(!readiness.buffering, "a user pause is not cache starvation");
+        assert!(
+            readiness.buffered_ahead > 2.0,
+            "local files need no packet cache"
+        );
+
+        let native_rate = || {
+            player
+                .state
+                .mpv
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .get_property::<f64>("speed")
+                .unwrap()
+        };
+        player.set_party_playback_rate(Some(1.03));
+        assert!((native_rate() - 1.03).abs() < 0.00001);
+        player.set_title_speed(1.6);
+        player.set_speed(2.0);
+        assert!(
+            (native_rate() - 1.03).abs() < 0.00001,
+            "the clock owns the live rate"
+        );
+        assert!((player.effective_playback_speed() - 1.03).abs() < 0.00001);
+        player.tick();
+        assert!((native_rate() - 1.03).abs() < 0.00001);
+        player.set_party_playback_rate(None);
+        assert!(
+            (native_rate() - 1.6).abs() < 0.00001,
+            "restore the updated title rate"
+        );
+        player.set_speed(2.0);
+        assert_eq!(
+            native_rate(),
+            2.0,
+            "normal gesture preview still owns its native rate"
+        );
+        player.set_speed(player.effective_playback_speed());
+        assert!((native_rate() - 1.6).abs() < 0.00001);
+
+        player.set_party_playback_rate(Some(1.03));
+        player.restore_playback_default(
+            2,
+            &nova_config::CacheSettings {
+                playback_speed: 1.25,
+                ..Default::default()
+            },
+        );
+        assert!((native_rate() - 1.03).abs() < 0.00001);
+        player.set_party_playback_rate(None);
+        assert_eq!(
+            native_rate(),
+            1.25,
+            "a changed default also survives the clock override"
+        );
+
+        *player.state.preference_source.lock().unwrap() = "https://example.invalid/stale".into();
+        assert_eq!(player.playback_readiness(), PlaybackReadiness::default());
+        player.set_party_playback_rate(Some(0.97));
+        assert!(
+            native_rate() == 1.25,
+            "stale native sources receive no clock command"
+        );
+        *player.state.pending.lock().unwrap() = Some(source.to_str().unwrap().to_owned());
+        *player.state.preference_source.lock().unwrap() = source.to_str().unwrap().to_owned();
+        player.set_party_playback_rate(Some(1.02));
+        assert!(
+            native_rate() == 1.25,
+            "queued loads receive no premature clock command"
+        );
+        assert_eq!(player.playback_readiness(), PlaybackReadiness::default());
+        *player.state.pending.lock().unwrap() = None;
+        player.set_party_playback_rate(Some(1.0));
+        {
+            let guard = player.state.mpv.lock().unwrap();
+            let mpv = guard.as_ref().unwrap();
+            mpv.set_property("time-pos", mpv.get_property::<f64>("duration").unwrap())
+                .unwrap();
+            mpv.set_property("pause", false).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !player.playback_readiness().ended {
+            assert!(Instant::now() < deadline, "party EOF was not retained");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        player.tick();
+        assert!(
+            app.get_player_open(),
+            "the party coordinator owns terminal close"
+        );
+        assert!(player.playback_readiness().ended);
+        *player.state.preference_source.lock().unwrap() = "https://example.invalid/stale".into();
+        assert!(
+            !player.playback_readiness().ended,
+            "a stale source cannot end the party"
+        );
         player.close();
+        assert_eq!(player.playback_readiness(), PlaybackReadiness::default());
+        player.set_party_playback_rate(None);
     }
 
     #[cfg(not(target_os = "android"))]

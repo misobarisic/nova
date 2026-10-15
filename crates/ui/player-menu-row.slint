@@ -1,0 +1,81 @@
+import { Theme, SettingsStyle } from "@NovaUiShared";
+import { IcMusic, IcCaptions, IcPlay, IcSettingsGear, IcCheck, IcChevronRight } from "icons.slint";
+
+// Shared category/track row: measured title, optional secondary text, and a
+// soft selected surface. Only categories get a chevron; tracks are direct picks.
+export component MenuRow inherits Rectangle {
+    in property <int> icon_kind: 0; // 0 none, 1 audio, 2 captions, 3 speed, 4 decoder
+    in property <string> label;
+    in property <string> value;
+    in property <bool> selected: false;
+    in property <bool> focused: false;
+    in property <bool> submenu: false;
+    in property <bool> enabled: true;
+    accessible-role: button; accessible-label: root.label; accessible-enabled: root.enabled;
+    callback activate();
+    forward-focus: row_focus;
+    row_focus := FocusScope {
+        enabled: root.enabled;
+        changed has-focus => { if self.has-focus { SettingsStyle.keyboard-mode = true; } }
+        key-pressed(e) => { SettingsStyle.keyboard-mode = true; if e.text == Key.Return || e.text == " " { if !e.repeat { root.activate(); } accept } else { reject } }
+    }
+
+    opacity: root.enabled ? 1 : 0.45;
+    property <length> label_x: root.icon_kind == 0 ? 14px : 50px;
+    property <length> label_h: Math.min(40px, row_label.preferred-height);
+    property <length> text_h: root.label_h + (root.value != "" ? 20px : 0px);
+    height: Math.max(60px, root.text_h + 20px);
+    border-radius: 10px;
+    border-width: root.focused || (row_focus.has-focus && SettingsStyle.keyboard-mode) ? 2px : 0px;
+    border-color: Theme.current.focus_ring;
+    background: root.selected ? Theme.current.selection_fill
+        : row_t.has-hover ? Theme.current.control_hover : transparent;
+
+    icon_host := Rectangle {
+        x: 14px; width: 24px; height: 100%;
+        if root.icon_kind == 1: IcMusic {
+            width: 22px; height: 22px; y: (parent.height - self.height) / 2;
+            fill: Theme.current.accent_soft;
+        }
+        if root.icon_kind == 2: IcCaptions {
+            width: 22px; height: 22px; y: (parent.height - self.height) / 2;
+            fill: Theme.current.accent_soft;
+        }
+        if root.icon_kind == 3: IcPlay {
+            width: 22px; height: 22px; y: (parent.height - self.height) / 2;
+            fill: Theme.current.accent_soft;
+        }
+        if root.icon_kind == 4: IcSettingsGear {
+            width: 22px; height: 22px; y: (parent.height - self.height) / 2;
+            fill: Theme.current.accent_soft;
+        }
+    }
+    row_label := Text {
+        x: root.label_x; y: (root.height - root.text_h) / 2;
+        width: Math.max(0px, root.width - root.label_x - 40px);
+        height: root.label_h;
+        text: root.label; color: Theme.current.text_bright;
+        font-size: 14px; font-weight: 600;
+        wrap: word-wrap; overflow: elide;
+    }
+    if root.value != "": Text {
+        x: root.label_x; y: row_label.y + root.label_h + 4px;
+        width: row_label.width; height: 16px;
+        text: root.value; color: Theme.current.text_secondary;
+        font-size: 12px; overflow: elide;
+    }
+    if root.selected: IcCheck {
+        x: root.width - 30px; y: (root.height - self.height) / 2;
+        width: 18px; height: 18px; fill: Theme.current.accent_soft;
+    }
+    if root.submenu && !root.selected: IcChevronRight {
+        x: root.width - 28px; y: (root.height - self.height) / 2;
+        width: 16px; height: 16px; fill: Theme.current.text_muted;
+    }
+    row_t := TouchArea {
+        enabled: root.enabled;
+        width: 100%; height: 100%; mouse-cursor: pointer;
+        clicked => { root.activate(); }
+    }
+}
+

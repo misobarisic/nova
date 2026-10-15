@@ -317,3 +317,13 @@ export struct RemoteDeviceRow {
 
 // Receiver-owned opaque offer identity; never a playback URL or file path.
 export struct RemoteOfferRow { id: string, title: string, description: string }
+
+// Ephemeral watch-room participants; never includes an invite or source URL.
+export struct PartyMemberRow {
+    id: string,
+    name: string,
+    status: string,
+    is_host: bool,
+    ready: bool,
+    can_remove: bool,
+}

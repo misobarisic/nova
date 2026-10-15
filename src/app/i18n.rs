@@ -124,6 +124,7 @@ impl Bridge {
         self.refresh_catalog_language_text();
         self.refresh_detail_language_text();
         self.refresh_remote_language_text();
+        self.refresh_party_language_text();
 
         // Settings surfaces whose text is formatted from live state.
         self.refresh_cache_disk_usage();

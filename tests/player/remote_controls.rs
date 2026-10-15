@@ -314,3 +314,79 @@ fn remote_pages_translate_and_fit_in_english_and_croatian() {
     }
     slint::select_bundled_translation("en").unwrap();
 }
+
+#[test]
+fn track_picker_dispatches_only_its_confirmed_session_and_back_closes_picker_first() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::track_picker_dispatches_only_its_confirmed_session_and_back_closes_picker_first"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.window().set_size(slint::PhysicalSize::new(360, 1600));
+    app.set_remote_controls_open(true);
+    app.set_remote_connected(true);
+    app.set_remote_session("session-a".into());
+    app.set_remote_can_tracks(true);
+    app.set_remote_audio_tracks(
+        Rc::new(slint::VecModel::from(vec![nova::TrackRow {
+            index: 4,
+            title: "English stereo".into(),
+            selected: true,
+            ..Default::default()
+        }]))
+        .into(),
+    );
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = actions.clone();
+    app.on_remote_action(move |name, value, token| {
+        recorded
+            .borrow_mut()
+            .push((name.to_string(), value, token.to_string()))
+    });
+    let detached = Rc::new(std::cell::Cell::new(false));
+    let recorded = detached.clone();
+    app.on_remote_device_close(move || recorded.set(true));
+    app.window().show().unwrap();
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, "English stereo")
+            .next()
+            .is_none(),
+        "track choices must stay inside the picker"
+    );
+    click(&app, "Audio tracks");
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    click(&app, "English stereo");
+    assert_eq!(
+        &*actions.borrow(),
+        &[("audio".into(), 4.0, "session-a".into())]
+    );
+    click(&app, "Subtitles");
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    key(&app, slint::platform::Key::Escape);
+    assert!(
+        !detached.get(),
+        "Back must dismiss the picker before controls"
+    );
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, "Off")
+            .next()
+            .is_none()
+    );
+    click(&app, "Audio tracks");
+    app.set_remote_session("session-b".into());
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, "English stereo")
+            .next()
+            .is_none(),
+        "session replacement dismisses stale tracks"
+    );
+    assert_eq!(actions.borrow().len(), 1);
+    key(&app, slint::platform::Key::Escape);
+    assert!(detached.get());
+}

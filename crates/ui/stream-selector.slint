@@ -1,5 +1,5 @@
 import { RemoteTargetMenu } from "remote-controls.slint";
-import { RemoteBridge, Theme, Anim, StreamRow, SheetItem } from "@NovaUiShared";
+import { PartyBridge, RemoteBridge, Theme, Anim, StreamRow, SheetItem } from "@NovaUiShared";
 
 
 
@@ -449,13 +449,13 @@ component StreamList {
                         if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
                             row_lp_timer.stop();
                             touch_st.lp_suppress = true;
-                            if RemoteBridge.target_id == "" {
+                            if (RemoteBridge.target_id == "" || PartyBridge.active) {
                                 root.action_requested(st.id);
                                 if (!root.touch_menus) { stream_ctx.show({ x: self.mouse-x, y: self.mouse-y }); }
                             }
                         } else if (ev.kind == PointerEventKind.down) {
                             touch_st.lp_suppress = false;
-                            if (root.touch_menus && RemoteBridge.target_id == "") {
+                            if (root.touch_menus && (RemoteBridge.target_id == "" || PartyBridge.active)) {
                                 row_lp_timer.stop();
                                 row_lp_timer.start();
                             }
@@ -473,7 +473,7 @@ component StreamList {
 
                 stream_actions := Rectangle {
                     // Receiver offers never invoke the controller's download actions.
-                    visible: RemoteBridge.target_id == "";
+                    visible: (RemoteBridge.target_id == "" || PartyBridge.active);
                     x: parent.width - 52px;
                     y: 8px;
                     width: 44px; height: 44px;
@@ -607,7 +607,7 @@ export component StreamSelector inherits Rectangle {
     // Zones: back, addon filters, stream rows, pager. Stream indexes are
     // absolute across the Rust-provided 25-row slices.
     private property <int> focus_zone: 2;
-    private property <bool> has_output_choice: RemoteBridge.has_ready_devices || RemoteBridge.target_id != "";
+    private property <bool> has_output_choice: !PartyBridge.active && (RemoteBridge.has_ready_devices || RemoteBridge.target_id != "");
 
     function request_back() {
         if (root.action_open) { root.action_open = false; }
@@ -862,7 +862,7 @@ export component StreamSelector inherits Rectangle {
                         kb_active: root.kb_active && root.focus_zone == 2;
                         touch_menus: root.touch_menus;
                         action_items: root.action_items;
-                        picked(i) => { root.kb_active = false; root.kb_index = i; if RemoteBridge.target_id != "" { RemoteBridge.stream_picked(i); } else { root.picked(i); } }
+                        picked(i) => { root.kb_active = false; root.kb_index = i; if (RemoteBridge.target_id != "" && !PartyBridge.active) { RemoteBridge.stream_picked(i); } else { root.picked(i); } }
                         action_requested(id) => { root.action_requested(id); }
                         action_selected(id, a) => { root.action_selected(id, a); }
                         focused_row(y, h) => { root.reveal_row(y, h); }
@@ -982,7 +982,7 @@ export component StreamSelector inherits Rectangle {
                 root.kb_active = true;
                 if (root.focus_zone == 0) {
                     root.request_back();
-                } else if (root.focus_zone == 2 && root.kb_index >= 0 && root.kb_index < root.total) { if RemoteBridge.target_id != "" { RemoteBridge.stream_picked(root.kb_index); } else { root.picked(root.kb_index); } }
+                } else if (root.focus_zone == 2 && root.kb_index >= 0 && root.kb_index < root.total) { if (RemoteBridge.target_id != "" && !PartyBridge.active) { RemoteBridge.stream_picked(root.kb_index); } else { root.picked(root.kb_index); } }
                 accept
             } else { reject }
         }

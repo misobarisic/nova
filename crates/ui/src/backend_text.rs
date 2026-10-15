@@ -23,6 +23,20 @@ pub fn set_language(language: Language) {
     *LANGUAGE.lock().unwrap() = language;
 }
 
+/// Approximate playable-ahead duration, not a bandwidth guarantee.
+pub fn party_buffered_status(status: &str, seconds: f64) -> String {
+    let seconds = if seconds.is_finite() {
+        seconds.max(0.0)
+    } else {
+        0.0
+    };
+    if croatian() {
+        format!("{} · {seconds:.1} s učitano", tr(status))
+    } else {
+        format!("{} · {seconds:.1} s buffered", tr(status))
+    }
+}
+
 pub fn screenshot_saved(path: &str) -> String {
     if croatian() {
         format!("Snimka zaslona spremljena: {path}")
@@ -71,6 +85,38 @@ pub fn tr(english: &str) -> &str {
         return english;
     }
     match english {
+        "Different edition or duration" => "Različito izdanje ili trajanje",
+        "This stream cannot seek" => "Ovaj prijenos ne podržava premotavanje",
+        "Local stream unavailable" => "Lokalni prijenos nije dostupan",
+        "Finished" => "Završeno",
+        "Choose the same title and episode" => "Odaberite isti naslov i epizodu",
+        "Disconnect remote controls before joining a watch party." => {
+            "Prekinite daljinsko upravljanje prije pridruživanja zajedničkom gledanju."
+        }
+        "Start a seekable video before hosting a watch party." => {
+            "Prije pokretanja zajedničkog gledanja pokrenite videozapis koji podržava premotavanje."
+        }
+        "The watch-party invite is invalid or expired." => {
+            "Pozivnica za zajedničko gledanje nije valjana ili je istekla."
+        }
+        "Could not connect to the watch party. Try again." => {
+            "Povezivanje sa zajedničkim gledanjem nije uspjelo. Pokušajte ponovno."
+        }
+        "Only the host controls the shared timeline." => {
+            "Samo domaćin upravlja zajedničkom reprodukcijom."
+        }
+        "Watch parties use normal speed; audio and subtitles remain your choice." => {
+            "Zajedničko gledanje koristi normalnu brzinu; zvuk i titlove birate sami."
+        }
+        "The watch party has ended." => "Zajedničko gledanje je završilo.",
+        "Reconnecting to the host…" => "Ponovno povezivanje s domaćinom…",
+        "Waiting for participants to buffer…" => "Čekanje da sudionici učitaju videozapis…",
+        "Watching together" => "Zajedničko gledanje",
+        "Choose the same episode and edition. Different cuts cannot be aligned automatically." => {
+            "Odaberite istu epizodu i izdanje. Različite verzije ne mogu se automatski uskladiti."
+        }
+        "Ready" => "Spremno",
+        "Choosing a stream" => "Odabir prijenosa",
         "Choose an addon ZIP file…" => "Odaberite ZIP datoteku dodatka…",
         "Reading addon ZIP…" => "Čitanje ZIP datoteke dodatka…",
         "Installing addon ZIP…" => "Instaliranje ZIP datoteke dodatka…",

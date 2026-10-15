@@ -267,6 +267,7 @@ struct HomeCatalogGroup {
 #[derive(Default)]
 struct Shared {
     remote_playback: remote_playback::State,
+    party: party::State,
     stream_prefetch: stream_prefetch::Cache,
     stream_prefetch_live_session: Option<u64>,
     installed: Vec<Installed>,
@@ -746,6 +747,7 @@ mod library;
 mod next_episode;
 mod onboarding;
 mod page_artwork;
+mod party;
 mod persistence;
 mod playback;
 mod playback_actions;

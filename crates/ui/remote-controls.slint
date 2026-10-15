@@ -1,8 +1,8 @@
 import { RemoteBridge, Theme, SettingsStyle } from "@NovaUiShared";
-import { PillButton } from "settings-controls.slint";
+import { PillButton, MiniSlider, SettingsCard } from "settings-controls.slint";
 import { PageHeader } from "page-header.slint";
 import { ScrollView } from "scrollview.slint";
-import { Slider } from "std-widgets.slint";
+import { MenuRow } from "player-menu-row.slint";
 
 // A preview belongs to the session at press time. Every release path uses that
 // captured identity, so reconnecting or replacing playback cannot reset a new session.
@@ -59,8 +59,24 @@ export component RemoteControlsPage inherits Rectangle {
     private property <bool> ready: RemoteBridge.connected && RemoteBridge.session != "" && !RemoteBridge.loading && RemoteBridge.error == "" && RemoteBridge.replacement_token == "";
     background: Theme.current.artwork_canvas;
     function action(name: string, value: float) { if root.ready { RemoteBridge.action(name, value, RemoteBridge.session); } }
+    private property <int> track_picker: RemoteBridge.track_picker;
+    changed track_picker => { if root.track_picker == 0 { focus.focus(); } }
+    private property <string> current_session: RemoteBridge.session;
+    changed current_session => { RemoteBridge.track_picker = 0; }
+    function open_tracks(kind: int) {
+        if root.ready && RemoteBridge.can_tracks {
+            RemoteBridge.track_picker_session = RemoteBridge.session;
+            RemoteBridge.track_picker = kind;
+        }
+    }
+    function pick_track(index: int) {
+        if root.ready && RemoteBridge.can_tracks && RemoteBridge.track_picker_session == RemoteBridge.session {
+            RemoteBridge.action(index == -2 ? (RemoteBridge.track_picker == 1 ? "reset_audio" : "reset_subtitle") : (RemoteBridge.track_picker == 1 ? "audio" : "subtitle"), index == -2 ? 0 : index, RemoteBridge.track_picker_session);
+        }
+        RemoteBridge.track_picker = 0;
+    }
     focus := FocusScope {
-        enabled: RemoteBridge.replacement_token == ""; width: 100%; height: 100%; init => { self.focus(); }
+        enabled: RemoteBridge.replacement_token == "" && RemoteBridge.track_picker == 0; width: 100%; height: 100%; init => { self.focus(); }
         key-pressed(e) => {
             if e.text == Key.Escape || e.text == Key.Backspace || e.text == Key.Back { if !e.repeat { RemoteBridge.device_close(); } accept }
             else if root.ready && RemoteBridge.can_pause && (e.text == " " || e.text == "k") { if !e.repeat { root.action("pause", 0); } accept }
@@ -74,12 +90,12 @@ export component RemoteControlsPage inherits Rectangle {
         }
     }
     ScrollView {
-        x: root.safe-left + 18px; y: root.safe-top + 18px;
-        width: Math.max(0px, root.width - root.safe-left - root.safe-right - 36px);
+        x: root.safe-left + 18px + Math.max(0px, (root.width - root.safe-left - root.safe-right - 800px) / 2); y: root.safe-top + 18px;
+        width: Math.max(0px, Math.min(764px, root.width - root.safe-left - root.safe-right - 36px));
         height: Math.max(0px, root.height - root.safe-top - root.safe-bottom - 36px);
         content-width: self.visible-width;
         VerticalLayout {
-            width: 100%; spacing: 16px; alignment: start;
+            width: 100%; spacing: 12px; alignment: start;
             HorizontalLayout {
                 spacing: 8px;
                 controls_header := PageHeader {
@@ -95,35 +111,53 @@ export component RemoteControlsPage inherits Rectangle {
                     clicked => { root.action("stop", 0); }
                 }
             }
-            Text { text: RemoteBridge.title; color: Theme.current.text_bright; font-size: 24px; font-weight: 700; wrap: word-wrap; }
-            if RemoteBridge.episode != "": Text { text: RemoteBridge.episode; color: Theme.current.text_primary; wrap: word-wrap; }
-            Text { text: RemoteBridge.error != "" ? RemoteBridge.error : RemoteBridge.loading ? @tr("Connecting…") : !RemoteBridge.connected ? @tr("Disconnected") : RemoteBridge.phase; color: Theme.current.text_muted; wrap: word-wrap; }
-            Text { text: RemoteBridge.time_text; color: Theme.current.text_primary; }
-            timeline := Slider { enabled: root.ready && RemoteBridge.can_seek && RemoteBridge.duration > 0; minimum: 0; maximum: Math.max(1, RemoteBridge.duration); value: RemoteBridge.position; changed(v) => { root.action("seek", v); } }
-            HorizontalLayout { alignment: start; spacing: 8px;
-                PillButton { label: @tr("−10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { root.action("seek_relative", -10); } }
-                PillButton { label: RemoteBridge.paused ? @tr("Play") : @tr("Pause"); primary: true; enabled: root.ready && RemoteBridge.can_pause; clicked => { root.action("pause", 0); } }
-                PillButton { label: @tr("+10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { root.action("seek_relative", 10); } }
+            SettingsCard {
+                VerticalLayout { padding: 16px; spacing: 8px;
+                    Text { text: RemoteBridge.title; color: Theme.current.text_bright; font-size: 22px; font-weight: 700; wrap: word-wrap; min-width: 0px; }
+                    if RemoteBridge.episode != "": Text { text: RemoteBridge.episode; color: Theme.current.text_primary; wrap: word-wrap; min-width: 0px; }
+                    Text { text: RemoteBridge.error != "" ? RemoteBridge.error : RemoteBridge.loading ? @tr("Connecting…") : !RemoteBridge.connected ? @tr("Disconnected") : RemoteBridge.phase; color: RemoteBridge.error != "" ? Theme.current.text_destructive : Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
+                    Text { text: RemoteBridge.time_text; color: Theme.current.text_primary; }
+                    timeline := MiniSlider { name: @tr("Playback position"); enabled: root.ready && RemoteBridge.can_seek && RemoteBridge.duration > 0; minimum: 0; maximum: Math.max(1, RemoteBridge.duration); value: RemoteBridge.position; changed(v) => { root.action("seek", v); } }
+                    HorizontalLayout { alignment: center; spacing: 8px;
+                        PillButton { label: @tr("−10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { root.action("seek_relative", -10); } }
+                        PillButton { label: RemoteBridge.paused ? @tr("Play") : @tr("Pause"); primary: true; compact: true; enabled: root.ready && RemoteBridge.can_pause; clicked => { root.action("pause", 0); } }
+                        PillButton { label: @tr("+10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { root.action("seek_relative", 10); } }
+                    }
+                }
             }
-            volume_label := Text { text: @tr("Volume"); color: Theme.current.text_primary; }
-            Slider { enabled: root.ready && RemoteBridge.can_volume; minimum: 0; maximum: 100; value: RemoteBridge.volume; changed(v) => { root.action("volume", v); } }
-            HorizontalLayout { alignment: start; spacing: 8px;
-                PillButton { label: RemoteBridge.muted ? @tr("Unmute") : @tr("Mute"); enabled: root.ready && RemoteBridge.can_mute; clicked => { root.action("mute", 0); } }
+            SettingsCard {
+                VerticalLayout { padding: 16px; spacing: 8px;
+                    HorizontalLayout {
+                        volume_label := Text { text: @tr("Volume"); color: Theme.current.text_primary; font-weight: 600; horizontal-stretch: 1; }
+                        Text { text: Math.round(RemoteBridge.volume) + "%"; color: Theme.current.text_muted; }
+                    }
+                    MiniSlider { name: @tr("Volume"); enabled: root.ready && RemoteBridge.can_volume; minimum: 0; maximum: 100; value: RemoteBridge.volume; changed(v) => { root.action("volume", v); } }
+                    PillButton { label: RemoteBridge.muted ? @tr("Unmute") : @tr("Mute"); enabled: root.ready && RemoteBridge.can_mute; clicked => { root.action("mute", 0); } }
+                }
             }
-            Text { text: @tr("Playback speed"); color: Theme.current.text_primary; }
-            Slider { enabled: root.ready && RemoteBridge.can_speed; minimum: 0.5; maximum: 2; value: RemoteBridge.speed; changed(v) => { root.action("speed", v); } }
-            Text { text: "" + RemoteBridge.speed + "×"; color: Theme.current.text_muted; }
-            PillButton { label: @tr("Use global default"); enabled: root.ready && RemoteBridge.can_speed; clicked => { root.action("reset_speed", 0); } }
-            RemoteSpeedHold { enabled: root.ready && RemoteBridge.can_speed; }
-            PillButton { label: RemoteBridge.fullscreen ? @tr("Exit fullscreen on device") : @tr("Fullscreen on device"); enabled: root.ready && RemoteBridge.can_fullscreen; clicked => { root.action("fullscreen", 0); } }
-            PillButton { label: @tr("Screenshot on device"); enabled: root.ready && RemoteBridge.can_screenshot; clicked => { root.action("screenshot", 0); } }
-            if RemoteBridge.can_tracks: Text { text: @tr("Audio tracks"); color: Theme.current.text_primary; }
-            if RemoteBridge.can_tracks: PillButton { label: @tr("Use global default"); enabled: root.ready; clicked => { root.action("reset_audio", 0); } }
-            for track in RemoteBridge.audio_tracks: PillButton { primary: track.selected; label: track.title + (track.lang != "" ? " · " + track.lang : ""); wrap_label: true; enabled: root.ready && RemoteBridge.can_tracks; clicked => { root.action("audio", track.index); } }
-            if RemoteBridge.can_tracks: Text { text: @tr("Subtitles"); color: Theme.current.text_primary; }
-            if RemoteBridge.can_tracks: PillButton { label: @tr("Use global default"); enabled: root.ready; clicked => { root.action("reset_subtitle", 0); } }
-            if RemoteBridge.can_tracks: PillButton { label: @tr("Off"); enabled: root.ready; clicked => { root.action("subtitle", -1); } }
-            for track in RemoteBridge.sub_tracks: PillButton { primary: track.selected; label: track.title + (track.lang != "" ? " · " + track.lang : ""); wrap_label: true; enabled: root.ready && RemoteBridge.can_tracks; clicked => { root.action("subtitle", track.index); } }
+            SettingsCard {
+                VerticalLayout { padding: 16px; spacing: 8px;
+                    HorizontalLayout {
+                        Text { text: @tr("Playback speed"); color: Theme.current.text_primary; font-weight: 600; horizontal-stretch: 1; }
+                        Text { text: "" + RemoteBridge.speed + "×"; color: Theme.current.text_muted; }
+                    }
+                    MiniSlider { name: @tr("Playback speed"); enabled: root.ready && RemoteBridge.can_speed; minimum: 0.5; maximum: 2; step: 0.05; value: RemoteBridge.speed; changed(v) => { root.action("speed", v); } }
+                    PillButton { label: @tr("Use global default"); enabled: root.ready && RemoteBridge.can_speed; clicked => { root.action("reset_speed", 0); } }
+                    RemoteSpeedHold { enabled: root.ready && RemoteBridge.can_speed; }
+                }
+            }
+            if RemoteBridge.can_tracks: SettingsCard {
+                VerticalLayout { padding: 8px; spacing: 4px;
+                    audio_picker := MenuRow { label: @tr("Audio tracks"); icon_kind: 1; submenu: true; enabled: root.ready; activate => { root.open_tracks(1); } }
+                    subtitle_picker := MenuRow { label: @tr("Subtitles"); icon_kind: 2; submenu: true; enabled: root.ready; activate => { root.open_tracks(2); } }
+                }
+            }
+            SettingsCard {
+                VerticalLayout { padding: 12px; spacing: 8px;
+                    PillButton { label: RemoteBridge.fullscreen ? @tr("Exit fullscreen on device") : @tr("Fullscreen on device"); wrap_label: true; enabled: root.ready && RemoteBridge.can_fullscreen; clicked => { root.action("fullscreen", 0); } }
+                    PillButton { label: @tr("Screenshot on device"); wrap_label: true; enabled: root.ready && RemoteBridge.can_screenshot; clicked => { root.action("screenshot", 0); } }
+                }
+            }
             if RemoteBridge.prompt != "": VerticalLayout { spacing: 8px;
                 Text { text: RemoteBridge.prompt; wrap: word-wrap; color: Theme.current.text_primary; }
                 PillButton { label: RemoteBridge.resume_prompt ? @tr("Resume") : @tr("Continue"); enabled: root.ready; clicked => { RemoteBridge.action("prompt_accept", 0, RemoteBridge.prompt_token); } }
@@ -138,6 +172,43 @@ export component RemoteControlsPage inherits Rectangle {
             Text { text: @tr("Back disconnects the controls. Playback continues on your device."); color: Theme.current.text_muted; wrap: word-wrap; }
         }
     }
+    if RemoteBridge.track_picker != 0: Rectangle {
+        width: 100%; height: 100%; background: Theme.current.scrim_shadow;
+        TouchArea { clicked => { RemoteBridge.track_picker = 0; } }
+        picker_focus := FocusScope {
+            width: 100%; height: 100%; init => { self.focus(); }
+            key-pressed(e) => {
+                if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
+                    if !e.repeat { RemoteBridge.track_picker = 0; } accept
+                } else { reject }
+            }
+        }
+        picker_card := Rectangle {
+            x: root.safe-left + (root.width - root.safe-left - root.safe-right - self.width) / 2;
+            y: root.height - root.safe-bottom - self.height - 12px;
+            width: Math.max(0px, Math.min(440px, root.width - root.safe-left - root.safe-right - 24px));
+            height: Math.min(picker_col.preferred-height, Math.max(0px, root.height - root.safe-top - root.safe-bottom - 24px));
+            background: Theme.current.player_menu; border-radius: Theme.card_corner_radius;
+            border-width: 1px; border-color: Theme.current.player_menu_border;
+            TouchArea { }
+            ScrollView {
+                width: 100%; height: 100%; content-width: self.visible-width; mouse-drag-pan-enabled: true;
+                picker_col := VerticalLayout { width: 100%; padding: 10px; spacing: 4px; alignment: start;
+                    Text { text: RemoteBridge.track_picker == 1 ? @tr("Audio tracks") : @tr("Subtitles"); color: Theme.current.text_bright; font-size: 18px; font-weight: 700; }
+                    MenuRow { label: @tr("Use global default"); enabled: root.ready && RemoteBridge.can_tracks; activate => { root.pick_track(-2); } }
+                    if RemoteBridge.track_picker == 2: MenuRow { label: @tr("Off"); enabled: root.ready && RemoteBridge.can_tracks; activate => { root.pick_track(-1); } }
+                    for track in (RemoteBridge.track_picker == 1 ? RemoteBridge.audio_tracks : RemoteBridge.sub_tracks): MenuRow {
+                        label: track.title + (track.lang != "" ? " · " + track.lang : ""); value: track.codec;
+                        enabled: root.ready && RemoteBridge.can_tracks;
+                        icon_kind: RemoteBridge.track_picker == 1 ? 1 : 2; selected: track.selected;
+                        activate => { root.pick_track(track.index); }
+                    }
+                    PillButton { label: @tr("Cancel"); clicked => { RemoteBridge.track_picker = 0; } }
+                }
+            }
+        }
+    }
+
 }
 
 export component RemoteDevicesPage inherits Rectangle {

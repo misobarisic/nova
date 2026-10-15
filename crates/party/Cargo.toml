@@ -1,0 +1,13 @@
+[package]
+name = "nova-party"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+nova-playback-api = { path = "../playback-api" }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["alloc"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+iroh = "1.2"

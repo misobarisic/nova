@@ -37,6 +37,7 @@ members = [
     "crates/media",
     "crates/player",
     "crates/playback-api",
+    "crates/party",
     "crates/sync",
     "crates/tracking",
 ]
@@ -115,6 +116,7 @@ nova-media = { path = "crates/media" }
 nova-download = { path = "crates/download" }
 nova-player = { path = "crates/player" }
 nova-playback-api = { path = "crates/playback-api" }
+nova-party = { path = "crates/party" }
 nova-torrent = { path = "crates/torrent" }
 nova-sync = { path = "crates/sync" }
 nova-tracking = { path = "crates/tracking" }

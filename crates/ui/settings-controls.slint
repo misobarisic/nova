@@ -325,6 +325,18 @@ export component MiniSlider inherits Rectangle {
     // 6-button nav highlight (Left/Right adjusts when focused).
     in property <bool> enabled: true;
     in property <bool> focused: false;
+    in property <string> name;
+    accessible-role: slider;
+    accessible-label: root.name;
+    accessible-enabled: root.enabled;
+    accessible-value: root.value;
+    accessible-value-minimum: root.minimum;
+    accessible-value-maximum: root.maximum;
+    accessible-value-step: root.step;
+    accessible-action-set-value(v) => { if root.enabled && v.is-float() { root.adjust(v.to-float()); } }
+    accessible-action-increment => { if root.enabled { root.adjust(root.value + root.step); } }
+    accessible-action-decrement => { if root.enabled { root.adjust(root.value - root.step); } }
+    function adjust(v: float) { root.value = Math.clamp(v, root.minimum, root.maximum); root.changed(root.value); }
     callback changed(float);
     height: 44px;
     border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;

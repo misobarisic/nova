@@ -66,6 +66,7 @@ impl PlaybackIntent {
 pub(crate) fn note_android_pause_checkpoint() {
     let bridge = super::bridge::with_global_bridge(Clone::clone);
     if let Some(bridge) = bridge {
+        bridge.party_suspend();
         bridge.remote_suspend();
         bridge.cancel_pending_playback();
         bridge.note_player_progress_from_ui();
@@ -75,6 +76,22 @@ pub(crate) fn note_android_pause_checkpoint() {
 }
 
 impl Bridge {
+    /// Snapshot the actual playback intent, not whichever detail page is open.
+    pub(super) fn current_playback_identity(&self) -> Option<nova_playback_api::MediaIdentity> {
+        let state = self.shared.lock().unwrap();
+        let context = &state.playback_intent.as_ref()?.context;
+        if context.media_id.is_empty() || context.request_id.is_empty() {
+            return None;
+        }
+        Some(nova_playback_api::MediaIdentity {
+            media_type: context.media_type.clone(),
+            title_id: context.media_id.clone(),
+            episode_id: context.request_id.clone(),
+            title: context.title.clone(),
+            episode: context.episode_label.clone(),
+        })
+    }
+
     pub(super) fn take_player_screenshot(&self) {
         let Some(app) = self.app() else { return };
         if !app.get_player_open() || !app.get_playback_started() || app.get_screenshot_busy() {
@@ -479,7 +496,7 @@ impl Bridge {
                     // User choice (Settings → Player): external player,
                     // always. Not tracked: there is no close event.
                     self.mark_playback_opened(false);
-                    if !self.remote_receiver_playback() {
+                    if !self.remote_receiver_playback() && !self.party_active() {
                         let _ = crate::player::open_external(&ready.url);
                     }
                 } else if self.open_player_for_request(
@@ -500,7 +517,7 @@ impl Bridge {
                     // Built-in failed: external app as a fallback.
                     // Not tracked: there is no close event.
                     self.mark_playback_opened(false);
-                    if !self.remote_receiver_playback() {
+                    if !self.remote_receiver_playback() && !self.party_active() {
                         let _ = crate::player::open_external(&ready.url);
                     }
                     self.finish_playback_request();
@@ -528,7 +545,9 @@ impl Bridge {
     }
 
     fn external_playback_allowed(&self) -> bool {
-        nova_config::active_cache_settings().player_external && !self.remote_receiver_playback()
+        nova_config::active_cache_settings().player_external
+            && !self.remote_receiver_playback()
+            && !self.party_active()
     }
 
     pub(super) fn open_player(&self, url: String) -> bool {
@@ -620,6 +639,7 @@ impl Bridge {
             app.set_player_status(text::tr("Loading stream…").into());
         }
         let private_playback = self.remote_receiver_playback()
+            || self.party_active()
             || result.as_ref().is_ok_and(|stream| {
                 stream
                     .extra
@@ -779,7 +799,7 @@ impl Bridge {
                             subtitles,
                         ) {
                             bridge.mark_playback_opened(false);
-                            if !bridge.remote_receiver_playback() {
+                            if !bridge.remote_receiver_playback() && !bridge.party_active() {
                                 let _ = crate::player::open_external(&url);
                             }
                         }
@@ -944,6 +964,11 @@ impl Bridge {
             context.is_episode,
             context.is_movie,
         );
+        // A party owns the timeline even while its snapshot is unavailable or
+        // this source has not yet passed compatibility/readiness checks. Never
+        // block its coordinator behind a local history prompt or resume seek.
+        let party_active = self.party_active();
+        let party_start = self.party_start_position();
         // Series flow: make sure a playback target exists (episode_picked
         // arms it, but library re-entry can reach here directly) and count
         // this opening. Movies arm a target too, keyed to the movie's own id,
@@ -988,14 +1013,19 @@ impl Bridge {
                 series_id,
                 episode_id: request_id,
                 session: next_episode::new_session(),
-                resume_pos: match (behavior, resume_choice) {
-                    (EpisodeStartBehavior::StartOver, _) | (_, Some(false)) => None,
-                    (_, Some(true)) => history_pos,
-                    (_, None) => keep_resume.or(resume_pos),
+                resume_pos: if party_active {
+                    party_start
+                } else {
+                    match (behavior, resume_choice) {
+                        (EpisodeStartBehavior::StartOver, _) | (_, Some(false)) => None,
+                        (_, Some(true)) => history_pos,
+                        (_, None) => keep_resume.or(resume_pos),
+                    }
                 },
+                resume_done: party_active,
                 ..Default::default()
             });
-            if ask && history_pos.is_some() && resume_choice.is_none() {
+            if !party_active && ask && history_pos.is_some() && resume_choice.is_none() {
                 state.pending_resume_stream = Some(PendingStream {
                     request,
                     url,
@@ -1036,7 +1066,12 @@ impl Bridge {
             state.playback = Some(PlaybackTarget {
                 series_id,
                 episode_id,
-                resume_pos,
+                resume_pos: if party_active {
+                    party_start
+                } else {
+                    resume_pos
+                },
+                resume_done: party_active,
                 ..Default::default()
             });
         } else {
@@ -1070,7 +1105,8 @@ impl Bridge {
         // seek — each restart is slow on debrid backends). `resume_done` is
         // deliberately left false: the tick safety net confirms the engine
         // actually landed at the resume point (some backends ignore the
-        // load-time start) and disarms it once confirmed.
+        // load-time start) and disarms it once confirmed. During a party the
+        // room coordinator owns any correction instead of local history.
         let start_at = {
             let state = self.shared.lock().unwrap();
             state
@@ -1083,6 +1119,7 @@ impl Bridge {
         self.publish_player_context(&context);
         let preferences = self.prepare_playback_preferences();
         let allow_external = !self.remote_receiver_playback()
+            && !self.party_active()
             && !self
                 .shared
                 .lock()

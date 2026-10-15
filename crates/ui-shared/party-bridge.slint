@@ -1,0 +1,36 @@
+import { PartyMemberRow } from "../ui/types.slint";
+
+// Display-only room state. Source URLs and source credentials never enter this bridge.
+// Room invites contain a join capability and are displayed only in the explicit room view.
+export global PartyBridge {
+    in-out property <bool> page_open;
+    in-out property <bool> active;
+    in-out property <bool> is_host;
+    in-out property <bool> can_host;
+    in-out property <bool> busy;
+    in-out property <bool> waiting;
+    in-out property <bool> paused;
+    in-out property <string> title;
+    in-out property <string> episode;
+    in-out property <string> status;
+    in-out property <string> error;
+    in-out property <string> warning;
+    in-out property <string> invite;
+    in-out property <string> input;
+    in-out property <string> time_text;
+    in-out property <float> position;
+    in-out property <float> duration;
+    in-out property <bool> wait_for_guests: true;
+    in-out property <[PartyMemberRow]> participants;
+    callback create();
+    callback join(string);
+    callback leave();
+    callback choose_stream();
+    callback copy_invite();
+    callback return_to_player();
+    callback set_paused(bool);
+    callback seek(float);
+    callback remove_member(string);
+    callback set_wait_for_guests(bool);
+    callback continue_without_waiting();
+}

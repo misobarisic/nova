@@ -337,6 +337,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     bridge.wire_remote_playback();
+    bridge.wire_party();
 
     bridge.last_stream = Arc::new(last_stream::Cache::open_synced(
         nova_config::app_cache_dir().join("last-stream-v1.json"),
@@ -1272,6 +1273,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 tick_bridge.complete_playback_close();
             }
             tick_bridge.remote_tick();
+            tick_bridge.party_tick();
             tick_bridge.flush_playback_preferences(false);
             tick_bridge.note_player_progress_from_ui();
             tick_bridge.note_torrent_progress_from_ui();
@@ -1335,6 +1337,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "desktop")]
     desktop_window.flush(&app, &player);
     bridge.persist_outgoing_playback();
+    bridge.party_leave();
     bridge.shutdown_tracking();
     drop(persistence_worker);
     drop(image_gc_worker);

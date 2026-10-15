@@ -78,6 +78,10 @@ fn remote_episode<'a>(videos: &'a [Video], requested: &str) -> Option<&'a Video>
 }
 
 static FOREGROUND: AtomicBool = AtomicBool::new(true);
+
+pub(super) fn is_foreground() -> bool {
+    FOREGROUND.load(Ordering::Acquire)
+}
 static BOOT: LazyLock<u64> = LazyLock::new(|| {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -588,6 +592,16 @@ impl Bridge {
         self.shared.lock().unwrap().remote_playback.ended();
     }
 
+    /// Party ownership supersedes any old local or paired-controller hold.
+    pub(super) fn release_speed_preview_for_party(&self) {
+        {
+            let mut state = self.shared.lock().unwrap();
+            state.remote_playback.preview_owner = None;
+            state.remote_playback.preview_seen = None;
+        }
+        let _ = self.execute_playback_action(PlaybackAction::EndSpeedPreview);
+    }
+
     fn playback_snapshot(&self) -> PlaybackSnapshot {
         let Some(app) = self.app() else {
             return PlaybackSnapshot::default();
@@ -600,7 +614,9 @@ impl Bridge {
         let remote = &state.remote_playback;
         let started = app.get_playback_started();
         let active = remote.session.is_some();
-        let ready = FOREGROUND.load(Ordering::Acquire) && remote.role != Role::Remote;
+        let ready = FOREGROUND.load(Ordering::Acquire)
+            && remote.role != Role::Remote
+            && !state.party.active();
         let tracks = |model: slint::ModelRc<crate::TrackRow>| {
             model
                 .iter()
@@ -726,6 +742,10 @@ impl Bridge {
         }
         if !FOREGROUND.load(Ordering::Acquire) || self.app().is_none() {
             done(Response::Error(PlaybackError::Unavailable));
+            return;
+        }
+        if !matches!(request, Request::Snapshot) && self.party_active() {
+            done(Response::Error(PlaybackError::Busy));
             return;
         }
         match request {
@@ -1326,6 +1346,9 @@ impl Bridge {
     }
 
     fn open_remote_controls(&self, target: &str) {
+        if self.party_active() {
+            return;
+        }
         let Some(engine) = nova_sync::engine() else {
             return;
         };
@@ -1395,6 +1418,9 @@ impl Bridge {
     }
 
     fn select_playback_output(&self, target: &str) {
+        if !target.is_empty() && self.party_active() {
+            return;
+        }
         if target.is_empty() {
             self.detach_remote_playback(true);
             let id = self
@@ -2186,6 +2212,7 @@ impl Bridge {
             });
         } else {
             let home_visible = app.get_show_home()
+                && !app.get_party_page_open()
                 && !app.get_player_open()
                 && !app.get_modal_visible()
                 && !app.get_show_library()

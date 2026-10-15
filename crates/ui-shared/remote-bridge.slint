@@ -2,6 +2,9 @@ import { RemoteOfferRow, RemoteDeviceRow, TrackRow } from "../ui/types.slint";
 
 // Receiver snapshots only; this bridge never holds a video surface or source URL.
 export global RemoteBridge {
+    // UI-owned picker captures the session so a stale row cannot change a replacement.
+    in-out property <int> track_picker;
+    in-out property <string> track_picker_session;
     // UI-owned lease identity survives page teardown so release uses the original session.
     in-out property <string> speed_preview_token;
     in-out property <[RemoteDeviceRow]> devices;

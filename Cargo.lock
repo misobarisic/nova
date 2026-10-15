@@ -5273,6 +5273,7 @@ dependencies = [
  "nova-config",
  "nova-download",
  "nova-media",
+ "nova-party",
  "nova-playback-api",
  "nova-player",
  "nova-providers",
@@ -5336,6 +5337,18 @@ dependencies = [
  "slint",
  "webp",
  "webpki-roots",
+]
+
+[[package]]
+name = "nova-party"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "iroh",
+ "nova-playback-api",
+ "postcard",
+ "serde",
+ "tokio",
 ]
 
 [[package]]

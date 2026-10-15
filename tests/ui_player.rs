@@ -29,3 +29,6 @@ mod subtitle_lift;
 
 #[path = "player/remote_controls.rs"]
 mod remote_controls;
+
+#[path = "player/settings_scroll.rs"]
+mod settings_scroll;

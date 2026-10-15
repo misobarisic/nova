@@ -1,8 +1,8 @@
-import { Theme, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
+import { PartyBridge, Theme, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 
-import { IcPlay, IcPause, IcVolumeUp, IcVolumeOff, IcReplay10, IcForward10, IcCaptions, IcMusic, IcFullscreen, IcFullscreenExit, IcClose, IcChevronRight, IcChevronLeft, IcCheck, IcSettingsGear, IcCamera } from "icons.slint";
+import { IcPlay, IcPause, IcVolumeUp, IcVolumeOff, IcReplay10, IcForward10, IcCaptions, IcMusic, IcFullscreen, IcFullscreenExit, IcClose, IcChevronRight, IcChevronLeft, IcSettingsGear, IcCamera } from "icons.slint";
 
 import { SpeedControl } from "speedcontrol.slint";
 
@@ -10,6 +10,7 @@ import { SpeedControl } from "speedcontrol.slint";
 // Rounded player control with the same purple selected surface as menus.
 component IconBtn inherits Rectangle {
     in property <bool> active: false;
+    in property <bool> enabled: true;
     // 6-button nav highlight.
     in property <bool> focused: false;
     // Base fill shown when idle (not hovered/active). Default transparent:
@@ -25,7 +26,9 @@ component IconBtn inherits Rectangle {
     border-color: Theme.current.focus_ring;
     background: root.active ? Theme.current.selection_fill
         : touch.has-hover ? Theme.current.player_control_hover : root.base;
+    opacity: root.enabled ? 1 : 0.4;
     touch := TouchArea {
+        enabled: root.enabled;
         width: 100%;
         height: 100%;
         mouse-cursor: pointer;
@@ -34,73 +37,7 @@ component IconBtn inherits Rectangle {
     @children
 }
 
-// Shared category/track row: measured title, optional secondary text, and a
-// soft selected surface. Only categories get a chevron; tracks are direct picks.
-component MenuRow inherits Rectangle {
-    in property <int> icon_kind: 0; // 0 none, 1 audio, 2 captions, 3 speed, 4 decoder
-    in property <string> label;
-    in property <string> value;
-    in property <bool> selected: false;
-    in property <bool> focused: false;
-    in property <bool> submenu: false;
-    callback activate();
-
-    property <length> label_x: root.icon_kind == 0 ? 14px : 50px;
-    property <length> label_h: Math.min(40px, row_label.preferred-height);
-    property <length> text_h: root.label_h + (root.value != "" ? 20px : 0px);
-    height: Math.max(60px, root.text_h + 20px);
-    border-radius: 10px;
-    border-width: root.focused ? 2px : 0px;
-    border-color: Theme.current.focus_ring;
-    background: root.selected ? Theme.current.selection_fill
-        : row_t.has-hover ? Theme.current.control_hover : transparent;
-
-    icon_host := Rectangle {
-        x: 14px; width: 24px; height: 100%;
-        if root.icon_kind == 1: IcMusic {
-            width: 22px; height: 22px; y: (parent.height - self.height) / 2;
-            fill: Theme.current.accent_soft;
-        }
-        if root.icon_kind == 2: IcCaptions {
-            width: 22px; height: 22px; y: (parent.height - self.height) / 2;
-            fill: Theme.current.accent_soft;
-        }
-        if root.icon_kind == 3: IcPlay {
-            width: 22px; height: 22px; y: (parent.height - self.height) / 2;
-            fill: Theme.current.accent_soft;
-        }
-        if root.icon_kind == 4: IcSettingsGear {
-            width: 22px; height: 22px; y: (parent.height - self.height) / 2;
-            fill: Theme.current.accent_soft;
-        }
-    }
-    row_label := Text {
-        x: root.label_x; y: (root.height - root.text_h) / 2;
-        width: Math.max(0px, root.width - root.label_x - 40px);
-        height: root.label_h;
-        text: root.label; color: Theme.current.text_bright;
-        font-size: 14px; font-weight: 600;
-        wrap: word-wrap; overflow: elide;
-    }
-    if root.value != "": Text {
-        x: root.label_x; y: row_label.y + root.label_h + 4px;
-        width: row_label.width; height: 16px;
-        text: root.value; color: Theme.current.text_secondary;
-        font-size: 12px; overflow: elide;
-    }
-    if root.selected: IcCheck {
-        x: root.width - 30px; y: (root.height - self.height) / 2;
-        width: 18px; height: 18px; fill: Theme.current.accent_soft;
-    }
-    if root.submenu && !root.selected: IcChevronRight {
-        x: root.width - 28px; y: (root.height - self.height) / 2;
-        width: 16px; height: 16px; fill: Theme.current.text_muted;
-    }
-    row_t := TouchArea {
-        width: 100%; height: 100%; mouse-cursor: pointer;
-        clicked => { root.activate(); }
-    }
-}
+import { MenuRow } from "player-menu-row.slint";
 
 // Dark rounded popup card listing audio/subtitle tracks. Anchored by the
 // caller above the button that opens it.
@@ -190,6 +127,10 @@ component SettingsMenu inherits Rectangle {
     // subtitles, 3 = audio, 4 = playback speed. Two-way bound to PlayerOverlay
     // so the keyboard handler can drive it.
     in-out property <int> page: 0;
+    // A submenu can remove a slider before its delayed pointer-up/cancel is
+    // delivered. Its gesture lease must not outlive the page that owned it.
+    changed page => { SliderGesture.active = false; SliderGesture.hovered = false; }
+
     // Keyboard focus row on the current page (-1 = none / mouse mode).
     in property <int> focused_idx: -1;
     // Decoder selection (-1 none, 0 HW+, 1 HW, 2 SW) and its short label for
@@ -346,7 +287,7 @@ component SettingsMenu inherits Rectangle {
             Rectangle { height: 1px; background: Theme.current.border_soft; }
 
             // ---- Rows for the current page (scrolls when the list is long) ----
-            Flickable {
+            settings_scroll := Flickable {
                 width: 100%;
                 vertical-stretch: 0;
                 height: Math.max(0px, Math.min(pages_col.preferred-height, root.card_limit - 101px));
@@ -386,7 +327,8 @@ component SettingsMenu inherits Rectangle {
                         MenuRow {
                             icon_kind: 3; submenu: true;
                             label: @tr("Playback speed");
-                            value: PlaybackSpeed.label(root.playback_speed);
+                            enabled: !(PartyBridge.active || PartyBridge.busy);
+                            value: (PartyBridge.active || PartyBridge.busy) ? @tr("Watch parties use normal speed.") : PlaybackSpeed.label(root.playback_speed);
                             focused: root.focused_idx == (root.is_android ? 3 : 2);
                             activate => { root.page = 4; }
                         }
@@ -482,7 +424,7 @@ component SettingsMenu inherits Rectangle {
 
                     // Playback rate: the shared slider + ± 0.05 step buttons
                     // (the same control Settings → Player shows).
-                    if root.page == 4: VerticalLayout {
+                    if root.page == 4 && !(PartyBridge.active || PartyBridge.busy): VerticalLayout {
                         width: 100%; spacing: 16px;
                         padding-top: 8px; padding-bottom: 8px;
                         MenuRow {
@@ -804,9 +746,22 @@ export component PlayerOverlay {
         return raw;
     }
 
+    private property <bool> timeline_control_allowed: !PartyBridge.busy && (!PartyBridge.active || PartyBridge.is_host);
+    private property <bool> party_owns_playback: (PartyBridge.active || PartyBridge.busy);
+    changed party_owns_playback => {
+        if root.party_owns_playback {
+            hold_timer.stop();
+            if root.hold_active {
+                root.hold_active = false;
+                root.flash_show = false;
+                root.playback_speed_preview_end();
+            }
+            if root.settings_page == 4 { root.settings_page = 0; root.kb_menu = 0; }
+        }
+    }
     function shortcut_seek(d: int) {
         // Unknown/live duration cannot provide a valid upper seek bound.
-        if (!root.playback_started || root.duration <= 0) { return; }
+        if (!root.timeline_control_allowed || !root.playback_started || root.duration <= 0) { return; }
         root.seek_relative(d * 10);
     }
 
@@ -825,13 +780,13 @@ export component PlayerOverlay {
         } else if (root.kb_idx == 0) {
             root.close_player();
         } else if (root.kb_idx == 1) {
-            root.toggle_pause();
+            if root.timeline_control_allowed { root.toggle_pause(); }
         } else if (root.kb_idx == 2 && !root.is_android) {
             root.toggle_mute();
         } else if (root.kb_idx == 3) {
-            root.seek_relative(-10);
+            if root.timeline_control_allowed { root.seek_relative(-10); }
         } else if (root.kb_idx == 4) {
-            root.seek_relative(10);
+            if root.timeline_control_allowed { root.seek_relative(10); }
         } else if (root.kb_idx == 5) {
             if (root.open_popup == 2) {
                 root.open_popup = 0;
@@ -882,7 +837,7 @@ export component PlayerOverlay {
                 } else if (root.is_android && root.kb_menu == 2) {
                     root.settings_page = 1;
                     root.kb_menu = 0;
-                } else {
+                } else if !(PartyBridge.active || PartyBridge.busy) {
                     root.settings_page = 4;
                     root.kb_menu = 0;
                 }
@@ -998,6 +953,10 @@ export component PlayerOverlay {
     // popup closes, even though the cursor was moving the whole time.
     // (Also resets the keyboard track-list index.)
     changed open_popup => {
+        // Popup teardown can destroy a pressed/hovered slider without running
+        // its release handler. Reopening starts with a fresh scroll gesture.
+        SliderGesture.active = false;
+        SliderGesture.hovered = false;
         tap_timer.stop();
         root.tap_side = -2;
         root.kb_menu = 0;
@@ -1036,7 +995,7 @@ export component PlayerOverlay {
         // Hover can reveal the controls before a click. Playback intent must
         // not depend on whether that hover happened to wake the OSD first.
         if (!root.is_android) {
-            root.toggle_pause();
+            if root.timeline_control_allowed { root.toggle_pause(); }
             root.osd_mouse_moved();
         } else if (was_visible) {
             root.osd_visible = false;
@@ -1050,7 +1009,7 @@ export component PlayerOverlay {
         running: false;
         triggered => {
             self.stop();
-            if (root.playback_started && root.duration > 0.0 && !root.hold_active) {
+            if (!(PartyBridge.active || PartyBridge.busy) && root.playback_started && root.duration > 0.0 && !root.hold_active) {
                 root.hold_active = true;
                 tap_timer.stop();
                 root.tap_side = -2;
@@ -1109,7 +1068,7 @@ export component PlayerOverlay {
         }
         // A second tap on the same side consumes the pending single tap.
         // Neither tap may wake controls or change pause state while seeking.
-        let can_seek = root.playback_started && root.duration > 0.0;
+        let can_seek = root.timeline_control_allowed && root.playback_started && root.duration > 0.0;
         let side = up_x < w / 3 ? -1 : (up_x > w * 2 / 3 ? 1 : 0);
         if (can_seek && side != 0 && player_backdrop.double_tap_pending && side == root.tap_side) {
             tap_timer.stop();
@@ -1240,7 +1199,7 @@ export component PlayerOverlay {
                     reject
                 } else if (e.text == " " || e.text == "k" || e.text == "K") {
                     root.kb_active = false;
-                    if (!e.repeat) { root.toggle_pause(); }
+                    if (!e.repeat && root.timeline_control_allowed) { root.toggle_pause(); }
                     accept
                 } else if (e.text == "f" || e.text == "F") {
                     root.kb_active = false;
@@ -1327,7 +1286,7 @@ export component PlayerOverlay {
                     player_backdrop.last_wake_y = self.mouse-y;
                     let side = self.mouse-x < self.width / 3 ? -1
                         : (self.mouse-x > self.width * 2 / 3 ? 1 : 0);
-                    player_backdrop.double_tap_pending = root.playback_started
+                    player_backdrop.double_tap_pending = root.timeline_control_allowed && root.playback_started
                         && root.duration > 0.0 && root.open_popup == 0
                         && side != 0 && tap_timer.running && side == root.tap_side;
                     if (player_backdrop.double_tap_pending) {
@@ -1339,7 +1298,7 @@ export component PlayerOverlay {
                     // a single tap, double tap, hold, or drag.
                     // Arm press-and-hold 2× (stationary press, active
                     // playback, no popup in the way).
-                    if (root.playback_started && root.duration > 0.0 && root.open_popup == 0) {
+                    if (!(PartyBridge.active || PartyBridge.busy) && root.playback_started && root.duration > 0.0 && root.open_popup == 0) {
                         hold_timer.stop();
                         hold_timer.start();
                     }
@@ -1602,6 +1561,7 @@ export component PlayerOverlay {
                 height: 52px;
                 border-radius: 26px;
                 base: Theme.current.player_control;
+                enabled: root.timeline_control_allowed;
                 focused: root.kb_active && root.kb_idx == 3 && root.open_popup == 0;
                 clicked => {
                     if (!root.guard_osd_control()) { return; }
@@ -1627,6 +1587,7 @@ export component PlayerOverlay {
                 height: 72px;
                 border-radius: 36px;
                 base: Theme.current.player_control;
+                enabled: root.timeline_control_allowed;
                 focused: root.kb_active && root.kb_idx == 1 && root.open_popup == 0;
                 clicked => {
                     if (!root.guard_osd_control()) { return; }
@@ -1656,6 +1617,7 @@ export component PlayerOverlay {
                 height: 52px;
                 border-radius: 26px;
                 base: Theme.current.player_control;
+                enabled: root.timeline_control_allowed;
                 focused: root.kb_active && root.kb_idx == 4 && root.open_popup == 0;
                 clicked => {
                     if (!root.guard_osd_control()) { return; }
@@ -1803,6 +1765,7 @@ export component PlayerOverlay {
                         }
 
                         seek_touch := TouchArea {
+                            enabled: root.timeline_control_allowed;
                             width: 100%;
                             height: 100%;
                             mouse-cursor: pointer;
@@ -1872,6 +1835,7 @@ export component PlayerOverlay {
                     // cluster (see below); the bottom bar keeps the time and
                     // title only.
                     if !root.is_android: IconBtn {
+                        enabled: root.timeline_control_allowed;
                         focused: root.kb_active && root.kb_idx == 1 && root.open_popup == 0;
                         // Re-arm the auto-hide wake so the bar lingers after
                         // (un)pausing instead of vanishing mid-press.
@@ -2054,6 +2018,7 @@ export component PlayerOverlay {
                     // Android's ±10s buttons live in the centered transport
                     // cluster, not here.
                     if !root.is_android: IconBtn {
+                        enabled: root.timeline_control_allowed;
                         focused: root.kb_active && root.kb_idx == 3 && root.open_popup == 0;
                         clicked => {
                             if (!root.guard_osd_control()) { return; }
@@ -2072,6 +2037,7 @@ export component PlayerOverlay {
                     }
 
                     if !root.is_android: IconBtn {
+                        enabled: root.timeline_control_allowed;
                         focused: root.kb_active && root.kb_idx == 4 && root.open_popup == 0;
                         clicked => {
                             if (!root.guard_osd_control()) { return; }

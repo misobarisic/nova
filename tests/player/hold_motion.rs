@@ -154,3 +154,63 @@ fn held_speed_ignores_motion_and_restores_without_waking_controls() {
     });
     assert!(app.get_osd_visible());
 }
+
+#[test]
+fn watch_party_never_previews_or_flashes_double_speed_and_guest_cannot_seek_or_pause() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::watch_party_never_previews_or_flashes_double_speed_and_guest_cannot_seek_or_pause"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.window().set_size(slint::PhysicalSize::new(600, 900));
+    app.set_player_open(true);
+    app.set_playback_started(true);
+    app.set_duration(600.0);
+    app.set_party_active(true);
+    let previews = Rc::new(Cell::new(0));
+    let recorded = previews.clone();
+    app.on_playback_speed_preview(move |_| recorded.set(recorded.get() + 1));
+    let actions = Rc::new(Cell::new(0));
+    let recorded = actions.clone();
+    app.on_toggle_pause(move || recorded.set(recorded.get() + 1));
+    let recorded = actions.clone();
+    app.on_seek_relative(move |_| recorded.set(recorded.get() + 1));
+    app.show().unwrap();
+    advance(500);
+    for (host, busy) in [(false, false), (true, false), (false, true)] {
+        actions.set(0);
+        app.set_party_active(!busy);
+        app.set_party_busy(busy);
+        app.set_party_is_host(host);
+        app.set_osd_visible(false);
+        let start = LogicalPosition::new(300.0, 300.0);
+        let backdrop = ElementHandle::find_by_element_id(&app, "PlayerOverlay::player_backdrop")
+            .next()
+            .unwrap();
+        let _ = backdrop.size();
+        press(&app, start);
+        advance(600);
+        assert_eq!(previews.get(), 0, "watch parties use fixed normal speed");
+        let flash = ElementHandle::find_by_element_id(&app, "PlayerOverlay::flash_pill")
+            .next()
+            .unwrap();
+        assert_eq!(flash.computed_opacity(), 0.0, "no misleading 2× feedback");
+        release(&app, start);
+        advance(400);
+        if !host {
+            for text in ["k".into(), slint::platform::Key::RightArrow.into()] {
+                app.window()
+                    .dispatch_event(WindowEvent::KeyPressed { text });
+            }
+            assert_eq!(
+                actions.get(),
+                0,
+                "guest native controls cannot change the shared timeline"
+            );
+        }
+    }
+}
