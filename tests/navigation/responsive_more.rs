@@ -1,4 +1,4 @@
-//! More-page routing and Settings/About/Devices chrome across the phone breakpoint.
+//! More-page routing and Settings/About/Devices/Watch party chrome across the phone breakpoint.
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::{ComponentHandle, LogicalPosition};
 use std::{cell::Cell, rc::Rc, time::Duration};
@@ -256,8 +256,8 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     );
     assert_eq!(
         ElementHandle::find_by_element_type_name(&app, "SettingsLink").count(),
-        3,
-        "wide More contains Settings, About and Devices; shortcuts live in the rail"
+        4,
+        "wide More contains Settings, About, Devices and Watch party; shortcuts live in the rail"
     );
     let calendar_y = button(&app, "Calendar").absolute_position().y;
     let downloads_y = button(&app, "Downloads").absolute_position().y;
@@ -266,7 +266,9 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     let about_y = button(&app, "About").absolute_position().y;
     assert!(calendar_y < downloads_y && downloads_y < more_y);
     assert!(settings_y < about_y);
-    assert!(about_y < button(&app, "Devices").absolute_position().y);
+    let devices_y = button(&app, "Devices").absolute_position().y;
+    let party_y = button(&app, "Watch party").absolute_position().y;
+    assert!(about_y < devices_y && devices_y < party_y);
     click(&app, button(&app, "Settings"));
     assert!(app.get_show_settings());
     assert!(!app.get_more_open());
@@ -311,5 +313,19 @@ fn more_and_its_subpages_route_back_without_backgrounding_home() {
     key(&app, slint::platform::Key::Back);
     assert!(!app.get_remote_devices_open());
     assert!(app.get_more_open(), "desktop Devices Back returns to More");
+    click(&app, button(&app, "Watch party"));
+    assert!(app.get_party_page_open());
+    assert!(
+        ElementHandle::find_by_element_type_name(&app, "PartyPage")
+            .next()
+            .is_some()
+    );
+    key(&app, slint::platform::Key::Back);
+    assert!(!app.get_party_page_open());
+    assert!(
+        app.get_more_open(),
+        "desktop Watch party Back returns to More"
+    );
+    assert!(button(&app, "Watch party").size().height >= 44.0);
     assert_eq!(backgrounds.get(), 0);
 }
