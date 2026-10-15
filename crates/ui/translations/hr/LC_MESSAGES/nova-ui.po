@@ -2028,6 +2028,9 @@ msgstr "Samo povezane epizode ažurirat će vaš popis na servisu."
 msgid "Back to details"
 msgstr "Natrag na detalje"
 
+msgid "Go to details"
+msgstr "Idi na detalje"
+
 msgid "New episodes"
 msgstr "Nove epizode"
 
