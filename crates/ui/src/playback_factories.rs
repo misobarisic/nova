@@ -24,6 +24,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_pick_sub_track => invoke_player_bridge_pick_sub_track(arg0),
             on_pick_decoder => invoke_player_bridge_pick_decoder(arg0),
             on_playback_speed_changed => invoke_player_bridge_playback_speed_changed(arg0),
+            on_subtitle_style_changed => invoke_player_bridge_subtitle_style_changed(arg0, arg1),
             on_playback_speed_stepped => invoke_player_bridge_playback_speed_stepped(arg0),
             on_playback_speed_preview => invoke_player_bridge_playback_speed_preview(arg0),
             on_android_brightness_step => invoke_player_bridge_android_brightness_step(arg0),

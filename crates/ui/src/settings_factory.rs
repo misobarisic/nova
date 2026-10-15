@@ -28,6 +28,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
         on_addon_refresh => invoke_settings_bridge_addon_refresh(arg0),
         on_addon_copy_link => invoke_settings_bridge_addon_copy_link(arg0),
         on_playback_speed_stepped => invoke_settings_bridge_playback_speed_stepped(arg0),
+        on_subtitle_style_changed => invoke_settings_bridge_subtitle_style_changed(arg0, arg1),
         on_category_added => invoke_settings_bridge_category_added(arg0),
         on_category_removed => invoke_settings_bridge_category_removed(arg0),
         on_home_catalog_candidate_picked => invoke_settings_bridge_home_catalog_candidate_picked(arg0),

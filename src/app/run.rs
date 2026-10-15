@@ -1103,6 +1103,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Settings edits defaults; OSD edits only the active title's override.
     let b = bridge.clone();
+    let save_subtitle_defaults = schedule_settings_save.clone();
+    app.on_default_subtitle_style_changed(move |index, value| {
+        b.edit_subtitle_style(index, value, true);
+        save_subtitle_defaults();
+    });
+    let b = bridge.clone();
+    app.on_subtitle_style_changed(move |index, value| b.edit_subtitle_style(index, value, false));
+    let b = bridge.clone();
     app.on_playback_speed_changed(move |speed| {
         let _ = b.dispatch_playback_action(PlaybackAction::SetSpeed(speed as f64));
     });
@@ -1128,6 +1136,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let b = bridge.clone();
     app.on_restore_playback_default(move |control| {
+        if control == 3 {
+            b.restore_playback_default(control);
+            return;
+        }
         let action = match control {
             0 => PlaybackAction::ResetAudioTrack,
             1 => PlaybackAction::ResetSubtitleTrack,

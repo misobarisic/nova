@@ -574,6 +574,8 @@ cache_settings_type! {
     pub default_subtitle_language: String,
     #[serde(default = "default_playback_speed")]
     pub playback_speed: f32,
+    #[serde(default)]
+    pub subtitle_style: playback_preferences::SubtitleStyle,
     /// Synced screenshot encoding; old settings retain lossless PNG.
     #[serde(default)]
     pub screenshot_format: ScreenshotFormat,
@@ -734,6 +736,7 @@ impl Default for CacheSettings {
             player_external: false,
             desktop_external_app: DesktopExternalApp::SystemDefault,
             playback_speed: 1.0,
+            subtitle_style: Default::default(),
             screenshot_format: ScreenshotFormat::Png,
             screenshot_jpeg_quality: default_screenshot_quality(),
             screenshot_webp_quality: default_screenshot_quality(),

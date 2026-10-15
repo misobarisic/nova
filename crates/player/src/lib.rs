@@ -893,10 +893,48 @@ fn apply_track_options(mpv: &Mpv, prefs: &SessionPreferences, audio: bool) {
     }
 }
 
-fn apply_preference_options(mpv: &Mpv, prefs: &SessionPreferences) {
+fn apply_preference_options(
+    mpv: &Mpv,
+    prefs: &SessionPreferences,
+    native: nova_config::playback_preferences::SubtitleStyle,
+) {
     apply_track_options(mpv, prefs, true);
     apply_track_options(mpv, prefs, false);
     let _ = mpv.set_property("speed", prefs.speed() as f64);
+    apply_subtitle_style(mpv, prefs.subtitle_style(), native);
+}
+
+fn native_subtitle_defaults(mpv: &Mpv) -> nova_config::playback_preferences::SubtitleStyle {
+    nova_config::playback_preferences::SubtitleStyle {
+        font_size: Some(mpv.get_property::<f64>("sub-font-size").unwrap_or(55.0) as f32),
+        outline: Some(mpv.get_property::<f64>("sub-border-size").unwrap_or(3.0) as f32),
+        ..Default::default()
+    }
+}
+
+fn apply_subtitle_style(
+    mpv: &Mpv,
+    style: nova_config::playback_preferences::SubtitleStyle,
+    native: nova_config::playback_preferences::SubtitleStyle,
+) {
+    let style = style.resolved(native);
+    let _ = mpv.set_property("sub-delay", style.delay as f64);
+    let _ = mpv.set_property("sub-font-size", style.font_size.unwrap_or(55.0) as f64);
+    let _ = mpv.set_property("sub-margin-x", style.margin as i64);
+    let _ = mpv.set_property("sub-pos", style.position as f64);
+    let _ = mpv.set_property("sub-border-size", style.outline.unwrap_or(3.0) as f64);
+    let _ = mpv.set_property(
+        "sub-color",
+        match style.color {
+            1 => "#FFFF00",
+            2 => "#00FFFF",
+            _ => "#FFFFFF",
+        },
+    );
+    let _ = mpv.set_property(
+        "sub-ass-override",
+        if style.override_ass { "force" } else { "yes" },
+    );
 }
 
 struct PreferenceSession {
@@ -912,6 +950,7 @@ struct State {
     #[cfg(not(target_os = "android"))]
     catalog_maximized: AtomicBool,
     subtitle_position: Mutex<subtitle_position::SubtitlePosition>,
+    native_subtitle_defaults: nova_config::playback_preferences::SubtitleStyle,
     preferences: Mutex<PreferenceSession>,
     /// Temporary clock correction; never written to title/device preferences.
     party_playback_rate: Mutex<Option<f64>>,
@@ -1170,7 +1209,19 @@ impl Player {
             Err(e) => Some(format!("failed to initialize mpv: {e}")),
         };
 
+        // Capture before any per-title/global style can change these options.
+        // Renderer recovery reuses this core, so its baseline stays immutable.
+        let native_subtitle_defaults = mpv
+            .as_ref()
+            .ok()
+            .map(native_subtitle_defaults)
+            .unwrap_or_else(|| {
+                nova_config::playback_preferences::SubtitleStyle::default()
+                    .with_value(1, 55.0)
+                    .with_value(4, 3.0)
+            });
         let state = Arc::new(State {
+            native_subtitle_defaults,
             subtitle_position: Mutex::new(subtitle_position::SubtitlePosition::default()),
             preference_source: Mutex::new(String::new()),
             preferences: Mutex::new(PreferenceSession {
@@ -1449,7 +1500,8 @@ impl Player {
                                         session.tracks.clear();
                                         session.manual_audio = false;
                                         session.manual_subtitles = false;
-                                        apply_preference_options(mpv, &session.preferences);
+                                        notifier_state.subtitle_position.lock().unwrap().set_base(mpv, session.preferences.subtitle_style().position as f64);
+                                        apply_preference_options(mpv, &session.preferences, notifier_state.native_subtitle_defaults);
                                     }
                                     set_http_header_fields(mpv, &headers)?;
                                     set_string_list(mpv, c"sub-files", subtitles)?;
@@ -1707,6 +1759,11 @@ impl Player {
             .allow_external
             .store(allow_external, Ordering::SeqCst);
         if let Some(app) = self.state.app.upgrade() {
+            app.set_effective_subtitle_style(slint::ModelRc::new(slint::VecModel::from(
+                self.resolve_subtitle_style(preferences.subtitle_style())
+                    .values()
+                    .to_vec(),
+            )));
             app.set_effective_playback_speed(
                 self.state
                     .party_playback_rate
@@ -2239,11 +2296,27 @@ impl Player {
                     session.preferences.title.speed = None;
                     session.preferences.default_speed = settings.playback_speed;
                 }
+                3 => {
+                    session.preferences.title.subtitle_style = None;
+                    session.preferences.default_subtitle_style =
+                        settings.subtitle_style.normalized();
+                }
                 _ => return,
             }
             session.tracks.clear();
             if let Some(mpv) = mpv.as_ref() {
-                if control == 2 {
+                if control == 3 {
+                    self.state
+                        .subtitle_position
+                        .lock()
+                        .unwrap()
+                        .set_base(mpv, session.preferences.subtitle_style().position as f64);
+                    apply_subtitle_style(
+                        mpv,
+                        session.preferences.subtitle_style(),
+                        self.state.native_subtitle_defaults,
+                    );
+                } else if control == 2 {
                     if self.state.party_playback_rate.lock().unwrap().is_none() {
                         let _ = mpv.set_property("speed", session.preferences.speed() as f64);
                     }
@@ -2281,6 +2354,50 @@ impl Player {
             .map_or(base, |rate| rate as f32)
     }
 
+    pub fn effective_subtitle_style(&self) -> nova_config::playback_preferences::SubtitleStyle {
+        self.resolve_subtitle_style(
+            self.state
+                .preferences
+                .lock()
+                .unwrap()
+                .preferences
+                .subtitle_style(),
+        )
+    }
+
+    pub fn resolve_subtitle_style(
+        &self,
+        style: nova_config::playback_preferences::SubtitleStyle,
+    ) -> nova_config::playback_preferences::SubtitleStyle {
+        style.resolved(self.state.native_subtitle_defaults)
+    }
+
+    pub fn set_title_subtitle_style_value(
+        &self,
+        index: i32,
+        value: f32,
+    ) -> nova_config::playback_preferences::SubtitleStylePatch {
+        let mpv = self.state.mpv.lock().unwrap();
+        let mut session = self.state.preferences.lock().unwrap();
+        let patch = session
+            .preferences
+            .title
+            .subtitle_style
+            .unwrap_or_default()
+            .with_value(index, value);
+        session.preferences.title.subtitle_style = Some(patch);
+        if let Some(mpv) = mpv.as_ref() {
+            let style = session.preferences.subtitle_style();
+            self.state
+                .subtitle_position
+                .lock()
+                .unwrap()
+                .set_base(mpv, style.position as f64);
+            apply_subtitle_style(mpv, style, self.state.native_subtitle_defaults);
+        }
+        patch
+    }
+
     pub fn set_title_speed(&self, speed: f32) {
         self.state
             .preferences
@@ -2308,6 +2425,20 @@ impl Player {
         for (control, inherits) in inherited.into_iter().enumerate() {
             if inherits {
                 self.restore_playback_default(control as i32, settings);
+            }
+        }
+        let mpv = self.state.mpv.lock().unwrap();
+        let mut session = self.state.preferences.lock().unwrap();
+        if session.preferences.default_subtitle_style != settings.subtitle_style.normalized() {
+            session.preferences.default_subtitle_style = settings.subtitle_style.normalized();
+            if let Some(mpv) = mpv.as_ref() {
+                let style = session.preferences.subtitle_style();
+                self.state
+                    .subtitle_position
+                    .lock()
+                    .unwrap()
+                    .set_base(mpv, style.position as f64);
+                apply_subtitle_style(mpv, style, self.state.native_subtitle_defaults);
             }
         }
     }
@@ -3579,6 +3710,7 @@ mod tests {
                     audio_language: "en".into(),
                     subtitle_language: "en".into(),
                     default_speed: 1.0,
+                    default_subtitle_style: Default::default(),
                     title: TitlePreferences::default(),
                 },
             )

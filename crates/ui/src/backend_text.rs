@@ -1607,6 +1607,56 @@ pub fn setting_sync_value(field: &str, value: &serde_json::Value) -> String {
             Some("webp_lossy") => tr("WebP (lossy)").into(),
             _ => value.to_string(),
         },
+        "subtitle_style" => {
+            let Ok(style) = serde_json::from_value::<
+                nova_config::playback_preferences::SubtitleStyle,
+            >(value.clone()) else {
+                return value.to_string();
+            };
+            let style = style.normalized();
+            let native = if croatian() { "izvorno" } else { "native" };
+            let font_size = style
+                .font_size
+                .map_or_else(|| native.into(), |v| format!("{v} px"));
+            let outline = style
+                .outline
+                .map_or_else(|| native.into(), |v| format!("{v} px"));
+            let color = if croatian() {
+                match style.color {
+                    1 => "žuta",
+                    2 => "cijan",
+                    _ => "bijela",
+                }
+            } else {
+                match style.color {
+                    1 => "yellow",
+                    2 => "cyan",
+                    _ => "white",
+                }
+            };
+            let embedded = if croatian() {
+                if style.override_ass {
+                    "zamjena stilova"
+                } else {
+                    "ugrađeni stilovi"
+                }
+            } else if style.override_ass {
+                "override styles"
+            } else {
+                "embedded styles"
+            };
+            if croatian() {
+                format!(
+                    "Pomak {:+.1} s · veličina {} · margine {} px · položaj {}% · obrub {} · {color} · {embedded}",
+                    style.delay, font_size, style.margin, style.position, outline
+                )
+            } else {
+                format!(
+                    "Timing {:+.1} s · size {} · margins {} px · position {}% · outline {} · {color} · {embedded}",
+                    style.delay, font_size, style.margin, style.position, outline
+                )
+            }
+        }
         "playback_speed" => format!("{}×", value),
         "default_audio_language" if value.as_str() == Some("") => tr("Automatic").into(),
         "default_subtitle_language" if value.as_str() == Some("") => tr("Automatic").into(),

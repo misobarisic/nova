@@ -26,3 +26,6 @@ mod screenshot_format;
 
 #[path = "settings_preferences/playback_preferences_ui.rs"]
 mod playback_preferences_ui;
+
+#[path = "settings_preferences/subtitle_style.rs"]
+mod subtitle_style;

@@ -876,7 +876,10 @@ impl Bridge {
             .filter(|(key, _, _)| {
                 matches!(
                     key.as_str(),
-                    "playback_speed" | "default_audio_language" | "default_subtitle_language"
+                    "playback_speed"
+                        | "default_audio_language"
+                        | "default_subtitle_language"
+                        | "subtitle_style"
                 )
             })
             .collect();
@@ -915,7 +918,10 @@ impl Bridge {
             .filter(|(key, _)| {
                 matches!(
                     key.as_str(),
-                    "playback_speed" | "default_audio_language" | "default_subtitle_language"
+                    "playback_speed"
+                        | "default_audio_language"
+                        | "default_subtitle_language"
+                        | "subtitle_style"
                 )
             })
             .collect();
@@ -2863,6 +2869,28 @@ mod tests {
         );
         assert!(!fields.contains_key("desktop_external_app"));
         assert!(fields.contains_key("playback_speed"));
+        assert!(fields.contains_key("subtitle_style"));
+        assert!(setting_can_override("subtitle_style"));
+        let style = settings.subtitle_style.with_value(2, 90.0);
+        let style_records = [(
+            "subtitle_style".into(),
+            serde_json::to_string(&style).unwrap(),
+        )];
+        assert_eq!(
+            merge_settings_fields(&settings, &style_records)
+                .subtitle_style
+                .margin,
+            90.0
+        );
+        let mut local_style = settings.clone();
+        local_style.sync_overrides.insert(
+            "subtitle_style".into(),
+            serde_json::to_value(style).unwrap(),
+        );
+        assert_eq!(
+            merge_settings_fields(&local_style, &style_records).subtitle_style,
+            settings.subtitle_style
+        );
         assert!(fields.contains_key("default_audio_language"));
         assert!(fields.contains_key("default_subtitle_language"));
         assert!(!fields.contains_key("android_auto_continue"));

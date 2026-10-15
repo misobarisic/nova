@@ -68,6 +68,7 @@ mod tests {
             init.set_property("ao", "null")
         })
         .unwrap();
+        let native = super::super::native_subtitle_defaults(&mpv);
         let settings = nova_config::CacheSettings {
             default_audio_language: "ja,en".into(),
             default_subtitle_language: "hr,en".into(),
@@ -82,16 +83,88 @@ mod tests {
                 ..Default::default()
             },
         );
-        super::super::apply_preference_options(&mpv, &prefs);
+        super::super::apply_preference_options(&mpv, &prefs, native);
         assert_eq!(mpv.get_property::<String>("alang").unwrap(), "ja,en");
         assert_eq!(mpv.get_property::<String>("slang").unwrap(), "hr,en");
         assert_eq!(mpv.get_property::<String>("sid").unwrap(), "no");
         assert_eq!(mpv.get_property::<f64>("speed").unwrap(), 1.6_f32 as f64);
         let prefs = SessionPreferences::from_settings(&settings, TitlePreferences::default());
-        super::super::apply_preference_options(&mpv, &prefs);
+        super::super::apply_preference_options(&mpv, &prefs, native);
         assert_eq!(mpv.get_property::<String>("sid").unwrap(), "auto");
         assert_eq!(mpv.get_property::<f64>("speed").unwrap(), 1.15_f32 as f64);
     }
+    #[test]
+    fn native_subtitle_settings_preserve_defaults_and_apply_title_patch_on_reload() {
+        use nova_config::playback_preferences::{
+            SessionPreferences, SubtitleStyle, SubtitleStylePatch, TitlePreferences,
+        };
+        let mpv = libmpv2::Mpv::with_initializer(|init| {
+            init.set_property("config", false)?;
+            init.set_property("vo", "null")?;
+            init.set_property("ao", "null")
+        })
+        .unwrap();
+        let properties = [
+            "sub-delay",
+            "sub-font-size",
+            "sub-margin-x",
+            "sub-pos",
+            "sub-border-size",
+        ];
+        let before = properties.map(|key| mpv.get_property::<f64>(key).unwrap());
+        let native = super::super::native_subtitle_defaults(&mpv);
+        super::super::apply_subtitle_style(&mpv, SubtitleStyle::default(), native);
+        assert_eq!(
+            properties.map(|key| mpv.get_property::<f64>(key).unwrap()),
+            before
+        );
+        assert_eq!(
+            mpv.get_property::<String>("sub-ass-override").unwrap(),
+            "yes"
+        );
+        let settings = nova_config::CacheSettings {
+            subtitle_style: SubtitleStyle {
+                font_size: Some(70.0),
+                margin: 80.0,
+                position: 85.0,
+                outline: Some(5.0),
+                color: 1,
+                override_ass: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let prefs = SessionPreferences::from_settings(
+            &settings,
+            TitlePreferences {
+                subtitle_style: Some(SubtitleStylePatch::default().with_value(0, -0.5)),
+                ..Default::default()
+            },
+        );
+        // This same helper runs for fresh loads and Android renderer reloads.
+        for _ in 0..2 {
+            super::super::apply_preference_options(&mpv, &prefs, native);
+            assert_eq!(
+                properties.map(|key| mpv.get_property::<f64>(key).unwrap()),
+                [-0.5, 70.0, 80.0, 85.0, 5.0]
+            );
+            assert_eq!(
+                mpv.get_property::<String>("sub-ass-override").unwrap(),
+                "force"
+            );
+        }
+        super::super::apply_subtitle_style(&mpv, SubtitleStyle::default(), native);
+        assert_eq!(
+            properties.map(|key| mpv.get_property::<f64>(key).unwrap()),
+            before,
+            "clearing overrides restores this mpv core's original defaults"
+        );
+        assert_eq!(
+            mpv.get_property::<String>("sub-ass-override").unwrap(),
+            "yes"
+        );
+    }
+
     #[test]
     fn raw_metadata_is_not_a_track_number_label() {
         let tracks = parse_tracks(

@@ -3,6 +3,8 @@ import { SettingSyncBadge } from "../ui/settings-sync.slint";
 
 import { KbMark } from "../ui/kbnav.slint";
 
+import { SubtitleControls } from "../ui/subtitle-controls.slint";
+
 import { SpeedControl } from "../ui/speedcontrol.slint";
 
 import { Segmented, SectionHeader, SettingsRow, SettingsCard, NumericSetting } from "../ui/settings-controls.slint";
@@ -392,6 +394,26 @@ export component SettingsPlayerModule inherits Window {
                                 SettingsContent.kb_pr = SettingsContent.kb_player_speed_row() + 4;
                                 SettingsContent.schedule_setting("screenshot_webp_quality");
                             }
+                        }
+                    }
+                }
+            }
+            if SettingsBridge.player_backend_index == 0: VerticalLayout {
+                spacing: 16px;
+                SectionHeader { label: @tr("Subtitle appearance and timing"); }
+                SettingsCard {
+                    VerticalLayout {
+                        padding: 16px; spacing: 12px;
+                        SettingSyncBadge { setting_key: "subtitle_style"; setting_title: @tr("Subtitle appearance and timing"); visible: SettingsSync.enabled; }
+                        Text { text: @tr("Global defaults. Player changes are saved per title; unedited controls keep using these defaults."); font-size: 14px; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
+                        SubtitleControls {
+                            values: SettingsBridge.subtitle_style;
+                            focused_idx: SettingsBridge.kb_active && SettingsBridge.kb_zone == 9 ? SettingsContent.kb_pr - SettingsContent.kb_player_speed_row() - (SettingsBridge.screenshot_format_index == 1 || SettingsBridge.screenshot_format_index == 3 ? 5 : 4) : -1;
+                            edited(i, v) => {
+                                SettingsBridge.subtitle_style_changed(i, v);
+                                SettingsContent.schedule_setting("subtitle_style");
+                            }
+                            reveal(y, h) => { SettingsContent.reveal_detail_control(y, h); }
                         }
                     }
                 }

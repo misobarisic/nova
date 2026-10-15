@@ -64,6 +64,14 @@ fn effective_clearance(mpv: &Mpv, clearance: f64) -> f64 {
 }
 
 impl SubtitlePosition {
+    /// An explicit baseline edit must replace the lifted position even when
+    /// its numeric value happens to match the current animated position.
+    pub(super) fn set_base(&mut self, mpv: &Mpv, base: f64) {
+        self.base = Some(base);
+        let _ = mpv.set_property("sub-pos", base);
+        self.applied = Some(base);
+    }
+
     pub(super) fn set_clearance(&mut self, clearance: f32, opacity: f32) {
         self.clearance = unit(clearance as f64);
         self.opacity = unit(opacity as f64);
@@ -149,8 +157,17 @@ mod tests {
         lift.set_clearance(0.25, 1.0);
         lift.apply(&mpv).unwrap();
         assert_eq!(mpv.get_property::<f64>("sub-pos").unwrap(), 65.0);
+        // Editing the baseline while lifted must not treat the lifted value
+        // as the next baseline, even when both happen to equal 75.
+        lift.set_base(&mpv, 95.0);
+        lift.apply(&mpv).unwrap();
+        assert_eq!(mpv.get_property::<f64>("sub-pos").unwrap(), 75.0);
+        lift.set_base(&mpv, 75.0);
+        lift.set_clearance(0.25, 0.0);
+        lift.apply(&mpv).unwrap();
+        assert_eq!(mpv.get_property::<f64>("sub-pos").unwrap(), 75.0);
         lift.restore(&mpv);
-        assert_eq!(mpv.get_property::<f64>("sub-pos").unwrap(), 65.0);
+        assert_eq!(mpv.get_property::<f64>("sub-pos").unwrap(), 75.0);
         assert_eq!(
             mpv.get_property::<String>("sub-ass-override").unwrap(),
             style

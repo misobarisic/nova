@@ -31,6 +31,9 @@ export global PlayerOsdBridge {
     in-out property <float> volume;
     in-out property <bool> muted;
     in-out property <float> playback_speed;
+    in-out property <[float]> subtitle_style;
+    in-out property <bool> subtitle_style_preference_saved;
+    callback subtitle_style_changed(int, float);
     in-out property <bool> audio_preference_saved;
     in-out property <bool> subtitle_preference_saved;
     in-out property <bool> speed_preference_saved;

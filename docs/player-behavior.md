@@ -258,6 +258,18 @@ Choosing audio, subtitles or speed in the OSD saves that control for the series
 **Use global default**, which clears only that control and immediately reapplies
 its current default. Speed previews from holding the video never save a choice.
 
+Subtitle appearance and timing has the same global/title split. Settings →
+Player sets timing offset, text size, side margins, vertical position, outline
+and text color. The in-player settings menu saves only the fields edited for
+that title; **Use global defaults** clears its appearance/timing overrides while
+retaining language and speed choices. A positive offset shows subtitles later.
+Size, margins and outline scale from a 720p canvas. Embedded ASS styling remains
+preserved by default, with an explicit option to override it; image subtitles
+retain their source appearance. Untouched text size and outline use each device’s
+native mpv defaults, including differences between bundled and desktop versions;
+only explicit edits persist and sync. Position edits remain the baseline while the
+OSD temporarily lifts bottom subtitles above its controls.
+
 Track preferences store language and track kind (normal/commentary audio or
 full/forced/signs subtitles), not stream-local track numbers. A missing saved
 track falls back to the global language; unavailable subtitles fall back to Off.
@@ -273,7 +285,7 @@ Android playback recovery use the same session preferences.
 Implementation: `src/app/playback_preferences.rs` owns persistence and OSD
 callbacks; `crates/config/src/playback_preferences.rs` matches semantic choices;
 `crates/player/src/track_preferences.rs` reads mpv metadata. Regression coverage
-includes their unit tests and `tests/settings_preferences/playback_preferences_ui.rs`.
+includes their unit tests and `tests/settings_preferences/{playback_preferences_ui,subtitle_style}.rs`.
 
 Global audio and subtitle defaults in Settings → Player accept ordered language
 lists. Add languages through search, then move or remove them with the row

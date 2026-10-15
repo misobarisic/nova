@@ -252,6 +252,7 @@ export component AppWindow inherits Window {
         volume <=> root.volume;
         muted <=> root.muted;
         playback_speed <=> root.effective_playback_speed;
+        subtitle_style <=> root.effective_subtitle_style;
         player_brightness <=> root.player_brightness;
         is_fullscreen <=> root.is_fullscreen;
         audio_tracks <=> root.audio_tracks;
@@ -501,6 +502,7 @@ export component AppWindow inherits Window {
         audio_language_choice_index <=> root.audio_language_choice_index;
         subtitle_language_choice_index <=> root.subtitle_language_choice_index;
         playback_speed <=> root.playback_speed;
+        subtitle_style <=> root.subtitle_style;
         android_auto_continue <=> root.android_auto_continue;
         prefetch_next_episode_streams <=> root.prefetch_next_episode_streams;
         screenshot_format_index <=> root.screenshot_format_index;
@@ -1124,6 +1126,13 @@ export component AppWindow inherits Window {
     // title rate separately. Both sliders cover 0.5–2.0; ± steps by 0.05.
     in-out property <float> playback_speed: 1.0;
     in-out property <float> effective_playback_speed: 1.0;
+    in-out property <[float]> subtitle_style: [0, 55, 19, 100, 3, 0, 0];
+    in-out property <[float]> effective_subtitle_style: [0, 55, 19, 100, 3, 0, 0];
+    in property <bool> subtitle_style_preference_saved: false;
+    callback default_subtitle_style_changed(int, float);
+    callback subtitle_style_changed(int, float);
+    public function settings_bridge_subtitle_style_changed(i: int, v: float) { root.default_subtitle_style_changed(i, v); }
+    public function player_bridge_subtitle_style_changed(i: int, v: float) { root.subtitle_style_changed(i, v); }
     in property <bool> audio_preference_saved: false;
     in property <bool> subtitle_preference_saved: false;
     in property <bool> speed_preference_saved: false;
@@ -2281,6 +2290,7 @@ export component AppWindow inherits Window {
         audio_preference_saved: root.audio_preference_saved;
         subtitle_preference_saved: root.subtitle_preference_saved;
         speed_preference_saved: root.speed_preference_saved;
+        subtitle_style_preference_saved: root.subtitle_style_preference_saved;
         system_back_request: root.page_back_request;
         is_android: root.is_android;
         narrow: root.narrow_ui;

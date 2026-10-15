@@ -3034,3 +3034,57 @@ msgstr "Limeta"
 
 msgid "Recommended"
 msgstr "Preporučeno"
+
+msgid "Subtitle appearance and timing"
+msgstr "Izgled i vremenski pomak titlova"
+
+msgid "Subtitle timing (seconds)"
+msgstr "Vremenski pomak titlova (sekunde)"
+
+msgid "Subtitle size (scaled px)"
+msgstr "Veličina titlova (skalirani px)"
+
+msgid "Side margins (scaled px)"
+msgstr "Bočne margine (skalirani px)"
+
+msgid "Vertical position (%)"
+msgstr "Okomiti položaj (%)"
+
+msgid "Black outline (scaled px)"
+msgstr "Crni obrub (skalirani px)"
+
+msgid "Decrease"
+msgstr "Smanji"
+
+msgid "Increase"
+msgstr "Povećaj"
+
+msgid "Positive timing shows subtitles later; negative timing shows them earlier. Size, margins and outline use a 720p canvas and scale with the video. Position: 0% top, 100% bottom."
+msgstr "Pozitivan pomak prikazuje titlove kasnije, a negativan ranije. Veličina, margine i obrub koriste platno od 720p i skaliraju se s videozapisom. Položaj: 0% vrh, 100% dno."
+
+msgid "Subtitle text color"
+msgstr "Boja teksta titlova"
+
+msgid "Yellow"
+msgstr "Žuta"
+
+msgid "White"
+msgstr "Bijela"
+
+msgid "Embedded subtitle styling"
+msgstr "Ugrađeni stil titlova"
+
+msgid "Override embedded styles"
+msgstr "Zanemari ugrađene stilove"
+
+msgid "Preserve embedded styles"
+msgstr "Zadrži ugrađene stilove"
+
+msgid "Text appearance applies to plain subtitles. Override embedded styles to restyle ASS subtitles; this can change signs and positioning. Image subtitles keep their original appearance."
+msgstr "Izgled teksta primjenjuje se na obične titlove. Zanemarivanje ugrađenih stilova mijenja izgled ASS titlova te može promijeniti natpise i njihov položaj. Slikovni titlovi zadržavaju izvorni izgled."
+
+msgid "Global defaults. Player changes are saved per title; unedited controls keep using these defaults."
+msgstr "Opće zadane postavke. Promjene u reproduktoru spremaju se za pojedini naslov; neizmijenjene kontrole i dalje koriste ove zadane postavke."
+
+msgid "Use global defaults"
+msgstr "Koristi opće zadane postavke"

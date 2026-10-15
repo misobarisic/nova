@@ -248,6 +248,12 @@ impl Bridge {
             app.set_player_backend_index(if settings.player_external { 1 } else { 0 });
             app.set_desktop_external_app_index(settings.desktop_external_app.index());
             app.set_playback_speed(settings.playback_speed);
+            app.set_subtitle_style(slint::ModelRc::new(slint::VecModel::from(
+                self.player
+                    .resolve_subtitle_style(settings.subtitle_style)
+                    .values()
+                    .to_vec(),
+            )));
             app.set_screenshot_format_index(settings.screenshot_format.index());
             app.set_screenshot_jpeg_quality(settings.screenshot_jpeg_quality.clamp(1, 100) as f32);
             app.set_screenshot_webp_quality(settings.screenshot_webp_quality.clamp(1, 100) as f32);
@@ -467,6 +473,9 @@ impl Bridge {
                     app.get_desktop_external_app_index(),
                 ),
                 playback_speed: nova_config::round_playback_speed(app.get_playback_speed()),
+                // Subtitle callbacks edit the typed backend value. Copying its
+                // UI readouts would persist native defaults as explicit edits.
+                subtitle_style: state.cache_settings.subtitle_style,
                 screenshot_format: nova_config::ScreenshotFormat::from_index(
                     app.get_screenshot_format_index(),
                 ),
@@ -532,6 +541,7 @@ impl Bridge {
         if !applying() {
             self.player.update_playback_defaults(&settings);
             self.refresh_effective_speed();
+            self.refresh_subtitle_style();
             notify_settings(&settings);
         }
         self.apply_theme(&settings);

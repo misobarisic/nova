@@ -31,6 +31,9 @@ export component PlayerOsdModule inherits Window {
         volume <=> PlayerOsdBridge.volume;
         muted <=> PlayerOsdBridge.muted;
         playback_speed <=> PlayerOsdBridge.playback_speed;
+        subtitle_style <=> PlayerOsdBridge.subtitle_style;
+        subtitle_style_preference_saved <=> PlayerOsdBridge.subtitle_style_preference_saved;
+        subtitle_style_changed(i, v) => { PlayerOsdBridge.subtitle_style_changed(i, v); }
         audio_preference_saved <=> PlayerOsdBridge.audio_preference_saved;
         subtitle_preference_saved <=> PlayerOsdBridge.subtitle_preference_saved;
         speed_preference_saved <=> PlayerOsdBridge.speed_preference_saved;

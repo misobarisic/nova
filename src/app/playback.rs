@@ -2205,6 +2205,72 @@ mod preference_tests {
             });
         }
         bridge.settings_to_ui();
+        let native = bridge.player.effective_subtitle_style();
+        assert_eq!(app.get_subtitle_style().row_data(1), native.font_size);
+        assert_eq!(app.get_subtitle_style().row_data(4), native.outline);
+        // Saving unrelated Settings must not turn displayed native values into
+        // explicit, synced font/outline overrides.
+        bridge.capture_settings();
+        assert!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .cache_settings
+                .subtitle_style
+                .font_size
+                .is_none()
+        );
+        assert!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .cache_settings
+                .subtitle_style
+                .outline
+                .is_none()
+        );
+        bridge.edit_subtitle_style(0, 0.3, false);
+        bridge.edit_subtitle_style(1, 70.0, true);
+        assert_eq!(bridge.player.effective_subtitle_style().delay, 0.3);
+        assert_eq!(
+            bridge.player.effective_subtitle_style().font_size,
+            Some(70.0)
+        );
+        assert_eq!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .cache_settings
+                .subtitle_style
+                .delay,
+            0.0
+        );
+        bridge.flush_playback_preferences(true);
+        let style_key = preference_key("series", "title", 3);
+        let saved_style = read_json::<HashMap<String, PreferenceValue>>(
+            super::super::playback_preferences::PREFERENCES_KEY,
+        )
+        .unwrap();
+        assert!(
+            matches!(saved_style.get(&style_key), Some(PreferenceValue::SubtitleStyle(patch)) if patch.delay == Some(0.3) && patch.font_size.is_none())
+        );
+        bridge.restore_playback_default(3);
+        assert_eq!(bridge.player.effective_subtitle_style().delay, 0.0);
+        assert_eq!(
+            bridge.player.effective_subtitle_style().font_size,
+            Some(70.0)
+        );
+        assert!(!app.get_subtitle_style_preference_saved());
+        assert!(
+            bridge
+                .prepare_playback_preferences()
+                .title
+                .subtitle_style
+                .is_none()
+        );
         bridge.apply_playback_speed(1.4);
         bridge.flush_playback_preferences(true);
         assert_eq!(

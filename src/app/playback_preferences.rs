@@ -10,6 +10,10 @@ type Preferences = HashMap<String, PreferenceValue>;
 
 fn title_preferences(values: &Preferences, media_type: &str, id: &str) -> TitlePreferences {
     TitlePreferences {
+        subtitle_style: match values.get(&preference_key(media_type, id, 3)) {
+            Some(PreferenceValue::SubtitleStyle(v)) => Some(*v),
+            _ => None,
+        },
         audio: match values.get(&preference_key(media_type, id, 0)) {
             Some(PreferenceValue::Audio(v)) => Some(v.clone()),
             _ => None,
@@ -57,6 +61,7 @@ impl Bridge {
             app.set_audio_preference_saved(title.audio.is_some());
             app.set_subtitle_preference_saved(title.subtitles.is_some());
             app.set_speed_preference_saved(title.speed.is_some());
+            app.set_subtitle_style_preference_saved(title.subtitle_style.is_some());
         }
     }
 
@@ -125,13 +130,14 @@ impl Bridge {
     }
 
     pub(super) fn restore_playback_default(&self, control: i32) {
-        if !(0..=2).contains(&control) {
+        if !(0..=3).contains(&control) {
             return;
         }
         let settings = self.shared.lock().unwrap().cache_settings.clone();
         self.player.restore_playback_default(control, &settings);
         self.remember_playback_preference(control, None, true);
         self.refresh_effective_speed();
+        self.refresh_subtitle_style();
     }
 
     pub(super) fn refresh_effective_speed(&self) {
@@ -139,6 +145,43 @@ impl Bridge {
             // The player mirrors its effective base rate, never the transient preview.
             app.set_effective_playback_speed(self.player.effective_playback_speed());
         }
+    }
+
+    pub(super) fn refresh_subtitle_style(&self) {
+        if let Some(app) = self.app() {
+            app.set_effective_subtitle_style(slint::ModelRc::new(slint::VecModel::from(
+                self.player.effective_subtitle_style().values().to_vec(),
+            )));
+        }
+    }
+
+    pub(super) fn edit_subtitle_style(&self, index: i32, value: f32, global: bool) {
+        if !(0..7).contains(&index) {
+            return;
+        }
+        if global {
+            let style = {
+                let mut state = self.shared.lock().unwrap();
+                state.cache_settings.subtitle_style =
+                    state.cache_settings.subtitle_style.with_value(index, value);
+                state.cache_settings.subtitle_style
+            };
+            if let Some(app) = self.app() {
+                app.set_subtitle_style(slint::ModelRc::new(slint::VecModel::from(
+                    self.player.resolve_subtitle_style(style).values().to_vec(),
+                )));
+            }
+            self.player
+                .update_playback_defaults(&self.shared.lock().unwrap().cache_settings);
+        } else {
+            let style = self.player.set_title_subtitle_style_value(index, value);
+            self.remember_playback_preference(
+                3,
+                Some(PreferenceValue::SubtitleStyle(style)),
+                false,
+            );
+        }
+        self.refresh_subtitle_style();
     }
 
     pub(super) fn filter_playback_languages(&self, query: &str, subtitles: bool) {
