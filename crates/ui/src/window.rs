@@ -16,6 +16,12 @@ impl AppWindow {
         crate::completion_bridge::install(&app);
         Ok(Self(app))
     }
+
+    /// Call after publishing an asynchronous model/conditional-tree update.
+    /// Retains any live editor or popup and repairs orphaned Back routing.
+    pub fn recover_back_focus(&self) {
+        crate::page_factories::recover_back_focus(&self.0);
+    }
 }
 
 impl std::ops::Deref for AppWindow {

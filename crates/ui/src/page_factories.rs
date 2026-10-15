@@ -129,22 +129,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             for page in 0..11 {
                 release_unmounted_payloads(&app, page);
             }
-            // Removing an outgoing factory tree can clear the focus that a
-            // mount guard established. Recover only absent focus; a live
-            // editor (even outside the scroll viewport) or separate popup
-            // retains its own native ownership.
-            if app.get_completion_prompt_visible() {
-                // The dialog defers its initial focus until tree publication.
-                // Covered page recovery must never replace its input focus.
-                return;
-            }
-            let missing_focus = window.focus_item.borrow().upgrade().is_none();
-            if window.active_popups().is_empty() {
-                if missing_focus {
-                    app.invoke_preserve_back_focus();
-                }
-                app.invoke_focus_mounted_page();
-            }
+            recover_back_focus(&app);
         }
     });
     {
@@ -251,6 +236,8 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
         crate::forward_app_callbacks!(app, &bridge;
             on_artwork_visible => invoke_calendar_bridge_artwork_visible(arg0, arg1),
             on_artwork_active_changed => invoke_calendar_bridge_artwork_active_changed(arg0),
+        );
+        crate::forward_app_callbacks!(app, &bridge; recover_focus;
             on_refreshed => invoke_calendar_bridge_refreshed(),
             on_step => invoke_calendar_bridge_step(arg0),
             on_agenda_more => invoke_calendar_bridge_agenda_more(arg0),
@@ -341,4 +328,59 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             }
         }));
     }
+}
+
+/// A row/model rebuild can destroy native focus without unmounting its page.
+/// Android treats an unhandled Back as permission to finish the activity, so
+/// publish removals before checking ownership and recover only missing/hidden
+/// focus. Live editors (including scrolled ones) and popups keep their keys.
+pub(crate) fn recover_back_focus(app: &crate::generated::AppWindow) {
+    recover_focus(app, false);
+}
+
+fn recover_focus(app: &crate::generated::AppWindow, check_tree: bool) {
+    let window = i_slint_core::window::WindowInner::from_pub(app.window());
+    window.ensure_tree_instantiated();
+    if app.get_completion_prompt_visible() || !window.active_popups().is_empty() {
+        return;
+    }
+    let focused = window.focus_item.borrow().upgrade();
+    let missing_focus = focused.is_none_or(|item| {
+        if !item.is_visible() {
+            return true;
+        }
+        if !check_tree {
+            return false;
+        }
+        // During a callback the native event stack can keep a removed row
+        // alive and apparently visible. Only the current tree owns input.
+        // This walk is limited to user actions, never periodic progress ticks.
+        let root = i_slint_core::item_tree::ItemRc::new_root(window.component());
+        item != root
+            && root
+                .visit_descendants(|live| {
+                    if live == &item {
+                        std::ops::ControlFlow::Break(())
+                    } else {
+                        std::ops::ControlFlow::Continue(())
+                    }
+                })
+                .is_none()
+    });
+    if missing_focus {
+        app.invoke_preserve_back_focus();
+    }
+    app.invoke_focus_mounted_page();
+}
+
+pub(crate) fn recover_after_callback(app: &crate::generated::AppWindow) {
+    recover_focus(app, true);
+    // A click/key event can retain the removed delegate until its stack
+    // unwinds. Recheck once then, retaining any new live focus or popup.
+    let weak = app.as_weak();
+    slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+        if let Some(app) = weak.upgrade() {
+            recover_back_focus(&app);
+        }
+    });
 }

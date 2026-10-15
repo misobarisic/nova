@@ -40,6 +40,9 @@ export component Onboarding inherits Rectangle {
     public function focus_shell() { onboarding_scope.focus(); }
 
     in-out property <int> step: 0;
+    // Step bodies contain native inputs. Move focus to the persistent wizard
+    // scope before their removal leaves Android Back without a dispatch route.
+    changed step => { onboarding_scope.focus(); }
     in-out property <int> language_index: 0;
     in-out property <bool> true_black: false;
     in-out property <string> addon_url: "";

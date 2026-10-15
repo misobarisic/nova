@@ -366,6 +366,9 @@ impl Bridge {
                 .count() as i32,
         );
         self.schedule_page_artwork(super::page_artwork::Page::Calendar);
+        if app.get_show_calendar() {
+            app.recover_back_focus();
+        }
     }
 }
 

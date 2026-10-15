@@ -2,7 +2,7 @@ use slint::ComponentHandle;
 
 pub(crate) fn install(app: &crate::generated::AppWindow) {
     let bridge = app.global::<nova_ui_shared::RemoteBridge>();
-    crate::forward_app_callbacks!(app, &bridge;
+    crate::forward_app_callbacks!(app, &bridge; recover_focus;
         on_action => invoke_remote_bridge_action(arg0, arg1, arg2),
         on_device_refresh => invoke_remote_bridge_device_refresh(),
         on_device_open => invoke_remote_bridge_device_open(arg0),

@@ -447,6 +447,9 @@ impl Bridge {
             app.set_stream_total(0);
             app.set_streams_hint(error_text(&PlaybackError::Unavailable).into());
         }
+        if app.get_remote_devices_open() || app.get_remote_controls_open() {
+            app.recover_back_focus();
+        }
     }
 
     fn remote_control_enabled(&self) -> bool {
@@ -1905,6 +1908,9 @@ impl Bridge {
             app.set_remote_phase(remote_phase_text(&snapshot).into());
             app.set_remote_prompt(remote_prompt_text(&snapshot).into());
         }
+        if app.get_remote_devices_open() || app.get_remote_controls_open() {
+            app.recover_back_focus();
+        }
     }
 
     fn apply_remote_snapshot(&self, snapshot: PlaybackSnapshot) {
@@ -1980,6 +1986,10 @@ impl Bridge {
             );
         }
         state.remote_playback.snapshot = Some(snapshot);
+        drop(state);
+        if app.get_remote_controls_open() {
+            app.recover_back_focus();
+        }
     }
 
     pub(super) fn remote_tick(&self) {
@@ -1993,6 +2003,7 @@ impl Bridge {
         if let Some(engine) = nova_sync::engine() {
             self.reconcile_remote_polling_engine(&engine);
         }
+        let mut devices_changed = false;
         {
             let mut state = self.shared.lock().unwrap();
             if let Some(engine) = nova_sync::engine() {
@@ -2014,6 +2025,7 @@ impl Bridge {
                     app.set_remote_has_playing_devices(rows.iter().any(|row| row.has_session));
                     app.set_remote_has_ready_devices(rows.iter().any(|row| row.ready));
                     app.set_remote_devices(Rc::new(VecModel::from(rows)).into());
+                    devices_changed = true;
                 }
             }
             if !app.get_stream_selector_open() {
@@ -2025,6 +2037,12 @@ impl Bridge {
                 state.remote_playback.selector_lookups.clear();
                 state.remote_playback.selector_engine = None;
             }
+        }
+        // Peer removal may have destroyed the device row holding native focus.
+        // Instantiate only after releasing SharedState: page callbacks can
+        // re-enter the bridge while the replacement trees are published.
+        if devices_changed && app.get_remote_devices_open() {
+            app.recover_back_focus();
         }
         if !app.get_stream_selector_open()
             && !app.get_remote_controls_open()
@@ -2258,6 +2276,9 @@ impl Bridge {
                 app.set_remote_has_playing_devices(false);
                 app.set_remote_has_ready_devices(false);
                 app.set_remote_devices(Default::default());
+                if app.get_remote_devices_open() {
+                    app.recover_back_focus();
+                }
             }
             return;
         };
@@ -2367,6 +2388,9 @@ impl Bridge {
                 app.set_remote_has_playing_devices(rows.iter().any(|row| row.has_session));
                 app.set_remote_has_ready_devices(rows.iter().any(|row| row.ready));
                 app.set_remote_devices(Rc::new(VecModel::from(rows)).into());
+                if app.get_remote_devices_open() {
+                    app.recover_back_focus();
+                }
                 if refresh_pending {
                     b.poll_playback_devices(false);
                 }

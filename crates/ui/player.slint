@@ -568,6 +568,9 @@ export component PlayerOverlay {
     // Settings-panel submenu page: 0 = root, 1 = decoder, 2 = subtitles,
     // 3 = audio. Driven by the keyboard handler.
     property <int> settings_page: 0;
+    // A native menu-row/preset scope may disappear when a submenu changes.
+    // The player scope survives every menu body and owns nearest-layer Back.
+    changed settings_page => { key_scope.focus(); }
     // Current-selection summaries shown on the settings panel's root rows.
     in-out property <string> sub_label: "";
     in-out property <string> audio_label: "";
@@ -975,6 +978,7 @@ export component PlayerOverlay {
     // popup closes, even though the cursor was moving the whole time.
     // (Also resets the keyboard track-list index.)
     changed open_popup => {
+        key_scope.focus();
         // Popup teardown can destroy a pressed/hovered slider without running
         // its release handler. Reopening starts with a fresh scroll gesture.
         SliderGesture.active = false;

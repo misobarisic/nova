@@ -79,7 +79,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
     }
     {
         let bridge = app.global::<AboutBridge>();
-        crate::forward_app_callbacks!(app, &bridge;
+        crate::forward_app_callbacks!(app, &bridge; recover_focus;
             on_home_picked => invoke_about_bridge_home_picked(),
             on_back_picked => invoke_about_bridge_back_picked(),
             on_discover_picked => invoke_about_bridge_discover_picked(),
@@ -117,6 +117,8 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
         crate::forward_app_callbacks!(app, &bridge;
             on_artwork_visible => invoke_downloads_bridge_artwork_visible(arg0, arg1),
             on_artwork_active_changed => invoke_downloads_bridge_artwork_active_changed(arg0),
+        );
+        crate::forward_app_callbacks!(app, &bridge; recover_focus;
             on_query_changed => invoke_downloads_bridge_query_changed(arg0),
             on_filter_changed => invoke_downloads_bridge_filter_changed(arg0),
             on_sort_changed => invoke_downloads_bridge_sort_changed(arg0),

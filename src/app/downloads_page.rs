@@ -447,6 +447,9 @@ impl Bridge {
         app.set_downloads_page_filter(filter);
         app.set_downloads_page_sort_recent(recent);
         self.schedule_page_artwork(super::page_artwork::Page::Downloads);
+        if app.get_show_downloads() {
+            app.recover_back_focus();
+        }
     }
 }
 

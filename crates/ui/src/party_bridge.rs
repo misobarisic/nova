@@ -2,7 +2,7 @@ use slint::ComponentHandle;
 
 pub(crate) fn install(app: &crate::generated::AppWindow) {
     let bridge = app.global::<nova_ui_shared::PartyBridge>();
-    crate::forward_app_callbacks!(app, &bridge;
+    crate::forward_app_callbacks!(app, &bridge; recover_focus;
         on_create => invoke_party_bridge_create(),
         on_join => invoke_party_bridge_join(arg0),
         on_leave => invoke_party_bridge_leave(),

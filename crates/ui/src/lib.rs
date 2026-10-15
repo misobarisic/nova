@@ -26,11 +26,24 @@ pub use nova_ui_shared::{
 };
 // Native page callbacks route through AppWindow without keeping it alive.
 macro_rules! forward_app_callbacks {
-    ($app:expr, $bridge:expr; $($callback:ident => $invoke:ident($($arg:ident),*)),* $(,)?) => {{
+    ($app:expr, $bridge:expr; recover_focus; $($callbacks:tt)*) => {
+        crate::forward_app_callbacks!(@forward $app, $bridge, true; $($callbacks)*);
+    };
+    ($app:expr, $bridge:expr; $($callbacks:tt)*) => {
+        crate::forward_app_callbacks!(@forward $app, $bridge, false; $($callbacks)*);
+    };
+    (@forward $app:expr, $bridge:expr, $recover:expr; $($callback:ident => $invoke:ident($($arg:ident),*)),* $(,)?) => {{
         let bridge = $bridge;
         $(let weak = $app.as_weak();
         bridge.$callback(move |$($arg),*| {
-            weak.upgrade().map(|app| app.$invoke($($arg),*)).unwrap_or_default()
+            weak.upgrade().map(|app| {
+                let result = app.$invoke($($arg),*);
+                // The callback may have removed its own focused delegate.
+                if $recover {
+                    crate::page_factories::recover_after_callback(&app);
+                }
+                result
+            }).unwrap_or_default()
         });)*
     }};
 }

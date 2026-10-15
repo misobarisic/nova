@@ -126,6 +126,97 @@ fn back(app: &nova::AppWindow) {
         .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
     settle(app);
 }
+
+fn accepted_back(app: &nova::AppWindow) {
+    for event in [
+        slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        },
+        slint::platform::WindowEvent::KeyPressRepeated {
+            text: slint::platform::Key::Back.into(),
+        },
+        slint::platform::WindowEvent::KeyReleased {
+            text: slint::platform::Key::Back.into(),
+        },
+    ] {
+        assert!(
+            matches!(
+                app.window().dispatch_event_with_result(event).unwrap(),
+                slint::platform::WindowEventDispatchResult::Accepted
+            ),
+            "wizard Back must remain accepted after removing an input: {}",
+            native_focus(app)
+        );
+    }
+    settle(app);
+}
+
+fn focus_wizard_input(app: &nova::AppWindow, id: &str) {
+    {
+        let field = ElementHandle::find_by_element_id(app, id)
+            .next()
+            .unwrap_or_else(|| panic!("mounted wizard field: {id}"));
+        field
+            .query_descendants()
+            .match_type_name("TextInput")
+            .find_first()
+            .expect("wizard field contains a native input")
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+    }
+    settle(app);
+    assert!(
+        native_focus(app).contains("TextInput"),
+        "pointer must focus the actual input before teardown: {}",
+        native_focus(app)
+    );
+}
+
+#[test]
+fn back_survives_url_and_language_input_step_teardown() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "back_survives_url_and_language_input_step_teardown"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_touch_menus(true);
+    app.set_onboarding_visible(true);
+    app.window().set_size(slint::PhysicalSize::new(390, 1000));
+    app.window().show().unwrap();
+    let backgrounds = Rc::new(Cell::new(0));
+    let recorded = backgrounds.clone();
+    app.on_exit_to_background(move || recorded.set(recorded.get() + 1));
+    settle(&app);
+
+    focus_wizard_input(&app, "Onboarding::url");
+    click(&app, "Skip for now");
+    assert_eq!(app.get_onboarding_step(), 1);
+    accepted_back(&app);
+    assert_eq!(app.get_onboarding_step(), 0);
+    accepted_back(&app);
+    assert_eq!(backgrounds.get(), 1);
+
+    for footer_back in [false, true] {
+        click(&app, "Skip for now");
+        click(&app, "Continue");
+        assert_eq!(app.get_onboarding_step(), 2);
+        focus_wizard_input(&app, "Onboarding::audio_language_picker");
+        if footer_back {
+            click(&app, "Back");
+        } else {
+            accepted_back(&app);
+        }
+        assert_eq!(app.get_onboarding_step(), 1);
+        accepted_back(&app);
+        assert_eq!(app.get_onboarding_step(), 0);
+        accepted_back(&app);
+    }
+    assert_eq!(backgrounds.get(), 3);
+}
 fn assert_wrapped_header(app: &nova::AppWindow, heading: &str, introduction: &str) {
     let text = |label: &str| {
         ElementHandle::find_by_element_type_name(app, "Text")

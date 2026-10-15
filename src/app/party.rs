@@ -386,6 +386,9 @@ impl Bridge {
             app.set_party_status("".into());
             app.set_party_error("".into());
             app.set_party_warning("".into());
+            if app.get_party_page_open() {
+                app.recover_back_focus();
+            }
         }
         // Runtime shutdown and the guest's best-effort leave never block Slint.
         if let Some(service) = service {
@@ -939,6 +942,9 @@ impl Bridge {
             self.player.set_paused(true);
             self.party_leave();
             app.set_party_status(text::tr("The watch party has ended.").into());
+        }
+        if app.get_party_page_open() {
+            app.recover_back_focus();
         }
     }
 }

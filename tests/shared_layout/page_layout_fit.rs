@@ -27,6 +27,57 @@ fn settle(app: &nova::AppWindow) {
     }
 }
 
+#[test]
+fn category_picker_header_keeps_done_above_the_selected_title() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "category_picker_header_keeps_done_above_the_selected_title"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.set_touch_menus(true);
+    app.set_show_home(false);
+    app.set_modal_visible(true);
+    app.set_selected_title("Category header geometry fixture".into());
+    app.set_categories_modal(true);
+    app.set_category_rows(model(vec![nova::CategoryRow {
+        name: "Anime".into(),
+    }]));
+    app.set_modal_category_flags(model(vec![false]));
+    app.window().show().unwrap();
+    for (width, height) in [(320, 568), (568, 320), (1280, 800)] {
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        settle(&app);
+        let popup = ElementHandle::find_by_element_type_name(&app, "CategoryPickerPopup")
+            .next()
+            .expect("category picker is mounted");
+        let done = popup
+            .query_descendants()
+            .match_predicate(|element| element.accessible_label().as_deref() == Some("Done"))
+            .find_first()
+            .expect("category picker Done action");
+        let title = popup
+            .query_descendants()
+            .match_predicate(|element| {
+                element.accessible_label().as_deref() == Some("Category header geometry fixture")
+            })
+            .find_first()
+            .expect("selected title below the header");
+        assert!(done.size().height >= 44.0);
+        assert!(
+            Bounds::of(&done).bottom + 7.5 <= Bounds::of(&title).top,
+            "Done must retain the header gap above the selected title at {width}x{height}: done={:?}, title={:?}",
+            Bounds::of(&done),
+            Bounds::of(&title)
+        );
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Bounds {
     left: f32,

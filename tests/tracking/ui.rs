@@ -60,7 +60,7 @@ fn detail_scroll(app: &nova::AppWindow) -> Option<ElementHandle> {
         ElementHandle::find_by_element_id(app, "DetailPage::det_scroll").next()
     }
 }
-async fn click(app: &nova::AppWindow, label: &str) {
+async fn reveal(app: &nova::AppWindow, label: &str) -> ElementHandle {
     let mut target = None;
     for attempt in 0..12 {
         target = if label.starts_with("settings:") {
@@ -140,8 +140,99 @@ async fn click(app: &nova::AppWindow, label: &str) {
             .unwrap();
     }
     target
+}
+async fn click(app: &nova::AppWindow, label: &str) {
+    reveal(app, label)
+        .await
         .single_click(slint::platform::PointerEventButton::Left)
         .await;
+    settle().await;
+}
+// Width-only viewport checks miss the screenshot regression: both controls
+// stayed inside the screen while Refresh collapsed to a few characters per line.
+async fn check_entry_action_layout(app: &nova::AppWindow) {
+    for (language, labels) in [
+        (
+            "en",
+            [
+                "Edit tracker entry",
+                "Open on service",
+                "Restore automatic status and dates",
+                "Refresh / retry",
+                "Edit alignment",
+                "Apply Nova history",
+            ],
+        ),
+        (
+            "hr",
+            [
+                "Uredite zapis praćenja",
+                "Otvori na servisu",
+                "Vrati automatski status i datume",
+                "Osvježite / pokušajte ponovno",
+                "Uredite dodjelu",
+                "Primijenite povijest Nove",
+            ],
+        ),
+    ] {
+        if let Err(error) = slint::select_bundled_translation(language) {
+            #[cfg(not(feature = "live-preview"))]
+            panic!("AOT build must bundle {language}: {error}");
+            #[cfg(feature = "live-preview")]
+            {
+                assert!(matches!(
+                    error,
+                    slint::SelectBundledTranslationError::NoTranslationsBundled
+                ));
+                continue;
+            }
+        }
+        for (width, height) in [(320, 800), (360, 800), (390, 800), (740, 360)] {
+            app.window()
+                .set_size(slint::PhysicalSize::new(width, height));
+            settle().await;
+            let mut geometry = Vec::new();
+            for label in labels {
+                // Reveal each action before measuring: landscape clips most of
+                // the card and Slint omits fully clipped accessibility elements.
+                let action = reveal(app, label).await;
+                let position = action.absolute_position();
+                let size = action.size();
+                assert!(
+                    size.width >= 96.0,
+                    "{language} {width}×{height}: {label} squeezed to {}px",
+                    size.width
+                );
+                assert!(
+                    position.x >= 0.0 && position.x + size.width <= width as f32 + 1.0,
+                    "{language} {width}×{height}: {label} extends outside the viewport"
+                );
+                geometry.push((position.x, size.width));
+            }
+            for (left, right) in [(0, 1), (4, 5)] {
+                assert!(
+                    (geometry[left].1 - geometry[right].1).abs() <= 1.0,
+                    "{language} {width}×{height}: paired actions need equal widths: {:?}",
+                    geometry
+                );
+                assert!(
+                    geometry[right].0 >= geometry[left].0 + geometry[left].1,
+                    "{language} {width}×{height}: paired actions overlap"
+                );
+            }
+            let full_width = geometry[1].0 + geometry[1].1 - geometry[0].0;
+            for index in [2, 3] {
+                assert!(
+                    (geometry[index].0 - geometry[0].0).abs() <= 1.0
+                        && (geometry[index].1 - full_width).abs() <= 1.0,
+                    "{language} {width}×{height}: recovery actions need a readable full row: {:?}",
+                    geometry
+                );
+            }
+        }
+    }
+    slint::select_bundled_translation("en").ok();
+    app.window().set_size(slint::PhysicalSize::new(360, 800));
     settle().await;
 }
 async fn scroll_down(app: &nova::AppWindow) {
@@ -396,6 +487,7 @@ fn tracking_settings_and_overlay_fit_phone_and_require_history_confirmation() {
             1,
             "only the active stable ID mounts an entry leaf"
         );
+        check_entry_action_layout(&app).await;
         click(&app, "Apply Nova history").await;
         assert_eq!(a.get(), 0, "preview must not send history");
         click(&app, "Confirm history update").await;

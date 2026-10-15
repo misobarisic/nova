@@ -50,18 +50,17 @@ export component EntryEditor inherits Rectangle {
             spacing: 6px;
             HorizontalLayout {
                 spacing: 8px;
-                TrackingButton { text: @tr("Edit tracker entry"); icon:6; horizontal-stretch:1; clicked => {root.entry_editing=true;} }
-                TrackingButton { text:@tr("Open on service"); icon:7; horizontal-stretch:1; clicked => {root.action(root.entry.id,4);} }
+                TrackingButton { text: @tr("Edit tracker entry"); icon:6; preferred-width:0px; horizontal-stretch:1; clicked => {root.entry_editing=true;} }
+                TrackingButton { text:@tr("Open on service"); icon:7; preferred-width:0px; horizontal-stretch:1; clicked => {root.action(root.entry.id,4);} }
             }
+            // Recovery labels are long in both catalogs. Give each its own
+            // row instead of letting intrinsic text widths squeeze its neighbor.
+            TrackingButton { text:@tr("Restore automatic status and dates"); icon:2; clicked => {root.action(root.entry.id,5);} }
+            TrackingButton { text: @tr("Refresh / retry"); icon:2; clicked => {root.action(root.entry.id,0);} }
             HorizontalLayout {
                 spacing: 8px;
-                TrackingButton { text:@tr("Restore automatic status and dates"); icon:2; horizontal-stretch:1; min-height:68px; clicked => {root.action(root.entry.id,5);} }
-                TrackingButton { text: @tr("Refresh / retry"); icon:2; horizontal-stretch:1; min-height:68px; clicked => {root.action(root.entry.id,0);} }
-            }
-            HorizontalLayout {
-                spacing: 8px;
-                TrackingButton { text: @tr("Edit alignment"); icon:8; horizontal-stretch:1; clicked => {root.action(root.entry.id,1);} }
-                TrackingButton { text: @tr("Apply Nova history"); icon:9; horizontal-stretch:1; clicked => {root.entry_history_confirm=true;root.entry_unlink_confirm=false;} }
+                TrackingButton { text: @tr("Edit alignment"); icon:8; preferred-width:0px; horizontal-stretch:1; clicked => {root.action(root.entry.id,1);} }
+                TrackingButton { text: @tr("Apply Nova history"); icon:9; preferred-width:0px; horizontal-stretch:1; clicked => {root.entry_history_confirm=true;root.entry_unlink_confirm=false;} }
             }
             if root.history_confirm: VerticalLayout {
                 Text {text:root.entry.history_preview; color:Theme.current.text_secondary; wrap:word-wrap; min-width:0;}
