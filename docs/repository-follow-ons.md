@@ -317,24 +317,29 @@ currently points to the tracked `android/keystore/debug.keystore` with the publi
 
 ## Noto Color Emoji subsetting
 
-Status: planned, not implemented. Keep the current bundled font unchanged until
-this follow-on is taken up. `assets/fonts/NotoColorEmoji.ttf` currently adds
-10,730,124 bytes before APK compression; registration and fallback live in
-`crates/ui/src/fonts.rs`, with upstream provenance in `assets/fonts/README.md`.
+The full-font format replacement is implemented: `assets/fonts/NotoColorEmoji.ttf`
+uses upstream's full COLRv1 vector artwork, with compatibility aliases preserving
+the previous bitmap font's 1,510 cmap entries and 4,176 GSUB input sequences.
+No character or vector-glyph subsetting is applied. The generated asset is
+5,060,792 bytes, down from the full bitmap font's 10,730,124 bytes (52.8% before
+package compression). `assets/fonts/README.md` records input/output hashes and
+reproduction commands; `assets/fonts/tools/prepare_emoji.py` verifies the full
+baseline repertoire and `emoji-coverage.txt` drives Slint shaping coverage
+without host fonts. Desktop's local FemtoVG painter reuses skrifa 0.44 and
+tiny-skia 0.12; Android keeps native Skia/FreeType COLRv1 rendering.
 
-- Measure subsetting from the pinned upstream font, including removing
-  unreachable glyphs before considering reduced character coverage. Addon text
-  is arbitrary, so a subset based only on emoji literals in Nova's source is
-  insufficient. Document any coverage loss and its fallback behavior.
-- Retain the substitution dependencies for country flags, variation selectors,
-  skin tones and joined emoji. Generate the chosen subset reproducibly and
-  preserve the font license and updated provenance.
-- Verify shaping without system fonts and color rendering on desktop FemtoVG
-  and Android Skia. Check representative addon text, flags and joined sequences
-  on the S25. Record original/subset font bytes and signed release APK bytes.
-- Run only one Cargo command at a time. Remove temporary font experiments and
-  scratch outputs when finished; retain only the intended packaged asset and
-  reproducible source tooling.
+Remaining validation and optional future work:
+
+- Verify actual color rendering on the S25 (representative addon text, flags,
+  joined emoji and skin tones). The configured ARM64 Skia archive contains
+  COLRv1 traversal/paint support, but that is not a physical-device visual test.
+- Record signed release APK sizes separately from uncompressed font bytes;
+  compression and CPU painter dependencies affect the final package delta.
+- Any future subset must preserve arbitrary addon text coverage and substitution
+  dependencies. Do not infer a safe repertoire from emoji literals in Nova's
+  source. Preserve font licensing and reproducible provenance.
+- Run only one Cargo command at a time; retain only the intended packaged asset
+  and reproducible tooling, with no tracked bitmap baseline or scratch files.
 
 ## APK license and source delivery
 

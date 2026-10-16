@@ -32,7 +32,7 @@ mod tests {
     use std::{borrow::Cow, sync::Arc};
 
     #[test]
-    fn flags_and_joined_emoji_shape_without_system_fonts() {
+    fn full_baseline_emoji_sequences_shape_without_system_fonts() {
         let mut fonts = FontContext::new(parley::FontContext {
             collection: fontique::Collection::new(fontique::CollectionOptions {
                 system_fonts: false,
@@ -58,12 +58,17 @@ mod tests {
             parley::style::FontFamilyName::Generic(GenericFamily::SansSerif),
             parley::style::FontFamilyName::Generic(GenericFamily::SystemUi),
         ];
+        let emoji_family = [parley::style::FontFamilyName::named("Noto Color Emoji")];
         let mut layout_context = parley::LayoutContext::<()>::new();
-        for text in ["🇬🇧", "🇩🇪", "🇫🇷", "🇪🇸", "🇭🇷", "👩‍💻", "🏳️‍🌈", "💾", "⚙️", "👤"]
-        {
+        let mut shape = |text: &str, emoji_only: bool| {
+            let families = if emoji_only {
+                &emoji_family[..]
+            } else {
+                &families[..]
+            };
             let mut builder = layout_context.ranged_builder(&mut fonts.inner, text, 1.0, true);
             builder.push_default(parley::StyleProperty::FontFamily(
-                parley::style::FontFamily::List(Cow::Borrowed(&families)),
+                parley::style::FontFamily::List(Cow::Borrowed(families)),
             ));
             let mut layout = builder.build(text);
             layout.break_all_lines(None);
@@ -76,8 +81,64 @@ mod tests {
                 })
                 .flat_map(|run| run.glyphs().collect::<Vec<_>>())
                 .collect();
-            assert_eq!(glyphs.len(), 1, "{text} must shape as one emoji");
-            assert_ne!(glyphs[0].id, 0, "{text} must not use a missing-glyph box");
+            assert_eq!(glyphs.len(), 1, "{text:?} must shape as one emoji");
+            assert_ne!(glyphs[0].id, 0, "{text:?} must not use a missing-glyph box");
+            glyphs[0].id
+        };
+        for text in [
+            "🇬🇧",
+            "🇩🇪",
+            "🇫🇷",
+            "🇪🇸",
+            "🇭🇷",
+            "👩‍💻",
+            "🏳️‍🌈",
+            "💾",
+            "⚙️",
+            "👤",
+            "❤️",
+            "👨🏿‍🚀",
+            // England's subdivision flag uses tag characters, not regional indicators.
+            "\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}",
+        ] {
+            shape(text, false);
         }
+        // Test the complete font repertoire with its family selected directly.
+        // Roboto itself covers ASCII digits, so Parley's current Roboto-first
+        // fallback splits keycaps across fonts with either the old bitmap or
+        // the new vector face. That existing policy is separate from whether
+        // the bundled face retains and shapes the full baseline repertoire.
+        shape("1️⃣", true);
+        let decode = |sequence: &str| -> String {
+            sequence
+                .split_whitespace()
+                .map(|cp| char::from_u32(u32::from_str_radix(cp, 16).unwrap()).unwrap())
+                .collect()
+        };
+        // The fixture comes from every GSUB ligature input in the old full
+        // bitmap font, including its legacy reversed aliases. Keep those
+        // aliases equivalent to the corresponding canonical color glyph.
+        // The generator separately checks all baseline cmap entries, including
+        // controls and default ignorables that do not produce layout glyphs.
+        let mut sequences = 0;
+        let mut aliases = 0;
+        for line in include_str!("../../../assets/fonts/emoji-coverage.txt").lines() {
+            if line.starts_with('#') {
+                continue;
+            }
+            let (input, equivalent) = line.split_once(';').unwrap_or((line, ""));
+            let text = decode(input);
+            if text.chars().count() < 2 {
+                continue;
+            }
+            let glyph = shape(&text, true);
+            sequences += 1;
+            if !equivalent.is_empty() {
+                assert_eq!(glyph, shape(&decode(equivalent), true), "alias {line}");
+                aliases += 1;
+            }
+        }
+        assert_eq!(sequences, 4176);
+        assert_eq!(aliases, 1612);
     }
 }

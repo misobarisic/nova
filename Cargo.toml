@@ -48,6 +48,10 @@ resolver = "3"
 license = "GPL-3.0-or-later"
 
 [patch.crates-io]
+# Keep desktop mpv/FemtoVG integration while painting COLRv1 emoji with the
+# existing Skrifa/tiny-skia stack. tiny-skia corrects partial sweep normalization.
+femtovg = { path = "vendor/femtovg" }
+tiny-skia = { path = "vendor/tiny-skia" }
 # Slint 1.18 must suspend while TerminateWindow still owns a valid native
 # window, so mpv releases its GL resources before InitWindow replaces it.
 i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }
@@ -90,6 +94,7 @@ desktop = [
     # Native cursor visibility must cover hidden OSD hit targets too.
     "slint/unstable-winit-030",
     "slint/renderer-femtovg",
+    "dep:femtovg",
 ]
 # Android's activity backend selects Slint's Skia renderer on Android.
 android = ["slint/backend-android-activity-06"]
@@ -140,6 +145,7 @@ qrcode = { version = "0.14", default-features = false }
 tikv-jemallocator = "0.6"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
+femtovg = { version = "=0.27.0", default-features = false, features = ["colrv1"], optional = true }
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
 
 # Android background execution: JNI bridge to the Java foreground service and
@@ -161,6 +167,8 @@ rqrr = { version = "0.11", default-features = false }
 zstd = { version = "0.13", default-features = false }
 
 [dev-dependencies]
+skrifa = "=0.44.0"
+tiny-skia = { version = "=0.12.0", default-features = false, features = ["std", "simd"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 # Headless UI tests (drag-scroll regression): drives the real AppWindow
 # through synthetic pointer events, no display needed.
