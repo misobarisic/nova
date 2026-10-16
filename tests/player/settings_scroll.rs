@@ -63,6 +63,7 @@ fn android_settings_scrolls_after_adjusting_closing_and_reopening() {
         ))
         .into(),
     );
+    app.set_sub_tracks(app.get_audio_tracks());
     let edits = Rc::new(Cell::new(0));
     let recorded = edits.clone();
     app.on_playback_speed_changed(move |_| recorded.set(recorded.get() + 1));
@@ -122,24 +123,178 @@ fn android_settings_scrolls_after_adjusting_closing_and_reopening() {
                 .is_none()
         );
 
-        open_settings(&app);
-        button(&app, "Audio").mock_single_click(slint::platform::PointerEventButton::Left);
+        for category in ["Audio", "Subtitles"] {
+            open_settings(&app);
+            button(&app, category).mock_single_click(slint::platform::PointerEventButton::Left);
+            settle();
+            let first = button(&app, "en — Track 00");
+            let before = first.absolute_position().y;
+            let drag = button(&app, "en — Track 04");
+            let drag_pos = drag.absolute_position();
+            let drag_size = drag.size();
+            drag.mock_drag(
+                LogicalPosition::new(drag_pos.x + drag_size.width / 2.0, drag_pos.y - 180.0),
+                slint::platform::PointerEventButton::Left,
+            );
+            settle();
+            assert!(
+                first.absolute_position().y < before - 40.0,
+                "reopened {category} list must scroll after adjustment (interrupted={interrupt_press})"
+            );
+            key(&app, slint::platform::Key::Escape);
+            key(&app, slint::platform::Key::Escape);
+        }
+    }
+}
+
+#[test]
+fn subtitle_style_vertical_touch_drags_scroll_without_editing_sliders() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::subtitle_style_vertical_touch_drags_scroll_without_editing_sliders"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    use i_slint_core::{input::TouchPhase, platform::InternalEvent};
+    use std::cell::RefCell;
+
+    fn touch(app: &nova::AppWindow, position: LogicalPosition, phase: TouchPhase) {
+        app.window()
+            .dispatch_event(WindowEvent::internal(InternalEvent::Touch {
+                id: 1,
+                position: i_slint_core::lengths::logical_point_from_api(position),
+                phase,
+            }));
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(16));
+        slint::platform::update_timers_and_animations();
+    }
+
+    fn open_style(app: &nova::AppWindow) {
+        open_settings(app);
+        // Reveal the last category even in a short landscape menu.
+        for _ in 0..4 {
+            key(app, slint::platform::Key::DownArrow);
+        }
+        key(app, slint::platform::Key::Return);
+    }
+
+    fn timing_slider(app: &nova::AppWindow) -> ElementHandle {
+        ElementHandle::find_by_accessible_label(app, "Subtitle timing (seconds)")
+            .find(|item| item.accessible_role() == Some(AccessibleRole::Slider))
+            .expect("subtitle timing slider")
+    }
+
+    for (width, height) in [(360, 720), (900, 360)] {
+        let app = nova::AppWindow::new().unwrap();
+        app.global::<nova::Anim>().set_enabled(false);
+        app.window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        app.set_is_android(true);
+        app.set_touch_menus(true);
+        app.set_player_open(true);
+        app.set_playback_started(true);
+        app.set_duration(600.0);
+        app.set_osd_visible(true);
+        let edits = Rc::new(RefCell::new(Vec::new()));
+        let recorded = edits.clone();
+        app.on_subtitle_style_changed(move |index, value| {
+            recorded.borrow_mut().push((index, value));
+        });
+        app.show().unwrap();
         settle();
-        let first = button(&app, "en — Track 00");
-        let before = first.absolute_position().y;
-        let drag = button(&app, "en — Track 04");
-        let drag_pos = drag.absolute_position();
-        let drag_size = drag.size();
-        drag.mock_drag(
-            LogicalPosition::new(drag_pos.x + drag_size.width / 2.0, drag_pos.y - 180.0),
-            slint::platform::PointerEventButton::Left,
-        );
-        settle();
-        assert!(
-            first.absolute_position().y < before - 40.0,
-            "reopened audio list must accept touch scrolling after adjustment (interrupted={interrupt_press})"
-        );
-        key(&app, slint::platform::Key::Escape);
-        key(&app, slint::platform::Key::Escape);
+
+        for cancelled in [false, true] {
+            open_style(&app);
+            let slider = timing_slider(&app);
+            let pos = slider.absolute_position();
+            let size = slider.size();
+            let start = LogicalPosition::new(pos.x + size.width * 0.2, pos.y + size.height / 2.0);
+            edits.borrow_mut().clear();
+            touch(&app, start, TouchPhase::Started);
+            if !cancelled {
+                settle();
+            }
+            for step in 1..=8 {
+                touch(
+                    &app,
+                    LogicalPosition::new(
+                        start.x + size.width * 0.6 * step as f32 / 8.0,
+                        start.y - step as f32,
+                    ),
+                    TouchPhase::Moved,
+                );
+            }
+            assert!(
+                app.global::<nova::SliderGesture>().get_active(),
+                "horizontal drag owns its gesture"
+            );
+            assert!(
+                (slider.absolute_position().y - pos.y).abs() < 1.0,
+                "horizontal slider drag must not move the panel"
+            );
+            touch(
+                &app,
+                LogicalPosition::new(start.x + size.width * 0.6, start.y - 8.0),
+                if cancelled {
+                    TouchPhase::Cancelled
+                } else {
+                    TouchPhase::Ended
+                },
+            );
+            settle();
+            assert!(
+                !edits.borrow().is_empty(),
+                "horizontal dragging must still adjust subtitles"
+            );
+            assert!(!app.global::<nova::SliderGesture>().get_active());
+            assert!(!app.global::<nova::SliderGesture>().get_hovered());
+            key(&app, slint::platform::Key::Escape);
+            key(&app, slint::platform::Key::Escape);
+
+            // Reopening after an edit must accept a new, independent vertical
+            // gesture. Native touch exercises the delayed press/cancel path.
+            open_style(&app);
+            let slider = timing_slider(&app);
+            let pos = slider.absolute_position();
+            let size = slider.size();
+            let start = LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0);
+            edits.borrow_mut().clear();
+            touch(&app, start, TouchPhase::Started);
+            // Exercise a delivered press as well as quick flicks: holding still
+            // must not permanently choose a horizontal slider gesture.
+            if !cancelled {
+                settle();
+            }
+            for step in 1..=8 {
+                touch(
+                    &app,
+                    LogicalPosition::new(start.x, start.y - step as f32 * 12.0),
+                    TouchPhase::Moved,
+                );
+            }
+            touch(
+                &app,
+                LogicalPosition::new(start.x, start.y - 96.0),
+                if cancelled {
+                    TouchPhase::Cancelled
+                } else {
+                    TouchPhase::Ended
+                },
+            );
+            settle();
+            assert!(
+                slider.absolute_position().y < pos.y - 40.0,
+                "vertical touch on a subtitle slider must scroll ({width}x{height}, cancelled={cancelled})"
+            );
+            assert!(
+                edits.borrow().is_empty(),
+                "vertical scrolling must not edit subtitle values"
+            );
+            assert!(!app.global::<nova::SliderGesture>().get_active());
+            assert!(!app.global::<nova::SliderGesture>().get_hovered());
+            key(&app, slint::platform::Key::Escape);
+            key(&app, slint::platform::Key::Escape);
+        }
     }
 }

@@ -25,6 +25,7 @@ export component SubtitleControls inherits VerticalLayout {
                 accessible-label: @tr("Decrease") + " " + caption;
                 clicked => { root.edited(i, root.values[i] - SubtitleStyle.step(i)); } }
             MiniSlider {
+                allow-vertical-pan: true;
                 horizontal-stretch: 1; min-width: 24px;
                 name: caption; focused: root.focused_idx == i;
                 value: root.values[i]; minimum: i == 0 ? -60 : i == 1 ? 16 : 0;

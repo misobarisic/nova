@@ -317,6 +317,7 @@ export component MiniSlider inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> focused: false;
     in property <string> name;
+    in property <bool> allow-vertical-pan: false;
     accessible-role: slider;
     accessible-label: root.name;
     accessible-enabled: root.enabled;
@@ -371,18 +372,20 @@ export component MiniSlider inherits Rectangle {
         }
     }
     slider_touch := SliderTouchArea {
+        allow-vertical-pan: root.allow-vertical-pan;
         enabled: root.enabled;
         width: 100%;
         height: 100%;
         mouse-cursor: pointer;
         moved => {
-            if (!self.pressed) { return; }
+            if (!self.pressed || !self.adjusting) { return; }
             SettingsStyle.keyboard-mode = false;
             value = minimum + Math.clamp(self.mouse-x / self.width, 0, 1) * span;
             value = Math.round(value / root.step) * root.step;
             root.changed(value);
         }
         clicked => {
+            if self.vertical-pan { return; }
             SettingsStyle.keyboard-mode = false;
             value = minimum + Math.clamp(self.mouse-x / self.width, 0, 1) * span;
             value = Math.round(value / root.step) * root.step;
