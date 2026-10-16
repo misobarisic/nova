@@ -49,9 +49,12 @@ license = "GPL-3.0-or-later"
 
 [patch.crates-io]
 # Keep desktop mpv/FemtoVG integration while painting COLRv1 emoji with the
-# existing Skrifa/tiny-skia stack. tiny-skia corrects partial sweep normalization.
-femtovg = { path = "vendor/femtovg" }
-tiny-skia = { path = "vendor/tiny-skia" }
+# existing Skrifa/tiny-skia stack. The fork backports the upstream borrow fix
+# onto Slint-compatible 0.27; tiny-skia corrects partial sweep normalization.
+femtovg = { git = "https://github.com/misobarisic/femtovg", rev = "dcbc52d06378b4dcb08921e7dce04e59b681aab7" }
+tiny-skia = { git = "https://github.com/misobarisic/tiny-skia", rev = "7cb203434cc55baa98333b5c480da158d08ce866" }
+# Keep resvg/usvg path geometry on the same source as tiny-skia.
+tiny-skia-path = { git = "https://github.com/misobarisic/tiny-skia", rev = "7cb203434cc55baa98333b5c480da158d08ce866" }
 # Slint 1.18 must suspend while TerminateWindow still owns a valid native
 # window, so mpv releases its GL resources before InitWindow replaces it.
 i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }
@@ -168,7 +171,6 @@ zstd = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 skrifa = "=0.44.0"
-tiny-skia = { version = "=0.12.0", default-features = false, features = ["std", "simd"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 # Headless UI tests (drag-scroll regression): drives the real AppWindow
 # through synthetic pointer events, no display needed.

@@ -325,7 +325,7 @@ No character or vector-glyph subsetting is applied. The generated asset is
 package compression). `assets/fonts/README.md` records input/output hashes and
 reproduction commands; `assets/fonts/tools/prepare_emoji.py` verifies the full
 baseline repertoire and `emoji-coverage.txt` drives Slint shaping coverage
-without host fonts. Desktop's local FemtoVG painter reuses skrifa 0.44 and
+without host fonts. Desktop's pinned FemtoVG fork painter reuses skrifa 0.44 and
 tiny-skia 0.12; Android keeps native Skia/FreeType COLRv1 rendering.
 
 Remaining validation and optional future work:

@@ -25,5 +25,5 @@ Roboto Regular font	Apache-2.0	https://github.com/misobarisic/nova/tree/main/ass
 Noto Color Emoji font	OFL-1.1	https://github.com/googlefonts/noto-emoji/tree/e20cbc2bbec1926686be9f9bee7d1d2cfa1fea0e/2D/fonts
 Android NDK system libraries (not bundled)	Android platform terms	https://developer.android.com/ndk
 Linux libmpv/X11 runtime (system-provided)	Distribution-provided licenses	https://github.com/mpv-player/mpv/tree/78d43740f52db817d98bcf24fb30a76ab6fa13ff
-FemtoVG 0.27 Nova COLRv1 patch	MIT OR Apache-2.0	https://github.com/misobarisic/nova/tree/main/vendor/femtovg
-tiny-skia 0.12 Nova sweep normalization patch	BSD-3-Clause	https://github.com/misobarisic/nova/tree/main/vendor/tiny-skia
+FemtoVG 0.27 COLRv1 fork	MIT OR Apache-2.0	https://github.com/misobarisic/femtovg/tree/dcbc52d06378b4dcb08921e7dce04e59b681aab7
+tiny-skia 0.12 sweep normalization fork	BSD-3-Clause	https://github.com/misobarisic/tiny-skia/tree/7cb203434cc55baa98333b5c480da158d08ce866

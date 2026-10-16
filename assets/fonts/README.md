@@ -63,7 +63,7 @@ registers the embedded font and appends it to Slint's generic fallback chains
 before showing the window. This covers flag pairs and joined emoji without
 relying on the desktop or Android system font inventory; Roboto stays the
 primary text family. Merely importing/registering the emoji family does not
-add it to those fallback chains. Desktop uses the local FemtoVG 0.27 COLRv1
+add it to those fallback chains. Desktop uses the pinned FemtoVG 0.27 fork’s COLRv1
 painter (skrifa 0.44, tiny-skia 0.12); Android keeps Slint 1.18's Skia renderer.
 The configured Android skia-bindings 0.153.3 FreeType build contains native
 COLRv1 traversal and paint support. Physical-device color validation is still

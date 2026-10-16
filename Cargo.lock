@@ -2027,6 +2027,7 @@ dependencies = [
 [[package]]
 name = "femtovg"
 version = "0.27.0"
+source = "git+https://github.com/misobarisic/femtovg?rev=dcbc52d06378b4dcb08921e7dce04e59b681aab7#dcbc52d06378b4dcb08921e7dce04e59b681aab7"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
@@ -5294,7 +5295,6 @@ dependencies = [
  "skrifa",
  "slint",
  "tikv-jemallocator",
- "tiny-skia 0.12.0",
  "tracing",
  "tracing-subscriber",
  "unicode-normalization",
@@ -8691,8 +8691,8 @@ dependencies = [
 [[package]]
 name = "tiny-skia"
 version = "0.12.0"
+source = "git+https://github.com/misobarisic/tiny-skia?rev=7cb203434cc55baa98333b5c480da158d08ce866#7cb203434cc55baa98333b5c480da158d08ce866"
 dependencies = [
- "arrayref",
  "arrayvec",
  "bytemuck",
  "cfg-if",
@@ -8715,10 +8715,8 @@ dependencies = [
 [[package]]
 name = "tiny-skia-path"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edca365c3faccca67d06593c5980fa6c57687de727a03131735bb85f01fdeeb9"
+source = "git+https://github.com/misobarisic/tiny-skia?rev=7cb203434cc55baa98333b5c480da158d08ce866#7cb203434cc55baa98333b5c480da158d08ce866"
 dependencies = [
- "arrayref",
  "bytemuck",
  "strict-num",
 ]
