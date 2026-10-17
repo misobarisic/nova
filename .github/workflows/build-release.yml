@@ -88,7 +88,9 @@ jobs:
         run: nix develop .#default --command cargo fmt --all -- --check
 
       - name: Test Android APK packaging
-        run: python3 -B -m unittest discover -s .github/scripts -p test_package_android.py
+        run: |
+          python3 -B -m unittest discover -s .github/scripts -p test_package_android.py
+          python3 -B android/test_tv_packaging.py
 
       - name: Run Clippy
         run: nix develop .#default --command cargo clippy --workspace --locked -- -D warnings

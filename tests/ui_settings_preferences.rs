@@ -29,3 +29,6 @@ mod playback_preferences_ui;
 
 #[path = "settings_preferences/subtitle_style.rs"]
 mod subtitle_style;
+
+#[path = "settings_preferences/interface_mode.rs"]
+mod interface_mode;

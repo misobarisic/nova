@@ -1,4 +1,7 @@
-//! Touch scroll feedback clears without breaking desktop hover or selection.
+//! Touch feedback and TV controls, with each case owning a fresh Slint backend.
+
+#[path = "support/isolation.rs"]
+mod isolation;
 use i_slint_core::{input::TouchPhase, platform::InternalEvent};
 use slint::{ComponentHandle, LogicalPosition, platform::WindowEvent};
 
@@ -40,6 +43,13 @@ fn touch(app: &HoverProbe, y: f32, phase: TouchPhase) {
 
 #[test]
 fn touch_scroll_release_and_cancel_do_not_strand_row_highlights() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "touch_scroll_release_and_cancel_do_not_strand_row_highlights"
+    )) {
+        return;
+    }
     i_slint_backend_testing::init_integration_test_with_mock_time();
     let app = HoverProbe::new().unwrap();
     app.global::<Anim>().set_enabled(false);
@@ -100,4 +110,167 @@ fn touch_scroll_release_and_cancel_do_not_strand_row_highlights() {
     assert!(root.global::<nova::ControlInput>().get_touch_feedback());
     root.set_touch_menus(false);
     assert!(!root.global::<nova::ControlInput>().get_touch_feedback());
+}
+
+mod tv_controls {
+    use slint::ComponentHandle;
+
+    slint::slint! {
+        import { Dropdown } from "../crates/ui/dropdown.slint";
+        import { MenuSheet } from "../crates/ui/menusheet.slint";
+        export { InterfaceStyle, Anim } from "@NovaUiShared";
+        export component TvControlsProbe inherits Window {
+            width: 900px; height: 700px;
+            out property <int> selection: -1;
+            out property <int> action: -1;
+            in-out property <bool> sheet_open: false;
+            public function focus_dropdown() { dropdown.focus(); }
+            dropdown := Dropdown {
+                width: 300px;
+                model: ["zero", "one", "two", "three", "four", "five", "six", "seven"];
+                selected(value) => { root.selection = self.current-index; }
+            }
+            MenuSheet {
+                open: root.sheet_open;
+                max_h: 350px;
+                items: [{ label: "Enabled", enabled: true }, { label: "Disabled", enabled: false }];
+                picked(index) => { root.action = index; root.sheet_open = false; }
+                closed => { root.sheet_open = false; }
+            }
+        }
+    }
+
+    fn key(app: &TvControlsProbe, key: slint::platform::Key) {
+        let text: slint::SharedString = key.into();
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+    }
+
+    #[test]
+    fn tv_dropdown_and_sheet_complete_with_directions_ok_and_back() {
+        if !crate::isolation::run(concat!(
+            module_path!(),
+            "::",
+            "tv_dropdown_and_sheet_complete_with_directions_ok_and_back"
+        )) {
+            return;
+        }
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = TvControlsProbe::new().unwrap();
+        app.global::<InterfaceStyle>().set_tv(true);
+        app.global::<Anim>().set_enabled(false);
+        app.show().unwrap();
+        app.invoke_focus_dropdown();
+        key(&app, slint::platform::Key::Return);
+        for _ in 0..7 {
+            key(&app, slint::platform::Key::DownArrow);
+        }
+        key(&app, slint::platform::Key::Return);
+        assert_eq!(
+            app.get_selection(),
+            7,
+            "the last popup row is reachable without Tab"
+        );
+        key(&app, slint::platform::Key::Return);
+        key(&app, slint::platform::Key::Back);
+        assert_eq!(
+            app.get_selection(),
+            7,
+            "Back closes without changing the selection"
+        );
+        app.set_sheet_open(true);
+        key(&app, slint::platform::Key::UpArrow);
+        key(&app, slint::platform::Key::Return);
+        assert!(
+            app.get_sheet_open(),
+            "disabled rows cannot dispatch an action"
+        );
+        key(&app, slint::platform::Key::UpArrow);
+        key(&app, slint::platform::Key::Return);
+        assert_eq!(app.get_action(), 0);
+        assert!(!app.get_sheet_open());
+        app.set_sheet_open(true);
+        key(&app, slint::platform::Key::Back);
+        assert!(!app.get_sheet_open());
+    }
+
+    #[test]
+    fn tv_devices_continue_directional_selection_from_the_mouse_clicked_row() {
+        if !crate::isolation::run(concat!(
+            module_path!(),
+            "::",
+            "tv_devices_continue_directional_selection_from_the_mouse_clicked_row"
+        )) {
+            return;
+        }
+        i_slint_backend_testing::init_integration_test_with_mock_time();
+        let app = nova::AppWindow::new().unwrap();
+        app.set_show_home(false);
+        app.set_remote_devices_open(true);
+        app.window().set_size(slint::PhysicalSize::new(900, 700));
+        app.global::<nova::InterfaceStyle>().set_tv(true);
+        app.global::<nova::Anim>().set_enabled(false);
+        let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let observed = opened.clone();
+        app.on_remote_device_open(move |id| observed.borrow_mut().push(id.to_string()));
+        app.set_remote_devices(
+            std::rc::Rc::new(slint::VecModel::from(vec![
+                nova::RemoteDeviceRow {
+                    id: "first".into(),
+                    name: "First device".into(),
+                    ready: true,
+                    has_session: true,
+                    ..Default::default()
+                },
+                nova::RemoteDeviceRow {
+                    id: "second".into(),
+                    name: "Second device".into(),
+                    ready: true,
+                    has_session: true,
+                    ..Default::default()
+                },
+            ]))
+            .into(),
+        );
+        app.show().unwrap();
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(100));
+        let first =
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app, "Controls")
+                .next()
+                .unwrap();
+        let p = first.absolute_position();
+        let size = first.size();
+        let position = slint::LogicalPosition::new(p.x + size.width / 2.0, p.y + size.height / 2.0);
+        for event in [
+            slint::platform::WindowEvent::PointerPressed {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            },
+            slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            },
+        ] {
+            app.window().dispatch_event(event);
+        }
+        assert_eq!(&*opened.borrow(), &["first"]);
+        for key in [
+            slint::platform::Key::DownArrow,
+            slint::platform::Key::Return,
+        ] {
+            let text: slint::SharedString = key.into();
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+            app.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+        }
+        assert_eq!(
+            &*opened.borrow(),
+            &["first", "second"],
+            "Down continues from the mouse-selected device"
+        );
+    }
 }

@@ -35,3 +35,6 @@ mod remote_controls;
 
 #[path = "player/settings_scroll.rs"]
 mod settings_scroll;
+
+#[path = "player/tv_controls.rs"]
+mod tv_controls;

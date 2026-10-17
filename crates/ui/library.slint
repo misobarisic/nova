@@ -1,4 +1,4 @@
-import { MediaCard, CategoryRow, NavMetrics, NavState, Anim, Theme } from "@NovaUiShared";
+import { InterfaceStyle, MediaCard, CategoryRow, NavMetrics, NavState, Anim, Theme } from "@NovaUiShared";
 import { ScrollView } from "scrollview.slint";
 
 import { KbMark } from "kbnav.slint";
@@ -16,7 +16,7 @@ export { LibraryFilterChip }
 
 export component LibraryPage {
     // Called after publication only while AppWindow retains baseline focus.
-    public function focus_shell() { search_focus_t.stop(); nav_scope.focus(); }
+    public function focus_shell() { search_focus_t.stop(); if (!InterfaceStyle.tv && root.kb_zone == 3) { root.kb_zone = 2; } nav_scope.focus(); }
 
     // Custom components placed in a Window are sized by their preferred size;
     // make this page fill the window (its parent).
@@ -55,11 +55,11 @@ export component LibraryPage {
     in property <int> system_back_request: 0;
     property <int> last_system_back_request: -1;
 
-    property <length> item-gap: Theme.card_spacing;
+    property <length> item-gap: InterfaceStyle.tv ? Math.max(24px, Theme.card_spacing) : Theme.card_spacing;
     // Fluid poster grid: phones keep two columns by default; wide screens
     // add columns. List mode shares the same model, actions and scroll math.
-    property <length> min-card: 160px;
-    property <length> max-card: 230px;
+    property <length> min-card: InterfaceStyle.tv ? 240px : 160px;
+    property <length> max-card: InterfaceStyle.tv ? 300px : 230px;
     // Floor from Settings → Display (phones fit N across at 160px cards).
     in property <int> min_cols: 2;
     // Left inset reserved by the wide-layout navigation rail (0 on narrow).
@@ -73,7 +73,7 @@ export component LibraryPage {
     property <length> grid-top: library_header.height + 8px;
     property <length> header_shift: Math.max(-library_hero.height - 14px, Math.min(0px, root.scroll_y));
     property <length> header_cover: library_header.height + root.header_shift;
-    property <int> cols: root.list_view ? 1 : Math.max(root.min_cols, Math.floor((root.grid-width + root.item-gap) / (root.min-card + root.item-gap)));
+    property <int> cols: root.list_view ? 1 : Math.max(InterfaceStyle.tv ? 1 : root.min_cols, Math.floor((root.grid-width + root.item-gap) / (root.min-card + root.item-gap)));
     property <length> item-width: Math.max(1px, Math.min(root.list_view ? root.grid-width : root.max-card, (root.grid-width - (root.cols - 1) * root.item-gap) / root.cols));
 
     callback discover_picked();
@@ -119,6 +119,7 @@ export component LibraryPage {
 
     function close_menu() {
         root.menu_open = false;
+        if (InterfaceStyle.tv) { nav_scope.focus(); }
     }
     function system_back() {
         if (root.menu_open) {
@@ -171,6 +172,24 @@ export component LibraryPage {
     in-out property <int> kb_idx: 0;
     // Keyboard modality (bound to AppWindow, see DiscoverPage).
     in-out property <bool> kb_active;
+    function tv_context() -> bool {
+        if (root.kb_zone == 2 && root.kb_idx >= 0 && root.kb_idx < root.library.length) {
+            root.open_lib_menu(root.kb_idx, root.library[root.kb_idx].watched);
+            return true;
+        }
+        return false;
+    }
+
+    // Remotes send repeated Return presses while OK is held. Delay the primary
+    // action until release so opening a context menu never also starts playback.
+    private property <bool> tv_ok_pending: false;
+    private property <bool> tv_ok_held: false;
+    tv_ok_hold := Timer {
+        interval: 650ms;
+        running: false;
+        triggered => { self.stop(); root.tv_ok_held = root.tv_context(); }
+    }
+
     // Exact scroll offset (bound to AppWindow): the grid viewport syncs
     // here continuously and restores absolutely on return.
     in-out property <length> scroll_y: 0px;
@@ -199,12 +218,20 @@ export component LibraryPage {
         }
     }
 
+    private property <int> tv_control: 0; // sort, grid, list, search
+    function tv_toggle_search() {
+        root.search_open = !root.search_open;
+        if (root.search_open) { search_focus_t.start(); }
+        else { root.query = ""; root.view_changed(); nav_scope.focus(); }
+    }
+
     function kb_up() {
+        if (InterfaceStyle.tv && root.kb_zone == 3) { root.kb_zone = root.kb_filter_on() ? 1 : 0; return; }
         if (root.kb_zone == 2) {
             if (root.kb_idx >= root.cols) {
                 root.kb_idx -= root.cols;
             } else {
-                root.kb_zone = root.kb_filter_on() ? 1 : 0;
+                root.kb_zone = InterfaceStyle.tv ? 3 : (root.kb_filter_on() ? 1 : 0);
             }
         } else if (root.kb_zone == 1) {
             root.kb_zone = 0;
@@ -212,6 +239,12 @@ export component LibraryPage {
     }
 
     function kb_down() {
+        if (InterfaceStyle.tv && root.kb_zone == 0 && !root.kb_filter_on()) { root.kb_zone = 3; return; }
+        if (InterfaceStyle.tv && root.kb_zone == 1) { root.kb_zone = 3; return; }
+        if (InterfaceStyle.tv && root.kb_zone == 3) {
+            if (root.library.length > 0) { root.kb_zone = 2; root.kb_clamp_idx(); }
+            return;
+        }
         if (root.kb_zone == 0) {
             if (root.kb_filter_on()) {
                 root.kb_zone = 1;
@@ -232,6 +265,7 @@ export component LibraryPage {
     }
 
     function kb_left() {
+        if (InterfaceStyle.tv && root.kb_zone == 3) { root.tv_control = Math.max(0, root.tv_control - 1); return; }
         if (root.kb_zone == 0) {
             root.kb_nav = NavState.step(root.kb_nav, -1, root.narrow);
         } else if (root.kb_zone == 1) {
@@ -244,6 +278,7 @@ export component LibraryPage {
     }
 
     function kb_right() {
+        if (InterfaceStyle.tv && root.kb_zone == 3) { root.tv_control = Math.min(3, root.tv_control + 1); return; }
         if (root.kb_zone == 0) {
             root.kb_nav = NavState.step(root.kb_nav, 1, root.narrow);
         } else if (root.kb_zone == 1) {
@@ -256,6 +291,12 @@ export component LibraryPage {
     }
 
     function kb_enter() {
+        if (InterfaceStyle.tv && root.kb_zone == 3) {
+            if (root.tv_control == 0) { root.sort_index = root.sort_index == 2 ? 0 : root.sort_index + 1; root.view_changed(); }
+            else if (root.tv_control == 3) { root.tv_toggle_search(); }
+            else { root.list_view = root.tv_control == 2; }
+            return;
+        }
         if (root.kb_zone == 0) {
             if (root.kb_nav == 0) {
                 root.home_picked();
@@ -275,7 +316,7 @@ export component LibraryPage {
         }
     }
 
-    property <length> card-height: root.list_view ? 140px : root.item-width * 3 / 2 + 76px;
+    property <length> card-height: root.list_view ? (InterfaceStyle.tv ? 180px : 140px) : root.item-width * 3 / 2 + (InterfaceStyle.tv ? 108px : 76px);
     property <length> row_stride: root.card-height + root.item-gap;
     property <bool> restoring_viewport: true;
     property <bool> keyboard_scroll_pending: false;
@@ -378,8 +419,24 @@ export component LibraryPage {
                 self.focus();
                 root.last_system_back_request = root.system_back_request;
             }
+            key-released(e) => {
+                if (InterfaceStyle.tv && e.text == Key.Return && root.tv_ok_pending) {
+                    tv_ok_hold.stop();
+                    root.tv_ok_pending = false;
+                    if (!root.tv_ok_held) { root.kb_enter(); }
+                    accept
+                } else { reject }
+            }
             key-pressed(e) => {
-                if (root.menu_open) {
+                if (InterfaceStyle.tv && e.text == Key.Return) {
+                    root.kb_active = true;
+                    if (!e.repeat) { root.tv_ok_pending = true; root.tv_ok_held = false; tv_ok_hold.stop(); tv_ok_hold.start(); }
+                    accept
+                } else if (InterfaceStyle.tv && (e.text == Key.Menu || (e.text == Key.F10 && e.modifiers.shift))) {
+                    root.kb_active = true;
+                    if (!e.repeat) { root.tv_context(); }
+                    accept
+                } else if (root.menu_open) {
                     // An open sheet eats Backspace (dismiss only).
                     root.close_menu();
                     accept
@@ -614,8 +671,8 @@ export component LibraryPage {
                                 height: 100%;
                                 background: Theme.current.card;
                                 border-radius: Theme.card_corner_radius;
-                                border-width: root.kb_active && root.kb_zone == 2 && root.kb_idx == i ? 2px : 1px;
-                                border-color: root.kb_active && root.kb_zone == 2 && root.kb_idx == i ? Theme.current.accent : Theme.current.border_card;
+                                border-width: root.kb_active && root.kb_zone == 2 && root.kb_idx == i ? (InterfaceStyle.tv ? 3px : 2px) : 1px;
+                                border-color: root.kb_active && root.kb_zone == 2 && root.kb_idx == i ? (InterfaceStyle.tv ? Theme.current.focus_ring : Theme.current.accent) : Theme.current.border_card;
                                 clip: true;
                                 y: touch_lib.has-hover && !touch_lib.pressed && !root.touch_menus ? -6px : 0px;
                                 animate y { duration: Anim.hover_lift; easing: ease-in-out; }
@@ -668,7 +725,7 @@ export component LibraryPage {
                                         width: Math.max(1px, parent.width - 18px);
                                         text: card.status;
                                         color: Theme.current.text_bright;
-                                        font-size: 11px;
+                                        font-size: InterfaceStyle.tv ? 18px : 11px;
                                         font-weight: 600;
                                         vertical-alignment: center;
                                         overflow: elide;
@@ -732,7 +789,7 @@ export component LibraryPage {
                                         max-width: parent.width * 0.65;
                                         overflow: elide;
                                         color: Theme.current.text_primary;
-                                        font-size: 11px;
+                                        font-size: InterfaceStyle.tv ? 18px : 11px;
                                         vertical-alignment: center;
                                     }
                                 }
@@ -741,13 +798,13 @@ export component LibraryPage {
                                     x: root.list_view ? 104px : 9px;
                                     y: root.list_view ? 42px : root.item-width * 3 / 2 + 6px;
                                     width: parent.width - self.x - 9px;
-                                    height: root.list_view ? 62px : 60px;
+                                    height: InterfaceStyle.tv ? 96px : (root.list_view ? 62px : 60px);
                                     spacing: 4px;
                                     alignment: start;
                                     library_title := Text {
                                         text: card.title;
                                         color: Theme.current.text_home_title;
-                                        font-size: root.list_view ? 15px : 13px;
+                                        font-size: InterfaceStyle.tv ? 22px : (root.list_view ? 15px : 13px);
                                         font-weight: 600;
                                         overflow: elide;
                                         min-width: 0px;
@@ -755,14 +812,14 @@ export component LibraryPage {
                                     library_metadata := Text {
                                         text: card.year + (card.year != "" && card.media_type != "" ? " · " : "") + card.media_type;
                                         color: Theme.current.text_home_metadata;
-                                        font-size: 11px;
+                                        font-size: InterfaceStyle.tv ? 18px : 11px;
                                         overflow: elide;
                                         min-width: 0px;
                                     }
                                     if card.badge != "": library_resume := Text {
                                         text: card.badge;
                                         color: Theme.current.text_download;
-                                        font-size: 11px;
+                                        font-size: InterfaceStyle.tv ? 18px : 11px;
                                         font-weight: 600;
                                         overflow: elide;
                                         min-width: 0px;
@@ -791,7 +848,7 @@ export component LibraryPage {
                             spacing: 14px;
                             library_heading := HorizontalLayout {
                                 vertical-stretch: 0;
-                                min-height: 44px;
+                                min-height: InterfaceStyle.tv ? 56px : 44px;
                                 spacing: 8px;
                                 Text {
                                     text: @tr("My Library");
@@ -806,7 +863,7 @@ export component LibraryPage {
                                 }
                                 Text {
                                     text: @tr("({n} item)" | "({n} items)" % root.library.length);
-                                    font-size: 13px;
+                                    font-size: InterfaceStyle.tv ? 18px : 13px;
                                     color: Theme.current.text_hint;
                                     vertical-alignment: center;
                                 }
@@ -816,7 +873,7 @@ export component LibraryPage {
                             Text {
                                 text: @tr("Your saved titles, continue watching, and downloads.");
                                 color: Theme.current.text_home_metadata;
-                                font-size: 14px;
+                                font-size: InterfaceStyle.tv ? 18px : 14px;
                                 wrap: word-wrap;
                                 min-width: 0px;
                                 height: self.preferred-height;
@@ -836,7 +893,7 @@ export component LibraryPage {
                                 animate opacity { duration: Anim.transition_fade; easing: ease-out; }
                                 library_search_line := SearchField {
                                     width: 100%;
-                                    height: 44px;
+                                    height: InterfaceStyle.tv ? 56px : 44px;
                                     enabled: root.search_open;
                                     text <=> root.query;
                                     placeholder-text: @tr("Search library");
@@ -888,10 +945,12 @@ export component LibraryPage {
                                 }
 
                                 library_sort_controls := HorizontalLayout {
-                                    height: 44px;
+                                    height: InterfaceStyle.tv ? 56px : 44px;
                                     vertical-stretch: 0;
                                     spacing: 10px;
                                     library_sort := Dropdown {
+                                        border-width: InterfaceStyle.tv && root.kb_active && root.kb_zone == 3 && root.tv_control == 0 ? 3px : 1px;
+                                        border-color: InterfaceStyle.tv && root.kb_active && root.kb_zone == 3 && root.tv_control == 0 ? Theme.current.focus_ring : Theme.current.control_border;
                                         model: [@tr("Recently Added"), @tr("Title"), @tr("Release year")];
                                         current-index <=> root.sort_index;
                                         roomy: true;
@@ -904,7 +963,7 @@ export component LibraryPage {
                                     Rectangle { horizontal-stretch: 1; min-width: 0px; }
                                     Rectangle {
                                         width: 88px;
-                                        height: 44px;
+                                        height: InterfaceStyle.tv ? 56px : 44px;
                                         border-radius: 22px;
                                         border-width: 1px;
                                         border-color: Theme.current.border_medium;
@@ -913,8 +972,11 @@ export component LibraryPage {
                                         for mode in [false, true]: library_view_button := Rectangle {
                                             x: mode ? 44px : 0px;
                                             width: 44px;
-                                            height: 44px;
+                                            height: InterfaceStyle.tv ? 56px : 44px;
                                             background: root.list_view == mode ? Theme.current.selection_wash : transparent;
+                                            border-width: InterfaceStyle.tv && root.kb_active && root.kb_zone == 3 && root.tv_control == (mode ? 2 : 1) ? 3px : 0px;
+                                            border-color: Theme.current.focus_ring;
+                                            border-radius: InterfaceStyle.tv ? 22px : 0px;
                                             accessible-role: button;
                                             accessible-label: mode ? @tr("List view") : @tr("Grid view");
                                             if !mode: Path {
@@ -937,10 +999,10 @@ export component LibraryPage {
                                     }
                                     library_search_button := Rectangle {
                                         width: 44px;
-                                        height: 44px;
+                                        height: InterfaceStyle.tv ? 56px : 44px;
                                         border-radius: 22px;
                                         border-width: 1px;
-                                        border-color: Theme.current.border_strong;
+                                        border-color: InterfaceStyle.tv && root.kb_active && root.kb_zone == 3 && root.tv_control == 3 ? Theme.current.focus_ring : Theme.current.border_strong;
                                         background: search_button_touch.has-hover ? Theme.current.control_hover : Theme.current.hero_control;
                                         accessible-role: button;
                                         accessible-label: @tr("Search library");
@@ -955,15 +1017,7 @@ export component LibraryPage {
                                         search_button_touch := TouchArea {
                                             mouse-cursor: pointer;
                                             clicked => {
-                                                root.search_open = !root.search_open;
-                                                // Restoring search on Detail return keeps the keyboard closed.
-                                                // Only an explicit open requests editor focus.
-                                                if (root.search_open) { search_focus_t.start(); }
-                                                else {
-                                                    root.query = "";
-                                                    root.view_changed();
-                                                    nav_scope.focus();
-                                                }
+                                                root.tv_toggle_search();
                                             }
                                         }
                                     }
@@ -997,7 +1051,7 @@ export component LibraryPage {
 
                 Text {
                     text: root.query != "" ? @tr("No matching titles in your library.") : root.library_empty_hint;
-                    font-size: 14px;
+                    font-size: InterfaceStyle.tv ? 18px : 14px;
                     color: #8a8a9a;
                     horizontal-alignment: center;
                     wrap: word-wrap;

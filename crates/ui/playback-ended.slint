@@ -1,4 +1,4 @@
-import { Theme, Anim } from "@NovaUiShared";
+import { InterfaceStyle, Theme, Anim } from "@NovaUiShared";
 import { TrackingButton } from "tracking-controls.slint";
 
 // Retained above the player so closing can finish its fade without exposing
@@ -87,28 +87,28 @@ export component PlaybackEnded inherits Rectangle {
             x: root.safe-left + (root.width - root.safe-left - root.safe-right - self.width) / 2;
             y: root.safe-top + Math.max(16px, (root.height - root.safe-top - root.safe-bottom - self.preferred-height) / 2)
                 + (root.revealed ? 0px : 16px);
-            width: Math.max(0px, Math.min(520px, root.width - root.safe-left - root.safe-right - 40px));
+            width: Math.max(0px, Math.min(InterfaceStyle.tv ? 680px : 520px, root.width - root.safe-left - root.safe-right - 40px));
             height: self.preferred-height;
             spacing: root.short ? 8px : 16px;
             animate y { duration: Anim.transition_slide; easing: ease-out; }
             Text {
-                text: @tr("Playback finished"); font-size: 13px; font-weight: 600;
+                text: @tr("Playback finished"); font-size: InterfaceStyle.tv ? 20px : 13px; font-weight: 600;
                 color: Theme.current.accent_soft; horizontal-alignment: center;
             }
             Text {
                 text: root.show_title;
-                font-size: root.short ? 24px : 32px; font-weight: 800;
+                font-size: InterfaceStyle.tv ? 38px : (root.short ? 24px : 32px); font-weight: 800;
                 color: Theme.current.text_bright; horizontal-alignment: center;
                 wrap: word-wrap; max-lines: root.short ? 1 : 2; overflow: elide;
             }
             if root.episode_title != "": Text {
-                text: root.episode_title; font-size: 14px;
+                text: root.episode_title; font-size: InterfaceStyle.tv ? 22px : 14px;
                 color: Theme.current.text_player_secondary; horizontal-alignment: center;
                 wrap: no-wrap; overflow: elide;
             }
             if root.has_next: Text {
                 text: @tr("Next episode") + (root.next_title == "" ? "" : " · " + root.next_title);
-                font-size: 13px; color: Theme.current.text_player_secondary;
+                font-size: InterfaceStyle.tv ? 20px : 13px; color: Theme.current.text_player_secondary;
                 horizontal-alignment: center; wrap: no-wrap; overflow: elide;
             }
             if root.has_next: TrackingButton {

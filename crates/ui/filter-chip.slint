@@ -1,4 +1,4 @@
-import { Theme, Anim } from "@NovaUiShared";
+import { Theme, Anim, InterfaceStyle } from "@NovaUiShared";
 
 export component LibraryFilterChip inherits Rectangle {
     in property <string> label;
@@ -20,7 +20,7 @@ export component LibraryFilterChip inherits Rectangle {
     changed selected => { if (root.selected) { root.reveal(root.x, root.width); } }
     changed x => { if (root.selected) { root.reveal(root.x, root.width); } }
     changed width => { if (root.selected) { root.reveal(root.x, root.width); } }
-    height: 40px;
+    height: InterfaceStyle.tv ? 56px : 40px;
     // Selection changes weight, but must not shift adjacent pills or their rail.
     width: chip_measure.preferred-width + 28px;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
@@ -34,13 +34,13 @@ export component LibraryFilterChip inherits Rectangle {
     accessible-label: root.label;
     chip_measure := Text {
         visible: false;
-        text: root.label; font-size: 13px; font-weight: 600;
+        text: root.label; font-size: InterfaceStyle.tv ? 20px : 13px; font-weight: 600;
     }
     chip_text := Text {
         text: root.label;
         color: root.selected ? Theme.current.on_accent : Theme.current.text_secondary;
         animate color { duration: Anim.hover_fast; }
-        font-size: 13px;
+        font-size: InterfaceStyle.tv ? 20px : 13px;
         font-weight: root.selected ? 600 : 400;
         horizontal-alignment: center;
         vertical-alignment: center;

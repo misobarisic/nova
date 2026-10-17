@@ -352,3 +352,21 @@ msgstr "Take screenshot"
 #: ../ui-settings-addons/addons-module.slint
 msgid "Install addon ZIP…"
 msgstr "Install addon ZIP…"
+
+msgid "Interface mode"
+msgstr "Interface mode"
+
+msgid "Standard"
+msgstr "Standard"
+
+msgid "TV"
+msgstr "TV"
+
+msgid "Automatic uses the TV interface on Android TV. This choice applies only to this device."
+msgstr "Automatic uses the TV interface on Android TV. This choice applies only to this device."
+
+msgid "Automatic"
+msgstr "Automatic"
+
+msgid "Details"
+msgstr "Details"

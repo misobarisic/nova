@@ -200,3 +200,131 @@ fn library_cards_fit_and_dispatch_progress_search_views_and_menus() {
     );
     assert_eq!(*actions.borrow(), [(1, 1)]);
 }
+
+#[test]
+fn tv_library_keeps_standard_columns_and_remote_context_actions() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "tv_library_keeps_standard_columns_and_remote_context_actions"
+    )) {
+        return;
+    }
+    use slint::platform::{Key, WindowEvent};
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.set_animations(false);
+    app.set_show_home(false);
+    app.set_show_library(true);
+    app.set_library_min_cols(8);
+    app.set_library(
+        Rc::new(VecModel::from(
+            (0..20)
+                .map(|i| nova::MediaCard {
+                    id: format!("tv-{i}").into(),
+                    title: format!("TV title {i}").into(),
+                    media_type: "TV".into(),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    app.window().set_size(slint::PhysicalSize::new(1280, 720));
+    app.window().show().unwrap();
+    settle();
+    let standard_width = elements(&app, "library_card")[0].size().width;
+    app.global::<nova::InterfaceStyle>().set_tv(true);
+    settle();
+    assert_eq!(app.get_library_min_cols(), 8);
+    assert!(elements(&app, "library_card")[0].size().width > standard_width * 1.5);
+
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let record = opened.clone();
+    app.on_library_item_picked(move |i| record.borrow_mut().push(i));
+    app.set_library_kb_zone(2);
+    app.set_library_kb_idx(0);
+    app.set_kb_active(true);
+    app.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Return.into(),
+    });
+    assert!(opened.borrow().is_empty(), "OK must wait for release");
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(700));
+    settle();
+    app.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Return.into(),
+    });
+    assert!(
+        opened.borrow().is_empty(),
+        "held OK must only open the context menu"
+    );
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, "Mark series as watched")
+            .next()
+            .is_some()
+    );
+    app.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Escape.into(),
+    });
+    app.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Escape.into(),
+    });
+    settle();
+
+    // A normal OK remains one primary action. Menu can reopen actions without
+    // a mouse or a touch-enabled platform flag.
+    app.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Return.into(),
+    });
+    app.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Return.into(),
+    });
+    settle();
+    assert_eq!(*opened.borrow(), [0]);
+    // Desktop TV still accepts the mouse, and a direction resumes remote
+    // navigation from the title selected with the pointer.
+    click(&app, elements(&app, "library_title").remove(1));
+    assert_eq!(*opened.borrow(), [0, 1]);
+    assert!(!app.get_kb_active());
+    app.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::LeftArrow.into(),
+    });
+    app.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::LeftArrow.into(),
+    });
+    settle();
+    assert!(app.get_kb_active());
+    assert_eq!(app.get_library_kb_idx(), 0);
+    app.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Menu.into(),
+    });
+    app.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Menu.into(),
+    });
+    settle();
+    assert!(
+        ElementHandle::find_by_accessible_label(&app, "Mark series as watched")
+            .next()
+            .is_some()
+    );
+    app.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Escape.into(),
+    });
+    app.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Escape.into(),
+    });
+    settle();
+
+    // Remote navigation reveals a later row instead of leaving focus offscreen.
+    app.set_library_kb_idx(16);
+    settle();
+    assert!(app.get_library_scroll_y() < 0.0);
+    assert!(
+        !app.get_library_search_open(),
+        "entering TV mode must not open an editor"
+    );
+    app.global::<nova::InterfaceStyle>().set_tv(false);
+    settle();
+    assert_eq!(app.get_library_min_cols(), 8);
+    assert!((elements(&app, "library_card")[0].size().width - standard_width).abs() < 1.0);
+}

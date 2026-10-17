@@ -1,4 +1,4 @@
-import { Theme } from "@NovaUiShared";
+import { InterfaceStyle, Theme } from "@NovaUiShared";
 import { SettingsBackButton } from "settings-controls.slint";
 
 // Root destinations use the same unpadded heading lane as Discover. The host
@@ -22,7 +22,7 @@ export component PageHeader inherits Rectangle {
             x: root.show-back ? 56px : 0px; y: 0px;
             width: parent.width - self.x; height: parent.height;
             text: root.title;
-            font-size: root.narrow ? 28px : 32px; font-weight: 700;
+            font-size: InterfaceStyle.tv ? 42px : (root.narrow ? 28px : 32px); font-weight: 700;
             color: Theme.current.text_bright;
             vertical-alignment: center; wrap: word-wrap;
         }
@@ -31,7 +31,7 @@ export component PageHeader inherits Rectangle {
         x: 0px; y: heading.height + 8px; width: 100%;
         height: root.subtitle != "" ? self.preferred-height : 0px;
         visible: root.subtitle != "";
-        text: root.subtitle; font-size: 14px;
+        text: root.subtitle; font-size: InterfaceStyle.tv ? 18px : 14px;
         color: Theme.current.text_secondary; wrap: word-wrap;
     }
 }

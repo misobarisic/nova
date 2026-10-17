@@ -14,3 +14,6 @@ mod page;
 
 #[path = "downloads/page_artwork_visibility.rs"]
 mod page_artwork_visibility;
+
+#[path = "downloads/tv_navigation.rs"]
+mod tv_navigation;

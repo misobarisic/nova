@@ -1,6 +1,6 @@
 import { SearchField } from "searchfield.slint";
 import { Dropdown } from "dropdown.slint";
-import { Theme } from "@NovaUiShared";
+import { Theme, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
 import { AddonIconButton } from "settings-controls.slint";
 import { IcChevronUp, IcChevronDown, IcClose } from "icons.slint";
 
@@ -8,6 +8,10 @@ import { IcChevronUp, IcChevronDown, IcClose } from "icons.slint";
 // The selected label remains visible when the backend's result list is
 // filtered and therefore no longer contains the current code.
 export component PlaybackLanguagePicker inherits Rectangle {
+    public function focus_picker() { root.tv-row = -1; language_dropdown.focus(); }
+    property <int> tv-row: -1;
+    property <int> tv-column: 2;
+    callback reveal(length, length);
     // Caller-controlled size avoids feeding row intrinsic width back into itself.
     in property <length> dropdown-width: 180px;
     in property <bool> subtitle: false;
@@ -30,16 +34,39 @@ export component PlaybackLanguagePicker inherits Rectangle {
     property <string> query: "";
 
     preferred-width: 360px;
-    preferred-height: 44px + (root.multiple ? root.selected-codes.length * 52px : 0px);
+    preferred-height: (InterfaceStyle.tv ? 56px : 44px) + (root.multiple ? root.selected-codes.length * (InterfaceStyle.tv ? 64px : 52px) : 0px);
     min-width: 1px;
     height: self.preferred-height;
 
+    picker_scope := FocusScope {
+        width: 100%; height: 100%;
+        key-pressed(e) => {
+            if !InterfaceStyle.tv { reject }
+            else if e.text == Key.DownArrow && root.tv-row + 1 < root.selected-codes.length {
+                root.tv-row += 1; self.focus(); accept
+            } else if e.text == Key.UpArrow && root.tv-row >= 0 {
+                root.tv-row -= 1;
+                if root.tv-row < 0 { language_dropdown.focus(); } else { self.focus(); }
+                accept
+            } else if root.tv-row >= 0 && (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                root.tv-column = Math.clamp(root.tv-column + (e.text == Key.LeftArrow ? -1 : 1), 0, 2); accept
+            } else if root.tv-row >= 0 && root.tv-row < root.selected-codes.length && (e.text == Key.Return || e.text == " ") {
+                if !e.repeat {
+                    let index = root.tv-row;
+                    if root.tv-column == 2 { root.edited(root.selected-codes[index], 1, root.subtitle); root.tv-row = Math.min(root.tv-row, root.selected-codes.length - 1); }
+                    else if root.tv-column == 0 && index > 0 { root.edited(root.selected-codes[index], 2, root.subtitle); root.tv-row -= 1; }
+                    else if root.tv-column == 1 && index + 1 < root.selected-codes.length { root.edited(root.selected-codes[index], 3, root.subtitle); root.tv-row += 1; }
+                    if root.tv-row < 0 { language_dropdown.focus(); }
+                }
+                accept
+            } else { reject }
+        }
     VerticalLayout {
         width: 100%;
         height: 100%;
         spacing: 8px;
         HorizontalLayout {
-            height: 44px;
+            height: InterfaceStyle.tv ? 56px : 44px;
             spacing: 8px;
 
             search_field := SearchField {
@@ -59,7 +86,7 @@ export component PlaybackLanguagePicker inherits Rectangle {
                 accepted(text) => { root.accepted(); }
             }
 
-            Dropdown {
+            language_dropdown := Dropdown {
                 width: root.dropdown-width;
                 roomy: true;
                 model: root.codes;
@@ -80,33 +107,41 @@ export component PlaybackLanguagePicker inherits Rectangle {
         if root.multiple: VerticalLayout {
             spacing: 8px;
             for code[index] in root.selected-codes: HorizontalLayout {
-                height: 44px; spacing: 4px;
+                height: InterfaceStyle.tv ? 56px : 44px; spacing: 4px;
                 Text {
                     text: (index + 1) + ". " + root.selected-names[index];
                     color: Theme.current.text_primary;
-                    font-size: 14px;
+                    font-size: InterfaceStyle.tv ? 20px : 14px;
                     min-width: 0px; horizontal-stretch: 1;
                     overflow: elide; vertical-alignment: center;
                 }
                 AddonIconButton {
+                    focused: InterfaceStyle.tv && root.tv-row == index && root.tv-column == 0;
+                    changed focused => { if self.focused { SettingsStyle.reveal_control(self.absolute-position.y, self.height, false); root.reveal(self.absolute-position.y, self.height); } }
                     name: @tr("Move up") + ": " + root.selected-names[index];
                     enabled: index > 0;
                     IcChevronUp { x: 12px; y: 12px; width: 20px; height: 20px; fill: Theme.current.text_primary; }
                     clicked => { root.edited(code, 2, root.subtitle); }
                 }
                 AddonIconButton {
+                    focused: InterfaceStyle.tv && root.tv-row == index && root.tv-column == 1;
+                    changed focused => { if self.focused { SettingsStyle.reveal_control(self.absolute-position.y, self.height, false); root.reveal(self.absolute-position.y, self.height); } }
                     name: @tr("Move down") + ": " + root.selected-names[index];
                     enabled: index + 1 < root.selected-codes.length;
                     IcChevronDown { x: 12px; y: 12px; width: 20px; height: 20px; fill: Theme.current.text_primary; }
                     clicked => { root.edited(code, 3, root.subtitle); }
                 }
                 AddonIconButton {
+                    focused: InterfaceStyle.tv && root.tv-row == index && root.tv-column == 2;
+                    changed focused => { if self.focused { SettingsStyle.reveal_control(self.absolute-position.y, self.height, false); root.reveal(self.absolute-position.y, self.height); } }
                     name: @tr("Remove") + ": " + root.selected-names[index];
                     IcClose { x: 12px; y: 12px; width: 20px; height: 20px; fill: Theme.current.text_primary; }
                     clicked => { root.edited(code, 1, root.subtitle); }
                 }
             }
         }
+    }
+
     }
 
     edit_timer := Timer {

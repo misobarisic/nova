@@ -292,3 +292,46 @@ fn history_catalog_reuses_rail_grid_activation_and_keyboard_without_changing_cat
         );
     }
 }
+
+#[test]
+fn tv_home_featured_actions_are_directionally_reachable() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "tv_home_featured_actions_are_directionally_reachable"
+    )) {
+        return;
+    }
+    use slint::platform::Key;
+    use std::cell::Cell;
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.global::<nova::InterfaceStyle>().set_tv(true);
+    app.set_home_featured_count(2);
+    app.set_home_featured_title("Featured TV title".into());
+    app.set_home_continue(Rc::new(VecModel::from(vec![nova::ContinueRow::default()])).into());
+    let played = Rc::new(Cell::new(0));
+    let record = played.clone();
+    app.on_home_featured_watch_now(move || record.set(record.get() + 1));
+    let detailed = Rc::new(Cell::new(0));
+    let record = detailed.clone();
+    app.on_home_featured_picked(move || record.set(record.get() + 1));
+    app.window().set_size(slint::PhysicalSize::new(1280, 720));
+    app.window().show().unwrap();
+    settle();
+    app.set_home_kb_zone(0);
+    key(&app, Key::DownArrow);
+    assert_eq!(app.get_home_kb_zone(), 6);
+    key(&app, Key::Return);
+    assert_eq!(played.get(), 1);
+    key(&app, Key::RightArrow);
+    key(&app, Key::Return);
+    assert_eq!(detailed.get(), 1);
+    key(&app, Key::DownArrow);
+    assert_eq!(app.get_home_kb_zone(), 1);
+    key(&app, Key::UpArrow);
+    assert_eq!(app.get_home_kb_zone(), 6);
+    key(&app, Key::UpArrow);
+    assert_eq!(app.get_home_kb_zone(), 0);
+}

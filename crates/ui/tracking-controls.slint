@@ -1,4 +1,4 @@
-import { Theme, Anim } from "@NovaUiShared";
+import { Theme, Anim, InterfaceStyle } from "@NovaUiShared";
 import { ControlTouchArea } from "control-input.slint";
 import { IcClose, IcChevronRight, IcSync, IcMyAnimeList, IcAniList, IcEdit, IcOpenInNew, IcHistory, IcDelete, IcInfo, IcTag } from "icons.slint";
 
@@ -15,7 +15,7 @@ export component TrackingButton inherits Rectangle {
     out property <bool> has-focus: focus.has-focus;
     // Wrapped and translated action labels must grow the control rather than
     // disappear behind a fixed-height ellipsis on narrow screens.
-    min-height: Math.max(root.icon >= 6 ? 68px : root.primary && !root.compact ? 52px : 44px, label.preferred-height + 24px);
+    min-height: Math.max(InterfaceStyle.tv ? 56px : 0px, Math.max(root.icon >= 6 ? 68px : root.primary && !root.compact ? 52px : 44px, label.preferred-height + 24px));
     max-height: self.min-height;
     min-width: 0px;
     vertical-stretch: 0;
@@ -47,7 +47,7 @@ export component TrackingButton inherits Rectangle {
             visible: root.icon != 1;
             max-width: root.icon == 1 ? 0px : 100000px;
             text: root.icon == 1 ? "" : root.text; color: root.destructive ? Theme.current.text_destructive : root.primary ? Theme.current.on_accent : Theme.current.text_bright;
-            font-size: root.icon >= 6 ? 13px : root.primary ? 16px : 14px; font-weight: root.primary ? 600 : 500;
+            font-size: InterfaceStyle.tv ? 20px : root.icon >= 6 ? 13px : root.primary ? 16px : 14px; font-weight: root.primary ? 600 : 500;
             vertical-alignment: center; wrap: word-wrap; overflow: elide; min-width: 0px;
         }
         if root.icon == 3: Rectangle { width:18px; horizontal-stretch:0; background:transparent; IcChevronRight { y:(parent.height - self.height)/2; width:18px; height:18px; fill:Theme.current.accent_vivid; } }
@@ -55,7 +55,7 @@ export component TrackingButton inherits Rectangle {
     focus := FocusScope {
         enabled: root.enabled;
         key-pressed(e) => {
-            if e.text == Key.Return || e.text == " " { root.clicked(); accept } else { reject }
+            if e.text == Key.Return || e.text == " " { if !InterfaceStyle.tv || !e.repeat { root.clicked(); } accept } else { reject }
         }
     }
     touch := ControlTouchArea {

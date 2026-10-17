@@ -30,3 +30,10 @@ submission per interrupted session/window cycle.
 The ordering is required by [mpv's render API](https://github.com/mpv-player/mpv/blob/master/include/mpv/render.h):
 all OpenGL render API calls, including freeing a context, require the same GL
 context used at creation to be current.
+
+Android remote transport keys map to private-use strings because Slint 1.18
+has no media Key variants: U+E100 play/pause, E101 play, E102 pause, E103 stop,
+E104 next, E105 previous, E106 rewind, E107 fast-forward. AppWindow consumes
+these before text inputs; the player handles them while mounted. Volume keys
+retain system handling. Gamepad A/B map to Select/Back; other gamepad keys keep
+upstream handling.

@@ -4,11 +4,11 @@ import { PlaybackEnded } from "playback-ended.slint";
 import { PartyPage, PartyPlayerBadge } from "party.slint";
 import { RemoteControlsPage, RemoteDevicesPage, RemoteReplacementDialog } from "remote-controls.slint";
 import { LibraryBindings, MoreBindings, AboutBindings, DownloadsBindings } from "collection-bindings.slint";
-import { CompletionBridge, CompletionDestination, PartyMemberRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
+import { CompletionBridge, CompletionDestination, PartyMemberRow, PartyBridge, RemoteOfferRow, RemoteDeviceRow, RemoteBridge, PluginSettingRow, MediaCard, StreamRow, DownloadRow, EpisodeRow, AddonRow, CategoryRow, HomeCatalogRow, HomeCatalogSection, HomeCatalogCard, LicenseSource, SyncPeer, SyncInvite, SeasonCard, TrackRow, SheetItem, ContinueRow, UpcomingRow, CalCell, TrackingAccountRow, TrackingLinkRow, TrackingCandidateRow, TrackingMappingRow, TrackingSetupRow, SettingSyncInfo, CalendarDay, CalendarRelease, DownloadGroup, DownloadEpisode, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, DetailContent, SettingsContent, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge } from "@NovaUiShared";
 // Types and globals have one shared compiled definition. Page visual trees
 // live in independent factory products, never imported into AppWindow.
 
-export { CompletionBridge, PartyBridge, RemoteBridge, Theme, ThemePalette, SettingsSync, Anim, NavState, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge }
+export { CompletionBridge, PartyBridge, RemoteBridge, Theme, ThemePalette, SettingsSync, Anim, NavState, InterfaceStyle, SettingsStyle, ControlInput, SliderGesture, SettingsBridge, HomeBridge, DiscoverBridge, CalendarBridge, DetailBridge, NavMetrics, SettingsDestinations, PlaybackSpeed, LibraryBridge, MoreBridge, AboutBridge, DownloadsBridge, PlayerOsdBridge, OnboardingBridge }
 // Bundle the same UI family on desktop and Android, including a real bold face.
 import "../../assets/fonts/Roboto-Regular.ttf";
 import "../../assets/fonts/Roboto-Bold.ttf";
@@ -750,7 +750,7 @@ export component AppWindow inherits Window {
     title: "Nova";
     // Narrow (portrait) layout mode: pages + player switch to compact
     // variants below this window width.
-    property <bool> narrow_ui: self.width < 700px;
+    property <bool> narrow_ui: !InterfaceStyle.tv && self.width < 700px;
     // In player mode the video (mpv on desktop, HTML5 <video> on web)
     // renders behind this window, so the window turns transparent while
     // the overlay is up and playback has started.
@@ -1159,6 +1159,8 @@ export component AppWindow inherits Window {
     in-out property <bool> screenshot_show_folder: false;
     in-out property <int> episode_start_index: 1;
     in-out property <bool> resume_prompt_visible: false;
+    private property <int> resume_focus: 1;
+    changed resume_prompt_visible => { if root.resume_prompt_visible { root.resume_focus = 1; } }
     // Monotonic signal used to route Android system Back through the active
     // page even while a text field owns focus. Per-page handlers remember
     // the last request so a newly mounted page cannot consume the same press.
@@ -1189,9 +1191,9 @@ export component AppWindow inherits Window {
     // property name to preserve settings and sync compatibility.
     in-out property <bool> anim_nav_slide: true;
     // --- Settings (display) -------------------------------------------
-    // Language of the interface (Settings → Display): the picker index into
-    // the bundled language list. Local-only, applied to Slint's catalogs by
-    // the backend (`src/app/i18n.rs`).
+    // Device-local presentation preference, persisted separately from synced settings.
+    in-out property <int> interface_mode_index <=> SettingsBridge.interface_mode_index;
+    // Language picker index, applied to Slint's catalogs by src/app/i18n.rs.
     in-out property <int> language_index: 0;
     // Language names shown in the picker, each in its own language
     // (`nova_config::Language::ALL` → `label()`), so they are not translated;
@@ -1377,7 +1379,7 @@ export component AppWindow inherits Window {
     in-out property <length> settings_scroll_y: 0px;
     in-out property <int> settings_selected_id: 13;
     in-out property <bool> settings_detail_open: root.settings_two_pane;
-    out property <bool> settings_two_pane: !root.is_android && root.width - (root.narrow_ui ? 0px : NavMetrics.width-for(root.width)) - root.safe-area-insets.left - root.safe-area-insets.right - 36px >= 900px;
+    out property <bool> settings_two_pane: (!root.is_android || InterfaceStyle.tv) && root.width - (root.narrow_ui ? 0px : NavMetrics.width-for(root.width)) - root.safe-area-insets.left - root.safe-area-insets.right - 36px >= 900px;
     changed settings_two_pane => { if (root.settings_two_pane && root.show_settings) { root.settings_detail_open = true; } }
     in-out property <string> settings_search_query: "";
     in-out property <int> settings_focused_id: 13;
@@ -1904,7 +1906,18 @@ export component AppWindow inherits Window {
         height: 100%;
 
         capture-key-pressed(e) => {
-            if (e.text == Key.Escape && root.completion_prompt_visible) {
+            if InterfaceStyle.tv && root.resume_prompt_visible {
+                if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
+                    if !e.repeat { root.resume_cancel(); }
+                } else if e.text == Key.LeftArrow || e.text == Key.UpArrow { root.resume_focus = 0; }
+                else if e.text == Key.RightArrow || e.text == Key.DownArrow { root.resume_focus = 1; }
+                else if e.text == Key.Return && !e.repeat { root.resume_choice(root.resume_focus == 1); }
+                accept
+            } else
+            if (!root.player_open && (e.text == "\u{e100}" || e.text == "\u{e101}" || e.text == "\u{e102}" || e.text == "\u{e103}" || e.text == "\u{e104}" || e.text == "\u{e105}" || e.text == "\u{e106}" || e.text == "\u{e107}")) {
+                // Transport events must never insert private-use characters in editors.
+                accept
+            } else if (e.text == Key.Escape && root.completion_prompt_visible) {
                 if !e.repeat { CompletionBridge.dismiss(CompletionBridge.token); } accept
             } else if ((e.text == Key.Escape || e.text == Key.Backspace) && root.playback_end_menu_shown) {
                 if !e.repeat { root.playback_end_stay(); } accept
@@ -1926,7 +1939,7 @@ export component AppWindow inherits Window {
                 // Android Back is navigation, not keyboard navigation. Clear
                 // both shared visual-mode sources before the returned page is
                 // built; arrow keys can enable them again on real key input.
-                if (root.touch_menus) {
+                if (root.touch_menus && !InterfaceStyle.tv) {
                     root.kb_active = false;
                     SettingsStyle.keyboard-mode = false;
                 }
@@ -2320,13 +2333,14 @@ export component AppWindow inherits Window {
 
     if root.resume_prompt_visible: Rectangle {
         x: 0; y: 0; width: 100%; height: 100%; background: Theme.current.scrim_resume;
+        FocusScope { width: 100%; height: 100%; enabled: InterfaceStyle.tv; init => { if InterfaceStyle.tv { self.focus(); } } }
         TouchArea {
             width: 100%; height: 100%;
             clicked => { root.resume_cancel(); }
         }
         Rectangle {
-            width: Math.min(360px, parent.width - 40px);
-            height: 176px;
+            width: Math.min(InterfaceStyle.tv ? 560px : 360px, parent.width - 40px);
+            height: InterfaceStyle.tv ? 224px : 176px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             background: Theme.current.player_menu; border-radius: 14px;
@@ -2335,19 +2349,23 @@ export component AppWindow inherits Window {
             TouchArea { width: 100%; height: 100%; }
             VerticalLayout {
                 padding: 20px; spacing: 12px;
-                Text { text: @tr("Resume playback?"); color: Theme.current.text_bright; font-size: 18px; font-weight: 600; }
-                Text { text: @tr("This episode has saved playback history."); color: Theme.current.text_resume_hint; font-size: 14px; wrap: word-wrap; }
+                Text { text: @tr("Resume playback?"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 26px : 18px; font-weight: 600; }
+                Text { text: @tr("This episode has saved playback history."); color: Theme.current.text_resume_hint; font-size: InterfaceStyle.tv ? 20px : 14px; wrap: word-wrap; }
                 HorizontalLayout {
                     alignment: end; spacing: 8px;
                     Rectangle {
-                        width: 112px; height: 40px; border-radius: 8px; background: Theme.current.hover_overlay;
-                        Text { text: @tr("Start over"); color: Theme.current.text_bright; horizontal-alignment: center; vertical-alignment: center; }
-                        TouchArea { width: 100%; height: 100%; clicked => { root.resume_choice(false); } }
+                        width: InterfaceStyle.tv ? 160px : 112px; height: InterfaceStyle.tv ? 56px : 40px; border-radius: 8px; background: Theme.current.hover_overlay;
+                        accessible-role: button; accessible-label: @tr("Start over");
+                        border-width: InterfaceStyle.tv && root.resume_focus == 0 ? 2px : 0px; border-color: Theme.current.focus_ring;
+                        Text { text: @tr("Start over"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 20px : root.default-font-size; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { width: 100%; height: 100%; clicked => { root.resume_focus = 0; root.resume_choice(false); } }
                     }
                     Rectangle {
-                        width: 100px; height: 40px; border-radius: 8px; background: Theme.current.accent;
-                        Text { text: @tr("Resume"); color: Theme.current.text_bright; horizontal-alignment: center; vertical-alignment: center; }
-                        TouchArea { width: 100%; height: 100%; clicked => { root.resume_choice(true); } }
+                        width: InterfaceStyle.tv ? 144px : 100px; height: InterfaceStyle.tv ? 56px : 40px; border-radius: 8px; background: Theme.current.accent;
+                        accessible-role: button; accessible-label: @tr("Resume");
+                        border-width: InterfaceStyle.tv && root.resume_focus == 1 ? 2px : 0px; border-color: Theme.current.focus_ring;
+                        Text { text: @tr("Resume"); color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 20px : root.default-font-size; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { width: 100%; height: 100%; clicked => { root.resume_focus = 1; root.resume_choice(true); } }
                     }
                 }
             }
@@ -2406,7 +2424,7 @@ export component AppWindow inherits Window {
 
     if root.completion_prompt_visible: CompletionRatingPrompt {
         width: parent.width; height: parent.height;
-        phone: root.is_android || root.narrow_ui;
+        phone: !InterfaceStyle.tv && (root.is_android || root.narrow_ui);
         safe-bottom: root.safe-area-insets.bottom;
         safe-top: root.safe-area-insets.top;
         safe-left: root.safe-area-insets.left;

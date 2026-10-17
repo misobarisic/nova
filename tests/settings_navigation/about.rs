@@ -558,3 +558,63 @@ fn opening_real_size_license_catalog_keeps_instantiated_content_bounded() {
     settle(&app);
     assert!(app.get_show_about() && !app.get_about_licenses_open());
 }
+
+#[test]
+fn tv_arrows_page_the_license_document_after_source_actions() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::tv_arrows_page_the_license_document_after_source_actions"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.global::<nova::InterfaceStyle>().set_tv(true);
+    app.set_show_home(false);
+    app.set_show_about(true);
+    app.set_license_sources(
+        Rc::new(VecModel::from(vec![nova::LicenseSource {
+            label: "Nova".into(),
+            license: "GPL-3.0-or-later".into(),
+            url: "https://example.com/nova".into(),
+        }]))
+        .into(),
+    );
+    app.set_license_text_chunks(
+        Rc::new(VecModel::from(vec![
+            s(
+                &"License conditions and permissions.\n".repeat(20)
+            );
+            30
+        ]))
+        .into(),
+    );
+    app.window().set_size(slint::PhysicalSize::new(1280, 720));
+    app.show().unwrap();
+    settle(&app);
+    let button = ElementHandle::find_by_element_id(&app, "AboutPage::about_licenses_button")
+        .next()
+        .unwrap();
+    click(&app, &button);
+    settle(&app);
+    let before = app.get_about_licenses_scroll_y();
+    let key = |key: slint::platform::Key| {
+        let text: SharedString = key.into();
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+        app.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+        settle(&app);
+    };
+    key(slint::platform::Key::DownArrow);
+    assert!(
+        app.get_about_licenses_scroll_y() < before - 100.0,
+        "Down must reach the legal text beyond the source action"
+    );
+    key(slint::platform::Key::UpArrow);
+    assert!(
+        (app.get_about_licenses_scroll_y() - before).abs() < 2.0,
+        "Up restores the source action position"
+    );
+}

@@ -1,4 +1,4 @@
-import { Theme, NavMetrics, CalendarDay, CalendarRelease } from "@NovaUiShared";
+import { Theme, InterfaceStyle, NavState, NavMetrics, CalendarDay, CalendarRelease } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 import { SearchField } from "searchfield.slint";
@@ -9,16 +9,19 @@ import { PageHeader } from "page-header.slint";
 component PlannerButton inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
+    in property <bool> tv-focused: false;
+    callback reveal(length, length);
+    changed tv-focused => { if root.tv-focused { root.reveal(self.absolute-position.y, self.height); } }
     callback picked();
-    height: 44px;
-    min-width: 44px;
+    height: InterfaceStyle.tv ? 56px : 44px;
+    min-width: InterfaceStyle.tv ? 56px : 44px;
     background: root.selected ? Theme.current.accent : Theme.current.control;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
-    border-width: scope.has-focus ? 2px : 1px;
-    border-color: scope.has-focus ? Theme.current.text_bright : Theme.current.control_hover;
+    border-width: (scope.has-focus || root.tv-focused) ? 2px : 1px;
+    border-color: (scope.has-focus || root.tv-focused) ? Theme.current.text_bright : Theme.current.control_hover;
     accessible-role: button;
     accessible-label: root.label;
-    Text { vertical-stretch: 0; min-width: 0; text: root.label; color: root.selected ? Theme.current.on_accent : Theme.current.text_bright; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
+    Text { vertical-stretch: 0; min-width: 0; text: root.label; color: root.selected ? Theme.current.on_accent : Theme.current.text_bright; horizontal-alignment: center; vertical-alignment: center; font-size: InterfaceStyle.tv ? 20px : 13px; }
     scope := FocusScope { width: 100%; height: 100%; key-pressed(e) => { if (e.text == Key.Return || e.text == " ") { if (!e.repeat) { root.picked(); } accept } else { reject } } }
     TouchArea { mouse-cursor: pointer; clicked => { scope.focus(); root.picked(); } }
 }
@@ -26,6 +29,9 @@ component PlannerDay inherits Rectangle {
     in property <CalendarDay> item;
     in property <bool> compact;
     in property <bool> week;
+    in property <bool> tv-focused: false;
+    callback reveal(length, length);
+    changed tv-focused => { if root.tv-focused { root.reveal(self.absolute-position.y, self.height); } }
     callback picked(int);
     // Divide each row evenly instead of giving dates with release counts or
     // longer previews a larger share of its available width.
@@ -33,19 +39,19 @@ component PlannerDay inherits Rectangle {
     preferred-width: 0px;
     horizontal-stretch: 1;
     background: root.item.cell.selected ? Theme.current.accent : Theme.current.control;
-    border-width: root.item.cell.today || scope.has-focus ? 2px : 1px;
-    border-color: root.item.cell.today || scope.has-focus ? Theme.current.text_bright : Theme.current.control_hover;
+    border-width: root.item.cell.today || (scope.has-focus || root.tv-focused) ? 2px : 1px;
+    border-color: root.item.cell.today || (scope.has-focus || root.tv-focused) ? Theme.current.text_bright : Theme.current.control_hover;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     accessible-role: button;
     accessible-label: root.item.weekday + " " + root.item.cell.day;
     VerticalLayout {
         padding: root.compact ? 3px : 8px; spacing: 4px;
-        if root.week: Text { vertical-stretch: 0; min-width: 0; text: root.item.weekday; color: Theme.current.text_muted; font-size: 11px; horizontal-alignment: center; }
+        if root.week: Text { vertical-stretch: 0; min-width: 0; text: root.item.weekday; color: Theme.current.text_muted; font-size: InterfaceStyle.tv ? 17px : 11px; horizontal-alignment: center; }
         HorizontalLayout {
-            Text { vertical-stretch: 0; min-width: 0; text: root.item.cell.day; color: root.item.cell.selected ? Theme.current.on_accent : root.item.cell.in_month ? Theme.current.text_bright : Theme.current.text_muted; font-size: root.compact ? 12px : 15px; }
-            if root.item.cell.count > 0: Text { vertical-stretch: 0; min-width: 0; text: root.compact ? "•" : root.item.cell.count; color: root.item.cell.selected ? Theme.current.on_accent : Theme.current.accent; horizontal-alignment: right; font-size: 12px; }
+            Text { vertical-stretch: 0; min-width: 0; text: root.item.cell.day; color: root.item.cell.selected ? Theme.current.on_accent : root.item.cell.in_month ? Theme.current.text_bright : Theme.current.text_muted; font-size: InterfaceStyle.tv ? 22px : root.compact ? 12px : 15px; }
+            if root.item.cell.count > 0: Text { vertical-stretch: 0; min-width: 0; text: root.compact ? "•" : root.item.cell.count; color: root.item.cell.selected ? Theme.current.on_accent : Theme.current.accent; horizontal-alignment: right; font-size: InterfaceStyle.tv ? 18px : 12px; }
         }
-        if !root.compact && !root.week: Text { vertical-stretch: 0; min-width: 0; text: root.item.preview; color: root.item.cell.selected ? Theme.current.on_accent : Theme.current.text_muted; font-size: 11px; overflow: elide; wrap: word-wrap; }
+        if !root.compact && !root.week: Text { vertical-stretch: 0; min-width: 0; text: root.item.preview; color: root.item.cell.selected ? Theme.current.on_accent : Theme.current.text_muted; font-size: InterfaceStyle.tv ? 17px : 11px; overflow: elide; wrap: word-wrap; }
         Rectangle { vertical-stretch: 1; }
     }
     scope := FocusScope { width: 100%; height: 100%; key-pressed(e) => { if (e.text == Key.Return || e.text == " ") { if (!e.repeat) { root.picked(root.item.cell.epoch); } accept } else { reject } } }
@@ -67,18 +73,21 @@ component ReleaseCard inherits Rectangle {
     Timer { interval: 1500ms; running: root.artwork-retained; triggered => { root.artwork-visible(root.artwork-key, true); } }
     changed artwork-report => { root.artwork-visible(root.artwork-key, root.artwork-retained); }
     init => { root.artwork-visible(root.artwork-key, root.artwork-retained); }
+    in property <bool> tv-focused: false;
+    callback reveal(length, length);
+    changed tv-focused => { if root.tv-focused { root.reveal(self.absolute-position.y, self.height); } }
     callback picked(string);
-    height: 86px;
+    height: InterfaceStyle.tv ? 112px : 86px;
     background: Theme.current.control;
     border-radius: Theme.card_corner_radius;
-    border-width: scope.has-focus ? 2px : 1px;
-    border-color: scope.has-focus ? Theme.current.accent : Theme.current.control_hover;
+    border-width: (scope.has-focus || root.tv-focused) ? 2px : 1px;
+    border-color: (scope.has-focus || root.tv-focused) ? Theme.current.accent : Theme.current.control_hover;
     accessible-role: button;
     accessible-label: root.release.title + " " + root.release.subtitle;
     HorizontalLayout {
         padding: 8px; spacing: 12px;
         Rectangle { width: 64px; background: Theme.current.control_hover; border-radius: 6px; clip: true; Image { source: root.release.poster; image-fit: cover; } }
-        VerticalLayout { spacing: 3px; Text { vertical-stretch: 0; min-width: 0; text: root.release.title; color: Theme.current.text_bright; font-size: 15px; overflow: elide; } Text { vertical-stretch: 0; min-width: 0; text: root.release.subtitle; color: Theme.current.text_muted; font-size: 12px; overflow: elide; } Text { vertical-stretch: 0; min-width: 0; text: root.release.date; color: Theme.current.text_muted; font-size: 12px; overflow: elide; } }
+        VerticalLayout { spacing: 3px; Text { vertical-stretch: 0; min-width: 0; text: root.release.title; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 22px : 15px; overflow: elide; } Text { vertical-stretch: 0; min-width: 0; text: root.release.subtitle; color: Theme.current.text_muted; font-size: InterfaceStyle.tv ? 18px : 12px; overflow: elide; } Text { vertical-stretch: 0; min-width: 0; text: root.release.date; color: Theme.current.text_muted; font-size: InterfaceStyle.tv ? 18px : 12px; overflow: elide; } }
         Text { width: 12px; text: "›"; color: Theme.current.text_muted; vertical-alignment: center; }
     }
     scope := FocusScope { width: 100%; height: 100%; key-pressed(e) => { if (e.text == Key.Return || e.text == " ") { if (!e.repeat) { root.picked(root.release.key); } accept } else { reject } } }
@@ -86,41 +95,111 @@ component ReleaseCard inherits Rectangle {
 }
 component PlannerViews inherits Rectangle {
     in property <int> current;
+    in property <int> tv-control: -1;
     callback picked(int);
-    height: 44px;
+    height: InterfaceStyle.tv ? 56px : 44px;
     HorizontalLayout { spacing: 6px;
         for label[i] in [@tr("Month"), @tr("Week"), @tr("Timeline")]: PlannerButton {
-            label: label; selected: root.current == i; picked => { root.picked(i); }
+            label: label; selected: root.current == i; tv-focused: root.tv-control == i + 1; picked => { root.picked(i); }
         }
     }
 }
 component PlannerScope inherits Rectangle {
     in property <bool> all;
+    in property <int> tv-control: -1;
     callback picked(bool);
-    height: 44px;
+    height: InterfaceStyle.tv ? 56px : 44px;
     HorizontalLayout { spacing: 6px;
-        PlannerButton { label: @tr("Next episode"); selected: !root.all; picked => { root.picked(false); } }
-        PlannerButton { label: @tr("All releases"); selected: root.all; picked => { root.picked(true); } }
+        PlannerButton { tv-focused: root.tv-control == 4; label: @tr("Next episode"); selected: !root.all; picked => { root.picked(false); } }
+        PlannerButton { tv-focused: root.tv-control == 5; label: @tr("All releases"); selected: root.all; picked => { root.picked(true); } }
     }
 }
 component PlannerPeriod inherits Rectangle {
     in property <string> title;
+    in property <int> tv-control: -1;
     in property <bool> compact: false;
     in property <bool> agenda: false;
     callback step(int);
     callback today();
-    height: 44px;
+    height: InterfaceStyle.tv ? 56px : 44px;
     HorizontalLayout { spacing: 8px;
-        if !root.agenda: PlannerButton { width: 44px; label: "‹"; accessible-label: @tr("Previous period"); picked => { root.step(-1); } }
-        Text { vertical-stretch: 0; min-width: 0; text: root.title; color: Theme.current.text_bright; vertical-alignment: center; horizontal-alignment: center; font-size: root.compact ? 12px : 15px; wrap: root.compact ? word-wrap : no-wrap; overflow: elide; }
-        if !root.agenda: PlannerButton { width: 44px; label: "›"; accessible-label: @tr("Next period"); picked => { root.step(1); } }
-        PlannerButton { width: 65px; label: @tr("Today"); picked => { root.today(); } }
+        if !root.agenda: PlannerButton { tv-focused: root.tv-control == 6; width: InterfaceStyle.tv ? 56px : 44px; label: "‹"; accessible-label: @tr("Previous period"); picked => { root.step(-1); } }
+        Text { vertical-stretch: 0; min-width: 0; text: root.title; color: Theme.current.text_bright; vertical-alignment: center; horizontal-alignment: center; font-size: InterfaceStyle.tv ? 22px : root.compact ? 12px : 15px; wrap: root.compact ? word-wrap : no-wrap; overflow: elide; }
+        if !root.agenda: PlannerButton { tv-focused: root.tv-control == 7; width: InterfaceStyle.tv ? 56px : 44px; label: "›"; accessible-label: @tr("Next period"); picked => { root.step(1); } }
+        PlannerButton { tv-focused: root.tv-control == 8; width: InterfaceStyle.tv ? 90px : 65px; label: @tr("Today"); picked => { root.today(); } }
     }
 }
 export component CalendarPage inherits Rectangle {
     // Called after publication only while AppWindow retains baseline focus.
     public function focus_shell() { if root.active { page_scope.focus(); } }
 
+    private property <int> tv-zone: 0; // -1 rail, 0 toolbar, 1 dates, 2 releases, 3 paging
+    private property <int> tv-nav: 4;
+    private property <int> tv-control: 0;
+    private property <int> tv-day: 0;
+    private property <int> tv-release: 0;
+    private property <bool> tv-search-focused: false;
+    private property <int> tv-search-request: 0;
+    function tv-reveal(y: length, h: length) {
+        let top = releases-scroll.absolute-position.y + 12px;
+        let bottom = releases-scroll.absolute-position.y + releases-scroll.visible-height - 12px;
+        if y < top { releases-scroll.content-y += top - y; }
+        else if y + h > bottom { releases-scroll.content-y -= y + h - bottom; }
+    }
+    function tv-next-control(d: int) {
+        let candidate = root.tv-control + d;
+        let next = root.view == 2 && candidate == 6 ? 8 : root.view == 2 && candidate == 7 ? 5 : candidate;
+        if next < 0 { root.tv-zone = -1; } else { root.tv-control = Math.min(8, next); }
+    }
+    function tv-vertical(d: int) {
+        if root.tv-zone < 0 { root.tv-nav = NavState.step(root.tv-nav, d, false); }
+        else if root.tv-zone == 0 {
+            if d < 0 { root.tv-zone = -1; }
+            else if root.view != 2 { root.tv-zone = 1; root.tv-day = 0; }
+            else if root.has-earlier { root.tv-zone = 3; root.tv-control = 0; }
+            else if root.rows.length > 0 { root.tv-zone = 2; root.tv-release = 0; }
+            else if root.has-later { root.tv-zone = 3; root.tv-control = 1; }
+        } else if root.tv-zone == 1 {
+            let limit = root.view == 0 ? root.cells.length : root.week_cells.length;
+            if d < 0 && root.tv-day < 7 { root.tv-zone = 0; root.tv-control = 0; }
+            else if d > 0 && root.tv-day + 7 >= limit {
+                if root.rows.length > 0 { root.tv-zone = 2; root.tv-release = 0; }
+            } else { root.tv-day = Math.max(0, Math.min(limit - 1, root.tv-day + d * 7)); }
+        } else if root.tv-zone == 2 {
+            if d < 0 && root.tv-release == 0 {
+                root.tv-zone = root.view == 2 ? (root.has-earlier ? 3 : 0) : 1;
+                root.tv-control = 0;
+            } else if d > 0 && root.tv-release + 1 >= root.rows.length {
+                if root.view == 2 && root.has-later { root.tv-zone = 3; root.tv-control = 1; }
+            } else { root.tv-release = Math.max(0, Math.min(root.rows.length - 1, root.tv-release + d)); }
+        } else if root.tv-control == 0 && d > 0 && root.rows.length > 0 { root.tv-zone = 2; root.tv-release = 0; }
+        else if root.tv-control == 1 && d < 0 && root.rows.length > 0 { root.tv-zone = 2; root.tv-release = root.rows.length - 1; }
+        else { root.tv-zone = 0; root.tv-control = 0; }
+    }
+    function tv-activate() {
+        if root.tv-zone == 1 {
+            let count = root.view == 0 ? root.cells.length : root.week_cells.length;
+            if count == 0 { return; }
+            root.tv-day = Math.max(0, Math.min(root.tv-day, count - 1));
+        } else if root.tv-zone == 2 {
+            if root.rows.length == 0 { root.tv-zone = 0; root.tv-control = 0; return; }
+            root.tv-release = Math.max(0, Math.min(root.tv-release, root.rows.length - 1));
+        }
+        if root.tv-zone < 0 {
+            if root.tv-nav == 0 { root.home_picked(); } else if root.tv-nav == 1 { root.discover_picked(); }
+            else if root.tv-nav == 2 { root.library_picked(); } else if root.tv-nav == 3 { root.more_picked(); }
+            else if root.tv-nav == 5 { NavState.downloads_picked(); }
+        } else if root.tv-zone == 0 {
+            if root.tv-control == 0 { root.tv-search-request += 1; }
+            else if root.tv-control < 4 { root.view = root.tv-control - 1; root.refreshed(); }
+            else if root.tv-control < 6 { root.all = root.tv-control == 5; root.refreshed(); }
+            else if root.tv-control < 8 { root.step(root.tv-control == 6 ? -1 : 1); }
+            else { root.today(); }
+        } else if root.tv-zone == 1 { root.day_picked(root.view == 0 ? root.cells[root.tv-day].cell.epoch : root.week_cells[root.tv-day].cell.epoch); }
+        else if root.tv-zone == 2 { root.release_picked(root.rows[root.tv-release].key); }
+        else if root.tv-control == 0 { root.load-earlier(); }
+        else { root.agenda-more(1); }
+    }
     in property <bool> external_navigation: false;
     in property <bool> active: true;
     background: Theme.current.artwork_canvas;
@@ -176,8 +255,8 @@ export component CalendarPage inherits Rectangle {
     in property <int> system_back_request;
     in-out property <bool> kb_active;
     in property <length> nav-viewport-width: root.width;
-    private property <bool> narrow: root.nav-viewport-width < 700px;
-    private property <bool> wide_header: root.nav-viewport-width >= 1000px;
+    private property <bool> narrow: !InterfaceStyle.tv && root.nav-viewport-width < 700px;
+    private property <bool> wide_header: !InterfaceStyle.tv && root.nav-viewport-width >= 1000px;
     private property <int> last_back;
     in property <bool> artwork-active: true;
     callback artwork-visible(string, bool);
@@ -191,12 +270,30 @@ export component CalendarPage inherits Rectangle {
     callback release_picked(string);
     callback back();
     callback home_picked(); callback discover_picked(); callback library_picked(); callback settings_picked(); callback about_picked(); callback more_picked();
-    changed system_back_request => { if root.active && root.last_back != root.system_back_request { root.last_back = root.system_back_request; root.back(); } }
+    changed system_back_request => { if root.active && root.last_back != root.system_back_request { root.last_back = root.system_back_request; if InterfaceStyle.tv && root.tv-search-focused { page_scope.focus(); root.tv-zone = 0; root.tv-control = 0; } else { root.back(); } } }
     page_scope := FocusScope {
     enabled: root.active;
     width: 100%; height: 100%;
     init => { root.last_back = root.system_back_request; self.focus(); }
-    capture-key-pressed(e) => { if (e.text == Key.Escape || e.text == Key.Back) { if (!e.repeat) { root.back(); } accept } else { reject } }
+    capture-key-pressed(e) => {
+        if InterfaceStyle.tv && root.tv-search-focused {
+            if e.text == Key.Back || e.text == Key.Escape || e.text == Key.DownArrow || e.text == Key.UpArrow {
+                page_scope.focus(); root.tv-zone = 0; root.tv-control = 0; accept
+            } else { reject }
+        } else if e.text == Key.Escape || e.text == Key.Back { if !e.repeat { root.back(); } accept }
+        else if InterfaceStyle.tv && (e.text == Key.UpArrow || e.text == Key.DownArrow) {
+            root.kb_active = true; page_scope.focus(); root.tv-vertical(e.text == Key.DownArrow ? 1 : -1); accept
+        } else if InterfaceStyle.tv && (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+            root.kb_active = true; page_scope.focus(); let d = e.text == Key.RightArrow ? 1 : -1;
+            if root.tv-zone < 0 { if d > 0 { root.tv-zone = 0; root.tv-control = 0; } }
+            else if root.tv-zone == 0 { root.tv-next-control(d); }
+            else if root.tv-zone == 1 { let limit = root.view == 0 ? root.cells.length : root.week_cells.length; root.tv-day = Math.max(0, Math.min(limit - 1, root.tv-day + d)); }
+            else if d < 0 { root.tv-zone = -1; }
+            accept
+        } else if InterfaceStyle.tv && (e.text == Key.Return || e.text == " ") {
+            root.kb_active = true; if !e.repeat { root.tv-activate(); } accept
+        } else { reject }
+    }
     VerticalLayout {
         padding-left: 18px + (root.narrow || root.external_navigation ? 0px : NavMetrics.width-for(root.nav-viewport-width)) + root.safe-left;
         padding-right: 18px + root.safe-right; padding-top: 18px + root.safe-top; spacing: 12px;
@@ -209,41 +306,49 @@ export component CalendarPage inherits Rectangle {
                 subtitle: @tr("{n} episode release" | "{n} episode releases" % root.count);
                 back => { root.back(); }
             }
-            if !root.narrow: SearchField {
-                width: root.wide_header ? 240px : 220px;
-                text <=> root.search; search-icon: true; roomy: true; placeholder-text: @tr("Search series");
+            if !root.narrow: calendar_search := SearchField {
+                // Conditional children publish focus state; the persistent page
+                // requests editing without reaching through conditional IDs.
+                property <int> focus-request: root.tv-search-request;
+                changed focus-request => { if InterfaceStyle.tv && self.focus-request > 0 { calendar_search.focus(); } }
+                focus_changed(focused) => { root.tv-search-focused = focused; }
+                width: InterfaceStyle.tv ? 320px : root.wide_header ? 240px : 220px;
+                height: InterfaceStyle.tv ? 56px : 44px;
+                border-width: InterfaceStyle.tv && root.kb_active && root.tv-zone == 0 && root.tv-control == 0 ? 3px : 1px;
+                border-color: InterfaceStyle.tv && root.kb_active && root.tv-zone == 0 && root.tv-control == 0 ? Theme.current.focus_ring : Theme.current.control_border;
+                text <=> root.search; search-icon: true; roomy: true; prominent: InterfaceStyle.tv; placeholder-text: @tr("Search series");
                 edited(v) => { root.search = v; root.refreshed(); }
             }
-            if root.wide_header: PlannerViews {
+            if root.wide_header: PlannerViews { tv-control: InterfaceStyle.tv && root.kb_active && root.tv-zone == 0 ? root.tv-control : -1;
                 width: 240px; current: root.view; picked(v) => { root.view = v; root.refreshed(); }
             }
         }
         if root.narrow: SearchField {
-            text <=> root.search; search-icon: true; roomy: true; placeholder-text: @tr("Search series");
+            text <=> root.search; search-icon: true; roomy: true; prominent: InterfaceStyle.tv; placeholder-text: @tr("Search series");
             edited(v) => { root.search = v; root.refreshed(); }
         }
         if !root.wide_header && !root.narrow: HorizontalLayout {
             spacing: 12px;
-            PlannerViews { current: root.view; picked(v) => { root.view = v; root.refreshed(); } }
-            PlannerScope { all: root.all; picked(v) => { root.all = v; root.refreshed(); } }
+            PlannerViews { tv-control: InterfaceStyle.tv && root.kb_active && root.tv-zone == 0 ? root.tv-control : -1; current: root.view; picked(v) => { root.view = v; root.refreshed(); } }
+            PlannerScope { tv-control: InterfaceStyle.tv && root.kb_active && root.tv-zone == 0 ? root.tv-control : -1; all: root.all; picked(v) => { root.all = v; root.refreshed(); } }
         }
-        if root.narrow: PlannerViews { current: root.view; picked(v) => { root.view = v; root.refreshed(); } }
-        if root.narrow: PlannerScope { all: root.all; picked(v) => { root.all = v; root.refreshed(); } }
+        if root.narrow: PlannerViews { tv-control: InterfaceStyle.tv && root.kb_active && root.tv-zone == 0 ? root.tv-control : -1; current: root.view; picked(v) => { root.view = v; root.refreshed(); } }
+        if root.narrow: PlannerScope { tv-control: InterfaceStyle.tv && root.kb_active && root.tv-zone == 0 ? root.tv-control : -1; all: root.all; picked(v) => { root.all = v; root.refreshed(); } }
         if root.wide_header: HorizontalLayout {
-            height: 44px; spacing: 12px;
-            PlannerPeriod { agenda: root.view == 2; title: root.title; step(d) => { root.step(d); } today => { root.today(); } }
-            PlannerScope { width: 280px; all: root.all; picked(v) => { root.all = v; root.refreshed(); } }
+            height: InterfaceStyle.tv ? 56px : 44px; spacing: 12px;
+            PlannerPeriod { tv-control: InterfaceStyle.tv && root.kb_active && root.tv-zone == 0 ? root.tv-control : -1; agenda: root.view == 2; title: root.title; step(d) => { root.step(d); } today => { root.today(); } }
+            PlannerScope { tv-control: InterfaceStyle.tv && root.kb_active && root.tv-zone == 0 ? root.tv-control : -1; width: 280px; all: root.all; picked(v) => { root.all = v; root.refreshed(); } }
         }
-        if !root.wide_header: PlannerPeriod { agenda: root.view == 2; compact: root.narrow; title: root.title; step(d) => { root.step(d); } today => { root.today(); } }
+        if !root.wide_header: PlannerPeriod { tv-control: InterfaceStyle.tv && root.kb_active && root.tv-zone == 0 ? root.tv-control : -1; agenda: root.view == 2; compact: root.narrow; title: root.title; step(d) => { root.step(d); } today => { root.today(); } }
         releases-scroll := ScrollView {
             vertical-stretch: 1; content-width: self.visible-width; mouse-drag-pan-enabled: true;
             VerticalLayout {
                 alignment: start; spacing: 12px;
                 if root.view == 2 && root.has-earlier: PlannerButton {
-                    label: @tr("Earlier releases"); picked => { root.load-earlier(); }
+                    tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 3 && root.tv-control == 0; reveal(y,h) => { root.tv-reveal(y,h); } label: @tr("Earlier releases"); picked => { root.load-earlier(); }
                 }
                 if root.view == 0: HorizontalLayout {
-                    height: root.narrow ? 300px : 550px;
+                    height: InterfaceStyle.tv ? 620px : root.narrow ? 300px : 550px;
                     spacing: 16px;
                     VerticalLayout {
                         spacing: 4px;
@@ -251,27 +356,27 @@ export component CalendarPage inherits Rectangle {
                             spacing: 3px;
                             for label in [@tr("Mon"), @tr("Tue"), @tr("Wed"), @tr("Thu"), @tr("Fri"), @tr("Sat"), @tr("Sun")]: weekday_heading := Text {
                                 vertical-stretch: 0; min-width: 0; preferred-width: 0px; horizontal-stretch: 1;
-                                text: label; color: Theme.current.text_muted; font-size: 11px; horizontal-alignment: center;
+                                text: label; color: Theme.current.text_muted; font-size: InterfaceStyle.tv ? 17px : 11px; horizontal-alignment: center;
                             }
                         }
-                        for week in 6: HorizontalLayout { spacing: 3px; height: root.narrow ? 43px : 85px; for col in 7: PlannerDay { item: root.cells[week * 7 + col]; compact: root.narrow; picked(day) => { root.day_picked(day); } } }
+                        for week in 6: HorizontalLayout { spacing: 3px; height: InterfaceStyle.tv ? 96px : root.narrow ? 43px : 85px; for col in 7: PlannerDay { tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 1 && root.tv-day == week * 7 + col; reveal(y,h) => { root.tv-reveal(y,h); } item: root.cells[week * 7 + col]; compact: root.narrow; picked(day) => { root.day_picked(day); } } }
                     }
                     // Keep the selected-day sidebar only when seven readable date
                     // columns fit beside it; medium windows show releases below.
                     if root.wide_header: day-scroll := ScrollView {
                         property <length> artwork-viewport-top: Math.max(self.absolute-position.y, releases-scroll.absolute-position.y);
                         property <length> artwork-viewport-height: Math.max(0px, Math.min(self.absolute-position.y + self.visible-height, releases-scroll.absolute-position.y + releases-scroll.visible-height) - self.artwork-viewport-top);
-                        width: 310px; height: 550px; content-width: self.visible-width; mouse-drag-pan-enabled: true; VerticalLayout { alignment: start; spacing: 10px; Text { vertical-stretch: 0; min-width: 0; text: root.day_title; color: Theme.current.text_bright; font-size: 16px; font-weight: 600; } if root.rows.length == 0: Text { vertical-stretch: 0; min-width: 0; text: @tr("No releases on this day"); color: Theme.current.text_muted; wrap: word-wrap; } for row in root.rows: ReleaseCard { artwork-key: "r" + row.key; artwork-active: root.artwork-active; viewport-top: day-scroll.artwork-viewport-top; viewport-height: day-scroll.artwork-viewport-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } release: row; picked(key) => { root.release_picked(key); } } Text { vertical-stretch: 0; min-width: 0; text: @tr("Next up"); color: Theme.current.text_bright; font-size: 16px; } for row in root.later: ReleaseCard { artwork-key: "l" + row.key; artwork-active: root.artwork-active; viewport-top: day-scroll.artwork-viewport-top; viewport-height: day-scroll.artwork-viewport-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } release: row; picked(key) => { root.release_picked(key); } } } }
+                        width: 310px; height: 550px; content-width: self.visible-width; mouse-drag-pan-enabled: true; VerticalLayout { alignment: start; spacing: 10px; Text { vertical-stretch: 0; min-width: 0; text: root.day_title; color: Theme.current.text_bright; font-size: 16px; font-weight: 600; } if root.rows.length == 0: Text { vertical-stretch: 0; min-width: 0; text: @tr("No releases on this day"); color: Theme.current.text_muted; wrap: word-wrap; } for row[index] in root.rows: ReleaseCard { tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 2 && root.tv-release == index; reveal(y,h) => { root.tv-reveal(y,h); } artwork-key: "r" + row.key; artwork-active: root.artwork-active; viewport-top: day-scroll.artwork-viewport-top; viewport-height: day-scroll.artwork-viewport-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } release: row; picked(key) => { root.release_picked(key); } } Text { vertical-stretch: 0; min-width: 0; text: @tr("Next up"); color: Theme.current.text_bright; font-size: 16px; } for row in root.later: ReleaseCard { artwork-key: "l" + row.key; artwork-active: root.artwork-active; viewport-top: day-scroll.artwork-viewport-top; viewport-height: day-scroll.artwork-viewport-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } release: row; picked(key) => { root.release_picked(key); } } } }
                 }
-                if root.view == 1: HorizontalLayout { spacing: 3px; height: 82px; for item in root.week_cells: PlannerDay { item: item; compact: root.narrow; week: true; picked(day) => { root.day_picked(day); } } }
-                if root.view != 0 || !root.wide_header: VerticalLayout { alignment: start; vertical-stretch: 0; spacing: 10px; if root.view == 0: Text { vertical-stretch: 0; min-width: 0; text: root.day_title; color: Theme.current.text_bright; font-size: 16px; } if root.rows.length == 0: Text { vertical-stretch: 0; min-width: 0; text: root.view == 0 ? @tr("No releases on this day") : root.view == 2 ? @tr("No upcoming releases") : @tr("No releases in this period"); color: Theme.current.text_muted; wrap: word-wrap; } for row in root.rows: VerticalLayout { alignment: start; vertical-stretch: 0; spacing: 8px; if root.view != 0 && row.group != "": Text { vertical-stretch: 0; min-width: 0; text: row.group; color: Theme.current.text_bright; font-size: 16px; font-weight: 600; } ReleaseCard { artwork-key: "r" + row.key; artwork-active: root.artwork-active; viewport-top: releases-scroll.absolute-position.y; viewport-height: releases-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } release: row; picked(key) => { root.release_picked(key); } } } }
+                if root.view == 1: HorizontalLayout { spacing: 3px; height: InterfaceStyle.tv ? 106px : 82px; for item[index] in root.week_cells: PlannerDay { tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 1 && root.tv-day == index; reveal(y,h) => { root.tv-reveal(y,h); } item: item; compact: root.narrow; week: true; picked(day) => { root.day_picked(day); } } }
+                if root.view != 0 || !root.wide_header: VerticalLayout { alignment: start; vertical-stretch: 0; spacing: 10px; if root.view == 0: Text { vertical-stretch: 0; min-width: 0; text: root.day_title; color: Theme.current.text_bright; font-size: 16px; } if root.rows.length == 0: Text { vertical-stretch: 0; min-width: 0; text: root.view == 0 ? @tr("No releases on this day") : root.view == 2 ? @tr("No upcoming releases") : @tr("No releases in this period"); color: Theme.current.text_muted; wrap: word-wrap; } for row[index] in root.rows: VerticalLayout { alignment: start; vertical-stretch: 0; spacing: 8px; if root.view != 0 && row.group != "": Text { vertical-stretch: 0; min-width: 0; text: row.group; color: Theme.current.text_bright; font-size: 16px; font-weight: 600; } ReleaseCard { tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 2 && root.tv-release == index; reveal(y,h) => { root.tv-reveal(y,h); } artwork-key: "r" + row.key; artwork-active: root.artwork-active; viewport-top: releases-scroll.absolute-position.y; viewport-height: releases-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } release: row; picked(key) => { root.release_picked(key); } } } }
                 if root.view == 2 && root.has-later: PlannerButton {
-                    label: @tr("Load more releases"); picked => { root.agenda-more(1); }
+                    tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 3 && root.tv-control == 1; reveal(y,h) => { root.tv-reveal(y,h); } label: @tr("Load more releases"); picked => { root.agenda-more(1); }
                 }
             }
         }
     }
-    if !root.narrow && !root.external_navigation: SideNav { active: 4; viewport-width: root.width; safe-top: root.safe-top; safe-left: root.safe-left; safe-bottom: root.safe-bottom; kb_active <=> root.kb_active; home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } more_picked => { root.more_picked(); } }
+    if !root.narrow && !root.external_navigation: SideNav { kb_zone: InterfaceStyle.tv ? (root.tv-zone == -1 ? 0 : -1) : 0; kb_nav: root.tv-nav; active: 4; viewport-width: root.width; safe-top: root.safe-top; safe-left: root.safe-left; safe-bottom: root.safe-bottom; kb_active <=> root.kb_active; home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } more_picked => { root.more_picked(); } }
     }
     if !root.active: TouchArea {
         width: 100%; height: 100%;

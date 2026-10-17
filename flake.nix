@@ -56,6 +56,12 @@
           hash = "sha256-OJ34HOTIcmJh/exp3yq6Ir1RvooMSRwf9yF02qSx6yY=";
         };
         cargoLock.lockFile = "${src}/Cargo.lock";
+        # ndk-build2 1.4.1 omits Application.banner. Patch its writable vendor
+        # copy so TOML banner metadata joins the normal generated manifest.
+        nativeBuildInputs = [ pkgs.python3 ];
+        postPatch = ''
+          python ${./android/patch-cargo-apk2-banner.py} "$cargoDepsCopy"
+        '';
         doCheck = false; # its tests need an Android SDK/device
       };
     in

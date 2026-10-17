@@ -1,4 +1,4 @@
-import { Theme, Anim, ControlInput, NavMetrics, DownloadEpisode, DownloadGroup } from "@NovaUiShared";
+import { Theme, Anim, InterfaceStyle, NavState, ControlInput, NavMetrics, DownloadEpisode, DownloadGroup } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 import { SearchField } from "searchfield.slint";
@@ -15,12 +15,15 @@ component DownloadButton inherits Rectangle {
     in property <bool> chevron: false;
     in property <bool> expanded: false;
     in property <bool> wrap-label: false;
+    in property <bool> tv-focused: false;
+    callback reveal(length, length);
+    changed tv-focused => { if root.tv-focused { root.reveal(self.absolute-position.y, self.height); } }
     callback picked();
-    width: Math.max(44px, label-text.preferred-width + 20px); height: 44px;
+    width: Math.max(44px, label-text.preferred-width + 20px); height: InterfaceStyle.tv ? 56px : 44px;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     background: root.selected ? Theme.current.accent : (touch.has-hover ? Theme.current.control_hover : Theme.current.control);
     accessible-role: button; accessible-label: root.label;
-    label-text := Text { width: 100%; height: 100%; wrap: root.wrap-label ? word-wrap : no-wrap; visible: !root.chevron; text: root.label; color: root.selected ? Theme.current.on_accent : Theme.current.text_bright; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+    label-text := Text { width: 100%; height: 100%; wrap: root.wrap-label ? word-wrap : no-wrap; visible: !root.chevron; text: root.label; color: root.selected ? Theme.current.on_accent : Theme.current.text_bright; font-size: InterfaceStyle.tv ? 19px : 12px; horizontal-alignment: center; vertical-alignment: center; }
     if root.chevron: IcChevronDown {
         width: 24px; height: 24px;
         x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
@@ -28,18 +31,22 @@ component DownloadButton inherits Rectangle {
         transform-rotation: root.expanded ? 180deg : 0deg;
         animate transform-rotation { duration: Anim.transition_fade; easing: ease-in-out; }
     }
-    border-width: key-focus.has-focus ? 2px : 0px; border-color: Theme.current.focus_ring;
+    border-width: key-focus.has-focus || root.tv-focused ? 2px : 0px; border-color: Theme.current.focus_ring;
     key-focus := FocusScope { key-pressed(e) => { if (e.text == Key.Return || e.text == " ") { if (!e.repeat) { root.picked(); } accept } else { reject } } }
     touch := TouchArea { mouse-cursor: pointer; clicked => { key-focus.focus(); root.picked(); } }
 }
 component DownloadEpisodeRow inherits Rectangle {
     in property <DownloadEpisode> episode;
     in property <bool> narrow;
+    in property <bool> tv-focused: false;
+    in property <int> tv-action;
+    callback reveal(length, length);
+    changed tv-focused => { if root.tv-focused { root.reveal(self.absolute-position.y, self.height); } }
     callback action(string, int);
     // Compact cards give titles and transfer details their own line. A side
     // action used to leave only a few characters and overflow its fixed width.
     private property <bool> stacked: root.width < 480px;
-    height: root.stacked ? 118px : 82px;
+    height: InterfaceStyle.tv ? 106px : root.stacked ? 118px : 82px;
     background: Theme.current.artwork_canvas;
     episode_text := VerticalLayout {
         x: root.stacked ? 8px : episode_badge.x + episode_badge.width + 8px;
@@ -47,31 +54,33 @@ component DownloadEpisodeRow inherits Rectangle {
         width: Math.max(0px, root.stacked ? root.width - 16px : episode_action.x - self.x - 8px);
         height: root.stacked ? 50px : root.height - 16px;
         min-width: 0px; spacing: 3px; alignment: center;
-        Text { vertical-stretch: 0; min-width: 0px; text: root.episode.title; color: Theme.current.text_primary; font-size: 13px; font-weight: 600; overflow: elide; }
-        Text { vertical-stretch: 0; min-width: 0px; text: root.episode.details; color: Theme.current.text_muted; font-size: 11px; overflow: elide; }
+        Text { vertical-stretch: 0; min-width: 0px; text: root.episode.title; color: Theme.current.text_primary; font-size: InterfaceStyle.tv ? 21px : 13px; font-weight: 600; overflow: elide; }
+        Text { vertical-stretch: 0; min-width: 0px; text: root.episode.details; color: Theme.current.text_muted; font-size: InterfaceStyle.tv ? 17px : 11px; overflow: elide; }
         if root.episode.state == 1: Rectangle { height: 4px; background: Theme.current.slider_track; border-radius: 2px;
             Rectangle { x: 0px; width: parent.width * root.episode.progress; height: 100%; background: Theme.current.accent; border-radius: 2px; }
         }
         if root.episode.action_kind == 4 && root.episode.state != 1: Text {
             vertical-stretch: 0; min-width: 0px;
-            text: root.episode.state == 2 ? @tr("Watched") : @tr("Unwatched"); color: root.episode.state == 2 ? Theme.current.accent : Theme.current.text_muted; font-size: 11px;
+            text: root.episode.state == 2 ? @tr("Watched") : @tr("Unwatched"); color: root.episode.state == 2 ? Theme.current.accent : Theme.current.text_muted; font-size: InterfaceStyle.tv ? 17px : 11px;
         }
     }
     episode_badge := Rectangle {
         x: 8px; y: root.stacked ? 66px : (root.height - self.height) / 2;
         width: root.narrow ? 49px : 62px; height: 30px; border-radius: 5px; background: Theme.current.control;
-        Text { text: root.episode.badge; color: Theme.current.text_secondary; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+        Text { text: root.episode.badge; color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 17px : 11px; horizontal-alignment: center; vertical-alignment: center; }
     }
     episode_action := DownloadButton {
-        x: root.stacked ? episode_badge.x + episode_badge.width + 8px : root.width - self.width - 60px;
+        x: root.stacked ? episode_badge.x + episode_badge.width + 8px : root.width - self.width - (InterfaceStyle.tv ? 84px : 60px);
         y: root.stacked ? 62px : (root.height - self.height) / 2;
         width: root.stacked ? Math.max(44px, root.width - episode_badge.x - episode_badge.width - 68px) : Math.max(100px, Math.min(160px, root.width * 0.3));
         label: root.episode.action_label; wrap-label: true;
+        tv-focused: root.tv-focused && root.tv-action == 0;
         picked => { root.action(root.episode.id, 0); }
     }
     DownloadButton {
-        x: root.width - 52px; y: episode_action.y;
-        width: 44px; label: "×"; accessible-label: @tr("Remove download"); picked => { root.action(root.episode.id, 1); }
+        x: root.width - (InterfaceStyle.tv ? 72px : 52px); y: episode_action.y;
+        tv-focused: root.tv-focused && root.tv-action == 1;
+        width: InterfaceStyle.tv ? 56px : 44px; label: "×"; accessible-label: @tr("Remove download"); picked => { root.action(root.episode.id, 1); }
     }
 }
 component DownloadSeriesCard inherits Rectangle {
@@ -88,12 +97,16 @@ component DownloadSeriesCard inherits Rectangle {
     Timer { interval: 1500ms; running: root.artwork-retained; triggered => { root.artwork-visible(root.group.id, true); } }
     changed artwork-report => { root.artwork-visible(root.group.id, root.artwork-retained); }
     init => { root.artwork-visible(root.group.id, root.artwork-retained); }
+    in property <bool> tv-focused: false;
+    in property <int> tv-episode: -1;
+    in property <int> tv-action;
+    callback reveal(length, length);
     callback toggled(string);
     callback action(string,int);
     border-radius: 10px; border-width: 1px; border-color: Theme.current.border_strong;
     background: Theme.current.artwork_canvas; clip: true;
     // Only the chevron animates; rows and card height switch immediately.
-    height: 86px + (root.group.collapsed ? 0px : root.group.episodes.length * (root.width < 480px ? 118px : 82px));
+    height: 86px + (root.group.collapsed ? 0px : root.group.episodes.length * (InterfaceStyle.tv ? 106px : root.width < 480px ? 118px : 82px));
     // Without an explicit anchor Slint centers this fixed-height child in
     // the expanded card, moving the artwork and clipping the toggle in rows.
     Rectangle { x: 0px; y: 0px; width: 100%; height: 86px; background: Theme.current.control;
@@ -101,21 +114,93 @@ component DownloadSeriesCard inherits Rectangle {
         Rectangle { width: 100%; height: 100%; background: #00000090; }
         HorizontalLayout { padding: 14px; spacing: 10px;
             VerticalLayout { spacing: 5px;
-                Text { vertical-stretch: 0; text: root.group.title; color: Theme.current.text_bright; font-size: 17px; font-weight: 700; overflow: elide; }
-                Text { vertical-stretch: 0; text: root.group.subtitle; color: Theme.current.text_secondary; font-size: 12px; overflow: elide; }
+                Text { vertical-stretch: 0; text: root.group.title; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 24px : 17px; font-weight: 700; overflow: elide; }
+                Text { vertical-stretch: 0; text: root.group.subtitle; color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 19px : 12px; overflow: elide; }
             }
-            DownloadButton { width: 44px; chevron: true; expanded: !root.group.collapsed; accessible-label: root.group.collapsed ? @tr("Expand series") : @tr("Collapse series"); picked => { root.toggled(root.group.id); } }
+            DownloadButton { tv-focused: root.tv-focused && root.tv-episode < 0; reveal(y,h) => { root.reveal(y,h); } width: InterfaceStyle.tv ? 56px : 44px; chevron: true; expanded: !root.group.collapsed; accessible-label: root.group.collapsed ? @tr("Expand series") : @tr("Collapse series"); picked => { root.toggled(root.group.id); } }
         }
     }
     if !root.group.collapsed: VerticalLayout {
-        y: 86px; width: 100%; height: root.group.episodes.length * (root.width < 480px ? 118px : 82px); spacing: 0px;
-        for episode in root.group.episodes: DownloadEpisodeRow { episode: episode; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } }
+        y: 86px; width: 100%; height: root.group.episodes.length * (InterfaceStyle.tv ? 106px : root.width < 480px ? 118px : 82px); spacing: 0px;
+        for episode[index] in root.group.episodes: DownloadEpisodeRow { tv-focused: root.tv-focused && root.tv-episode == index; tv-action: root.tv-action; reveal(y,h) => { root.reveal(y,h); } episode: episode; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } }
     }
 }
 export component DownloadsPage inherits Rectangle {
     // Called after publication only while AppWindow retains baseline focus.
     public function focus_shell() { if root.active { page_scope.focus(); } }
 
+    // Semantic remote focus stays in this persistent scope while native text
+    // editing opts in only after OK. Model changes cannot strand focus in a row.
+    private property <int> tv-zone: 0; // -1 rail, 0 search, 1 filters, 2 sort, 3 series, 4 transfers
+    private property <int> tv-nav: 5;
+    private property <int> tv-group: 0;
+    private property <int> tv-episode: -1;
+    private property <int> tv-action: 0;
+    private property <int> tv-filter: 0;
+    function tv-reveal(y: length, h: length) {
+        let top = groups-scroll.absolute-position.y + download_controls.preferred-height + 28px;
+        let bottom = groups-scroll.absolute-position.y + groups-scroll.visible-height - 20px;
+        if y < top { groups-scroll.content-y += top - y; }
+        else if y + h > bottom { groups-scroll.content-y -= y + h - bottom; }
+    }
+    function tv-normalize() {
+        if root.tv-zone == 3 {
+            if root.groups.length == 0 { root.tv-zone = 2; root.tv-episode = -1; }
+            else {
+                root.tv-group = Math.max(0, Math.min(root.tv-group, root.groups.length - 1));
+                root.tv-episode = root.groups[root.tv-group].collapsed ? -1 : Math.min(root.tv-episode, root.groups[root.tv-group].episodes.length - 1);
+            }
+        } else if root.tv-zone == 4 {
+            if root.transfers.length == 0 { root.tv-zone = 2; root.tv-episode = -1; }
+            else { root.tv-episode = Math.max(0, Math.min(root.tv-episode, root.transfers.length - 1)); }
+        }
+    }
+    // Transfer completion/removal and search filters can shrink live models.
+    changed groups => { if InterfaceStyle.tv { root.tv-normalize(); } }
+    changed transfers => { if InterfaceStyle.tv { root.tv-normalize(); } }
+    function tv-step(d: int) {
+        root.tv-normalize();
+        if root.tv-zone < 0 { root.tv-nav = NavState.step(root.tv-nav, d, false); return; }
+        if root.tv-zone == 3 {
+            let count = root.groups[root.tv-group].collapsed ? 0 : root.groups[root.tv-group].episodes.length;
+            if d > 0 {
+                if root.tv-episode + 1 < count { root.tv-episode += 1; }
+                else if root.tv-group + 1 < root.groups.length { root.tv-group += 1; root.tv-episode = -1; }
+                else if root.transfers.length > 0 { root.tv-zone = 4; root.tv-episode = 0; }
+            } else {
+                if root.tv-episode >= 0 { root.tv-episode -= 1; }
+                else if root.tv-group > 0 { root.tv-group -= 1; root.tv-episode = root.groups[root.tv-group].collapsed ? -1 : root.groups[root.tv-group].episodes.length - 1; }
+                else { root.tv-zone = 2; }
+            }
+        } else if root.tv-zone == 4 {
+            if d < 0 && root.tv-episode == 0 {
+                root.tv-zone = root.groups.length > 0 ? 3 : 2;
+                root.tv-group = Math.max(0, root.groups.length - 1);
+                root.tv-episode = root.groups[root.tv-group].collapsed ? -1 : root.groups[root.tv-group].episodes.length - 1;
+            } else { root.tv-episode = Math.max(0, Math.min(root.transfers.length - 1, root.tv-episode + d)); }
+        } else if d > 0 {
+            if root.tv-zone < 2 { root.tv-zone += 1; }
+            else if root.groups.length > 0 { root.tv-zone = 3; root.tv-group = 0; root.tv-episode = -1; }
+            else if root.transfers.length > 0 { root.tv-zone = 4; root.tv-episode = 0; }
+        } else if root.tv-zone > 0 { root.tv-zone -= 1; }
+        else { root.tv-zone = -1; }
+        root.tv-action = 0;
+        if root.tv-zone <= 1 { groups-scroll.content-y = 0px; }
+    }
+    function tv-activate() {
+        root.tv-normalize();
+        if root.tv-zone < 0 {
+            if root.tv-nav == 0 { root.home_picked(); } else if root.tv-nav == 1 { root.discover_picked(); }
+            else if root.tv-nav == 2 { root.library_picked(); } else if root.tv-nav == 3 { root.more_picked(); }
+            else if root.tv-nav == 4 { NavState.calendar_picked(); }
+        } else if root.tv-zone == 0 { download_search.focus(); }
+        else if root.tv-zone == 1 { root.filter_changed(root.tv-filter); }
+        else if root.tv-zone == 2 { root.sort_changed(!root.sort_recent); }
+        else if root.tv-zone == 3 {
+            if root.tv-episode < 0 { root.group_toggled(root.groups[root.tv-group].id); }
+            else { root.action(root.groups[root.tv-group].episodes[root.tv-episode].id, root.tv-action); }
+        } else { root.action(root.transfers[root.tv-episode].id, root.tv-action); }
+    }
     in property <bool> external_navigation: false;
     in property <bool> active: true;
     background: Theme.current.artwork_canvas;
@@ -130,7 +215,7 @@ export component DownloadsPage inherits Rectangle {
     in property <int> system_back_request;
     in-out property <bool> kb_active;
     in property <length> nav-viewport-width: root.width;
-    private property <bool> narrow: root.nav-viewport-width < 700px;
+    private property <bool> narrow: !InterfaceStyle.tv && root.nav-viewport-width < 700px;
     // Derive layout widths directly from the hosting viewport. Using a
     // repeated row's parent.width here would feed its intrinsic width back
     // into ScrollView's minimum width calculation.
@@ -140,7 +225,7 @@ export component DownloadsPage inherits Rectangle {
         && root.width - root.safe-left - root.safe-right > root.height - root.safe-top - root.safe-bottom
         && root.height - root.safe-top - root.safe-bottom < 600px;
     changed scrolling_landscape => { groups-scroll.content-y = 0px; }
-    private property <bool> two-columns: root.available-width > 850px;
+    private property <bool> two-columns: !InterfaceStyle.tv && root.available-width > 850px;
     private property <int> columns: root.two-columns ? 2 : 1;
     private property <int> last-back;
     private property <[string]> filter-labels: [@tr("All"), @tr("Unwatched"), @tr("In progress"), @tr("Watched")];
@@ -162,11 +247,30 @@ export component DownloadsPage inherits Rectangle {
     callback query_changed(string); callback filter_changed(int); callback sort_changed(bool);
     callback group_toggled(string); callback action(string,int); callback back();
     callback home_picked(); callback discover_picked(); callback library_picked(); callback settings_picked(); callback about_picked(); callback more_picked();
-    changed system_back_request => { if (root.active && root.last-back != root.system_back_request) { root.last-back = root.system_back_request; root.back(); } }
+    changed system_back_request => { if (root.active && root.last-back != root.system_back_request) { root.last-back = root.system_back_request; if InterfaceStyle.tv && download_search.has-focus { page_scope.focus(); root.tv-zone = 0; } else { root.back(); } } }
     page_scope := FocusScope { enabled: root.active; width: 100%; height: 100%; init => { root.last-back = root.system_back_request; self.focus(); }
-        capture-key-pressed(e) => { if (e.text == Key.Back || e.text == Key.Escape) { if (!e.repeat) { root.back(); } accept } else { reject } }
+        capture-key-pressed(e) => {
+            if InterfaceStyle.tv && download_search.has-focus {
+                if e.text == Key.Back || e.text == Key.Escape || e.text == Key.DownArrow || e.text == Key.UpArrow {
+                    page_scope.focus(); root.tv-zone = e.text == Key.DownArrow ? 1 : 0; accept
+                } else { reject }
+            } else if e.text == Key.Back || e.text == Key.Escape { if !e.repeat { root.back(); } accept }
+            else if InterfaceStyle.tv && (e.text == Key.UpArrow || e.text == Key.DownArrow) {
+                root.kb_active = true; page_scope.focus(); root.tv-step(e.text == Key.DownArrow ? 1 : -1); accept
+            } else if InterfaceStyle.tv && (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                root.kb_active = true; page_scope.focus();
+                let d = e.text == Key.RightArrow ? 1 : -1;
+                if root.tv-zone < 0 { if d > 0 { root.tv-zone = 0; } }
+                else if root.tv-zone == 1 { root.tv-filter = Math.max(0, Math.min(3, root.tv-filter + d)); }
+                else if root.tv-zone >= 3 && root.tv-episode >= 0 { root.tv-action = Math.max(0, Math.min(1, root.tv-action + d)); }
+                else if d < 0 { root.tv-zone = -1; }
+                accept
+            } else if InterfaceStyle.tv && (e.text == Key.Return || e.text == " ") {
+                root.kb_active = true; if !e.repeat { root.tv-activate(); } accept
+            } else { reject }
+        }
     if !root.narrow && !root.external_navigation: SideNav {
-        viewport-width: root.nav-viewport-width; active: 5; safe-top: root.safe-top; safe-left: root.safe-left; safe-bottom: root.safe-bottom; kb_active <=> root.kb_active;
+        viewport-width: root.nav-viewport-width; active: 5; kb_zone: InterfaceStyle.tv ? (root.tv-zone == -1 ? 0 : -1) : 0; kb_nav: root.tv-nav; safe-top: root.safe-top; safe-left: root.safe-left; safe-bottom: root.safe-bottom; kb_active <=> root.kb_active;
         home_picked => { root.home_picked(); } discover_picked => { root.discover_picked(); } library_picked => { root.library_picked(); } more_picked => { root.more_picked(); }
     }
     // Portrait and desktop retain a pinned heading. Touch landscape expands
@@ -187,20 +291,20 @@ export component DownloadsPage inherits Rectangle {
                 height: root.scrolling_landscape ? download_header.height + root.safe-top : 0px;
                 vertical-stretch: 0;
             }
-            Text { vertical-stretch: 0; text: @tr("On this device"); color: Theme.current.text_muted; font-size: 12px; }
+            Text { vertical-stretch: 0; text: @tr("On this device"); color: Theme.current.text_muted; font-size: InterfaceStyle.tv ? 19px : 12px; }
             controls_slot := Rectangle { height: download_controls.preferred-height; vertical-stretch: 0; }
-            DownloadButton { label: root.sort_recent ? @tr("Newest first") : @tr("Series & episode"); picked => { root.sort_changed(!root.sort_recent); } }
+            DownloadButton { tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 2; reveal(y,h) => { root.tv-reveal(y,h); } label: root.sort_recent ? @tr("Newest first") : @tr("Series & episode"); picked => { root.sort_changed(!root.sort_recent); } }
             if root.groups.length == 0: Text { vertical-stretch: 0;
                 text: root.counts[0] == 0 ? @tr("Your completed downloads will appear here.") : @tr("No downloads match your search or filter.");
                 color: Theme.current.text_muted; wrap: word-wrap; font-size: 15px;
             }
             for row in Math.ceil(root.groups.length / root.columns): HorizontalLayout { spacing: 12px; vertical-stretch: 0;
-                DownloadSeriesCard { artwork-active: root.artwork-active; viewport-top: groups-scroll.absolute-position.y; viewport-height: groups-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * root.columns]; narrow: root.narrow; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } }
+                DownloadSeriesCard { tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 3 && root.tv-group == row * root.columns; tv-episode: root.tv-episode; tv-action: root.tv-action; reveal(y,h) => { root.tv-reveal(y,h); } artwork-active: root.artwork-active; viewport-top: groups-scroll.absolute-position.y; viewport-height: groups-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * root.columns]; narrow: root.narrow; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } }
                 if root.two-columns && row * 2 + 1 < root.groups.length: DownloadSeriesCard { artwork-active: root.artwork-active; viewport-top: groups-scroll.absolute-position.y; viewport-height: groups-scroll.visible-height; artwork-visible(key, retained) => { root.artwork-visible(key, retained); } width: (root.available-width - (root.columns - 1) * 12px) / root.columns; group: root.groups[row * 2 + 1]; narrow: false; toggled(id) => { root.group_toggled(id); } action(id,kind) => { root.action(id,kind); } }
                 if root.two-columns && row * 2 + 1 >= root.groups.length: Rectangle { width: (root.available-width - 12px) / 2; }
             }
             if root.transfers.length > 0: Text { vertical-stretch: 0; text: @tr("Transfers"); color: Theme.current.text_bright; font-size: 20px; font-weight: 600; }
-            for transfer in root.transfers: DownloadEpisodeRow { episode: transfer; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } }
+            for transfer[index] in root.transfers: DownloadEpisodeRow { tv-focused: InterfaceStyle.tv && root.kb_active && root.tv-zone == 4 && root.tv-episode == index; tv-action: root.tv-action; reveal(y,h) => { root.tv-reveal(y,h); } episode: transfer; narrow: root.narrow; action(id,kind) => { root.action(id,kind); } }
         }
     }
     download_header := PageHeader {
@@ -230,13 +334,15 @@ export component DownloadsPage inherits Rectangle {
                 width: root.available-width; height: self.preferred-height; min-width: 0px;
                 spacing: 14px;
                 download_search := SearchField {
-                    height: 44px; vertical-stretch: 0;
+                    height: InterfaceStyle.tv ? 56px : 44px; vertical-stretch: 0;
                     text <=> root.query; placeholder-text: @tr("Search downloaded episodes");
-                    search-icon: true; roomy: true;
+                    search-icon: true; roomy: true; prominent: InterfaceStyle.tv;
+                    border-width: InterfaceStyle.tv && root.kb_active && root.tv-zone == 0 ? 3px : 1px;
+                    border-color: InterfaceStyle.tv && root.kb_active && root.tv-zone == 0 ? Theme.current.focus_ring : Theme.current.control_border;
                     edited(value) => { root.query_changed(value); }
                 }
                 filter_rail := Flickable {
-                    height: 44px; vertical-stretch: 0; min-width: 0px;
+                    height: InterfaceStyle.tv ? 56px : 44px; vertical-stretch: 0; min-width: 0px;
                     content-width: filter_chips.preferred-width;
                     content-height: self.height;
                     changed width => { root.reveal_filter(root.selected_filter_left, root.selected_filter_width); }
@@ -248,6 +354,10 @@ export component DownloadsPage inherits Rectangle {
                             label: label + " " + root.counts[index]; selected: root.filter == index;
                             touch_feedback: ControlInput.touch-feedback;
                             keyboard-focusable: true;
+                            property <bool> tv-highlight: InterfaceStyle.tv && root.kb_active && root.tv-zone == 1 && root.tv-filter == index;
+                            changed tv-highlight => { if self.tv-highlight { root.reveal_filter(self.x, self.width); } }
+                            border-width: InterfaceStyle.tv && root.kb_active && root.tv-zone == 1 && root.tv-filter == index ? 3px : 1px;
+                            border-color: InterfaceStyle.tv && root.kb_active && root.tv-zone == 1 && root.tv-filter == index ? Theme.current.focus_ring : Theme.current.border_strong;
                             picked => { root.filter_changed(index); }
                             reveal(left, w) => { root.reveal_filter(left, w); }
                         }

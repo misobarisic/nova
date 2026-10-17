@@ -3097,3 +3097,18 @@ msgstr "Prikažite povijest gledanja"
 
 msgid "No watch history yet."
 msgstr "Još nema povijesti gledanja."
+
+msgid "Interface mode"
+msgstr "Način sučelja"
+
+msgid "Standard"
+msgstr "Standardno"
+
+msgid "Automatic uses the TV interface on Android TV. This choice applies only to this device."
+msgstr "Automatski koristi TV sučelje na Android TV uređajima. Ovaj izbor vrijedi samo za ovaj uređaj."
+
+msgid "Automatic"
+msgstr "Automatski"
+
+msgid "Details"
+msgstr "Pojedinosti"

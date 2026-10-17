@@ -79,6 +79,7 @@ macro_rules! forward_globals {
     };
 }
 forward_globals!(
+    InterfaceStyle,
     CompletionBridge,
     PartyBridge,
     RemoteBridge,

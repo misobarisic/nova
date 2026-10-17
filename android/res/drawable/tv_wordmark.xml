@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A compact geometric NOVA wordmark; no additional raster or font asset. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="148dp" android:height="42dp" android:viewportWidth="148" android:viewportHeight="42">
+    <path android:fillColor="#F7F5FF" android:pathData="M0,40 L0,2 L7,2 L25,29 L25,2 L32,2 L32,40 L25,40 L7,13 L7,40 Z" />
+    <path android:fillColor="#F7F5FF" android:fillType="evenOdd" android:pathData="M40,12 Q40,1 52,1 L60,1 Q72,1 72,12 L72,30 Q72,41 60,41 L52,41 Q40,41 40,30 Z M47,13 L47,29 Q47,34 53,34 L59,34 Q65,34 65,29 L65,13 Q65,8 59,8 L53,8 Q47,8 47,13 Z" />
+    <path android:fillColor="#F7F5FF" android:pathData="M77,2 L85,2 L95,31 L105,2 L113,2 L99,40 L91,40 Z" />
+    <path android:fillColor="#F7F5FF" android:fillType="evenOdd" android:pathData="M111,40 L125,2 L134,2 L148,40 L140,40 L137,31 L122,31 L119,40 Z M124,24 L135,24 L129.5,9 Z" />
+</vector>

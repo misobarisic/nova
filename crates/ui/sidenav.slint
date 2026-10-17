@@ -1,10 +1,10 @@
-import { Theme, Anim, NavMetrics, NavState } from "@NovaUiShared";
+import { InterfaceStyle, Theme, Anim, NavMetrics, NavState } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 import { IcHome, IcExplore, IcVideoLibrary, IcMoreHoriz, IcCalendar, IcDownload } from "icons.slint";
 
 
-// Left navigation stays a compact icon-only rail on every wide layout.
+// Wide navigation keeps compact icons in Standard mode and visible labels on TV.
 // It shares selection state and icon feedback with the phone bar. Most root
 // pages host their own rail; AppWindow hosts one stationary rail for More and
 // its children. NavMetrics.width-for() reserves the matching wide footprint.
@@ -78,13 +78,13 @@ component SideItem inherits Rectangle {
     accessible-role: button;
     accessible-label: root.kind == 0 ? @tr("Home") : root.kind == 1 ? @tr("Discover") : root.kind == 2 ? @tr("Library") : root.kind == 3 ? @tr("More") : root.kind == 4 ? @tr("Calendar") : @tr("Downloads");
 
-    height: 56px;
+    height: InterfaceStyle.tv ? 72px : 56px;
 
     // Only the hover fill and keyboard ring live here; SideNav owns the
     // shared highlight. The entire item slot remains clickable.
     Rectangle {
-        width: 48px;
-        height: 48px;
+        width: InterfaceStyle.tv ? parent.width - 16px : 48px;
+        height: InterfaceStyle.tv ? 64px : 48px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: (root.active || root.kb_focused || item_focus.has-focus) ? transparent : (item_touch.has-hover ? Theme.current.control_hover : transparent);
@@ -93,46 +93,53 @@ component SideItem inherits Rectangle {
         border-color: Theme.current.text_bright;
 
         if root.kind == 0: icon_home := IcHome {
-            x: (parent.width - self.width) / 2;
+            x: InterfaceStyle.tv ? 12px : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 24px + root.pop * 2px;
+            width: (InterfaceStyle.tv ? 28px : 24px) + root.pop * 2px;
             height: self.width;
             fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
         if root.kind == 1: icon_discover := IcExplore {
-            x: (parent.width - self.width) / 2;
+            x: InterfaceStyle.tv ? 12px : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 24px + root.pop * 2px;
+            width: (InterfaceStyle.tv ? 28px : 24px) + root.pop * 2px;
             height: self.width;
             fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
         if root.kind == 2: icon_library := IcVideoLibrary {
-            x: (parent.width - self.width) / 2;
+            x: InterfaceStyle.tv ? 12px : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 24px + root.pop * 2px;
+            width: (InterfaceStyle.tv ? 28px : 24px) + root.pop * 2px;
             height: self.width;
             fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
         if root.kind == 3: icon_more := IcMoreHoriz {
-            x: (parent.width - self.width) / 2;
+            x: InterfaceStyle.tv ? 12px : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 24px + root.pop * 2px;
+            width: (InterfaceStyle.tv ? 28px : 24px) + root.pop * 2px;
             height: self.width;
             fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
         if root.kind == 4: icon_calendar := IcCalendar {
-            x: (parent.width - self.width) / 2;
+            x: InterfaceStyle.tv ? 12px : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 24px + root.pop * 2px;
+            width: (InterfaceStyle.tv ? 28px : 24px) + root.pop * 2px;
             height: self.width;
             fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
         }
         if root.kind == 5: icon_download := IcDownload {
-            x: (parent.width - self.width) / 2;
+            x: InterfaceStyle.tv ? 12px : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 24px + root.pop * 2px;
+            width: (InterfaceStyle.tv ? 28px : 24px) + root.pop * 2px;
             height: self.width;
             fill: root.active ? Theme.current.on_accent : Theme.current.text_muted;
+        }
+        if InterfaceStyle.tv: Text {
+            x: 48px; y: 0px; width: parent.width - 54px; height: 100%;
+            text: root.accessible-label;
+            font-size: 18px; font-weight: root.active || root.kb_focused ? 600 : 400;
+            color: root.active ? Theme.current.on_accent : Theme.current.text_primary;
+            vertical-alignment: center; overflow: elide;
         }
     }
 
@@ -195,13 +202,13 @@ export component SideNav inherits Rectangle {
     rail_scroll := ScrollView {
         x: 0px; y: 0px; width: 100%; height: 100%;
         content-width: self.visible-width;
-        content-height: Math.max(self.visible-height, 352px + root.safe-top + root.safe-bottom);
+        content-height: Math.max(self.visible-height, (InterfaceStyle.tv ? 448px : 352px) + root.safe-top + root.safe-bottom);
         mouse-drag-pan-enabled: true;
     panel := Rectangle {
         x: root.safe-left;
         y: root.safe-top;
         width: root.width - root.safe-left - 8px;
-        height: Math.max(root.height - root.safe-top - root.safe-bottom, 352px);
+        height: Math.max(root.height - root.safe-top - root.safe-bottom, InterfaceStyle.tv ? 448px : 352px);
         background: root.panel-background;
         border-width: 0px;
 
@@ -209,12 +216,12 @@ export component SideNav inherits Rectangle {
         // the item index (56px item pitch, 8px panel padding), with no glide.
         // Declared before the item column, which draws the icons over it.
         marker_dot := Rectangle {
-            x: (parent.width - self.width) / 2;
+            x: InterfaceStyle.tv ? 8px : (parent.width - self.width) / 2;
             // Centred inside the item slot, like the item's own 48px ring:
             // the 4px is half of the 8px the 48px circle leaves in a 56px item.
-            y: 8px + (56px - self.height) / 2 + (root.active == 3 ? 5 : root.active >= 4 ? root.active - 1 : root.active) * 56px;
-            width: 48px;
-            height: 48px;
+            y: 8px + ((InterfaceStyle.tv ? 72px : 56px) - self.height) / 2 + (root.active == 3 ? 5 : root.active >= 4 ? root.active - 1 : root.active) * (InterfaceStyle.tv ? 72px : 56px);
+            width: InterfaceStyle.tv ? parent.width - 16px : 48px;
+            height: InterfaceStyle.tv ? 64px : 48px;
             border-radius: 24px;
             background: Theme.current.accent;
         }

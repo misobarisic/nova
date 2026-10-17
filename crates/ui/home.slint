@@ -1,9 +1,10 @@
 import { RemotePlayingSection } from "remote-controls.slint";
-import { SettingsBridge, RemoteBridge, Theme, ContinueRow, UpcomingRow, HomeCatalogSection, HomeCatalogCard, CalCell, SheetItem, NavMetrics, NavState, Anim } from "@NovaUiShared";
+import { InterfaceStyle, SettingsBridge, RemoteBridge, Theme, ContinueRow, UpcomingRow, HomeCatalogSection, HomeCatalogCard, CalCell, SheetItem, NavMetrics, NavState, Anim } from "@NovaUiShared";
 
 import { TitleArtwork } from "title-artwork.slint";
 import { ScrollView } from "scrollview.slint";
 
+import { PillButton } from "settings-controls.slint";
 import { MenuSheet } from "menusheet.slint";
 import { SideNav } from "sidenav.slint";
 import { BottomNav } from "bottomnav.slint";
@@ -22,7 +23,7 @@ component NextUpBadge inherits Rectangle {
 
     badge_lbl := Text {
         text: @tr("Next up");
-        font-size: 11px;
+        font-size: InterfaceStyle.tv ? 18px : 11px;
         font-weight: 700;
         color: Theme.current.text_bright;
         width: Math.max(0px, root.width - 16px);
@@ -43,7 +44,7 @@ component NewEpisodeBadge inherits Rectangle {
 
     badge_lbl := Text {
         text: @tr("New Episode");
-        font-size: 11px;
+        font-size: InterfaceStyle.tv ? 18px : 11px;
         font-weight: 700;
         color: Theme.current.text_bright;
         width: Math.max(0px, root.width - 16px);
@@ -63,7 +64,7 @@ component HomeEpisodeBadge inherits Rectangle {
     background: Theme.current.home_badge;
     badge_label := Text {
         x: 7px; width: Math.max(0px, parent.width - 14px); height: 100%;
-        text: root.label; color: Theme.current.text_bright; font-size: 10px; font-weight: 700;
+        text: root.label; color: Theme.current.text_bright; font-size: InterfaceStyle.tv ? 18px : 10px; font-weight: 700;
         vertical-alignment: center; overflow: elide;
     }
 }
@@ -111,9 +112,9 @@ component ContinueCard inherits Rectangle {
     in property <string> removal_label: @tr("Remove from Continue Watching");
 
     width: card-width;
-    // True 2:3 poster at any width + 76px footer reserves title, episode
-    // label and the progress rail so cards never clip.
-    height: card-width * 3 / 2 + 76px;
+    // True 2:3 posters reserve a taller caption in TV mode for readable labels.
+    // The progress rail keeps its own space so cards never clip.
+    height: card-width * 3 / 2 + (InterfaceStyle.tv ? 108px : 76px);
 
     // Each card owns its native desktop popup (landing rail and subpage).
     // On touch the same press/hold opens the page-level sheet instead.
@@ -290,9 +291,9 @@ component ContinueCard inherits Rectangle {
                     }
                 }
                 continue_footer := Rectangle {
-                    height: 76px;
+                    height: InterfaceStyle.tv ? 108px : 76px;
                     if root.entry.progress > 0: continue_progress := HorizontalLayout {
-                        x: 8px; y: 7px; width: parent.width - 16px; height: 12px; spacing: 6px;
+                        x: 8px; y: 7px; width: parent.width - 16px; height: InterfaceStyle.tv ? 20px : 12px; spacing: 6px;
                         Rectangle {
                             horizontal-stretch: 1;
                             Rectangle {
@@ -306,24 +307,24 @@ component ContinueCard inherits Rectangle {
                         }
                         Text {
                             text: @tr("{}%", Math.round(Math.max(0, Math.min(1, root.entry.progress)) * 100));
-                            color: Theme.current.text_home_badge; font-size: 10px; vertical-alignment: center;
+                            color: Theme.current.text_home_badge; font-size: InterfaceStyle.tv ? 18px : 10px; vertical-alignment: center;
                         }
                     }
                     continue_title := Text {
-                        x: 8px; y: root.entry.progress > 0 ? 24px : 8px;
-                        width: parent.width - 16px; height: 34px;
+                        x: 8px; y: root.entry.progress > 0 ? (InterfaceStyle.tv ? 32px : 24px) : 8px;
+                        width: parent.width - 16px; height: InterfaceStyle.tv ? 48px : 34px;
                         text: root.entry.title;
-                        color: Theme.current.text_home_title; font-size: 12px; font-weight: 600;
+                        color: Theme.current.text_home_title; font-size: InterfaceStyle.tv ? 18px : 12px; font-weight: 600;
                         vertical-alignment: top; wrap: word-wrap; overflow: elide;
                     }
                     continue_status := Text {
-                        x: 8px; y: parent.height - 17px; width: parent.width - 16px; height: 14px;
+                        x: 8px; y: parent.height - (InterfaceStyle.tv ? 28px : 17px); width: parent.width - 16px; height: InterfaceStyle.tv ? 24px : 14px;
                         // Show the episode beneath the now-prominent series
                         // title, retaining the remaining-time hint.
                         text: root.entry.episode_title != "" ? root.entry.episode_title
                             + (root.entry.remaining != "" ? " · " + root.entry.remaining : "")
                             : root.entry.remaining != "" ? root.entry.remaining : root.entry.subtitle;
-                        color: Theme.current.text_home_date; font-size: 10px; vertical-alignment: center; overflow: elide;
+                        color: Theme.current.text_home_date; font-size: InterfaceStyle.tv ? 18px : 10px; vertical-alignment: center; overflow: elide;
                     }
                 }
             }
@@ -351,9 +352,9 @@ component UpcomingCard inherits Rectangle {
     callback menu_requested();
 
     width: card-width;
-    // True 2:3 poster + 88px footer reserves title, episode label and the
-    // air date.
-    height: card-width * 3 / 2 + 88px;
+    // True 2:3 posters reserve title, episode and air-date caption space;
+    // TV mode grows that caption with the type.
+    height: card-width * 3 / 2 + (InterfaceStyle.tv ? 120px : 88px);
 
     up_ctx := ContextMenuArea {
         width: 100%; height: 100%;
@@ -460,22 +461,22 @@ component UpcomingCard inherits Rectangle {
                     }
                 }
                 upcoming_footer := Rectangle {
-                    height: 88px;
+                    height: InterfaceStyle.tv ? 120px : 88px;
                     upcoming_title := Text {
-                        x: 8px; y: 8px; width: parent.width - 16px; height: 34px;
+                        x: 8px; y: 8px; width: parent.width - 16px; height: InterfaceStyle.tv ? 48px : 34px;
                         text: root.entry.title;
-                        color: Theme.current.text_home_title; font-size: 12px; font-weight: 600;
+                        color: Theme.current.text_home_title; font-size: InterfaceStyle.tv ? 18px : 12px; font-weight: 600;
                         vertical-alignment: top; wrap: word-wrap; overflow: elide;
                     }
                     // Keep the episode identifiable beneath the series title.
                     Text {
-                        x: 8px; y: 46px; width: parent.width - 16px; height: 14px;
+                        x: 8px; y: InterfaceStyle.tv ? 62px : 46px; width: parent.width - 16px; height: InterfaceStyle.tv ? 24px : 14px;
                         text: root.entry.episode_title != "" ? root.entry.episode_title : root.entry.subtitle;
-                        color: Theme.current.text_home_metadata; font-size: 10px; overflow: elide;
+                        color: Theme.current.text_home_metadata; font-size: InterfaceStyle.tv ? 18px : 10px; overflow: elide;
                     }
                     upcoming_date := Text {
-                        x: 8px; y: parent.height - 22px; width: parent.width - 16px; height: 14px;
-                        text: root.entry.date; color: Theme.current.text_home_date; font-size: 10px;
+                        x: 8px; y: parent.height - (InterfaceStyle.tv ? 28px : 22px); width: parent.width - 16px; height: InterfaceStyle.tv ? 24px : 14px;
+                        text: root.entry.date; color: Theme.current.text_home_date; font-size: InterfaceStyle.tv ? 18px : 10px;
                         vertical-alignment: center; overflow: elide;
                     }
                 }
@@ -505,7 +506,7 @@ component HomeCatalogPosterCard inherits Rectangle {
     callback pan_release();
 
     width: card-width;
-    height: card-width * 3 / 2 + (root.entry.history_date != "" ? 72px : 54px);
+    height: card-width * 3 / 2 + (root.entry.history_date != "" ? (InterfaceStyle.tv ? 116px : 72px) : (InterfaceStyle.tv ? 88px : 54px));
     history_ctx := ContextMenuArea {
         width: root.entry.history_action != "" ? root.width : 0px;
         height: 100%;
@@ -577,16 +578,16 @@ component HomeCatalogPosterCard inherits Rectangle {
                     }
                 }
                 catalog_footer := Rectangle {
-                    height: root.entry.history_date != "" ? 72px : 54px;
+                    height: root.entry.history_date != "" ? (InterfaceStyle.tv ? 116px : 72px) : (InterfaceStyle.tv ? 88px : 54px);
                     background: Theme.current.card;
                     catalog_title := Text {
                         x: 8px;
                         y: 5px;
                         width: parent.width - 16px;
-                        height: 30px;
+                        height: InterfaceStyle.tv ? 48px : 30px;
                         text: root.entry.title;
                         color: Theme.current.text_home_title;
-                        font-size: 12px;
+                        font-size: InterfaceStyle.tv ? 18px : 12px;
                         font-weight: 600;
                         vertical-alignment: top;
                         wrap: word-wrap;
@@ -594,18 +595,18 @@ component HomeCatalogPosterCard inherits Rectangle {
                     }
                     catalog_caption := Text {
                         x: 8px;
-                        y: 35px;
+                        y: InterfaceStyle.tv ? 55px : 35px;
                         width: parent.width - 16px;
-                        height: 14px;
+                        height: InterfaceStyle.tv ? 24px : 14px;
                         text: root.entry.year;
                         color: Theme.current.text_home_date;
-                        font-size: 10px;
+                        font-size: InterfaceStyle.tv ? 18px : 10px;
                         vertical-alignment: center;
                         overflow: elide;
                     }
                     if root.entry.history_date != "": Text {
-                        x: 8px; y: 51px; width: parent.width - 16px; height: 14px;
-                        text: root.entry.history_date; font-size: 10px;
+                        x: 8px; y: InterfaceStyle.tv ? 82px : 51px; width: parent.width - 16px; height: InterfaceStyle.tv ? 24px : 14px;
+                        text: root.entry.history_date; font-size: InterfaceStyle.tv ? 18px : 10px;
                         color: Theme.current.text_home_date; overflow: elide;
                     }
                 }
@@ -744,7 +745,7 @@ component SectionHeader inherits Rectangle {
 
         Text {
             text: root.title;
-            font-size: 22px;
+            font-size: InterfaceStyle.tv ? 29px : 22px;
             font-weight: 700;
             color: Theme.current.text_bright;
             min-width: 0px;
@@ -757,7 +758,7 @@ component SectionHeader inherits Rectangle {
             text: @tr("See all");
             horizontal-stretch: 0;
             max-width: self.preferred-width;
-            font-size: 12px;
+            font-size: InterfaceStyle.tv ? 18px : 12px;
             color: Theme.current.text_home_badge;
             vertical-alignment: center;
         }
@@ -810,7 +811,7 @@ component CalDayCell inherits Rectangle {
 
         Text {
             text: "" + root.cell.day;
-            font-size: 14px;
+            font-size: InterfaceStyle.tv ? 18px : 14px;
             font-weight: root.cell.selected ? 700 : 400;
             color: root.cell.selected ? Theme.current.on_accent : (root.cell.today ? Theme.current.text_calendar_today : Theme.current.text_calendar_day);
             horizontal-alignment: center;
@@ -861,7 +862,7 @@ component CalToggle inherits Rectangle {
         x: 14px;
         y: (parent.height - self.height) / 2;
         text: root.open ? @tr("List") : @tr("Calendar");
-        font-size: 13px;
+        font-size: InterfaceStyle.tv ? 18px : 13px;
         font-weight: 600;
         color: Theme.current.text_calendar_today;
     }
@@ -875,6 +876,7 @@ component CalToggle inherits Rectangle {
 }
 
 component FeaturedActionButton inherits Rectangle {
+    in property <bool> focused: false;
     in property <string> label;
     in property <bool> narrow;
     in property <bool> compact;
@@ -886,8 +888,8 @@ component FeaturedActionButton inherits Rectangle {
     background: action_touch.has-hover
         ? Theme.current.primary_button_hover
         : Theme.current.primary_button;
-    border-width: 1px;
-    border-color: Theme.current.primary_button_border;
+    border-width: root.focused ? 3px : 1px;
+    border-color: root.focused ? Theme.current.focus_ring : Theme.current.primary_button_border;
     animate background { duration: Anim.hover_fast; }
 
     HorizontalLayout {
@@ -904,7 +906,7 @@ component FeaturedActionButton inherits Rectangle {
         }
         action_label := Text {
             text: root.label;
-            font-size: root.narrow ? (root.compact ? 13px : 14px) : 16px;
+            font-size: InterfaceStyle.tv ? 22px : (root.narrow ? (root.compact ? 13px : 14px) : 16px);
             font-weight: 600; color: Theme.current.on_accent; vertical-alignment: center;
             horizontal-alignment: center; horizontal-stretch: 1;
             min-width: 0px; overflow: elide;
@@ -921,6 +923,7 @@ component FeaturedActionButton inherits Rectangle {
 }
 
 component FeaturedActions inherits Rectangle {
+    in property <bool> focused: false;
     in property <string> watch_label;
     in property <bool> narrow;
     in property <bool> compact;
@@ -930,7 +933,7 @@ component FeaturedActions inherits Rectangle {
     height: root.narrow ? 46px : 52px;
     watch_button := FeaturedActionButton {
         x: 0px; y: 0px; width: 100%;
-        label: root.watch_label; narrow: root.narrow; compact: root.compact;
+        label: root.watch_label; narrow: root.narrow; compact: root.compact; focused: root.focused;
         picked => { root.watch_now(); }
     }
 }
@@ -979,6 +982,9 @@ component FeaturedBadge inherits Rectangle {
 }
 
 component FeaturedPagerButton inherits Rectangle {
+    in property <bool> focused: false;
+    border-width: root.focused ? 3px : 0px;
+    border-color: Theme.current.focus_ring;
     in property <bool> next;
     in property <bool> narrow;
     callback stepped();
@@ -1051,7 +1057,7 @@ component FeaturedCaption inherits VerticalLayout {
     }
     if root.slide.tagline != "": caption_tagline := Text {
         text: root.slide.tagline; width: 100%; height: self.preferred-height; max-lines: 2;
-        font-size: root.narrow ? 14px : 17px; color: Theme.current.text_home_badge;
+        font-size: InterfaceStyle.tv ? 22px : (root.narrow ? 14px : 17px); color: Theme.current.text_home_badge;
         horizontal-alignment: left; wrap: word-wrap; overflow: elide; min-width: 0px;
     }
     caption_metadata := HorizontalLayout {
@@ -1066,13 +1072,14 @@ component FeaturedCaption inherits VerticalLayout {
     }
     if root.slide.description != "": caption_description := Text {
         text: root.slide.description; width: 100%; height: self.preferred-height; max-lines: 3;
-        font-size: root.narrow ? 14px : 16px; color: Theme.current.text_description;
+        font-size: InterfaceStyle.tv ? 22px : (root.narrow ? 14px : 16px); color: Theme.current.text_description;
         horizontal-alignment: left; wrap: word-wrap; overflow: elide; min-width: 0px;
     }
 }
 
 // Catalog artwork with a left-aligned caption and a steady bottom control row.
 component FeaturedShowcase inherits Rectangle {
+    in property <int> tv_focus: -1; // play, details, previous, next
     in property <string> watch_label;
     in property <string> title;
     in property <string> media_type;
@@ -1314,14 +1321,14 @@ component FeaturedShowcase inherits Rectangle {
         x: root.width - self.width - root.right_inset;
         y: root.height - self.height - 24px;
         width: root.pager_width; height: 44px; spacing: 2px;
-        FeaturedPagerButton { narrow: root.narrow; stepped => { root.step(-1); } }
+        FeaturedPagerButton { focused: InterfaceStyle.tv && root.tv_focus == 2; narrow: root.narrow; stepped => { root.step(-1); } }
         Text {
             text: @tr("{} / {}", root.index + 1, root.count);
             horizontal-stretch: 1; horizontal-alignment: center;
-            font-size: root.narrow ? 14px : 16px; font-weight: 600;
+            font-size: InterfaceStyle.tv ? 22px : (root.narrow ? 14px : 16px); font-weight: 600;
             color: Theme.current.text_home_type; vertical-alignment: center;
         }
-        FeaturedPagerButton { next: true; narrow: root.narrow; stepped => { root.step(1); } }
+        FeaturedPagerButton { focused: InterfaceStyle.tv && root.tv_focus == 3; next: true; narrow: root.narrow; stepped => { root.step(1); } }
     }
 
     // Text follows the same left edge and stays above the steady controls.
@@ -1339,7 +1346,16 @@ component FeaturedShowcase inherits Rectangle {
         width: root.narrow ? root.width - root.left_inset - root.right_inset : Math.min(Math.max(0px, root.width - root.left_inset - root.right_inset), Math.min(640px, root.width * 0.55));
         opacity: root.fading && root.fade_text ? root.mix : 1.0;
     }
+    if InterfaceStyle.tv: featured_details := PillButton {
+        x: featured_actions.x + featured_actions.width + 16px;
+        y: featured_actions.y; height: featured_actions.height;
+        label: @tr("Details");
+        border-width: root.tv_focus == 1 ? 3px : 1px;
+        border-color: root.tv_focus == 1 ? Theme.current.focus_ring : Theme.current.border_strong;
+        clicked => { root.picked(); }
+    }
     featured_actions := FeaturedActions {
+        focused: InterfaceStyle.tv && root.tv_focus == 0;
         watch_label: root.watch_label;
         narrow: root.narrow; compact: root.width < 400px;
         available-width: Math.max(0px, root.controls_width - (root.count > 1 && !root.controls_stacked ? root.pager_width + 12px : 0px));
@@ -1351,7 +1367,7 @@ component FeaturedShowcase inherits Rectangle {
 
 export component HomePage {
     // Called after publication only while AppWindow retains baseline focus.
-    public function focus_shell() { nav_scope.focus(); }
+    public function focus_shell() { if (!InterfaceStyle.tv && root.kb_zone == 6) { root.kb_zone = 0; } nav_scope.focus(); }
 
     // Custom components placed in a Window are sized by their preferred size;
     // make this page fill the window (its parent).
@@ -1401,12 +1417,12 @@ export component HomePage {
     in property <int> system_back_request: 0;
     property <int> last_system_back_request: -1;
 
-    property <length> item-gap: Theme.card_spacing;
+    property <length> item-gap: InterfaceStyle.tv ? Math.max(24px, Theme.card_spacing) : Theme.card_spacing;
     // Same fluid scheme as Library: column count from a 160px minimum
     // card (always ≥ 2), live card width stretched to fill the row
     // (capped), grid centered when capped. Used by the subpage grids.
-    property <length> min-card: 160px;
-    property <length> max-card: 200px;
+    property <length> min-card: InterfaceStyle.tv ? 240px : 160px;
+    property <length> max-card: InterfaceStyle.tv ? 300px : 200px;
     in property <int> min_cols: 2;
     // Left inset reserved by the wide-layout navigation rail (0 on narrow).
     // Window width is supplied separately so responsive padding does not
@@ -1417,16 +1433,16 @@ export component HomePage {
     // leave the last column wider than the space it actually occupies.
     property <length> grid_width: Math.max(1px, sub_scroll.visible-width);
     property <length> grid_top: 8px;
-    property <int> grid_cols: Math.max(root.min_cols, Math.floor((root.grid_width + root.item-gap) / (root.min-card + root.item-gap)));
+    property <int> grid_cols: Math.max(InterfaceStyle.tv ? 1 : root.min_cols, Math.floor((root.grid_width + root.item-gap) / (root.min-card + root.item-gap)));
     property <length> grid_item_width: Math.max(1px, Math.min(root.max-card, (root.grid_width - (root.grid_cols - 1) * root.item-gap) / root.grid_cols));
     // Landing carousel card: ~2.45 cards visible on narrow (Android), the
     // grid card elsewhere.
     property <length> rail_item_width: root.narrow
         ? Math.max(96px, (continue_rail_host.width + root.item-gap) / 2.5 - root.item-gap)
         : root.grid_item_width;
-    property <length> rail_h: root.rail_item_width * 3 / 2 + 76px;
-    property <length> rail_h_up: root.rail_item_width * 3 / 2 + 88px;
-    property <length> catalog_rail_h: root.rail_item_width * 3 / 2 + 54px;
+    property <length> rail_h: root.rail_item_width * 3 / 2 + (InterfaceStyle.tv ? 108px : 76px);
+    property <length> rail_h_up: root.rail_item_width * 3 / 2 + (InterfaceStyle.tv ? 120px : 88px);
+    property <length> catalog_rail_h: root.rail_item_width * 3 / 2 + (InterfaceStyle.tv ? 88px : 54px);
     // Conditional headers report their actual positions; wrapped headings
     // and a taller showcase must not invalidate keyboard scroll estimates.
     property <length> continue_top: 0px;
@@ -1596,6 +1612,7 @@ export component HomePage {
 
     function close_menu() {
         root.menu_open = false;
+        if (InterfaceStyle.tv) { nav_scope.focus(); }
     }
 
     function system_back() {
@@ -1646,6 +1663,24 @@ export component HomePage {
     in-out property <int> kb_up_idx: 0;
     // Keyboard modality (bound to AppWindow, see DiscoverPage).
     in-out property <bool> kb_active;
+    function tv_context() -> bool {
+        if ((root.view == 1 || (root.view == 0 && root.kb_zone == 1)) && root.kb_idx >= 0 && root.kb_idx < root.continue_rows.length) { root.open_continue_menu(root.kb_idx); return true; }
+        if ((root.view == -3 || (root.view == 0 && root.kb_zone == 4)) && root.kb_idx >= 0 && root.kb_idx < root.new_episode_rows.length) { root.open_new_episode_menu(root.kb_idx); return true; }
+        let upcoming = root.view == 2 ? root.kb_idx : root.kb_up_idx;
+        if (!root.cal_open && (root.view == 2 || (root.view == 0 && root.kb_zone == 2)) && upcoming >= 0 && upcoming < root.upcoming_rows.length) { root.open_upcoming_menu(upcoming); return true; }
+        return root.open_focused_history_menu();
+    }
+
+    // Remotes send repeated Return presses while OK is held. Delay the primary
+    // action until release so opening a context menu never also starts playback.
+    private property <bool> tv_ok_pending: false;
+    private property <bool> tv_ok_held: false;
+    tv_ok_hold := Timer {
+        interval: 650ms;
+        running: false;
+        triggered => { self.stop(); root.tv_ok_held = root.tv_context(); }
+    }
+
 
     // Number of cards in the list the keyboard cursor is on (Continue on the
     // landing, whichever grid the subpage shows).
@@ -1681,7 +1716,9 @@ export component HomePage {
         }
     }
 
+    private property <int> tv_featured_control: 0;
     function kb_up() {
+        if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 6) { root.kb_zone = 0; return; }
         if (root.view == 2 && root.cal_open) {
             // Calendar: a week back.
             root.upcoming_cal_pick(root.cal_epoch - 7);
@@ -1695,6 +1732,7 @@ export component HomePage {
     }
 
     function kb_down() {
+        if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 0 && root.featured_count > 0) { root.kb_zone = 6; land_scroll.content-y = 0px; return; }
         if (root.view == 2 && root.cal_open) {
             // Calendar: a week forward.
             root.upcoming_cal_pick(root.cal_epoch + 7);
@@ -1734,8 +1772,8 @@ export component HomePage {
     // Arrow navigation follows the displayed catalog order, including addon
     // rows placed between the two built-ins.
     function kb_move_catalog(direction: int) {
-        let target = root.kb_zone == 5 ? root.catalog_order.length + direction : root.catalog_position(root.focused_catalog()) + direction;
-        if (target < 0) { root.kb_zone = 0; return; }
+        let target = root.kb_zone == 6 ? 0 : root.kb_zone == 5 ? root.catalog_order.length + direction : root.catalog_position(root.focused_catalog()) + direction;
+        if (target < 0) { root.kb_zone = InterfaceStyle.tv && root.featured_count > 0 ? 6 : 0; if (root.kb_zone == 6) { land_scroll.content-y = 0px; } return; }
         if (target >= root.catalog_order.length) {
             if (root.history_archive_cards.length > 0) { root.kb_zone = 5; }
             return;
@@ -1749,6 +1787,7 @@ export component HomePage {
     }
 
     function kb_left() {
+        if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 6) { root.tv_featured_control = Math.max(0, root.tv_featured_control - 1); return; }
         if (root.view == 2 && root.cal_open) {
             // Calendar: the previous day.
             root.upcoming_cal_pick(root.cal_epoch - 1);
@@ -1775,6 +1814,7 @@ export component HomePage {
     }
 
     function kb_right() {
+        if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 6) { root.tv_featured_control = Math.min(root.featured_count > 1 ? 3 : 1, root.tv_featured_control + 1); return; }
         if (root.view == 2 && root.cal_open) {
             // Calendar: the next day.
             root.upcoming_cal_pick(root.cal_epoch + 1);
@@ -1801,6 +1841,12 @@ export component HomePage {
     }
 
     function kb_enter() {
+        if (InterfaceStyle.tv && root.view == 0 && root.kb_zone == 6) {
+            if (root.tv_featured_control == 0) { root.featured_watch_now(); }
+            else if (root.tv_featured_control == 1) { root.featured_picked(); }
+            else { root.step_featured(root.tv_featured_control == 2 ? -1 : 1); }
+            return;
+        }
         if (root.view == 2 && root.cal_open) {
             // Calendar: open the selected day's first episode.
             root.upcoming_cal_activate();
@@ -1849,8 +1895,8 @@ export component HomePage {
     }
 
     // Row strides for the subpage grids, plus the carousel scroll helpers.
-    property <length> row_stride: root.grid_item_width * 3 / 2 + 76px + root.item-gap;
-    property <length> row_stride_up: root.grid_item_width * 3 / 2 + 88px + root.item-gap;
+    property <length> row_stride: root.grid_item_width * 3 / 2 + (InterfaceStyle.tv ? 108px : 76px) + root.item-gap;
+    property <length> row_stride_up: root.grid_item_width * 3 / 2 + (InterfaceStyle.tv ? 120px : 88px) + root.item-gap;
 
     // Keep the focused card on screen. Skipped before layout
     // (content-height 0) — the one-shot restore timer below retries.
@@ -1927,7 +1973,7 @@ export component HomePage {
         if (sub_scroll.content-height == 0px) {
             return;
         }
-        let stride = root.view >= 3 || root.view == -4 ? root.grid_item_width * 3 / 2 + (root.view == -4 ? 72px : 54px) + root.item-gap
+        let stride = root.view >= 3 || root.view == -4 ? root.grid_item_width * 3 / 2 + (root.view == -4 ? (InterfaceStyle.tv ? 116px : 72px) : (InterfaceStyle.tv ? 88px : 54px)) + root.item-gap
             : root.view == 2 ? root.row_stride_up : root.row_stride;
         let top = root.grid_top + Math.floor(root.kb_idx / root.grid_cols) * stride;
         // The back bar is outside this viewport; only the hover inset belongs
@@ -2057,8 +2103,24 @@ export component HomePage {
                 self.focus();
                 root.last_system_back_request = root.system_back_request;
             }
+            key-released(e) => {
+                if (InterfaceStyle.tv && e.text == Key.Return && root.tv_ok_pending) {
+                    tv_ok_hold.stop();
+                    root.tv_ok_pending = false;
+                    if (!root.tv_ok_held) { root.kb_enter(); }
+                    accept
+                } else { reject }
+            }
             key-pressed(e) => {
-                if (e.text == Key.Menu || (e.text == Key.F10 && e.modifiers.shift)) {
+                if (InterfaceStyle.tv && e.text == Key.Return) {
+                    root.kb_active = true;
+                    if (!e.repeat) { root.tv_ok_pending = true; root.tv_ok_held = false; tv_ok_hold.stop(); tv_ok_hold.start(); }
+                    accept
+                } else if (InterfaceStyle.tv && (e.text == Key.Menu || (e.text == Key.F10 && e.modifiers.shift))) {
+                    root.kb_active = true;
+                    if (!e.repeat) { root.tv_context(); }
+                    accept
+                } else if (e.text == Key.Menu || (e.text == Key.F10 && e.modifiers.shift)) {
                     if (root.open_focused_history_menu()) { accept } else { reject }
                 } else if (e.text == Key.UpArrow) {
                     root.kb_active = true;
@@ -2172,6 +2234,7 @@ export component HomePage {
                             spacing: 12px;
 
                             if root.featured_count > 0: FeaturedShowcase {
+                                tv_focus: InterfaceStyle.tv && root.kb_active && root.kb_zone == 6 ? root.tv_featured_control : -1;
                                 watch_label: root.featured_watch_label;
                                 title: root.featured_title;
                                 logo: root.featured_logo;
@@ -2222,7 +2285,7 @@ export component HomePage {
                                     min-height: 300px;
                                     Text {
                                         text: root.home_empty_hint;
-                                        font-size: 14px;
+                                        font-size: InterfaceStyle.tv ? 18px : 14px;
                                         color: Theme.current.text_muted;
                                         horizontal-alignment: center;
                                         wrap: word-wrap;
@@ -2625,7 +2688,7 @@ export component HomePage {
                             Text {
                                 text: root.view == -4 ? @tr("Watch history") : root.view >= 3 ? root.catalog_sections[root.view - 3].title
                                     : root.view == -3 ? @tr("New episodes") : root.view == 2 ? @tr("Upcoming") : @tr("Continue Watching");
-                                font-size: 22px;
+                                font-size: InterfaceStyle.tv ? 29px : 22px;
                                 font-weight: 700;
                                 color: Theme.current.text_bright;
                                 vertical-alignment: center;
@@ -2638,7 +2701,7 @@ export component HomePage {
 
                             Text {
                                 text: "(" + root.active_len() + ")";
-                                font-size: 14px;
+                                font-size: InterfaceStyle.tv ? 18px : 14px;
                                 color: Theme.current.text_hint;
                                 vertical-alignment: center;
                             }
@@ -2832,7 +2895,7 @@ export component HomePage {
                                     if root.view == -4 && root.history_archive_cards.length == 0: history_empty := Text {
                                         width: 100%; min-height: 120px;
                                         text: @tr("No watch history yet.");
-                                        font-size: 14px; color: Theme.current.text_muted;
+                                        font-size: InterfaceStyle.tv ? 18px : 14px; color: Theme.current.text_muted;
                                         horizontal-alignment: center; vertical-alignment: center;
                                         wrap: word-wrap;
                                     }
@@ -2885,7 +2948,7 @@ export component HomePage {
 
                                             Text {
                                                 text: root.cal_title;
-                                                font-size: 16px;
+                                                font-size: InterfaceStyle.tv ? 21px : 16px;
                                                 font-weight: 700;
                                                 color: Theme.current.text_bright;
                                                 vertical-alignment: center;
@@ -2924,7 +2987,7 @@ export component HomePage {
 
                                             for wd in [@tr("Mon"), @tr("Tue"), @tr("Wed"), @tr("Thu"), @tr("Fri"), @tr("Sat"), @tr("Sun")]: Text {
                                                 text: wd;
-                                                font-size: 11px;
+                                                font-size: InterfaceStyle.tv ? 18px : 11px;
                                                 font-weight: 600;
                                                 color: Theme.current.text_hint;
                                                 horizontal-alignment: center;
@@ -2980,7 +3043,7 @@ export component HomePage {
 
                                         if root.cal_day_rows.length == 0: Text {
                                             text: @tr("No episodes on this day.");
-                                            font-size: 13px;
+                                            font-size: InterfaceStyle.tv ? 18px : 13px;
                                             color: Theme.current.text_muted;
                                             horizontal-alignment: center;
                                             width: 100%;

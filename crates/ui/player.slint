@@ -1,4 +1,4 @@
-import { SubtitleStyle, PartyBridge, Theme, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
+import { InterfaceStyle, SubtitleStyle, PartyBridge, Theme, TrackRow, Anim, PlaybackSpeed, SliderGesture } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 
@@ -21,8 +21,8 @@ component IconBtn inherits Rectangle {
     in property <color> base: transparent;
     in-out property <bool> hovered: touch.has-hover;
     callback clicked();
-    width: 40px;
-    height: 40px;
+    width: InterfaceStyle.tv ? 56px : 40px;
+    height: InterfaceStyle.tv ? 56px : 40px;
     border-radius: 10px;
     border-width: focused ? 2px : 0px;
     border-color: Theme.current.focus_ring;
@@ -52,8 +52,13 @@ component TrackMenu inherits Rectangle {
     // 6-button nav: focused row index (off-row is 0 when present).
     in property <int> focused_idx: -1;
     callback pick(int);
+    function reveal_row(y: length, h: length) {
+        let top = y - menu_scroll.absolute-position.y;
+        if top < 0px { menu_scroll.content-y = Math.min(0px, menu_scroll.content-y - top); }
+        else if top + h > menu_scroll.height { menu_scroll.content-y = Math.max(Math.min(0px, menu_scroll.height - menu_scroll.content-height), menu_scroll.content-y - (top + h - menu_scroll.height)); }
+    }
 
-    width: Math.min(340px, self.max_w);
+    width: Math.min(InterfaceStyle.tv ? 500px : 340px, self.max_w);
     height: menu_scroll.height;
     background: Theme.current.player_menu;
     border-radius: 16px;
@@ -67,7 +72,7 @@ component TrackMenu inherits Rectangle {
 
     menu_scroll := ScrollView {
         width: 100%;
-        height: Math.min(menu_col.preferred-height, 320px);
+        height: Math.min(menu_col.preferred-height, InterfaceStyle.tv ? 440px : 320px);
         // Touch devices scroll by dragging (there is no wheel): the
         // fluent-style ScrollView disables drag-pan by default, so opt
         // in explicitly.
@@ -78,6 +83,7 @@ component TrackMenu inherits Rectangle {
             spacing: 4px;
 
             if with_off_row: MenuRow {
+                reveal(y, h) => { root.reveal_row(y, h); }
                 label: @tr("Off");
                 focused: root.kb_active && root.focused_idx == 0;
                 activate => { pick(-1); }
@@ -89,13 +95,14 @@ component TrackMenu inherits Rectangle {
                 Text {
                     text: @tr("No tracks available.");
                     color: Theme.current.text_player_muted;
-                    font-size: 13px;
+                    font-size: InterfaceStyle.tv ? 20px : 13px;
                     x: 16px;
                     vertical-alignment: center;
                 }
             }
 
             for track[i] in tracks: MenuRow {
+                reveal(y, h) => { root.reveal_row(y, h); }
                 icon_kind: row_icon;
                 label: track.lang + (track.title != "" ? " — " + track.title : "");
                 value: track.codec;
@@ -164,6 +171,11 @@ component SettingsMenu inherits Rectangle {
     callback speed_changed(float);
     callback speed_stepped(int);
     callback closed();
+    function reveal_row(y: length, h: length) {
+        let top = y - settings_scroll.absolute-position.y;
+        if top < 0px { settings_scroll.content-y = Math.min(0px, settings_scroll.content-y - top); }
+        else if top + h > settings_scroll.height { settings_scroll.content-y = Math.max(Math.min(0px, settings_scroll.height - settings_scroll.content-height), settings_scroll.content-y - (top + h - settings_scroll.height)); }
+    }
 
     width: 100%;
     height: 100%;
@@ -194,7 +206,7 @@ component SettingsMenu inherits Rectangle {
     }
 
     card := Rectangle {
-        width: Math.max(0px, Math.min(root.anchored ? 400px : 380px,
+        width: Math.max(0px, Math.min(InterfaceStyle.tv ? 560px : (root.anchored ? 400px : 380px),
             root.width - root.safe_left - root.safe_right - 32px));
         height: card_col.preferred-height;
         x: root.anchored
@@ -220,7 +232,7 @@ component SettingsMenu inherits Rectangle {
 
             // ---- Header: title + back (submenu) / close ----
             settings_header := Rectangle {
-                height: Math.max(44px, settings_title.preferred-height);
+                height: Math.max(InterfaceStyle.tv ? 56px : 44px, settings_title.preferred-height);
 
                 HorizontalLayout {
                     padding-left: 4px;
@@ -228,8 +240,8 @@ component SettingsMenu inherits Rectangle {
                     spacing: 6px;
 
                     if root.page != 0: Rectangle {
-                        width: 40px;
-                        height: 40px;
+                        width: InterfaceStyle.tv ? 56px : 40px;
+                        height: InterfaceStyle.tv ? 56px : 40px;
                         border-radius: 20px;
                         background: back_touch.has-hover ? Theme.current.control_hover : Theme.current.control;
 
@@ -263,14 +275,14 @@ component SettingsMenu inherits Rectangle {
                     if root.page == 1: Text {
                         text: root.hwdec_label != "" ? root.hwdec_label : "…";
                         color: Theme.current.text_player_secondary;
-                        font-size: 12px;
+                        font-size: InterfaceStyle.tv ? 18px : 12px;
                         font-weight: 600;
                         vertical-alignment: center;
                     }
 
                     Rectangle {
-                        width: 40px;
-                        height: 40px;
+                        width: InterfaceStyle.tv ? 56px : 40px;
+                        height: InterfaceStyle.tv ? 56px : 40px;
                         border-radius: 20px;
                         background: close_touch.has-hover ? Theme.current.control_hover : Theme.current.control;
 
@@ -310,6 +322,7 @@ component SettingsMenu inherits Rectangle {
                         width: 100%;
                         spacing: 4px;
                         MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 2; submenu: true;
                             label: @tr("Subtitles");
                             value: root.sub_label;
@@ -317,6 +330,7 @@ component SettingsMenu inherits Rectangle {
                             activate => { root.page = 2; }
                         }
                         MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 1; submenu: true;
                             label: @tr("Audio");
                             value: root.audio_label;
@@ -324,6 +338,7 @@ component SettingsMenu inherits Rectangle {
                             activate => { root.page = 3; }
                         }
                         if root.is_android: MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 4; submenu: true;
                             label: @tr("Hardware decoding");
                             value: root.hwdec_label != "" ? root.hwdec_label : "…";
@@ -332,6 +347,7 @@ component SettingsMenu inherits Rectangle {
                         }
                         // Same value as Settings → Player (per device).
                         MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 3; submenu: true;
                             label: @tr("Playback speed");
                             enabled: !(PartyBridge.active || PartyBridge.busy);
@@ -340,6 +356,7 @@ component SettingsMenu inherits Rectangle {
                             activate => { root.page = 4; }
                         }
                         MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 2; submenu: true;
                             label: @tr("Subtitle appearance and timing");
                             focused: root.focused_idx == (root.is_android ? 4 : 3);
@@ -352,6 +369,7 @@ component SettingsMenu inherits Rectangle {
                         width: 100%;
                         spacing: 4px;
                         MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             label: "HW+";
                             value: @tr("zero-copy");
                             selected: root.selected_index == 0;
@@ -359,6 +377,7 @@ component SettingsMenu inherits Rectangle {
                             activate => { root.pick_decoder(0); }
                         }
                         MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             label: "HW";
                             value: @tr("copy-back");
                             selected: root.selected_index == 1;
@@ -366,6 +385,7 @@ component SettingsMenu inherits Rectangle {
                             activate => { root.pick_decoder(1); }
                         }
                         MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             label: "SW";
                             value: @tr("software");
                             selected: root.selected_index == 2;
@@ -379,6 +399,7 @@ component SettingsMenu inherits Rectangle {
                         width: 100%;
                         spacing: 4px;
                         MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             label: @tr("Use global default");
                             value: root.subtitle_preference_saved
                                 ? @tr("Saved for this title") : @tr("Using global default");
@@ -387,12 +408,14 @@ component SettingsMenu inherits Rectangle {
                             activate => { root.restore_playback_default(1); }
                         }
                         MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 2;
                             label: @tr("Off");
                             focused: root.focused_idx == 1;
                             activate => { root.pick_sub(-1); }
                         }
                         for t[i] in root.sub_tracks: MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 2;
                             label: t.lang + (t.title != "" ? " — " + t.title : "");
                             value: t.codec;
@@ -407,6 +430,7 @@ component SettingsMenu inherits Rectangle {
                         width: 100%;
                         spacing: 4px;
                         MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             label: @tr("Use global default");
                             value: root.audio_preference_saved
                                 ? @tr("Saved for this title") : @tr("Using global default");
@@ -420,12 +444,13 @@ component SettingsMenu inherits Rectangle {
                             Text {
                                 text: @tr("No tracks available.");
                                 color: Theme.current.text_player_muted;
-                                font-size: 13px;
+                                font-size: InterfaceStyle.tv ? 20px : 13px;
                                 x: 16px;
                                 vertical-alignment: center;
                             }
                         }
                         for t[i] in root.audio_tracks: MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             icon_kind: 1;
                             label: t.lang + (t.title != "" ? " — " + t.title : "");
                             value: t.codec;
@@ -438,6 +463,7 @@ component SettingsMenu inherits Rectangle {
                     if root.page == 5: VerticalLayout {
                         width: 100%; spacing: 12px;
                         MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             label: @tr("Use global defaults");
                             value: root.subtitle_style_preference_saved ? @tr("Saved for this title") : @tr("Using global default");
                             selected: !root.subtitle_style_preference_saved;
@@ -462,6 +488,7 @@ component SettingsMenu inherits Rectangle {
                         width: 100%; spacing: 16px;
                         padding-top: 8px; padding-bottom: 8px;
                         MenuRow {
+                            reveal(y, h) => { root.reveal_row(y, h); }
                             label: @tr("Use global default");
                             value: root.speed_preference_saved
                                 ? @tr("Saved for this title") : @tr("Using global default");
@@ -504,7 +531,7 @@ component NextEpisodeAction inherits Rectangle {
         padding-left: 4px; padding-right: 4px; spacing: 4px; alignment: center;
         action_text := Text {
             text: @tr("Choose streams"); color: Theme.current.accent_soft;
-            font-size: 13px; font-weight: 600; wrap: word-wrap; max-lines: 2; overflow: elide;
+            font-size: InterfaceStyle.tv ? 20px : 13px; font-weight: 600; wrap: word-wrap; max-lines: 2; overflow: elide;
             vertical-alignment: center; horizontal-alignment: center;
         }
         // Fixed-height icons are top-aligned by a HorizontalLayout. Let the
@@ -541,17 +568,17 @@ component NextEpisodeBanner inherits Rectangle {
         VerticalLayout {
             spacing: 4px; horizontal-stretch: 1; alignment: center;
             Text {
-                text: @tr("Next episode"); font-size: 12px;
+                text: @tr("Next episode"); font-size: InterfaceStyle.tv ? 18px : 12px;
                 color: Theme.current.accent_soft; overflow: elide;
             }
             Text {
                 text: root.context + (root.title != root.context ? " · " + root.title : "");
-                font-size: 13px; font-weight: 600; color: Theme.current.text_bright;
+                font-size: InterfaceStyle.tv ? 20px : 13px; font-weight: 600; color: Theme.current.text_bright;
                 wrap: no-wrap; overflow: elide;
             }
         }
         next_streams := NextEpisodeAction {
-            width: 108px;
+            width: InterfaceStyle.tv ? 160px : 108px;
             focused: root.focused_action == 1;
             activate => { root.choose(); }
         }
@@ -631,6 +658,9 @@ export component PlayerOverlay {
     // calls this first. While hidden it wakes the OSD and suppresses the
     // control; while active it simply permits the control.
     function guard_osd_control() -> bool {
+        // Pointer input takes ownership from a held remote seek. A delayed
+        // key release must not undo a mouse scrub or another clicked action.
+        if InterfaceStyle.tv { root.tv_cancel_seek(); }
         if (root.controls_active) {
             return true;
         }
@@ -701,6 +731,121 @@ export component PlayerOverlay {
     property <int> kb_idx: 1;
     property <int> kb_menu: 0;
 
+    // TV has two focus rows: the bottom buttons and the seek timeline (12).
+    // A held seek previews locally; one release produces one decoder seek.
+    property <bool> tv_timeline_focused: InterfaceStyle.tv && root.kb_active && root.kb_idx == 12;
+    private property <bool> tv_mode: InterfaceStyle.tv;
+    changed tv_mode => { root.tv_cancel_seek(); root.kb_idx = 1; root.kb_active = root.tv_mode; }
+    property <bool> tv_scrubbing: false;
+    property <float> tv_seek_position: 0;
+    property <int> tv_seek_repeats: 0;
+    private property <float> displayed_position: root.tv_scrubbing ? root.tv_seek_position : root.position;
+
+    function tv_can_seek() -> bool {
+        return root.timeline_control_allowed && root.playback_started && root.duration > 0;
+    }
+    function tv_show_controls() {
+        root.kb_active = true;
+        root.kb_idx = root.timeline_control_allowed ? 1 : 5;
+        root.osd_mouse_moved();
+    }
+    function tv_cancel_seek() { root.tv_scrubbing = false; root.tv_seek_repeats = 0; }
+    function tv_preview_seek(direction: int, repeated: bool) {
+        if !root.tv_can_seek() { return; }
+        if !root.tv_scrubbing {
+            root.tv_seek_position = root.position;
+            root.tv_seek_repeats = 0;
+            root.tv_scrubbing = true;
+        }
+        root.tv_seek_repeats = repeated ? root.tv_seek_repeats + 1 : 0;
+        let step = root.tv_seek_repeats >= 16 ? 60 : root.tv_seek_repeats >= 8 ? 30 : 10;
+        root.tv_seek_position = Math.clamp(root.tv_seek_position + direction * step, 0, root.duration);
+        if root.controls_active { root.osd_mouse_moved(); }
+    }
+    function tv_commit_seek() {
+        if !root.tv_scrubbing { return; }
+        let target = root.tv_seek_position;
+        let allowed = root.tv_can_seek();
+        root.tv_cancel_seek();
+        if allowed { root.seek(Math.clamp(target, 0, root.duration)); }
+    }
+    // Slint 1.18 has no media-key enum; the Android backend reserves these
+    // codes and the window consumes them outside playback (never editor text).
+    function media_key(text: string, repeated: bool) -> bool {
+        if text == "\u{e100}" || text == "\u{e101}" || text == "\u{e102}" {
+            if !repeated && root.timeline_control_allowed && root.playback_started
+                && (text == "\u{e100}" || (text == "\u{e101}" && root.is_paused)
+                    || (text == "\u{e102}" && !root.is_paused)) { root.toggle_pause(); }
+            return true;
+        }
+        if text == "\u{e103}" { if !repeated { root.close_player(); } return true; }
+        if text == "\u{e104}" {
+            if !repeated && root.timeline_control_allowed && root.next_episode_visible {
+                root.next_episode_streams(root.next_episode_token);
+            }
+            return true;
+        }
+        if text == "\u{e105}" { return true; }
+        if text == "\u{e106}" || text == "\u{e107}" {
+            root.shortcut_seek(text == "\u{e106}" ? -1 : 1); return true;
+        }
+        return false;
+    }
+    property <int> tv_last_control: 1;
+    function tv_direction(text: string, repeated: bool) {
+        root.kb_active = true;
+        if !root.controls_active {
+            if text == Key.LeftArrow || text == Key.RightArrow {
+                root.tv_preview_seek(text == Key.LeftArrow ? -1 : 1, repeated);
+            } else if !repeated { root.tv_show_controls(); }
+            return;
+        }
+        root.osd_mouse_moved();
+        if text == Key.UpArrow {
+            if root.kb_idx == 12 {
+                if !repeated { root.tv_commit_seek(); root.osd_visible = false; root.kb_active = false; }
+            } else if root.tv_can_seek() { root.tv_last_control = root.kb_idx; root.kb_idx = 12; }
+        } else if text == Key.DownArrow {
+            if root.kb_idx == 12 {
+                root.tv_commit_seek();
+                root.kb_idx = root.tv_control_available(root.tv_last_control) ? root.tv_last_control : 7;
+            } else if !repeated { root.osd_visible = false; root.kb_active = false; }
+        } else if text == Key.LeftArrow || text == Key.RightArrow {
+            let direction = text == Key.LeftArrow ? -1 : 1;
+            if root.kb_idx == 12 { root.tv_preview_seek(direction, repeated); }
+            else { root.tv_step_control(direction); }
+        }
+    }
+    // Only present, enabled bottom-row controls participate in TV traversal.
+    function tv_control_available(index: int) -> bool {
+        if index == 1 { return root.timeline_control_allowed; }
+        if index == 3 || index == 4 { return root.tv_can_seek(); }
+        if index == 5 || index == 6 { return !root.narrow; }
+        if index == 7 { return true; }
+        if index == 9 { return root.playback_started && !root.screenshot_busy; }
+        if index == 10 { return root.next_episode_shown && root.timeline_control_allowed; }
+        return index == 11 && root.next_episode_shown;
+    }
+    function tv_step_control(direction: int) {
+        // Bound the walk: unavailable track/screenshot/party actions cannot trap focus.
+        let first = Math.clamp(root.kb_idx + direction, 1, 11);
+        if root.tv_control_available(first) { root.kb_idx = first; return; }
+        let second = Math.clamp(first + direction, 1, 11);
+        if root.tv_control_available(second) { root.kb_idx = second; return; }
+        let third = Math.clamp(second + direction, 1, 11);
+        if root.tv_control_available(third) { root.kb_idx = third; return; }
+        let fourth = Math.clamp(third + direction, 1, 11);
+        if root.tv_control_available(fourth) { root.kb_idx = fourth; return; }
+        let fifth = Math.clamp(fourth + direction, 1, 11);
+        if root.tv_control_available(fifth) { root.kb_idx = fifth; }
+    }
+    // An input held beyond the ordinary three-second timeout stays interactive.
+    tv_seek_wake := Timer {
+        interval: 1s;
+        running: InterfaceStyle.tv && root.tv_scrubbing && root.osd_visible;
+        triggered => { root.osd_mouse_moved(); }
+    }
+
     function kb_menu_n() -> int {
         if (root.open_popup == 2) {
             return root.sub_tracks.length + 1;
@@ -742,6 +887,15 @@ export component PlayerOverlay {
     }
 
     function system_back() {
+        if InterfaceStyle.tv {
+            if root.tv_scrubbing { root.tv_cancel_seek(); }
+            else if root.open_popup == 4 { root.settings_back(); }
+            else if root.open_popup != 0 { root.open_popup = 0; }
+            else if root.osd_visible && root.playback_started { root.osd_visible = false; root.kb_active = false; }
+            else if root.next_episode_shown { root.next_episode_dismiss(root.next_episode_token); }
+            else { root.close_player(); }
+            return;
+        }
         root.osd_mouse_moved();
         if (!root.is_android) { root.kb_active = true; }
         if (root.open_popup == 4) {
@@ -789,6 +943,10 @@ export component PlayerOverlay {
     }
 
     private property <bool> timeline_control_allowed: !PartyBridge.busy && (!PartyBridge.active || PartyBridge.is_host);
+    changed timeline_control_allowed => {
+        if !root.timeline_control_allowed { root.tv_cancel_seek(); }
+        if InterfaceStyle.tv { root.kb_clamp_focus(); }
+    }
     private property <bool> party_owns_playback: (PartyBridge.active || PartyBridge.busy);
     changed party_owns_playback => {
         if root.party_owns_playback {
@@ -826,9 +984,9 @@ export component PlayerOverlay {
         } else if (root.kb_idx == 2 && !root.is_android) {
             root.toggle_mute();
         } else if (root.kb_idx == 3) {
-            if root.timeline_control_allowed { root.seek_relative(-10); }
+            if root.timeline_control_allowed && (!InterfaceStyle.tv || root.tv_can_seek()) { root.seek_relative(-10); }
         } else if (root.kb_idx == 4) {
-            if root.timeline_control_allowed { root.seek_relative(10); }
+            if root.timeline_control_allowed && (!InterfaceStyle.tv || root.tv_can_seek()) { root.seek_relative(10); }
         } else if (root.kb_idx == 5) {
             if (root.open_popup == 2) {
                 root.open_popup = 0;
@@ -940,6 +1098,11 @@ export component PlayerOverlay {
     // fullscreen button (8) is hidden on Android (the system affordance is
     // used there).
     function kb_clamp_focus() {
+        if InterfaceStyle.tv {
+            if root.kb_idx == 12 && root.tv_can_seek() { return; }
+            if !root.tv_control_available(root.kb_idx) { root.kb_idx = 7; }
+            return;
+        }
         if (!root.next_episode_shown && root.kb_idx > 9) { root.kb_idx = 1; }
         if (root.narrow && (root.kb_idx == 5 || root.kb_idx == 6)) {
             root.kb_idx = 7;
@@ -954,6 +1117,12 @@ export component PlayerOverlay {
     changed narrow => { root.kb_clamp_focus(); }
     changed is_android => { root.kb_clamp_focus(); }
     changed next_episode_shown => { root.kb_clamp_focus(); }
+    changed playback_started => {
+        if !root.playback_started { root.tv_cancel_seek(); }
+        if InterfaceStyle.tv { root.kb_clamp_focus(); }
+    }
+    changed duration => { if root.duration <= 0 { root.tv_cancel_seek(); root.kb_clamp_focus(); } }
+    changed screenshot_busy => { if InterfaceStyle.tv { root.kb_clamp_focus(); } }
 
     // Hover movement over the bar itself re-arms the auto-hide countdown.
     // TouchArea.moved only fires while pressed and the backdrop's mouse-x/y
@@ -1033,6 +1202,7 @@ export component PlayerOverlay {
         tap_timer.stop();
         root.tap_side = -2;
         root.kb_menu = 0;
+        if InterfaceStyle.tv { root.kb_active = true; }
         root.osd_mouse_moved();
     }
 
@@ -1067,7 +1237,10 @@ export component PlayerOverlay {
     function backdrop_single_tap(was_visible: bool) {
         // Hover can reveal the controls before a click. Playback intent must
         // not depend on whether that hover happened to wake the OSD first.
-        if (!root.is_android) {
+        if InterfaceStyle.tv {
+            if root.timeline_control_allowed && root.playback_started { root.toggle_pause(); }
+            root.tv_show_controls();
+        } else if (!root.is_android) {
             if root.timeline_control_allowed { root.toggle_pause(); }
             root.osd_mouse_moved();
         } else if (was_visible) {
@@ -1180,18 +1353,45 @@ export component PlayerOverlay {
         key_scope := FocusScope {
             width: 100%;
             height: 100%;
+            changed has-focus => { if !self.has-focus { root.tv_cancel_seek(); } }
             init => {
                 self.focus();
                 root.last_system_back_request = root.system_back_request;
             }
             key-pressed(e) => {
+                if root.media_key(e.text, e.repeat) {
+                    accept
+                } else if InterfaceStyle.tv && root.open_popup == 0
+                    && !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta
+                    && (e.text == Key.UpArrow || e.text == Key.DownArrow
+                        || e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                    root.tv_direction(e.text, e.repeat);
+                    accept
+                } else if InterfaceStyle.tv && root.open_popup == 0 && e.text == Key.Return
+                    && !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta {
+                    if !e.repeat {
+                        if !root.controls_active {
+                            root.tv_show_controls();
+                            if root.timeline_control_allowed && root.playback_started { root.toggle_pause(); }
+                        }
+                        else {
+                            root.kb_active = true;
+                            root.osd_mouse_moved();
+                            if root.kb_idx == 12 { root.tv_commit_seek(); }
+                            else { root.kb_activate(); }
+                        }
+                    }
+                    accept
+                } else {
                 if (root.open_popup != 0 || e.text == Key.Tab || e.text == Key.Return) {
                     root.osd_mouse_moved();
                     root.kb_active = true;
                 }
                 if (e.text == Key.Escape) {
                     if (!e.repeat) {
-                        if (root.open_popup == 4) {
+                        if InterfaceStyle.tv {
+                            root.system_back();
+                        } else if (root.open_popup == 4) {
                             root.settings_back();
                         } else if (root.open_popup != 0) {
                             root.open_popup = 0;
@@ -1237,7 +1437,7 @@ export component PlayerOverlay {
                             }
                             accept
                         } else if (e.text == Key.Return) {
-                            root.kb_menu_pick();
+                            if !e.repeat { root.kb_menu_pick(); }
                             accept
                         } else if (e.text == Key.LeftArrow) {
                             if (root.settings_page == 4 && root.kb_menu == 1) {
@@ -1266,7 +1466,7 @@ export component PlayerOverlay {
                         }
                         accept
                     } else if (e.text == Key.Return) {
-                        root.kb_menu_pick();
+                        if !e.repeat { root.kb_menu_pick(); }
                         accept
                     } else if (e.text == Key.Backspace || e.text == Key.Back) {
                         root.open_popup = 0;
@@ -1310,7 +1510,7 @@ export component PlayerOverlay {
                     root.kb_idx = e.modifiers.shift ? root.kb_prev() : root.kb_next();
                     accept
                 } else if (e.text == Key.Return) {
-                    root.kb_activate();
+                    if !e.repeat { root.kb_activate(); }
                     accept
                 } else if (e.text == Key.Backspace || e.text == Key.Back) {
                     root.system_back();
@@ -1318,6 +1518,12 @@ export component PlayerOverlay {
                 } else {
                     reject
                 }
+                }
+            }
+            key-released(e) => {
+                if InterfaceStyle.tv && (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                    root.tv_commit_seek(); accept
+                } else { reject }
             }
         }
 
@@ -1516,7 +1722,7 @@ export component PlayerOverlay {
             // Gestures briefly own the caption lane; keep the feedback at
             // its stable top position. Keep the header mounted so titles can
             // fade out and back in without changing their measured geometry.
-            x: root.safe-left + 68px; y: root.safe-top + 16px;
+            x: root.safe-left + (InterfaceStyle.tv ? 32px : 68px); y: root.safe-top + (InterfaceStyle.tv ? 24px : 16px);
             width: Math.max(0px, root.width - root.safe-left - root.safe-right - 140px);
             height: episode_heading.height + show_heading.height + 6px;
             spacing: 6px;
@@ -1524,20 +1730,21 @@ export component PlayerOverlay {
             animate opacity { duration: Anim.player_fade; }
             episode_heading := Text {
                 text: root.player_episode_title;
-                height: root.player_episode_title == "" ? 0px : 22px;
-                font-size: root.narrow ? 14px : 16px;
+                height: root.player_episode_title == "" ? 0px : (InterfaceStyle.tv ? 28px : 22px);
+                font-size: InterfaceStyle.tv ? 20px : (root.narrow ? 14px : 16px);
                 font-weight: 600; color: Theme.current.text_bright;
                 overflow: elide; max-lines: 1;
             }
             show_heading := Text {
                 text: root.player_show_title;
                 width: 100%; height: self.preferred-height;
-                font-size: root.narrow ? 20px : 26px;
+                font-size: InterfaceStyle.tv ? 32px : (root.narrow ? 20px : 26px);
                 font-weight: 800; color: Theme.current.text_bright;
                 overflow: elide; max-lines: 1;
             }
         }
         screenshot_button := Rectangle {
+            visible: !InterfaceStyle.tv;
             x: root.width - root.safe-right - self.width - 16px;
             y: root.safe-top + 16px;
             width: 40px; height: 40px; border-radius: 20px;
@@ -1568,7 +1775,7 @@ export component PlayerOverlay {
             x: Math.max(root.safe-left + 16px, root.width - root.safe-right - self.width - 16px);
             y: root.safe-top + 16px + Math.max(40px, player_header.height) + 8px;
             width: Math.min(240px, Math.max(0px, root.width - root.safe-left - root.safe-right - 32px));
-            text: root.screenshot_notice; font-size: 12px;
+            text: root.screenshot_notice; font-size: InterfaceStyle.tv ? 18px : 12px;
             color: Theme.current.text_player_caption;
             horizontal-alignment: right; wrap: word-wrap; max-lines: 2; overflow: elide;
             // Screenshot confirmation is independent of the controls: S can
@@ -1581,6 +1788,7 @@ export component PlayerOverlay {
         Rectangle {
             x: 16px + safe-left;
             y: 16px + safe-top;
+            visible: !InterfaceStyle.tv;
             width: 40px;
             height: 40px;
             border-radius: 20px;
@@ -1624,7 +1832,7 @@ export component PlayerOverlay {
         // readable over bright video. The three buttons keep their logical
         // keyboard indices (play 1, rewind 3, forward 4); on-screen they read
         // 3, 1, 4 left to right.
-        if root.is_android: Rectangle {
+        if root.is_android && !InterfaceStyle.tv: Rectangle {
             width: 216px;
             height: 72px;
             x: (parent.width - self.width) / 2;
@@ -1715,12 +1923,23 @@ export component PlayerOverlay {
             }
         }
 
+        if InterfaceStyle.tv && root.tv_scrubbing && !root.controls_active: Rectangle {
+            width: tv_seek_text.preferred-width + 40px; height: 56px;
+            x: (root.width - self.width) / 2; y: root.height - self.height - 40px;
+            border-radius: 12px; background: Theme.current.player_control;
+            tv_seek_text := Text {
+                text: root.format_time(root.tv_seek_position); font-size: 24px;
+                color: Theme.current.text_bright;
+                width: 100%; height: 100%; horizontal-alignment: center; vertical-alignment: center;
+            }
+        }
+
         // ---- Bottom OSD -------------------------------------------------
         // The video dim layer lives above; this element only owns the bottom
         // controls and their hover/touch area.
         osd := Rectangle {
             width: 100%;
-            height: 96px;
+            height: InterfaceStyle.tv ? 132px : 96px;
             y: parent.height - self.height;
             // Visible when the wake timer says so, and always while loading or a
             // popup is open — the auto-hide countdown applies whether playing
@@ -1737,7 +1956,7 @@ export component PlayerOverlay {
             // tapping the video — primarily a touch convenience.
             osd_hover := TouchArea {
                 width: 100%;
-                height: 96px;
+                height: InterfaceStyle.tv ? 132px : 96px;
                 y: parent.height - self.height;
                 // Like the backdrop: a swipe that wakes the OSD must not hide
                 // it again on release, and a tap wakes it when it was down.
@@ -1776,7 +1995,7 @@ export component PlayerOverlay {
             VerticalLayout {
                 // A layout inside a plain element fills the parent, so pin
                 // the 68px of controls (seekbar + row) to the bottom edge.
-                height: 68px;
+                height: InterfaceStyle.tv ? 104px : 68px;
                 y: parent.height - self.height;
                 width: 100%;
                 spacing: 0px;
@@ -1787,7 +2006,7 @@ export component PlayerOverlay {
                 // lines up with the buttons underneath it.
                 seekbar := Rectangle {
                     width: 100%;
-                    height: 20px;
+                    height: InterfaceStyle.tv ? 40px : 20px;
 
                     track_zone := Rectangle {
                         x: 10px;
@@ -1797,8 +2016,8 @@ export component PlayerOverlay {
                         // Dim track.
                         unbuffered_track := Rectangle {
                             x: 0;
-                            y: 8px;
-                            height: 3px;
+                            y: InterfaceStyle.tv ? 17px : 8px;
+                            height: root.tv_timeline_focused ? 6px : (InterfaceStyle.tv ? 4px : 3px);
                             width: 100%;
                             background: Theme.current.player_secondary;
                             border-radius: 1.5px;
@@ -1808,8 +2027,8 @@ export component PlayerOverlay {
                         // portion, including while the user moves the seek thumb.
                         buffered_track := Rectangle {
                             x: root.duration > 0 ? Math.clamp(root.position / root.duration, 0, 1) * parent.width : 0px;
-                            y: 8px;
-                            height: 3px;
+                            y: InterfaceStyle.tv ? 17px : 8px;
+                            height: root.tv_timeline_focused ? 6px : (InterfaceStyle.tv ? 4px : 3px);
                             width: root.playback_started && root.duration > 0
                                 ? Math.max(0, Math.clamp(root.buffered_until / root.duration, 0, 1)
                                     - Math.clamp(root.position / root.duration, 0, 1)) * parent.width
@@ -1821,9 +2040,9 @@ export component PlayerOverlay {
                         // Played portion (anchored to the left edge).
                         played_track := Rectangle {
                             x: 0;
-                            y: 8px;
-                            height: 3px;
-                            width: root.duration > 0 ? (root.position / root.duration) * parent.width : 0;
+                            y: InterfaceStyle.tv ? 17px : 8px;
+                            height: root.tv_timeline_focused ? 6px : (InterfaceStyle.tv ? 4px : 3px);
+                            width: root.duration > 0 ? (root.displayed_position / root.duration) * parent.width : 0;
                             background: Theme.current.player_progress_fill;
                             border-radius: 1.5px;
                         }
@@ -1832,14 +2051,14 @@ export component PlayerOverlay {
                         // (stays visible while scrubbing).
                         Rectangle {
                             x: Math.clamp(
-                                root.duration > 0 ? (root.position / root.duration) * (parent.width - 11px) : 0,
+                                root.duration > 0 ? (root.displayed_position / root.duration) * (parent.width - 11px) : 0,
                                 0, parent.width - 11px);
                             y: (parent.height - 11px) / 2;
                             width: 11px;
                             height: 11px;
                             background: Theme.current.player_progress_fill;
                             border-radius: 5.5px;
-                            opacity: seek_touch.has-hover ? 1.0 : 0.0;
+                            opacity: seek_touch.has-hover || root.tv_timeline_focused ? 1.0 : 0.0;
                             animate opacity { duration: Anim.player_fast; }
                         }
 
@@ -1873,17 +2092,17 @@ export component PlayerOverlay {
                         if root.duration > 0: Rectangle {
                             width: seek_tip.preferred-width + 12px;
                             height: 20px;
-                            x: Math.clamp(seek_touch.mouse-x - self.width / 2, 0px, parent.width - self.width);
+                            x: Math.clamp((root.tv_timeline_focused ? (root.displayed_position / root.duration) * parent.width : seek_touch.mouse-x) - self.width / 2, 0px, parent.width - self.width);
                             y: -self.height - 4px;
                             border-radius: 5px;
                             background: Theme.current.player_tooltip;
-                            opacity: seek_touch.has-hover ? 1.0 : 0.0;
+                            opacity: seek_touch.has-hover || root.tv_timeline_focused ? 1.0 : 0.0;
                             animate opacity { duration: Anim.player_fast; }
 
                             seek_tip := Text {
-                                text: root.format_time((seek_touch.mouse-x / seek_touch.width) * root.duration);
+                                text: root.format_time(root.tv_timeline_focused ? root.displayed_position : (seek_touch.mouse-x / seek_touch.width) * root.duration);
                                 color: Theme.current.text_bright;
-                                font-size: 11px;
+                                font-size: InterfaceStyle.tv ? 18px : 11px;
                                 width: 100%;
                                 height: 100%;
                                 horizontal-alignment: center;
@@ -1899,7 +2118,7 @@ export component PlayerOverlay {
                 // the title stretches in between (centered within).
                 HorizontalLayout {
                     width: 100%;
-                    height: 48px;
+                    height: InterfaceStyle.tv ? 64px : 48px;
                     // The Android gear adds an eighth button; the portrait rail
                     // is already close to the 360px floor, so tighten the gaps
                     // there (the volume slider still expands over the row).
@@ -1913,7 +2132,7 @@ export component PlayerOverlay {
                     // Android moves play/pause to the centered transport
                     // cluster (see below); the bottom bar keeps the time and
                     // title only.
-                    if !root.is_android: IconBtn {
+                    if !root.is_android || InterfaceStyle.tv: IconBtn {
                         enabled: root.timeline_control_allowed;
                         focused: root.kb_active && root.kb_idx == 1 && root.open_popup == 0;
                         // Re-arm the auto-hide wake so the bar lingers after
@@ -1943,7 +2162,7 @@ export component PlayerOverlay {
                     // catcher covers the layout gap between them so moving
                     // the cursor across never collapses the slider.
                     // Android hides it entirely: volume is pinned to 100%.
-                    if !root.is_android: vol_group := Rectangle {
+                    if !root.is_android && !InterfaceStyle.tv: vol_group := Rectangle {
                         height: 40px;
                         width: 40px + (self.vol_open ? 106px : 0px);
                             animate width { duration: Anim.player_slide; }
@@ -2059,7 +2278,7 @@ export component PlayerOverlay {
                                 text: root.format_volume(
                                     Math.clamp(vol_slider_touch.mouse-x / vol_slider_touch.width, 0, 1) * 100);
                                 color: Theme.current.text_bright;
-                                font-size: 11px;
+                                font-size: InterfaceStyle.tv ? 18px : 11px;
                                 width: 100%;
                                 height: 100%;
                                 horizontal-alignment: center;
@@ -2077,12 +2296,12 @@ export component PlayerOverlay {
                     // there (the title stays hidden).
                     Rectangle {
                         width: time_lbl.preferred-width + 16px;
-                        height: 40px;
+                        height: InterfaceStyle.tv ? 56px : 40px;
 
                         time_lbl := Text {
                             text: root.time_text;
                             color: Theme.current.text_bright;
-                            font-size: 13px;
+                            font-size: InterfaceStyle.tv ? 20px : 13px;
                             vertical-alignment: center;
                             x: 8px;
                         }
@@ -2096,8 +2315,8 @@ export component PlayerOverlay {
                     // -- Right cluster --
                     // Android's ±10s buttons live in the centered transport
                     // cluster, not here.
-                    if !root.is_android: IconBtn {
-                        enabled: root.timeline_control_allowed;
+                    if !root.is_android || InterfaceStyle.tv: rewind_button := IconBtn {
+                        enabled: root.timeline_control_allowed && (!InterfaceStyle.tv || root.tv_can_seek());
                         focused: root.kb_active && root.kb_idx == 3 && root.open_popup == 0;
                         clicked => {
                             if (!root.guard_osd_control()) { return; }
@@ -2115,8 +2334,8 @@ export component PlayerOverlay {
                         }
                     }
 
-                    if !root.is_android: IconBtn {
-                        enabled: root.timeline_control_allowed;
+                    if !root.is_android || InterfaceStyle.tv: forward_button := IconBtn {
+                        enabled: root.timeline_control_allowed && (!InterfaceStyle.tv || root.tv_can_seek());
                         focused: root.kb_active && root.kb_idx == 4 && root.open_popup == 0;
                         clicked => {
                             if (!root.guard_osd_control()) { return; }
@@ -2138,8 +2357,8 @@ export component PlayerOverlay {
                     // flush with the button, 8px gap). Wide only: on narrow
                     // layouts track selection lives in the settings panel.
                     if !root.narrow: Rectangle {
-                        width: 40px;
-                        height: 40px;
+                        width: InterfaceStyle.tv ? 56px : 40px;
+                        height: InterfaceStyle.tv ? 56px : 40px;
 
                         IconBtn {
                             x: 0;
@@ -2184,8 +2403,8 @@ export component PlayerOverlay {
                     // on narrow layouts track selection lives in the settings
                     // panel.
                     if !root.narrow: Rectangle {
-                        width: 40px;
-                        height: 40px;
+                        width: InterfaceStyle.tv ? 56px : 40px;
+                        height: InterfaceStyle.tv ? 56px : 40px;
 
                         IconBtn {
                             x: 0;
@@ -2260,7 +2479,19 @@ export component PlayerOverlay {
                     // Fullscreen button. Hidden on Android: the platform has
                     // its own fullscreen affordance (and the bars are already
                     // immersive during playback).
-                    if !root.is_android: IconBtn {
+                    if InterfaceStyle.tv: IconBtn {
+                        enabled: root.playback_started && !root.screenshot_busy;
+                        focused: root.kb_active && root.kb_idx == 9 && root.open_popup == 0;
+                        accessible-role: button; accessible-label: @tr("Take screenshot");
+                        clicked => {
+                            if !root.guard_osd_control() { return; }
+                            root.kb_active = true; root.kb_idx = 9;
+                            if root.playback_started && !root.screenshot_busy { root.take_screenshot(); }
+                        }
+                        IcCamera { width: 28px; height: 28px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; fill: Theme.current.text_bright; }
+                    }
+
+                    if !root.is_android && !InterfaceStyle.tv: IconBtn {
                         focused: root.kb_active && root.kb_idx == 8 && root.open_popup == 0;
                         clicked => {
                             if (!root.guard_osd_control()) { return; }
@@ -2292,11 +2523,11 @@ export component PlayerOverlay {
             property <length> subtitle_clearance: root.height - self.y + 8px;
             init => { root.next_episode_clearance = self.subtitle_clearance; }
             changed subtitle_clearance => { root.next_episode_clearance = self.subtitle_clearance; }
-            width: Math.max(0px, Math.min(360px,
+            width: Math.max(0px, Math.min(InterfaceStyle.tv ? 540px : 360px,
                 root.width - root.safe-left - root.safe-right - 32px));
             x: root.width - root.safe-right - self.width - 16px;
             y: Math.max(root.safe-top + 16px,
-                root.height - self.height - (root.controls_active ? 80px : 16px));
+                root.height - self.height - (root.controls_active ? (InterfaceStyle.tv ? osd.height + 12px : 80px) : 16px));
             title: root.next_episode_title;
             context: root.next_episode_context;
             focused_action: root.kb_active ? (root.kb_idx == 10 ? 1 : root.kb_idx == 11 ? 2 : 0) : 0;

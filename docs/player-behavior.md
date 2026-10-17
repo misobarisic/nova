@@ -145,7 +145,7 @@ Android Gallery uses the matching MIME type, extension and relative path.
 Screenshots are local files and never enter device sync. A brief
 notice reports the saved location or a sanitized error.
 
-Outside player menus, Left/Right seek by ten seconds, Up/Down change volume
+In Standard interface mode, outside player menus, Left/Right seek by ten seconds, Up/Down change volume
 (desktop five percentage points, Android one system-volume notch), Space/K
 pause or resume, desktop F toggles fullscreen, and S saves a screenshot.
 Screenshot keys are disabled while loading or capturing; modifier chords and
@@ -171,6 +171,25 @@ and the next-episode offer keep it visible.
 Implementation: `crates/ui/player.slint`, `src/app/{playback,posters,run}.rs`
 and `crates/player/src/{screenshot,gpu_screenshot}.rs`. Header/keyboard regressions live in
 `tests/player/{osd_header,shortcuts}.rs`.
+
+TV interface mode uses two remote-focus rows. With controls hidden, OK toggles
+pause/play and reveals the OSD together; Left/Right previews a ten-second seek
+without opening the full overlay. Holding a direction accelerates the preview;
+release performs one bounded seek. Up/Down can reveal controls without pausing.
+With controls visible, Left/Right moves between bottom buttons; Up focuses the
+timeline and Down returns to the originating button. Left/Right on the timeline
+previews a seek and commits on release. Down from the button row or Up from the
+timeline hides controls. Back closes a menu, cancels a pending seek, hides the OSD,
+then leaves playback. Loading/live streams and party guests cannot seek; previews
+are discarded if focus, control permission or the current source disappears. A held
+seek keeps visible controls awake. Android's mobile center transport is replaced
+by the TV bottom row, which also contains screenshots; TV volume uses the remote's
+system control. Mouse clicks, wheel menus and pointer timeline scrubbing remain
+available on desktop; clicking the video toggles pause and reveals controls.
+Android's Play/Pause toggle, separate Play and Pause, Stop and seek buttons use the same actions;
+Next opens the available next-episode offer, while Previous is consumed without
+inventing a previous-episode target. TV-specific regressions, including mouse
+switching and party guards, live in `tests/player/tv_controls.rs`.
 
 Deferred addon streams open the built-in player immediately with “Resolving
 stream…”, the selected show's header and the normal dimmed loading artwork.

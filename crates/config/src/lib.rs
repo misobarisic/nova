@@ -5,6 +5,72 @@
 
 pub mod playback_preferences;
 
+/// Device-local presentation preference. Never included in synced settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterfaceMode {
+    #[default]
+    Automatic,
+    Standard,
+    Tv,
+}
+
+impl InterfaceMode {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Standard,
+            2 => Self::Tv,
+            _ => Self::Automatic,
+        }
+    }
+
+    pub fn index(self) -> i32 {
+        match self {
+            Self::Automatic => 0,
+            Self::Standard => 1,
+            Self::Tv => 2,
+        }
+    }
+
+    pub fn is_tv(self, television: bool) -> bool {
+        match self {
+            Self::Automatic => television,
+            Self::Standard => false,
+            Self::Tv => true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod interface_mode_tests {
+    use super::InterfaceMode;
+
+    #[test]
+    fn interface_mode_resolution_and_persistence() {
+        for index in 0..=2 {
+            let mode = InterfaceMode::from_index(index);
+            assert_eq!(mode.index(), index);
+            assert_eq!(
+                serde_json::from_str::<InterfaceMode>(&serde_json::to_string(&mode).unwrap())
+                    .unwrap(),
+                mode
+            );
+        }
+        assert_eq!(InterfaceMode::from_index(-1), InterfaceMode::Automatic);
+        assert_eq!(InterfaceMode::from_index(99), InterfaceMode::Automatic);
+        assert!(InterfaceMode::Automatic.is_tv(true));
+        assert!(!InterfaceMode::Automatic.is_tv(false));
+        assert!(!InterfaceMode::Standard.is_tv(true));
+        assert!(InterfaceMode::Tv.is_tv(false));
+        assert!(
+            serde_json::to_value(super::CacheSettings::default())
+                .unwrap()
+                .get("interface_mode")
+                .is_none()
+        );
+    }
+}
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};

@@ -1,4 +1,4 @@
-import { CompletionBridge, CompletionDestination, Theme, Anim } from "@NovaUiShared";
+import { CompletionBridge, CompletionDestination, Theme, Anim, InterfaceStyle } from "@NovaUiShared";
 import { ScrollView } from "scrollview.slint";
 import { TrackingButton } from "tracking-controls.slint";
 import { SettingsInput } from "settings-controls.slint";
@@ -6,6 +6,15 @@ import { IcCheck, IcVideoLibrary } from "icons.slint";
 
 component DestinationRating inherits Rectangle {
     in property <CompletionDestination> destination;
+    in property <bool> tv-selected: false;
+    in property <int> tv-step-request;
+    in property <int> tv-direction;
+    changed tv-step-request => {
+        if InterfaceStyle.tv && root.tv-selected {
+            root.choose("" + Math.clamp(root.numeric-score + root.tv-direction * root.destination.step, root.destination.step, root.destination.max));
+        }
+    }
+    changed tv-selected => { if InterfaceStyle.tv && root.tv-selected { root.reveal(root.absolute-position.y, root.height); } }
     property <string> prompt-token: CompletionBridge.token;
     property <string> shown-token;
     property <string> shown-id;
@@ -28,12 +37,14 @@ component DestinationRating inherits Rectangle {
     property <bool> pills: root.destination.step == 1 && root.destination.max <= 10;
     background: Theme.current.tracking_panel;
     border-radius: 16px;
-    border-width: 1px;
-    border-color: Theme.current.border_soft;
+    border-width: InterfaceStyle.tv && root.tv-selected ? 2px : 1px;
+    border-color: InterfaceStyle.tv && root.tv-selected ? Theme.current.focus_ring : Theme.current.border_soft;
     min-width: 0px;
     vertical-stretch: 0;
     callback reveal(length, length);
+    callback interacted();
     function choose(value: string) {
+        if InterfaceStyle.tv { root.interacted(); }
         root.draft-score = value;
         CompletionBridge.score_changed(CompletionBridge.token, root.destination.id, value);
     }
@@ -99,6 +110,9 @@ export component CompletionRatingPrompt inherits Rectangle {
     in property <length> safe-right;
     background: #0009;
     property <bool> content-focus-claimed;
+    property <int> tv-row: 0;
+    property <int> tv-step-request;
+    property <int> tv-direction;
     property <bool> motion-enabled: Anim.enabled && Anim.transitions;
     property <bool> revealed;
     property <float> reveal-alpha: root.revealed ? 1 : 0;
@@ -132,7 +146,28 @@ export component CompletionRatingPrompt inherits Rectangle {
         // A button focus never opens the keyboard. Sentinels contain native
         // Tab traversal in this dialog, including its editable numeric field.
         init => { completion_close.focus(); }
-        key-pressed(e) => { reject }
+        capture-key-pressed(e) => {
+            if !InterfaceStyle.tv { reject }
+            else if e.text == Key.Back || e.text == Key.Escape {
+                if !e.repeat { CompletionBridge.dismiss(CompletionBridge.token); } accept
+            } else if e.text == Key.UpArrow || e.text == Key.DownArrow {
+                root.tv-row = Math.clamp(root.tv-row + (e.text == Key.UpArrow ? -1 : 1), 0, CompletionBridge.destinations.length + 1);
+                accept
+            } else if e.text == Key.LeftArrow || e.text == Key.RightArrow {
+                if root.tv-row < CompletionBridge.destinations.length {
+                    root.tv-direction = e.text == Key.LeftArrow ? -1 : 1;
+                    root.tv-step-request += 1;
+                } else { root.tv-row = root.tv-row == CompletionBridge.destinations.length ? CompletionBridge.destinations.length + 1 : CompletionBridge.destinations.length; }
+                accept
+            } else if e.text == Key.Return || e.text == " " {
+                if !e.repeat {
+                    if root.tv-row < CompletionBridge.destinations.length { root.tv-direction = 1; root.tv-step-request += 1; }
+                    else if root.tv-row == CompletionBridge.destinations.length { CompletionBridge.dismiss(CompletionBridge.token); }
+                    else if CompletionBridge.can_save { CompletionBridge.save(CompletionBridge.token); }
+                }
+                accept
+            } else { reject }
+        }
         FocusScope {
             width: 0px; height: 0px;
             changed has-focus => {
@@ -151,7 +186,7 @@ export component CompletionRatingPrompt inherits Rectangle {
                 ? parent.height - root.safe-top - self.height
                 : (parent.height - root.safe-top - root.safe-bottom - self.height) / 2)
                 + (root.phone ? root.reveal-rise : 0px);
-            width: Math.max(0px, Math.min(480px, parent.width - root.safe-left - root.safe-right - (root.phone ? 0px : 48px)));
+            width: Math.max(0px, Math.min(InterfaceStyle.tv ? 720px : 480px, parent.width - root.safe-left - root.safe-right - (root.phone ? 0px : 48px)));
             height: Math.max(0px, Math.min(parent.height - root.safe-top - (root.phone ? 12px : root.safe-bottom + 48px), 604px + (root.phone ? root.safe-bottom : 0px)));
             background: Theme.current.popup;
             border-radius: 24px;
@@ -213,8 +248,12 @@ export component CompletionRatingPrompt inherits Rectangle {
                             Text { text: @tr("How was it?"); color: Theme.current.text_bright; font-size: 19px; font-weight: 600; }
                             Text { text: @tr("Rate your completed release."); color: Theme.current.text_secondary; wrap: word-wrap; min-width: 0px; }
                         }
-                        for destination in CompletionBridge.destinations: DestinationRating {
+                        for destination[index] in CompletionBridge.destinations: DestinationRating {
                             destination: destination;
+                            interacted => { root.tv-row = index; }
+                            tv-selected: root.tv-row == index;
+                            tv-step-request: root.tv-step-request;
+                            tv-direction: root.tv-direction;
                             reveal(y, height) => {
                                 root.content-focus-claimed = true;
                                 completion_scroll.reveal(y, height);
@@ -232,10 +271,12 @@ export component CompletionRatingPrompt inherits Rectangle {
                     spacing: 10px; vertical-stretch: 0;
                     completion_dismiss := TrackingButton {
                         text: @tr("Dismiss"); compact: true;
+                        selected: InterfaceStyle.tv && root.tv-row == CompletionBridge.destinations.length;
                         clicked => { CompletionBridge.dismiss(CompletionBridge.token); }
                     }
                     completion_save := TrackingButton {
                         text: @tr("Save ratings"); primary: true; compact: true;
+                        selected: InterfaceStyle.tv && root.tv-row == CompletionBridge.destinations.length + 1;
                         enabled: CompletionBridge.can_save;
                         clicked => { if CompletionBridge.can_save { CompletionBridge.save(CompletionBridge.token); } }
                     }

@@ -169,6 +169,16 @@ impl Bridge {
             let b = self.clone();
             let callback_schedule = schedule.clone();
             app.on_settings_edited(move |field| {
+                if field == "interface_mode" {
+                    if let Some(app) = b.app() {
+                        let mode =
+                            nova_config::InterfaceMode::from_index(app.get_interface_mode_index());
+                        // Keep this preference outside the synced settings object.
+                        write_json("interface_mode", &mode);
+                        apply_interface_mode(&app, mode);
+                    }
+                    return;
+                }
                 allow_setting_field(&field);
                 b.capture_settings();
                 let settings = b.shared.lock().unwrap().cache_settings.clone();
@@ -283,6 +293,10 @@ impl Bridge {
             app.set_anim_hover(settings.anim_hover);
             app.set_anim_player(settings.anim_player);
             app.set_anim_nav_slide(settings.anim_nav_slide);
+            let mode =
+                read_json::<nova_config::InterfaceMode>("interface_mode").unwrap_or_default();
+            app.set_interface_mode_index(mode.index());
+            apply_interface_mode(&app, mode);
             app.set_language_index(settings.language.index());
             app.set_language_names(
                 Rc::new(VecModel::<SharedString>::from(language_labels())).into(),
@@ -1096,6 +1110,61 @@ impl Bridge {
             app.set_selected_description(SharedString::default());
             app.set_selected_genre_list(Rc::new(VecModel::from(vec![])).into());
         }
+    }
+}
+
+/// Publish startup and live choices through the same path. Remotes need a
+/// visible initial focus marker before the first directional event arrives.
+fn apply_interface_mode(app: &nova_ui::AppWindow, mode: nova_config::InterfaceMode) {
+    let tv = mode.is_tv(interface_is_television());
+    app.global::<nova_ui::InterfaceStyle>().set_tv(tv);
+    app.set_touch_menus(cfg!(target_os = "android") && !tv);
+    if tv {
+        app.set_kb_active(true);
+        app.global::<nova_ui::SettingsStyle>()
+            .set_keyboard_mode(true);
+    }
+}
+
+/// Android's device mode is queried once per process. Manual mode works on every platform.
+fn interface_is_television() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        static TELEVISION: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *TELEVISION.get_or_init(|| {
+            super::android_bg::with_app_context(|env, raw| {
+                use jni::objects::{JObject, JValue};
+                let context = unsafe { JObject::from_raw(raw) };
+                let detection = (|| {
+                    let name = env.new_string("uimode")?;
+                    let service = env
+                        .call_method(
+                            &context,
+                            "getSystemService",
+                            "(Ljava/lang/String;)Ljava/lang/Object;",
+                            &[JValue::Object(&name)],
+                        )?
+                        .l()?;
+                    if service.is_null() {
+                        return Ok(false);
+                    }
+                    let mode = env
+                        .call_method(&service, "getCurrentModeType", "()I", &[])?
+                        .i()?;
+                    Ok(mode == 4) // Configuration.UI_MODE_TYPE_TELEVISION
+                })();
+                // A failed service lookup must not poison subsequent JNI calls.
+                if detection.is_err() {
+                    let _ = env.exception_clear();
+                }
+                detection
+            })
+            .unwrap_or(false)
+        })
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        false
     }
 }
 

@@ -1,4 +1,4 @@
-import { Theme, SheetItem, Anim } from "@NovaUiShared";
+import { Theme, SheetItem, Anim, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 
@@ -56,6 +56,7 @@ export component MenuSheet inherits Rectangle {
         exit_t.stop();
         if (root.open) {
             root.retained = true;
+            if InterfaceStyle.tv { root.tv-index = root.items.length; menu_scope.focus(); }
             if (root.motion_enabled) {
                 // Defer the first target until the hidden baseline is painted.
                 enter_t.start();
@@ -94,12 +95,36 @@ export component MenuSheet inherits Rectangle {
         triggered => { self.stop(); root.retained = false; }
     }
 
+    // TV remotes own the sheet until an action or Back closes it. Cancel is
+    // the safe initial selection; disabled actions can never be invoked.
+    property <int> tv-index: 0;
+    menu_scope := FocusScope {
+        enabled: InterfaceStyle.tv && root.open;
+        key-pressed(e) => {
+            if !InterfaceStyle.tv || !root.open { reject }
+            else if e.text == Key.UpArrow || e.text == Key.DownArrow {
+                SettingsStyle.keyboard-mode = true;
+                root.tv-index = Math.clamp(root.tv-index + (e.text == Key.UpArrow ? -1 : 1), 0, root.items.length);
+                menu_scroll.content-y = -Math.max(0px, (root.tv-index + 1) * 68px - menu_scroll.visible-height);
+                accept
+            } else if e.text == Key.Return || e.text == " " {
+                if !e.repeat {
+                    if root.tv-index == root.items.length { root.closed(); }
+                    else if root.items[root.tv-index].enabled { root.picked(root.tv-index); }
+                }
+                accept
+            } else if e.text == Key.Back || e.text == Key.Escape {
+                if !e.repeat { root.closed(); } accept
+            } else { reject }
+        }
+    }
+
     // Chrome around the scrolling list: padding + gaps + optional title
     // + Cancel. Kept explicit (not measured) so the cap math below is
     // exact and short sheets never reserve empty space.
-    property <length> chrome_h: 24px + (root.sheet_title == "" ? 0px : 28px) + 48px;
+    property <length> chrome_h: 24px + (root.sheet_title == "" ? 0px : InterfaceStyle.tv ? 36px : 28px) + (InterfaceStyle.tv ? 64px : 48px);
     // Visible list height: everything when it fits, floored at 0.
-    property <length> list_h: Math.max(0px, Math.min(root.items.length * 52px - 4px, root.max_h - root.chrome_h - root.safe-bottom));
+    property <length> list_h: Math.max(0px, Math.min(root.items.length * (InterfaceStyle.tv ? 68px : 52px) - 4px, root.max_h - root.chrome_h - root.safe-bottom));
 
     // Dim backdrop: covers the page, eats outside taps (close only).
     Rectangle {
@@ -134,7 +159,7 @@ export component MenuSheet inherits Rectangle {
             padding-right: root.safe-right;
 
             panel := Rectangle {
-                width: Math.min(560px, parent.width - root.safe-left - root.safe-right - 24px);
+                width: Math.min(InterfaceStyle.tv ? 720px : 560px, parent.width - root.safe-left - root.safe-right - 24px);
                 height: root.chrome_h + root.list_h + root.safe-bottom;
                 background: Theme.current.popup;
                 border-radius: 16px;
@@ -154,7 +179,7 @@ export component MenuSheet inherits Rectangle {
                     if root.sheet_title != "": Text {
                         text: root.sheet_title;
                         color: Theme.current.text_muted;
-                        font-size: 12px;
+                        font-size: InterfaceStyle.tv ? 18px : 12px;
                         font-weight: 600;
                         horizontal-alignment: center;
                     }
@@ -172,8 +197,10 @@ export component MenuSheet inherits Rectangle {
                             spacing: 4px;
 
                             for it[i] in root.items: Rectangle {
-                                height: 48px;
+                                height: InterfaceStyle.tv ? 64px : 48px;
                                 border-radius: 8px;
+                                border-width: InterfaceStyle.tv && root.tv-index == i ? 2px : 0px;
+                                border-color: Theme.current.focus_ring;
                                 background: btn_touch.has-hover ? Theme.current.control_hover : transparent;
                                 // Expose the row to the accessibility tree (and
                                 // headless tests, which locate a specific
@@ -185,7 +212,7 @@ export component MenuSheet inherits Rectangle {
                                 Text {
                                     text: it.label;
                                     color: it.enabled ? Theme.current.text_primary : Theme.current.text_disabled;
-                                    font-size: 15px;
+                                    font-size: InterfaceStyle.tv ? 22px : 15px;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                     overflow: elide;
@@ -201,15 +228,17 @@ export component MenuSheet inherits Rectangle {
                     }
 
                     Rectangle {
-                        height: 48px;
+                        height: InterfaceStyle.tv ? 64px : 48px;
                         vertical-stretch: 0;
                         border-radius: 8px;
+                        border-width: InterfaceStyle.tv && root.tv-index == root.items.length ? 2px : 0px;
+                        border-color: Theme.current.focus_ring;
                         background: cancel_touch.has-hover ? Theme.current.control_hover : transparent;
 
                         Text {
                             text: @tr("Cancel");
                             color: Theme.current.accent;
-                            font-size: 15px;
+                            font-size: InterfaceStyle.tv ? 22px : 15px;
                             font-weight: 700;
                             horizontal-alignment: center;
                             vertical-alignment: center;

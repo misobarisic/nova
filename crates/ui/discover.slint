@@ -1,4 +1,4 @@
-import { MediaCard, NavMetrics, NavState, Theme, Anim } from "@NovaUiShared";
+import { InterfaceStyle, MediaCard, NavMetrics, NavState, Theme, Anim } from "@NovaUiShared";
 import { Spinner } from "std-widgets.slint";
 import { PillButton } from "settings-controls.slint";
 import { ScrollView } from "scrollview.slint";
@@ -36,7 +36,7 @@ component DiscoverFilters inherits Flickable {
 
     width: 100%;
     vertical-stretch: 0;
-    height: 44px;
+    height: InterfaceStyle.tv ? 56px : 44px;
     interactive: true;
     content-width: filter_row.width;
     content-height: self.height;
@@ -224,7 +224,7 @@ component DiscoverHeader {
                 search_title_measure := Text {
                     width: Math.max(0px, root.width - 56px);
                     text: root.results_open ? @tr("Search results") : @tr("Search");
-                    font-size: root.narrow ? 28px : 32px;
+                    font-size: InterfaceStyle.tv ? 42px : (root.narrow ? 28px : 32px);
                     font-weight: 700;
                     wrap: word-wrap;
                 }
@@ -239,7 +239,7 @@ component DiscoverHeader {
 
                 Rectangle {
                     width: 44px;
-                    height: 44px;
+                    height: InterfaceStyle.tv ? 56px : 44px;
                     border-radius: 22px;
                     background: back_touch.has-hover ? Theme.current.control_hover : Theme.current.hero_control;
                     accessible-role: button;
@@ -261,7 +261,7 @@ component DiscoverHeader {
                 }
                 results_title := Text {
                     text: root.results_open ? @tr("Search results") : @tr("Search");
-                    font-size: root.narrow ? 28px : 32px;
+                    font-size: InterfaceStyle.tv ? 42px : (root.narrow ? 28px : 32px);
                     font-weight: 700;
                     color: Theme.current.text_bright;
                     vertical-alignment: center;
@@ -282,7 +282,7 @@ component DiscoverHeader {
                     width: 100%;
                     height: Math.max(44px, self.preferred-height);
                     text: @tr("Discover");
-                    font-size: root.narrow ? 28px : 32px;
+                    font-size: InterfaceStyle.tv ? 42px : (root.narrow ? 28px : 32px);
                     font-weight: 700;
                     color: Theme.current.text_bright;
                     vertical-alignment: center;
@@ -293,7 +293,7 @@ component DiscoverHeader {
                     width: 100%;
                     height: self.preferred-height;
                     text: @tr("Find your next movie, show, or anime.");
-                    font-size: 14px;
+                    font-size: InterfaceStyle.tv ? 18px : 14px;
                     color: Theme.current.text_secondary;
                     wrap: word-wrap;
                 }
@@ -350,7 +350,7 @@ component DiscoverHeader {
             Text {
                 text: @tr("Search filters");
                 color: Theme.current.text_secondary;
-                font-size: 13px;
+                font-size: InterfaceStyle.tv ? 18px : 13px;
                 height: self.preferred-height;
             }
             search_filters := DiscoverFilters {
@@ -394,7 +394,7 @@ component DiscoverHeader {
                     Text {
                         text: @tr("Recent searches");
                         color: Theme.current.text_primary;
-                        font-size: 13px;
+                        font-size: InterfaceStyle.tv ? 18px : 13px;
                         font-weight: 600;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
@@ -409,7 +409,7 @@ component DiscoverHeader {
                         clear_label := Text {
                             text: @tr("Clear history");
                             color: Theme.current.text_download;
-                            font-size: 12px;
+                            font-size: InterfaceStyle.tv ? 18px : 12px;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
@@ -425,7 +425,7 @@ component DiscoverHeader {
                         width: 100%;
                         spacing: 0px;
                         for query[index] in root.search_history: Rectangle {
-                            height: 44px;
+                            height: InterfaceStyle.tv ? 56px : 44px;
                             border-radius: 8px;
                             background: history_touch.has-hover ? Theme.current.selection_wash : transparent;
                             HorizontalLayout {
@@ -450,13 +450,13 @@ component DiscoverHeader {
                                     Text {
                                         text: query;
                                         color: Theme.current.text_primary;
-                                        font-size: 14px;
+                                        font-size: InterfaceStyle.tv ? 18px : 14px;
                                         overflow: elide;
                                     }
                                     if index < root.search_history_contexts.length: Text {
                                         text: root.search_history_contexts[index];
                                         color: Theme.current.text_hint;
-                                        font-size: 11px;
+                                        font-size: InterfaceStyle.tv ? 18px : 11px;
                                         overflow: elide;
                                     }
                                 }
@@ -591,7 +591,7 @@ component DiscoverGrid {
                 // Poster keeps a true 2:3 ratio at any column count, so
                 // narrow (e.g. 3-across phone) cards shrink in height too
                 // instead of stretching tall. The caption reserves two title lines.
-                height: root.item-width * 3 / 2 + 72px;
+                height: root.item-width * 3 / 2 + (InterfaceStyle.tv ? 104px : 72px);
                 // Each delegate owns its one-shot reveal. Model row updates
                 // (especially posters) must never reset/cancel a page-wide
                 // reveal timer and strand this card at zero opacity.
@@ -664,7 +664,7 @@ component DiscoverGrid {
                                     Text {
                                         text: card.title;
                                         color: Theme.current.text_bright;
-                                        font-size: root.item-width < 130px ? 12px : 14px;
+                                        font-size: InterfaceStyle.tv ? 22px : (root.item-width < 130px ? 12px : 14px);
                                         font-weight: 600;
                                         height: self.preferred-height;
                                         min-width: 0px; wrap: word-wrap; max-lines: 2;
@@ -673,7 +673,7 @@ component DiscoverGrid {
                                     Text {
                                         text: card.year;
                                         color: Theme.current.text_secondary;
-                                        font-size: 11px;
+                                        font-size: InterfaceStyle.tv ? 18px : 11px;
                                         height: self.preferred-height;
                                         overflow: elide;
                                     }
@@ -738,7 +738,7 @@ component DiscoverGrid {
                 }
                 empty_message := Text {
                     text: root.empty_hint;
-                    font-size: 14px;
+                    font-size: InterfaceStyle.tv ? 18px : 14px;
                     color: Theme.current.text_secondary;
                     height: self.preferred-height;
                     horizontal-alignment: center;
@@ -804,10 +804,10 @@ export component DiscoverPage {
     in-out property <string> empty_hint: @tr("No addons installed yet — add one in Settings → Addons.");
     in-out property <string> searchable_hint: "";
 
-    property <length> item-gap: Theme.card_spacing;
+    property <length> item-gap: InterfaceStyle.tv ? Math.max(24px, Theme.card_spacing) : Theme.card_spacing;
     // Match Library's fluid 160–230px poster grid; capped rows align left.
-    property <length> min-card: 160px;
-    property <length> max-card: 230px;
+    property <length> min-card: InterfaceStyle.tv ? 240px : 160px;
+    property <length> max-card: InterfaceStyle.tv ? 300px : 230px;
     // Floor from Settings → Display (phones fit N across at 160px cards).
     in property <int> min_cols: 2;
     // Left inset reserved by the wide-layout navigation rail (0 on narrow).
@@ -818,7 +818,7 @@ export component DiscoverPage {
     // The active ScrollView reports its measured width; it already clears
     // page padding, the rail, cutouts and scroll chrome.
     property <length> grid-width: Math.max(1px, root.sv_vw);
-    property <int> cols: Math.max(root.min_cols, Math.floor((root.grid-width + root.item-gap) / (root.min-card + root.item-gap)));
+    property <int> cols: Math.max(InterfaceStyle.tv ? 1 : root.min_cols, Math.floor((root.grid-width + root.item-gap) / (root.min-card + root.item-gap)));
     property <length> item-width: Math.max(1px, Math.min(root.max-card, (root.grid-width - (root.cols - 1) * root.item-gap) / root.cols));
 
     callback addon_picked(string);
@@ -1149,10 +1149,10 @@ export component DiscoverPage {
         }
     }
 
-    // Row stride follows the card height (2:3 poster + 72px footer, see
+    // Row stride follows the card height (2:3 poster and a mode-sized footer; see
     // the grid below) plus the item gap, matching the preload math below.
     // It changes with the column count, so it stays a live property.
-    property <length> row_stride: root.item-width * 3 / 2 + 72px + root.item-gap;
+    property <length> row_stride: root.item-width * 3 / 2 + (InterfaceStyle.tv ? 104px : 72px) + root.item-gap;
     // Keep the focused card on screen. Reads the live scroll
     // metrics (sv_*) and steers through scroll_y: each mounted scroll
     // mirrors its viewport into scroll_y and applies scroll_y back via

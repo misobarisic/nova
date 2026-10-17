@@ -1,4 +1,4 @@
-import { PartyBridge, RemoteBridge, Theme, NavMetrics, NavState, SettingsStyle } from "@NovaUiShared";
+import { PartyBridge, RemoteBridge, InterfaceStyle, Theme, NavMetrics, NavState, SettingsStyle } from "@NovaUiShared";
 
 import { ScrollView } from "scrollview.slint";
 import { BottomNav } from "bottomnav.slint";
@@ -116,33 +116,33 @@ export component MorePage inherits Rectangle {
             VerticalLayout {
                 width: 100%; spacing: 12px;
                 PageHeader { title: @tr("More"); narrow: root.narrow; show-back: root.narrow; back => { if (root.active) { root.home_picked(); } } }
-                if root.narrow: SettingsCard { SettingsLink { interactive: root.active; destination-id: "more:calendar"; icon-kind: 16; title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 0; picked => { root.calendar_picked(); } } }
-                if root.narrow: SettingsCard { SettingsLink { interactive: root.active; destination-id: "more:downloads"; icon-kind: 17; title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 1; picked => { root.downloads_picked(); } } }
+                if root.narrow: SettingsCard { SettingsLink { interactive: root.active; destination-id: "more:calendar"; icon-kind: 16; title: @tr("Calendar"); subtitle: @tr("Upcoming episodes from your library"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 0; picked => { if InterfaceStyle.tv { root.choice = 0; root.kb_zone = 1; } root.calendar_picked(); } } }
+                if root.narrow: SettingsCard { SettingsLink { interactive: root.active; destination-id: "more:downloads"; icon-kind: 17; title: @tr("Downloads"); subtitle: @tr("Watch your saved episodes"); focused: root.kb_active && root.kb_zone == 1 && root.choice == 1; picked => { if InterfaceStyle.tv { root.choice = 1; root.kb_zone = 1; } root.downloads_picked(); } } }
                 SettingsCard { SettingsLink {
                     interactive: root.active; destination-id: "more:settings";
                     icon-kind: 14;
                     title: @tr("Settings"); subtitle: @tr("Make Nova yours");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 2;
-                    picked => { root.settings_picked(); }
+                    picked => { if InterfaceStyle.tv { root.choice = 2; root.kb_zone = 1; } root.settings_picked(); }
                 } }
                 SettingsCard { SettingsLink {
                     interactive: root.active; destination-id: "more:about";
                     icon-kind: 15;
                     title: @tr("About"); subtitle: @tr("Information about Nova");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 3;
-                    picked => { root.about_picked(); }
+                    picked => { if InterfaceStyle.tv { root.choice = 3; root.kb_zone = 1; } root.about_picked(); }
                 } }
                 SettingsCard { SettingsLink {
                     interactive: root.active; destination-id: "more:devices"; icon-kind: 3;
                     title: @tr("Devices"); subtitle: @tr("Control playback on your paired devices");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 4;
-                    picked => { RemoteBridge.devices_open = true; RemoteBridge.device_refresh(); }
+                    picked => { if InterfaceStyle.tv { root.choice = 4; root.kb_zone = 1; } RemoteBridge.devices_open = true; RemoteBridge.device_refresh(); }
                 } }
                 SettingsCard { SettingsLink {
                     interactive: root.active; destination-id: "more:party"; icon-kind: 7;
                     title: @tr("Watch party"); subtitle: @tr("Watch together on your own devices");
                     focused: root.kb_active && root.kb_zone == 1 && root.choice == 5;
-                    picked => { PartyBridge.page_open = true; }
+                    picked => { if InterfaceStyle.tv { root.choice = 5; root.kb_zone = 1; } PartyBridge.page_open = true; }
                 } }
                 Rectangle { vertical-stretch: 1; }
             }

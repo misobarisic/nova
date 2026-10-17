@@ -718,6 +718,9 @@ fn map_key_event(key_event: &android_activity::input::KeyEvent) -> Option<Window
     }
 }
 
+// Slint 1.18 has no media Key variants. Nova reserves U+E100..E107 for
+// transport keys; the AppWindow capture consumes them outside playback too,
+// so they never become text-input content. System volume keys stay unmapped.
 fn map_key_code(code: android_activity::input::Keycode) -> Option<SharedString> {
     match code {
         Keycode::Unknown => None,
@@ -805,19 +808,19 @@ fn map_key_code(code: android_activity::input::Keycode) -> Option<SharedString> 
         Keycode::Menu => Some(Key::Menu.into()),
         Keycode::Notification => None,
         Keycode::Search => None,
-        Keycode::MediaPlayPause => None,
-        Keycode::MediaStop => None,
-        Keycode::MediaNext => None,
-        Keycode::MediaPrevious => None,
-        Keycode::MediaRewind => None,
-        Keycode::MediaFastForward => None,
+        Keycode::MediaPlayPause => Some("\u{e100}".into()),
+        Keycode::MediaStop => Some("\u{e103}".into()),
+        Keycode::MediaNext => Some("\u{e104}".into()),
+        Keycode::MediaPrevious => Some("\u{e105}".into()),
+        Keycode::MediaRewind => Some("\u{e106}".into()),
+        Keycode::MediaFastForward => Some("\u{e107}".into()),
         Keycode::Mute => None,
         Keycode::PageUp => Some(Key::PageUp.into()),
         Keycode::PageDown => Some(Key::PageDown.into()),
         Keycode::Pictsymbols => None,
         Keycode::SwitchCharset => None,
-        Keycode::ButtonA => None,
-        Keycode::ButtonB => None,
+        Keycode::ButtonA => Some(Key::Return.into()),
+        Keycode::ButtonB => Some(Key::Back.into()),
         Keycode::ButtonC => None,
         Keycode::ButtonX => None,
         Keycode::ButtonY => None,
@@ -846,8 +849,8 @@ fn map_key_code(code: android_activity::input::Keycode) -> Option<SharedString> 
         Keycode::MoveEnd => Some(Key::End.into()),
         Keycode::Insert => Some(Key::Insert.into()),
         Keycode::Forward => None,
-        Keycode::MediaPlay => None,
-        Keycode::MediaPause => None,
+        Keycode::MediaPlay => Some("\u{e101}".into()),
+        Keycode::MediaPause => Some("\u{e102}".into()),
         Keycode::MediaClose => None,
         Keycode::MediaEject => None,
         Keycode::MediaRecord => None,

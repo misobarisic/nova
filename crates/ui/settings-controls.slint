@@ -1,4 +1,4 @@
-import { SettingsSync, Theme, Anim, SettingsStyle, SettingsDestinations, SettingsDestination } from "@NovaUiShared";
+import { SettingsSync, InterfaceStyle, Theme, Anim, SettingsStyle, SettingsDestinations, SettingsDestination } from "@NovaUiShared";
 import { SettingSyncBadge } from "settings-sync.slint";
 
 import { ControlTouchArea } from "control-input.slint";
@@ -35,7 +35,7 @@ export component PillButton inherits Rectangle {
     accessible-label: label;
     accessible-enabled: root.enabled;
     width: Math.max(pill_lbl.preferred-width + (root.compact ? 20px : 28px), self.btn_min_width);
-    height: root.wrap_label ? Math.max(44px, pill_lbl.preferred-height + 16px) : 44px;
+    height: root.wrap_label ? Math.max(InterfaceStyle.tv ? 56px : 44px, pill_lbl.preferred-height + 16px) : InterfaceStyle.tv ? 56px : 44px;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     property <bool> outlined: Theme.true_black && !root.primary;
     // Scrollable button rails observe native keyboard focus to reveal the active pill.
@@ -53,7 +53,7 @@ export component PillButton inherits Rectangle {
         height: root.height;
         wrap: root.wrap_label ? word-wrap : no-wrap;
         text: label;
-        font-size: 13px;
+        font-size: InterfaceStyle.tv ? 20px : 13px;
         color: root.destructive ? Theme.current.text_destructive : (primary ? Theme.current.on_accent : Theme.current.text_settings);
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -63,7 +63,7 @@ export component PillButton inherits Rectangle {
         enabled: root.enabled;
         key-pressed(e) => {
             SettingsStyle.keyboard-mode = true;
-            if e.text == Key.Return || e.text == " " { root.clicked(); accept } else { reject }
+            if e.text == Key.Return || e.text == " " { if !InterfaceStyle.tv || !e.repeat { root.clicked(); } accept } else { reject }
         }
     }
     touch := ControlTouchArea {
@@ -99,8 +99,8 @@ export component ToggleSwitch inherits Rectangle {
     accessible-checked <=> root.checked;
     accessible-enabled: root.enabled;
     callback toggled();
-    width: 44px;
-    height: 44px;
+    width: InterfaceStyle.tv ? 56px : 44px;
+    height: InterfaceStyle.tv ? 56px : 44px;
     border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;
     border-color: Theme.current.focus_ring;
     border-radius: 6px;
@@ -130,7 +130,7 @@ export component ToggleSwitch inherits Rectangle {
         enabled: root.enabled;
         key-pressed(e) => {
             SettingsStyle.keyboard-mode = true;
-            if e.text == Key.Return || e.text == " " { root.checked = !root.checked; root.toggled(); accept } else { reject }
+            if e.text == Key.Return || e.text == " " { if !InterfaceStyle.tv || !e.repeat { root.checked = !root.checked; root.toggled(); } accept } else { reject }
         }
     }
     TouchArea {
@@ -170,8 +170,8 @@ export component AddonIconButton inherits Rectangle {
     // shared row stays aligned.
     in property <bool> roomy: false;
     callback clicked();
-    width: 44px;
-    height: 44px;
+    width: InterfaceStyle.tv ? 56px : 44px;
+    height: InterfaceStyle.tv ? 56px : 44px;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;
     border-color: Theme.current.focus_ring;
@@ -185,7 +185,7 @@ export component AddonIconButton inherits Rectangle {
         enabled: root.enabled;
         key-pressed(e) => {
             SettingsStyle.keyboard-mode = true;
-            if e.text == Key.Return || e.text == " " { root.clicked(); accept } else { reject }
+            if e.text == Key.Return || e.text == " " { if !InterfaceStyle.tv || !e.repeat { root.clicked(); } accept } else { reject }
         }
     }
     touch := ControlTouchArea {
@@ -252,8 +252,8 @@ export component AddonRowCard inherits Rectangle {
             }
             VerticalLayout {
                 min-width: 0px; horizontal-stretch: 1; spacing: 4px; alignment: center;
-                Text { text: root.title; font-size: 16px; font-weight: 600; color: Theme.current.text_bright; wrap: word-wrap; min-width: 0px; }
-                if root.caption != "": Text { text: root.caption; color: Theme.current.text_secondary; font-size: 12px; wrap: word-wrap; min-width: 0px; }
+                Text { text: root.title; font-size: InterfaceStyle.tv ? 22px : 16px; font-weight: 600; color: Theme.current.text_bright; wrap: word-wrap; min-width: 0px; }
+                if root.caption != "": Text { text: root.caption; color: Theme.current.text_secondary; font-size: InterfaceStyle.tv ? 18px : 12px; wrap: word-wrap; min-width: 0px; }
             }
             Rectangle {
                 width: 44px; height: 48px;
@@ -286,7 +286,7 @@ export component AddonRowCard inherits Rectangle {
         HorizontalLayout {
             spacing: 8px;
             addon_copy := Rectangle {
-                horizontal-stretch: 1; min-width: 0px; height: 44px;
+                horizontal-stretch: 1; min-width: 0px; height: InterfaceStyle.tv ? 56px : 44px;
                 border-radius: 12px; border-width: 1px;
                 border-color: root.kb_active && root.kb_focused_row && root.kb_col == 2 ? Theme.current.focus_ring : Theme.current.border_overlay;
                 background: copy_touch.feedback-active ? Theme.current.settings_control_hover : Theme.current.settings_control;
@@ -330,7 +330,7 @@ export component MiniSlider inherits Rectangle {
     accessible-action-decrement => { if root.enabled { root.adjust(root.value - root.step); } }
     function adjust(v: float) { root.value = Math.clamp(v, root.minimum, root.maximum); root.changed(root.value); }
     callback changed(float);
-    height: 44px;
+    height: InterfaceStyle.tv ? 56px : 44px;
     border-width: (focused || (key_focus.has-focus && SettingsStyle.keyboard-mode)) && root.enabled ? 2px : 0px;
     border-color: Theme.current.focus_ring;
     border-radius: 6px;
@@ -422,7 +422,7 @@ export component Segmented inherits HorizontalLayout {
         accessible-checkable: true;
         accessible-checked: root.current_index == i;
         width: seg_lbl.preferred-width + 28px;
-        height: 44px;
+        height: InterfaceStyle.tv ? 56px : 44px;
         border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
         border-width: self.focus_visible ? 2px : (Theme.true_black ? 1px : 0px);
         border-color: self.focus_visible ? Theme.current.focus_ring : Theme.current.control_border;
@@ -431,7 +431,7 @@ export component Segmented inherits HorizontalLayout {
 
         seg_lbl := Text {
             text: opt;
-            font-size: 13px;
+            font-size: InterfaceStyle.tv ? 20px : 13px;
             color: root.current_index == i ? Theme.current.text_selected : Theme.current.text_settings;
             vertical-alignment: center;
         }
@@ -534,7 +534,7 @@ export component SectionHeader inherits HorizontalLayout {
 
     Text {
         text: label;
-        font-size: 16px;
+        font-size: InterfaceStyle.tv ? 22px : 16px;
         font-weight: 600;
         letter-spacing: 0px;
         color: Theme.current.text_settings;
@@ -550,7 +550,7 @@ export component SettingsRow inherits Rectangle {
     in property <string> row-title: "";
     in property <string> row-desc: "";
     in property <bool> tinted: false;
-    in property <length> row-min-height: 64px;
+    in property <length> row-min-height: InterfaceStyle.tv ? 88px : 64px;
     background: Theme.current.card;
 
     property <length> inner-width: Math.max(0px, self.width - 32px);
@@ -575,12 +575,12 @@ export component SettingsRow inherits Rectangle {
     Rectangle {
         width: 0px;
         height: 0px; clip: true;
-        title_natural := Text { width: 0px; height: 0px; text: root.row-title; font-size: 16px; font-weight: 600; }
+        title_natural := Text { width: 0px; height: 0px; text: root.row-title; font-size: InterfaceStyle.tv ? 22px : 16px; font-weight: 600; }
         badge_natural := Text {
             width: 0px; height: 0px;
             text: SettingsSync.rows[SettingsSync.lookup(root.setting-key)].status == 1 ? @tr("Synced")
                 : SettingsSync.rows[SettingsSync.lookup(root.setting-key)].status == 2 ? @tr("This device (overridden)") : @tr("This device");
-            font-size: 11px; font-weight: 600;
+            font-size: InterfaceStyle.tv ? 16px : 11px; font-weight: 600;
         }
     }
     property <length> text-height: measure_col.preferred-height;
@@ -614,7 +614,7 @@ export component SettingsRow inherits Rectangle {
                 + (root.setting-key != "" && SettingsSync.enabled && !root.inline-badge ? 29px : 0px);
             title_text := Text {
                 x: 0px;
-                text: root.row-title; font-size: 16px; font-weight: 600;
+                text: root.row-title; font-size: InterfaceStyle.tv ? 22px : 16px; font-weight: 600;
                 color: Theme.current.text_bright; wrap: word-wrap; min-width: 0px;
                 width: root.inline-badge ? title_natural.preferred-width : parent.width;
                 height: self.preferred-height;
@@ -630,7 +630,7 @@ export component SettingsRow inherits Rectangle {
 
         if row-desc != "": Text {
             text: row-desc;
-            font-size: 14px;
+            font-size: InterfaceStyle.tv ? 20px : 14px;
             color: Theme.current.text_settings;
             min-width: 0px;
             wrap: word-wrap;
@@ -672,7 +672,7 @@ export component SettingsRow inherits Rectangle {
 
             if row-desc != "": Text {
                 text: row-desc;
-                font-size: 14px;
+                font-size: InterfaceStyle.tv ? 20px : 14px;
                 wrap: word-wrap;
                 min-width: 0px;
             }
@@ -684,7 +684,7 @@ export component SettingsRow inherits Rectangle {
 export component ValueBox inherits Rectangle {
     in property <string> text;
     width: 120px;
-    height: 30px;
+    height: InterfaceStyle.tv ? 44px : 30px;
     border-radius: 8px;
     border-width: 1px;
     border-color: Theme.current.border_overlay;
@@ -692,7 +692,7 @@ export component ValueBox inherits Rectangle {
 
     Text {
         text: text;
-        font-size: 13px;
+        font-size: InterfaceStyle.tv ? 20px : 13px;
         color: Theme.current.text_bright;
         vertical-alignment: center;
         horizontal-alignment: center;
@@ -723,8 +723,8 @@ export component SettingsLink inherits Rectangle {
         height: 0px; clip: true;
         link_measure := VerticalLayout {
             width: Math.max(0px, root.width - 128px); spacing: 2px;
-            Text { text: root.title; font-size: 16px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
-            if root.subtitle != "": Text { text: root.subtitle; font-size: 14px; wrap: word-wrap; min-width: 0px; }
+            Text { text: root.title; font-size: InterfaceStyle.tv ? 22px : 16px; font-weight: 600; wrap: word-wrap; min-width: 0px; }
+            if root.subtitle != "": Text { text: root.subtitle; font-size: InterfaceStyle.tv ? 20px : 14px; wrap: word-wrap; min-width: 0px; }
         }
     }
     border-radius: 8px;
@@ -827,7 +827,7 @@ export component SettingsLink inherits Rectangle {
 
             Text {
                 text: root.title;
-                font-size: 16px;
+                font-size: InterfaceStyle.tv ? 22px : 16px;
                 font-weight: 600;
                 color: Theme.current.text_bright;
                 wrap: word-wrap;
@@ -836,7 +836,7 @@ export component SettingsLink inherits Rectangle {
 
             if root.subtitle != "": Text {
                 text: root.subtitle;
-                font-size: 14px;
+                font-size: InterfaceStyle.tv ? 20px : 14px;
                 color: Theme.current.text_settings;
                 wrap: word-wrap;
                 min-width: 0px;
@@ -896,7 +896,7 @@ export component NumericSetting inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> focused: false;
     callback changed(float);
-    preferred-width: 252px; min-width: 0px; height: 44px;
+    preferred-width: 252px; min-width: 0px; height: InterfaceStyle.tv ? 56px : 44px;
     HorizontalLayout {
         spacing: 4px;
         PillButton { label: "−"; enabled: root.enabled && root.value > root.minimum; compact: true; btn_min_width: 44px;
@@ -904,7 +904,7 @@ export component NumericSetting inherits Rectangle {
         MiniSlider { min-width: 36px; horizontal-stretch: 1; enabled: root.enabled; focused: root.focused;
             value <=> root.value; minimum: root.minimum; maximum: root.maximum; step: root.step;
             changed(v) => { root.changed(v); } }
-        ValueBox { width: root.suffix == "" ? 36px : 68px; height: 44px; text: Math.round(root.value) + root.suffix; }
+        ValueBox { width: root.suffix == "" ? 36px : 68px; height: InterfaceStyle.tv ? 56px : 44px; text: Math.round(root.value) + root.suffix; }
         PillButton { label: "+"; enabled: root.enabled && root.value < root.maximum; compact: true; btn_min_width: 44px;
             clicked => { root.value = Math.min(root.maximum, root.value + root.step); root.changed(root.value); } }
     }
@@ -917,8 +917,8 @@ export component SettingsBackButton inherits Rectangle {
     in property <bool> focused: false;
     in property <bool> reveal-on-focus: true;
     callback clicked();
-    width: 44px;
-    height: 44px;
+    width: InterfaceStyle.tv ? 56px : 44px;
+    height: InterfaceStyle.tv ? 56px : 44px;
     border-radius: 22px;
     background: back_touch.feedback-active ? Theme.current.settings_control_hover : Theme.current.settings_control;
     border-width: root.focused || (back_focus.has-focus && SettingsStyle.keyboard-mode) ? 2px : 0px;
@@ -926,11 +926,11 @@ export component SettingsBackButton inherits Rectangle {
     accessible-role: button;
     accessible-label: @tr("Back");
     forward-focus: back_focus;
-    IcChevronLeft { width: 20px; height: 20px; x: 12px; y: 12px; fill: Theme.current.text_settings; }
+    IcChevronLeft { width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; fill: Theme.current.text_settings; }
     back_focus := FocusScope {
         key-pressed(e) => {
             SettingsStyle.keyboard-mode = true;
-            if e.text == Key.Return || e.text == " " { root.clicked(); accept } else { reject }
+            if e.text == Key.Return || e.text == " " { if !InterfaceStyle.tv || !e.repeat { root.clicked(); } accept } else { reject }
         }
     }
     back_touch := ControlTouchArea {
@@ -959,7 +959,7 @@ export component SettingsHeader inherits Rectangle {
     Rectangle {
         height: 0px; clip: true;
         heading_measure := Text { width: Math.max(0px, root.width - (root.show-back ? 88px : 32px)); text: root.title; font-size: root.overview ? 32px : 24px; font-weight: 700; wrap: word-wrap; }
-        intro_measure := Text { width: Math.max(0px, root.width - 32px); text: root.introduction; font-size: 14px; wrap: word-wrap; }
+        intro_measure := Text { width: Math.max(0px, root.width - 32px); text: root.introduction; font-size: InterfaceStyle.tv ? 20px : 14px; wrap: word-wrap; }
     }
     VerticalLayout {
         padding: 16px; spacing: 8px;
@@ -968,7 +968,7 @@ export component SettingsHeader inherits Rectangle {
             if root.show-back: SettingsBackButton { focused: root.back_focused; clicked => { root.back(); } }
             Text { text: root.title; font-size: root.overview ? 32px : 24px; font-weight: 700; color: Theme.current.text_bright; wrap: word-wrap; min-width: 0px; vertical-alignment: center; }
         }
-        Text { text: root.introduction; font-size: 14px; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
+        Text { text: root.introduction; font-size: InterfaceStyle.tv ? 20px : 14px; color: Theme.current.text_settings; wrap: word-wrap; min-width: 0px; }
     }
 }
 

@@ -40,6 +40,19 @@ export component SettingsDisplayModule inherits Window {
                     }
                 }
             }
+            SettingsCard {
+                SettingsRow {
+                    setting-key: "interface_mode";
+                    row-title: @tr("Interface mode");
+                    row-desc: @tr("Automatic uses the TV interface on Android TV. This choice applies only to this device.");
+                    Segmented {
+                        labels: [@tr("Automatic"), @tr("Standard"), @tr("TV")];
+                        current-index: SettingsBridge.interface_mode_index;
+                        focused: SettingsBridge.kb_zone == 6 && SettingsContent.kb_dr == 7 && SettingsBridge.kb_active;
+                        picked(i) => { SettingsBridge.kb_active = SettingsStyle.keyboard-mode; SettingsBridge.kb_zone = 6; SettingsContent.kb_dr = 7; SettingsBridge.interface_mode_index = i; SettingsContent.schedule_setting("interface_mode"); }
+                    }
+                }
+            }
             SectionHeader { label: @tr("Artwork and metadata"); }
             SettingsCard {
                 SettingsRow {

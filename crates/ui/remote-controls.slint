@@ -1,4 +1,4 @@
-import { RemoteBridge, Theme, SettingsStyle } from "@NovaUiShared";
+import { RemoteBridge, Theme, SettingsStyle, InterfaceStyle } from "@NovaUiShared";
 import { PillButton, MiniSlider, SettingsCard } from "settings-controls.slint";
 import { PageHeader } from "page-header.slint";
 import { ScrollView } from "scrollview.slint";
@@ -8,7 +8,7 @@ import { MenuRow } from "player-menu-row.slint";
 // captured identity, so reconnecting or replacing playback cannot reset a new session.
 component RemoteSpeedHold inherits Rectangle {
     in property <bool> enabled;
-    height: 44px;
+    height: InterfaceStyle.tv ? 56px : 44px;
     border-radius: Theme.button_corner_radius;
     background: RemoteBridge.speed_preview_token != "" ? Theme.current.accent : Theme.current.settings_control;
     accessible-role: button;
@@ -57,14 +57,17 @@ export component RemoteControlsPage inherits Rectangle {
     in property <length> safe-left;
     in property <length> safe-right;
     private property <bool> ready: RemoteBridge.connected && RemoteBridge.session != "" && !RemoteBridge.loading && RemoteBridge.error == "" && RemoteBridge.replacement_token == "";
+    changed ready => { if InterfaceStyle.tv { root.tv-index = -1; focus.focus(); } }
     background: Theme.current.artwork_canvas;
     function action(name: string, value: float) { if root.ready { RemoteBridge.action(name, value, RemoteBridge.session); } }
+    property <int> tv-track: 0;
     private property <int> track_picker: RemoteBridge.track_picker;
     changed track_picker => { if root.track_picker == 0 { focus.focus(); } }
     private property <string> current_session: RemoteBridge.session;
     changed current_session => { RemoteBridge.track_picker = 0; }
     function open_tracks(kind: int) {
         if root.ready && RemoteBridge.can_tracks {
+            root.tv-track = 0;
             RemoteBridge.track_picker_session = RemoteBridge.session;
             RemoteBridge.track_picker = kind;
         }
@@ -75,10 +78,68 @@ export component RemoteControlsPage inherits Rectangle {
         }
         RemoteBridge.track_picker = 0;
     }
+    function tv_reveal(y: length, h: length) {
+        let top = y - controls_scroll.absolute-position.y;
+        if top < 0px { controls_scroll.content-y -= top; }
+        else if top + h > controls_scroll.visible-height { controls_scroll.content-y -= top + h - controls_scroll.visible-height; }
+    }
+    // Keep a page-local order while native editors and sliders handle their
+    // own keys first. Mounted controls claim focus from tv-index, so rebuilding
+    // a conditional section never leaves references to a destroyed element.
+    function tv_move(direction: int) {
+        SettingsStyle.keyboard-mode = true;
+        if direction > 0 {
+            if root.tv-index >= 16 && root.tv-index < 16 + RemoteBridge.offers.length { root.tv-index += 1; focus.focus(); return; }
+            if root.tv-index < 0 && (root.ready && RemoteBridge.can_stop) { root.tv-index = 0; return; }
+            if root.tv-index < 1 && (root.ready && RemoteBridge.can_seek && RemoteBridge.duration > 0) { root.tv-index = 1; return; }
+            if root.tv-index < 2 && (root.ready && RemoteBridge.can_seek) { root.tv-index = 2; return; }
+            if root.tv-index < 3 && (root.ready && RemoteBridge.can_pause) { root.tv-index = 3; return; }
+            if root.tv-index < 4 && (root.ready && RemoteBridge.can_seek) { root.tv-index = 4; return; }
+            if root.tv-index < 5 && (root.ready && RemoteBridge.can_volume) { root.tv-index = 5; return; }
+            if root.tv-index < 6 && (root.ready && RemoteBridge.can_mute) { root.tv-index = 6; return; }
+            if root.tv-index < 7 && (root.ready && RemoteBridge.can_speed) { root.tv-index = 7; return; }
+            if root.tv-index < 8 && (root.ready && RemoteBridge.can_speed) { root.tv-index = 8; return; }
+            if root.tv-index < 9 && (root.ready && RemoteBridge.can_speed) { root.tv-index = 9; return; }
+            if root.tv-index < 10 && (RemoteBridge.can_tracks && (root.ready)) { root.tv-index = 10; return; }
+            if root.tv-index < 11 && (RemoteBridge.can_tracks && (root.ready)) { root.tv-index = 11; return; }
+            if root.tv-index < 12 && (root.ready && RemoteBridge.can_fullscreen) { root.tv-index = 12; return; }
+            if root.tv-index < 13 && (root.ready && RemoteBridge.can_screenshot) { root.tv-index = 13; return; }
+            if root.tv-index < 14 && RemoteBridge.prompt != "" && root.ready { root.tv-index = 14; return; }
+            if root.tv-index < 15 && RemoteBridge.prompt != "" && RemoteBridge.resume_prompt && root.ready { root.tv-index = 15; return; }
+            if root.tv-index < 16 && RemoteBridge.prompt != "" && root.ready { root.tv-index = 16; return; }
+            if root.tv-index < 17 && RemoteBridge.offers.length > 0 { root.tv-index = 17; focus.focus(); return; }
+        }
+        if direction < 0 {
+            if root.tv-index > 17 { root.tv-index -= 1; focus.focus(); return; }
+            if root.tv-index > 16 && RemoteBridge.prompt != "" && root.ready { root.tv-index = 16; return; }
+            if root.tv-index > 15 && RemoteBridge.prompt != "" && RemoteBridge.resume_prompt && root.ready { root.tv-index = 15; return; }
+            if root.tv-index > 14 && RemoteBridge.prompt != "" && root.ready { root.tv-index = 14; return; }
+            if root.tv-index > 13 && (root.ready && RemoteBridge.can_screenshot) { root.tv-index = 13; return; }
+            if root.tv-index > 12 && (root.ready && RemoteBridge.can_fullscreen) { root.tv-index = 12; return; }
+            if root.tv-index > 11 && (RemoteBridge.can_tracks && (root.ready)) { root.tv-index = 11; return; }
+            if root.tv-index > 10 && (RemoteBridge.can_tracks && (root.ready)) { root.tv-index = 10; return; }
+            if root.tv-index > 9 && (root.ready && RemoteBridge.can_speed) { root.tv-index = 9; return; }
+            if root.tv-index > 8 && (root.ready && RemoteBridge.can_speed) { root.tv-index = 8; return; }
+            if root.tv-index > 7 && (root.ready && RemoteBridge.can_speed) { root.tv-index = 7; return; }
+            if root.tv-index > 6 && (root.ready && RemoteBridge.can_mute) { root.tv-index = 6; return; }
+            if root.tv-index > 5 && (root.ready && RemoteBridge.can_volume) { root.tv-index = 5; return; }
+            if root.tv-index > 4 && (root.ready && RemoteBridge.can_seek) { root.tv-index = 4; return; }
+            if root.tv-index > 3 && (root.ready && RemoteBridge.can_pause) { root.tv-index = 3; return; }
+            if root.tv-index > 2 && (root.ready && RemoteBridge.can_seek) { root.tv-index = 2; return; }
+            if root.tv-index > 1 && (root.ready && RemoteBridge.can_seek && RemoteBridge.duration > 0) { root.tv-index = 1; return; }
+            if root.tv-index > 0 && (root.ready && RemoteBridge.can_stop) { root.tv-index = 0; return; }
+        }
+    }
+    property <int> tv-index: -1;
     focus := FocusScope {
         enabled: RemoteBridge.replacement_token == "" && RemoteBridge.track_picker == 0; width: 100%; height: 100%; init => { self.focus(); }
         key-pressed(e) => {
-            if e.text == Key.Escape || e.text == Key.Backspace || e.text == Key.Back { if !e.repeat { RemoteBridge.device_close(); } accept }
+            if !InterfaceStyle.tv && !self.has-focus { reject }
+            else if e.text == Key.Escape || e.text == Key.Backspace || e.text == Key.Back { if !e.repeat { RemoteBridge.device_close(); } accept }
+            else if InterfaceStyle.tv && root.tv-index >= 17 && (e.text == Key.Return || e.text == " ") {
+                if !e.repeat && root.tv-index - 17 < RemoteBridge.offers.length { RemoteBridge.stream_picked(root.tv-index - 17); } accept
+            }
+            else if InterfaceStyle.tv && (e.text == Key.UpArrow || e.text == Key.DownArrow || e.text == Key.LeftArrow || e.text == Key.RightArrow) { root.tv_move(e.text == Key.UpArrow || e.text == Key.LeftArrow ? -1 : 1); accept }
             else if root.ready && RemoteBridge.can_pause && (e.text == " " || e.text == "k") { if !e.repeat { root.action("pause", 0); } accept }
             else if root.ready && RemoteBridge.can_seek && e.text == Key.LeftArrow { root.action("seek_relative", -10); accept }
             else if root.ready && RemoteBridge.can_seek && e.text == Key.RightArrow { root.action("seek_relative", 10); accept }
@@ -88,8 +149,7 @@ export component RemoteControlsPage inherits Rectangle {
             else if root.ready && RemoteBridge.can_screenshot && e.text == "s" { if !e.repeat { root.action("screenshot", 0); } accept }
             else { reject }
         }
-    }
-    ScrollView {
+    controls_scroll := ScrollView {
         x: root.safe-left + 18px + Math.max(0px, (root.width - root.safe-left - root.safe-right - 800px) / 2); y: root.safe-top + 18px;
         width: Math.max(0px, Math.min(764px, root.width - root.safe-left - root.safe-right - 36px));
         height: Math.max(0px, root.height - root.safe-top - root.safe-bottom - 36px);
@@ -105,10 +165,13 @@ export component RemoteControlsPage inherits Rectangle {
                     back => { RemoteBridge.device_close(); }
                 }
                 stop_button := PillButton {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 0;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
                     label: @tr("Stop"); compact: true; destructive: true;
                     horizontal-stretch: 0; vertical-stretch: 0;
                     enabled: root.ready && RemoteBridge.can_stop;
-                    clicked => { root.action("stop", 0); }
+                    clicked => { if InterfaceStyle.tv { root.tv-index = 0; } root.action("stop", 0); }
                 }
             }
             SettingsCard {
@@ -117,11 +180,23 @@ export component RemoteControlsPage inherits Rectangle {
                     if RemoteBridge.episode != "": Text { text: RemoteBridge.episode; color: Theme.current.text_primary; wrap: word-wrap; min-width: 0px; }
                     Text { text: RemoteBridge.error != "" ? RemoteBridge.error : RemoteBridge.loading ? @tr("Connecting…") : !RemoteBridge.connected ? @tr("Disconnected") : RemoteBridge.phase; color: RemoteBridge.error != "" ? Theme.current.text_destructive : Theme.current.text_muted; wrap: word-wrap; min-width: 0px; }
                     Text { text: RemoteBridge.time_text; color: Theme.current.text_primary; }
-                    timeline := MiniSlider { name: @tr("Playback position"); enabled: root.ready && RemoteBridge.can_seek && RemoteBridge.duration > 0; minimum: 0; maximum: Math.max(1, RemoteBridge.duration); value: RemoteBridge.position; changed(v) => { root.action("seek", v); } }
+                    timeline := MiniSlider {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 1;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } name: @tr("Playback position"); enabled: root.ready && RemoteBridge.can_seek && RemoteBridge.duration > 0; minimum: 0; maximum: Math.max(1, RemoteBridge.duration); value: RemoteBridge.position; changed(v) => { if InterfaceStyle.tv { root.tv-index = 1; } root.action("seek", v); } }
                     HorizontalLayout { alignment: center; spacing: 8px;
-                        PillButton { label: @tr("−10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { root.action("seek_relative", -10); } }
-                        PillButton { label: RemoteBridge.paused ? @tr("Play") : @tr("Pause"); primary: true; compact: true; enabled: root.ready && RemoteBridge.can_pause; clicked => { root.action("pause", 0); } }
-                        PillButton { label: @tr("+10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { root.action("seek_relative", 10); } }
+                        seek_back := PillButton {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 2;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("−10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { if InterfaceStyle.tv { root.tv-index = 2; } root.action("seek_relative", -10); } }
+                        pause_button := PillButton {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 3;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: RemoteBridge.paused ? @tr("Play") : @tr("Pause"); primary: true; compact: true; enabled: root.ready && RemoteBridge.can_pause; clicked => { if InterfaceStyle.tv { root.tv-index = 3; } root.action("pause", 0); } }
+                        seek_forward := PillButton {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 4;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("+10 s"); compact: true; enabled: root.ready && RemoteBridge.can_seek; clicked => { if InterfaceStyle.tv { root.tv-index = 4; } root.action("seek_relative", 10); } }
                     }
                 }
             }
@@ -131,8 +206,14 @@ export component RemoteControlsPage inherits Rectangle {
                         volume_label := Text { text: @tr("Volume"); color: Theme.current.text_primary; font-weight: 600; horizontal-stretch: 1; }
                         Text { text: Math.round(RemoteBridge.volume) + "%"; color: Theme.current.text_muted; }
                     }
-                    MiniSlider { name: @tr("Volume"); enabled: root.ready && RemoteBridge.can_volume; minimum: 0; maximum: 100; value: RemoteBridge.volume; changed(v) => { root.action("volume", v); } }
-                    PillButton { label: RemoteBridge.muted ? @tr("Unmute") : @tr("Mute"); enabled: root.ready && RemoteBridge.can_mute; clicked => { root.action("mute", 0); } }
+                    volume_slider := MiniSlider {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 5;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } name: @tr("Volume"); enabled: root.ready && RemoteBridge.can_volume; minimum: 0; maximum: 100; value: RemoteBridge.volume; changed(v) => { if InterfaceStyle.tv { root.tv-index = 5; } root.action("volume", v); } }
+                    mute_button := PillButton {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 6;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: RemoteBridge.muted ? @tr("Unmute") : @tr("Mute"); enabled: root.ready && RemoteBridge.can_mute; clicked => { if InterfaceStyle.tv { root.tv-index = 6; } root.action("mute", 0); } }
                 }
             }
             SettingsCard {
@@ -141,36 +222,67 @@ export component RemoteControlsPage inherits Rectangle {
                         Text { text: @tr("Playback speed"); color: Theme.current.text_primary; font-weight: 600; horizontal-stretch: 1; }
                         Text { text: "" + RemoteBridge.speed + "×"; color: Theme.current.text_muted; }
                     }
-                    MiniSlider { name: @tr("Playback speed"); enabled: root.ready && RemoteBridge.can_speed; minimum: 0.5; maximum: 2; step: 0.05; value: RemoteBridge.speed; changed(v) => { root.action("speed", v); } }
-                    PillButton { label: @tr("Use global default"); enabled: root.ready && RemoteBridge.can_speed; clicked => { root.action("reset_speed", 0); } }
-                    RemoteSpeedHold { enabled: root.ready && RemoteBridge.can_speed; }
+                    speed_slider := MiniSlider {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 7;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } name: @tr("Playback speed"); enabled: root.ready && RemoteBridge.can_speed; minimum: 0.5; maximum: 2; step: 0.05; value: RemoteBridge.speed; changed(v) => { if InterfaceStyle.tv { root.tv-index = 7; } root.action("speed", v); } }
+                    reset_speed := PillButton {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 8;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Use global default"); enabled: root.ready && RemoteBridge.can_speed; clicked => { if InterfaceStyle.tv { root.tv-index = 8; } root.action("reset_speed", 0); } }
+                    speed_hold := RemoteSpeedHold {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 9;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } enabled: root.ready && RemoteBridge.can_speed; }
                 }
             }
             if RemoteBridge.can_tracks: SettingsCard {
                 VerticalLayout { padding: 8px; spacing: 4px;
-                    audio_picker := MenuRow { label: @tr("Audio tracks"); icon_kind: 1; submenu: true; enabled: root.ready; activate => { root.open_tracks(1); } }
-                    subtitle_picker := MenuRow { label: @tr("Subtitles"); icon_kind: 2; submenu: true; enabled: root.ready; activate => { root.open_tracks(2); } }
+                    audio_picker := MenuRow {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 10;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Audio tracks"); icon_kind: 1; submenu: true; enabled: root.ready; activate => { if InterfaceStyle.tv { root.tv-index = 10; } root.open_tracks(1); } }
+                    subtitle_picker := MenuRow {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 11;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Subtitles"); icon_kind: 2; submenu: true; enabled: root.ready; activate => { if InterfaceStyle.tv { root.tv-index = 11; } root.open_tracks(2); } }
                 }
             }
             SettingsCard {
                 VerticalLayout { padding: 12px; spacing: 8px;
-                    PillButton { label: RemoteBridge.fullscreen ? @tr("Exit fullscreen on device") : @tr("Fullscreen on device"); wrap_label: true; enabled: root.ready && RemoteBridge.can_fullscreen; clicked => { root.action("fullscreen", 0); } }
-                    PillButton { label: @tr("Screenshot on device"); wrap_label: true; enabled: root.ready && RemoteBridge.can_screenshot; clicked => { root.action("screenshot", 0); } }
+                    fullscreen_button := PillButton {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 12;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: RemoteBridge.fullscreen ? @tr("Exit fullscreen on device") : @tr("Fullscreen on device"); wrap_label: true; enabled: root.ready && RemoteBridge.can_fullscreen; clicked => { if InterfaceStyle.tv { root.tv-index = 12; } root.action("fullscreen", 0); } }
+                    screenshot_button := PillButton {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 13;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Screenshot on device"); wrap_label: true; enabled: root.ready && RemoteBridge.can_screenshot; clicked => { if InterfaceStyle.tv { root.tv-index = 13; } root.action("screenshot", 0); } }
                 }
             }
             if RemoteBridge.prompt != "": VerticalLayout { spacing: 8px;
                 Text { text: RemoteBridge.prompt; wrap: word-wrap; color: Theme.current.text_primary; }
-                PillButton { label: RemoteBridge.resume_prompt ? @tr("Resume") : @tr("Continue"); enabled: root.ready; clicked => { RemoteBridge.action("prompt_accept", 0, RemoteBridge.prompt_token); } }
-                if RemoteBridge.resume_prompt: PillButton { label: @tr("Start over"); enabled: root.ready; clicked => { RemoteBridge.action("prompt_reject", 0, RemoteBridge.prompt_token); } }
-                PillButton { label: @tr("Cancel"); enabled: root.ready; clicked => { RemoteBridge.action(RemoteBridge.resume_prompt ? "prompt_cancel" : "prompt_reject", 0, RemoteBridge.prompt_token); } }
+                prompt_accept := PillButton {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 14;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: RemoteBridge.resume_prompt ? @tr("Resume") : @tr("Continue"); enabled: root.ready; clicked => { if InterfaceStyle.tv { root.tv-index = 14; } RemoteBridge.action("prompt_accept", 0, RemoteBridge.prompt_token); } }
+                if RemoteBridge.resume_prompt: prompt_restart := PillButton {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 15;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Start over"); enabled: root.ready; clicked => { if InterfaceStyle.tv { root.tv-index = 15; } RemoteBridge.action("prompt_reject", 0, RemoteBridge.prompt_token); } }
+                prompt_cancel := PillButton {
+                    property <bool> tv-current: InterfaceStyle.tv && root.tv-index == 16;
+                    changed tv-current => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } }
+                    init => { if self.tv-current { self.focus(); root.tv_reveal(self.absolute-position.y, self.height); } } label: @tr("Cancel"); enabled: root.ready; clicked => { if InterfaceStyle.tv { root.tv-index = 16; } RemoteBridge.action(RemoteBridge.resume_prompt ? "prompt_cancel" : "prompt_reject", 0, RemoteBridge.prompt_token); } }
             }
             if RemoteBridge.offers.length > 0: Text { text: @tr("Choose a stream"); color: Theme.current.text_bright; font-size: 20px; font-weight: 700; }
             for offer[index] in RemoteBridge.offers: VerticalLayout { spacing: 4px;
-                PillButton { label: offer.title; wrap_label: true; enabled: root.ready; clicked => { RemoteBridge.stream_picked(index); } }
+                PillButton { focused: InterfaceStyle.tv && root.tv-index == 17 + index; label: offer.title; wrap_label: true; enabled: root.ready; clicked => { if InterfaceStyle.tv { root.tv-index = 17 + index; } RemoteBridge.stream_picked(index); } }
                 if offer.description != "": Text { text: offer.description; color: Theme.current.text_muted; wrap: word-wrap; }
             }
             Text { text: @tr("Back disconnects the controls. Playback continues on your device."); color: Theme.current.text_muted; wrap: word-wrap; }
         }
+    }
     }
     if RemoteBridge.track_picker != 0: Rectangle {
         width: 100%; height: 100%; background: Theme.current.scrim_shadow;
@@ -180,6 +292,20 @@ export component RemoteControlsPage inherits Rectangle {
             key-pressed(e) => {
                 if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
                     if !e.repeat { RemoteBridge.track_picker = 0; } accept
+                } else if InterfaceStyle.tv && (e.text == Key.UpArrow || e.text == Key.DownArrow) {
+                    root.tv-track = Math.clamp(root.tv-track + (e.text == Key.UpArrow ? -1 : 1), 0, (RemoteBridge.track_picker == 1 ? RemoteBridge.audio_tracks.length + 1 : RemoteBridge.sub_tracks.length + 2));
+                    track_scroll.content-y = -Math.max(0px, (root.tv-track + 1) * 60px - track_scroll.visible-height);
+                    accept
+                } else if InterfaceStyle.tv && (e.text == Key.Return || e.text == " ") {
+                    if !e.repeat {
+                        let offset = RemoteBridge.track_picker == 1 ? 1 : 2;
+                        let tracks = RemoteBridge.track_picker == 1 ? RemoteBridge.audio_tracks : RemoteBridge.sub_tracks;
+                        if root.tv-track == 0 { root.pick_track(-2); }
+                        else if RemoteBridge.track_picker == 2 && root.tv-track == 1 { root.pick_track(-1); }
+                        else if root.tv-track - offset < tracks.length { root.pick_track(tracks[root.tv-track - offset].index); }
+                        else { RemoteBridge.track_picker = 0; }
+                    }
+                    accept
                 } else { reject }
             }
         }
@@ -191,19 +317,20 @@ export component RemoteControlsPage inherits Rectangle {
             background: Theme.current.player_menu; border-radius: Theme.card_corner_radius;
             border-width: 1px; border-color: Theme.current.player_menu_border;
             TouchArea { }
-            ScrollView {
+            track_scroll := ScrollView {
                 width: 100%; height: 100%; content-width: self.visible-width; mouse-drag-pan-enabled: true;
                 picker_col := VerticalLayout { width: 100%; padding: 10px; spacing: 4px; alignment: start;
                     Text { text: RemoteBridge.track_picker == 1 ? @tr("Audio tracks") : @tr("Subtitles"); color: Theme.current.text_bright; font-size: 18px; font-weight: 700; }
-                    MenuRow { label: @tr("Use global default"); enabled: root.ready && RemoteBridge.can_tracks; activate => { root.pick_track(-2); } }
-                    if RemoteBridge.track_picker == 2: MenuRow { label: @tr("Off"); enabled: root.ready && RemoteBridge.can_tracks; activate => { root.pick_track(-1); } }
-                    for track in (RemoteBridge.track_picker == 1 ? RemoteBridge.audio_tracks : RemoteBridge.sub_tracks): MenuRow {
+                    MenuRow { focused: InterfaceStyle.tv && root.tv-track == 0; label: @tr("Use global default"); enabled: root.ready && RemoteBridge.can_tracks; activate => { root.pick_track(-2); } }
+                    if RemoteBridge.track_picker == 2: MenuRow { focused: InterfaceStyle.tv && root.tv-track == 1; label: @tr("Off"); enabled: root.ready && RemoteBridge.can_tracks; activate => { root.pick_track(-1); } }
+                    for track[index] in (RemoteBridge.track_picker == 1 ? RemoteBridge.audio_tracks : RemoteBridge.sub_tracks): MenuRow {
+                        focused: InterfaceStyle.tv && root.tv-track == index + (RemoteBridge.track_picker == 1 ? 1 : 2);
                         label: track.title + (track.lang != "" ? " · " + track.lang : ""); value: track.codec;
                         enabled: root.ready && RemoteBridge.can_tracks;
                         icon_kind: RemoteBridge.track_picker == 1 ? 1 : 2; selected: track.selected;
                         activate => { root.pick_track(track.index); }
                     }
-                    PillButton { label: @tr("Cancel"); clicked => { RemoteBridge.track_picker = 0; } }
+                    PillButton { focused: InterfaceStyle.tv && root.tv-track == (RemoteBridge.track_picker == 1 ? RemoteBridge.audio_tracks.length + 1 : RemoteBridge.sub_tracks.length + 2); label: @tr("Cancel"); clicked => { RemoteBridge.track_picker = 0; } }
                 }
             }
         }
@@ -218,10 +345,23 @@ export component RemoteDevicesPage inherits Rectangle {
     in property <length> safe-top; in property <length> safe-bottom;
     in property <length> safe-left; in property <length> safe-right;
     background: Theme.current.artwork_canvas;
+    property <int> tv-index: -1;
+    private property <int> device-count: RemoteBridge.devices.length;
+    changed device-count => { root.tv-index = Math.min(root.tv-index, root.device-count - 1); }
     FocusScope { enabled: root.active; width: 100%; height: 100%; init => { self.focus(); }
-        key-pressed(e) => { if e.text == Key.Escape || e.text == Key.Backspace || e.text == Key.Back { if !e.repeat { root.back(); } accept } else { reject } }
+        key-pressed(e) => {
+            if InterfaceStyle.tv && (e.text == Key.UpArrow || e.text == Key.DownArrow) {
+                root.tv-index = Math.clamp(root.tv-index + (e.text == Key.UpArrow ? -1 : 1), -1, RemoteBridge.devices.length - 1);
+                SettingsStyle.keyboard-mode = true; accept
+            } else if InterfaceStyle.tv && (e.text == Key.Return || e.text == " ") {
+                if !e.repeat {
+                    if root.tv-index < 0 { RemoteBridge.device_refresh(); }
+                    else if RemoteBridge.devices[root.tv-index].has_session && RemoteBridge.devices[root.tv-index].ready { RemoteBridge.device_open(RemoteBridge.devices[root.tv-index].id); }
+                }
+                accept
+            } else if e.text == Key.Escape || e.text == Key.Backspace || e.text == Key.Back { if !e.repeat { root.back(); } accept } else { reject } }
     }
-    ScrollView {
+    devices_scroll := ScrollView {
         x: root.safe-left + 18px; y: root.safe-top + 18px;
         width: Math.max(0px, root.width - root.safe-left - root.safe-right - 36px);
         height: Math.max(0px, root.height - root.safe-top - root.safe-bottom - 36px);
@@ -236,9 +376,9 @@ export component RemoteDevicesPage inherits Rectangle {
                     back => { root.back(); }
                 }
                 PillButton {
-                    label: @tr("Refresh"); compact: true;
+                    label: @tr("Refresh"); compact: true; focused: InterfaceStyle.tv && root.tv-index == -1;
                     horizontal-stretch: 0; vertical-stretch: 0;
-                    clicked => { RemoteBridge.device_refresh(); }
+                    clicked => { if InterfaceStyle.tv { root.tv-index = -1; } RemoteBridge.device_refresh(); }
                 }
             }
             if RemoteBridge.devices.length == 0: Text {
@@ -246,7 +386,7 @@ export component RemoteDevicesPage inherits Rectangle {
                 color: Theme.current.text_muted; wrap: word-wrap;
                 min-width: 0px; vertical-stretch: 0;
             }
-            for device in RemoteBridge.devices: device_card := Rectangle {
+            for device[index] in RemoteBridge.devices: device_card := Rectangle {
                 min-width: 0px; vertical-stretch: 0;
                 // Explicit content height prevents spare viewport height stretching each row.
                 height: card_content.preferred-height;
@@ -270,10 +410,11 @@ export component RemoteDevicesPage inherits Rectangle {
                     HorizontalLayout {
                         alignment: start;
                         device_controls := PillButton {
-                            label: @tr("Controls"); compact: true;
+                            label: @tr("Controls"); compact: true; focused: InterfaceStyle.tv && root.tv-index == index;
+                            changed focused => { if self.focused { let top = self.absolute-position.y - devices_scroll.absolute-position.y; if top < 0px { devices_scroll.content-y -= top; } else if top + self.height > devices_scroll.visible-height { devices_scroll.content-y -= top + self.height - devices_scroll.visible-height; } } }
                             horizontal-stretch: 0; vertical-stretch: 0;
                             enabled: device.has_session && device.ready;
-                            clicked => { RemoteBridge.device_open(device.id); }
+                            clicked => { if InterfaceStyle.tv { root.tv-index = index; } RemoteBridge.device_open(device.id); }
                         }
                     }
                 }
@@ -292,10 +433,10 @@ export component RemotePlayingSection inherits VerticalLayout {
     Text { text: @tr("Playing on your devices"); min-width: 0px; overflow: elide; color: Theme.current.text_bright; font-size: 20px; font-weight: 700; }
     device_rail := Flickable {
         min-width: 0px;
-        height: 44px;
+        height: InterfaceStyle.tv ? 56px : 44px;
         vertical-stretch: 0;
         interactive: true;
-        content-height: 44px;
+        content-height: InterfaceStyle.tv ? 56px : 44px;
         content-width: device_choices.preferred-width;
         device_choices := HorizontalLayout {
             spacing: 0px;
@@ -328,39 +469,56 @@ export component RemotePlayingSection inherits VerticalLayout {
 
 // Output choice shares the stream heading; its popup never consumes result height.
 export component RemoteTargetMenu inherits Rectangle {
+    public function focus_launcher() { output_button.focus(); }
+    in property <bool> focused: false;
+    callback dismissed();
+    public function open_menu() { root.tv-target = -1; RemoteBridge.device_refresh(); target_popup.show(); }
+    property <int> tv-target: -1;
     in property <length> popup-height: 180px;
-    height: 32px;
+    height: InterfaceStyle.tv ? 56px : 32px;
     width: output_button.width; horizontal-stretch: 0;
     output_button := PillButton {
         x: 0px; y: (root.height - self.height) / 2;
-        btn_min_width: 80px; height: 32px;
+        btn_min_width: 80px; height: InterfaceStyle.tv ? 56px : 32px;
+        focused: root.focused;
         compact: true; label: @tr("Play on"); primary: RemoteBridge.target_id != "";
-        clicked => { RemoteBridge.device_refresh(); target_popup.show(); }
+        clicked => { root.open_menu(); }
     }
     target_popup := PopupWindow {
-        width: 240px; height: Math.max(60px, Math.min(root.popup-height, 220px));
+        width: InterfaceStyle.tv ? 380px : 240px; height: Math.max(60px, Math.min(root.popup-height, 220px));
         x: root.width - self.width; y: output_button.y + output_button.height;
         close-policy: close-on-click-outside;
         forward-focus: popup_focus;
         popup_focus := FocusScope {
             width: 100%; height: 100%; init => { self.focus(); }
             capture-key-pressed(e) => {
-                if e.text == Key.Back || e.text == Key.Escape { if !e.repeat { target_popup.close(); } accept } else { reject }
+                if e.text == Key.Back || e.text == Key.Escape { if !e.repeat { target_popup.close(); if InterfaceStyle.tv { output_button.focus(); } root.dismissed(); } accept }
+                else if InterfaceStyle.tv && (e.text == Key.UpArrow || e.text == Key.DownArrow) {
+                    root.tv-target = Math.clamp(root.tv-target + (e.text == Key.UpArrow ? -1 : 1), -1, RemoteBridge.devices.length - 1);
+                    target_scroll.content-y = -Math.max(0px, (root.tv-target + 2) * 64px - target_scroll.visible-height);
+                    accept
+                } else if InterfaceStyle.tv && (e.text == Key.Return || e.text == " ") {
+                    if !e.repeat {
+                        if root.tv-target == -1 { target_popup.close(); output_button.focus(); root.dismissed(); RemoteBridge.device_selected(""); }
+                        else if RemoteBridge.devices[root.tv-target].ready { let id = RemoteBridge.devices[root.tv-target].id; target_popup.close(); output_button.focus(); root.dismissed(); RemoteBridge.device_selected(id); }
+                    }
+                    accept
+                } else { reject }
             }
             capture-key-released(e) => { if e.text == Key.Back || e.text == Key.Escape { accept } else { reject } }
             Rectangle {
                 width: 100%; height: 100%; background: Theme.current.popup;
                 border-radius: 8px; border-width: 1px; border-color: Theme.current.control_border;
-                ScrollView { width: 100%; height: 100%; content-width: self.visible-width; mouse-drag-pan-enabled: true;
+                target_scroll := ScrollView { width: 100%; height: 100%; content-width: self.visible-width; mouse-drag-pan-enabled: true;
                     VerticalLayout { width: 100%; padding: 8px; spacing: 0px; alignment: start;
-                        PillButton { label: @tr("This device"); primary: RemoteBridge.target_id == ""; clicked => { target_popup.close(); RemoteBridge.device_selected(""); } }
-                        for device in RemoteBridge.devices: VerticalLayout {
+                        PillButton { focused: InterfaceStyle.tv && root.tv-target == -1; label: @tr("This device"); primary: RemoteBridge.target_id == ""; clicked => { target_popup.close(); root.dismissed(); RemoteBridge.device_selected(""); } }
+                        for device[index] in RemoteBridge.devices: VerticalLayout {
                             spacing: 0px; vertical-stretch: 0;
                             // Offline wrappers reserve no inter-item gap.
                             padding-top: device.ready ? 8px : 0px;
                             if device.ready: PillButton {
-                                label: device.name; wrap_label: true; primary: RemoteBridge.target_id == device.id;
-                                clicked => { let id = device.id; target_popup.close(); RemoteBridge.device_selected(id); }
+                                focused: InterfaceStyle.tv && root.tv-target == index; label: device.name; wrap_label: true; primary: RemoteBridge.target_id == device.id;
+                                clicked => { let id = device.id; target_popup.close(); root.dismissed(); RemoteBridge.device_selected(id); }
                             }
                         }
                     }
@@ -381,7 +539,7 @@ export component RemoteReplacementDialog inherits Rectangle {
         // Keep keyboard navigation inside this confirmation even when a pill
         // owns native focus; underlying stream selection must remain covered.
         capture-key-pressed(e) => {
-            if e.text == Key.Tab { root.cancel_selected = !root.cancel_selected; SettingsStyle.keyboard-mode = true; self.focus(); accept }
+            if e.text == Key.Tab || (InterfaceStyle.tv && (e.text == Key.LeftArrow || e.text == Key.RightArrow || e.text == Key.UpArrow || e.text == Key.DownArrow)) { root.cancel_selected = !root.cancel_selected; SettingsStyle.keyboard-mode = true; self.focus(); accept }
             else { reject }
         }
         key-pressed(e) => {

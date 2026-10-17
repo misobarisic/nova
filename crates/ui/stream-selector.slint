@@ -1,5 +1,5 @@
 import { RemoteTargetMenu } from "remote-controls.slint";
-import { PartyBridge, RemoteBridge, Theme, Anim, StreamRow, SheetItem } from "@NovaUiShared";
+import { InterfaceStyle, PartyBridge, RemoteBridge, Theme, Anim, StreamRow, SheetItem } from "@NovaUiShared";
 
 
 
@@ -23,7 +23,7 @@ export component StreamFilterPill inherits Rectangle {
     // reflows as addons answer one by one.
     property <length> pad: 14px;
 
-    height: 40px;
+    height: InterfaceStyle.tv ? 56px : 40px;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
     // A released Android touch can retain has-hover without a pointer exit.
     background: root.selected ? Theme.current.primary_button : ((root.touch_feedback ? pill_touch.pressed : pill_touch.has-hover) ? Theme.current.control_hover : Theme.current.hero_control);
@@ -47,7 +47,7 @@ export component StreamFilterPill inherits Rectangle {
         Text {
             text: root.label;
             color: root.selected ? Theme.current.on_accent : Theme.current.text_secondary;
-            font-size: 13px;
+            font-size: InterfaceStyle.tv ? 18px : 13px;
             font-weight: root.selected ? 600 : 400;
             vertical-alignment: center;
         }
@@ -127,7 +127,7 @@ component StreamFilterBar inherits HorizontalLayout {
     pill_flick := Flickable {
         horizontal-stretch: 1;
         min-width: 0px;
-        height: 40px;
+        height: InterfaceStyle.tv ? 56px : 40px;
         interactive: true;
         content-width: pill_row.width;
         content-height: self.height;
@@ -136,7 +136,7 @@ component StreamFilterBar inherits HorizontalLayout {
         // scrolls it horizontally instead of squeezing it.
         pill_row := HorizontalLayout {
             width: self.preferred-width;
-            height: 40px;
+            height: InterfaceStyle.tv ? 56px : 40px;
             spacing: 8px;
             alignment: start;
 
@@ -191,8 +191,8 @@ component StreamList {
             // narrow screens and clips. Keep it as a floor for the first
             // paint (before `row_measure` has a width).
             min-height: Math.max(
-                72px,
-                max(st.lines * 18px + 56px,
+                (InterfaceStyle.tv ? 112px : 72px),
+                max(st.lines * (InterfaceStyle.tv ? 26px : 18px) + 56px,
                     row_measure.preferred-height + 24px),
             );
             property <bool> focused: root.kb_active && root.kb_focus == i + root.page_start;
@@ -255,12 +255,12 @@ component StreamList {
                     // Only the addon/quality header reserves the menu's width.
                     // Release titles and details use the full padded card.
                     HorizontalLayout {
-                        min-height: 40px;
+                        min-height: InterfaceStyle.tv ? 56px : 40px;
                         spacing: 0px;
                         card_metadata := Text {
                             text: st.metadata;
                             color: Theme.current.text_primary;
-                            font-size: 16px;
+                            font-size: InterfaceStyle.tv ? 21px : 16px;
                             font-weight: 700;
                             wrap: word-wrap;
                             vertical-alignment: center;
@@ -273,7 +273,7 @@ component StreamList {
                     if st.last_used || st.recommended: last_used_label := Text {
                         text: st.last_used ? @tr("Last used") : @tr("Recommended");
                         color: Theme.current.accent;
-                        font-size: 12px;
+                        font-size: InterfaceStyle.tv ? 18px : 12px;
                         font-weight: 600;
                         wrap: word-wrap;
                         min-width: 0px;
@@ -282,7 +282,7 @@ component StreamList {
                     card_title := Text {
                         text: (st.title != "" ? st.title : st.text) + (st.recommended ? " ★" : "");
                         color: Theme.current.text_secondary;
-                        font-size: 14px;
+                        font-size: InterfaceStyle.tv ? 18px : 14px;
                         font-weight: 400;
                         wrap: word-wrap;
                         vertical-alignment: center;
@@ -293,7 +293,7 @@ component StreamList {
                     if st.description != "": card_description := Text {
                         text: st.description;
                         color: Theme.current.text_secondary;
-                        font-size: 14px;
+                        font-size: InterfaceStyle.tv ? 18px : 14px;
                         wrap: word-wrap;
                         width: 100%;
                         min-width: 0px;
@@ -302,7 +302,7 @@ component StreamList {
                     if st.details != "": Text {
                         text: st.details;
                         color: Theme.current.text_secondary;
-                        font-size: 12px;
+                        font-size: InterfaceStyle.tv ? 18px : 12px;
                         wrap: word-wrap;
                         width: 100%;
                         min-width: 0px;
@@ -324,7 +324,7 @@ component StreamList {
                                 width: parent.width - 20px; height: 100%;
                                 text: st.size != "" ? @tr("SIZE {}", st.size) : @tr("SIZE UNKNOWN");
                                 color: Theme.current.text_secondary;
-                                font-size: 12px;
+                                font-size: InterfaceStyle.tv ? 18px : 12px;
                                 font-weight: 600;
                                 vertical-alignment: center;
                                 overflow: elide;
@@ -368,11 +368,11 @@ component StreamList {
                         spacing: 6px;
 
                         HorizontalLayout {
-                            min-height: 40px;
+                            min-height: InterfaceStyle.tv ? 56px : 40px;
                             spacing: 0px;
                             Text {
                                 text: st.metadata;
-                                font-size: 16px;
+                                font-size: InterfaceStyle.tv ? 21px : 16px;
                                 font-weight: 700;
                                 wrap: word-wrap;
                                 min-width: 0px;
@@ -383,7 +383,7 @@ component StreamList {
 
                         if st.last_used || st.recommended: Text {
                             text: st.last_used ? @tr("Last used") : @tr("Recommended");
-                            font-size: 12px;
+                            font-size: InterfaceStyle.tv ? 18px : 12px;
                             font-weight: 600;
                             wrap: word-wrap;
                             min-width: 0px;
@@ -391,7 +391,7 @@ component StreamList {
 
                         Text {
                             text: (st.title != "" ? st.title : st.text) + (st.recommended ? " ★" : "");
-                            font-size: 14px;
+                            font-size: InterfaceStyle.tv ? 18px : 14px;
                             font-weight: 400;
                             wrap: word-wrap;
                             min-width: 0px;
@@ -399,14 +399,14 @@ component StreamList {
 
                         if st.description != "": Text {
                             text: st.description;
-                            font-size: 14px;
+                            font-size: InterfaceStyle.tv ? 18px : 14px;
                             wrap: word-wrap;
                             min-width: 0px;
                         }
 
                         if st.details != "": Text {
                             text: st.details;
-                            font-size: 12px;
+                            font-size: InterfaceStyle.tv ? 18px : 12px;
                             wrap: word-wrap;
                             min-width: 0px;
                         }
@@ -559,6 +559,34 @@ export component StreamSelector inherits Rectangle {
     in property <length> safe-bottom;
     in-out property <int> kb_index;
     in-out property <bool> kb_active;
+    function tv_context() -> bool {
+        let index = root.kb_index - root.page_start;
+        if (root.focus_zone == 2 && index >= 0 && index < root.rows.length) {
+            root.action_requested(root.rows[index].id);
+            return true;
+        }
+        return false;
+    }
+    private property <int> output_open_request: 0;
+    function tv_activate() {
+        if (root.focus_zone == 0) { root.request_back(); }
+        else if (root.focus_zone == 4 && root.has_output_choice) { root.output_open_request += 1; }
+        else if (root.focus_zone == 2 && root.kb_index >= 0 && root.kb_index < root.total) {
+            if (RemoteBridge.target_id != "" && !PartyBridge.active) { RemoteBridge.stream_picked(root.kb_index); }
+            else { root.picked(root.kb_index); }
+        }
+    }
+
+    // Remotes send repeated Return presses while OK is held. Delay the primary
+    // action until release so opening a context menu never also starts playback.
+    private property <bool> tv_ok_pending: false;
+    private property <bool> tv_ok_held: false;
+    tv_ok_hold := Timer {
+        interval: 650ms;
+        running: false;
+        triggered => { self.stop(); root.tv_ok_held = root.tv_context(); }
+    }
+
     in-out property <bool> action_open;
     in property <string> action_title;
     in property <string> action_id;
@@ -589,13 +617,13 @@ export component StreamSelector inherits Rectangle {
         triggered => { root.entered = true; }
     }
     private property <length> usable_height: root.height - root.safe-top - root.safe-bottom;
-    private property <bool> short: root.usable_height < 600px;
+    private property <bool> short: !InterfaceStyle.tv && root.usable_height < 600px;
     // Touch landscape needs the whole screen for sources after its context
     // scrolls away. Short desktop windows retain their fixed context layout.
-    out property <bool> scrolling_landscape: root.touch_menus && root.usable_width > root.usable_height && root.short;
+    out property <bool> scrolling_landscape: !InterfaceStyle.tv && root.touch_menus && root.usable_width > root.usable_height && root.short;
     changed scrolling_landscape => { landscape_scroll.content-y = 0px; result_scroll.content-y = 0px; }
     private property <length> usable_width: root.width - root.safe-left - root.safe-right;
-    out property <bool> narrow: root.usable_width < 700px;
+    out property <bool> narrow: !InterfaceStyle.tv && root.usable_width < 700px;
     // Short landscape windows need all of their width for wrapped filenames.
     out property <bool> artwork_layout: root.usable_width >= 1200px && !root.short;
     private property <length> margin: root.narrow ? 16px : 32px;
@@ -604,10 +632,12 @@ export component StreamSelector inherits Rectangle {
     private property <string> context: root.episode_context != "" ? root.episode_context : (root.is_movie ? (root.year != "" ? @tr("{} · Movie", root.year) : @tr("Movie")) : root.year);
     private property <bool> episode_header: !root.is_movie && root.episode_context != "";
     private property <string> main_title: root.episode_header ? (root.episode_title != "" ? root.episode_title : (root.episode_number != "" ? root.title : root.episode_context)) : root.title;
-    // Zones: back, addon filters, stream rows, pager. Stream indexes are
+    // Zones: back, addon filters, stream rows, pager, TV output choice. Stream indexes are
     // absolute across the Rust-provided 25-row slices.
     private property <int> focus_zone: 2;
     private property <bool> has_output_choice: !PartyBridge.active && (RemoteBridge.has_ready_devices || RemoteBridge.target_id != "");
+
+    changed has_output_choice => { if (!root.has_output_choice && root.focus_zone == 4) { root.focus_zone = 2; } }
 
     function request_back() {
         if (root.action_open) { root.action_open = false; }
@@ -717,7 +747,7 @@ export component StreamSelector inherits Rectangle {
                 if root.episode_header && root.episode_number != "": Text {
                     text: root.episode_number;
                     color: Theme.current.text_bright;
-                    font-size: 16px; font-weight: 600;
+                    font-size: InterfaceStyle.tv ? 21px : 16px; font-weight: 600;
                     overflow: elide;
                 }
                 Text {
@@ -729,19 +759,19 @@ export component StreamSelector inherits Rectangle {
                 if root.episode_header && (root.episode_title != "" || root.episode_number == ""): Text {
                     text: root.title;
                     color: Theme.current.text_secondary;
-                    font-size: 18px;
+                    font-size: InterfaceStyle.tv ? 23px : 18px;
                     wrap: word-wrap; max-lines: 2; overflow: elide;
                 }
                 if !root.episode_header: Text {
                     text: root.context;
                     color: Theme.current.text_secondary;
-                    font-size: 16px;
+                    font-size: InterfaceStyle.tv ? 21px : 16px;
                     wrap: word-wrap; max-lines: 3; overflow: elide;
                 }
                 Text {
                     text: @tr("Select a source to start watching.");
                     color: Theme.current.text_muted;
-                    font-size: 14px;
+                    font-size: InterfaceStyle.tv ? 18px : 14px;
                     wrap: word-wrap;
                 }
             }
@@ -778,7 +808,7 @@ export component StreamSelector inherits Rectangle {
                     compact_main_title := Text {
                         text: root.main_title;
                         color: Theme.current.text_bright;
-                        font-size: root.short ? 22px : (root.narrow ? 24px : 28px);
+                        font-size: InterfaceStyle.tv ? 36px : (root.short ? 22px : (root.narrow ? 24px : 28px));
                         font-weight: 700;
                         wrap: word-wrap; max-lines: root.short ? 1 : 2; overflow: elide;
                         min-width: 0px;
@@ -792,7 +822,7 @@ export component StreamSelector inherits Rectangle {
                     if !root.episode_header: Text {
                         text: root.context;
                         color: Theme.current.text_secondary;
-                        font-size: 13px;
+                        font-size: InterfaceStyle.tv ? 18px : 13px;
                         wrap: word-wrap; max-lines: root.short ? 1 : 2; overflow: elide;
                         min-width: 0px;
                     }
@@ -814,22 +844,26 @@ export component StreamSelector inherits Rectangle {
                 min-width: 0px;
                 spacing: root.short ? 8px : (root.narrow ? 12px : 16px);
                 stream_heading := HorizontalLayout {
-                    height: root.short ? 32px : 40px;
+                    height: InterfaceStyle.tv ? 56px : (root.short ? 32px : 40px);
                     spacing: 8px;
                     heading_title := Text {
                         text: @tr("Choose a stream");
                         color: Theme.current.text_bright;
-                        font-size: root.narrow ? 20px : 26px; font-weight: 700;
+                        font-size: InterfaceStyle.tv ? 32px : (root.narrow ? 20px : 26px); font-weight: 700;
                         vertical-alignment: center;
                         overflow: elide; min-width: 0px; horizontal-stretch: 1;
                     }
                     stream_count := Text {
                         text: @tr("{n} stream" | "{n} streams" % root.total);
                         color: Theme.current.text_muted;
-                        font-size: 13px; vertical-alignment: center;
+                        font-size: InterfaceStyle.tv ? 18px : 13px; vertical-alignment: center;
                         horizontal-stretch: 0;
                     }
                     if root.has_output_choice: output_picker := RemoteTargetMenu {
+                        property <int> open_request: root.output_open_request;
+                        changed open_request => { self.open_menu(); }
+                        focused: InterfaceStyle.tv && root.kb_active && root.focus_zone == 4;
+                        dismissed => { if (InterfaceStyle.tv) { selector_scope.focus(); } }
                         // Fill the fixed heading lane so the smaller button can center in it.
                         height: stream_heading.height;
                         popup-height: root.height - selector_body.y - 44px - root.safe-bottom;
@@ -841,10 +875,10 @@ export component StreamSelector inherits Rectangle {
                 }
                 // Reserve the same slot while the independent horizontal bar floats
                 // above this viewport and becomes sticky in touch landscape.
-                filter_slot := Rectangle { visible: root.addons.length > 0; height: root.addons.length > 0 ? 40px : 0px; vertical-stretch: 0; }
+                filter_slot := Rectangle { visible: root.addons.length > 0; height: root.addons.length > 0 ? (InterfaceStyle.tv ? 56px : 40px) : 0px; vertical-stretch: 0; }
                 if root.rows.length > 0 && root.hint != "": Text {
                     text: root.hint;
-                    font-size: 13px; color: Theme.current.text_muted;
+                    font-size: InterfaceStyle.tv ? 18px : 13px; color: Theme.current.text_muted;
                     wrap: word-wrap; max-lines: root.short && !root.scrolling_landscape ? 1 : 0; overflow: elide; min-width: 0px;
                 }
                 result_scroll := Flickable {
@@ -863,7 +897,12 @@ export component StreamSelector inherits Rectangle {
                         touch_menus: root.touch_menus;
                         action_items: root.action_items;
                         picked(i) => { root.kb_active = false; root.kb_index = i; if (RemoteBridge.target_id != "" && !PartyBridge.active) { RemoteBridge.stream_picked(i); } else { root.picked(i); } }
-                        action_requested(id) => { root.action_requested(id); }
+                        action_requested(id) => {
+                            root.action_requested(id);
+                            // Pointer actions on desktop TV retain the native popup.
+                            // Remote Menu/held OK call the page callback directly.
+                            if (InterfaceStyle.tv && !root.touch_menus) { root.action_open = false; }
+                        }
                         action_selected(id, a) => { root.action_selected(id, a); }
                         focused_row(y, h) => { root.reveal_row(y, h); }
                     }
@@ -879,7 +918,7 @@ export component StreamSelector inherits Rectangle {
                         Text {
                             text: root.hint != "" ? root.hint : (root.searching ? @tr("Loading streams…") : @tr("No streams found."));
                             color: Theme.current.text_muted;
-                            font-size: 15px; wrap: word-wrap;
+                            font-size: InterfaceStyle.tv ? 20px : 15px; wrap: word-wrap;
                             horizontal-alignment: center;
                             min-width: 0px;
                         }
@@ -891,7 +930,7 @@ export component StreamSelector inherits Rectangle {
                     if !root.touch_menus && !root.narrow && !root.short: Text {
                         text: @tr("↑ ↓ Navigate    Enter Play    Esc Back");
                         color: Theme.current.text_hint;
-                        font-size: 12px; vertical-alignment: center;
+                        font-size: InterfaceStyle.tv ? 18px : 12px; vertical-alignment: center;
                         overflow: elide; min-width: 0px;
                     }
                     Rectangle { horizontal-stretch: 1; background: transparent; }
@@ -927,7 +966,7 @@ export component StreamSelector inherits Rectangle {
     if root.addons.length > 0: sticky_filters := Rectangle {
         x: selector_body.absolute-position.x - root.absolute-position.x;
         y: root.scrolling_landscape ? Math.max(root.safe-top, root.filter_screen_y) : root.filter_screen_y;
-        width: selector_body.width; height: 40px;
+        width: selector_body.width; height: InterfaceStyle.tv ? 56px : 40px;
         background: root.scrolling_landscape ? Theme.current.artwork_canvas : transparent;
         StreamFilterBar {
             x: 0px; y: 0px; width: 100%; height: 100%;
@@ -947,8 +986,24 @@ export component StreamSelector inherits Rectangle {
         width: 100%; height: 100%;
         focus-on-click: false;
         init => { self.focus(); }
-        key-pressed(e) => {
-            if (e.text == Key.Back && e.repeat) {
+        key-released(e) => {
+                if (InterfaceStyle.tv && e.text == Key.Return && root.tv_ok_pending) {
+                    tv_ok_hold.stop();
+                    root.tv_ok_pending = false;
+                    if (!root.tv_ok_held) { root.tv_activate(); }
+                    accept
+                } else { reject }
+            }
+            key-pressed(e) => {
+                if (InterfaceStyle.tv && e.text == Key.Return) {
+                    root.kb_active = true;
+                    if (!e.repeat) { root.tv_ok_pending = true; root.tv_ok_held = false; tv_ok_hold.stop(); tv_ok_hold.start(); }
+                    accept
+                } else if (InterfaceStyle.tv && (e.text == Key.Menu || (e.text == Key.F10 && e.modifiers.shift))) {
+                    root.kb_active = true;
+                    if (!e.repeat) { root.tv_context(); }
+                    accept
+                } else if (e.text == Key.Back && e.repeat) {
                 accept
             } else if (e.text == Key.Back || e.text == Key.Escape || e.text == Key.Backspace) {
                 root.kb_active = true;
@@ -958,13 +1013,17 @@ export component StreamSelector inherits Rectangle {
                 reject
             } else if (e.text == Key.DownArrow) {
                 root.kb_active = true;
-                if (root.focus_zone < 2) { root.focus_zone += root.addons.length == 0 ? 2 : 1; }
+                if (InterfaceStyle.tv && root.focus_zone == 0 && root.has_output_choice) { root.focus_zone = 4; }
+                else if (InterfaceStyle.tv && root.focus_zone == 4) { root.focus_zone = root.addons.length > 0 ? 1 : 2; }
+                else if (root.focus_zone < 2) { root.focus_zone += root.addons.length == 0 ? 2 : 1; }
                 else if (root.focus_zone == 2 && root.kb_index + 1 < root.total) { root.focus_stream(root.kb_index + 1); }
                 else if (root.page_count > 1) { root.focus_zone = 3; }
                 accept
             } else if (e.text == Key.UpArrow) {
                 root.kb_active = true;
-                if (root.focus_zone == 2 && root.kb_index > 0) { root.focus_stream(root.kb_index - 1); }
+                if (InterfaceStyle.tv && root.focus_zone == 4) { root.focus_zone = 0; }
+                else if (InterfaceStyle.tv && root.has_output_choice && (root.focus_zone == 1 || (root.focus_zone == 2 && root.kb_index == 0 && root.addons.length == 0))) { root.focus_zone = 4; }
+                else if (root.focus_zone == 2 && root.kb_index > 0) { root.focus_stream(root.kb_index - 1); }
                 else if (root.focus_zone > 0) { root.focus_zone -= root.focus_zone == 2 && root.addons.length == 0 ? 2 : 1; }
                 accept
             } else if (e.text == Key.PageUp || e.text == Key.PageDown) {
@@ -976,7 +1035,7 @@ export component StreamSelector inherits Rectangle {
                 root.kb_active = true;
                 let delta = e.text == Key.LeftArrow ? -1 : 1;
                 if (root.focus_zone == 1) { root.pick_filter(root.addon_filter + delta); }
-                else if (root.focus_zone > 1) { root.move_page(delta); }
+                else if (root.focus_zone > 1 && root.focus_zone != 4) { root.move_page(delta); }
                 accept
             } else if (e.text == Key.Return || e.text == " ") {
                 root.kb_active = true;
@@ -989,7 +1048,7 @@ export component StreamSelector inherits Rectangle {
     }
 
     MenuSheet {
-        open: root.touch_menus && root.action_open;
+        open: (root.touch_menus || InterfaceStyle.tv) && root.action_open;
         width: 100%; height: 100%;
         safe-bottom: root.safe-bottom; safe-left: root.safe-left; safe-right: root.safe-right;
         max_h: root.height * 0.85;

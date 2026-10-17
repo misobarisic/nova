@@ -1,4 +1,4 @@
-import { Theme } from "@NovaUiShared";
+import { Theme, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
 import { ControlTouchArea } from "control-input.slint";
 
 // Touch-friendly dropdown replacing std-widgets ComboBox.
@@ -43,7 +43,23 @@ export component Dropdown inherits Rectangle {
     callback pan_hint();
     callback pan_release();
 
-    property <length> item-h: root.roomy ? 44px : 32px;
+    property <length> item-h: InterfaceStyle.tv ? 56px : root.roomy ? 44px : 32px;
+    property <int> popup-index: 0;
+    function open_popup() {
+        root.popup-index = Math.max(0, root.current-index);
+        popup.show();
+    }
+    forward-focus: closed_scope;
+    closed_scope := FocusScope {
+        enabled: root.enabled && InterfaceStyle.tv;
+        key-pressed(e) => {
+            if InterfaceStyle.tv && (e.text == Key.Return || e.text == " ") && root.model.length > 0 {
+                SettingsStyle.keyboard-mode = true;
+                if !e.repeat { root.open_popup(); }
+                accept
+            } else { reject }
+        }
+    }
     // Visible popup rows, capped like the stock control.
     property <int> shown: Math.min(6, root.model.length);
     property <bool> has_selection: root.current-index >= 0 && root.current-index < root.model.length;
@@ -55,8 +71,8 @@ export component Dropdown inherits Rectangle {
 
     height: root.item-h;
     border-radius: Math.min(Theme.button_corner_radius, Math.min(self.width, self.height) / 2);
-    border-width: 1px;
-    border-color: Theme.current.control_border;
+    border-width: InterfaceStyle.tv && closed_scope.has-focus ? 2px : 1px;
+    border-color: InterfaceStyle.tv && closed_scope.has-focus ? Theme.current.focus_ring : Theme.current.control_border;
     background: root.prominent
         ? (touch.feedback-active && root.enabled ? Theme.current.settings_control_hover : Theme.current.settings_control)
         : (touch.feedback-active && root.enabled ? Theme.current.input_hover : Theme.current.popup);
@@ -69,7 +85,7 @@ export component Dropdown inherits Rectangle {
         Text {
             text: root.shown-text;
             color: root.has_selection ? Theme.current.text_primary : Theme.current.text_muted;
-            font-size: root.prominent ? 14px : 13px;
+            font-size: InterfaceStyle.tv ? 20px : root.prominent ? 14px : 13px;
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
@@ -135,7 +151,7 @@ export component Dropdown inherits Rectangle {
         }
         clicked => {
             if (!self.dragged && root.model.length > 0) {
-                popup.show();
+                root.open_popup();
             }
             self.dragged = false;
         }
@@ -152,10 +168,22 @@ export component Dropdown inherits Rectangle {
         popup_scope := FocusScope {
             width: 100%;
             height: 100%;
-            init => { self.focus(); }
+            init => { self.focus(); if InterfaceStyle.tv { popup_scroll.content-y = -Math.max(0px, (root.popup-index + 1) * root.item-h - popup_scroll.visible-height); } }
             capture-key-pressed(e) => {
-                if (e.text == Key.Back) {
-                    if (!e.repeat) { popup.close(); }
+                if (e.text == Key.Back || (InterfaceStyle.tv && e.text == Key.Escape)) {
+                    if (!e.repeat) { popup.close(); if InterfaceStyle.tv { closed_scope.focus(); } }
+                    accept
+                } else if InterfaceStyle.tv && (e.text == Key.UpArrow || e.text == Key.DownArrow) {
+                    root.popup-index = Math.clamp(root.popup-index + (e.text == Key.UpArrow ? -1 : 1), 0, root.model.length - 1);
+                    popup_scroll.content-y = -Math.max(0px, (root.popup-index + 1) * root.item-h - popup_scroll.visible-height);
+                    accept
+                } else if InterfaceStyle.tv && (e.text == Key.Return || e.text == " ") {
+                    if !e.repeat && root.popup-index < root.model.length {
+                        root.current-index = root.popup-index;
+                        root.selected(root.model[root.popup-index]);
+                        popup.close();
+                        closed_scope.focus();
+                    }
                     accept
                 } else {
                     reject
@@ -174,7 +202,7 @@ export component Dropdown inherits Rectangle {
                 border-radius: root.prominent ? 16px : 6px;
                 clip: true;
 
-                ScrollView {
+                popup_scroll := ScrollView {
                     width: 100%;
                     height: 100%;
                     // THE fix (see header comment): without this, touch
@@ -191,6 +219,8 @@ export component Dropdown inherits Rectangle {
                             width: 100%;
                             height: root.item-h;
                             border-radius: root.prominent ? 10px : 4px;
+                            border-width: InterfaceStyle.tv && index == root.popup-index ? 2px : 0px;
+                            border-color: Theme.current.focus_ring;
                             background: index == root.current-index ? Theme.current.selection_wash : (item_touch.feedback-active ? Theme.current.control_hover : transparent);
 
                             HorizontalLayout {
@@ -200,7 +230,7 @@ export component Dropdown inherits Rectangle {
                                 Text {
                                     text: root.text_at(index);
                                     color: root.prominent && index == root.current-index ? Theme.current.accent_soft : Theme.current.text_primary;
-                                    font-size: root.prominent ? 14px : 13px;
+                                    font-size: InterfaceStyle.tv ? 20px : root.prominent ? 14px : 13px;
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;
                                     overflow: elide;

@@ -1,4 +1,4 @@
-import { Theme, SettingsStyle } from "@NovaUiShared";
+import { InterfaceStyle, Theme, SettingsStyle } from "@NovaUiShared";
 import { IcMusic, IcCaptions, IcPlay, IcSettingsGear, IcCheck, IcChevronRight } from "icons.slint";
 
 // Shared category/track row: measured title, optional secondary text, and a
@@ -13,6 +13,12 @@ export component MenuRow inherits Rectangle {
     in property <bool> enabled: true;
     accessible-role: button; accessible-label: root.label; accessible-enabled: root.enabled;
     callback activate();
+    callback reveal(length, length);
+    changed focused => { if root.focused && InterfaceStyle.tv { reveal_timer.start(); } }
+    reveal_timer := Timer {
+        interval: 1ms; running: false;
+        triggered => { self.stop(); if root.focused && InterfaceStyle.tv { root.reveal(root.absolute-position.y, root.height); } }
+    }
     forward-focus: row_focus;
     row_focus := FocusScope {
         enabled: root.enabled;
@@ -22,8 +28,8 @@ export component MenuRow inherits Rectangle {
 
     opacity: root.enabled ? 1 : 0.45;
     property <length> label_x: root.icon_kind == 0 ? 14px : 50px;
-    property <length> label_h: Math.min(40px, row_label.preferred-height);
-    property <length> text_h: root.label_h + (root.value != "" ? 20px : 0px);
+    property <length> label_h: Math.min(InterfaceStyle.tv ? 60px : 40px, row_label.preferred-height);
+    property <length> text_h: root.label_h + (root.value != "" ? (InterfaceStyle.tv ? 28px : 20px) : 0px);
     height: Math.max(60px, root.text_h + 20px);
     border-radius: 10px;
     border-width: root.focused || (row_focus.has-focus && SettingsStyle.keyboard-mode) ? 2px : 0px;
@@ -55,14 +61,14 @@ export component MenuRow inherits Rectangle {
         width: Math.max(0px, root.width - root.label_x - 40px);
         height: root.label_h;
         text: root.label; color: Theme.current.text_bright;
-        font-size: 14px; font-weight: 600;
+        font-size: InterfaceStyle.tv ? 20px : 14px; font-weight: 600;
         wrap: word-wrap; overflow: elide;
     }
     if root.value != "": Text {
         x: root.label_x; y: row_label.y + root.label_h + 4px;
-        width: row_label.width; height: 16px;
+        width: row_label.width; height: InterfaceStyle.tv ? 24px : 16px;
         text: root.value; color: Theme.current.text_secondary;
-        font-size: 12px; overflow: elide;
+        font-size: InterfaceStyle.tv ? 18px : 12px; overflow: elide;
     }
     if root.selected: IcCheck {
         x: root.width - 30px; y: (root.height - self.height) / 2;

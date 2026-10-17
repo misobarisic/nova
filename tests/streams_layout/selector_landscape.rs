@@ -253,3 +253,55 @@ fn touch_landscape_scrolls_context_pins_addons_and_keeps_bottom_paging() {
         "covered cards cannot play through the safe-area backdrop"
     );
 }
+
+#[test]
+fn tv_selector_retains_fixed_context_on_short_touch_landscape() {
+    if !crate::isolation::run(concat!(
+        module_path!(),
+        "::",
+        "tv_selector_retains_fixed_context_on_short_touch_landscape"
+    )) {
+        return;
+    }
+    i_slint_backend_testing::init_integration_test_with_mock_time();
+    let app = nova::AppWindow::new().unwrap();
+    app.global::<nova::Anim>().set_enabled(false);
+    app.global::<nova::InterfaceStyle>().set_tv(true);
+    app.set_touch_menus(true);
+    app.set_modal_visible(true);
+    app.set_selected_title("TV movie".into());
+    app.set_detail_is_movie(true);
+    app.set_stream_total(8);
+    app.set_streams(
+        Rc::new(VecModel::from(
+            (0..8)
+                .map(|i| nova::StreamRow {
+                    id: format!("tv-source-{i}").into(),
+                    text: format!("TV source {i}").into(),
+                    lines: 1,
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into(),
+    );
+    app.set_stream_selector_open(true);
+    // A short logical display is common on televisions even at high physical
+    // resolution. Android touch capability must not select the phone scroller.
+    app.window().set_size(slint::PhysicalSize::new(960, 540));
+    app.window().show().unwrap();
+    idle();
+    let before = element(&app, "StreamSelector::compact_context")
+        .absolute_position()
+        .y;
+    scroll(&app, -500.0);
+    assert!(
+        (element(&app, "StreamSelector::compact_context")
+            .absolute_position()
+            .y
+            - before)
+            .abs()
+            < 1.0
+    );
+    assert!(element(&app, "StreamSelector::result_scroll").size().height > 100.0);
+}
