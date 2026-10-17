@@ -9,8 +9,8 @@ import tomllib
 from pathlib import Path
 from zipfile import ZipFile
 
-ABIS = {"arm64-v8a", "x86_64"}
-VARIANTS = {"-universal": ABIS, "-arm64-v8a": {"arm64-v8a"}, "-x86_64": {"x86_64"}}
+ABIS = {"arm64-v8a", "armeabi-v7a", "x86_64"}
+VARIANTS = {"-universal": ABIS, **{f"-{abi}": {abi} for abi in sorted(ABIS)}}
 
 
 def signature_entry(name):
@@ -155,7 +155,7 @@ def main():
                 raise RuntimeError(f"Signing certificate changed for {output}")
             verify_payload(source, output, abis)
             print(f"Verified {output}: {', '.join(sorted(abis))}")
-    print("Packaged all three APKs from one universal build")
+    print(f"Packaged all {len(VARIANTS)} APKs from one universal build")
 
 
 if __name__ == "__main__":

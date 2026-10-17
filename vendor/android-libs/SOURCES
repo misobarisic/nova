@@ -14,11 +14,14 @@ table used to record those instead).
 | file                | size (B) | sha256                                                           |
 |---------------------|----------|------------------------------------------------------------------|
 | arm64-v8a/libmpv.so | 16111232 | 1389a049513651ef7367f9710c34701ccb5de33ebef4f9691389891a2acd7bca |
+| armeabi-v7a/libmpv.so | 15307608 | ee8f6fde1040b98557dd7c1809c9d9ab96d787a8e57211f5c3735a5a08038cd1 |
 | x86_64/libmpv.so    | 19799824 | a314e50636601239304d2630836f76bf3482c6a18f498b826ddb5592960a1044 |
 
 Source jars (NOT vendored, extracted and discarded):
 - https://github.com/media-kit/libmpv-android-video-build/releases/download/v1.1.11/full-arm64-v8a.jar
   sha256 cdb54c5cf24725623ca717bbbd6d991031d625a377460bd128f19c2dffe189bd
+- https://github.com/media-kit/libmpv-android-video-build/releases/download/v1.1.11/full-armeabi-v7a.jar
+  sha256 b658f2ff91169f8dad0e09e0240ebe200bb3df999da5712f8fab96ad11a4fbec
 - https://github.com/media-kit/libmpv-android-video-build/releases/download/v1.1.11/full-x86_64.jar
   sha256 848936cfd7333077f21759adaca4a9e1a5647891da2e42ab211c5bdc30f4535d
 
@@ -42,10 +45,10 @@ Notes:
   helper (only system libs: libm, libandroid, libOpenSLES, libEGL, libdl, libc;
   SONAME is `libmpv.so`). The OpenSL ES dependency is what backs `ao=opensles`
   for audio out on-device.
-- Directory names are Gradle Android ABI names (`arm64-v8a`, `x86_64`), matching
+- Directory names are Gradle Android ABI names (`arm64-v8a`, `armeabi-v7a`, `x86_64`), matching
   the jar layout, ndk-build's `target.android_abi()` and cargo-apk's
   `runtime_libs` convention. They intentionally differ from the Rust target
-  triples (`aarch64-linux-android`, `x86_64-linux-android`).
+  triples (`aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android`).
 - The `full` flavor is a superset of `default`; the extra codecs are subtitle
   bitmap decoders (PGS, XSUB, JACOsub, …) plus more audio/video decoders. It
   was chosen because `default` cannot play HDMV PGS subtitles at all.

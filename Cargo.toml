@@ -187,11 +187,11 @@ rqrr = { version = "0.11", default-features = false }
 # id; iroh is already in the build via nova-sync, so this adds no new tree.
 iroh = "1.2"
 
-# Android packaging (cargo-apk). arm64 covers physical devices;
-# x86_64 covers the emulator. Slint needs min SDK 26.
+# Android packaging (cargo-apk2). ARMv7 also covers devices with a 32-bit
+# Android userspace; x86_64 covers the emulator. Slint needs min SDK 26.
 [package.metadata.android]
 package = "dev.misob.nova"
-build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
+build_targets = ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android"]
 # Folder holding extra prebuilt shared libraries: cargo-apk2 adds everything
 # matching `<runtime_libs>/<android_abi>/*.so` (see build.rs for the matching
 # link search path and vendor/android-libs/SOURCES for provenance). The ABI directory

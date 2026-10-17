@@ -42,6 +42,11 @@ jni = "0.22"
 # dlopen/dlsym for the Android EGL function-pointer lookup.
 libc = "0.2"
 
+[target.'cfg(all(target_os = "android", target_pointer_width = "32"))'.dependencies]
+# Upstream's pregenerated bindings contain 64-bit size/offset assertions.
+# Generate against the NDK target headers for the ARMv7 ABI instead.
+libmpv2-sys = { version = "4.0.1", features = ["use-bindgen"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # Idle inhibition over D-Bus (ScreenSaver, logind fallback). Same major
 # version the tree already pulls in transitively via atspi. The blocking

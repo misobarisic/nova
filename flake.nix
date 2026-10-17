@@ -152,7 +152,7 @@
         };
     }
     // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-      # Android build environment: nix-managed Rust (fenix, stable + the two
+      # Android build environment: nix-managed Rust (fenix, stable + the three
       # vendored Android target stds) + SDK + NDK + JDK + cargo-apk. No
       # rustup, no manual `rustup target add` — entering the shell is enough.
       # Enter with: nix develop .#android
@@ -160,7 +160,7 @@
         androidsdk = (pkgsAndroid.androidenv.composeAndroidPackages {
           platformVersions = [ "34" "35" ];
           buildToolsVersions = [ "34.0.0" "35.0.0" ];
-          abiVersions = [ "arm64-v8a" "x86_64" ];
+          abiVersions = [ "arm64-v8a" "armeabi-v7a" "x86_64" ];
           includeNDK = true;
           ndkVersions = [ "26.1.10909125" ];
           # Emulator binary included; no system images (they add GBs).
@@ -171,8 +171,8 @@
         }).androidsdk;
         # Host stable plus a std for every target cargo-apk packages for us
         # (Cargo.toml `build_targets`, matching the vendored libmpv.so ABIs
-        # in vendor/android-libs/). armv7/i686 are omitted until their libmpv.so is
-        # vendored — linking them would fail at `build.rs`'s warning.
+        # in vendor/android-libs/). i686 is omitted until its libmpv.so is
+        # included — linking it would fail at `build.rs`'s warning.
         toolchain = fenixPkgs.combine (
           [
             host.cargo
@@ -183,8 +183,8 @@
           ]
           ++ map (target: fenixPkgs.targets.${target}.stable.rust-std) [
             "aarch64-linux-android"
+            "armv7-linux-androideabi"
             "x86_64-linux-android"
-            #"armv7-linux-androideabi"
             #"i686-linux-android"
           ]
         );
@@ -200,6 +200,13 @@
             cargo-apk2
             pkgsAndroid.cargo-about
             pkgs.llvmPackages.libclang
+            # ARMv7 Skia has no upstream binary cache: its source build
+            # synchronizes dependencies and invokes Python/GN/Ninja.
+            pkgs.python3
+            pkgs.gn
+            pkgs.ninja
+            pkgs.git
+            pkgs.curl
             toolchain
           ];
           # cargo-apk2 does not use Gradle, so no aapt2 override is needed.
@@ -210,6 +217,11 @@
             export ANDROID_HOME="${androidsdk}/libexec/android-sdk"
             # First (only) pinned NDK, robust to version drift.
             export ANDROID_NDK_ROOT="$(echo "$ANDROID_HOME"/ndk/* | cut -d' ' -f1)"
+            # rust-skia's source build reads ANDROID_NDK directly.
+            export ANDROID_NDK="$ANDROID_NDK_ROOT"
+            # Use Nix-native build tools rather than downloaded host binaries.
+            export SKIA_GN_COMMAND="${pkgs.gn}/bin/gn"
+            export SKIA_NINJA_COMMAND="${pkgs.ninja}/bin/ninja"
             export JAVA_HOME="${pkgsAndroid.jdk17}"
             export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
             export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
@@ -223,6 +235,7 @@
             # API 26 matches Cargo.toml's min_sdk_version and cargo-apk2.
             ndk_sysroot="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
             export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--sysroot=$ndk_sysroot --target=aarch64-linux-android26"
+            export BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi="--sysroot=$ndk_sysroot --target=armv7a-linux-androideabi26"
             export BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android="--sysroot=$ndk_sysroot --target=x86_64-linux-android26"
             export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ndk_bin/aarch64-linux-android34-clang"
             export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$ndk_bin/armv7a-linux-androideabi34-clang"

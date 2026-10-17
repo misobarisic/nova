@@ -22,7 +22,7 @@ entries in Settings → About:
 - nova-sync (crates/sync/)
 
 ANDROID NATIVE MEDIA LIBRARY
-The APK bundles libmpv.so for arm64-v8a and x86_64 from the full flavor of
+The APKs bundle libmpv.so for arm64-v8a, armeabi-v7a and x86_64 from the full flavor of
 media-kit/libmpv-android-video-build v1.1.11. The matching source/build project
 and pinned inputs are at:
 https://github.com/media-kit/libmpv-android-video-build/releases/tag/v1.1.11

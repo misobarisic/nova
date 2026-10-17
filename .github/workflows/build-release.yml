@@ -9,6 +9,7 @@ on:
       - "rust-toolchain"
       - "rust-toolchain.toml"
       - ".github/scripts/package-android.py"
+      - ".github/scripts/test_package_android.py"
       - ".github/scripts/package-linux.sh"
       - ".github/scripts/package-windows.sh"
       - ".github/scripts/nova.desktop"
@@ -34,6 +35,7 @@ on:
       - "rust-toolchain"
       - "rust-toolchain.toml"
       - ".github/scripts/package-android.py"
+      - ".github/scripts/test_package_android.py"
       - ".github/scripts/package-linux.sh"
       - ".github/scripts/package-windows.sh"
       - ".github/scripts/nova.desktop"
@@ -84,6 +86,9 @@ jobs:
 
       - name: Check Rust formatting
         run: nix develop .#default --command cargo fmt --all -- --check
+
+      - name: Test Android APK packaging
+        run: python3 -B -m unittest discover -s .github/scripts -p test_package_android.py
 
       - name: Run Clippy
         run: nix develop .#default --command cargo clippy --workspace --locked -- -D warnings
@@ -154,9 +159,9 @@ jobs:
 
   android-build:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    name: Build Android APKs (universal, arm64-v8a, x86_64)
+    name: Build Android APKs (universal, arm64-v8a, armeabi-v7a, x86_64)
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     permissions:
       contents: read
     steps:
@@ -183,7 +188,7 @@ jobs:
       - name: Build universal APK once
         run: nix develop .#android --command make android-build-release-universal RELEASE_PROFILE="$NOVA_RELEASE_PROFILE"
 
-      - name: Derive, align, sign, and verify all three APKs
+      - name: Derive, align, sign, and verify all APKs
         run: nix develop .#android --command python3 .github/scripts/package-android.py
 
       - name: Upload APK artifact

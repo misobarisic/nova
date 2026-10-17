@@ -39,6 +39,7 @@ make linux-run-preview
 make linux-run-release
 make android-build
 make android-build-release
+make android-build-release ANDROID_TARGET=armv7-linux-androideabi
 make android-build-release-universal
 # Tagged CI uses fat LTO; local Make release targets accept the same profile:
 make android-build-release-universal RELEASE_PROFILE=cd-release
@@ -52,6 +53,7 @@ cargo test --workspace                  # also leaf-crate unit + documentation t
 cargo test -p nova-sync --lib            # sync crate unit tests (fast)
 cargo test --test ui_settings_sync -- sync_overflow:: # headless Slint UI regression tests
 cargo test --test ui_discover --test ui_library --test ui_player # isolated UI suites
+python3 -B -m unittest discover -s .github/scripts -p test_package_android.py
 
 # Android Make rules use cargo-apk2 (not cargo-apk): it compiles android/java/
 # to DEX and declares the foreground service + sync job. They enable the
@@ -68,11 +70,14 @@ and Windows GNU and ARM64 Android target checks. `check-android` uses the
 Android Nix shell with `--no-default-features --features android --lib -p nova`
 and `--target aarch64-linux-android`.
 Pushing a Git tag selects the `cd-release` Cargo profile through the workflow's
-`NOVA_RELEASE_PROFILE`, building three Android APKs, a Linux
-x86_64 `.deb` and AppImage, and a Windows x86_64 ZIP, then attaches all six
+`NOVA_RELEASE_PROFILE`, building four Android APKs, a Linux
+x86_64 `.deb` and AppImage, and a Windows x86_64 ZIP, then attaches all seven
 files to a GitHub Release. Android release filenames are
-`nova-arm64-v8a-<tag>.apk`, `nova-x86_64-<tag>.apk`, and `nova-<tag>.apk`;
-the APK without an architecture suffix contains both arm64-v8a and x86_64.
+`Nova-Android-arm64-v8a-<version>.apk`, `Nova-Android-armeabi-v7a-<version>.apk`,
+`Nova-Android-x86_64-<version>.apk`, and `Nova-Android-universal-<version>.apk`
+(version is the tag without its leading `v`, with `/` replaced by `-`).
+The universal APK contains all three architectures; ARMv7 supports devices
+running a 32-bit ARM Android userspace, including compatible TV devices.
 The Windows bundle is named `Nova-Windows-x86_64-<version>.zip` (tag without
 the leading `v`, with `/` replaced by `-`). `.github/scripts/package-windows.sh`
 places the executable, DLLs, and license/source notices directly inside it.
@@ -94,13 +99,16 @@ for every Windows UI compilation unit using Cargo's target OS, including
 Linux cross-builds, so menus remain dark even with a light Windows system theme.
 Other targets retain their existing widget style and menu presentation.
 
-The Android workflow invokes cargo-apk2 once to build both architectures into
-a universal APK. `.github/scripts/package-android.py` derives the two
-architecture-specific APKs from that output, aligns and signs all three with
+The Android workflow invokes cargo-apk2 once to build all three architectures into
+a universal APK. `.github/scripts/package-android.py` derives the three
+architecture-specific APKs from that output, aligns and signs all four with
 the same selected-profile key cargo-apk2 uses (environment override, then Cargo metadata),
 and checks signatures, signing certificates, exact ABI sets, native libraries,
-and unchanged payload bytes/compression. All three APKs share one Actions
-artifact for the release job to collect.
+and unchanged payload bytes/compression. All four APKs share one Actions
+artifact for the release job to collect. `.github/scripts/test_package_android.py`
+checks ABI coverage against Cargo's targets, split payloads, native library
+completeness and corruption rejection using temporary APK fixtures; the Linux
+CI check runs it without Android tooling.
 Packagers read the selected profile directory explicitly: `target/cd-release`
 for Linux and the universal APK, and `target/x86_64-pc-windows-gnu/cd-release`
 for Windows. Outside CI, `NOVA_RELEASE_PROFILE` defaults to `release` in these
@@ -116,6 +124,14 @@ also provides `cargo-apk2` (packaged by the flake) and unsets `CPATH` (the
 stdenv's host include path, which the NDK clang would otherwise pick up).
 Target-specific `BINDGEN_EXTRA_CLANG_ARGS_*` also pass the NDK sysroot and API
 26 target to host libclang when generating Android bindings.
+The Android shell supplies Rust standard libraries for ARM64, ARMv7 and x86_64;
+the matching pinned `full` mpv libraries and checksums live under
+`vendor/android-libs/` (see `SOURCES`).
+`nova-player` enables `libmpv2-sys/use-bindgen` on 32-bit Android so the mpv
+bindings use target-correct layouts instead of upstream's 64-bit assertions.
+ARMv7 builds compile Skia from source because upstream's prebuilt Android
+artifacts cover ARM64/x86_64 only. The shell supplies Python, GN, Ninja, Git, curl
+and the NDK path required by this fallback; tagged builds allow extra time.
 
 The workspace's `dev` profile disables debug information and strips symbols;
 the default `test` profile inherits these settings. Incremental compilation
@@ -264,7 +280,7 @@ the tracking actor owns local state, shared plaintext credentials and authentica
 | `nova-stremio` | `crates/stremio` | Official Stremio account/code authentication and library API with bounded HTTPS, opaque raw-library field preservation, watched-bitfield decoding/encoding, and pure field-level two-way reconciliation. Initial linking unions positive membership/history; subsequent edits use action timestamps and acknowledged baselines. App-side verified native bindings keep cold canonical imports virtual rather than duplicating saved titles/history; Home collapses existing cards only by current confirmed episode identity, preserving storage. No Slint dependency. |
 | `nova-tracking` | `crates/tracking` | Local anime tracking domain: account-scoped targets, explicit episode assignments, mapping validation, watched checkpoints, forward progress projection, semantic events (`journal.rs`), field-specific manual edits (`edits.rs`), completion prompts and grow-only handled receipts (`completion.rs`), and a durable progress outbox (`outbox.rs`) with account/mapping guards, attempt leases, retry backoff and service cooldowns. Versioned JSON persistence through `nova-storage`. `service.rs` defines tracker capabilities; `api.rs` implements bounded MAL REST and AniList GraphQL calls with injected transports; `auth.rs` implements native public-client OAuth, MAL PKCE/refresh and AniList manual token/PIN sign-in with a minimal authorization URL. Tokens are redacted and zeroized in memory; `credentials.rs` stores versioned plaintext tokens, restores verified accounts and persists MAL refresh rotation; `peer.rs` defines version-1 tracking links/preferences/shared credentials and local-history projection. `callback.rs` captures bounded loopback returns; `cache.rs` bounds metadata results and expiry; `resolution.rs` ranks title/alias and release-context candidates and grades exact title/year evidence without activating mappings. Opening the Tracking page drafts coverage from the first ranked release for a verified connected service unless source IDs are ambiguous or only historical; Choose another release exposes alternatives before confirmation. Already linked active releases are omitted from automatic suggestions. |
 | `nova-download` | `crates/download` | Durable stream-job model, manifest helpers, cancellation, progressive/resumable HTTP file transfers (`http.rs`, durable `.part.resume.json` validators; unvalidated partials restart; private resolver requests omit signed URLs/validators and restart partials), and finite HLS offline bundles (`hls.rs`, parsed with `m3u8-rs`). HTTP/HLS requests share bounded, cancellable HTTP 429 recovery; `httpdate` parses date-form `Retry-After`. `artifact_filename` uses `aws-lc-rs` SHA-256 of the download key plus a safe media extension, keeping disk/partial/validator names bounded independently of readable UI labels. |
-| `nova-player` | `crates/player` | In-window mpv player (desktop + Android), URL-free addon-resolution loading/error overlays (`wait_for_source` / `source_failed`, excluded from decoder timeouts), session-guarded subtitle-inclusive screenshots (`screenshot.rs`: asynchronous mpv capture, configurable lossless PNG/WebP or quality-controlled JPEG/WebP encoding, bounded portable show/season/episode/playhead filenames and optional show folders; `gpu_screenshot.rs`: Android HW+ native-display-size offscreen RGBA readback on the existing GL thread, with worker PNG/JPEG/WebP encoding (`png`, `image`, `webp`), cancellation and unchanged decoder/pause/position; private temporary staging, desktop Pictures/Nova and Android MediaStore/app-scoped Pictures publication), shared GL state isolation (`gl_state.rs`: Windows entry preparation and host restoration, Android host restoration; `glow` on both targets and Linux EGL tests), session-scoped Android renderer recovery (`android_recovery.rs`, desktop-runnable lifecycle tests; renderer recovery retains effective rate and semantic track preferences) and version-independent named `loadfile` options (`mpv_load.rs`, real-mpv paused load/reload regression). `PlaybackReadiness` exposes source-guarded native buffering/seekability/EOF and an approximate playable-ahead duration (local files use remaining duration). `set_party_playback_rate` applies an in-memory 0.9–1.1× override above saved title/global preferences; new party sources load paused and retain EOF until the coordinator returns the room to its lobby, and clearing the override restores ordinary speed/load/EOF behavior. `subtitle_position.rs` temporarily clears the bottom OSD using its measured viewport fraction and animated opacity; explicit subtitle position edits replace the stored baseline while controls are raised; render-time `sub-pos` changes preserve base positions, native ASS letterboxing and authored signs without forcing style overrides, then restore on close. `track_preferences.rs` parses mpv track metadata into semantic language/kind descriptors; the shared config matcher applies per-title or global audio/subtitle choices without persisting stream-local IDs. Automatic leaves mpv track selection in control; an unavailable preferred subtitle resolves to Off. Per-stream HTTP header and external subtitle arrays use `libmpv2-sys`. External launch supports the *video* app (`open_external` — desktop target app, Android video-MIME `ACTION_VIEW` for stream fallback) and system *browser* (`open_browser` — `xdg-open`, or on Android `ACTION_VIEW` marked `BROWSABLE` + `FLAG_ACTIVITY_NEW_TASK` so only web-link handlers can claim it, for links like addon config pages); Android JNI glue. |
+| `nova-player` | `crates/player` | In-window mpv player (desktop + Android), URL-free addon-resolution loading/error overlays (`wait_for_source` / `source_failed`, excluded from decoder timeouts), session-guarded subtitle-inclusive screenshots (`screenshot.rs`: asynchronous mpv capture, configurable lossless PNG/WebP or quality-controlled JPEG/WebP encoding, bounded portable show/season/episode/playhead filenames and optional show folders; `gpu_screenshot.rs`: Android HW+ native-display-size offscreen RGBA readback on the existing GL thread, with worker PNG/JPEG/WebP encoding (`png`, `image`, `webp`), cancellation and unchanged decoder/pause/position; private temporary staging, desktop Pictures/Nova and Android MediaStore/app-scoped Pictures publication), shared GL state isolation (`gl_state.rs`: Windows entry preparation and host restoration, Android host restoration; `glow` on both targets and Linux EGL tests), session-scoped Android renderer recovery (`android_recovery.rs`, desktop-runnable lifecycle tests; renderer recovery retains effective rate and semantic track preferences) and version-independent named `loadfile` options (`mpv_load.rs`, real-mpv paused load/reload regression). `PlaybackReadiness` exposes source-guarded native buffering/seekability/EOF and an approximate playable-ahead duration (local files use remaining duration). `set_party_playback_rate` applies an in-memory 0.9–1.1× override above saved title/global preferences; new party sources load paused and retain EOF until the coordinator returns the room to its lobby, and clearing the override restores ordinary speed/load/EOF behavior. `subtitle_position.rs` temporarily clears the bottom OSD using its measured viewport fraction and animated opacity; explicit subtitle position edits replace the stored baseline while controls are raised; render-time `sub-pos` changes preserve base positions, native ASS letterboxing and authored signs without forcing style overrides, then restore on close. `track_preferences.rs` parses mpv track metadata into semantic language/kind descriptors; the shared config matcher applies per-title or global audio/subtitle choices without persisting stream-local IDs. Automatic leaves mpv track selection in control; an unavailable preferred subtitle resolves to Off. Per-stream HTTP header and external subtitle arrays use `libmpv2-sys`; `crates/player/Cargo.toml` regenerates its bindings on 32-bit Android to match target pointer sizes and struct layouts. External launch supports the *video* app (`open_external` — desktop target app, Android video-MIME `ACTION_VIEW` for stream fallback) and system *browser* (`open_browser` — `xdg-open`, or on Android `ACTION_VIEW` marked `BROWSABLE` + `FLAG_ACTIVITY_NEW_TASK` so only web-link handlers can claim it, for links like addon config pages); Android JNI glue. |
 | `nova-playback-api` | `crates/playback-api` | Serde-only shared contract for session IDs, media identities, opaque stream offers, commands, capabilities, playback snapshots and app handler/completion callbacks. Carries display/control state rather than source URLs, headers or credentials; no storage dependency. |
 | `nova-party` | `crates/party` | Lazy independent iroh endpoint (`nova/party/2`) for temporary capability-invited parties, with no sync/pair/package protocols or persistent membership. `engine.rs` owns host-authoritative clock anchors, buffering barriers, finite disconnect grace, expiry, revocation and lobby-return on EOF; `service.rs` provides serialized foreground-worker create-lobby/join/select-media/clear-media/report/generation-guarded-command/leave APIs and nonblocking snapshots; `ticket.rs` bounds capability invites; `wire.rs` bounds frames. Each device resolves its own stream and keeps tracks/quality/preferences local. |
 | `nova-torrent` | `crates/torrent` | Embedded BitTorrent (librqbit); resolves `infoHash` → loopback HTTP URL for mpv. The root manifest pins the merged `librqbit-utp` Windows UDP receive-error fix until it is released. |
@@ -1409,5 +1425,5 @@ unit/documentation coverage.
 | Android glue / external player / edge-to-edge system bars | `src/lib.rs` (`android_main`), `crates/player/src/external.rs` (Android; retains edge-to-edge layout with a transparent status bar when restoring visible system bars), `crates/player/src/lib.rs::open_external` (desktop) |
 | Android QuickJS bindings / NDK headers | `flake.nix` (Android shell's `BINDGEN_EXTRA_CLANG_ARGS_*`), `crates/providers/Cargo.toml` (`bindgen` feature) |
 | Tracker browser sign-in / Android HTTPS | `crates/tracking/src/auth.rs` (MAL PKCE, AniList minimal PIN authorization URL and manual token paste), `crates/tracking/src/api.rs` (`HttpsTransport::new`, Android bundled TLS roots), `src/app/tracking/worker.rs`, `crates/ui/{tracking,tracking-panel}.slint` (account setup and title episode mapping review) |
-| CI checks / build/packaging / Windows artifact ZIP | `Cargo.toml` (`[package.metadata.android]`), `build.rs`, `flake.nix`, `Makefile`, `.github/workflows/build-release.yml` (`check-linux`, `check-windows`, ARM64-only `check-android` on PRs/main source pushes), `.github/scripts/package-windows.sh` (flat bundle ZIP; uploaded directly and preserved by the release job) |
+| CI checks / Android ABI assets / build packaging / Windows artifact ZIP | `Cargo.toml` (`[package.metadata.android]`), `build.rs`, `crates/player/Cargo.toml` (32-bit mpv bindings), `flake.nix`, `Makefile`, `vendor/android-libs/SOURCES`, `.github/workflows/build-release.yml` (`check-linux`, `check-windows`, ARM64-only `check-android` on PRs/main source pushes), `.github/scripts/{package-android,test_package_android}.py` (universal plus ARM64/ARMv7/x86_64 APKs; payload and ABI regressions), `.github/scripts/package-windows.sh` (flat bundle ZIP; uploaded directly and preserved by the release job) |
 | Missing seasons in main series / preserved episode IDs | `crates/providers/src/metadata/coverage.rs`, `metadata.rs::{missing_seasons,apply_enrichment}`, `src/app/detail.rs::write_episode_meta_cache_for`; shared ID/alias/episode proof prevents duplicate coverage, fills partial seasons and retains saved IDs/episodes through refreshes; Detail, Home and prefetch use the existing stable episode cache. |
