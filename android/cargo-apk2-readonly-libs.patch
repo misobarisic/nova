@@ -1,0 +1,14 @@
+diff --git a/ndk-build2/src/apk.rs b/ndk-build2/src/apk.rs
+--- a/ndk-build2/src/apk.rs
++++ b/ndk-build2/src/apk.rs
+@@ -398,3 +398,10 @@ impl<'a> UnalignedApk<'a> {
++        // std::fs::copy preserves read-only Nix store permissions. Dependencies
++        // can be staged again by add_runtime_libs or a subsequent build, so
++        // replace the old directory entry instead of opening it for writing.
++        if out.exists() {
++            std::fs::remove_file(&out)?;
++        }
++
+         match self.config.strip {
+             StripConfig::Default => {
+                 copy(path, out)?;

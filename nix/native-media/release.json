@@ -1,0 +1,22 @@
+{
+  "repository": "misobarisic/nova-vendor",
+  "release": "v0.1.0",
+  "bundles": {
+    "android-arm64": {
+      "file": "nova-media-android-arm64.tar.gz",
+      "hash": "sha256-S9TK9R5Df/YnTG35AlrlsDWkxGgi2FNNMcruPpOkWas="
+    },
+    "android-armv7": {
+      "file": "nova-media-android-armv7.tar.gz",
+      "hash": "sha256-wNv6KFJAMkwv+06z46jokFL0T+fE+cR1EUZP2nhfMgk="
+    },
+    "android-x86_64": {
+      "file": "nova-media-android-x86_64.tar.gz",
+      "hash": "sha256-16usmG2uJBlhu86GWO2J24q2PR5Bm7L37ZoTb+rtDxc="
+    },
+    "mingw-x86_64": {
+      "file": "nova-media-mingw-x86_64.tar.gz",
+      "hash": "sha256-dgsA8XPDONyP7tpXb5GeFgxHV3WLjrdeu783vTahRBc="
+    }
+  }
+}

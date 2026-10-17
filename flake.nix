@@ -29,7 +29,7 @@
           android_sdk.accept_license = true;
         };
       };
-      # Source-built native dependencies; Nix caches unchanged derivations.
+      # Pinned native release inputs; Nix verifies and caches each archive.
       nativeMedia = import ./nix/native-media { inherit system; pkgs = pkgsAndroid; };
       androidMedia = pkgs.runCommand "nova-android-media" { } ''
         mkdir -p "$out"
@@ -68,6 +68,7 @@
           rev = "32b91331ff2371f3f06505ea6ceea3743e423a1c";
           hash = "sha256-Sp6oc3Ee1cjpABCpV3Pj2Hmj26A+4WYDeElUCMbuBjc=";
         };
+        patches = [ ./android/cargo-apk2-readonly-libs.patch ];
         cargoLock.lockFile = ./android/cargo-apk2-Cargo.lock;
         postPatch = ''
           sed -i '/^    ".*-examples",$/d' Cargo.toml
@@ -193,7 +194,7 @@
           includeEmulator = true;
         }).androidsdk;
         # Host stable plus a std for every target cargo-apk packages for us
-        # (Cargo.toml `build_targets`, matching the source-built ABIs). i686 is
+        # (Cargo.toml `build_targets`, matching the packaged ABIs). i686 is
         # omitted because the native recipe does not build that ABI.
         toolchain = fenixPkgs.combine (
           [
@@ -298,8 +299,8 @@
             echo "  run:   cargo apk2 run   --target aarch64-linux-android --no-default-features --features android --lib"
           '';
         };
-      # Windows x86_64 cross-build environment. Native media libraries are
-      # built from the pinned source recipe in nix/native-media.
+      # Windows x86_64 cross-build environment. Native media libraries come
+      # from the pinned nova-vendor release in nix/native-media.
       # Enter with: nix develop .#windows
       windows = let
         target = "x86_64-pc-windows-gnu";

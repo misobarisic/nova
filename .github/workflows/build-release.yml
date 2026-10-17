@@ -10,6 +10,7 @@ on:
       - "rust-toolchain.toml"
       - ".github/scripts/package-android.py"
       - ".github/scripts/test_package_android.py"
+      - ".github/scripts/test_package_windows.py"
       - ".github/scripts/package-linux.sh"
       - ".github/scripts/package-windows.sh"
       - ".github/scripts/nova.desktop"
@@ -38,6 +39,7 @@ on:
       - "rust-toolchain.toml"
       - ".github/scripts/package-android.py"
       - ".github/scripts/test_package_android.py"
+      - ".github/scripts/test_package_windows.py"
       - ".github/scripts/package-linux.sh"
       - ".github/scripts/package-windows.sh"
       - ".github/scripts/nova.desktop"
@@ -92,9 +94,9 @@ jobs:
       - name: Check Rust formatting
         run: nix develop .#default --command cargo fmt --all -- --check
 
-      - name: Test Android APK packaging
+      - name: Test release packaging
         run: |
-          python3 -B -m unittest discover -s .github/scripts -p test_package_android.py
+          python3 -B -m unittest discover -s .github/scripts -p 'test_package_*.py'
           python3 -B android/test_tv_packaging.py
 
       - name: Run Clippy
@@ -163,6 +165,9 @@ jobs:
         with:
           github_access_token: ${{ github.token }}
 
+      - name: Test read-only Android runtime packaging
+        run: nix develop .#android --command python3 -B android/test_runtime_packaging.py
+
       - name: Check Android ARM64 target
         run: >-
           nix develop .#android --command cargo check --locked
@@ -197,6 +202,9 @@ jobs:
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
         with:
           github_access_token: ${{ github.token }}
+
+      - name: Test read-only Android runtime packaging
+        run: nix develop .#android --command python3 -B android/test_runtime_packaging.py
 
       - name: Build universal APK once
         run: nix develop .#android --command make android-build-release-universal RELEASE_PROFILE="$NOVA_RELEASE_PROFILE"

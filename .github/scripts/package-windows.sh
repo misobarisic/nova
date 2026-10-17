@@ -8,6 +8,10 @@ tag="${GITHUB_REF_NAME#v}"
 tag="${tag//\//-}"
 bundle="target/windows-package"
 dist="dist"
+# Older runs may have copied read-only directory modes from Nix inputs.
+if [[ -d "$bundle" ]]; then
+  find "$bundle" -type d -exec chmod u+w {} +
+fi
 rm -rf "$bundle"
 mkdir -p "$bundle" "$dist"
 
@@ -17,6 +21,8 @@ cp LICENSE "$bundle/LICENSE"
 cp "$MPV_SOURCE/SOURCES" "$bundle/THIRD-PARTY-SOURCES.txt"
 cp -RL "$MPV_SOURCE/licenses" "$bundle/licenses"
 cp -RL "$MPV_SOURCE/metadata" "$bundle/native-media"
+# Keep generated staging directories removable on the next packaging run.
+find "$bundle" -type d -exec chmod u+w {} +
 
 find -L "$MPV_SOURCE/64" -maxdepth 1 -type f -iname "*.dll" -exec cp {} "$bundle/" \;
 test -f "$bundle/libmpv-2.dll"

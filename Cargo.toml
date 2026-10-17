@@ -80,7 +80,7 @@ tracing = "0.1"
 
 [package]
 name = "nova"
-version = "0.0.30"
+version = "0.0.31"
 edition = "2024"
 license.workspace = true
 
@@ -195,8 +195,8 @@ iroh = "1.2"
 [package.metadata.android]
 package = "dev.misob.nova"
 build_targets = ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android"]
-# The Nix Android shell supplies NOVA_ANDROID_LIBS from the source-built
-# native media dependency. Its cargo-apk2 patch uses that path for runtime libraries, matching
+# The Nix Android shell supplies NOVA_ANDROID_LIBS from the pinned native
+# media release. Its cargo-apk2 patch uses that path for runtime libraries, matching
 # build.rs, without a mutable staging directory or committed media binaries.
 resources = "android/res"
 
