@@ -4,9 +4,47 @@
 import hashlib
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import zipfile
+
+
+def verify_runtime_symbols(libraries, target):
+    ndk = Path(os.environ["ANDROID_NDK_ROOT"])
+    toolchain = ndk / "toolchains/llvm/prebuilt/linux-x86_64"
+    triple = target.replace("armv7-linux-", "arm-linux-")
+    system = toolchain / "sysroot/usr/lib" / triple / "26"
+    platform = ("libc.so", "libm.so", "libdl.so", "libandroid.so", "libOpenSLES.so",
+                "libEGL.so", "libGLESv2.so", "libmediandk.so", "liblog.so")
+    providers, imports = set(), {}
+    packaged = sorted(libraries.glob("*.so"))
+    for library in [*packaged, *(system / name for name in platform)]:
+        required = set()
+        report = subprocess.check_output(
+            [toolchain / "bin/llvm-readelf", "--dyn-syms", "--wide", library], text=True
+        )
+        for line in report.splitlines():
+            fields = line.split()
+            if len(fields) < 8 or not fields[0].rstrip(":").isdigit():
+                continue
+            symbol, _, version = fields[7].partition("@")
+            key = (symbol, version.lstrip("@") or None)
+            if fields[6] == "UND":
+                # Weak imports may resolve to null; strong imports need a
+                # provider. A successful link alone does not prove this.
+                if fields[4] == "GLOBAL":
+                    required.add(key)
+            elif fields[4] in {"GLOBAL", "WEAK"} and fields[5] in {"DEFAULT", "PROTECTED"}:
+                providers.add(key)
+                if version.startswith("@"):
+                    providers.add((symbol, None))
+        if library in packaged:
+            imports[library.name] = required
+    for name, required in imports.items():
+        missing = sorted(symbol + ("@" + version if version else "")
+                         for symbol, version in required - providers)
+        assert not missing, f"{name} has unresolved runtime symbols: {', '.join(missing)}"
 
 
 def main():
@@ -50,13 +88,20 @@ path = "{root / 'android/keystore/debug.keystore'}"
 keystore_password = "android"
 '''
         )
-        # Linking avcodec makes recursive dependency staging overlap the explicit
-        # runtime list. A rebuild also exercises copies left by the previous run.
+        # Link the player as well as avcodec: the APK can contain every file
+        # while libmpv still has unresolved C++ runtime symbols and cannot load.
+        # A separate symbol check verifies that before reaching a device.
+        # Recursive dependency staging overlaps the explicit runtime list; a
+        # rebuild also exercises copies left by the previous run.
         (work / "src/lib.rs").write_text(
             '''#[link(name = "avcodec")]
 unsafe extern "C" { fn avcodec_version() -> u32; }
+#[link(name = "mpv")]
+unsafe extern "C" { fn mpv_client_api_version() -> core::ffi::c_ulong; }
 #[unsafe(no_mangle)]
-pub extern "C" fn probe_version() -> u32 { unsafe { avcodec_version() } }
+pub extern "C" fn probe_version() -> u32 {
+    unsafe { avcodec_version() ^ mpv_client_api_version() as u32 }
+}
 '''
         )
         (work / "build.rs").write_text(
@@ -85,10 +130,26 @@ pub extern "C" fn probe_version() -> u32 { unsafe { avcodec_version() } }
             assert len(apks) == 1, apks
             with zipfile.ZipFile(apks[0]) as apk:
                 entries = set(apk.namelist())
-            for abi in abis.values():
+            # Old local 0.1.0 APKs used code 16777472. Even the smallest
+            # version in the new epoch must upgrade those retained installs.
+            aapt2 = Path(os.environ["ANDROID_HOME"]) / "build-tools/35.0.0/aapt2"
+            badging = subprocess.check_output(
+                [aapt2, "dump", "badging", apks[0]], text=True
+            )
+            code = int(re.search(r"versionCode='(\d+)'", badging)[1])
+            assert code == 2 << 24 and code > 16777472, badging
+            assert "versionName='0.0.0'" in badging
+            for target, abi in abis.items():
                 expected = {f"lib/{abi}/{p.name}" for p in sources if p.parent.name == abi}
                 expected.add(f"lib/{abi}/libruntime_packaging_probe.so")
                 assert expected <= entries, expected - entries
+                packaged = work / f"packaged-{attempt}-{abi}"
+                packaged.mkdir()
+                with zipfile.ZipFile(apks[0]) as apk:
+                    for source in sources:
+                        if source.parent.name == abi:
+                            (packaged / source.name).write_bytes(apk.read(f"lib/{abi}/{source.name}"))
+                verify_runtime_symbols(packaged, target)
 
     assert all(hashlib.sha256(p.read_bytes()).digest() == digest for p, digest in hashes.items())
     assert all(p.stat().st_mode & 0o222 == 0 for p in sources)

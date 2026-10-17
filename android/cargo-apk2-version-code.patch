@@ -1,0 +1,10 @@
+diff --git a/cargo-apk2/src/apk.rs b/cargo-apk2/src/apk.rs
+--- a/cargo-apk2/src/apk.rs
++++ b/cargo-apk2/src/apk.rs
+@@ -97,1 +97,5 @@
+-        let version_code = VersionCode::from_semver(&package_version)?.to_code(1);
++        // Nova shipped local 0.1.0 APKs before adopting the 0.0.x release
++        // sequence. Reserve epoch 2 so those installations can upgrade while
++        // keeping the public version name and future semver ordering intact.
++        // Development builds keep the same code as their base release.
++        let version_code = VersionCode::from_semver(&package_version)?.to_code(2);

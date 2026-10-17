@@ -18,6 +18,19 @@ ABI_ELF = {"arm64-v8a": (2, 183), "armeabi-v7a": (1, 40), "x86_64": (2, 62)}
 VARIANTS = {"-universal": ABIS, **{f"-{abi}": {abi} for abi in sorted(ABIS)}}
 
 
+def verify_version(badging, expected_version):
+    package = re.search(
+        r"^package: name='dev\.misob\.nova' versionCode='(\d+)' versionName='([^']+)'",
+        badging, re.MULTILINE,
+    )
+    if not package or package[2] != expected_version:
+        raise RuntimeError("APK package or version name does not match Cargo.toml")
+    # Epoch 1 included local 0.1.0 builds, higher than the subsequent 0.0.x
+    # releases. Reject the old mapping before publishing uninstallable updates.
+    if not (2 << 24) <= int(package[1]) <= 2100000000:
+        raise RuntimeError("APK version code would regress the Android installation epoch")
+
+
 def signature_entry(name):
     upper = name.upper()
     if not upper.startswith("META-INF/"):
@@ -147,6 +160,9 @@ def main():
         raise RuntimeError(f"Missing built APK for profile {profile}: {source}")
     tools = Path(os.environ["ANDROID_HOME"]) / "build-tools" / "35.0.0"
     zipalign, apksigner = tools / "zipalign", tools / "apksigner"
+    with Path("Cargo.toml").open("rb") as handle:
+        version = tomllib.load(handle)["package"]["version"]
+    verify_version(run(tools / "aapt2", "dump", "badging", source), version)
     keystore, password = signing_key(Path("Cargo.toml"), profile)
     if not keystore.is_file():
         raise RuntimeError("Configured Android release keystore does not exist")

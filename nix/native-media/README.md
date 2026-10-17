@@ -17,6 +17,9 @@ these outputs to the existing `NOVA_ANDROID_LIBS`, `NOVA_NATIVE_CA_BUNDLE`,
 
 The profile includes MKV, HEVC, AV1/dav1d, common playback codecs and subtitles,
 MediaCodec on Android, D3D11 copy-back on Windows, and packet-copy remuxing.
+Android mpv links static NDK libc++/libc++abi explicitly through its C linker.
+Bundle validation rejects strong runtime imports without a packaged or API-26
+system provider; checking library filenames alone cannot establish loadability.
 Audio/video transcoding encoders are excluded. Nova separately encodes JPEG
 and lossy/lossless WebP screenshots in its Rust screenshot worker. Windows HW+
 remains disabled.
@@ -32,4 +35,5 @@ nix develop .#android --command python3 -B android/test_runtime_packaging.py
 
 The cargo-apk2 patch in `android/cargo-apk2-readonly-libs.patch` replaces old
 staged library entries before copying read-only Nix inputs. The regression
-packages all three ABIs twice and verifies the inputs remain unchanged.
+packages all three ABIs twice, checks runtime symbol providers in the extracted
+media payloads and verifies the inputs remain unchanged.

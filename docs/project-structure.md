@@ -131,12 +131,21 @@ FFmpeg libraries for those ABIs and Windows x86_64 from a pinned
 `androidMedia` and `windowsMedia` remain development-shell build inputs;
 Nix verifies archive hashes and caches the downloads. Build recipes, native
 ABI checks, smoke probes, source archives and measurements live in nova-vendor.
+Android mpv explicitly links static NDK libc++/libc++abi through its C linker;
+bundle checks resolve strong dynamic imports against the packaged libraries and
+API-26 system stubs, including C++ runtime symbols.
 Native binaries are GitHub release assets. Linux retains system mpv/FFmpeg.
 
 Android exports `NOVA_ANDROID_LIBS` for both `build.rs` and the shell's
 cargo-apk2 runtime-library override. `android/cargo-apk2-readonly-libs.patch`
 replaces existing staged library entries before copying, so repeated dependency
 copies and rebuilds accept read-only Nix inputs without changing the originals.
+`android/cargo-apk2-version-code.patch` reserves Android installation epoch 2:
+`(2 << 24) | (major << 16) | (minor << 8) | patch`. This makes the 0.0.x release
+sequence install over older local 0.1.0 APKs (code 16777472) while keeping the
+public version name unchanged. Development builds share their base release's
+code. The real packaging probe verifies this migration; release packaging
+rejects APKs from the old epoch before publishing.
 `NOVA_NATIVE_CA_BUNDLE` embeds the built dependency's Mozilla CA roots;
 `nova-player` installs them into `<cache>/native-media/cacert.pem` and enables
 TLS verification. FFmpeg 9's JavaVM registration is linked from `libavcodec`.
@@ -478,6 +487,9 @@ building. No local manifest-schema patch is needed.
 `android/cargo-apk2-readonly-libs.patch` fixes repeated staging of read-only native libraries;
 `android/test_runtime_packaging.py` builds a small universal APK twice against the actual
 Nix inputs, verifying all three ABI payloads and unchanged inputs in Android check CI.
+The probe also links mpv and checks the extracted media libraries' dynamic
+imports against their actual packaged providers and API-26 system stubs; a
+successful Rust/shared-library link alone does not establish loadability.
 `python3 -B android/test_tv_packaging.py` checks metadata and assets without
 building Android; the Linux CI packaging step runs both
 Python suites. TV regressions live in the existing UI
@@ -1435,7 +1447,7 @@ unit/documentation coverage.
 | Cross-addon identity connections / metadata enrichment / split anime seasons | `crates/providers/src/{metadata,sequence,matching}.rs`, `src/app/detail.rs::{source_stream_lookup,episode_stream_ids,stream_endpoint_owned}`, `../nova-addons/addons/anikoto/index.js::{sourceSequence,sourceSequences,loadLookupCandidates}`, `crates/media/src/net.rs` |
 | Metadata pipeline / featured missing-artwork diagnosis | [metadata fetching and reliability](metadata-pipeline.md), `src/app/home.rs` (owner-aware hydration, retained previews, backdrop/poster fallback and retries), `crates/providers/src/metadata.rs` (ID-first lookup and accepted field provenance), `crates/media/src/{cache,net}.rs` (shared image processing and platform download retries) |
 | Installed-addon logos / capability search / filtered row actions | `src/app/addon_mgr.rs::{apply_addon_rows,installed_row_index}`, `crates/media/src/net.rs::fetch_image`, `crates/ui/{settings,settings-controls,appwindow,types}.slint` (`AddonRowCard`), `src/app/run.rs`, `tests/addons/addon_filters.rs` |
-| Version identity / GitHub updates / packager opt-out | `build-support/version.rs`, `build.rs`, `src/version.rs`, `src/app/updates.rs`, `crates/media/src/net/updates.rs`, `crates/ui/{about,update-notice,appwindow}.slint`, AboutBridge/collection bindings and factories, root `update-check` feature, `Makefile` (`UPDATE_FEATURES`), tagged CI version validation; `tests/settings_navigation/updates.rs` covers About and responsive notice actions. Root Cargo version stays at the latest release between tags, so Android development builds reuse its installation code; Git commit suffixes affect the displayed app version only. |
+| Version identity / GitHub updates / packager opt-out | `build-support/version.rs`, `build.rs`, `src/version.rs`, `src/app/updates.rs`, `crates/media/src/net/updates.rs`, `crates/ui/{about,update-notice,appwindow}.slint`, AboutBridge/collection bindings and factories, root `update-check` feature, `Makefile` (`UPDATE_FEATURES`), tagged CI version validation; `tests/settings_navigation/updates.rs` covers About and responsive notice actions. Root Cargo version stays at the latest release between tags, so Android development builds reuse its installation code; Git commit suffixes affect the displayed app version only. `android/cargo-apk2-version-code.patch` reserves installation epoch 2 to upgrade legacy local 0.1.0 APKs. |
 | First-launch setup / upgrade gating / completion / explicit Cinemeta suggestion | `src/app/onboarding.rs`, `src/app/run.rs`, `src/app/addon_mgr.rs`, `crates/ui/{onboarding,onboarding-host,playback-language-picker,appwindow,settings}.slint`, `crates/ui-shared/onboarding-bridge.slint`, `crates/ui-onboarding/onboarding-module.slint`, `crates/ui/src/playback_factories.rs`, `tests/navigation/onboarding_ui.rs` (ordered playback-language controls, responsive scrolling and native Back after focused step-input teardown); step changes restore the wizard’s persistent focus scope before conditional bodies disappear |
 | First-run onboarding screen concepts | `assets/onboarding/{01-addon-setup,02-language,03-playback-preferences}.png` |
 | Tracker domain / split release coverage / progress checkpoints | `crates/tracking/src/{models,mapping,projection,outbox,persistence,journal,edits,completion,service,api,auth,credentials,callback,cache,resolution,proposal,peer}.rs`, `src/app/tracking/{ui,worker,setup,peer,background,completion}.rs`, and [tracking behavior](tracking-behavior.md). `src/app/tracking.rs` separates current source IDs from historical hints; `tracking/worker.rs` bounds ambiguous-release discovery and requires selection before alignment. The tracking domain shares links/preferences/account choice/tokens; projections/outbox/history cursors/caches stay local. Unreadable state retains `tracking:quarantine:*` backups. |

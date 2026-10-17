@@ -68,7 +68,10 @@
           rev = "32b91331ff2371f3f06505ea6ceea3743e423a1c";
           hash = "sha256-Sp6oc3Ee1cjpABCpV3Pj2Hmj26A+4WYDeElUCMbuBjc=";
         };
-        patches = [ ./android/cargo-apk2-readonly-libs.patch ];
+        patches = [
+          ./android/cargo-apk2-readonly-libs.patch
+          ./android/cargo-apk2-version-code.patch
+        ];
         cargoLock.lockFile = ./android/cargo-apk2-Cargo.lock;
         postPatch = ''
           sed -i '/^    ".*-examples",$/d' Cargo.toml

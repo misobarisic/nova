@@ -14,6 +14,20 @@ SPEC.loader.exec_module(packaging)
 
 
 class AndroidPackagingTests(unittest.TestCase):
+    def test_installation_epoch_preserves_legacy_local_updates(self):
+        def badging(code, version="0.0.31", package="dev.misob.nova"):
+            return f"package: name='{package}' versionCode='{code}' versionName='{version}'"
+
+        packaging.verify_version(badging(33554463), "0.0.31")
+        for code in (16777247, 16777472, 33554431, 2100000001):
+            with self.subTest(code=code):
+                with self.assertRaisesRegex(RuntimeError, "installation epoch"):
+                    packaging.verify_version(badging(code), "0.0.31")
+        for report in (badging(33554463, "0.1.0"), badging(33554463, package="other.app"), ""):
+            with self.subTest(report=report):
+                with self.assertRaisesRegex(RuntimeError, "package or version name"):
+                    packaging.verify_version(report, "0.0.31")
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="nova-apk-test-")
         self.addCleanup(temporary.cleanup)
