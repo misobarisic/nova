@@ -1217,6 +1217,35 @@ mod tests {
     }
 
     #[test]
+    fn home_catalog_defaults_enable_all_builtins_in_display_order() {
+        let expected: Vec<HomeRow> = [
+            HomeRowSource::ContinueWatching,
+            HomeRowSource::WatchHistory,
+            HomeRowSource::NewEpisodes,
+            HomeRowSource::Upcoming,
+        ]
+        .into_iter()
+        .map(|source| HomeRow {
+            source,
+            enabled: true,
+        })
+        .collect();
+
+        let fresh = CacheSettings::default();
+        let restored: CacheSettings =
+            serde_json::from_str(&serde_json::to_string(&fresh).unwrap()).unwrap();
+        // Settings written before Home preferences existed must agree with
+        // fresh installs, rather than silently disabling a built-in row.
+        let legacy: CacheSettings =
+            serde_json::from_str(r#"{"enabled":false,"format":"webp","quality":85}"#).unwrap();
+        for settings in [fresh, restored, legacy] {
+            assert_eq!(settings.effective_home_rows(), expected);
+            assert!(settings.home_continue_enabled);
+            assert!(settings.home_upcoming_enabled);
+        }
+    }
+
+    #[test]
     fn watch_history_defaults_after_continue_without_changing_custom_home_rows() {
         let legacy: CacheSettings = serde_json::from_str(
             r#"{"enabled":false,"format":"webp","quality":85,"home_continue_enabled":false}"#,

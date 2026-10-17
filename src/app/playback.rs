@@ -308,6 +308,12 @@ impl Bridge {
                 .map(|header| header.poster_url)
         })
         .unwrap_or_default();
+        let history_hidden: HashMap<String, u64> =
+            read_json(watch_history::HIDDEN_KEY).unwrap_or_default();
+        let hidden_at = history_hidden.get(&watch_history::title_key(
+            &context.media_type,
+            &context.media_id,
+        ));
         context.history = Some(PlaybackHistory {
             type_: context.media_type.clone(),
             title: context.title.clone(),
@@ -317,11 +323,36 @@ impl Bridge {
                 .unwrap_or_else(|| context.episode_label.clone()),
             season: video.and_then(|video| video.season),
             episode: video.and_then(Video::episode_number),
+            played_at_secs: state
+                .progress
+                .get(&progress_map_key(&context.media_id, &context.request_id))
+                .and_then(|record| record.history.as_ref())
+                .map_or(0, |history| history.played_at_secs),
+            engaged_secs: Some(
+                state
+                    .progress
+                    .get(&progress_map_key(&context.media_id, &context.request_id))
+                    .filter(|record| {
+                        playback_can_resume(record)
+                            && hidden_at.is_none_or(|hidden_at| {
+                                record
+                                    .history
+                                    .as_ref()
+                                    .is_some_and(|history| history.played_at_secs > *hidden_at)
+                            })
+                    })
+                    .map_or(0.0, |record| {
+                        record
+                            .history
+                            .as_ref()
+                            .and_then(|history| history.engaged_secs)
+                            .unwrap_or(watch_history::MEANINGFUL_PLAYBACK_SECS)
+                    }),
+            ),
             rewatch: state
                 .progress
                 .get(&progress_map_key(&context.media_id, &context.request_id))
                 .is_some_and(|p| p.watched),
-            ..Default::default()
         });
         context.history_resume = (!detached)
             .then(|| {
@@ -1381,6 +1412,7 @@ impl Bridge {
             if !app.get_playback_started() || (dur <= 0.0 && pos <= 0.0) {
                 return; // frames not flowing yet: nothing to persist
             }
+            observe_history_playback(&mut target, pos, app.get_is_paused());
             target.last_pos = pos;
             target.last_dur = dur;
             let watched_now = is_watched_position(pos, dur);
@@ -1415,6 +1447,13 @@ impl Bridge {
                 {
                     t.last_pos = pos;
                     t.last_dur = dur;
+                    t.history_observed_at = target.history_observed_at;
+                    if let (Some(current), Some(observed)) =
+                        (t.history.as_mut(), target.history.as_ref())
+                    {
+                        current.engaged_secs = observed.engaged_secs;
+                        current.played_at_secs = observed.played_at_secs;
+                    }
                 }
                 return;
             }
@@ -1589,11 +1628,40 @@ pub(super) fn playback_can_resume(progress: &EpisodeProgress) -> bool {
         )
 }
 
+/// Count short, advancing samples only: buffering/pauses contribute nothing,
+/// seeks cannot turn their media distance into observed viewing time, and a
+/// suspended app cannot count a long gap as playback.
+fn observe_history_playback(target: &mut PlaybackTarget, position: f64, paused: bool) {
+    let now = std::time::Instant::now();
+    let elapsed = target
+        .history_observed_at
+        .replace(now)
+        .map_or(0.0, |last| now.duration_since(last).as_secs_f64());
+    let delta = position - target.last_pos;
+    if let Some(history) = target.history.as_mut()
+        && !paused
+        && elapsed > 0.0
+        && elapsed <= 2.0
+        && delta.is_finite()
+        && delta > 0.0
+        && delta <= elapsed * 8.0 + 0.5
+    {
+        history.played_at_secs = now_secs();
+        if let Some(seconds) = history.engaged_secs.as_mut() {
+            *seconds = (*seconds + elapsed).min(watch_history::MEANINGFUL_PLAYBACK_SECS);
+        }
+    }
+}
+
 /// Only observations of real playback advance History's clock. Manual watched
 /// changes and metadata refreshes must not move an old episode to the front.
 fn stamp_playback_history(entry: &mut EpisodeProgress, captured: &Option<PlaybackHistory>) {
     if let Some(mut history) = captured.clone() {
-        history.played_at_secs = entry.updated_at_secs;
+        // Modern captures carry the clock of the last advancing sample.
+        // Closing a paused player must not reorder History or undo dismissal.
+        if history.engaged_secs.is_none() {
+            history.played_at_secs = entry.updated_at_secs;
+        }
         // Seeking back after EOF keeps the same player session. Recognize
         // its partial replay too, without clearing sticky completion.
         history.rewatch |=
@@ -2447,6 +2515,36 @@ mod history_tests {
     use super::*;
 
     #[test]
+    fn history_qualifies_real_play_time_without_counting_seeks_pauses_or_suspension() {
+        let mut target = PlaybackTarget {
+            last_pos: 10.0,
+            history: Some(PlaybackHistory {
+                engaged_secs: Some(0.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let second_ago = || Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        target.history_observed_at = second_ago();
+        observe_history_playback(&mut target, 1000.0, false);
+        target.history_observed_at = second_ago();
+        observe_history_playback(&mut target, 11.0, true);
+        target.history_observed_at =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
+        observe_history_playback(&mut target, 11.0, false);
+        target.history_observed_at = second_ago();
+        observe_history_playback(&mut target, 10.0, false);
+        assert_eq!(target.history.as_ref().unwrap().engaged_secs, Some(0.0));
+        for _ in 0..31 {
+            target.history_observed_at = second_ago();
+            let position = target.last_pos + 1.0;
+            observe_history_playback(&mut target, position, false);
+            target.last_pos = position;
+        }
+        assert_eq!(target.history.as_ref().unwrap().engaged_secs, Some(30.0));
+    }
+
+    #[test]
     fn seeking_back_after_completion_records_a_resumable_rewatch() {
         let mut record = EpisodeProgress {
             watched: true,
@@ -2510,6 +2608,9 @@ mod history_tests {
             episode: Some(3),
             played_at_secs: 100,
             position_secs: 300.0,
+            resumable: true,
+            meaningful: true,
+            rewatch: true,
             duration_secs: 1200.0,
         };
         {
@@ -2608,7 +2709,10 @@ mod history_tests {
             episode_id: entry.episode_id.clone(),
             last_pos: 320.0,
             last_dur: 1200.0,
-            history: Some(captured.clone()),
+            history: Some(PlaybackHistory {
+                played_at_secs: now_secs(),
+                ..captured.clone()
+            }),
             ..Default::default()
         });
         bridge.persist_outgoing_playback();
@@ -2623,5 +2727,88 @@ mod history_tests {
                 .unwrap(),
             *record
         );
+
+        // Removal persists and syncs independently of playback completion.
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            state
+                .progress
+                .get_mut(&progress_map_key(&entry.series_id, &entry.episode_id))
+                .unwrap()
+                .history
+                .as_mut()
+                .unwrap()
+                .engaged_secs = Some(30.0);
+        }
+        bridge.refresh_home_history_models();
+        let before = bridge.shared.lock().unwrap().progress.clone();
+        bridge.watch_history_action(&entry.type_, &entry.series_id, 2);
+        let hidden: HashMap<String, u64> = read_json(watch_history::HIDDEN_KEY).unwrap();
+        let hidden_at = hidden[&watch_history::title_key(&entry.type_, &entry.series_id)];
+        assert!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .home_history_archive
+                .is_empty()
+        );
+        assert_eq!(bridge.shared.lock().unwrap().progress, before);
+        let owner = nova_sync::local_store().unwrap();
+        assert_eq!(
+            owner.lock().unwrap().records(DOMAIN_HISTORY_HIDDEN).len(),
+            1
+        );
+        bridge.sync_apply(vec![DOMAIN_HISTORY_HIDDEN.into()]);
+        assert_eq!(
+            read_json::<HashMap<String, u64>>(watch_history::HIDDEN_KEY).unwrap(),
+            hidden
+        );
+        // A metadata / progress edit cannot undo the explicit dismissal.
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            let record = state
+                .progress
+                .get_mut(&progress_map_key(&entry.series_id, &entry.episode_id))
+                .unwrap();
+            record.updated_at_secs = hidden_at + 100;
+        }
+        bridge.refresh_home_history_models();
+        assert!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .home_history_archive
+                .is_empty()
+        );
+        // Actual later playback can surface the title again on either device.
+        {
+            let mut state = bridge.shared.lock().unwrap();
+            let record = state
+                .progress
+                .get_mut(&progress_map_key(&entry.series_id, &entry.episode_id))
+                .unwrap();
+            record.history.as_mut().unwrap().played_at_secs = hidden_at + 1;
+        }
+        bridge.refresh_home_history_models();
+        assert_eq!(bridge.shared.lock().unwrap().home_history_archive.len(), 1);
+        assert!(
+            bridge
+                .shared
+                .lock()
+                .unwrap()
+                .progress
+                .values()
+                .all(|record| record.watched)
+        );
+        // Enter series opens Detail, without starting the source selector.
+        bridge.modal_closed();
+        app.set_modal_visible(false);
+        // A resume row can retain a title older than the archive cutoff.
+        bridge.shared.lock().unwrap().home_history_archive.clear();
+        bridge.watch_history_action(&entry.type_, &entry.series_id, 1);
+        assert!(app.get_modal_visible());
+        assert!(!app.get_stream_selector_open());
     }
 }

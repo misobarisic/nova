@@ -175,6 +175,7 @@ impl Bridge {
         }) || app
             .get_home_catalog_cards()
             .iter()
+            .chain(app.get_home_history_archive_cards().iter())
             .any(|card| card.media_type == type_ && card.id == id && card.poster_url == url);
         let saved = self
             .shared
@@ -247,13 +248,17 @@ impl Bridge {
         }
         paint_poster_rows(&app.get_catalog(), &browse, id, url, &image);
         paint_poster_rows(&app.get_search_results(), &search, id, url, &image);
-        let home_cards = app.get_home_catalog_cards();
-        for (index, mut card) in home_cards.iter().enumerate() {
-            if card.id == id && card.media_type == type_ {
-                card.poster_url = url.into();
-                card.poster = image.clone();
-                card.is_loaded = true;
-                home_cards.set_row_data(index, card);
+        for home_cards in [
+            app.get_home_catalog_cards(),
+            app.get_home_history_archive_cards(),
+        ] {
+            for (index, mut card) in home_cards.iter().enumerate() {
+                if card.id == id && card.media_type == type_ {
+                    card.poster_url = url.into();
+                    card.poster = image.clone();
+                    card.is_loaded = true;
+                    home_cards.set_row_data(index, card);
+                }
             }
         }
         if library {
@@ -1155,21 +1160,30 @@ impl Bridge {
     /// settings change or a newer catalog response cannot paint stale art.
     pub(super) fn dispatch_home_catalog_posters(&self) {
         let Some(app) = self.app() else { return };
-        let requests = app
-            .get_home_catalog_cards()
-            .iter()
-            .enumerate()
-            .filter(|(_, card)| !card.is_loaded)
-            .map(|(index, card)| {
-                (
-                    index,
-                    card.media_type.to_string(),
-                    card.id.to_string(),
-                    card.poster_url.to_string(),
-                )
-            })
-            .collect::<Vec<_>>();
-        for (index, type_, id, url) in requests {
+        let requests = [
+            app.get_home_catalog_cards(),
+            app.get_home_history_archive_cards(),
+        ]
+        .into_iter()
+        .enumerate()
+        .flat_map(|(archive, model)| {
+            model
+                .iter()
+                .enumerate()
+                .filter(|(_, card)| !card.is_loaded)
+                .map(move |(index, card)| {
+                    (
+                        archive != 0,
+                        index,
+                        card.media_type.to_string(),
+                        card.id.to_string(),
+                        card.poster_url.to_string(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+        for (archive, index, type_, id, url) in requests {
             if url.is_empty() {
                 self.recover_missing_artwork(&type_, &id, "");
                 continue;
@@ -1180,7 +1194,11 @@ impl Bridge {
             net::fetch_image(url.clone(), Some(DISPLAY_POSTER_SIDE), move |pixels| {
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(app) = bridge.app() else { return };
-                    let model = app.get_home_catalog_cards();
+                    let model = if archive {
+                        app.get_home_history_archive_cards()
+                    } else {
+                        app.get_home_catalog_cards()
+                    };
                     let current = model.row_data(index).is_some_and(|card| {
                         card.id == id
                             && card.media_type == type_

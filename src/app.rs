@@ -377,6 +377,8 @@ struct Shared {
     continue_list: Vec<ContinueEntry>,
     /// Recent actual playback, excluding titles visible in Continue Watching.
     home_history_list: Vec<watch_history::HistoryEntry>,
+    /// Explicit history view includes completed titles without populating Home.
+    home_history_archive: Vec<watch_history::HistoryEntry>,
     /// Exact episode/resume selected from History, scoped to one modal opening.
     history_selection: Option<watch_history_actions::HistorySelection>,
     /// Released episodes awaiting an explicit return, separate from active viewing.
@@ -570,6 +572,10 @@ struct PlaybackHistory {
     season: Option<u32>,
     episode: Option<u32>,
     played_at_secs: u64,
+    /// Observed playing time in the current viewing run, capped at 30 seconds.
+    /// None is a legacy record whose valid resume is retained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    engaged_secs: Option<f64>,
     /// Actual replay of watched material, including seeking back after EOF.
     #[serde(default)]
     rewatch: bool,
@@ -601,6 +607,8 @@ struct PlaybackTarget {
     /// Last wall-clock save (throttles KV writes during the 250 ms poll).
     last_saved_at: u64,
     last_saved_pos: f64,
+    /// Monotonic sample clock for qualifying real playback, never seek distance.
+    history_observed_at: Option<std::time::Instant>,
     /// Immutable source metadata; browsing another title cannot change it.
     history: Option<PlaybackHistory>,
 }

@@ -1804,6 +1804,9 @@ impl Bridge {
             entry.series_id = series_id.to_string();
             entry.episode_id = episode_id.to_string();
             entry.watched = true;
+            if let Some(history) = entry.history.as_mut() {
+                history.rewatch = false;
+            }
             // A fresh watch intent supersedes any earlier unwatch, so the
             // mesh merge can't mistake the stale unwatch for current intent.
             entry.unwatched_at_secs = 0;

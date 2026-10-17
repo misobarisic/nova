@@ -36,6 +36,10 @@ impl Bridge {
         else {
             return;
         };
+        self.open_history_entry(entry);
+    }
+
+    fn open_history_entry(&self, entry: watch_history::HistoryEntry) {
         let preview = MetaPreview {
             id: entry.series_id.clone(),
             type_: entry.type_.clone(),
@@ -82,6 +86,50 @@ impl Bridge {
         }
         if let Some(app) = self.app() {
             app.set_detail_deep_stream(true);
+        }
+    }
+
+    /// Stable typed identities keep an open menu attached to its original title
+    /// even if playback or sync reorders the Home models underneath it.
+    pub(super) fn watch_history_action(&self, type_: &str, id: &str, action: i32) {
+        let entry = {
+            let state = self.shared.lock().unwrap();
+            // The archive and resume row have independent 100-title limits:
+            // a still-resumable card may be older than the archive's cutoff.
+            state
+                .home_history_list
+                .iter()
+                .chain(state.home_history_archive.iter())
+                .find(|entry| entry.type_ == type_ && entry.series_id == id)
+                .cloned()
+        };
+        let Some(entry) = entry else { return };
+        match action {
+            0 => self.open_history_entry(entry),
+            1 => self.open_preview(
+                MetaPreview {
+                    id: entry.series_id,
+                    type_: entry.type_,
+                    name: entry.title,
+                    poster: (!entry.poster_url.is_empty()).then_some(entry.poster_url),
+                    ..Default::default()
+                },
+                0,
+                false,
+                None,
+                false,
+            ),
+            2 => {
+                let mut hidden: HashMap<String, u64> =
+                    read_json(watch_history::HIDDEN_KEY).unwrap_or_default();
+                hidden.insert(
+                    watch_history::title_key(type_, id),
+                    now_secs().max(entry.played_at_secs),
+                );
+                write_json(watch_history::HIDDEN_KEY, &hidden);
+                self.apply_home_to_ui();
+            }
+            _ => {}
         }
     }
 

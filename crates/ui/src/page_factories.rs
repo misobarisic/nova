@@ -21,6 +21,7 @@ fn release_unmounted_payloads(app: &crate::generated::AppWindow, page: i32) {
             bridge.set_catalog_order(Default::default());
             bridge.set_catalog_positions(Default::default());
             bridge.set_catalog_cards(Default::default());
+            bridge.set_history_archive_cards(Default::default());
             drop(bridge.get_cal_cells());
             drop(bridge.get_cal_day_rows());
             bridge.set_featured_logo(Default::default());
@@ -145,6 +146,7 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
             on_new_episode_picked => invoke_home_bridge_new_episode_picked(arg0),
             on_new_episode_enter => invoke_home_bridge_new_episode_enter(arg0),
             on_new_episode_remove => invoke_home_bridge_new_episode_remove(arg0),
+            on_history_action => invoke_home_bridge_history_action(arg0, arg1, arg2),
             on_continue_remove => invoke_home_bridge_continue_remove(arg0),
             on_continue_enter => invoke_home_bridge_continue_enter(arg0),
             on_upcoming_picked => invoke_home_bridge_upcoming_picked(arg0),

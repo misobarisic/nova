@@ -2,6 +2,13 @@
 use super::*;
 
 const WATCH_HISTORY_MAX: usize = 100;
+pub(super) const MEANINGFUL_PLAYBACK_SECS: f64 = 30.0;
+pub(super) const HIDDEN_KEY: &str = "watch_history_hidden:v1";
+
+// JSON tuple identity cannot collide when addon IDs contain separators.
+pub(super) fn title_key(type_: &str, id: &str) -> String {
+    serde_json::to_string(&(type_, id)).expect("history title identity")
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct HistoryEntry {
@@ -16,14 +23,24 @@ pub(super) struct HistoryEntry {
     pub(super) played_at_secs: u64,
     pub(super) position_secs: f64,
     pub(super) duration_secs: f64,
+    pub(super) resumable: bool,
+    pub(super) meaningful: bool,
+    pub(super) rewatch: bool,
 }
 
 impl HistoryEntry {
     pub(super) fn can_resume(&self) -> bool {
-        // Watched is intentionally absent: it is sticky across partial rewatches.
-        self.position_secs.is_finite()
-            && self.duration_secs.is_finite()
-            && resumable_position(self.position_secs, self.duration_secs, false)
+        self.resumable
+    }
+
+    pub(super) fn action_label(&self) -> &'static str {
+        text::tr(if !self.can_resume() {
+            "Play again"
+        } else if self.rewatch {
+            "Rewatch"
+        } else {
+            "Resume"
+        })
     }
 
     pub(super) fn caption(&self) -> String {
@@ -44,13 +61,27 @@ impl HistoryEntry {
     }
 }
 
+#[cfg(test)]
 fn project_watch_history(
     progress: &HashMap<String, EpisodeProgress>,
     library: &[LibraryEntry],
     visible_continue: &HashSet<(String, String)>,
 ) -> Vec<HistoryEntry> {
+    let mut rows = project_history(progress, library, visible_continue, true);
+    rows.truncate(WATCH_HISTORY_MAX);
+    rows
+}
+
+fn project_history(
+    progress: &HashMap<String, EpisodeProgress>,
+    library: &[LibraryEntry],
+    visible_continue: &HashSet<(String, String)>,
+    resume_only: bool,
+) -> Vec<HistoryEntry> {
     let mut rows = Vec::new();
-    for record in progress.values().filter(|record| record.play_count > 0) {
+    for record in progress.values().filter(|record| {
+        record.play_count > 0 && record.position_secs.is_finite() && record.position_secs > 0.0
+    }) {
         let snapshot = record.history.as_ref();
         let legacy = || {
             let mut matches = library.iter().filter(|entry| entry.id == record.series_id);
@@ -75,7 +106,9 @@ fn project_watch_history(
             .filter(|title| !title.trim().is_empty())
             .or_else(|| saved.map(|entry| entry.name.as_str()))
             .unwrap_or_default();
-        if title.trim().is_empty() {
+        if title.trim().is_empty()
+            || (resume_only && saved.is_some_and(|entry| entry.watch_status != WatchStatus::Auto))
+        {
             continue;
         }
         let poster_url = snapshot
@@ -100,6 +133,18 @@ fn project_watch_history(
                 .map_or(record.updated_at_secs, |snapshot| snapshot.played_at_secs),
             position_secs: record.position_secs,
             duration_secs: record.duration_secs,
+            // A sticky watched flag is resumable only for an actual rewatch.
+            // Legacy records lack measured play time; keep their valid resumes.
+            resumable: playback_can_resume(record),
+            rewatch: snapshot.is_some_and(|history| history.rewatch),
+            // A brief new rewatch must not erase the archive entry earned by
+            // an earlier completion. Home still requires this run to qualify.
+            meaningful: (!resume_only && record.watched)
+                || snapshot
+                    .and_then(|history| history.engaged_secs)
+                    .is_none_or(|seconds| {
+                        seconds.is_finite() && seconds >= MEANINGFUL_PLAYBACK_SECS
+                    }),
         });
     }
     rows.sort_by(|a, b| {
@@ -110,8 +155,10 @@ fn project_watch_history(
             .then_with(|| a.episode_id.cmp(&b.episode_id))
     });
     let mut seen = HashSet::new();
+    // Select the latest episode before rejecting completed or brief openings:
+    // finishing E4 must never resurrect a stale unfinished E2.
     rows.retain(|row| seen.insert((row.type_.clone(), row.series_id.clone())));
-    rows.truncate(WATCH_HISTORY_MAX);
+    rows.retain(|row| row.meaningful && (!resume_only || row.can_resume()));
     rows
 }
 
@@ -141,6 +188,10 @@ fn visible_continue_titles(
 
 impl Bridge {
     pub(super) fn current_watch_history_entries(&self) -> Vec<HistoryEntry> {
+        self.current_history_entries(true)
+    }
+
+    fn current_history_entries(&self, resume_only: bool) -> Vec<HistoryEntry> {
         let visible_ids: HashSet<String> = self
             .app()
             .map(|app| {
@@ -151,15 +202,32 @@ impl Bridge {
             })
             .unwrap_or_default();
         let state = self.shared.lock().unwrap();
-        if !state
-            .cache_settings
-            .home_row_enabled(&HomeRowSource::WatchHistory)
+        if resume_only
+            && !state
+                .cache_settings
+                .home_row_enabled(&HomeRowSource::WatchHistory)
         {
             return Vec::new();
         }
-        let visible_continue = visible_continue_titles(&state, &visible_ids);
-        let mut rows = project_watch_history(&state.progress, &state.entries, &visible_continue);
+        let visible_continue = if resume_only {
+            visible_continue_titles(&state, &visible_ids)
+        } else {
+            HashSet::new()
+        };
+        let mut rows = project_history(
+            &state.progress,
+            &state.entries,
+            &visible_continue,
+            resume_only,
+        );
         drop(state);
+        let hidden: HashMap<String, u64> = read_json(HIDDEN_KEY).unwrap_or_default();
+        rows.retain(|row| {
+            hidden
+                .get(&title_key(&row.type_, &row.series_id))
+                .is_none_or(|hidden_at| row.played_at_secs > *hidden_at)
+        });
+        rows.truncate(WATCH_HISTORY_MAX);
         // Legacy playback can borrow existing episode labels offline. This is
         // cache-only: opening Home never fetches entire metadata for history.
         for row in &mut rows {
@@ -186,7 +254,10 @@ impl Bridge {
 
     pub(super) fn rebuild_watch_history_list(&self) {
         let entries = self.current_watch_history_entries();
-        self.shared.lock().unwrap().home_history_list = entries;
+        let archive = self.current_history_entries(false);
+        let mut state = self.shared.lock().unwrap();
+        state.home_history_list = entries;
+        state.home_history_archive = archive;
     }
 }
 
@@ -196,8 +267,8 @@ mod tests {
 
     fn played(type_: &str, id: &str, episode: &str, at: u64) -> EpisodeProgress {
         serde_json::from_value(serde_json::json!({
-            "series_id": id, "episode_id": episode, "position_secs": 1200.0,
-            "duration_secs": 1200.0, "watched": true, "play_count": 1,
+            "series_id": id, "episode_id": episode, "position_secs": 60.0,
+            "duration_secs": 1200.0, "watched": false, "play_count": 1,
             "updated_at_secs": at,
             "history": { "type_": type_, "title": "Played title", "poster_url": "poster",
                 "episode_label": "Pilot", "season": 1, "episode": 1, "played_at_secs": at }
@@ -243,6 +314,8 @@ mod tests {
         let mut rewatch = played("series", "show", "e1", 30);
         rewatch.position_secs = 60.0;
         rewatch.play_count = 2;
+        rewatch.watched = true;
+        rewatch.history.as_mut().unwrap().rewatch = true;
         let rows = project_watch_history(
             &map([played("series", "show", "e2", 20), rewatch]),
             &[],
@@ -336,6 +409,63 @@ mod tests {
             project_watch_history(&ties, &[], &HashSet::new())[0].episode_id,
             "a"
         );
+    }
+
+    #[test]
+    fn completion_and_brief_openings_do_not_resurrect_older_episodes() {
+        let older = played("series", "show", "e1", 10);
+        let mut latest = played("series", "show", "e2", 20);
+        latest.position_secs = latest.duration_secs;
+        latest.watched = true;
+        let records = map([older.clone(), latest.clone()]);
+        assert!(project_watch_history(&records, &[], &HashSet::new()).is_empty());
+        assert_eq!(records.len(), 2, "projection preserves recorded history");
+        let archive = project_history(&records, &[], &HashSet::new(), false);
+        assert_eq!(archive.len(), 1);
+        assert_eq!(archive[0].episode_id, "e2");
+        assert!(!archive[0].can_resume());
+        let mut brief_rewatch = latest.clone();
+        brief_rewatch.position_secs = 60.0;
+        brief_rewatch.history.as_mut().unwrap().rewatch = true;
+        brief_rewatch.history.as_mut().unwrap().engaged_secs = Some(5.0);
+        let replay_records = map([brief_rewatch]);
+        assert!(project_watch_history(&replay_records, &[], &HashSet::new()).is_empty());
+        assert_eq!(
+            project_history(&replay_records, &[], &HashSet::new(), false).len(),
+            1,
+            "a brief rewatch retains an earlier completion in the explicit archive"
+        );
+        latest.watched = false;
+        latest.position_secs = 300.0; // a seek is not 30 seconds of viewing
+        latest.history.as_mut().unwrap().engaged_secs = Some(5.0);
+        assert!(
+            project_watch_history(&map([older, latest.clone()]), &[], &HashSet::new()).is_empty()
+        );
+        latest.history.as_mut().unwrap().engaged_secs = Some(30.0);
+        assert_eq!(
+            project_watch_history(&map([latest]), &[], &HashSet::new()).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn unknown_duration_and_partial_rewatch_resume_but_manual_completion_does_not() {
+        let mut record = played("series", "show", "e1", 10);
+        record.duration_secs = 0.0;
+        assert_eq!(
+            project_watch_history(&map([record.clone()]), &[], &HashSet::new()).len(),
+            1
+        );
+        record.watched = true;
+        assert!(project_watch_history(&map([record.clone()]), &[], &HashSet::new()).is_empty());
+        record.history.as_mut().unwrap().rewatch = true;
+        assert_eq!(
+            project_watch_history(&map([record.clone()]), &[], &HashSet::new()).len(),
+            1
+        );
+        let mut records = map([record]);
+        Bridge::set_episode_watched_locked(&mut records, "show", "e1", true);
+        assert!(project_watch_history(&records, &[], &HashSet::new()).is_empty());
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub(crate) const DOMAIN_PLAYBACK_PREFERENCES: &str = "playback_preferences";
 use super::playback_preferences::PREFERENCES_KEY;
 use nova_config::playback_preferences::PreferenceValue;
 pub(crate) const DOMAIN_VIEWING_ACTIVITY: &str = "viewing_activity";
+pub(crate) const DOMAIN_HISTORY_HIDDEN: &str = "watch_history_hidden";
 pub(crate) const DOMAIN_NEW_EPISODES_HIDDEN: &str = "new_episodes_hidden";
 pub(crate) const DOMAIN_PACKAGES: &str = addon_packages::DOMAIN;
 pub(crate) const DOMAIN_PLUGIN_SETTINGS: &str = "plugin_settings";
@@ -103,6 +104,7 @@ fn sync_records(domain: &str, records: Vec<(String, String, u64)>) {
         DOMAIN_PLAYBACK_PREFERENCES => PREFERENCES_KEY,
         DOMAIN_VIEWING_ACTIVITY => VIEWING_ACTIVITY_KEY,
         DOMAIN_NEW_EPISODES_HIDDEN => NEW_EPISODES_HIDDEN_KEY,
+        DOMAIN_HISTORY_HIDDEN => watch_history::HIDDEN_KEY,
         DOMAIN_ADDONS => "addons",
         DOMAIN_PLUGIN_SETTINGS => plugin_settings::KEY,
         DOMAIN_PACKAGES => addon_packages::KEY,
@@ -182,10 +184,14 @@ pub(crate) fn persist_sync_snapshot(key: &str, raw: &str, seed: bool) -> nova_sy
                     .collect::<Result<_, serde_json::Error>>()?,
             )]
         }
-        "continue_hidden" => {
+        "continue_hidden" | watch_history::HIDDEN_KEY => {
             let map: HashMap<String, u64> = serde_json::from_str(raw)?;
             vec![(
-                DOMAIN_CONTINUE_HIDDEN,
+                if key == watch_history::HIDDEN_KEY {
+                    DOMAIN_HISTORY_HIDDEN
+                } else {
+                    DOMAIN_CONTINUE_HIDDEN
+                },
                 map.into_iter()
                     .map(|(k, v)| (k, v.to_string(), v))
                     .collect(),
@@ -810,6 +816,7 @@ impl Bridge {
             ("continue_hidden", DOMAIN_CONTINUE_HIDDEN),
             (VIEWING_ACTIVITY_KEY, DOMAIN_VIEWING_ACTIVITY),
             (NEW_EPISODES_HIDDEN_KEY, DOMAIN_NEW_EPISODES_HIDDEN),
+            (watch_history::HIDDEN_KEY, DOMAIN_HISTORY_HIDDEN),
             ("addons", DOMAIN_ADDONS),
             (plugin_settings::KEY, DOMAIN_PLUGIN_SETTINGS),
             (addon_packages::KEY, DOMAIN_PACKAGES),
@@ -845,6 +852,9 @@ impl Bridge {
                             .collect::<Vec<_>>(),
                     )?,
                     "settings" => serde_json::to_string(&state.cache_settings)?,
+                    watch_history::HIDDEN_KEY => serde_json::to_string(
+                        &read_json::<HashMap<String, u64>>(key).unwrap_or_default(),
+                    )?,
                     VIEWING_ACTIVITY_KEY => serde_json::to_string(&read_viewing_activity())?,
                     NEW_EPISODES_HIDDEN_KEY => serde_json::to_string(
                         &read_json::<HashMap<String, Vec<String>>>(key).unwrap_or_default(),
@@ -997,6 +1007,7 @@ impl Bridge {
                     | DOMAIN_CONTINUE_HIDDEN
                     | DOMAIN_VIEWING_ACTIVITY
                     | DOMAIN_NEW_EPISODES_HIDDEN
+                    | DOMAIN_HISTORY_HIDDEN
                     | DOMAIN_SETTINGS
                     | DOMAIN_CATEGORY
             )
@@ -1033,6 +1044,8 @@ impl Bridge {
                 }
                 DOMAIN_VIEWING_ACTIVITY => self.sync_apply_viewing_activity(),
                 DOMAIN_NEW_EPISODES_HIDDEN => self.sync_apply_new_episodes_hidden(),
+                DOMAIN_HISTORY_HIDDEN => self
+                    .sync_apply_json_map::<u64>(DOMAIN_HISTORY_HIDDEN, watch_history::HIDDEN_KEY),
                 DOMAIN_ADDONS => self.sync_apply_addons(),
                 DOMAIN_PACKAGES => {
                     let result = (|| -> Result<(), String> {

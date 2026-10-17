@@ -148,6 +148,8 @@ export struct HomeCatalogCard {
     is_loaded: bool,
     /// Empty for ordinary catalogs; localized playback action for history.
     history_action: string,
+    /// Explicit archive view only; Home cards retain their compact footer.
+    history_date: string,
     progress: float,
 }
 

@@ -18,6 +18,9 @@ mod continue_hover;
 #[path = "home_cards/continue_menu.rs"]
 mod continue_menu;
 
+#[path = "home_cards/history_menu.rs"]
+mod history_menu;
+
 #[path = "home_cards/new_episodes.rs"]
 mod new_episodes;
 

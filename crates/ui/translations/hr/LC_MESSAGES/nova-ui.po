@@ -3088,3 +3088,12 @@ msgstr "Opće zadane postavke. Promjene u reproduktoru spremaju se za pojedini n
 
 msgid "Use global defaults"
 msgstr "Koristi opće zadane postavke"
+
+msgid "Remove from watch history"
+msgstr "Uklonite iz povijesti gledanja"
+
+msgid "View watch history"
+msgstr "Prikažite povijest gledanja"
+
+msgid "No watch history yet."
+msgstr "Još nema povijesti gledanja."

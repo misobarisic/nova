@@ -774,6 +774,7 @@ pub fn tr(english: &str) -> &str {
         "Caught up" => "Sve pogledano",
         "New episodes" => "Nove epizode",
         "Watch history" => "Povijest gledanja",
+        "Rewatch" => "Ponovno gledanje",
         "Play again" => "Reproducirajte ponovno",
         "Specials" => "Specijali",
         "Episode" => "Epizoda",

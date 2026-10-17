@@ -670,6 +670,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.on_continue_picked(move |i| b.continue_picked(i as usize));
 
     let b = bridge.clone();
+    app.on_home_history_action(move |type_, id, action| {
+        b.watch_history_action(&type_, &id, action)
+    });
+
+    let b = bridge.clone();
     app.on_continue_remove(move |i| b.continue_remove(i as usize));
 
     let b = bridge.clone();

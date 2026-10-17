@@ -913,6 +913,7 @@ export component AppWindow inherits Window {
     in-out property <[int]> home_catalog_order: [-1, -3, -2];
     in-out property <[int]> home_catalog_positions: [0, 2, 1];
     in-out property <[HomeCatalogCard]> home_catalog_cards: [];
+    in-out property <[HomeCatalogCard]> home_history_archive_cards: [];
     // Independent catalog-driven feature at the top of Home. Rust keeps its
     // selected preview and fetches the active backdrop on demand.
     in-out property <string> home_featured_title: "";
@@ -1564,6 +1565,7 @@ export component AppWindow inherits Window {
     callback new_episode_picked(int);
     callback new_episode_enter(int);
     callback new_episode_remove(int);
+    callback home_history_action(string, string, int);
     callback continue_remove(int);
     // "Enter series": open the card's detail page without starting playback.
     callback continue_enter(int);
@@ -1723,6 +1725,7 @@ export component AppWindow inherits Window {
     public function home_bridge_new_episode_picked(i: int) { root.new_episode_picked(i); }
     public function home_bridge_new_episode_enter(i: int) { root.new_episode_enter(i); }
     public function home_bridge_new_episode_remove(i: int) { root.new_episode_remove(i); }
+    public function home_bridge_history_action(type: string, id: string, action: int) { root.home_history_action(type, id, action); }
     public function home_bridge_continue_remove(i: int) { root.continue_remove(i); }
     public function home_bridge_continue_enter(i: int) { root.continue_enter(i); }
     public function home_bridge_upcoming_picked(i: int) { root.upcoming_picked(i); }
@@ -2010,6 +2013,7 @@ export component AppWindow inherits Window {
         catalog_order: root.home_catalog_order;
         catalog_positions: root.home_catalog_positions;
         catalog_cards: root.home_catalog_cards;
+        history_archive_cards: root.home_history_archive_cards;
         featured_watch_label: root.home_featured_watch_label;
         featured_logo: root.home_featured_logo;
         featured_refresh_pending: root.home_featured_refresh_pending;

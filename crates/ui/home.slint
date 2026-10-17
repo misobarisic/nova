@@ -485,7 +485,8 @@ component UpcomingCard inherits Rectangle {
 }
 
 // Catalog rows below Upcoming use the same landscape-independent poster
-// cards as Home's other rails, with a show title and year in the footer.
+// cards as Home's other rails, with a show title and caption in the footer.
+// The explicit history archive reserves one extra line for its viewing date.
 component HomeCatalogPosterCard inherits Rectangle {
     in property <HomeCatalogCard> entry;
     in property <length> card-width;
@@ -496,11 +497,25 @@ component HomeCatalogPosterCard inherits Rectangle {
     in property <bool> touch_menus: false;
     callback pointer_pressed();
     callback picked();
+    callback menu_requested();
+    callback action_requested(string, string, int);
+    property <string> popup_type;
+    property <string> popup_id;
     callback pan_hint();
     callback pan_release();
 
     width: card-width;
-    height: card-width * 3 / 2 + 54px;
+    height: card-width * 3 / 2 + (root.entry.history_date != "" ? 72px : 54px);
+    history_ctx := ContextMenuArea {
+        width: root.entry.history_action != "" ? root.width : 0px;
+        height: 100%;
+        Menu {
+            MenuItem { title: @tr("Play"); activated => { root.action_requested(root.popup_type, root.popup_id, 0); } }
+            MenuItem { title: @tr("Enter series"); activated => { root.action_requested(root.popup_type, root.popup_id, 1); } }
+            MenuSeparator {}
+            MenuItem { title: @tr("Remove from watch history"); activated => { root.action_requested(root.popup_type, root.popup_id, 2); } }
+        }
+    }
     reveal_layer := Rectangle {
         width: 100%;
         height: 100%;
@@ -562,7 +577,7 @@ component HomeCatalogPosterCard inherits Rectangle {
                     }
                 }
                 catalog_footer := Rectangle {
-                    height: 54px;
+                    height: root.entry.history_date != "" ? 72px : 54px;
                     background: Theme.current.card;
                     catalog_title := Text {
                         x: 8px;
@@ -588,27 +603,37 @@ component HomeCatalogPosterCard inherits Rectangle {
                         vertical-alignment: center;
                         overflow: elide;
                     }
+                    if root.entry.history_date != "": Text {
+                        x: 8px; y: 51px; width: parent.width - 16px; height: 14px;
+                        text: root.entry.history_date; font-size: 10px;
+                        color: Theme.current.text_home_date; overflow: elide;
+                    }
                 }
             }
         }
 
         touch := TouchArea {
+            // A drag (carousel flick / page scroll) must not also open the
+            // item: `clicked` fires for any down+up over the area, so a swipe
+            // that the Flickable didn't capture could still navigate. Suppress
+            // the pick once the finger travels, and re-arm on the next press.
             enabled: root.tappable;
-            width: 100%;
-            height: 100%;
-            mouse-cursor: pointer;
             property <bool> dragged: false;
-            property <bool> hint_live: false;
-            property <bool> hint_held: false;
+            // Release after a hold: the sheet is already open, so the pending
+            // tap must not play the item too.
+            property <bool> menu_suppress: false;
             property <length> hint_x: 0px;
             property <length> hint_y: 0px;
+            property <bool> hint_live: false;
+            property <bool> hint_held: false;
             function hint_stop() {
-                touch.hint_live = false;
-                if (touch.hint_held) {
-                    touch.hint_held = false;
+                self.hint_live = false;
+                if (self.hint_held) {
+                    self.hint_held = false;
                     root.pan_release();
                 }
             }
+            mouse-cursor: pointer;
             pointer-event(ev) => {
                 if (ev.kind == PointerEventKind.down) {
                     root.pointer_pressed();
@@ -616,8 +641,31 @@ component HomeCatalogPosterCard inherits Rectangle {
                     touch.hint_y = touch.mouse-y;
                     touch.hint_live = true;
                     touch.dragged = false;
+                    touch.menu_suppress = false;
+                    // Hold-to-open the card menu (subpage grids): the timer
+                    // is cancelled as soon as the finger moves or the press
+                    // ends (same 600ms convention as the library cards).
+                    if (root.touch_menus && root.entry.history_action != "") {
+                        history_hold_t.stop();
+                        history_hold_t.start();
+                    }
                 } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
                     touch.hint_stop();
+                    history_hold_t.stop();
+                    if (root.entry.history_action != "" && ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
+                    // Card menu, exactly like a Library card: on touch the
+                    // page-level sheet (same menu the hold opens), on desktop
+                    // the native popup at the cursor (the ContextMenuArea
+                    // alone never sees the press while this TouchArea sits on
+                    // top of it).
+                        if (root.touch_menus) {
+                            root.menu_requested();
+                        } else {
+                            root.popup_type = root.entry.media_type;
+                            root.popup_id = root.entry.id;
+                            history_ctx.show({ x: touch.mouse-x, y: touch.mouse-y });
+                        }
+                    }
                 } else if (ev.kind == PointerEventKind.move) {
                     if (!(touch.pressed || ev.touch-finger-id != 0)) {
                         touch.hint_stop();
@@ -638,18 +686,39 @@ component HomeCatalogPosterCard inherits Rectangle {
                     }
                 }
             }
-            changed pressed => { if (!self.pressed) { touch.hint_stop(); } }
+            changed pressed => {
+                if (!self.pressed) { self.hint_stop(); }
+            }
             moved => {
                 if (Math.abs(touch.mouse-x - touch.pressed-x)
                     + Math.abs(touch.mouse-y - touch.pressed-y) > 12px) {
                     touch.dragged = true;
+                    history_hold_t.stop();
                 }
             }
             clicked => {
-                if (!touch.dragged) { root.picked(); }
+                history_hold_t.stop();
+                if (!touch.dragged && !touch.menu_suppress) {
+                    root.picked();
+                }
                 touch.dragged = false;
+                touch.menu_suppress = false;
             }
         }
+
+        // Hold-to-open timer (pinned off until a press arms it; Slint Timers
+        // run from creation by default). A 600ms stationary hold opens the
+        // card menu; the host suppresses the trailing pick.
+        history_hold_t := Timer {
+            interval: 600ms;
+            running: false;
+            triggered => {
+                self.stop();
+                touch.menu_suppress = true;
+                root.menu_requested();
+            }
+        }
+
     }
 }
 
@@ -1299,6 +1368,7 @@ export component HomePage {
     // Positions indexed by Continue, Upcoming, catalog sections, then New episodes.
     in property <[int]> catalog_positions: [0, 2, 1];
     in property <[HomeCatalogCard]> catalog_cards: [];
+    in property <[HomeCatalogCard]> history_archive_cards: [];
     callback catalog_card_picked(int);
     // Upcoming calendar (month view inside the "see all" subpage, toggled by
     // the Calendar button): the 42 grid cells, the month title, the selected
@@ -1441,6 +1511,7 @@ export component HomePage {
     // backend: `continue_picked` plays the resume episode (the card tap too),
     // `continue_enter` opens the detail page without starting playback, and
     // `continue_remove` hides the card until the item is resumed again.
+    callback history_action(string, string, int);
     callback continue_remove(int);
     callback continue_enter(int);
     callback upcoming_picked(int);
@@ -1466,8 +1537,23 @@ export component HomePage {
     property <int> menu_idx: 0;
     property <bool> menu_upcoming: false;
     property <bool> menu_new: false;
+    property <bool> menu_history: false;
+    property <string> menu_history_id;
+    property <string> menu_history_type;
+    property <string> menu_history_title;
+
+    function open_history_menu(entry: HomeCatalogCard) {
+        root.menu_upcoming = false;
+        root.menu_new = false;
+        root.menu_history = true;
+        root.menu_history_id = entry.id;
+        root.menu_history_type = entry.media_type;
+        root.menu_history_title = entry.title;
+        root.menu_open = true;
+    }
 
     function open_continue_menu(idx: int) {
+        root.menu_history = false;
         if (root.menu_open) {
             root.close_menu();
             return;
@@ -1478,7 +1564,22 @@ export component HomePage {
         root.menu_open = true;
     }
 
+    function open_focused_history_menu() -> bool {
+        if (root.view == -4 && root.kb_idx >= 0 && root.kb_idx < root.history_archive_cards.length) {
+            root.open_history_menu(root.history_archive_cards[root.kb_idx]);
+            return true;
+        }
+        let index = root.view >= 3 ? root.catalog_sections[root.view - 3].first_card + root.kb_idx : root.kb_idx;
+        if ((root.view >= 3 || (root.view == 0 && root.kb_zone == 3))
+            && index >= 0 && index < root.catalog_cards.length && root.catalog_cards[index].history_action != "") {
+            root.open_history_menu(root.catalog_cards[index]);
+            return true;
+        }
+        return false;
+    }
+
     function open_new_episode_menu(idx: int) {
+        root.menu_history = false;
         root.menu_upcoming = false;
         root.menu_new = true;
         root.menu_idx = idx;
@@ -1486,6 +1587,7 @@ export component HomePage {
     }
 
     function open_upcoming_menu(idx: int) {
+        root.menu_history = false;
         root.menu_new = false;
         root.menu_upcoming = true;
         root.menu_idx = idx;
@@ -1548,6 +1650,7 @@ export component HomePage {
     // Number of cards in the list the keyboard cursor is on (Continue on the
     // landing, whichever grid the subpage shows).
     function active_len() -> int {
+        if (root.view == -4) { return root.history_archive_cards.length; }
         if (root.view >= 3) {
             return root.catalog_sections[root.view - 3].card_count;
         }
@@ -1631,9 +1734,12 @@ export component HomePage {
     // Arrow navigation follows the displayed catalog order, including addon
     // rows placed between the two built-ins.
     function kb_move_catalog(direction: int) {
-        let target = root.catalog_position(root.focused_catalog()) + direction;
+        let target = root.kb_zone == 5 ? root.catalog_order.length + direction : root.catalog_position(root.focused_catalog()) + direction;
         if (target < 0) { root.kb_zone = 0; return; }
-        if (target >= root.catalog_order.length) { return; }
+        if (target >= root.catalog_order.length) {
+            if (root.history_archive_cards.length > 0) { root.kb_zone = 5; }
+            return;
+        }
         let candidate = root.catalog_order[target];
         if (candidate == -1) { root.kb_zone = 1; }
         else if (candidate == -2) { root.kb_zone = 2; }
@@ -1702,6 +1808,9 @@ export component HomePage {
             if (root.kb_idx >= 0 && root.kb_idx < root.active_len()) {
                 if (root.view >= 3) {
                     root.catalog_card_picked(root.catalog_cards[root.catalog_sections[root.view - 3].first_card + root.kb_idx].flat_index);
+                } else if (root.view == -4) {
+                    let entry = root.history_archive_cards[root.kb_idx];
+                    root.history_action(entry.media_type, entry.id, 0);
                 } else if (root.view == -3) {
                     root.new_episode_picked(root.kb_idx);
                 } else if (root.view == 2) {
@@ -1724,6 +1833,8 @@ export component HomePage {
             if (root.kb_idx >= 0 && root.kb_idx < root.continue_rows.length) {
                 root.continue_picked(root.kb_idx);
             }
+        } else if (root.kb_zone == 5) {
+            root.open_subpage(-4);
         } else if (root.kb_zone == 4) {
             if (root.kb_idx >= 0 && root.kb_idx < root.new_episode_rows.length) { root.new_episode_picked(root.kb_idx); }
         } else if (root.kb_zone == 3) {
@@ -1771,7 +1882,10 @@ export component HomePage {
         if (land_scroll.content-height == 0px) {
             return;
         }
-        if (root.kb_zone == 1 && root.continue_rows.length > 0) {
+        if (root.kb_zone == 5 && root.history_archive_cards.length > 0) {
+            let top = archive_link.absolute-position.y - landing_rows.absolute-position.y + landing_rows.y;
+            root.kb_scroll_to(top, top + archive_link.height);
+        } else if (root.kb_zone == 1 && root.continue_rows.length > 0) {
             let cw = root.rail_item_width;
             let x = c_row.padding-left + root.kb_idx * (cw + root.item-gap);
             rail_continue.content-x = root.rail_show(rail_continue.content-x, x, cw, rail_continue.width, rail_continue.content-width);
@@ -1813,7 +1927,7 @@ export component HomePage {
         if (sub_scroll.content-height == 0px) {
             return;
         }
-        let stride = root.view >= 3 ? root.grid_item_width * 3 / 2 + 54px + root.item-gap
+        let stride = root.view >= 3 || root.view == -4 ? root.grid_item_width * 3 / 2 + (root.view == -4 ? 72px : 54px) + root.item-gap
             : root.view == 2 ? root.row_stride_up : root.row_stride;
         let top = root.grid_top + Math.floor(root.kb_idx / root.grid_cols) * stride;
         // The back bar is outside this viewport; only the hover inset belongs
@@ -1860,6 +1974,7 @@ export component HomePage {
         root.kb_follow();
     }
     changed catalog_order => { root.kb_follow(); }
+    changed history_archive_cards => { root.kb_clamp_idx(); root.kb_follow(); }
 
     changed catalog_sections => {
         if (root.view >= 3 && root.view - 3 >= root.catalog_sections.length) {
@@ -1943,7 +2058,9 @@ export component HomePage {
                 root.last_system_back_request = root.system_back_request;
             }
             key-pressed(e) => {
-                if (e.text == Key.UpArrow) {
+                if (e.text == Key.Menu || (e.text == Key.F10 && e.modifiers.shift)) {
+                    if (root.open_focused_history_menu()) { accept } else { reject }
+                } else if (e.text == Key.UpArrow) {
                     root.kb_active = true;
                     root.kb_up();
                     accept
@@ -2402,6 +2519,8 @@ export component HomePage {
                                                         // cards still reserve space in a HorizontalLayout.
                                                         for i in section.card_count: HomeCatalogPosterCard {
                                                             entry: root.catalog_cards[section.first_card + i];
+                                                menu_requested => { root.open_history_menu(root.catalog_cards[section.first_card + i]); }
+                                                action_requested(type, id, action) => { root.history_action(type, id, action); }
                                                             tappable: root.view == 0;
                                                             touch_menus: root.touch_menus;
                                                             pointer_pressed => { root.kb_active = false; }
@@ -2422,6 +2541,23 @@ export component HomePage {
                                             }
                                         }
                                     }
+                                    Rectangle {
+                                        row: root.catalog_order.length + 3; col: 0;
+                                        width: 100%;
+                                        height: root.history_archive_cards.length > 0 ? archive_link.preferred-height + 24px : 0px;
+                                        visible: root.history_archive_cards.length > 0;
+                                        archive_link := SectionHeader {
+                                            title: @tr("View watch history");
+                                            accessible-role: button;
+                                            accessible-label: @tr("View watch history");
+                                            border-width: root.kb_active && root.kb_zone == 5 ? 2px : 0px;
+                                            border-color: Theme.current.focus_ring;
+                                            count: root.history_archive_cards.length;
+                                            width: 100%;
+                                            open_all => { root.open_subpage(-4); }
+                                        }
+                                    }
+
                                 }
 
                             }
@@ -2487,7 +2623,7 @@ export component HomePage {
                             }
 
                             Text {
-                                text: root.view >= 3 ? root.catalog_sections[root.view - 3].title
+                                text: root.view == -4 ? @tr("Watch history") : root.view >= 3 ? root.catalog_sections[root.view - 3].title
                                     : root.view == -3 ? @tr("New episodes") : root.view == 2 ? @tr("Upcoming") : @tr("Continue Watching");
                                 font-size: 22px;
                                 font-weight: 700;
@@ -2655,6 +2791,8 @@ export component HomePage {
                                                 row: Math.floor(i / root.grid_cols);
                                                 col: Math.mod(i, root.grid_cols);
                                                 entry: root.catalog_cards[root.catalog_sections[root.view - 3].first_card + i];
+                                                menu_requested => { root.open_history_menu(root.catalog_cards[root.catalog_sections[root.view - 3].first_card + i]); }
+                                                action_requested(type, id, action) => { root.history_action(type, id, action); }
                                                 card-width: root.grid_item_width;
                                                 touch_menus: root.touch_menus;
                                                 focused: root.kb_active && root.kb_zone == 1 && root.kb_idx == i;
@@ -2669,6 +2807,34 @@ export component HomePage {
                                                 }
                                             }
                                         }
+                                    }
+
+                                    if root.view == -4: HorizontalLayout {
+                                        width: 100%; alignment: center;
+                                        GridLayout {
+                                            width: root.grid_cols * (root.grid_item_width + root.item-gap) - root.item-gap;
+                                            spacing: root.item-gap;
+                                            for entry[i] in root.history_archive_cards: HomeCatalogPosterCard {
+                                                row: Math.floor(i / root.grid_cols); col: Math.mod(i, root.grid_cols);
+                                                entry: entry; card-width: root.grid_item_width;
+                                                touch_menus: root.touch_menus;
+                                                focused: root.kb_active && root.kb_zone == 1 && root.kb_idx == i;
+                                                reveal: root.sub_revealed;
+                                                reveal-delay: root.stagger ? i * 30ms : 0ms;
+                                                pointer_pressed => { root.kb_active = false; }
+                                                picked => { root.kb_active = false; root.history_action(entry.media_type, entry.id, 0); }
+                                                menu_requested => { root.open_history_menu(entry); }
+                                                action_requested(type, id, action) => { root.history_action(type, id, action); }
+                                            }
+                                        }
+                                    }
+
+                                    if root.view == -4 && root.history_archive_cards.length == 0: history_empty := Text {
+                                        width: 100%; min-height: 120px;
+                                        text: @tr("No watch history yet.");
+                                        font-size: 14px; color: Theme.current.text_muted;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                        wrap: word-wrap;
                                     }
 
                                     // ---- Upcoming calendar ----------
@@ -2886,8 +3052,8 @@ export component HomePage {
         // sibling of the page layout, not a layout child — inside the
         // VerticalLayout above it would be laid out as a row and squeeze the
         // landing content instead of covering it (very visible on Android).
-        // Play / Enter series / Remove from Continue Watching (+ the sheet's
-        // own Cancel).
+        // Play / Enter series / Remove from this row (+ the sheet's own Cancel).
+        // History captures typed identity so live refreshes cannot retarget it.
         cont_sheet := MenuSheet {
             open: root.menu_open;
             width: 100%;
@@ -2896,7 +3062,7 @@ export component HomePage {
             safe-left: root.safe-left;
             safe-right: root.safe-right;
             max_h: root.height * 0.85;
-            sheet_title: root.menu_upcoming && root.menu_idx >= 0 && root.menu_idx < root.upcoming_rows.length
+            sheet_title: root.menu_history ? root.menu_history_title : root.menu_upcoming && root.menu_idx >= 0 && root.menu_idx < root.upcoming_rows.length
                 ? root.upcoming_rows[root.menu_idx].title
                 : root.menu_new && root.menu_idx >= 0 && root.menu_idx < root.new_episode_rows.length
                 ? root.new_episode_rows[root.menu_idx].title
@@ -2906,10 +3072,12 @@ export component HomePage {
             items: root.menu_upcoming ? [ { label: @tr("Enter series"), enabled: true } ] : [
                 { label: @tr("Play"), enabled: true },
                 { label: @tr("Enter series"), enabled: true },
-                { label: root.menu_new ? @tr("Remove from New episodes") : @tr("Remove from Continue Watching"), enabled: true },
+                { label: root.menu_history ? @tr("Remove from watch history") : root.menu_new ? @tr("Remove from New episodes") : @tr("Remove from Continue Watching"), enabled: true },
             ];
             picked(a) => {
-                if (root.menu_upcoming) {
+                if (root.menu_history) {
+                    root.history_action(root.menu_history_type, root.menu_history_id, a);
+                } else if (root.menu_upcoming) {
                     root.kb_active = false;
                     root.upcoming_picked(root.menu_idx);
                 } else if (root.menu_new) {

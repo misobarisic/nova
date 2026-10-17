@@ -721,6 +721,7 @@ impl Bridge {
         let previous_cards: HashMap<_, _> = app
             .get_home_catalog_cards()
             .iter()
+            .chain(app.get_home_history_archive_cards().iter())
             .filter(|card| card.is_loaded)
             .map(|card| {
                 (
@@ -771,6 +772,7 @@ impl Bridge {
                     title: SharedString::from(preview.title()),
                     year: SharedString::from(preview.year_str().unwrap_or_default()),
                     history_action: SharedString::default(),
+                    history_date: SharedString::default(),
                     progress: 0.0,
                     poster_url: SharedString::from(poster_url),
                     poster: pixels
@@ -812,12 +814,8 @@ impl Bridge {
                     media_type: entry.type_.clone().into(),
                     title: entry.title.clone().into(),
                     year: entry.caption().into(),
-                    history_action: text::tr(if entry.can_resume() {
-                        "Resume"
-                    } else {
-                        "Play again"
-                    })
-                    .into(),
+                    history_date: SharedString::default(),
+                    history_action: entry.action_label().into(),
                     progress: if entry.can_resume() {
                         progress_fraction(entry.position_secs, entry.duration_secs)
                     } else {
@@ -850,6 +848,46 @@ impl Bridge {
         }
         app.set_home_catalog_sections(Rc::new(VecModel::from(sections)).into());
         app.set_home_catalog_cards(Rc::new(VecModel::from(cards)).into());
+        let archive = self.shared.lock().unwrap().home_history_archive.clone();
+        let archive_cards = archive
+            .iter()
+            .map(|entry| {
+                let pixels = decoded_cache_get(&image_cache_key(
+                    &entry.poster_url,
+                    ImageUse::Fixed(Some(DISPLAY_POSTER_SIDE)),
+                ));
+                let previous = previous_cards.get(&(
+                    entry.type_.clone(),
+                    entry.series_id.clone(),
+                    entry.poster_url.clone(),
+                ));
+                let (year, month, day) = civil_from_days((entry.played_at_secs / 86400) as i64);
+                let date = text::absolute_date(day, month, year);
+                let caption = entry.caption();
+                HomeCatalogCard {
+                    id: entry.series_id.clone().into(),
+                    media_type: entry.type_.clone().into(),
+                    title: entry.title.clone().into(),
+                    year: caption.into(),
+                    history_date: date.into(),
+                    history_action: entry.action_label().into(),
+                    progress: if entry.can_resume() {
+                        progress_fraction(entry.position_secs, entry.duration_secs)
+                    } else {
+                        0.0
+                    },
+                    poster_url: entry.poster_url.clone().into(),
+                    poster: pixels
+                        .as_ref()
+                        .map(|pixels| Image::from_rgba8(pixels.clone()))
+                        .or_else(|| previous.cloned())
+                        .unwrap_or_default(),
+                    is_loaded: pixels.is_some() || previous.is_some(),
+                    ..Default::default()
+                }
+            })
+            .collect::<Vec<_>>();
+        app.set_home_history_archive_cards(Rc::new(VecModel::from(archive_cards)).into());
         self.publish_home_catalog_order();
         if view >= 3 {
             app.set_home_view(next_view);
@@ -4478,7 +4516,7 @@ mod tests {
             title: id.into(),
             previews: vec![showcase_preview(id)],
         };
-        let mut outside = progress("outside-library", "episode-2", 3600.0, true, 20);
+        let mut outside = progress("outside-library", "episode-2", 600.0, false, 20);
         outside.history = Some(PlaybackHistory {
             type_: "series".into(),
             title: "Outside Library".into(),
@@ -4551,7 +4589,7 @@ mod tests {
         assert_eq!(history_card.flat_index, 2);
         assert_eq!(history_card.id, "outside-library");
         assert_eq!(history_card.year, "S1 E2 · Second episode");
-        assert_eq!(history_card.history_action, "Play again");
+        assert_eq!(history_card.history_action, "Resume");
         assert_eq!(app.get_home_catalog_positions().row_data(4), Some(0));
         {
             let state = bridge.shared.lock().unwrap();
