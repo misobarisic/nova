@@ -41,16 +41,16 @@
         "rust-src"
       ];
       # cargo-apk2 compiles android/java/ to DEX and declares <service>, unlike
-      # nixpkgs' cargo-apk. Pin our fork's banner support until it is upstream.
+      # nixpkgs' cargo-apk. Pin upstream's merged Android TV banner support.
       # The repository omits Cargo.lock, so keep the CLI-only dependency lock
       # here and exclude example apps from dependency resolution and builds.
       cargo-apk2 = pkgs.rustPlatform.buildRustPackage rec {
         pname = "cargo-apk2";
         version = "1.4.2";
         src = pkgs.fetchFromGitHub {
-          owner = "misobarisic";
+          owner = "mzdk100";
           repo = "cargo-apk2";
-          rev = "5cd1749bb05180be40de753767c2ea014373a793";
+          rev = "32b91331ff2371f3f06505ea6ceea3743e423a1c";
           hash = "sha256-Sp6oc3Ee1cjpABCpV3Pj2Hmj26A+4WYDeElUCMbuBjc=";
         };
         cargoLock.lockFile = ./android/cargo-apk2-Cargo.lock;

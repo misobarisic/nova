@@ -215,7 +215,7 @@ has_code = true
 # the display capitalisation.
 label = "Nova"
 icon = "@mipmap/ic_launcher"
-# Supported by the pinned cargo-apk2 fork in flake.nix.
+# Supported by the pinned upstream cargo-apk2 revision in flake.nix.
 banner = "@drawable/tv_banner"
 
 # cargo-apk2 generates no implicit activity (unlike cargo-apk): declare the
