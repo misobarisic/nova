@@ -30,6 +30,14 @@ export component MoreBindings {
 }
 
 export component AboutBindings {
+    in-out property <string> app_version <=> AboutBridge.app_version;
+    in-out property <bool> update_checks_enabled <=> AboutBridge.update_checks_enabled;
+    in-out property <bool> update_is_development <=> AboutBridge.update_is_development;
+    in-out property <bool> update_automatic <=> AboutBridge.update_automatic;
+    in-out property <int> update_status <=> AboutBridge.update_status;
+    in-out property <bool> update_available <=> AboutBridge.update_available;
+    in-out property <string> update_latest_version <=> AboutBridge.update_latest_version;
+
     in-out property <int> kb_zone <=> AboutBridge.kb_zone;
     in-out property <int> kb_nav <=> AboutBridge.kb_nav;
     in-out property <bool> kb_active <=> AboutBridge.kb_active;

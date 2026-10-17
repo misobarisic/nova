@@ -133,6 +133,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .select()?;
     let app = AppWindow::new()?;
     nova_ui::initialize_fonts(app.window());
+    app.set_app_version(crate::version::DISPLAY.into());
+    app.set_update_is_development(!crate::version::is_release());
     about::prepare_license_text(&app);
     app.set_license_sources(
         Rc::new(VecModel::<LicenseSource>::from(
@@ -147,6 +149,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .try_exists()
         .unwrap_or(true);
     storage::init_at(&app_data_dir());
+    #[cfg(feature = "update-check")]
+    let _updates_timer = updates::install(&app);
     persistence::register_collections();
     let onboarding_visible = onboarding::begin(database_existed);
     let owns_addon_setup = onboarding::owns_addon_setup();

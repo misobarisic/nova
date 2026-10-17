@@ -1,0 +1,75 @@
+import { Theme, InterfaceStyle, SettingsStyle } from "@NovaUiShared";
+import { PillButton } from "settings-controls.slint";
+
+// A passive notice: mounting it never moves focus away from the current page.
+export component UpdateNotice inherits Rectangle {
+    in property <string> installed_version;
+    in property <string> latest_version;
+    callback dismissed();
+    callback view_release();
+    background: Theme.current.popup;
+    border-width: 1px;
+    border-color: Theme.current.border_overlay;
+    border-radius: 16px;
+    height: content.preferred-height;
+    drop-shadow-blur: 20px;
+    drop-shadow-color: #00000060;
+    out property <bool> actions_focused: later.keyboard_focused || view_release.keyboard_focused;
+    public function focus_actions() { SettingsStyle.keyboard-mode = true; later.focus(); }
+    // The opaque card eats taps on its text/padding, protecting cards below it.
+    TouchArea { width: 100%; height: 100%; }
+    FocusScope {
+        width: 100%; height: 100%;
+        key-pressed(e) => {
+            if e.text == Key.LeftArrow || e.text == Key.UpArrow { later.focus(); accept }
+            else if e.text == Key.RightArrow || e.text == Key.DownArrow { view_release.focus(); accept }
+            else { reject }
+        }
+        content := HorizontalLayout {
+            padding: 16px; spacing: 14px;
+            Rectangle {
+                width: InterfaceStyle.tv ? 52px : 40px;
+                height: self.width;
+                border-radius: self.width / 2;
+                background: Theme.current.accent;
+                Text {
+                    width: 100%; height: 100%;
+                    text: "↑"; font-size: 26px;
+                    horizontal-alignment: center; vertical-alignment: center;
+                    color: Theme.current.on_accent;
+                }
+            }
+            VerticalLayout {
+                spacing: 10px;
+                Text {
+                    text: @tr("A new Nova is available");
+                    font-size: InterfaceStyle.tv ? 22px : 16px;
+                    font-weight: 700;
+                    color: Theme.current.text_primary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: @tr("Available version") + ": " + root.latest_version + "\n"
+                        + @tr("Installed version") + ": " + root.installed_version;
+                    font-size: InterfaceStyle.tv ? 18px : 13px;
+                    color: Theme.current.text_secondary;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px; alignment: end;
+                    later := PillButton {
+                        accessible-id: "update-later";
+                        label: @tr("Later"); compact: true; wrap_label: true;
+                        clicked => { root.dismissed(); }
+                    }
+                    view_release := PillButton {
+                        accessible-id: "update-view-release";
+                        label: @tr("View release"); primary: true;
+                        compact: true; wrap_label: true;
+                        clicked => { root.view_release(); }
+                    }
+                }
+            }
+        }
+    }
+}

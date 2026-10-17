@@ -3130,3 +3130,51 @@ msgstr "HW+ pokušava izravno dekodiranje na GPU-u, uz povratak na HW ili SW. HW
 
 msgid "Applies to this stream only. The next stream uses Settings → Player."
 msgstr "Vrijedi samo za ovaj stream. Sljedeći stream koristi Postavke → Reproduktor."
+
+msgid "Version"
+msgstr "Verzija"
+
+msgid "Updates"
+msgstr "Ažuriranja"
+
+msgid "Update checks are disabled in this build."
+msgstr "Provjera ažuriranja onemogućena je u ovoj verziji aplikacije."
+
+msgid "Checking for updates…"
+msgstr "Provjera ažuriranja…"
+
+msgid "You’re up to date."
+msgstr "Imate najnoviju verziju."
+
+msgid "A new Nova is available"
+msgstr "Dostupna je nova verzija aplikacije Nova"
+
+msgid "Could not check for updates. Try again later."
+msgstr "Nije moguće provjeriti ažuriranja. Pokušajte ponovno kasnije."
+
+msgid "GitHub is limiting requests. Try again later."
+msgstr "GitHub ograničava zahtjeve. Pokušajte ponovno kasnije."
+
+msgid "Development builds do not check automatically."
+msgstr "Razvojne verzije ne provjeravaju ažuriranja automatski."
+
+msgid "Nova checks GitHub for new releases once a day."
+msgstr "Nova jednom dnevno provjerava ima li novih izdanja na GitHubu."
+
+msgid "Automatically check for updates"
+msgstr "Automatski provjeravaj ažuriranja"
+
+msgid "Check for updates"
+msgstr "Provjeri ažuriranja"
+
+msgid "View release"
+msgstr "Otvori izdanje"
+
+msgid "Available version"
+msgstr "Dostupna verzija"
+
+msgid "Installed version"
+msgstr "Instalirana verzija"
+
+msgid "Later"
+msgstr "Kasnije"

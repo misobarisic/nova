@@ -9,6 +9,9 @@ mod destinations;
 #[path = "settings_navigation/about.rs"]
 mod about;
 
+#[path = "settings_navigation/updates.rs"]
+mod updates;
+
 #[path = "settings_navigation/layout.rs"]
 mod layout;
 

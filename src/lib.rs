@@ -34,6 +34,7 @@ pub use nova_torrent as torrent;
 // The full catalog app.
 pub mod app;
 mod diagnostics;
+pub mod version;
 
 // Android entry point: cargo-apk / xbuild launch `android_main`, not
 // `main`. Initializes the Slint Android backend, then runs the same catalog

@@ -2,6 +2,9 @@ import { HomePage } from "../ui/home.slint";
 import { HomeBridge } from "@NovaUiShared";
 
 export component HomeModule inherits Window {
+    private property <bool> card_menu_open: page.card_menu_open;
+    init => { HomeBridge.card_menu_open = false; }
+    changed card_menu_open => { HomeBridge.card_menu_open = root.card_menu_open; }
     public function focus_shell() { page.focus_shell(); }
     default-font-family: "Roboto";
     background: transparent;

@@ -25,6 +25,16 @@ export component AboutModule inherits Window {
         system_back_request <=> AboutBridge.system_back_request;
         license_text_chunks <=> AboutBridge.license_text_chunks;
         license_sources <=> AboutBridge.license_sources;
+        app_version <=> AboutBridge.app_version;
+        update_checks_enabled <=> AboutBridge.update_checks_enabled;
+        update_is_development <=> AboutBridge.update_is_development;
+        update_automatic <=> AboutBridge.update_automatic;
+        update_status <=> AboutBridge.update_status;
+        update_available <=> AboutBridge.update_available;
+        update_latest_version <=> AboutBridge.update_latest_version;
+        update_check_requested() => { AboutBridge.update_check_requested(); }
+        update_automatic_changed(v) => { AboutBridge.update_automatic_changed(v); }
+        update_release_requested() => { AboutBridge.update_release_requested(); }
         home_picked() => { AboutBridge.home_picked(); }
         back_picked() => { AboutBridge.back_picked(); }
         discover_picked() => { AboutBridge.discover_picked(); }

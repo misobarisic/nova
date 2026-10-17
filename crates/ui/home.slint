@@ -1553,6 +1553,7 @@ export component HomePage {
     // Card menu state. `menu_idx` is the card the open/next menu acts on;
     // `menu_open` only drives the bottom sheet (single instance, -1 closed).
     // Pure UI state: actions reuse the callbacks above.
+    out property <bool> card_menu_open: root.menu_open;
     property <bool> menu_open: false;
     property <int> menu_idx: 0;
     property <bool> menu_upcoming: false;

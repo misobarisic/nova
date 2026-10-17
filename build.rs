@@ -4,7 +4,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "build-support/version.rs"]
+mod version;
+
 fn main() {
+    generate_build_version();
     generate_license_catalog();
     // Cargo exposes library metadata to build scripts. Forward it to rustc so
     // inline slint! test fixtures resolve the canonical compiled shared globals.
@@ -64,6 +68,50 @@ fn main() {
             ),
         }
     }
+}
+
+fn generate_build_version() {
+    println!("cargo:rerun-if-changed=build-support/version.rs");
+    // A tag/commit or a tracked source edit changes the identity even when the
+    // Rust package version stays at the last release between tags.
+    for path in version::SOURCE_PATHS {
+        println!("cargo:rerun-if-changed={path}");
+    }
+    for path in ["HEAD", "refs", "packed-refs", "index", "logs/HEAD"] {
+        if let Some(path) = version::git(&["rev-parse", "--git-path", path]) {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
+    for key in ["GITHUB_REF_TYPE", "GITHUB_REF_NAME"] {
+        println!("cargo:rerun-if-env-changed={key}");
+    }
+    let package = env::var("CARGO_PKG_VERSION").expect("Cargo package version");
+    if env::var("GITHUB_REF_TYPE").as_deref() == Ok("tag") {
+        let tag = env::var("GITHUB_REF_NAME").expect("release tag");
+        assert_eq!(
+            tag,
+            format!("v{package}"),
+            "release tag must match Cargo.toml"
+        );
+    }
+    let tag = version::git(&["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0"]);
+    let commit = version::git(&["rev-parse", "--short=8", "HEAD"]);
+    let exact = (env::var("PROFILE").as_deref() == Ok("release"))
+        .then(|| version::git(&["describe", "--tags", "--match", "v[0-9]*", "--exact-match"]))
+        .flatten();
+    let mut status_args = vec!["status", "--porcelain", "--untracked-files=normal", "--"];
+    status_args.extend_from_slice(version::SOURCE_PATHS);
+    let dirty = version::git(&status_args).is_none_or(|status| !status.is_empty());
+    let info = version::resolve(
+        &package,
+        tag.as_deref(),
+        commit.as_deref(),
+        exact.as_deref(),
+        dirty,
+    );
+    println!("cargo:rustc-env=NOVA_BUILD_VERSION={}", info.display);
+    println!("cargo:rustc-env=NOVA_BASE_VERSION={}", info.base);
+    println!("cargo:rustc-env=NOVA_BUILD_RELEASE={}", info.release);
 }
 
 /// Generate the license and source catalog compiled into Settings → About.

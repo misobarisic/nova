@@ -796,6 +796,8 @@ mod run;
 mod settings;
 mod settings_sync;
 mod stream_prefetch;
+#[cfg(feature = "update-check")]
+mod updates;
 mod watch_history;
 mod watch_history_actions;
 pub use run::run;

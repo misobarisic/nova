@@ -4,7 +4,7 @@ import { ListView } from "std-widgets.slint";
 import { ScrollView } from "scrollview.slint";
 
 import { SideNav } from "sidenav.slint";
-import { PillButton, SectionHeader, SettingsCard, SettingsHeader } from "settings-controls.slint";
+import { PillButton, ToggleSwitch, SectionHeader, SettingsCard, SettingsHeader } from "settings-controls.slint";
 
 // About has independent navigation and scroll state; opening it does not
 // mount Settings or trigger its storage and service refreshes.
@@ -25,6 +25,17 @@ export component AboutPage inherits Rectangle {
     in property <length> safe-bottom: 0px;
     in property <[string]> license_text_chunks;
     in property <[LicenseSource]> license_sources;
+    in property <string> app_version: "";
+    in property <bool> update_checks_enabled: false;
+    in property <bool> update_is_development: true;
+    in property <bool> update_automatic: true;
+    in property <int> update_status: 0;
+    in property <bool> update_available: false;
+    in property <string> update_latest_version: "";
+    callback update_check_requested();
+    callback update_automatic_changed(bool);
+    callback update_release_requested();
+    private property <int> about_action: 0;
     in property <int> system_back_request;
     in-out property <bool> licenses_open: false;
     in-out property <length> scroll_y: 0px;
@@ -37,6 +48,12 @@ export component AboutPage inherits Rectangle {
     private property <length> legal-entry-y;
     private property <length> selected_source_top;
     private property <length> selected_source_bottom;
+    function step_about(direction: int) {
+        let next = Math.clamp(root.about_action + direction, 0, root.update_available ? 3 : 2);
+        if !root.update_checks_enabled { root.about_action = 0; }
+        else if next == 1 && root.update_is_development { root.about_action = direction > 0 ? 2 : 0; }
+        else { root.about_action = next; }
+    }
     function step_source(direction: int) {
         let next = Math.clamp(root.source_index + direction, 0, Math.max(0, root.license_sources.length - 1));
         if next != root.source_index {
@@ -70,6 +87,12 @@ export component AboutPage inherits Rectangle {
             if (top < 0px) { about_scroll.content-y -= top; }
             else if (top + SettingsStyle.focus-height > about_scroll.visible-height) {
                 about_scroll.content-y -= top + SettingsStyle.focus-height - about_scroll.visible-height;
+            }
+        } else if (!root.licenses_open && !root.restore_pending && SettingsStyle.keyboard-mode) {
+            let top = SettingsStyle.focus-y - about_info_scroll.absolute-position.y;
+            if top < 0px { about_info_scroll.content-y -= top; }
+            else if top + SettingsStyle.focus-height > about_info_scroll.visible-height {
+                about_info_scroll.content-y -= top + SettingsStyle.focus-height - about_info_scroll.visible-height;
             }
         }
     }
@@ -137,6 +160,8 @@ export component AboutPage inherits Rectangle {
                     if about_scroll.content-y >= root.legal-entry-y { root.kb_zone = 1; }
                 } else if (root.licenses_open && root.kb_zone == 1 && root.source_index > 0) {
                     root.step_source(-1);
+                } else if !root.licenses_open && root.kb_zone == 1 && root.about_action > 0 {
+                    root.step_about(-1);
                 } else { root.kb_zone = 0; }
                 accept
             } else if (e.text == Key.DownArrow || e.text == Key.Tab) {
@@ -149,7 +174,9 @@ export component AboutPage inherits Rectangle {
                     about_scroll.content-y = Math.max(Math.min(0px, about_scroll.visible-height - about_scroll.content-height), about_scroll.content-y - about_scroll.visible-height * 0.72);
                 } else if (root.licenses_open) {
                     root.step_source(1);
-                }
+                } else { root.step_about(1); }
+                accept
+            } else if ((e.text == Key.Return || e.text == " ") && e.repeat) {
                 accept
             } else if (e.text == Key.Return || e.text == " ") {
                 root.kb_active = true;
@@ -161,7 +188,12 @@ export component AboutPage inherits Rectangle {
                     else if (root.kb_nav == 3) { root.more_picked(); }
                     else if root.kb_nav == 4 { NavState.calendar_picked(); }
                     else { NavState.downloads_picked(); }
-                } else if (!root.licenses_open) { root.open_licenses(); }
+                } else if (!root.licenses_open) {
+                    if root.about_action == 0 { root.open_licenses(); }
+                    else if root.about_action == 1 && root.update_checks_enabled && !root.update_is_development { root.update_automatic_changed(!root.update_automatic); }
+                    else if root.about_action == 2 && root.update_checks_enabled && root.update_status != 1 { root.update_check_requested(); }
+                    else if root.about_action == 3 && root.update_available { root.update_release_requested(); }
+                }
                 else if (root.kb_zone != 2 && root.source_index < root.license_sources.length) {
                     root.license_source_requested(root.license_sources[root.source_index].url);
                 }
@@ -301,10 +333,17 @@ export component AboutPage inherits Rectangle {
                                 wrap: word-wrap;
                             }
 
+                            app_version_label := Text {
+                                text: @tr("Version") + " " + root.app_version;
+                                accessible-id: "about-version";
+                                font-size: InterfaceStyle.tv ? 20px : 14px;
+                                color: Theme.current.text_secondary;
+                                wrap: word-wrap;
+                            }
                             about_licenses_button := PillButton {
                                 label: @tr("Licenses");
                                 roomy: true;
-                                focused: !root.licenses_open && root.kb_zone == 1 && root.kb_active;
+                                focused: !root.licenses_open && root.kb_zone == 1 && root.about_action == 0 && root.kb_active;
                                 clicked => {
                                     root.kb_active = SettingsStyle.keyboard-mode;
                                     root.kb_zone = 1;
@@ -312,6 +351,56 @@ export component AboutPage inherits Rectangle {
                                 }
                             }
                         } }
+                    SectionHeader { label: @tr("Updates"); }
+                    SettingsCard { VerticalLayout { padding: 16px; spacing: 16px;
+                        Text {
+                            text: !root.update_checks_enabled ? @tr("Update checks are disabled in this build.")
+                                : root.update_status == 1 ? @tr("Checking for updates…")
+                                : root.update_status == 2 ? @tr("You’re up to date.")
+                                : root.update_status == 3 ? @tr("A new Nova is available") + " · " + root.update_latest_version
+                                : root.update_status == 4 ? @tr("Could not check for updates. Try again later.")
+                                : root.update_status == 5 ? @tr("GitHub is limiting requests. Try again later.")
+                                : root.update_is_development ? @tr("Development builds do not check automatically.")
+                                : @tr("Nova checks GitHub for new releases once a day.");
+                            font-size: InterfaceStyle.tv ? 20px : 14px;
+                            color: Theme.current.text_settings;
+                            wrap: word-wrap;
+                        }
+                        if root.update_checks_enabled: HorizontalLayout {
+                            spacing: 16px;
+                            Text {
+                                text: @tr("Automatically check for updates");
+                                font-size: InterfaceStyle.tv ? 20px : 14px;
+                                color: Theme.current.text_settings;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                            }
+                            ToggleSwitch {
+                                name: @tr("Automatically check for updates");
+                                checked: root.update_automatic;
+                                enabled: !root.update_is_development;
+                                focused: root.kb_zone == 1 && root.about_action == 1 && root.kb_active;
+                                toggled => { root.update_automatic_changed(self.checked); }
+                            }
+                        }
+                        if root.update_checks_enabled: VerticalLayout {
+                            spacing: 8px;
+                            PillButton {
+                                label: @tr("Check for updates");
+                                enabled: root.update_status != 1;
+                                focused: root.kb_zone == 1 && root.about_action == 2 && root.kb_active;
+                                wrap_label: true;
+                                clicked => { root.about_action = 2; root.update_check_requested(); }
+                            }
+                            if root.update_available: PillButton {
+                                label: @tr("View release"); primary: true;
+                                focused: root.kb_zone == 1 && root.about_action == 3 && root.kb_active;
+                                wrap_label: true;
+                                clicked => { root.about_action = 3; root.update_release_requested(); }
+                            }
+                        }
+                    } }
                     }
           }
         }

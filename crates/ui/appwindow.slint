@@ -22,6 +22,7 @@ import { LibraryHost } from "library-host.slint";
 import { OnboardingHost } from "onboarding-host.slint";
 import { SettingsHost } from "settings-host.slint";
 import { AboutHost } from "about-host.slint";
+import { UpdateNotice } from "update-notice.slint";
 import { CalendarHost } from "calendar-host.slint";
 import { DownloadsHost } from "downloads-host.slint";
 import { MoreHost } from "more-host.slint";
@@ -296,6 +297,14 @@ export component AppWindow inherits Window {
         kb_active <=> root.kb_active;
     }
     AboutBindings {
+        app_version <=> root.app_version;
+        update_checks_enabled <=> root.update_checks_enabled;
+        update_is_development <=> root.update_is_development;
+        update_automatic <=> root.update_automatic;
+        update_status <=> root.update_status;
+        update_available <=> root.update_available;
+        update_latest_version <=> root.update_latest_version;
+
         kb_zone <=> root.family_nav_zone;
         kb_nav <=> root.family_nav_index;
         kb_active <=> root.kb_active;
@@ -1094,6 +1103,26 @@ export component AppWindow inherits Window {
         if (Anim.enabled && Anim.transitions) { more_return_tick.start(); }
         else { root.finish_more_subpage_back(); }
     }
+    in-out property <string> app_version: "";
+    in-out property <bool> update_checks_enabled: false;
+    in-out property <bool> update_is_development: true;
+    in-out property <bool> update_automatic: true;
+    in-out property <int> update_status: 0;
+    in-out property <bool> update_available: false;
+    in-out property <string> update_latest_version: "";
+    in-out property <bool> update_notice_visible: false;
+    out property <bool> update_notice_shown: root.update_checks_enabled && root.update_available && root.update_notice_visible
+        && !root.player_open && !root.onboarding_visible && !root.modal_visible
+        && !root.completion_prompt_visible && !root.resume_prompt_visible
+        && !root.party_page_open && !root.remote_devices_open && !root.remote_controls_open
+        && root.remote_replacement_token == "" && !root.sync_pair_prompt_visible
+        && !SettingsContent.sync_remove_prompt_visible && !SettingsContent.tracking_reset_confirm
+        && !(root.home_page_mounted && HomeBridge.card_menu_open)
+        && !(root.library_page_mounted && LibraryBridge.card_menu_open)
+        && !SettingsBridge.addon_config_open && !SettingsSync.open;
+    callback update_check_requested();
+    callback update_automatic_changed(bool);
+    callback update_release_requested();
     in-out property <[string]> license_text_chunks: [];
     in-out property <[LicenseSource]> license_sources: [];
     // Image-cache re-encode settings are desktop-only (the web build relies
@@ -1699,6 +1728,9 @@ export component AppWindow inherits Window {
     public function more_bridge_downloads_picked() { root.pick_more(1); }
     public function more_bridge_settings_picked() { root.pick_more(2); }
     public function more_bridge_about_picked() { root.pick_more(3); }
+    public function about_bridge_update_check_requested() { root.update_check_requested(); }
+    public function about_bridge_update_automatic_changed(v: bool) { root.update_automatic_changed(v); }
+    public function about_bridge_update_release_requested() { root.update_release_requested(); }
     public function about_bridge_home_picked() { root.navigate_section(0); }
     public function about_bridge_back_picked() { root.more_subpage_back(); }
     public function about_bridge_discover_picked() { root.navigate_section(1); }
@@ -1911,7 +1943,18 @@ export component AppWindow inherits Window {
         height: 100%;
 
         capture-key-pressed(e) => {
-            if InterfaceStyle.tv && root.resume_prompt_visible {
+            if root.update_notice_shown && (e.text == Key.Menu || (e.text == Key.Tab && !update_notice.actions_focused)) {
+                if !e.repeat { update_notice.focus_actions(); }
+                accept
+            } else if root.update_notice_shown && (e.text == Key.Back || e.text == Key.Escape) {
+                if !e.repeat {
+                    root.update_notice_visible = false;
+                    root.system_back_held = e.text == Key.Back;
+                    root.preserve_back_focus();
+                    page_release_timer.start();
+                }
+                accept
+            } else if InterfaceStyle.tv && root.resume_prompt_visible {
                 if e.text == Key.Escape || e.text == Key.Back || e.text == Key.Backspace {
                     if !e.repeat { root.resume_cancel(); }
                 } else if e.text == Key.LeftArrow || e.text == Key.UpArrow { root.resume_focus = 0; }
@@ -2427,6 +2470,20 @@ export component AppWindow inherits Window {
     if root.remote_replacement_token != "": RemoteReplacementDialog {
         width: 100%; height: 100%; safe-top: root.safe-area-insets.top; safe-bottom: root.safe-area-insets.bottom;
         safe-left: root.safe-area-insets.left; safe-right: root.safe-area-insets.right;
+    }
+
+    update_notice := UpdateNotice {
+        visible: root.update_notice_shown;
+        width: Math.max(0px, Math.min(InterfaceStyle.tv ? 600px : 460px,
+            root.width - root.safe-area-insets.left - root.safe-area-insets.right - 24px));
+        x: root.width - root.safe-area-insets.right - self.width - 12px;
+        // Phone root pages have a bottom navigation bar; subpages do not.
+        y: Math.max(root.safe-area-insets.top + 12px, root.height - self.height - root.safe-area-insets.bottom
+            - (root.narrow_ui && !root.show_settings && !root.show_about && !root.show_calendar && !root.show_downloads ? 80px : 12px));
+        installed_version: root.app_version;
+        latest_version: root.update_latest_version;
+        dismissed => { root.update_notice_visible = false; root.preserve_back_focus(); page_release_timer.start(); }
+        view_release => { root.update_release_requested(); root.update_notice_visible = false; root.preserve_back_focus(); page_release_timer.start(); }
     }
 
     if root.completion_prompt_visible: CompletionRatingPrompt {

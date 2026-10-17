@@ -2,6 +2,9 @@ import { LibraryPage } from "../ui/library.slint";
 import { LibraryBridge } from "@NovaUiShared";
 
 export component LibraryModule inherits Window {
+    private property <bool> card_menu_open: page.card_menu_open;
+    init => { LibraryBridge.card_menu_open = false; }
+    changed card_menu_open => { LibraryBridge.card_menu_open = root.card_menu_open; }
     public function focus_shell() { page.focus_shell(); }
     default-font-family: "Roboto";
     background: transparent;

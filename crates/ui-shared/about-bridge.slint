@@ -22,6 +22,16 @@ export global AboutBridge {
     in-out property <int> system_back_request;
     in-out property <[string]> license_text_chunks;
     in-out property <[LicenseSource]> license_sources;
+    in-out property <string> app_version;
+    in-out property <bool> update_checks_enabled;
+    in-out property <bool> update_is_development;
+    in-out property <bool> update_automatic;
+    in-out property <int> update_status;
+    in-out property <bool> update_available;
+    in-out property <string> update_latest_version;
+    callback update_check_requested();
+    callback update_automatic_changed(bool);
+    callback update_release_requested();
     callback home_picked();
     callback back_picked();
     callback discover_picked();

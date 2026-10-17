@@ -96,6 +96,7 @@ export component LibraryPage {
 
     // Card bottom-sheet menu state (single instance).
     // Pure UI state: actions reuse the callbacks above.
+    out property <bool> card_menu_open: root.menu_open;
     property <bool> menu_open: false;
     property <int> menu_idx: 0;
     property <bool> menu_watched: false;

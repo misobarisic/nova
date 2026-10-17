@@ -29,10 +29,31 @@ cargo test               # workspace tests (unit + headless Slint UI tests)
 cargo test -p nova-sync --lib   # fast sync-crate unit tests
 ```
 
-Android Cargo builds use `--no-default-features --features android`. Enter
+Android Cargo builds use `--no-default-features --features android,update-check`. Enter
 `nix develop .#android` before using Android Make targets; Make assumes the
 required toolchain is already active. See `docs/project-structure.md` for all
 targets.
+
+## Versions and updates
+
+About shows the installed version. Development builds use the last reachable
+version tag plus the short commit hash (`v0.0.29-abc12345`, with `-dirty` for
+local source edits). They skip automatic update checks, including builds compiled in
+release mode. About still offers a manual check. Clean, matching tagged release
+builds check GitHub daily while Nova is in the foreground, retrying failures
+after a cooldown. The bottom-right notice opens the release page in a browser.
+
+Keep the root Cargo version at the last release between tags. Bump it when
+preparing a release, and tag that commit `v<version>`; tagged CI rejects a
+mismatch. Android's version name and code come from that Cargo version, so
+subsequent development commits retain the last release's installation code.
+Changing the previous placeholder `0.1.0` to `0.0.29` lowers the Android code;
+existing installations may need an uninstall/reinstall, which clears app data.
+
+Packagers can remove all automatic and manual checks with
+`cargo build --release --no-default-features --features desktop`.
+For Android Make targets, use `UPDATE_FEATURES=` to omit them.
+The About automatic-check preference and cached release result are device-local.
 
 ## License
 

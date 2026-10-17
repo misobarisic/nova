@@ -11,6 +11,9 @@
 //! Continuations always run on worker threads; the callers wrap their UI
 //! updates in `slint::invoke_from_event_loop` themselves.
 
+#[cfg(feature = "update-check")]
+pub mod updates;
+
 /// Failure of a fetch, with the HTTP status when the server answered.
 #[derive(Debug)]
 pub struct FetchError {

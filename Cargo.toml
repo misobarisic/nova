@@ -80,7 +80,7 @@ tracing = "0.1"
 
 [package]
 name = "nova"
-version = "0.1.0"
+version = "0.0.29"
 edition = "2024"
 license.workspace = true
 
@@ -88,7 +88,9 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["desktop"]
+default = ["desktop", "update-check"]
+# Packagers can omit this feature to remove all GitHub update checks.
+update-check = ["nova-media/update-check"]
 # Desktop entry: Winit/FemtoVG backend. The app code
 # itself compiles on desktop and Android (the APK builds with
 # `--no-default-features --features android`).
@@ -167,6 +169,7 @@ ndk-context = "0.1"
 rqrr = { version = "0.11", default-features = false }
 
 [build-dependencies]
+semver = "1"
 zstd = { version = "0.13", default-features = false }
 
 [dev-dependencies]

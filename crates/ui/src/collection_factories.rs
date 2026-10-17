@@ -80,6 +80,9 @@ pub(crate) fn install(app: &crate::generated::AppWindow) {
     {
         let bridge = app.global::<AboutBridge>();
         crate::forward_app_callbacks!(app, &bridge; recover_focus;
+            on_update_check_requested => invoke_about_bridge_update_check_requested(),
+            on_update_automatic_changed => invoke_about_bridge_update_automatic_changed(arg0),
+            on_update_release_requested => invoke_about_bridge_update_release_requested(),
             on_home_picked => invoke_about_bridge_home_picked(),
             on_back_picked => invoke_about_bridge_back_picked(),
             on_discover_picked => invoke_about_bridge_discover_picked(),

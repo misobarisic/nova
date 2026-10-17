@@ -388,3 +388,51 @@ msgstr "HW+ tries direct GPU decoding, with copy-back and software fallbacks. HW
 
 msgid "Applies to this stream only. The next stream uses Settings → Player."
 msgstr "Applies to this stream only. The next stream uses Settings → Player."
+
+msgid "Version"
+msgstr "Version"
+
+msgid "Updates"
+msgstr "Updates"
+
+msgid "Update checks are disabled in this build."
+msgstr "Update checks are disabled in this build."
+
+msgid "Checking for updates…"
+msgstr "Checking for updates…"
+
+msgid "You’re up to date."
+msgstr "You’re up to date."
+
+msgid "A new Nova is available"
+msgstr "A new Nova is available"
+
+msgid "Could not check for updates. Try again later."
+msgstr "Could not check for updates. Try again later."
+
+msgid "GitHub is limiting requests. Try again later."
+msgstr "GitHub is limiting requests. Try again later."
+
+msgid "Development builds do not check automatically."
+msgstr "Development builds do not check automatically."
+
+msgid "Nova checks GitHub for new releases once a day."
+msgstr "Nova checks GitHub for new releases once a day."
+
+msgid "Automatically check for updates"
+msgstr "Automatically check for updates"
+
+msgid "Check for updates"
+msgstr "Check for updates"
+
+msgid "View release"
+msgstr "View release"
+
+msgid "Available version"
+msgstr "Available version"
+
+msgid "Installed version"
+msgstr "Installed version"
+
+msgid "Later"
+msgstr "Later"

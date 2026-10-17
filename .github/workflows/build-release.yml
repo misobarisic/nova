@@ -18,6 +18,7 @@ on:
       - "Cargo.lock"
       - "about.toml"
       - "build.rs"
+      - "build-support/**"
       - "crates/**"
       - "src/**"
       - "android/**"
@@ -44,6 +45,7 @@ on:
       - "Cargo.lock"
       - "about.toml"
       - "build.rs"
+      - "build-support/**"
       - "crates/**"
       - "src/**"
       - "android/**"
@@ -78,6 +80,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Install Nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
@@ -97,6 +100,9 @@ jobs:
 
       - name: Check Rust workspace
         run: nix develop .#default --command cargo check --workspace --locked
+
+      - name: Check distro build without update checks
+        run: nix develop .#default --command cargo check --locked -p nova --no-default-features --features desktop
 
       - name: Test shared OpenGL state guard
         env:
@@ -120,6 +126,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Install Nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
@@ -143,6 +150,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Free unused Android SDK space
         # The job uses the Nix SDK/NDK, not the runner's preinstalled SDK.
@@ -156,7 +164,7 @@ jobs:
       - name: Check Android ARM64 target
         run: >-
           nix develop .#android --command cargo check --locked
-          --target aarch64-linux-android --no-default-features --features android
+          --target aarch64-linux-android --no-default-features --features android,update-check
           --lib -p nova
 
   android-build:
@@ -171,6 +179,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Free disk space
         run: |
@@ -213,6 +222,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
@@ -266,6 +276,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Install Nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1

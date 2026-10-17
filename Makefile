@@ -10,7 +10,9 @@
 ANDROID_TARGET ?= aarch64-linux-android
 # Local release builds stay quick; tagged CI selects cd-release explicitly.
 RELEASE_PROFILE ?= release
-ANDROID_ARGS = --target $(ANDROID_TARGET) --no-default-features --features android --lib -p nova
+# Set UPDATE_FEATURES= to build APKs without any GitHub update checks.
+UPDATE_FEATURES ?= ,update-check
+ANDROID_ARGS = --target $(ANDROID_TARGET) --no-default-features --features android$(UPDATE_FEATURES) --lib -p nova
 
 # cargo-apk2 (not cargo-apk) compiles the Java foreground service and
 # JobScheduler job to DEX and declares them in the manifest.
@@ -24,7 +26,7 @@ android-build-release:
 
 # Release packaging starts from one universal APK, then derives ABI-specific APKs.
 android-build-release-universal:
-	cargo apk2 build --no-default-features --features android --lib -p nova --profile $(RELEASE_PROFILE)
+	cargo apk2 build --no-default-features --features android$(UPDATE_FEATURES) --lib -p nova --profile $(RELEASE_PROFILE)
 
 android-run:
 	cargo apk2 run $(ANDROID_ARGS)
