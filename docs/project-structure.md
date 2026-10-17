@@ -174,6 +174,7 @@ nova/
 ├── Makefile                  # Linux and Android build/run targets (use active shell)
 ├── android/                  # Android source, signing key, and resources
 │   ├── java/                 # Java services and activities compiled to DEX by cargo-apk2
+│   ├── cargo-apk2-Cargo.lock  # Dependency lock for the pinned APK packager fork (CLI workspace only)
 │   ├── keystore/
 │   │   └── debug.keystore    # Tracked debug key for local APK signing; not for publishing
 │   └── res/                  # Android launcher icon mipmaps
@@ -446,11 +447,13 @@ enter text fields. System volume remains owned by the platform in TV mode.
 
 The existing APK also declares `LEANBACK_LAUNCHER`, optional Leanback/touchscreen
 and optional camera/autofocus features. `android/res/drawable/{tv_banner,tv_wordmark}.xml`
-reuse Nova branding. `android/patch-cargo-apk2-banner.py`, invoked from the flake's
-cargo-apk2 postPatch, extends pinned ndk-build2's Application schema with the banner
-attribute while retaining ordinary generated manifest/version/service behavior.
-`python3 -B android/test_tv_packaging.py` checks metadata, assets and vendor checksum
-preservation without building Android; the Linux CI packaging step runs both
+reuse Nova branding. `flake.nix` builds cargo-apk2 from `misobarisic/cargo-apk2`
+at commit `5cd1749bb05180be40de753767c2ea014373a793`, which adds the application
+banner attribute. `android/cargo-apk2-Cargo.lock` pins its CLI-only workspace;
+the flake excludes example apps and copies that lock into the source before
+building. No local manifest-schema patch is needed.
+`python3 -B android/test_tv_packaging.py` checks metadata and assets without
+building Android; the Linux CI packaging step runs both
 Python suites. TV regressions live in the existing UI
 suites (`player/tv_controls.rs`, `downloads/tv_navigation.rs`,
 `settings_preferences/interface_mode.rs`, Library/Home/stream layout tests and
@@ -1357,7 +1360,7 @@ unit/documentation coverage.
 
 | Task | Start here |
 |---|---|
-| TV mode / remote and mouse navigation / Android TV launcher | `nova_config::InterfaceMode`, `src/app/settings.rs`, `crates/ui-shared/globals.slint::InterfaceStyle`, `crates/ui/{appwindow,player,sidenav,remote-controls,party,onboarding,calendar,downloads-page}.slint`, `android/{patch-cargo-apk2-banner,test_tv_packaging}.py`; see TV interface mode above and `docs/player-behavior.md`. |
+| TV mode / remote and mouse navigation / Android TV launcher | `nova_config::InterfaceMode`, `src/app/settings.rs`, `crates/ui-shared/globals.slint::InterfaceStyle`, `crates/ui/{appwindow,player,sidenav,remote-controls,party,onboarding,calendar,downloads-page}.slint`, `flake.nix` (pinned cargo-apk2 fork), `android/{cargo-apk2-Cargo.lock,test_tv_packaging.py}`; see TV interface mode above and `docs/player-behavior.md`. |
 | Windows title-bar / context-menu theme | `src/app/run.rs` (dark native frame at creation via Winit attribute hook; `SLINT_NO_MUDA` before initialization), `crates/ui/{build-support,build}.rs` (shared target-aware `fluent-dark` configuration), `tests/shared_layout/desktop_action_menus.rs`; Windows keeps native caption buttons and uses Slint-rendered context menus like Linux |
 | Setting sync labels / inline title pills / per-device overrides / value comparison | `src/app/settings_sync.rs`, `src/app/sync.rs`, `crates/ui/settings-sync{,-modal}.slint` (`SettingsSync.enabled` mirrors the actual device setting and hides pills while sync is off), `crates/ui/appwindow.slint` (binding), `crates/ui/settings-controls.slint` (`SettingsRow` sizes inline pills within the available control gap), `crates/ui/settings.slint` (left-anchored narrow Playback speed title avoids the badge overlapping its default centered position), `tests/settings_sync/scopes.rs` (title/badge bounds and natural pill widths in rows, vertical cards and comparison modals across English/Croatian labels) |
 | Change theme colours / card and button corners / spacing / backdrop sizes / status-bar gradient / true-black mode / effects | `crates/ui/theme.slint` (`ThemePalette`, `Theme.standard`, `Theme.current`), `crates/ui/src/lib.rs::apply_theme`, `crates/config/src/lib.rs::AccentColor`, `crates/ui-settings-theme/theme-module.slint`, `crates/ui/appwindow.slint` (Rust re-exports), `tests/theme.rs`, `tests/settings_controls/theme.rs`; Theme (ID 14, `settings:theme`) adds the eight-preset `AccentColor` filled-swatch picker first above True black (four choices per row wide, two narrow; centered contrasting selection check), changes canvases/navigation/artwork fades, card/button radius and card spacing plus the narrow Home/Detail status-bar gradient live, with a complete theme reset; preferences sync by default with optional device overrides, retaining artwork and accent/status colours; neutral cards and controls become black with subtle outlines |

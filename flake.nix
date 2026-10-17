@@ -40,28 +40,25 @@
         "rustfmt"
         "rust-src"
       ];
-      # cargo-apk2 is mzdk100's crate (distinct from nixpkgs' cargo-apk, which
-      # cannot compile android/java/ to DEX or declare <service>). It is not in
-      # nixpkgs and the upstream repo publishes no releases/tags, so cargo
-      # binstall has no prebuilt artifacts to fetch — package it from
-      # crates.io. The .crate ships its Cargo.lock, so cargoLock needs no
-      # separate hash to maintain.
+      # cargo-apk2 compiles android/java/ to DEX and declares <service>, unlike
+      # nixpkgs' cargo-apk. Pin our fork's banner support until it is upstream.
+      # The repository omits Cargo.lock, so keep the CLI-only dependency lock
+      # here and exclude example apps from dependency resolution and builds.
       cargo-apk2 = pkgs.rustPlatform.buildRustPackage rec {
         pname = "cargo-apk2";
-        version = "1.4.1";
-        src = pkgs.fetchCrate {
-          inherit pname version;
-          # Hash of the *unpacked* crate (fetchurl runs with unpack = true),
-          # not of the .crate file itself.
-          hash = "sha256-OJ34HOTIcmJh/exp3yq6Ir1RvooMSRwf9yF02qSx6yY=";
+        version = "1.4.2";
+        src = pkgs.fetchFromGitHub {
+          owner = "misobarisic";
+          repo = "cargo-apk2";
+          rev = "5cd1749bb05180be40de753767c2ea014373a793";
+          hash = "sha256-Sp6oc3Ee1cjpABCpV3Pj2Hmj26A+4WYDeElUCMbuBjc=";
         };
-        cargoLock.lockFile = "${src}/Cargo.lock";
-        # ndk-build2 1.4.1 omits Application.banner. Patch its writable vendor
-        # copy so TOML banner metadata joins the normal generated manifest.
-        nativeBuildInputs = [ pkgs.python3 ];
+        cargoLock.lockFile = ./android/cargo-apk2-Cargo.lock;
         postPatch = ''
-          python ${./android/patch-cargo-apk2-banner.py} "$cargoDepsCopy"
+          sed -i '/^    ".*-examples",$/d' Cargo.toml
+          cp ${./android/cargo-apk2-Cargo.lock} Cargo.lock
         '';
+        cargoBuildFlags = [ "-p" "cargo-apk2" ];
         doCheck = false; # its tests need an Android SDK/device
       };
     in
